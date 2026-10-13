@@ -6012,6 +6012,11 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_pointer_array_bounds_follow_source_updates",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_pointer_array_bounds_reject_unproven_mutations",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_pointer_array_bounds_require_checked_metadata",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_pointer_array_bounds_validate_uploads",
+            "tests/test_translator/test_pointer_index_bounds.py::def test_pointer_array_bounds_execute_natively",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_vector_initializers_without_repeating_values",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_partial_vector_initializers_validate_with_glslang_and_spirv_val",
@@ -6022,7 +6027,7 @@
             "tests/test_translator/test_pointer_offset_address_spaces.py::def test_pointer_offsets_execute_natively",
             "demos/integrations/mlx/tests/kernels/test_general_gather_opengl.py::def test_opengl_indexed_general_gather_executes_natively"
           ],
-          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Selected compute entries lower private storage-pointer aggregates through resource identities and signed offsets, specializing helpers against concrete buffer bindings. Typed vector pointees retain two or four 32-bit float/int/uint components and vector-element offsets; unproven vector layouts remain diagnostic. Final subscripts require proven ranges or explicit index-range assertions; external aggregate layouts and unproven escapes remain unsupported. Generated-code validation and required native compute controls exercise this bounded contract, not full MLX host integration.",
+          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Selected compute entries lower private storage-pointer aggregates through resource identities and signed offsets, specializing helpers against concrete buffer bindings. Fixed pointer arrays retain checked per-element source bounds across specialization, assignment, branches and bounded loop replay; unknown effects and invalid offsets invalidate the proof. Native controls cover addressed views, multiple elements, forwarding, saved pointers and different caller bounds with guards and unchanged inputs. Typed vector pointees retain two or four 32-bit float/int/uint components and vector-element offsets; unproven vector layouts remain diagnostic. Final subscripts require proven ranges or explicit index-range assertions; external aggregate layouts and unproven escapes remain unsupported. Generated-code validation and required native compute controls exercise this bounded contract, not full MLX host integration.",
           "status": "supported"
         },
         "rust": {

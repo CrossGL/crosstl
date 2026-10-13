@@ -10806,7 +10806,8 @@ def test_hlsl_return_captures_value_before_pointer_array_writeback(precise):
         "    second_offset = second_offsets[0];",
     ]
     assert lines[3].startswith("    return ")
-    assert lines[3].removeprefix("    return ").removesuffix(";") in lines[0]
+    assert lines[3].endswith(";")
+    assert lines[3][len("    return ") : -1] in lines[0]
 
 
 def test_hlsl_void_return_expression_precedes_pointer_array_writeback():

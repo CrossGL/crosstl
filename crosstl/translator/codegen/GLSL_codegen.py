@@ -9075,6 +9075,15 @@ class GLSLCodeGen:
         for name, binding in getattr(
             function, "_glsl_storage_pointer_aliases", {}
         ).items():
+            if binding.get("kind") == "storage-pointer-array":
+                for index, bounds in enumerate(
+                    binding.get("source_offset_intervals", ())
+                ):
+                    if bounds is not None:
+                        intervals[self.glsl_pointer_array_interval_key(name, index)] = (
+                            bounds
+                        )
+                continue
             offset = binding.get("offset")
             if isinstance(offset, str) and offset in intervals:
                 intervals[name] = intervals[offset]
@@ -9417,6 +9426,28 @@ class GLSLCodeGen:
     def annotate_glsl_control_flow_intervals(self, function):
         constants = self.initial_literal_int_constants(function)
         lexical = self.glsl_scalar_array_view_lexical_bindings(function)
+        replay_depth = 0
+        replay_budget = 4096
+        replay_intervals = {}
+
+        def pointer_array_extent(expression):
+            if not isinstance(expression, IdentifierNode):
+                return None
+            declaration = lexical["declarations"].get(
+                lexical["reference_bindings"].get(id(expression))
+            )
+            if declaration is not None:
+                contract = self.glsl_storage_pointer_array_contract(declaration["node"])
+            else:
+                contract = getattr(function, "_glsl_storage_pointer_aliases", {}).get(
+                    expression.name
+                )
+                if (
+                    contract is not None
+                    and contract.get("kind") != "storage-pointer-array"
+                ):
+                    contract = None
+            return contract.get("extent") if contract is not None else None
 
         def lexical_source_types(expression):
             source_types = {}
@@ -9697,14 +9728,28 @@ class GLSLCodeGen:
 
         def annotate_expression(expression, intervals):
             if hasattr(expression, "__dict__"):
-                expression._glsl_control_flow_intervals = dict(intervals)
+                bounds = dict(intervals)
+                if replay_depth:
+                    previous = replay_intervals.get(id(expression))
+                    if previous is not None:
+                        bounds = merge_intervals(previous, bounds)
+                    replay_intervals[id(expression)] = bounds
+                expression._glsl_control_flow_intervals = bounds
 
         def target_interval_keys(target):
+            if isinstance(target, UnaryOpNode) and self.map_operator(target.op) == "&":
+                return target_interval_keys(target.operand)
             field_key = self.glsl_declared_struct_member_interval_key(target)
             if field_key is not None:
                 return {field_key}
             if isinstance(target, ArrayAccessNode):
                 component_index = self.literal_int_value(target.index, constants)
+                array_name = self.expression_name(target.array)
+                if pointer_array_extent(target.array) is not None:
+                    array_key = self.glsl_pointer_array_interval_key(
+                        array_name, component_index
+                    )
+                    return {array_key} if array_key is not None else {array_name}
                 if (
                     isinstance(component_index, int)
                     and not isinstance(component_index, bool)
@@ -9800,6 +9845,14 @@ class GLSLCodeGen:
                 if argument_index >= len(parameters):
                     continue
                 parameter = parameters[argument_index]
+                if self.glsl_storage_pointer_array_contract(parameter) is not None:
+                    if getattr(candidate, "body", None) is None or (
+                        self.glsl_storage_pointer_array_parameter_is_mutated(
+                            candidate, getattr(parameter, "name", None)
+                        )
+                    ):
+                        result.update(target_interval_keys(argument))
+                    continue
                 if not set(self.glsl_parameter_qualifiers(parameter)).intersection(
                     {"out", "inout"}
                 ):
@@ -10264,6 +10317,7 @@ class GLSLCodeGen:
             return entries, exits
 
         def visit(value, intervals):
+            nonlocal replay_depth, replay_budget
             if value is None or isinstance(value, (str, int, float, bool)):
                 return
             if isinstance(value, dict):
@@ -10438,10 +10492,49 @@ class GLSLCodeGen:
                             for member, interval in assigned_members.items():
                                 intervals[f"{key}.{member}"] = interval
                 elif isinstance(target, ArrayAccessNode):
+                    index_bounds = checked_interval(target.index, intervals)
+                    array_name = self.expression_name(target.array)
+                    source_bounds = checked_interval(target, intervals)
+                    operator = self.map_operator(value.operator)
+                    assigned_bounds = checked_integer_interval(assigned, intervals)
+                    replacement = None
+                    extent = pointer_array_extent(target.array)
+                    if operator == "=" and extent is not None:
+                        replacement = checked_interval(assigned, intervals)
+                    if source_bounds is not None and assigned_bounds is not None:
+                        if operator == "+=":
+                            replacement = (
+                                source_bounds[0] + assigned_bounds[0],
+                                source_bounds[1] + assigned_bounds[1],
+                            )
+                        elif operator == "-=":
+                            replacement = (
+                                source_bounds[0] - assigned_bounds[1],
+                                source_bounds[1] - assigned_bounds[0],
+                            )
+                    key = (
+                        self.glsl_pointer_array_interval_key(
+                            array_name, index_bounds[0]
+                        )
+                        if index_bounds is not None
+                        and index_bounds[0] == index_bounds[1]
+                        and extent is not None
+                        and 0 <= index_bounds[0] < extent
+                        else None
+                    )
+                    known_element = key is not None and (
+                        key in intervals or operator == "="
+                    )
                     clear_interval_targets(
                         intervals,
-                        target_interval_keys(target),
+                        {key} if key is not None else target_interval_keys(target),
                     )
+                    if (
+                        known_element
+                        and replacement is not None
+                        and (0 <= replacement[0] <= replacement[1] < (1 << 31))
+                    ):
+                        intervals[key] = replacement
                 visit(target, intervals)
                 return
             if isinstance(value, TernaryOpNode):
@@ -10470,6 +10563,36 @@ class GLSLCodeGen:
                 arguments = list(value.arguments or [])
                 for argument in arguments:
                     visit(argument, intervals)
+                argument_mutations = (
+                    [mutation_interval_keys(argument) for argument in arguments]
+                    if any(
+                        isinstance(argument, UnaryOpNode)
+                        and self.map_operator(argument.op) == "&"
+                        for argument in arguments
+                    )
+                    else []
+                )
+                for argument_index, argument in enumerate(arguments):
+                    if pointer_array_extent(argument) is not None:
+                        # An array argument refers to the current slots, including
+                        # effects from evaluating other arguments of this call.
+                        annotate_expression(argument, intervals)
+                    elif (
+                        isinstance(argument, UnaryOpNode)
+                        and self.map_operator(argument.op) == "&"
+                    ):
+                        other_mutations = set().union(
+                            *(
+                                mutations
+                                for index, mutations in enumerate(argument_mutations)
+                                if index != argument_index
+                            )
+                        )
+                        argument._glsl_pointer_argument_mutated = (
+                            self.glsl_interval_key_sets_overlap(
+                                target_interval_keys(argument.operand), other_mutations
+                            )
+                        )
                 updates = aggregate_updates(value, intervals)
                 function_name = self.function_call_name(value)
                 for argument_index, argument in enumerate(arguments):
@@ -10527,11 +10650,13 @@ class GLSLCodeGen:
                 outer_keys = set(intervals)
                 block_intervals = dict(intervals)
                 shadowed_values = {}
+                block_names = set()
                 statements = list(getattr(value, "statements", []) or [])
                 for statement in statements:
                     if isinstance(statement, (VariableNode, ArrayNode)):
                         name = getattr(statement, "name", None)
                         if name:
+                            block_names.add(name)
                             for key in outer_keys:
                                 if key == name or key.startswith(f"{name}."):
                                     shadowed_values[key] = block_intervals.get(key)
@@ -10545,6 +10670,10 @@ class GLSLCodeGen:
                         intervals[key] = value_after_block
                     else:
                         intervals.pop(key, None)
+                for key, bounds in block_intervals.items():
+                    owner, separator, _ = key.partition(".[")
+                    if separator and owner not in block_names:
+                        intervals[key] = bounds
                 return
             if isinstance(value, IfNode):
                 condition = getattr(
@@ -10634,6 +10763,44 @@ class GLSLCodeGen:
                 count = bounded[0] if bounded is not None else None
                 if count == 0:
                     bounded_zero_trip.add(id(value))
+                    return
+                pointer_array_loop = any(
+                    isinstance(child, ArrayAccessNode)
+                    and pointer_array_extent(child.array) is not None
+                    for child in self.walk_ast(value.body)
+                )
+                exact_values = (
+                    self.glsl_storage_pointer_array_loop_iteration_values(value)
+                    if count is not None and pointer_array_loop
+                    else None
+                )
+                if (
+                    exact_values is not None
+                    and len(exact_values) == count
+                    and count <= replay_budget
+                ):
+                    # Replay proven iterations on source state, joining facts at
+                    # each repeated occurrence rather than keeping the last visit.
+                    replay = dict(intervals)
+                    visit(value.init, replay)
+                    replay_budget -= count
+                    replay_depth += 1
+                    try:
+                        for counter in exact_values:
+                            replay[value.init.name] = (counter, counter)
+                            visit(value.condition, replay)
+                            visit_sequence(value.body, replay)
+                            visit(value.update, replay)
+                    finally:
+                        replay_depth -= 1
+                    for key in list(intervals):
+                        if key in replay:
+                            intervals[key] = replay[key]
+                        else:
+                            intervals.pop(key, None)
+                    for key, bounds in replay.items():
+                        if ".[" in key:
+                            intervals[key] = bounds
                     return
                 entries, exits = (
                     additive_loop_intervals(value, intervals, mutated, count)
@@ -14934,6 +15101,63 @@ class GLSLCodeGen:
                     "offset_direction": offset_direction,
                     "resource_root": False,
                 }
+                with self.glsl_lexical_source_type_scope(lexical_source_types):
+                    offset_info = self.glsl_value_type_info(
+                        self.glsl_source_expression_type(binding.get("offset", 0))
+                    )
+                    if (
+                        offset_info is not None
+                        and offset_info["width"] == 1
+                        and offset_info["bits"] > 32
+                    ):
+                        binding["wide_offset"] = True
+                    if (
+                        isinstance(arg, UnaryOpNode)
+                        and self.map_operator(arg.op) == "&"
+                    ):
+                        scalar = self.glsl_storage_pointer_binding(arg.operand, aliases)
+                        bounds = self.glsl_checked_private_pointer_interval(
+                            arg.operand,
+                            getattr(arg, "_glsl_control_flow_intervals", {}),
+                            self.glsl_active_literal_int_constants(),
+                        )
+                        offset_range = (
+                            IntegerRange(*bounds)
+                            if bounds is not None
+                            else (
+                                self.glsl_storage_pointer_offset_range(scalar, arg)
+                                if scalar is not None
+                                else None
+                            )
+                        )
+                        source_intervals = (
+                            (
+                                (offset_range.minimum, offset_range.maximum)
+                                if offset_range is not None
+                                and 0
+                                <= offset_range.minimum
+                                <= offset_range.maximum
+                                < (1 << 31)
+                                else None
+                            ),
+                        )
+                    else:
+                        flow = getattr(arg, "_glsl_control_flow_intervals", {})
+                        source_intervals = tuple(
+                            flow.get(
+                                self.glsl_pointer_array_interval_key(
+                                    self.expression_name(arg), element_index
+                                )
+                            )
+                            for element_index in range(extent)
+                        )
+                if (
+                    "pointer_reinterpretation" in binding
+                    or "byte_offset" in binding
+                    or getattr(arg, "_glsl_pointer_argument_mutated", False)
+                ):
+                    source_intervals = (None,) * extent
+                binding["source_offset_intervals"] = source_intervals
                 bindings[index] = (param_name, binding)
                 key_parts.append(
                     (
@@ -14944,6 +15168,8 @@ class GLSLCodeGen:
                         extent,
                         required_access,
                         offset_direction,
+                        source_intervals,
+                        binding.get("wide_offset", False),
                     )
                 )
                 continue
@@ -26292,6 +26518,18 @@ class GLSLCodeGen:
         }
 
     def glsl_storage_pointer_offset_range(self, binding, expression):
+        if isinstance(expression, ArrayAccessNode) and (
+            "offset_expressions" in binding
+            and "pointer_reinterpretation" not in binding
+            and "byte_offset" not in binding
+        ):
+            bounds = self.glsl_checked_private_pointer_interval(
+                expression,
+                getattr(expression, "_glsl_control_flow_intervals", {}),
+                self.glsl_active_literal_int_constants(),
+            )
+            if bounds is not None:
+                return IntegerRange(*bounds)
         assertion = binding.get("index_assertion_expression")
         if assertion is not None:
             asserted = self.glsl_index_asserted_range(assertion)
@@ -48619,6 +48857,17 @@ complex64_t crossgl_complex64_mod_assign(
         name = self.expression_name(expression)
         return name if name in intervals else None
 
+    @staticmethod
+    def glsl_pointer_array_interval_key(name, index):
+        if (
+            name
+            and isinstance(index, int)
+            and not isinstance(index, bool)
+            and index >= 0
+        ):
+            return f"{name}.[{index}]"
+        return None
+
     def glsl_private_pointer_interval(self, expression, intervals, constants):
         if expression is None:
             return None
@@ -48633,6 +48882,27 @@ complex64_t crossgl_complex64_mod_assign(
         if element_interval is not None:
             return element_interval
         if isinstance(expression, (MemberAccessNode, ArrayAccessNode)):
+            if isinstance(expression, ArrayAccessNode):
+                name = self.expression_name(expression.array)
+                index = self.glsl_private_pointer_interval(
+                    expression.index, intervals, constants
+                )
+                if (
+                    name
+                    and index is not None
+                    and 0 <= index[0] <= index[1]
+                    and index[1] - index[0] < len(intervals)
+                ):
+                    bounds = [
+                        intervals.get(
+                            self.glsl_pointer_array_interval_key(name, element)
+                        )
+                        for element in range(index[0], index[1] + 1)
+                    ]
+                    if bounds and all(item is not None for item in bounds):
+                        return min(item[0] for item in bounds), max(
+                            item[1] for item in bounds
+                        )
             key = self.glsl_private_pointer_interval_key(
                 expression, intervals, constants
             )

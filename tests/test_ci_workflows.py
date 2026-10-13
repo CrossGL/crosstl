@@ -3809,7 +3809,7 @@ def test_resource_selection_retains_every_native_opt_in():
                 required.add(identity)
             if any(term in name for term in expression.split(" or ")):
                 selected.add(identity)
-    assert len(required) == 64
+    assert len(required) == 65
     assert required <= selected
     assert (
         "tests/test_translator/test_helper_local_returns.py",
@@ -3822,6 +3822,10 @@ def test_resource_selection_retains_every_native_opt_in():
     assert (
         "tests/test_translator/test_pointer_index_bounds.py",
         "test_local_pointer_loops_execute_natively",
+    ) in selected
+    assert (
+        "tests/test_translator/test_pointer_index_bounds.py",
+        "test_pointer_array_bounds_execute_natively",
     ) in selected
     assert (
         "tests/test_translator/test_pointer_index_bounds.py",

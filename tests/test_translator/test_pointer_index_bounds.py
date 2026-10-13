@@ -8,6 +8,7 @@ from dataclasses import replace
 import pytest
 
 from crosstl.project import build_native_loader_dispatch_request, translate_project
+from crosstl.project.native_loader_dispatch import NativeLoaderDispatchError
 from crosstl.translator.ast import ForNode, ReturnNode
 from crosstl.translator.codegen import GLSL_codegen
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
@@ -21,6 +22,245 @@ from tests.test_translator.test_metadata_index_bounds import (
 )
 from tests.test_translator.test_project_metadata_entry_scope import _config, _packages
 from tests.test_translator.test_scalar_return_bounds import _generator
+
+ARRAY_BOUND_BODIES = {
+    "addressed": "rows[0] += 1; return rows[0][0] + rows[0][0];",
+    "read": "return rows[0][0] + rows[1][0];",
+    "advance": "rows[0] += 1; rows[1] += 2; return rows[0][0] + rows[1][0];",
+    "loop": (
+        "for (int i = 0; i < 3; ++i) { rows[0] += 1; } return rows[0][0] + rows[1][0];"
+    ),
+    "loop-reads": (
+        "uint total = 0; for (int i = 0; i < 3; ++i) { total += rows[0][0]; rows[0] += 1; } return total + rows[1][0];"
+    ),
+    "nested": (
+        "for (int i = 0; i < 2; ++i) { for (int j = 0; j < 2; ++j) { rows[j] += i + 1; } } return rows[0][0] + rows[1][0];"
+    ),
+    "branch": (
+        "if (selector == 0) { rows[0] += 1; } else { rows[1] += 2; } return rows[0][0] + rows[1][0];"
+    ),
+    "forward": "return advance_rows(rows);",
+    "saved": (
+        "const device uint* saved = rows[0]; rows[0] += 1; return saved[0] + rows[1][0];"
+    ),
+    "multiple-calls": "return rows[0][0] + rows[1][0];",
+}
+ARRAY_BOUND_DIRECTX_DIAGNOSTICS = {
+    "saved": "pointer-element-escape",
+    "multiple-calls": "element-reassignment-unsupported",
+}
+
+
+def _array_bounds_source(case, *, body=None):
+    body = ARRAY_BOUND_BODIES[case] if body is None else body
+    helpers = ""
+    if "advance_rows(" in body:
+        helpers += """uint advance_rows(const device uint* rows[2]) {
+    rows[0] += 1; rows[1] += 2;
+    return rows[0][0] + rows[1][0];
+}
+"""
+    if "invalidate_rows(" in body:
+        helpers += "void invalidate_rows(const device uint* rows[2]) { rows[0] += 2147483647; }\n"
+    second_call = ""
+    if case == "multiple-calls":
+        second_call = """
+        for (int i = 0; i < 2; ++i) { rows[i] = values + base + 4 + i * 2; }
+        result[2] += consume(rows, uint(index));
+        """
+    source = (
+        """#include <metal_stdlib>
+using namespace metal;
+long source_offset(constant long& offset) { return offset; }
+HELPERS
+uint consume(const device uint* rows[2], uint selector) {
+    BODY
+}
+kernel void read_value(const device uint* values [[buffer(0)]],
+                       constant long& index [[buffer(1)]],
+                       constant long& offset [[buffer(2)]],
+                       device uint* result [[buffer(3)]]) {
+    long base = source_offset(offset);
+    const device uint* rows[2];
+    for (int i = 0; i < 2; ++i) { rows[i] = values + base + i * 2; }
+    result[2] = consume(rows, uint(index));
+    SECOND_CALL
+}
+""".replace("BODY", body)
+        .replace("HELPERS", helpers)
+        .replace("SECOND_CALL", second_call)
+    )
+    if case == "addressed":
+        source = source.replace("rows[2]", "rows[1]")
+        source = source.replace(
+            "const device uint* rows[1];\n    for (int i = 0; i < 2; ++i) { rows[i] = values + base + i * 2; }",
+            "const device uint* row = values + base;",
+        ).replace("consume(rows, uint(index))", "consume(&row, uint(index))")
+    return source
+
+
+def _array_bounds_config(root, case, target="opengl", *, body=None):
+    return replace(
+        _index_config(
+            root,
+            source=_array_bounds_source(case, body=body),
+            target=target,
+            conditions=(
+                dict(entryPoint="read_value", parameter="index", minimum=0, maximum=1),
+                dict(entryPoint="read_value", parameter="offset", minimum=0, maximum=3),
+            ),
+        ),
+        output_dir="out",
+    )
+
+
+@pytest.mark.parametrize(
+    "case,target",
+    [
+        (case, target)
+        for case in ARRAY_BOUND_BODIES
+        for target in ("metal", "directx", "opengl")
+        if not (target == "directx" and case in ARRAY_BOUND_DIRECTX_DIAGNOSTICS)
+    ],
+)
+def test_pointer_array_bounds_follow_source_updates(tmp_path, case, target):
+    payload = translate_project(
+        _array_bounds_config(tmp_path, case, target), format_output=False
+    ).to_json()
+    assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
+    assert not payload["diagnostics"]
+
+
+@pytest.mark.parametrize("case,reason", ARRAY_BOUND_DIRECTX_DIAGNOSTICS.items())
+def test_pointer_array_bounds_report_remaining_directx_restrictions(
+    tmp_path, case, reason
+):
+    payload = translate_project(
+        _array_bounds_config(tmp_path, case, "directx"), format_output=False
+    ).to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert (
+        payload["diagnostics"][0]["details"]["resourcePointerArray"]["reason"] == reason
+    )
+    assert not list((tmp_path / "out").rglob("*.hlsl"))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "rows[0] += 2147483647;",
+        "rows[0] -= 4;",
+        "rows[selector] += 2147483647;",
+        "if (selector == 0) { rows[0] -= 4; }",
+        "invalidate_rows(rows);",
+        "for (int i = 0; i < 2; ++i) { rows[0] += 1073741824; }",
+        "for (int i = 0; i < 2; ++i) { if (i == 0) { rows[0] -= 4; } uint observed = rows[0][0]; rows[0] += 4; }",
+        "while (selector != 0) { rows[0] += 1; selector -= 1; }",
+    ),
+)
+def test_pointer_array_bounds_reject_unproven_mutations(tmp_path, mutation):
+    payload = translate_project(
+        _array_bounds_config(
+            tmp_path, "read", body=mutation + ARRAY_BOUND_BODIES["read"]
+        ),
+        format_output=False,
+    ).to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert any(item["severity"] == "error" for item in payload["diagnostics"])
+    assert not list((tmp_path / "out").rglob("*.glsl"))
+
+
+def test_pointer_array_bounds_require_checked_metadata(tmp_path):
+    config = replace(_array_bounds_config(tmp_path, "read"), metadata_preconditions=())
+    payload = translate_project(config, format_output=False).to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert not list((tmp_path / "out").rglob("*.glsl"))
+
+
+@pytest.mark.parametrize("case", ("read", "addressed"))
+def test_pointer_array_bounds_invalidate_other_argument_effects(tmp_path, case):
+    extent = 1 if case == "addressed" else 2
+    argument = "&row" if case == "addressed" else "rows"
+    source = (
+        _array_bounds_source(case)
+        .replace(
+            "uint consume(",
+            f"uint change_rows(const device uint* rows[{extent}]) {{ rows[0] += 2147483647; return 0; }}\nuint consume(",
+        )
+        .replace(
+            f"consume({argument}, uint(index))",
+            f"consume({argument}, change_rows({argument}))",
+        )
+    )
+    config = _array_bounds_config(tmp_path, case)
+    (tmp_path / "multi.metal").write_text(source)
+    payload = translate_project(config, format_output=False).to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert not list((tmp_path / "out").rglob("*.glsl"))
+
+
+@pytest.mark.parametrize("offset", (-1, 4))
+def test_pointer_array_bounds_validate_uploads(tmp_path, offset):
+    _, package, (descriptor,) = _packages(_array_bounds_config(tmp_path, "read"))
+    with pytest.raises(NativeLoaderDispatchError, match="outside"):
+        _index_request(descriptor, package, 0, offset)
+
+
+@pytest.mark.parametrize("case", ARRAY_BOUND_BODIES)
+def test_pointer_array_bounds_execute_natively(tmp_path, case):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native array bounds"
+        )
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    if target == "directx" and case in ARRAY_BOUND_DIRECTX_DIAGNOSTICS:
+        pytest.skip(
+            f"DirectX rejects this source: {ARRAY_BOUND_DIRECTX_DIAGNOSTICS[case]}"
+        )
+    config = _array_bounds_config(tmp_path, case, target)
+    _, package, (descriptor,) = _packages(config)
+    values = [17 + position * 13 for position in range(16)]
+    for offset, selector in ((0, 0), (1, 1), (3, 0)):
+        first, second = offset, offset + 2
+        if case == "addressed":
+            first = second = offset + 1
+        elif case in {"advance", "forward"}:
+            first += 1
+            second += 2
+        elif case == "loop":
+            first += 3
+        elif case == "nested":
+            first += 3
+            second += 3
+        elif case == "branch":
+            first += selector == 0
+            second += 2 * (selector != 0)
+        expected_words = [GUARD] * 8
+        expected_words[2] = values[first] + values[second]
+        if case == "loop-reads":
+            expected_words[2] += values[first + 1] + values[first + 2]
+        if case == "multiple-calls":
+            expected_words[2] += values[first + 4] + values[second + 4]
+        request, expected = _index_request(
+            descriptor, package, selector, offset, expected_words=expected_words
+        )
+        assert not request.execution_plan.diagnostics
+        run = tmp_path / f"run-{offset}-{selector}"
+        run.mkdir()
+        _execute(
+            request,
+            expected,
+            run,
+            validate=_validate,
+            original_source=_array_bounds_source(case),
+            original_entry="read_value",
+        )
+        evidence = json.loads((run / "evidence.json").read_text())
+        for record in evidence["records"].values():
+            observations = record["details"]["inputObservations"]
+            assert len(observations) == 3
+            assert all(item["unchanged"] for item in observations.values())
+
 
 CONDITIONS = (
     dict(entryPoint="read_value", parameter="index", minimum=-2, maximum=-1),

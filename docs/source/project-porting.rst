@@ -1404,6 +1404,21 @@ shadowing. The existing native pointer controls check these cases on each target
 without adding a CI job. Unproven wide offsets remain structured failures; this
 does not establish bounds for an entire upstream reduction kernel.
 
+OpenGL fixed storage-pointer arrays carry checked element-offset bounds through
+helper specialization. Facts belong to source array elements and each use, not
+to generated parameter names. Assignments, branches, lexical scopes and bounded
+loop iterations update or invalidate those facts; repeated uses retain the
+combined range from every analyzed iteration. Different caller bounds produce
+distinct specializations. Unknown effects, absent metadata, negative offsets,
+overflow and byte-reinterpreted views cannot acquire a proof from this analysis.
+Loop analysis has a bounded work budget and falls back to conservative analysis
+when exact replay cannot be established. Required native controls cover multiple
+elements, addressed views, forwarding, saved pointers and repeated calls with
+guards and unchanged inputs. DirectX still diagnoses selected pointer-element
+aliases and element reassignment outside its canonical initialization plan.
+This does not qualify the full upstream row-reduction family or its iterator
+state, and does not establish complete repository runtime integration.
+
 DirectX mutable storage-pointer array helpers write back their logical offsets
 on both fallthrough and explicit returns. Value returns are evaluated once
 before writeback, including forwarded calls that mutate the array. Conditional
