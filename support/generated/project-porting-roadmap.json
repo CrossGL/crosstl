@@ -6435,12 +6435,21 @@
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects CUDA descriptors with a structured target-unsupported diagnostic; no CUDA physical-layout allocation or execution support is claimed.",
+          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX, OpenGL and Metal. Native loader request construction rejects CUDA descriptors with a structured target-unsupported diagnostic; no CUDA physical-layout allocation or execution support is claimed.",
           "status": "validated_rejection"
         },
         "directx": {
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_hlsl_reflection_preserves_entry_points_resources_and_constants",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
+            "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_applies_to_view_not_larger_allocation",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_footprint_native_readback",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
+            "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -6448,33 +6457,48 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_directx_buffers_uses_reflected_block_size_as_allocation_minimum",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_directx_native_loader"
           ],
-          "notes": "HLSL host reflection emits scalarLayout for float, int, and uint StructuredBuffer/RWStructuredBuffer resources and one-member scalar cbuffer declarations. The contract records physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed blocks. Native loader ABI packaging preserves these fields, request construction rejects missing or mismatched layouts, and DirectX CBV preparation validates the fixed block before allocating at least blockSizeBytes with 256-byte API alignment. Windows Direct3D CI translates, reflects, packages, dispatches, and executes pinned MLX arangeuint32 with exact output [3, 5, 7, 9]. Vectors, matrices, fixed arrays, aggregates, packed or widened types, arbitrary offsets, and multi-member blocks are not inferred.",
+          "notes": "HLSL host reflection records exact supported scalar and vector structured-buffer layouts and one-member constant blocks. Flat homogeneous structs with 1-64 float, int, uint, int64_t or uint64_t members retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Allocation sizing uses complete struct elements, and request validation rejects mixed, nested, padded or malformed layouts rather than treating structs as native vectors. Windows CI requires generic struct-buffer readback and the current-pinned MLX complex-power kernel through the public native-loader path. Existing MLX arange scalar execution remains covered. This is bounded layout and kernel execution support, not whole-repository runtime redirection.",
           "status": "supported"
         },
         "hip": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects HIP descriptors with a structured target-unsupported diagnostic; no HIP physical-layout allocation or execution support is claimed.",
+          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX, OpenGL and Metal. Native loader request construction rejects HIP descriptors with a structured target-unsupported diagnostic; no HIP physical-layout allocation or execution support is claimed.",
           "status": "validated_rejection"
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_scalar_layouts",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_vector_alignment",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_homogeneous_struct_is_not_a_vector",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_unproven_layouts_remain_unavailable",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_preserves_layouts_and_single_buffer_namespace",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_readback",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects Metal descriptors with a structured target-unsupported diagnostic; no Metal physical-layout allocation or execution support is claimed.",
-          "status": "validated_rejection"
+          "notes": "Metal reflection preserves exact scalar, tightly packed 32-bit vector and flat homogeneous struct buffer layouts through package inspection, loader descriptors and native dispatch. Constant pointers remain read-only runtime buffers, while supported constant scalar/vector references are fixed values. Native execution validates compiled argument presence, alignment, allocation views and device threadgroup limits. Required macOS CI exercises public package readback and all 15 current MLX complex-power shapes. Unsupported physical layouts remain fail-closed; this does not establish MLX host redirection or full-suite parity.",
+          "status": "supported"
         },
         "mojo": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects Mojo descriptors with a structured target-unsupported diagnostic; no Mojo physical-layout allocation or execution support is claimed.",
+          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX, OpenGL and Metal. Native loader request construction rejects Mojo descriptors with a structured target-unsupported diagnostic; no Mojo physical-layout allocation or execution support is claimed.",
           "status": "validated_rejection"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_host_reflection.py::def test_glsl_reflection_records_exact_mlx_scalar_block_layouts",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_reflection_retains_exact_members",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_dispatch_rejects_forged_layout",
+            "tests/test_translator/test_buffer_requirements.py::def test_package_dispatch_enforces_minimum_not_exact_extent",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_applies_to_view_not_larger_allocation",
+            "tests/test_translator/test_buffer_requirements.py::def test_minimum_footprint_native_readback",
+            "tests/test_translator/test_struct_buffer_layouts.py::def test_struct_buffer_native_readback",
+            "tests/test_translator/test_mlx_current_complex_power.py::def test_current_mlx_complex_power_native_loader",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_binary_shape_branch_cut_preserves_uploaded_zero_sign",
             "tests/test_translator/test_host_reflection.py::def test_source_reflection_does_not_guess_aggregate_or_implicit_layouts",
             "tests/test_translator/test_native_loader_abi_integration.py::def test_runtime_packages_preserve_reflected_native_loader_contract",
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_incomplete_or_incompatible_physical_layouts",
@@ -6482,42 +6506,42 @@
             "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_zero_pads_scalar_uniform_block_allocation",
             "tests/test_translator/test_mlx_arange_native_loader.py::def test_pinned_mlx_arange_executes_through_opengl_native_loader"
           ],
-          "notes": "GLSL host reflection emits scalarLayout for explicit std430 one-member float, int, and uint runtime-array buffer blocks and explicit std140 one-member scalar uniform blocks. The contract records physicalType, elementType, elementSizeBytes, elementStrideBytes, alignmentBytes, memberOffsetBytes, storageLayout, runtimeSized, optional memberName, and blockSizeBytes for fixed blocks. Native loader ABI packaging preserves these fields, request construction rejects missing or mismatched layouts, and OpenGL UBO preparation zero-pads scalar uploads to blockSizeBytes while storage-buffer readback retains its logical payload size. Linux EGL CI translates, reflects, packages, dispatches, and executes pinned MLX arangeuint32 with exact output [3, 5, 7, 9]. Implicit layouts and unsupported aggregate shapes are not inferred.",
+          "notes": "GLSL host reflection records explicit std430 scalar/vector storage arrays and std140 single-value uniform blocks. Flat homogeneous structs with 1-64 float, int, uint, int64_t or uint64_t members retain their actual type, member names, offsets, scalar alignment and stride through packaging and dispatch. Allocation sizing uses complete struct elements, and request validation rejects mixed, nested, padded or malformed layouts rather than treating structs as native vectors. Linux EGL CI requires generic struct-buffer readback and the current-pinned MLX complex-power kernel through the public native-loader path. Existing MLX arange scalar execution remains covered. Implicit layouts are not inferred, and whole-repository runtime redirection remains separate.",
           "status": "supported"
         },
         "rust": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects Rust descriptors with a structured target-unsupported diagnostic; no Rust physical-layout allocation or execution support is claimed.",
+          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX, OpenGL and Metal. Native loader request construction rejects Rust descriptors with a structured target-unsupported diagnostic; no Rust physical-layout allocation or execution support is claimed.",
           "status": "validated_rejection"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects Slang descriptors with a structured target-unsupported diagnostic; no Slang physical-layout allocation or execution support is claimed.",
+          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX, OpenGL and Metal. Native loader request construction rejects Slang descriptors with a structured target-unsupported diagnostic; no Slang physical-layout allocation or execution support is claimed.",
           "status": "validated_rejection"
         },
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects Vulkan descriptors with a structured target-unsupported diagnostic; no Vulkan physical-layout allocation or execution support is claimed.",
+          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX, OpenGL and Metal. Native loader request construction rejects Vulkan descriptors with a structured target-unsupported diagnostic; no Vulkan physical-layout allocation or execution support is claimed.",
           "status": "validated_rejection"
         },
         "webgl": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects WebGL descriptors with a structured target-unsupported diagnostic; no WebGL physical-layout allocation or execution support is claimed.",
+          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX, OpenGL and Metal. Native loader request construction rejects WebGL descriptors with a structured target-unsupported diagnostic; no WebGL physical-layout allocation or execution support is claimed.",
           "status": "validated_rejection"
         },
         "wgsl": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX and OpenGL. Native loader request construction rejects WGSL descriptors with a structured target-unsupported diagnostic; no WGSL physical-layout allocation or execution support is claimed.",
+          "notes": "The exact scalar physical layout-to-native-runtime contract is limited to DirectX, OpenGL and Metal. Native loader request construction rejects WGSL descriptors with a structured target-unsupported diagnostic; no WGSL physical-layout allocation or execution support is claimed.",
           "status": "validated_rejection"
         }
       }
@@ -7096,7 +7120,7 @@
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "notes": "The descriptor-to-request bridge is restricted to DirectX, OpenGL and Metal compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
           "status": "validated_rejection"
         },
         "directx": {
@@ -7127,21 +7151,28 @@
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "notes": "The descriptor-to-request bridge is restricted to DirectX, OpenGL and Metal compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
           "status": "validated_rejection"
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_preserves_layouts_and_single_buffer_namespace",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_loader_requires_workgroup_size",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_operation_deadline_terminates_process",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_alias_views_share_storage_and_reject_conflicting_uploads",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_function_constant_types_and_ids",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_readback",
+            "tests/test_translator/test_metal_native_runtime.py::def test_metal_package_native_function_constants",
+            "tests/test_translator/test_mlx_current_binary_shapes.py::def test_current_mlx_complex_power_shape_native_parity"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
-          "status": "validated_rejection"
+          "notes": "The Metal descriptor-to-request bridge verifies packaged source identity, exact buffer names and physical layouts, the shared buffer namespace, explicit dispatch geometry and scalar function-constant values. MetalRuntimeParityAdapter compiles an identity-checked source snapshot and MetalComputeRuntime executes it through a bounded Swift/Metal worker on macOS 13 or newer. The worker checks compiled bindings and native pipeline limits before execution and returns exact typed byte readbacks. Native CI requires multidimensional struct-buffer execution, both function-constant branches and current MLX complex-power package parity. The runtime is process-isolated and does not rewrite MLX host code or provide persistent streams or full-suite parity.",
+          "status": "supported"
         },
         "mojo": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "notes": "The descriptor-to-request bridge is restricted to DirectX, OpenGL and Metal compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
           "status": "validated_rejection"
         },
         "opengl": {
@@ -7172,35 +7203,35 @@
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "notes": "The descriptor-to-request bridge is restricted to DirectX, OpenGL and Metal compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
           "status": "validated_rejection"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "notes": "The descriptor-to-request bridge is restricted to DirectX, OpenGL and Metal compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
           "status": "validated_rejection"
         },
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "notes": "The descriptor-to-request bridge is restricted to DirectX, OpenGL and Metal compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
           "status": "validated_rejection"
         },
         "webgl": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "notes": "The descriptor-to-request bridge is restricted to DirectX, OpenGL and Metal compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
           "status": "validated_rejection"
         },
         "wgsl": {
           "evidence": [
             "tests/test_translator/test_native_loader_dispatch.py::def test_rejects_unsupported_target_stage_and_artifact_combinations"
           ],
-          "notes": "The descriptor-to-request bridge is restricted to DirectX and OpenGL compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
+          "notes": "The descriptor-to-request bridge is restricted to DirectX, OpenGL and Metal compute artifacts and rejects other target descriptors with a structured project.native-loader-dispatch.target-unsupported diagnostic.",
           "status": "validated_rejection"
         }
       }
@@ -12095,10 +12126,10 @@
       "metal": {
         "diagnostic": 1,
         "partial": 1,
-        "supported": 30,
+        "supported": 32,
         "unknown": 0,
         "unsupported": 3,
-        "validated_rejection": 8
+        "validated_rejection": 6
       },
       "mojo": {
         "diagnostic": 1,

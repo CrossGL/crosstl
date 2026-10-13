@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from crosstl.project.buffer_requirements import valid_minimum_binding_size
 from crosstl.project.native_loader_abi import (
     NativeLoaderABIError,
     _validate_descriptor,
@@ -36,10 +37,17 @@ from crosstl.project.runtime_verification import (
 _ERROR_PREFIX = "project.native-loader-dispatch"
 _COMPUTE_STAGE = "compute"
 _TARGET_ARTIFACT_FORMATS = {
+    "metal": frozenset(("Metal source",)),
     "directx": frozenset(("HLSL source", "DXIL binary")),
     "opengl": frozenset(("GLSL source", "SPIR-V binary")),
 }
 _TARGET_RESOURCE_NAMESPACES = {
+    "metal": {
+        ("buffer", "read"): "buffer",
+        ("buffer", "write"): "buffer",
+        ("buffer", "read_write"): "buffer",
+        ("constant-buffer", "read"): "buffer",
+    },
     "directx": {
         ("buffer", "read"): "srv",
         ("buffer", "write"): "uav",
@@ -103,6 +111,7 @@ _PHYSICAL_TYPES = {
     "uint64": "uint64_t",
 }
 _TARGET_STORAGE_LAYOUTS = {
+    "metal": {"buffer": "metal-buffer", "constant-buffer": "metal-constant"},
     "directx": {
         "buffer": "hlsl-structured-buffer",
         "constant-buffer": "hlsl-constant-buffer",
@@ -161,7 +170,7 @@ def build_native_loader_dispatch_request(
     *,
     expected_target: str | None = None,
 ) -> RuntimeExecutionRequest:
-    """Build and preflight one DirectX or OpenGL native runtime request.
+    """Build and preflight one DirectX, OpenGL or Metal native runtime request.
 
     The descriptor remains the source of truth for artifact identity, resource
     coordinates, entry-point metadata, and specialization identities. Callers
@@ -184,6 +193,12 @@ def build_native_loader_dispatch_request(
         entry_point=entry_point["name"],
         reflected_workgroup_size=_reflected_workgroup_size(entry_point),
     )
+    if target == "metal" and not dispatch.workgroup_size:
+        raise NativeLoaderDispatchError(
+            "workgroup-size-missing",
+            "Metal native dispatch requires an explicit or reflected workgroup size.",
+            path="$.dispatchGeometry.workgroupSize",
+        )
     inputs = _with_derived_execution_inputs(
         inputs,
         normalized["bindings"],
@@ -299,7 +314,7 @@ def _validated_target(
     if target not in _TARGET_ARTIFACT_FORMATS:
         raise NativeLoaderDispatchError(
             "target-unsupported",
-            "Native loader dispatch supports DirectX and OpenGL targets only.",
+            "Native loader dispatch supports DirectX, OpenGL and Metal targets only.",
             path="$.target",
             details={
                 "target": target,
@@ -318,7 +333,7 @@ def _validated_target(
         if expected not in _TARGET_ARTIFACT_FORMATS:
             raise NativeLoaderDispatchError(
                 "expected-target-invalid",
-                "Expected target must identify DirectX or OpenGL.",
+                "Expected target must identify DirectX, OpenGL or Metal.",
                 path="$.expectedTarget",
                 details={"value": expected_target},
             )
@@ -339,9 +354,11 @@ def _validated_target(
             path="$.artifact.format",
             details={
                 "target": target,
-                "expectedFormat": (
-                    "HLSL source" if target == "directx" else "GLSL source"
-                ),
+                "expectedFormat": {
+                    "directx": "HLSL source",
+                    "opengl": "GLSL source",
+                    "metal": "Metal source",
+                }[target],
                 "supportedFormats": sorted(supported_formats),
                 "actualFormat": actual_format,
             },
@@ -1022,7 +1039,7 @@ def _resource_bindings(
         if coordinates["set"] != 0:
             raise NativeLoaderDispatchError(
                 "resource-set-unsupported",
-                "DirectX and OpenGL native runtime adapters currently require resource set zero.",
+                "Native runtime buffer adapters require resource set zero.",
                 path=f"{path}.coordinates.set",
                 details={"target": target, "name": name, "set": coordinates["set"]},
             )
@@ -1136,6 +1153,31 @@ def _validated_scalar_layout(
             "Native runtime buffer bindings require a concrete scalar or vector layout.",
             path=path,
             details={"binding": runtime_value.name},
+        )
+    # Metal's constant address space does not imply a fixed-size argument.
+    if (
+        target == "metal"
+        and resource_kind == "constant-buffer"
+        and layout.get("storageLayout") == "metal-buffer"
+        and layout.get("runtimeSized") is True
+    ):
+        resource_kind = "buffer"
+    if "minimumBindingSizeBytes" in layout and not valid_minimum_binding_size(
+        layout["minimumBindingSizeBytes"]
+    ):
+        raise NativeLoaderDispatchError(
+            "resource-minimum-binding-size-invalid",
+            "Minimum binding size must be a positive signed 64-bit byte count.",
+            path=f"{path}.minimumBindingSizeBytes",
+            details={"binding": runtime_value.name},
+        )
+    if "structMembers" in layout or "componentCount" in layout:
+        return _validated_struct_layout(
+            layout,
+            runtime_value=runtime_value,
+            target=target,
+            resource_kind=resource_kind,
+            path=path,
         )
     element_type = _buffer_dtype(layout.get("elementType"), path=f"{path}.elementType")
     element_size = layout.get("elementSizeBytes")
@@ -1269,6 +1311,86 @@ def _validated_scalar_layout(
                     "elementSizeBytes": element_size,
                 },
             )
+    return copy.deepcopy(dict(layout))
+
+
+def _validated_struct_layout(
+    layout: Mapping[str, Any],
+    *,
+    runtime_value: RuntimeValue,
+    target: str,
+    resource_kind: str,
+    path: str,
+) -> dict[str, Any]:
+    members = layout.get("structMembers")
+    count = layout.get("componentCount")
+    scalar_type = _PHYSICAL_TYPES[runtime_value.dtype]
+    scalar_size = _DTYPE_SIZES[runtime_value.dtype]
+    type_name = layout.get("physicalType")
+    valid = (
+        resource_kind == "buffer"
+        and isinstance(members, list)
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and 1 <= count <= 64
+        and len(members) == count
+        and isinstance(type_name, str)
+        and re.fullmatch(r"[A-Za-z_]\w*", type_name) is not None
+        and type_name not in _PHYSICAL_TYPES.values()
+        and "vectorWidth" not in layout
+        and layout.get("elementType") == runtime_value.dtype
+        and layout.get("storageLayout")
+        == _TARGET_STORAGE_LAYOUTS[target][resource_kind]
+        and layout.get("runtimeSized") is True
+    )
+    if valid:
+        expected_sizes = {
+            "elementSizeBytes": scalar_size * count,
+            "elementStrideBytes": scalar_size * count,
+            "alignmentBytes": scalar_size,
+            "memberOffsetBytes": 0,
+        }
+        valid = all(
+            type(layout.get(key)) is int and layout[key] == value
+            for key, value in expected_sizes.items()
+        )
+    if valid:
+        names = set()
+        for index, member in enumerate(members):
+            if not isinstance(member, Mapping):
+                valid = False
+                break
+            name = member.get("name")
+            if (
+                set(member) != {"name", "physicalType", "offsetBytes"}
+                or not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z_]\w*", name) is None
+                or name in names
+                or member.get("physicalType") != scalar_type
+                or type(member.get("offsetBytes")) is not int
+                or member["offsetBytes"] != index * scalar_size
+            ):
+                valid = False
+                break
+            names.add(name)
+    if not valid:
+        raise NativeLoaderDispatchError(
+            "resource-layout-unsupported",
+            "Native struct buffers require exact tightly packed homogeneous scalar members.",
+            path=path,
+            details={"binding": runtime_value.name},
+        )
+    if math.prod(runtime_value.shape) % count:
+        raise NativeLoaderDispatchError(
+            "resource-layout-mismatch",
+            "Runtime value shape does not contain complete reflected struct elements.",
+            path=path,
+            details={
+                "binding": runtime_value.name,
+                "componentCount": count,
+                "shape": list(runtime_value.shape),
+            },
+        )
     return copy.deepcopy(dict(layout))
 
 
@@ -1470,6 +1592,8 @@ def _specialization_constants(
             "descriptorProvenance": copy.deepcopy(constant.get("provenance", {})),
         }
         kind = "specialization-constant"
+        if target == "metal":
+            kind = "function-constant"
         if target == "directx":
             kind = "compile-time-constant"
             metadata["mechanism"] = "compiled"
