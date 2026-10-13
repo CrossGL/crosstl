@@ -22,7 +22,42 @@ This is a 24/17,478 deterministic translation and native-compiler increment with
 2/17,478 numerical runtime coverage, not full-tree coverage, upstream MLX
 test-suite execution, or MLX host-runtime redirection.
 
+A separate native gate exercises all 15 discovered `Powercomplex64` entry
+shapes at the same `d9add9d` pin. Its 873 complex outputs cover scalar/vector
+broadcasting, multidimensional grids, non-contiguous inputs, zero strides,
+32/64-bit index variants, and partial final tiles in four-dimensional gathers.
+Every shape retains its random cases and tests both signed-zero sides of the
+negative-real branch cut with a half exponent, using the same error bound.
+Inputs and readbacks are retained separately for all three datasets.
+DirectX and OpenGL use the public runtime-package and native-loader APIs.
+Metal executes the original source, generated kernels and public runtime package
+for every dataset, retaining 873 comparisons on each path. Each output is
+checked against an independently indexed CPU reference; required CI retains
+the compiler logs, packages, bindings and numerical results. The OpenGL
+index-range assertions are bounded fixture preconditions, not general runtime
+bounds checks. Other binary operators and types, the complete upstream suite,
+and MLX host-runtime redirection remain outside this proof.
+
+The DirectX/OpenGL two- and three-dimensional cases also verify that truncated
+stride buffers are rejected before dispatch. Their minimum lengths come from
+proven constant-index accesses in the generated helpers, not from MLX-specific
+buffer names. Valid workloads still run unchanged; this preflight guarantee does
+not cover arbitrary dynamic indexing.
+
 ## Scope
+
+The [Metal host integration harness](METAL_HOST.md) redirects selected current-pinned
+complex-power kernels through MLX's own runtime and runs its unchanged upstream
+operations tests. Its dispatch trace distinguishes actual host execution from
+compile-only coverage. Eight host layouts retain 402 complex readbacks across
+ordinary inputs and both signed-zero branch cuts; unselected operations still
+use upstream kernels.
+
+The [portable host adapter](portable_host/README.md) connects MLX's C++ GPU
+evaluation to native DirectX/OpenGL packages with Metal and CUDA disabled. It
+covers five typed array-creation entries, unchanged upstream arange tests and
+explicit unsupported-operation failures. This synchronous adapter does not yet
+implement a complete MLX backend.
 
 The current harness verifies:
 
@@ -60,7 +95,7 @@ The current harness verifies:
   `unary.metal` entries to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
   `main` artifact across the same five shapes, 37 operators, 20 type pairs,
-  1,243 materializations, and 3,363 reflected resources, totaling 4,060,696
+  1,243 materializations, and 3,363 reflected resources, totaling 4,119,841
   generated GLSL bytes. Translation requires three explicit host/runtime
   index-range preconditions for `offset + i`, `out_idx++`, and `idx`; these are
   portability promises rather than inferred or runtime-enforced bounds. The
@@ -95,7 +130,8 @@ The current harness verifies:
   reflection, and native compiler coverage on both targets, not numerical
   execution or MLX host runtime redirection;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 2,496
-  discovered current-pinned copy entries from `copy.metal`. The schema-v2
+  discovered copy entries from `copy.metal` at the legacy reference revision
+  `846d176227a0ac13d2667e58d2bb68b322109ab0`. The schema-v2
   `contracts/copy.metal-roundtrip.json` contract spans 30 shapes, 16 concrete
   templates, 13 source types, all 169 conversion pairs, 6,566 exact
   materializations, and 8,684 reflected resources. It records the conditional
@@ -105,7 +141,11 @@ The current harness verifies:
   macOS shards each compile 104 exact artifacts with warnings fatal and require
   2,496 non-empty AIR objects in aggregate. This is complete copy translation,
   reflection, and native compiler coverage, not numerical execution or MLX host
-  runtime redirection;
+  runtime redirection. The compiler-gated identity refresh retains source
+  coverage, materializations and resource ABI; generated differences are limited
+  to helper linkage qualifiers. `artifactIdentityRefresh` records the new audit
+  separately from the historical `proof` metadata. Neither record establishes
+  coverage of a newer MLX revision;
 - selected-entry translation of all 2,496 discovered current-pinned
   `copy.metal` entries to OpenGL. The schema-v2
   `contracts/copy.opengl-translation.json` contract pins every standalone

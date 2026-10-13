@@ -35782,7 +35782,7 @@ def _runtime_package_inspection_host_interface(
             )
         return host_interface
 
-    reflected_targets = {"directx", "opengl", "webgl", "vulkan"}
+    reflected_targets = {"directx", "opengl", "webgl", "vulkan", "metal"}
     if target_name in reflected_targets:
         if not _is_non_empty_string(package_relative_path):
             return _runtime_host_interface_empty(
