@@ -89,11 +89,12 @@ def test_fixed_stride_collectives_compile(tmp_path, case, stride_target):
     ast = parse(_canonical(CASES[case][0], declarations=LOCAL_CONSTANTS.get(case, "")))
     generated = generator.generate_stage(ast, "compute")
     assert generated == generator.generate_stage(ast, "compute")
-    assert (
-        "GroupMemoryBarrierWithGroupSync"
-        if stride_target == "directx"
-        else "barrier();"
-    ) in generated
+    if CASES[case][1]:
+        assert (
+            "GroupMemoryBarrierWithGroupSync"
+            if stride_target == "directx"
+            else "barrier();"
+        ) in generated
     assert "WaveActiveSum(" not in generated
     _compile(generated, stride_target, tmp_path)
 

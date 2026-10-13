@@ -1344,7 +1344,22 @@ proved and its arguments remain invariant across calls. Counter-dependent calls,
 even those that appear effect-free on the first iteration, cannot establish this
 proof. Native controls retain the source loop and verify exact output values,
 untouched inputs and output guards. The pinned arg-reduce demo separately exercises
-checked metadata for two entries; it does not establish full reduction coverage.
+checked metadata for all 24 compiler entries and 14 numerical entries; it does
+not establish full reduction coverage.
+
+Owned private aggregates can carry initialized integer fields through resolved
+getters and bounded helper updates. Field writes retain their declared storage
+conversions, nested calls retain private frames, and by-value arguments cannot
+change the caller's aggregate. A caller loop can summarize one unconditional
+additive field update when its increment is independent of aggregate state.
+Positive counter strides and bounded varying starts are supported when their
+dependencies remain invariant and all terminating updates fit the source types.
+The analysis does not replace helper computations or unroll live loops. Aliased
+references, volatile objects, unknown effects, nonlinear field updates and
+overflow cannot establish a range. Native Metal and OpenGL controls check
+per-invocation results, unchanged inputs and output guards; Windows requires
+the same controls through the existing native job. These bounds do not yet
+carry every generated pointer base through subsequent alias construction.
 
 Ordinary arithmetic uses each operand's lexical source type, including promoted
 byte and short operands mixed with 32-bit or 64-bit locals. Stored integer facts

@@ -493,9 +493,12 @@ Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
 rather than treating pre-conversion values as valid offsets. The unchanged
-`col_reduce_2pass_large_1_32_32_reduce_sumfloat16` probe advances to the separate
-`LoopedElemToLoc::location` state-bound limitation. This is translation progress,
-not a passing column-reduction execution or complete reduction coverage.
+`col_reduce_2pass_large_1_32_32_reduce_sumfloat16` probe now retains private cursor
+updates and the `LoopedElemToLoc::location` return range through its strided loop.
+It still rejects the composed address because the generated base offset loses
+its source bounds. A reduced kernel containing only a pointer increment and
+alias construction reproduces this separate limitation. This is translation
+progress, not a passing column-reduction execution or complete reduction coverage.
 
 The following reviews describe earlier artifact revisions, before the checked
 metadata identity refresh. Their Windows numerical results do not qualify the

@@ -47,12 +47,33 @@ class _MetadataArray:
     elements: dict
 
 
+@dataclass(frozen=True)
+class _Aggregate:
+    source_type: object
+    fields: dict
+
+
+@dataclass(frozen=True)
+class _CallResult:
+    value: object
+    updates: dict
+    function: object
+
+
 class _ReturnAnalysis:
     def __init__(self, generator, intervals, constants):
         self.generator = generator
         self.intervals = intervals
         self.constants = constants
         self.remaining = 4096
+
+    def aggregate_fields(self, source_type):
+        if isinstance(source_type, (PointerType, ReferenceType, ArrayType)):
+            return {}
+        name = self.generator.type_name_string(source_type) or ""
+        if "volatile" in name.split():
+            return {}
+        return self.generator.glsl_struct_member_types(name)
 
     def component_type(self, source_type):
         info = self.generator.glsl_value_type_info(source_type)
@@ -77,6 +98,14 @@ class _ReturnAnalysis:
             return None
         if isinstance(first, _MetadataArray):
             return first if all(value == first for value in values) else None
+        if isinstance(first, _Aggregate):
+            return _Aggregate(
+                first.source_type,
+                {
+                    name: self.join([value.fields.get(name) for value in values])
+                    for name in first.fields
+                },
+            )
         if isinstance(first, _Vector):
             components = tuple(
                 self.join([value.components[i] for value in values])
@@ -100,6 +129,13 @@ class _ReturnAnalysis:
         return bits, info["family"] == "int"
 
     def convert(self, value, source_type):
+        if isinstance(value, _Aggregate):
+            name = self.generator.type_name_string
+            return (
+                _Aggregate(source_type, dict(value.fields))
+                if name(value.source_type) == name(source_type)
+                else None
+            )
         info = self.generator.glsl_value_type_info(source_type)
         if info is not None and 2 <= info["width"] <= 4 and isinstance(value, _Vector):
             if len(value.components) != info["width"]:
@@ -142,9 +178,26 @@ class _ReturnAnalysis:
             return None
         return _Value(source_type, [bounds])
 
-    def caller_value(self, expression):
+    def caller_value(self, expression, active=()):
+        self.remaining -= 1
+        if self.remaining < 0:
+            return None
         generator = self.generator
         source_type = generator.glsl_source_expression_type(expression)
+        fields = self.aggregate_fields(source_type)
+        if fields:
+            name = generator.type_name_string(source_type)
+            if name in active or len(active) >= 8:
+                return None
+            return _Aggregate(
+                source_type,
+                {
+                    member: self.caller_value(
+                        MemberAccessNode(expression, member), (*active, name)
+                    )
+                    for member in fields
+                },
+            )
         if isinstance(expression, IdentifierNode):
             prefix = f"@metadata:{expression.name}["
             elements = {}
@@ -180,8 +233,8 @@ class _ReturnAnalysis:
         if (
             left is None
             or right is None
-            or isinstance(left, _MetadataArray)
-            or isinstance(right, _MetadataArray)
+            or isinstance(left, (_MetadataArray, _Aggregate))
+            or isinstance(right, (_MetadataArray, _Aggregate))
         ):
             return None
         source_type = self.generator.glsl_common_arithmetic_type(
@@ -229,6 +282,17 @@ class _ReturnAnalysis:
     def constructor(self, source_type, values):
         if any(value is None for value in values):
             return None
+        fields = self.aggregate_fields(source_type)
+        if fields:
+            if len(values) != len(fields):
+                return None
+            converted = {
+                name: self.convert(value, field_type)
+                for (name, field_type), value in zip(fields.items(), values)
+            }
+            return (
+                _Aggregate(source_type, converted) if all(converted.values()) else None
+            )
         info = self.generator.glsl_value_type_info(source_type)
         if info is None:
             return None
@@ -298,6 +362,8 @@ class _ReturnAnalysis:
             )
         if isinstance(expression, MemberAccessNode):
             owner = self.expression(expression.object, bindings, active)
+            if isinstance(owner, _Aggregate):
+                return owner.fields.get(str(expression.member))
             index = generator.glsl_index_component_index(expression.member)
             if (
                 isinstance(owner, _Vector)
@@ -342,9 +408,8 @@ class _ReturnAnalysis:
             if any(value is None for value in values):
                 return None
             if (
-                self.component_type(name) is not None
-                and name not in generator.function_return_types
-            ):
+                self.component_type(name) is not None or self.aggregate_fields(name)
+            ) and name not in generator.function_return_types:
                 return self.constructor(name, values)
             if (
                 name == "buffer_load"
@@ -383,6 +448,13 @@ class _ReturnAnalysis:
         )
 
     def call(self, expression, values, active):
+        result = self.invoke(expression, values, active, allow_updates=False)
+        return result.value if result is not None else None
+
+    def invoke(self, expression, values, active, *, allow_updates):
+        self.remaining -= 1
+        if self.remaining < 0 or len(active) > 32:
+            return None
         generator = self.generator
         name = generator.function_call_name(expression)
         candidates = list(generator.glsl_function_overloads_by_name.get(name, ()))
@@ -432,20 +504,56 @@ class _ReturnAnalysis:
         if len(winners) != 1:
             return None
         function = winners[0]
+        if allow_updates:
+            arguments = list(expression.arguments or ())
+            for index, (parameter, value) in enumerate(
+                zip(function.parameters, values)
+            ):
+                if not isinstance(
+                    value, _Aggregate
+                ) or "inout" not in generator.glsl_parameter_qualifiers(parameter):
+                    continue
+                argument = arguments[index]
+                if not isinstance(argument, IdentifierNode):
+                    return None
+                for other_index, other in enumerate(function.parameters):
+                    if other_index == index:
+                        continue
+                    if isinstance(other.param_type, ReferenceType) or set(
+                        generator.glsl_parameter_qualifiers(other)
+                    ) & {"inout", "out"}:
+                        dependencies = generator.glsl_interval_dependency_names(
+                            arguments[other_index]
+                        )
+                        if generator.glsl_interval_key_sets_overlap(
+                            {argument.name}, dependencies
+                        ):
+                            return None
+        is_void = generator.type_name_string(function.return_type) == "void"
         if (
             id(function) in active
             or isinstance(function.return_type, (PointerType, ReferenceType))
-            or self.component_type(function.return_type) is None
+            or not (
+                self.component_type(function.return_type) is not None
+                or self.aggregate_fields(function.return_type)
+                or is_void
+                and allow_updates
+            )
         ):
             return None
         statements = generator.glsl_software_subgroup_statement_list(function.body)
-        if not statements or not isinstance(statements[-1], ReturnNode):
+        if (
+            function.body is None
+            or not is_void
+            and (not statements or not isinstance(statements[-1], ReturnNode))
+        ):
             return None
         # Value parameters and locals belong to this call's frame. References
         # and metadata keep their source identity and remain read-only below.
         bindings = {}
         readonly = set()
-        for parameter, value in zip(function.parameters, values):
+        mutable = {}
+        for index, (parameter, value) in enumerate(zip(function.parameters, values)):
             source_type = parameter.param_type
             nodes = [parameter, source_type]
             if parameter.name in bindings:
@@ -456,8 +564,11 @@ class _ReturnAnalysis:
                 source_type = source_type.referenced_type
                 nodes.append(source_type)
                 readonly.add(parameter.name)
+            qualifiers = set(generator.glsl_parameter_qualifiers(parameter))
             if (
-                set(generator.glsl_parameter_qualifiers(parameter)) & {"out", "inout"}
+                "out" in qualifiers
+                or "inout" in qualifiers
+                and not isinstance(value, _Aggregate)
                 or any(
                     "volatile" in (getattr(node, "qualifiers", ()) or ())
                     for node in nodes
@@ -470,6 +581,11 @@ class _ReturnAnalysis:
                 )
             ):
                 return None
+            if "inout" in qualifiers:
+                if allow_updates:
+                    mutable[index] = parameter.name
+                else:
+                    readonly.add(parameter.name)
             if "const" in (getattr(parameter, "qualifiers", ()) or ()):
                 readonly.add(parameter.name)
             if isinstance(value, _MetadataArray):
@@ -507,15 +623,33 @@ class _ReturnAnalysis:
             if converted is None:
                 return None
             bindings[parameter.name] = (
-                _Vector(parameter.param_type, converted.components)
-                if isinstance(converted, _Vector)
-                else _Value(parameter.param_type, converted.intervals)
+                _Aggregate(parameter.param_type, dict(converted.fields))
+                if isinstance(converted, _Aggregate)
+                else (
+                    _Vector(parameter.param_type, converted.components)
+                    if isinstance(converted, _Vector)
+                    else _Value(parameter.param_type, converted.intervals)
+                )
             )
         active = (*active, id(function))
-        if not self.statements(statements[:-1], bindings, readonly, active):
+        has_return = bool(statements and isinstance(statements[-1], ReturnNode))
+        body = statements[:-1] if has_return else statements
+        if not self.statements(body, bindings, readonly, active):
             return None
-        value = self.expression(statements[-1].value, bindings, active)
-        return self.convert(value, function.return_type)
+        if is_void:
+            if has_return and statements[-1].value is not None:
+                return None
+            value = None
+        else:
+            value = self.convert(
+                self.expression(statements[-1].value, bindings, active),
+                function.return_type,
+            )
+            if value is None:
+                return None
+        return _CallResult(
+            value, {index: bindings[name] for index, name in mutable.items()}, function
+        )
 
     def truth(self, expression, bindings, active):
         self.remaining -= 1
@@ -590,15 +724,23 @@ class _ReturnAnalysis:
                     or "volatile" in statement.qualifiers
                 ):
                     return False
-                value = self.convert(
-                    self.expression(statement.initial_value, bindings, active),
-                    statement.var_type,
+                fields = self.aggregate_fields(statement.var_type)
+                value = (
+                    _Aggregate(statement.var_type, {name: None for name in fields})
+                    if fields and statement.initial_value is None
+                    else self.convert(
+                        self.expression(statement.initial_value, bindings, active),
+                        statement.var_type,
+                    )
                 )
                 if value is None:
                     return False
                 bindings[statement.name] = value
                 if "const" in statement.qualifiers:
                     readonly.add(statement.name)
+            elif isinstance(statement, FunctionCallNode):
+                if not self.apply_call(statement, bindings, readonly, active):
+                    return False
             elif isinstance(statement, ForNode):
                 if not self.loop(statement, bindings, readonly, active):
                     return False
@@ -639,7 +781,22 @@ class _ReturnAnalysis:
                 ):
                     return False
                 prior = self.expression(target, bindings, active)
-                if not isinstance(prior, (_Value, _Vector)):
+                aggregate = bindings[owner.name]
+                if isinstance(target, MemberAccessNode) and isinstance(
+                    aggregate, _Aggregate
+                ):
+                    field_type = self.aggregate_fields(aggregate.source_type).get(
+                        str(target.member)
+                    )
+                    value = self.convert(value, field_type)
+                    if value is None:
+                        return False
+                    bindings[owner.name] = _Aggregate(
+                        aggregate.source_type,
+                        {**aggregate.fields, str(target.member): value},
+                    )
+                    continue
+                if not isinstance(prior, (_Value, _Vector, _Aggregate)):
                     return False
                 value = self.convert(value, prior.source_type)
                 if value is None:
@@ -657,6 +814,29 @@ class _ReturnAnalysis:
                     components[index] = value
                     value = _Vector(vector.source_type, tuple(components))
                 bindings[owner.name] = value
+        return True
+
+    def apply_call(self, expression, bindings, readonly, active):
+        arguments = list(expression.arguments or ())
+        values = [self.expression(argument, bindings, active) for argument in arguments]
+        if any(value is None for value in values):
+            return False
+        result = self.invoke(expression, values, active, allow_updates=True)
+        if result is None:
+            return False
+        owners = [
+            argument.name
+            for argument, value in zip(arguments, values)
+            if isinstance(argument, IdentifierNode) and isinstance(value, _Aggregate)
+        ]
+        if len(owners) != len(set(owners)):
+            return False
+        for index in result.updates:
+            argument = arguments[index]
+            if not isinstance(argument, IdentifierNode) or argument.name in readonly:
+                return False
+        for index, value in result.updates.items():
+            bindings[arguments[index].name] = value
         return True
 
     def loop(self, node, bindings, readonly, active):
@@ -724,6 +904,115 @@ def scalar_return_interval(generator, expression, intervals, constants):
     return min(low for low, _ in value.intervals), max(
         high for _, high in value.intervals
     )
+
+
+def aggregate_call_intervals(
+    generator, expression, intervals, constants, *, additive=False
+):
+    """Return proved field updates; caller ownership and escape checks are required."""
+    if not isinstance(expression, FunctionCallNode) or getattr(
+        generator, "_glsl_return_bounds_active", False
+    ):
+        return None
+    generator._glsl_return_bounds_active = True
+    try:
+        analysis = _ReturnAnalysis(generator, intervals, constants)
+        arguments = list(expression.arguments or ())
+        values = [analysis.expression(argument) for argument in arguments]
+        if any(value is None for value in values):
+            return None
+        result = analysis.invoke(expression, values, (), allow_updates=True)
+        if result is None:
+            return None
+        owners = [
+            argument.name
+            for argument, value in zip(arguments, values)
+            if isinstance(argument, IdentifierNode) and isinstance(value, _Aggregate)
+        ]
+        if len(owners) != len(set(owners)):
+            return None
+        if additive:
+            body = generator.glsl_software_subgroup_statement_list(result.function.body)
+            if len(body) != 1:
+                return None
+            statement = body[0]
+            if isinstance(statement, ExpressionStatementNode):
+                statement = statement.expression
+            if not isinstance(statement, AssignmentNode) or generator.map_operator(
+                statement.operator
+            ) not in {"+=", "-="}:
+                return None
+            target = statement.target
+            if not isinstance(target, MemberAccessNode) or not isinstance(
+                target.object, IdentifierNode
+            ):
+                return None
+            parameters = result.function.parameters
+            indices = [
+                index
+                for index in result.updates
+                if parameters[index].name == target.object.name
+            ]
+            if len(indices) != 1:
+                return None
+            index = indices[0]
+            if not isinstance(arguments[index], IdentifierNode):
+                return None
+            aggregate_names = {
+                parameter.name
+                for parameter, value in zip(parameters, values)
+                if isinstance(value, _Aggregate)
+            }
+            if any(
+                isinstance(node, IdentifierNode) and node.name in aggregate_names
+                for node in generator.walk_ast(statement.value)
+            ):
+                return None
+            original = values[index]
+            field = str(target.member)
+            stored = original.fields.get(field)
+            if not isinstance(stored, _Value):
+                return None
+            values[index] = _Aggregate(
+                original.source_type,
+                {**original.fields, field: _Value(stored.source_type, [(0, 0)])},
+            )
+            shifted = analysis.invoke(expression, values, (), allow_updates=True)
+            if shifted is None:
+                return None
+            delta = shifted.updates[index].fields.get(field)
+            if not isinstance(delta, _Value):
+                return None
+            return {
+                f"{arguments[index].name}.{field}": (
+                    min(a for a, _ in delta.intervals),
+                    max(b for _, b in delta.intervals),
+                )
+            }
+        updates = {}
+
+        def fields(name, value):
+            if isinstance(value, _Aggregate):
+                for member, item in value.fields.items():
+                    fields(f"{name}.{member}", item)
+            elif isinstance(value, _Vector):
+                for index, item in enumerate(value.components):
+                    fields(
+                        generator.glsl_index_component_interval_key(name, index), item
+                    )
+            elif isinstance(value, _Value):
+                updates[name] = (
+                    min(a for a, _ in value.intervals),
+                    max(b for _, b in value.intervals),
+                )
+
+        for index, value in result.updates.items():
+            if not isinstance(arguments[index], IdentifierNode):
+                return None
+            fields(arguments[index].name, value)
+        return updates
+    finally:
+        generator._glsl_return_bounds_active = False
 
 
 def vector_return_intervals(generator, expression, vector_type, intervals, constants):

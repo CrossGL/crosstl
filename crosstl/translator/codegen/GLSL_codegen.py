@@ -368,7 +368,11 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
-from .scalar_return_bounds import scalar_return_interval, vector_return_intervals
+from .scalar_return_bounds import (
+    aggregate_call_intervals,
+    scalar_return_interval,
+    vector_return_intervals,
+)
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -9460,6 +9464,31 @@ class GLSLCodeGen:
             with self.glsl_lexical_source_type_scope(source_types):
                 return self.glsl_source_expression_type(expression)
 
+        def aggregate_updates(expression, intervals, *, additive=False):
+            source_types = lexical_source_types(expression)
+            if source_types is None:
+                return None
+            has_aggregate = False
+            for argument in expression.arguments or ():
+                source_type = expression_source_type(argument)
+                if not self.glsl_struct_member_types(
+                    self.type_name_string(source_type)
+                ):
+                    continue
+                has_aggregate = True
+                if (
+                    not isinstance(argument, IdentifierNode)
+                    or stable_lexical_type(argument) is None
+                    or argument.name in escaped_names
+                ):
+                    return None
+            if not has_aggregate:
+                return None
+            with self.glsl_lexical_source_type_scope(source_types):
+                return aggregate_call_intervals(
+                    self, expression, intervals, constants, additive=additive
+                )
+
         escaped_names = set()
         local_storage_pointer_names = set()
         for node in self.walk_ast(getattr(function, "body", [])):
@@ -9516,6 +9545,11 @@ class GLSLCodeGen:
             ):
                 return None
             if isinstance(expression, MemberAccessNode):
+                field_type = self.glsl_struct_member_types(type_name).get(
+                    str(expression.member)
+                )
+                if field_type is not None:
+                    return field_type
                 component = self.glsl_index_component_index(expression.member)
                 info = self.glsl_value_type_info(source_type)
                 if (
@@ -9861,7 +9895,7 @@ class GLSLCodeGen:
 
         bounded_zero_trip = set()
 
-        def bounded_loop_count(node, loop_intervals, mutated):
+        def bounded_loop_bounds(node, loop_intervals, mutated):
             init, condition, update = node.init, node.condition, node.update
             if not isinstance(init, VariableNode):
                 return None
@@ -9920,20 +9954,32 @@ class GLSLCodeGen:
                     None,
                 )
             counter = counter_operand(condition.left) if condition is not None else None
+            increment = None
+            if (
+                isinstance(update, UnaryOpNode)
+                and isinstance(update.operand, IdentifierNode)
+                and update.operand.name == init.name
+                and unit_increment(update.op) == 1
+            ):
+                increment = LiteralNode(1, PrimitiveType("int"))
+            elif (
+                isinstance(update, AssignmentNode)
+                and isinstance(update.target, IdentifierNode)
+                and update.target.name == init.name
+                and self.map_operator(update.operator) == "+="
+            ):
+                increment = update.value
             if (
                 not isinstance(init, VariableNode)
                 or getattr(init, "qualifiers", None)
                 or not isinstance(condition, BinaryOpNode)
                 or counter is None
                 or self.map_operator(condition.op) not in {"<", "<="}
-                or not isinstance(update, UnaryOpNode)
-                or not isinstance(update.operand, IdentifierNode)
-                or update.operand.name != init.name
-                or unit_increment(update.op) != 1
+                or increment is None
+                or not self.glsl_side_effect_free_expression(increment)
+                or mutation_interval_keys(increment)
                 or init.name in escaped_names
-                or self.glsl_private_pointer_expression_has_side_effects(
-                    init.initial_value
-                )
+                or not self.glsl_side_effect_free_expression(init.initial_value)
                 or mutation_interval_keys(init.initial_value)
             ):
                 return None
@@ -9941,6 +9987,7 @@ class GLSLCodeGen:
             start = loop_intervals.get(init.name)
             dependencies = self.glsl_interval_dependency_names(condition)
             dependencies.discard(init.name)
+            dependencies.update(self.glsl_interval_dependency_names(increment))
             for child in self.walk_ast(node.condition):
                 if isinstance(child, AssignmentNode) or (
                     isinstance(child, UnaryOpNode)
@@ -9963,8 +10010,7 @@ class GLSLCodeGen:
             if (
                 domain is None
                 or start is None
-                or start[0] != start[1]
-                or not 0 <= start[0] <= domain.maximum
+                or not 0 <= start[0] <= start[1] <= domain.maximum
                 or checked_integer_interval(init.initial_value, loop_intervals) != start
                 or self.glsl_interval_key_sets_overlap(
                     dependencies, mutated | escaped_names | {init.name}
@@ -9988,9 +10034,28 @@ class GLSLCodeGen:
             if initial_left is None:
                 return None
             inclusive = self.map_operator(condition.op) == "<="
-            count = max(0, bound[1] - initial_left[0] + int(inclusive))
-            if start[0] + count > domain.maximum:
+            step = checked_integer_interval(increment, loop_intervals)
+            if step is None or step[0] <= 0:
                 return None
+            distance = max(0, bound[1] - initial_left[0] + int(inclusive))
+            count = (distance + step[0] - 1) // step[0]
+            terminal = start[1] + count * step[1]
+            if terminal > domain.maximum:
+                return None
+            counter_bounds = (start[0], start[1] + max(0, count - 1) * step[1])
+            if count:
+                update_bounds = checked_integer_interval(
+                    BinaryOpNode(counter, "+", increment),
+                    {**loop_intervals, init.name: counter_bounds},
+                )
+                if (
+                    update_bounds is None
+                    or not domain.minimum
+                    <= update_bounds[0]
+                    <= update_bounds[1]
+                    <= domain.maximum
+                ):
+                    return None
             if condition.left is not counter:
                 for call in self.walk_ast(node.body):
                     if not isinstance(call, FunctionCallNode):
@@ -10008,7 +10073,7 @@ class GLSLCodeGen:
                         return None
                 # Include the terminal condition evaluation. Source additions and
                 # usual arithmetic conversions must preserve these integer values.
-                frame = {**loop_intervals, init.name: (start[0], start[0] + count)}
+                frame = {**loop_intervals, init.name: (start[0], terminal)}
                 source_types = {}
                 for child in self.walk_ast(condition):
                     if isinstance(child, IdentifierNode):
@@ -10047,7 +10112,7 @@ class GLSLCodeGen:
                             maximum = (1 << (info.bits - int(signed))) - 1
                             if not minimum <= bounds[0] <= bounds[1] <= maximum:
                                 return None
-            return count
+            return count, counter_bounds
 
         def additive_loop_intervals(node, incoming, mutated, count):
             """Bound one unconditional, invariant additive update per iteration."""
@@ -10073,11 +10138,34 @@ class GLSLCodeGen:
                     if isinstance(statement, ExpressionStatementNode)
                     else statement
                 )
-                if not isinstance(update, AssignmentNode):
+                call_step = None
+                if isinstance(update, FunctionCallNode):
+                    deltas = aggregate_updates(update, incoming, additive=True)
+                    if not deltas or len(deltas) != 1:
+                        continue
+                    name, call_step = next(iter(deltas.items()))
+                    owner_name, _, member = name.rpartition(".")
+                    owners = [
+                        argument
+                        for argument in update.arguments
+                        if isinstance(argument, IdentifierNode)
+                        and argument.name == owner_name
+                    ]
+                    if len(owners) != 1:
+                        continue
+                    target = MemberAccessNode(owners[0], member)
+                    assigned = [
+                        argument
+                        for argument in update.arguments
+                        if argument is not owners[0]
+                    ]
+                    operator = "+="
+                elif isinstance(update, AssignmentNode):
+                    target = getattr(update, "target", getattr(update, "left", None))
+                    assigned = getattr(update, "value", getattr(update, "right", None))
+                    operator = self.map_operator(update.operator)
+                else:
                     continue
-                target = getattr(update, "target", getattr(update, "left", None))
-                assigned = getattr(update, "value", getattr(update, "right", None))
-                operator = self.map_operator(update.operator)
                 if not isinstance(
                     target, (IdentifierNode, MemberAccessNode)
                 ) or operator not in {
@@ -10088,9 +10176,15 @@ class GLSLCodeGen:
                 if isinstance(target, MemberAccessNode):
                     if stable_lexical_type(target) is None:
                         continue
-                    name = self.glsl_index_component_interval_key(
-                        target.object, self.glsl_index_component_index(target.member)
-                    )
+                    with self.glsl_lexical_source_type_scope(
+                        {target.object.name: stable_lexical_type(target.object)}
+                    ):
+                        name = self.glsl_declared_struct_member_interval_key(
+                            target
+                        ) or self.glsl_index_component_interval_key(
+                            target.object,
+                            self.glsl_index_component_index(target.member),
+                        )
                 else:
                     name = target.name
                 initial = incoming.get(name)
@@ -10107,7 +10201,10 @@ class GLSLCodeGen:
                     or self.glsl_interval_key_sets_overlap(
                         {name}, mutation_interval_keys(other_statements)
                     )
-                    or self.glsl_private_pointer_expression_has_side_effects(assigned)
+                    or any(
+                        self.glsl_private_pointer_expression_has_side_effects(item)
+                        for item in (assigned if call_step is not None else [assigned])
+                    )
                 ):
                     continue
                 domain = lexical_integer_domain(target)
@@ -10122,7 +10219,11 @@ class GLSLCodeGen:
                     )
                 ):
                     domain = IntegerRange(0, (1 << 31) - 1)
-                step = checked_integer_interval(assigned, incoming)
+                step = (
+                    call_step
+                    if call_step is not None
+                    else checked_integer_interval(assigned, incoming)
+                )
                 if domain is None or step is None:
                     continue
                 if operator == "-=":
@@ -10138,10 +10239,26 @@ class GLSLCodeGen:
                     <= domain.maximum
                 ):
                     continue
-                entries[name] = (
+                entry_interval = (
                     initial[0] + min(0, (count - 1) * step[0]),
                     initial[1] + max(0, (count - 1) * step[1]),
                 )
+                if call_step is not None:
+                    # Recheck promoted arithmetic over every possible entry,
+                    # not just the zero-based probe used to obtain the step.
+                    after = aggregate_updates(
+                        update, {**incoming, name: entry_interval}
+                    )
+                    bounds = after.get(name) if after is not None else None
+                    if (
+                        bounds is None
+                        or not exit_interval[0]
+                        <= bounds[0]
+                        <= bounds[1]
+                        <= exit_interval[1]
+                    ):
+                        continue
+                entries[name] = entry_interval
                 exits[name] = exit_interval
             return entries, exits
 
@@ -10352,6 +10469,7 @@ class GLSLCodeGen:
                 arguments = list(value.arguments or [])
                 for argument in arguments:
                     visit(argument, intervals)
+                updates = aggregate_updates(value, intervals)
                 function_name = self.function_call_name(value)
                 for argument_index, argument in enumerate(arguments):
                     clear_interval_targets(
@@ -10363,6 +10481,8 @@ class GLSLCodeGen:
                             argument,
                         ),
                     )
+                if updates is not None:
+                    intervals.update(updates)
                 return
             if isinstance(value, UnaryOpNode) and self.map_operator(value.op) == "&":
                 visit(value.operand, intervals)
@@ -10509,7 +10629,8 @@ class GLSLCodeGen:
                 )
                 clear_interval_targets(loop_intervals, mutated)
                 visit(getattr(value, "init", None), loop_intervals)
-                count = bounded_loop_count(value, loop_intervals, mutated)
+                bounded = bounded_loop_bounds(value, loop_intervals, mutated)
+                count = bounded[0] if bounded is not None else None
                 if count == 0:
                     bounded_zero_trip.add(id(value))
                     return
@@ -10541,10 +10662,9 @@ class GLSLCodeGen:
                 )
                 if loop_interval is None and count is not None:
                     loop_name = value.init.name
-                    first = loop_intervals[loop_name][0]
                     # An upper trip bound establishes entry values, not an exact
                     # iteration sequence for pointer rebasing or exit state.
-                    loop_interval = (first, first + count - 1)
+                    loop_interval = bounded[1]
                 if loop_name in mutation_interval_keys(
                     [
                         getattr(value, "condition", None),
