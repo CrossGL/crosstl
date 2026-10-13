@@ -22,7 +22,7 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Target aliases", "Target profiles", "Ext", "Target generator", "Source kind", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_translator/test_directx_metal_math.py, tests/test_translator/test_metal_builtin_ownership.py, tests/test_backend/test_directx", "1539", "502", "Microsoft Learn HLSL reference; HLSL specification project"
+   "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_translator/test_directx_metal_math.py, tests/test_translator/test_directx_atan2.py, tests/test_translator/test_metal_builtin_ownership.py, tests/test_backend/test_directx", "1548", "509", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_arithmetic_conversions.py, tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py, tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py, tests/test_translator/test_opengl_metal_math.py, tests/test_translator/test_metal_builtin_ownership.py, tests/test_backend/test_GLSL", "1783", "351", "GLSL 4.60 specification; OpenGL registry"
    "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_arithmetic_conversions.py, tests/test_translator/test_codegen/test_webgl_codegen.py", "59", "40", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
    "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "104", "70", "WGSL specification; WebGPU specification"
@@ -41,7 +41,7 @@ implicitly supported.
    "OpenGL / GLSL", "84", "1", "2", "0", "0", "0"
    "WebGL / GLSL ES", "43", "1", "23", "17", "3", "0"
    "WebGPU / WGSL", "47", "1", "21", "15", "3", "0"
-   "Metal", "71", "1", "4", "8", "3", "0"
+   "Metal", "73", "1", "4", "6", "3", "0"
    "Vulkan SPIR-V", "73", "1", "2", "8", "3", "0"
    "CUDA", "67", "1", "8", "8", "3", "0"
    "HIP", "67", "1", "8", "8", "3", "0"
@@ -60,7 +60,7 @@ scope for graphics backend completion work.
 
    "DirectX / HLSL", "84", "1", "2", "0", "0", "0"
    "OpenGL / GLSL", "84", "1", "2", "0", "0", "0"
-   "Metal", "71", "1", "4", "8", "3", "0"
+   "Metal", "73", "1", "4", "6", "3", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal actionable backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -85,7 +85,7 @@ inspection, diagnostics, validation, and corpus-coverage rows.
    "OpenGL / GLSL", "41", "1", "1", "0", "0", "0"
    "WebGL / GLSL ES", "30", "1", "1", "8", "3", "0"
    "WebGPU / WGSL", "30", "1", "1", "8", "3", "0"
-   "Metal", "30", "1", "1", "8", "3", "0"
+   "Metal", "32", "1", "1", "6", "3", "0"
    "Vulkan SPIR-V", "30", "1", "1", "8", "3", "0"
    "CUDA", "30", "1", "1", "8", "3", "0"
    "HIP", "30", "1", "1", "8", "3", "0"
@@ -242,12 +242,12 @@ Each category below uses the status codes from the legend.
    "Runtime host binding plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime adapter plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime loader manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Exact scalar physical resource layouts", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
+   "Exact scalar physical resource layouts", "Y", "Y", "R", "R", "Y", "R", "R", "R", "R", "R", "R"
    "Shared native allocation views", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
    "Runtime execution graphs", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
    "Native loader ABI descriptors", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Generated native loader target adapters", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
-   "Native loader dispatch request", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
+   "Native loader dispatch request", "Y", "Y", "R", "R", "Y", "R", "R", "R", "R", "R", "R"
    "Runtime test manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Project test-runner environment execution", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime variant registry", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"

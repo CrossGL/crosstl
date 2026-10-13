@@ -8871,7 +8871,7 @@ def test_codegen_mlx_gemv_materialized_array_shuffle_uses_builtin_overload():
     normalized = normalize(generated)
 
     assert (
-        "float shuffle_local_float(float value, uint index) { "
+        "float shuffle_local_float(float value, uint index) @metal_inline { "
         "float[1] result = {value}; "
         "for (uint16 sn = 1; sn > 0; sn >>= 1) { "
         "result[index] = WaveShuffleDown(result[index], sn); } "
@@ -8927,7 +8927,7 @@ def test_codegen_mlx_gemvt_materialized_lane_expression_uses_builtin_overload(
     normalized = normalize(generated)
 
     assert (
-        "float shuffle_scaled_float_4(float value, uint index) { "
+        "float shuffle_scaled_float_4(float value, uint index) @metal_inline { "
         "float[1] result = {value}; "
         "for (uint16 sm = 1; sm > 0; sm >>= 1) { "
         "result[index] = WaveShuffleDown(result[index], 4 * sm); } "
@@ -13157,11 +13157,13 @@ def test_mlx_materialized_collapsed_member_overloads_reach_project_targets(tmp_p
     bfloat_wrapper = f"{bfloat_helper}__temporary"
     assert (
         f"float16 {half_helper}(inout thread FloorDivide self, "
-        "float16 x, float16 y) { return trunc(x / y); }" in normalized_intermediate
+        "float16 x, float16 y) @metal_static { return trunc(x / y); }"
+        in normalized_intermediate
     )
     assert (
         f"bfloat16_t {bfloat_helper}(inout thread FloorDivide self, "
-        "bfloat16_t x, bfloat16_t y) { return x - y; }" in normalized_intermediate
+        "bfloat16_t x, bfloat16_t y) @metal_static { return x - y; }"
+        in normalized_intermediate
     )
     assert f"return {half_helper}(self, x, y);" in normalized_intermediate
     assert f"return {bfloat_helper}(self, x, y);" in normalized_intermediate

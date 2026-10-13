@@ -3179,7 +3179,9 @@ def test_verify_runtime_test_manifest_reports_runtime_adapter_gap_as_unavailable
 def test_runtime_parity_native_factories_create_target_adapters():
     adapters = native_runtime_parity_adapters()
 
-    assert set(adapters) == {"directx", "opengl", "vulkan"}
+    assert set(adapters) == {"directx", "opengl", "vulkan", "metal"}
+    assert adapters["metal"].target == "metal"
+    assert adapters["metal"].runtime.name == "metal-compute-runtime"
     assert isinstance(adapters["directx"], DirectXRuntimeParityAdapter)
     assert adapters["directx"].runtime.name == "directx-compute-runtime"
     assert isinstance(adapters["opengl"], OpenGLRuntimeParityAdapter)
@@ -3189,7 +3191,7 @@ def test_runtime_parity_native_factories_create_target_adapters():
         native_runtime_parity_adapter("DirectX"), DirectXRuntimeParityAdapter
     )
     with pytest.raises(RuntimeVerificationError, match="not available"):
-        native_runtime_parity_adapter("metal")
+        native_runtime_parity_adapter("cuda")
 
 
 def test_runtime_parity_native_adapter_reports_unavailable_tooling(tmp_path):

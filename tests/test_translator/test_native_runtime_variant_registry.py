@@ -91,6 +91,9 @@ def _write_registry_input(
                     "void main() {}\n"
                 ).encode()
             )
+            if target == "metal":
+                extension = "metal"
+                artifact_bytes = f"kernel void {entry_point}() {{}}\n".encode()
             package_path = f"artifacts/{target}/{variant}.{extension}"
             artifact_path = tmp_path / package_path
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -586,8 +589,8 @@ def test_native_runtime_variant_registry_rejects_specialization_mismatch(tmp_pat
         ("mojo", "project.native-runtime-variant-registry.target-unsupported"),
         ("rust", "project.native-runtime-variant-registry.target-unsupported"),
         ("slang", "project.native-runtime-variant-registry.target-unsupported"),
-        ("vulkan", "project.native-runtime-variant-registry.registry-invalid"),
-        ("webgl", "project.native-runtime-variant-registry.registry-invalid"),
+        ("vulkan", "project.native-runtime-variant-registry.target-unsupported"),
+        ("webgl", "project.native-runtime-variant-registry.target-unsupported"),
         ("wgsl", "project.native-runtime-variant-registry.target-unsupported"),
     ),
 )
@@ -669,6 +672,8 @@ def test_native_runtime_variant_registry_rejects_adapter_incompatible_units(
     )
     ready_keys = sorted(unsupported_registry["variants"])
     for record in unsupported_registry["variants"].values():
+        if record["status"] == "ready":
+            continue
         record["status"] = "ready"
         record["execution"] = {"workgroupSize": None, "subgroupWidth": None}
         record["bindingInterface"]["status"] = "ready"
@@ -699,7 +704,7 @@ def test_native_runtime_variant_registry_rejects_adapter_incompatible_units(
             unsupported_registry,
             unsupported_units,
         )
-    assert exc_info.value.code == expected_code
+    assert exc_info.value.code == expected_code, exc_info.value.to_json()
 
 
 def test_native_runtime_variant_registry_rejects_unexecutable_specializations(
