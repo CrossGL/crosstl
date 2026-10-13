@@ -1285,7 +1285,7 @@ Native tail-copy cases exercise partial two-element tiles and three-dimensional
 launches with tight inputs, unchanged metadata and output guards. Source loops
 and tail conditions remain intact.
 
-Pure scalar helpers with one return expression can retain checked caller ranges
+Pure integer-returning helpers can retain checked caller ranges
 through nested calls, integer casts and integer arithmetic.
 Analysis uses source overloads, parameter conversions and return conversions;
 each callee has its own bindings. Fixed-width unsigned wrapping is represented
@@ -1293,12 +1293,15 @@ before signed conversion, while possible signed arithmetic overflow establishes
 no proof. Unknown callees, ambiguous overloads, recursion, mutable or volatile
 references, captured caller locals and unmodeled effects remain unproved.
 Checked immutable integer-array elements can pass through these helpers without
-becoming unchecked pointer-offset facts. Integer vector-return helpers additionally
-support local scalar/vector assignments and finite ``for`` loops, with a maximum
-of 64 iterations per loop and a shared expression budget. Component ranges include
-every possible exit. Writes through array parameters, escaping locals, uncovered
-elements and division by a possibly zero value cannot establish a proof.
-Scalar-return helpers still require one return expression.
+becoming unchecked pointer-offset facts. Scalar- and vector-return helpers support
+local scalar/vector assignments and finite ``for`` loops before a final return,
+with a maximum of 64 iterations per loop and a shared expression budget. By-value
+parameters have private state; their updates cannot change the caller's facts.
+Ranges include every possible exit. Writes through reference or array parameters,
+constant writes, escaping locals, uncovered elements and division by a possibly
+zero value cannot establish a proof. Early returns and unmodeled control flow
+remain unsupported. Native controls compare expression, local, loop and parameter
+forms with exact indexed readbacks, caller-value observations and untouched guards.
 The pinned reversed one- and four-dimensional copy demos use checked shape,
 stride and offset uploads and a checked OpenGL dispatch region rather than
 trusted index assertions.

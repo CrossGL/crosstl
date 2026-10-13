@@ -3299,6 +3299,14 @@ is not treated as an exact iteration sequence for pointer rebasing. These cases
 extend the existing native jobs without changing upstream kernels or claiming
 complete copy-conversion coverage.
 
+The unchanged `gn4large_copyfloat32float32` entry also exercises a scalar-return
+index helper with local accumulation and by-value vector-component updates. Its
+checked shape `[2, 3, 4, 5]`, strides `[100, 7, 21, 1]` and dimension count feed a
+`[2, 4, 6]` dispatch with four-element tiles. The native fixture checks all 120
+copied values, 32 guards and unchanged inputs, with original Metal comparison on
+macOS. The existing copy jobs now select 12 entry prefixes and 16 float32
+layouts. This does not cover every dtype conversion or complete host routing.
+
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32
 with axis size 4099 and VJP float32 with axis size 8192 and `has_w=true`. It

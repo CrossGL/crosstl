@@ -439,8 +439,8 @@ class _ReturnAnalysis:
         statements = generator.glsl_software_subgroup_statement_list(function.body)
         if not statements or not isinstance(statements[-1], ReturnNode):
             return None
-        if self.shape(function.return_type) is not None and len(statements) != 1:
-            return None
+        # Value parameters and locals belong to this call's frame. References
+        # and metadata keep their source identity and remain read-only below.
         bindings = {}
         readonly = set()
         for parameter, value in zip(function.parameters, values):
@@ -667,6 +667,8 @@ class _ReturnAnalysis:
         current = dict(bindings)
         if not self.statements([node.init], current, readonly, active):
             return False
+        if "const" in node.init.qualifiers:
+            readonly = readonly | {node.init.name}
         exits = []
         for iteration in range(65):
             condition = self.truth(node.condition, current, active)

@@ -126,7 +126,7 @@ def test_helper_cannot_capture_caller_constants_or_flow_facts(body):
         "int offset(int lane) { return offset(lane); }",
         "int offset(int lane) { return external(lane); }",
         "int offset(int lane) { return ++lane; }",
-        "int offset(int lane) { lane += 1; return lane; }",
+        "int offset(inout int lane) { lane += 1; return lane; }",
         "int offset(inout int lane) { return lane; }",
     ],
 )

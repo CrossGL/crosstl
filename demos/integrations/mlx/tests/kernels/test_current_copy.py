@@ -62,6 +62,7 @@ CASES = {
     "broadcast-row": ("g2_copy", [5, 7], [0, 2]),
     "permute-3d": ("g3_copy", [3, 5, 7], [5, 1, 15]),
     "strided-4d": ("gn2_copy", [2, 3, 4, 5], [100, 7, 21, 1]),
+    "tiled-wide-4d": ("gn4large_copy", [2, 3, 4, 5], [100, 7, 21, 1]),
     "broadcast-4d": ("gn2_copy", [2, 3, 4, 5], [0, 0, 0, 2]),
     "reverse-1d": ("gg1_dynamic_copy", [17], [-2]),
     "reverse-4d": ("ggn2_dynamic_copy", [2, 3, 4, 5], [100, 7, -21, -1]),
@@ -78,9 +79,15 @@ DYNAMIC_LAYOUTS = {
     "tight-reverse-4d": (67, 4, [151, 43, 9, -1]),
     "tight-reverse-wide-4d": (67, 4, [151, 43, 9, -1]),
 }
-TILE_WIDTHS = {"gn2_copy": 2, "ggn2_dynamic_copy": 2, "ggn4large_dynamic_copy": 4}
+TILE_WIDTHS = {
+    "gn2_copy": 2,
+    "gn4large_copy": 4,
+    "ggn2_dynamic_copy": 2,
+    "ggn4large_dynamic_copy": 4,
+}
 FLAT_TILED_PREFIXES = {"s2_copy", "v2_copy"}
 CHECKED_PREFIXES = (
+    "gn4large_copy",
     "gg1_dynamic_copy",
     "ggn2_dynamic_copy",
     "ggn4large_dynamic_copy",
@@ -254,7 +261,8 @@ def test_copy_readback_rejects_corruption(fault):
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 @pytest.mark.parametrize(
-    "case", (*DYNAMIC_LAYOUTS, "scalar-tiled-tail", "vector-tiled-tail")
+    "case",
+    (*DYNAMIC_LAYOUTS, "scalar-tiled-tail", "vector-tiled-tail", "tiled-wide-4d"),
 )
 def test_copy_contracts_bind_uploaded_metadata_and_launch(tmp_path, target, case):
     workload = _workload(case)
@@ -262,7 +270,9 @@ def test_copy_contracts_bind_uploaded_metadata_and_launch(tmp_path, target, case
     config = _checked_copy_config(original, workload)
     assert not config.index_range_assertions
     assert len(config.metadata_preconditions) == (
-        1 if case.endswith("tiled-tail") else 4 if case == "reverse-1d" else 15
+        1
+        if case.endswith("tiled-tail")
+        else 9 if case == "tiled-wide-4d" else 4 if case == "reverse-1d" else 15
     )
     assert {
         (item.parameter, item.element): (item.minimum, item.maximum)
@@ -313,7 +323,7 @@ def test_ci_requires_native_copy_parity(job):
     assert upload_path in upload
     assert "if-no-files-found: error" in upload
     assert "retention-days: 14" in upload
-    assert len({item[0] for item in CASES.values()}) == 11
+    assert len({item[0] for item in CASES.values()}) == 12
 
 
 @pytest.fixture(scope="module")
