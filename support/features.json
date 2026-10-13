@@ -11838,8 +11838,8 @@
     {
       "id": "project.checked_scalar_metadata",
       "category": "project",
-      "name": "Checked scalar metadata preconditions",
-      "description": "Preserve original integer scalar requirements through project packages and enforce their bounds against native upload snapshots.",
+      "name": "Checked integer metadata preconditions",
+      "description": "Preserve original integer scalar and immutable array-element requirements through project packages and enforce their bounds against native upload snapshots.",
       "support": {
         "webgl": {
           "status": "validated_rejection",
@@ -11853,7 +11853,7 @@
         },
         "directx": {
           "status": "supported",
-          "notes": "Constant integer references retain source identity, signedness and width in artifact headers and reflected binding provenance. Python native dispatch rechecks exact descriptors and upload bytes, rejects out-of-range values and shared allocation identities, and records checked values and payload hashes. Software collective loops can use immutable scalar bounds for fixed-stride termination, including final-update overflow checks. Required Windows execution includes runtime-controlled loops and observed metadata. Composed index proofs, record fields, GPU-produced metadata, shared allocations and C execution wrappers remain unsupported.",
+          "notes": "Constant integer references retain source identity, signedness and width in artifact headers and reflected binding provenance. Selected elements of read-only unpacked integer buffers retain separate requirements, validated at their reflected byte offsets. Python native dispatch rechecks exact descriptors and upload bytes, rejects out-of-range values and shared allocation identities, and records checked values and payload hashes. Software collective loops can use immutable scalar bounds for fixed-stride termination, including final-update overflow checks. Required Windows execution includes runtime-controlled loops, selected metadata elements and observed inputs. Composed index proofs, record fields, GPU-produced metadata, shared allocations and C execution wrappers remain unsupported.",
           "evidence": [
             "tests/test_translator/test_metadata_preconditions.py::def test_project_package_dispatch_roundtrip",
             "tests/test_translator/test_metadata_preconditions.py::def test_descriptor_cannot_change_obligations",
@@ -11869,12 +11869,18 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_combined_project_contracts_survive_format_package_and_dispatch",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_combined_contracts",
             "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
-            "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata",
+            "tests/test_translator/test_metadata_elements.py::def test_array_requirements_survive_package_and_snapshot",
+            "tests/test_translator/test_metadata_elements.py::def test_descriptor_cannot_reassign_element_obligations",
+            "tests/test_translator/test_metadata_elements.py::def test_checked_array_cannot_alias_another_binding",
+            "tests/test_translator/test_metadata_elements.py::def test_array_checks_use_offset_view_and_owned_snapshot",
+            "tests/test_translator/test_metadata_elements.py::def test_array_metadata_executes_natively",
+            "tests/test_translator/test_metadata_elements.py::def test_checked_element_indices_execute_natively"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "Checked original scalar parameters are matched to reflected GLSL uniform layouts and validated against immutable native upload bytes. Descriptor mutations, out-of-range values and shared allocations are rejected. Software collective loops consume immutable source-owned scalar bounds and check final-update overflow. Selected-entry index proofs use those bounds for composed arithmetic, local variables, guards and loops without source overflow. Wide pointer updates and rebased indices check the complete signed logical offset, retaining structured rejection when unproved. Required native controls cover direct and rebased endpoint reads, exact input observations and output guards. These conditional integer ranges do not prove allocation bounds, arbitrary helper state or global dispatch coordinates. Record metadata and custom runtime enforcement remain separate contracts.",
+          "notes": "Checked original scalar parameters and selected elements of read-only unpacked integer buffers are matched to reflected layouts and validated against immutable native upload bytes. Descriptor mutations, out-of-range values and shared allocations are rejected. Software collective loops consume immutable source-owned scalar bounds and check final-update overflow. Selected-entry index proofs use those bounds for composed arithmetic, local variables, guards and loops without source overflow. Direct metadata reads provide value bounds only when every possible selected element has a checked requirement; they do not become pointer-offset facts. Wide pointer updates and rebased indices check the complete signed logical offset, retaining structured rejection when unproved. Required native controls cover direct, rebased and metadata-indexed endpoint reads, exact input observations and output guards. These conditional integer ranges do not prove allocation bounds, arbitrary helper state or global dispatch coordinates. Helper forwarding, record metadata and custom runtime enforcement remain separate contracts.",
           "evidence": [
             "tests/test_translator/test_metadata_preconditions.py::def test_project_package_dispatch_roundtrip",
             "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
@@ -11916,12 +11922,19 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_combined_project_contracts_survive_format_package_and_dispatch",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_combined_contracts",
             "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
-            "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata",
+            "tests/test_translator/test_metadata_elements.py::def test_array_requirements_survive_package_and_snapshot",
+            "tests/test_translator/test_metadata_elements.py::def test_bad_metadata_values_fail_before_dispatch",
+            "tests/test_translator/test_metadata_elements.py::def test_array_checks_use_offset_view_and_owned_snapshot",
+            "tests/test_translator/test_metadata_elements.py::def test_checked_elements_bound_dynamic_index_reads",
+            "tests/test_translator/test_metadata_elements.py::def test_array_index_proofs_reject_uncovered_or_invalid_values",
+            "tests/test_translator/test_metadata_elements.py::def test_array_metadata_executes_natively",
+            "tests/test_translator/test_metadata_elements.py::def test_checked_element_indices_execute_natively"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "Generated Metal constant scalar references retain original parameter identities and checked integer bounds. Project packages and Python native dispatch enforce the artifact contract, including immutable upload snapshots and allocation isolation. Native controls compare generated and original Metal outputs with guards and offset metadata views. Record fields, mutable metadata, compiler range proofs and C execution wrappers are not covered.",
+          "notes": "Generated Metal constant scalar references and selected elements of read-only unpacked integer buffers retain original parameter identities and checked integer bounds. Project packages and Python native dispatch enforce each requirement at its reflected byte offset, including immutable upload snapshots and allocation isolation. Native controls compare generated and original Metal outputs with guards and offset metadata views. Record fields, mutable metadata, compiler range proofs and C execution wrappers are not covered.",
           "evidence": [
             "tests/test_translator/test_metadata_preconditions.py::def test_project_package_dispatch_roundtrip",
             "tests/test_translator/test_metadata_preconditions.py::def test_metadata_source_types_survive_lowering",
@@ -11933,7 +11946,12 @@
             "tests/test_translator/test_metadata_preconditions.py::def test_combined_project_contracts_survive_format_package_and_dispatch",
             "tests/test_translator/test_metadata_preconditions.py::def test_native_combined_contracts",
             "tests/test_translator/test_artifact_contracts.py::def test_combined_records_retain_individual_validation",
-            "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata"
+            "tests/test_translator/test_metadata_preconditions.py::def test_native_checked_metadata",
+            "tests/test_translator/test_metadata_elements.py::def test_array_requirements_survive_package_and_snapshot",
+            "tests/test_translator/test_metadata_elements.py::def test_element_contract_requires_readonly_integer_source",
+            "tests/test_translator/test_metadata_elements.py::def test_descriptor_cannot_reassign_element_obligations",
+            "tests/test_translator/test_metadata_elements.py::def test_array_metadata_executes_natively",
+            "tests/test_translator/test_metadata_elements.py::def test_checked_element_indices_execute_natively"
           ]
         },
         "vulkan": {

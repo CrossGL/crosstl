@@ -109,10 +109,20 @@ def loop_constant_bindings(function, constants, mutable_names, type_name):
 
 def metadata_loop_bindings(function, records, mutable_names, walk_ast):
     """Keep only immutable, unshadowed source-owned scalar parameter ranges."""
+    return {
+        name: record
+        for name, record in metadata_parameter_bindings(
+            function, records, mutable_names, walk_ast
+        )
+        if "element" not in record
+    }
+
+
+def metadata_parameter_bindings(function, records, mutable_names, walk_ast):
+    """Resolve immutable metadata without conflating buffer contents and offsets."""
     invalid = set(mutable_names) | {
         node.name for node in walk_ast(function.body) if isinstance(node, VariableNode)
     }
-    result = {}
     for parameter in function.parameters:
         if parameter.name in invalid:
             continue
@@ -131,8 +141,7 @@ def metadata_loop_bindings(function, records, mutable_names, walk_ast):
             continue
         for record in records:
             if record["sourceResource"] == {"schemaVersion": 1, **origin}:
-                result[parameter.name] = record
-    return result
+                yield parameter.name, record
 
 
 def fixed_stride_loop_terminates(

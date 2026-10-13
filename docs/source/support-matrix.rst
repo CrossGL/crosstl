@@ -250,7 +250,7 @@ Each category below uses the status codes from the legend.
    "Runtime adapter plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime loader manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Exact scalar physical resource layouts", "Y", "Y", "R", "R", "Y", "R", "R", "R", "R", "R", "R"
-   "Checked scalar metadata preconditions", "Y", "Y", "R", "R", "Y", "R", "R", "R", "R", "R", "R"
+   "Checked integer metadata preconditions", "Y", "Y", "R", "R", "Y", "R", "R", "R", "R", "R", "R"
    "Native read-only input observations", "Y", "Y", "?", "?", "Y", "R", "?", "?", "?", "?", "?"
    "Shared native allocation views", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"
    "Runtime execution graphs", "Y", "Y", "U", "U", "U", "U", "U", "U", "U", "U", "U"

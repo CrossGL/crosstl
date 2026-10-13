@@ -1395,6 +1395,7 @@ jobs:
               tests/test_translator/test_runtime_input_observations.py \
               tests/test_translator/test_resource_identity.py \
               tests/test_translator/test_metadata_preconditions.py \
+              tests/test_translator/test_metadata_elements.py \
               tests/test_translator/test_frozen_specializations.py \
               tests/test_translator/test_storage_record_runtime.py \
               tests/test_translator/test_integer_literals.py \

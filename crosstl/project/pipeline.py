@@ -36325,6 +36325,15 @@ def _runtime_package_resource_identity_diagnostics(package_path, artifact, refle
                         if "metadataPrecondition" in provenance
                         else {}
                     ),
+                    **(
+                        {
+                            "metadataElementPreconditions": provenance[
+                                "metadataElementPreconditions"
+                            ]
+                        }
+                        if "metadataElementPreconditions" in provenance
+                        else {}
+                    ),
                 }
             )
         return sorted(result, key=lambda item: json.dumps(item, sort_keys=True))

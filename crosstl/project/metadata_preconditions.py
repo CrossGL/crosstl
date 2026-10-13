@@ -39,8 +39,8 @@ def artifact_metadata_bindings(artifact_path, target, bindings):
     result = {}
     for resource in reflected["resources"]:
         provenance = resource.get("metadata", {}).get("provenance", {})
-        requirement = provenance.get("metadataPrecondition")
-        if requirement is None:
+        requirements = binding_metadata_preconditions([{"provenance": provenance}])
+        if not requirements:
             continue
         matches = [item for item in bindings if item.get("name") == resource["name"]]
         if len(matches) != 1:
@@ -59,13 +59,13 @@ def artifact_metadata_bindings(artifact_path, target, bindings):
             }
             or binding.get("provenance", {}).get("sourceResource")
             != provenance["sourceResource"]
-            or binding.get("provenance", {}).get("metadataPrecondition") != requirement
+            or binding_metadata_preconditions([binding]) != requirements
         ):
             raise ValueError(
                 "Metadata binding differs from its reflected source resource."
             )
-        result[resource["name"]] = requirement
-    if len(result) != len(records):
+        result[resource["name"]] = requirements
+    if sum(map(len, result.values())) != len(records):
         raise ValueError("Not every metadata precondition has a reflected binding.")
     return result
 
@@ -76,8 +76,9 @@ def check_metadata_value(requirement, value, dtype):
         raise ValueError("Metadata input requires its exact reflected integer type.")
     if not requirement["minimum"] <= value <= requirement["maximum"]:
         origin = requirement["sourceResource"]
+        selector = f"[{requirement['element']}]" if "element" in requirement else ""
         raise ValueError(
-            f"Metadata {origin['entryPoint']}.{origin['parameter']} value {value} "
+            f"Metadata {origin['entryPoint']}.{origin['parameter']}{selector} value {value} "
             f"is outside [{requirement['minimum']}, {requirement['maximum']}]."
         )
 
@@ -109,7 +110,7 @@ def check_metadata_inputs(requirements, inputs, outputs, bindings):
     from .runtime_verification import _runtime_default_allocation_id
 
     default_ids = {item.name: _runtime_default_allocation_id(item) for item in bindings}
-    for name, requirement in requirements.items():
+    for name, records in requirements.items():
         value = inputs.get(name)
         if value is None:
             raise ValueError("Checked metadata requires an uploaded scalar input.")
@@ -122,7 +123,13 @@ def check_metadata_inputs(requirements, inputs, outputs, bindings):
             raise ValueError(
                 "Checked metadata requires a nonempty typed scalar payload."
             )
-        check_metadata_value(requirement, words[0], value.dtype)
+        for requirement in records:
+            element = requirement.get("element", 0)
+            if element >= len(words):
+                raise ValueError(
+                    "Checked metadata element is missing from the uploaded payload."
+                )
+            check_metadata_value(requirement, words[element], value.dtype)
         check_metadata_allocation(name, value, inputs, outputs, default_ids)
 
 
@@ -144,19 +151,16 @@ def check_native_metadata_snapshots(artifact_path, target, buffers):
         )
     requirements = artifact_metadata_bindings(artifact_path, target, bindings)
     receipts = []
-    for name, requirement in requirements.items():
+    for name, records in requirements.items():
         matches = [item for item in buffers.values() if item.binding.name == name]
         if len(matches) != 1:
             raise ValueError("Checked metadata does not have one native binding.")
         native = matches[0]
         snapshot = native.upload_snapshot
-        width = INTEGER_METADATA_BYTES[requirement["dtype"]]
         if (
             snapshot is None
             or type(snapshot.payload) is not bytes
-            or snapshot.dtype != requirement["dtype"]
             or snapshot.encoding is not None
-            or len(snapshot.payload) < width
             or native.expected_output is not None
             or native.source == "expectedOutput"
         ):
@@ -176,23 +180,30 @@ def check_native_metadata_snapshots(artifact_path, target, buffers):
             for other in buffers.values()
         ):
             raise ValueError("Checked metadata cannot share a native allocation.")
-        value = int.from_bytes(
-            snapshot.payload[:width],
-            "little",
-            signed=requirement["dtype"].startswith("int"),
-        )
-        check_metadata_value(requirement, value, snapshot.dtype)
-        receipts.append(
-            {
-                "binding": name,
-                "requirement": requirement,
-                "value": value,
-                "uploadSnapshot": snapshot.to_json(),
-                **(
-                    {"allocation": native.allocation.to_json()}
-                    if native.allocation is not None
-                    else {}
-                ),
-            }
-        )
+        for requirement in records:
+            width = INTEGER_METADATA_BYTES[requirement["dtype"]]
+            offset = requirement.get("element", 0) * width
+            if offset + width > len(snapshot.payload):
+                raise ValueError(
+                    "Checked metadata element is missing from the immutable upload snapshot."
+                )
+            value = int.from_bytes(
+                snapshot.payload[offset : offset + width],
+                "little",
+                signed=requirement["dtype"].startswith("int"),
+            )
+            check_metadata_value(requirement, value, snapshot.dtype)
+            receipts.append(
+                {
+                    "binding": name,
+                    "requirement": requirement,
+                    "value": value,
+                    "uploadSnapshot": snapshot.to_json(),
+                    **(
+                        {"allocation": native.allocation.to_json()}
+                        if native.allocation is not None
+                        else {}
+                    ),
+                }
+            )
     return receipts

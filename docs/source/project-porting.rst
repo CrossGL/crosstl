@@ -1166,7 +1166,7 @@ metadata, or establish that a resource remains immutable during execution.
 Those checks require separate runtime contracts. Existing layout and native
 runtime limitations still apply.
 
-**Checked scalar metadata.**
+**Checked integer metadata.**
 
 Project translation can attach integer bounds to an original constant-reference
 parameter. These bounds are enforced by the Python native loader and native
@@ -1184,8 +1184,31 @@ Metal, DirectX and OpenGL dispatch adapters, unlike caller-trusted
 
 Enable ``preserve_resource_origins`` for the Metal source frontend. Each matched
 translation must select one compute entry. A missing or ambiguous source
-parameter, writable resource, pointer, vector or record produces a diagnostic;
-the initial contract supports constant integer scalar references only.
+parameter, writable resource, vector or record produces a diagnostic. Without an
+element selector, the contract requires a constant integer scalar reference.
+An explicit ``element`` selects a zero-based element of a read-only integer
+buffer. Multiple requirements may select distinct elements of the same buffer;
+scalar and element requirements cannot be mixed for one resource:
+
+.. code-block:: toml
+
+   [[project.metadata_preconditions]]
+   source = "kernels/copy.metal"
+   entryPoint = "copy_values"
+   parameter = "shape"
+   element = 0
+   minimum = 1
+   maximum = 1024
+
+Array element contracts require a reflected, unpacked scalar layout. The native
+loader validates the selected element within the supplied allocation view, and
+the adapter checks the same element in its owned upload snapshot. A missing
+element fails before dispatch. Elements without a requirement remain unknown;
+checking one array element does not bound its neighbors or the buffer offset.
+OpenGL can bound direct metadata reads only when every possible selected index
+has a checked element requirement. Shadowed or rebased resource names do not
+inherit these facts. Record fields and unproved helper forwarding remain
+unsupported.
 
 Requirements are scoped by both the source pattern and the original entry name,
 including template ``host_name`` entries. Explicit and discovered jobs, and

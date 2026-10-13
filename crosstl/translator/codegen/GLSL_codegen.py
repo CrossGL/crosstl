@@ -80,6 +80,7 @@ from ..dispatch_region_contract import (
     with_dispatch_region_header,
 )
 from ..metadata_preconditions import (
+    MAX_METADATA_PRECONDITIONS,
     checked_metadata_preconditions,
     validate_codegen_metadata_preconditions,
     with_metadata_precondition_header,
@@ -345,6 +346,7 @@ from .loop_induction import (
     geometric_loop_terminates,
     loop_constant_bindings,
     metadata_loop_bindings,
+    metadata_parameter_bindings,
 )
 from .match_utils import (
     generate_match_expression_assignment,
@@ -9074,6 +9076,13 @@ class GLSLCodeGen:
             .items()
         ):
             intervals[name] = (record["minimum"], record["maximum"])
+        for name, record in getattr(self, "glsl_metadata_element_entry_bounds", {}).get(
+            id(function), ()
+        ):
+            intervals[self.glsl_metadata_element_key(name, record["element"])] = (
+                record["minimum"],
+                record["maximum"],
+            )
         constants = self.initial_literal_int_constants(function)
         for name, value in constants.items():
             literal = self.literal_int_value(value, constants)
@@ -10465,6 +10474,7 @@ class GLSLCodeGen:
     def prepare_glsl_resource_function_specializations(self, ast, target_stage=None):
         """Create GLSL helper variants for concrete storage image arguments."""
         self.glsl_metadata_entry_bounds = {}
+        self.glsl_metadata_element_entry_bounds = {}
         entries = self.glsl_software_subgroup_stage_entries(ast, target_stage)
         region = codegen_dispatch_region(ast, entries)
         self.glsl_dispatch_entry_regions = (
@@ -10495,6 +10505,16 @@ class GLSLCodeGen:
                 self.glsl_function_mutated_interval_names(function),
                 self.walk_ast,
             )
+            self.glsl_metadata_element_entry_bounds[id(function)] = [
+                (name, record)
+                for name, record in metadata_parameter_bindings(
+                    function,
+                    records,
+                    self.glsl_function_mutated_interval_names(function),
+                    self.walk_ast,
+                )
+                if "element" in record
+            ]
         self.glsl_resource_function_specializations = {}
         self.glsl_resource_function_call_names = {}
         self.glsl_resource_specialized_source_names = set()
@@ -39541,6 +39561,16 @@ complex64_t crossgl_complex64_mod_assign(
         if not intervals:
             return None
 
+        element_interval = self.glsl_metadata_element_interval(
+            expression, intervals, self.glsl_active_literal_int_constants()
+        )
+        if element_interval is not None:
+            return IntegerRange(
+                *element_interval,
+                INDEX_RANGE_STATIC,
+                "checked immutable metadata elements",
+            )
+
         if isinstance(expression, MemberAccessNode):
             component_index = self.glsl_index_component_index(expression.member)
             key = self.glsl_index_component_interval_key(
@@ -48138,6 +48168,48 @@ complex64_t crossgl_complex64_mod_assign(
             )
         return None
 
+    @staticmethod
+    def glsl_metadata_element_key(name, element):
+        return f"@metadata:{name}[{element}]"
+
+    def glsl_metadata_element_interval(self, expression, intervals, constants):
+        if (
+            isinstance(expression, FunctionCallNode)
+            and self.function_call_name(expression) == "buffer_load"
+            and "buffer_load" not in self.function_return_types
+        ):
+            arguments = list(expression.arguments or [])
+            if len(arguments) != 2:
+                return None
+            resource, index = arguments
+        elif isinstance(expression, ArrayAccessNode):
+            resource, index = expression.array, expression.index
+        else:
+            return None
+        if not isinstance(resource, IdentifierNode):
+            return None
+        prefix = f"@metadata:{resource.name}["
+        if not any(key.startswith(prefix) for key in intervals if isinstance(key, str)):
+            return None
+        if not self.glsl_side_effect_free_expression(index):
+            return None
+        index_range = self.glsl_checked_private_pointer_interval(
+            index, intervals, constants, require_arithmetic_types=True
+        )
+        if (
+            index_range is None
+            or index_range[0] < 0
+            or index_range[1] - index_range[0] >= MAX_METADATA_PRECONDITIONS
+        ):
+            return None
+        values = [
+            intervals.get(self.glsl_metadata_element_key(resource.name, element))
+            for element in range(index_range[0], index_range[1] + 1)
+        ]
+        if not values or any(value is None for value in values):
+            return None
+        return min(value[0] for value in values), max(value[1] for value in values)
+
     def glsl_private_pointer_interval_key(self, expression, intervals, constants):
         field_key = self.glsl_declared_struct_member_interval_key(expression)
         if field_key is not None:
@@ -48168,6 +48240,11 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_private_pointer_interval(self, expression, intervals, constants):
         if expression is None:
             return None
+        element_interval = self.glsl_metadata_element_interval(
+            expression, intervals, constants
+        )
+        if element_interval is not None:
+            return element_interval
         if isinstance(expression, (MemberAccessNode, ArrayAccessNode)):
             key = self.glsl_private_pointer_interval_key(
                 expression, intervals, constants
