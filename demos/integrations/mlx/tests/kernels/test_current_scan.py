@@ -437,7 +437,8 @@ def test_complete_scan_package_retains_source_buffer_layout(scan_package, dtype)
         if "sourceResource" in binding.get("provenance", {})
     }
     assert set(bindings) == {"in", "out", "axis_size"}
-    assert len(descriptor["bindings"]) == (4 if target == "directx" else 3)
+    # The checked dispatch region embeds launch dimensions without an extra buffer.
+    assert len(descriptor["bindings"]) == 3
     assert bindings["axis_size"]["provenance"]["metadataPrecondition"] == {
         "dtype": "uint64",
         "minimum": 1,
