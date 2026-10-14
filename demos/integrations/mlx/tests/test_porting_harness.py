@@ -17134,6 +17134,22 @@ def test_reduce_opengl_translation_evidence_records_complete_family():
             "inputs[i - 1] + reduction_size",
             "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
             "out_idx",
+            "in_ + start_idx",
+            "in_ + i",
+            "in_ + in_idx + column",
+            "in_ + in_idx + lid.x",
+            "row + i",
+            "row + j",
+            "row + 0",
+            "inputs[j] + i",
+            "out_ + full_idx * int64(reduction_stride) + out_column",
+            "out_ + out_idx * int64(reduction_stride) + out_column",
+            "out_ + out_idx * int64(reduction_stride) + column",
+            "out_ + i",
+            "in_ + elem_to_loc_int64_t(out_idx, shape, strides, ndim)"
+            " + int64(lid.x) * REDUCE_N_READS",
+            "in_ + out_idx * int64(reduction_size)",
+            "in_ + elem_to_loc_int64_t(out_idx, shape, strides, ndim)",
         ],
     }
     assert contract["portabilityPreconditions"] == {
@@ -17265,7 +17281,7 @@ def test_reduce_opengl_translation_evidence_records_complete_family():
         "all 2,396 discovered `reduce.metal` entries at historical revision "
         "`846d176227a0ac13d2667e58d2bb68b322109ab0` to OpenGL" in readme
     )
-    assert "Six explicit host/runtime index-range preconditions" in readme
+    assert "Twenty-one explicit host/runtime index-range preconditions" in readme
     assert "one exact iteration at a time" in readme
     assert "non-singleton per-invocation dynamic target remains a may-write" in readme
     assert "shadowed loop-index bindings remain fail-closed" in readme
@@ -17335,7 +17351,7 @@ def test_reduce_opengl_translation_evidence_records_complete_family():
         .split()
     )
     assert "all 2,396 reduction entries to standalone OpenGL" in guide
-    assert "six explicit source-expression portability preconditions" in guide
+    assert "twenty-one explicit source-expression portability preconditions" in guide
     assert "one exact iteration at a time" in guide
     assert "non-singleton per-invocation dynamic target remains a may-write" in guide
     assert "shadowed loop-index binding disables the serial-loop proof" in guide

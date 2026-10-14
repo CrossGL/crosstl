@@ -1541,7 +1541,7 @@ The current harness verifies:
   `contracts/reduce.opengl-translation.json` contract spans the same 39 exact
   ABI shapes, nine kernel templates, six operator families, 44 concrete
   operator types, and 13 input/output types. It pins 9,216 exact
-  materializations, 41,794,920 generated GLSL bytes, and 25,088
+  materializations, 45,931,388 generated GLSL bytes, and 25,088
   resources across scalar-layout-aware one- through twelve-resource target ABIs.
   Complete source comparisons and strict compiler checks cover every entry.
   The latest review reconstructs every previous source identity and verifies
@@ -1552,10 +1552,21 @@ The current harness verifies:
   64-bit integer extension when narrowing a wide literal.
   Resource declarations are unchanged. The 156 complex-buffer reference updates
   add explicit scalar-layout metadata rather than changing buffer storage.
-  Six explicit host/runtime index-range preconditions bound the source pointer
-  and output expressions required by wide-index shapes to signed 32-bit OpenGL
-  index space; they are deployment promises rather than inferred or generated
-  checks. Bounded unit-step loop-carried pointer-array initialization is proven
+  Twenty-one explicit host/runtime index-range preconditions bound the source
+  pointer and output expressions required by wide-index shapes to signed 32-bit
+  OpenGL index space; they are deployment promises rather than inferred or
+  generated checks. Fifteen of them name complete rebased-pointer offsets such
+  as `in_ + start_idx`, `inputs[j] + i` and `out_ + i`, because the int64
+  `IdxT` shapes rebase storage pointers by wide deltas whose operands alone
+  cannot prove the signed sum. With them, the 1,240 entries of the 20 wide-index
+  kinds translate again. 868 entries in 14 kinds (62 each) change identity:
+  removal of a zero-trip `gl_WorkGroupSize.y` loop under the `[1, 1, 1]`
+  workgroup in the long-column kinds, and one peeled tail-loop iteration
+  emitted as a separate helper specialization in the five-dimensional kinds.
+  The review normalizes exactly those two rewrites, compares every helper by
+  greatest bisimulation over overload sets, and accepts all 868 pairs, while
+  its negative controls reject every semantic mutation tried.
+  Bounded unit-step loop-carried pointer-array initialization is proven
   one exact iteration at a time; a non-singleton per-invocation dynamic target
   remains a may-write and cannot establish full-array definite assignment,
   while shadowed loop-index bindings remain fail-closed. For-in range and

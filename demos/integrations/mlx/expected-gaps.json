@@ -3116,8 +3116,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "72a336159422752025cb072d55bf2c46c57ae5f62bce4981a70864535dde0972",
-      "size_bytes": 1498206,
+      "sha256": "c991c7a46b976e60c1cef45d82335a4bb52298fc7823493a05595f872e3160d0",
+      "size_bytes": 1500973,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -3163,7 +3163,22 @@
         "in_ + LoopedElemToLoc_5_int64_t_true__location(loop)",
         "inputs[i - 1] + reduction_size",
         "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
-        "out_idx"
+        "out_idx",
+        "in_ + start_idx",
+        "in_ + i",
+        "in_ + in_idx + column",
+        "in_ + in_idx + lid.x",
+        "row + i",
+        "row + j",
+        "row + 0",
+        "inputs[j] + i",
+        "out_ + full_idx * int64(reduction_stride) + out_column",
+        "out_ + out_idx * int64(reduction_stride) + out_column",
+        "out_ + out_idx * int64(reduction_stride) + column",
+        "out_ + i",
+        "in_ + elem_to_loc_int64_t(out_idx, shape, strides, ndim) + int64(lid.x) * REDUCE_N_READS",
+        "in_ + out_idx * int64(reduction_size)",
+        "in_ + elem_to_loc_int64_t(out_idx, shape, strides, ndim)"
       ]
     },
     "implementation_contracts": {
@@ -3275,7 +3290,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 41794920,
+      "generated_size_bytes_total": 45931388,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_minbool_",
@@ -3283,7 +3298,7 @@
         },
         "maximum": {
           "entryPoint": "col_reduce_2pass_large_5_32_32_reduce_mincomplex64",
-          "sizeBytes": 38545
+          "sizeBytes": 45445
         }
       }
     },

@@ -55,16 +55,16 @@ REDUCE_OPENGL_CONTRACT_PATH = (
     / "reduce.opengl-translation.json"
 )
 REDUCE_OPENGL_CONTRACT_SHA256 = (
-    "72a336159422752025cb072d55bf2c46c57ae5f62bce4981a70864535dde0972"
+    "c991c7a46b976e60c1cef45d82335a4bb52298fc7823493a05595f872e3160d0"
 )
-REDUCE_OPENGL_CONTRACT_SIZE_BYTES = 1498206
+REDUCE_OPENGL_CONTRACT_SIZE_BYTES = 1500973
 REDUCE_OPENGL_SPECIALIZATION_COUNT = 9216
 REDUCE_OPENGL_REFLECTED_RESOURCE_COUNT = 25088
-REDUCE_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 41794920
+REDUCE_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 45931388
 REDUCE_OPENGL_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1331)
 REDUCE_OPENGL_GENERATED_SIZE_MAXIMUM = (
     "col_reduce_2pass_large_5_32_32_reduce_mincomplex64",
-    38545,
+    45445,
 )
 INDEX_RANGE_ASSERTIONS = (
     ("in_ + LoopedElemToLoc_1_int64_t_false__location(loop)", 0, 2**31 - 1),
@@ -77,6 +77,37 @@ INDEX_RANGE_ASSERTIONS = (
         2**31 - 1,
     ),
     ("out_idx", 0, 2**31 - 1),
+    # Complete rebased-pointer offsets for the int64-index shapes. Each names
+    # the full logical offset of a wide pointer update or of a subscript
+    # through a rebased pointer; operand-only assertions do not cover them.
+    ("in_ + start_idx", 0, 2**31 - 1),
+    ("in_ + i", 0, 2**31 - 1),
+    ("in_ + in_idx + column", 0, 2**31 - 1),
+    ("in_ + in_idx + lid.x", 0, 2**31 - 1),
+    ("row + i", 0, 2**31 - 1),
+    ("row + j", 0, 2**31 - 1),
+    ("row + 0", 0, 2**31 - 1),
+    ("inputs[j] + i", 0, 2**31 - 1),
+    (
+        "out_ + full_idx * int64(reduction_stride) + out_column",
+        0,
+        2**31 - 1,
+    ),
+    (
+        "out_ + out_idx * int64(reduction_stride) + out_column",
+        0,
+        2**31 - 1,
+    ),
+    ("out_ + out_idx * int64(reduction_stride) + column", 0, 2**31 - 1),
+    ("out_ + i", 0, 2**31 - 1),
+    (
+        "in_ + elem_to_loc_int64_t(out_idx, shape, strides, ndim)"
+        " + int64(lid.x) * REDUCE_N_READS",
+        0,
+        2**31 - 1,
+    ),
+    ("in_ + out_idx * int64(reduction_size)", 0, 2**31 - 1),
+    ("in_ + elem_to_loc_int64_t(out_idx, shape, strides, ndim)", 0, 2**31 - 1),
 )
 RESOURCE_ABI_FIELDS = (
     "name",

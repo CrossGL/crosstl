@@ -2355,7 +2355,7 @@ standalone OpenGL ``main`` artifacts. The compact schema-v2
 ``reduce.opengl-translation.json`` contract preserves the 39 shapes, nine
 kernel templates, six operator families, 44 concrete operator types, and 13
 input/output types while pinning 9,216 exact materializations,
-41,794,920 generated GLSL bytes, and 25,088 resources across
+45,931,388 generated GLSL bytes, and 25,088 resources across
 scalar-layout-aware one- through twelve-resource target ABIs.
 All source bodies and resource interfaces have complete reference comparisons;
 an earlier 85-entry pipeline review covers its edit patterns and ABI shapes.
@@ -2366,13 +2366,19 @@ when a wide initializer is narrowed to a 32-bit result. All 2,396 current
 artifacts compile and validate. These checks establish deterministic translation
 and strict compilation, not whole-family numerical execution.
 
-OpenGL's signed 32-bit logical buffer offsets require six explicit
+OpenGL's signed 32-bit logical buffer offsets require twenty-one explicit
 source-expression portability preconditions: the one-, two-, and
 five-dimensional ``LoopedElemToLoc`` source pointer expressions,
-``inputs[i - 1] + reduction_size``, the long-column output expression, and
-``out_idx``. Each is host-bounded to ``[0, 2147483647]``. These bounds are not
+``inputs[i - 1] + reduction_size``, the long-column output expression,
+``out_idx``, and fifteen complete rebased-pointer offsets such as
+``in_ + start_idx``, ``inputs[j] + i`` and ``out_ + i`` for the int64-index
+shapes. Each is host-bounded to ``[0, 2147483647]``. These bounds are not
 inferred and no runtime check is generated; missing, mismatched, negative, or
-over-wide assertions remain fail-closed. Bounded unit-step loop-carried
+over-wide assertions remain fail-closed. The 868 identity changes in 14 kinds
+are reviewed as two mechanical rewrites (a zero-trip ``gl_WorkGroupSize.y``
+loop removed under the ``[1, 1, 1]`` workgroup and a peeled tail-loop iteration
+emitted as a helper specialization) followed by a helper-by-helper
+bisimulation; negative controls reject semantic mutations. Bounded unit-step loop-carried
 pointer-array initialization is evaluated one exact iteration at a time. A
 non-singleton per-invocation dynamic target remains a may-write and cannot
 establish full-array definite assignment, while a shadowed loop-index binding
