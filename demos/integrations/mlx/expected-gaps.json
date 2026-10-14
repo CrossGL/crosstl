@@ -3365,8 +3365,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "82b597827181fdc5b62df6c6a9f76efeedbb48c139701352583260bcd2135bbc",
-      "size_bytes": 874494,
+      "sha256": "34d6b76ed7c8df8b456d1852fc3a7a0aea29acde2d31c213aadcb7ee6f7a6f68",
+      "size_bytes": 875148,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -3463,7 +3463,11 @@
         "src_idx + src_offset",
         "dst_idx + dst_offset",
         "idx.x",
-        "idx.y"
+        "idx.y",
+        "src_offset",
+        "dst_offset",
+        "src + idx.x",
+        "dst + idx.y"
       ]
     },
     "implementation_contracts": {

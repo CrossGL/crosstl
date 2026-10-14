@@ -2695,6 +2695,30 @@
         "expression": "idx.y",
         "minimum": 0,
         "maximum": 2147483647
+      },
+      {
+        "source": "mlx/backend/metal/kernels/copy.metal",
+        "expression": "src_offset",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      {
+        "source": "mlx/backend/metal/kernels/copy.metal",
+        "expression": "dst_offset",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      {
+        "source": "mlx/backend/metal/kernels/copy.metal",
+        "expression": "src + idx.x",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      {
+        "source": "mlx/backend/metal/kernels/copy.metal",
+        "expression": "dst + idx.y",
+        "minimum": 0,
+        "maximum": 2147483647
       }
     ],
     "contractKind": "explicit-host-runtime-portability-preconditions",

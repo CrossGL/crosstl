@@ -234,6 +234,33 @@ ENTRIES = (
 )
 
 
+# OpenGL lowers the dynamic general copies' int64 ``src += src_offset`` and
+# ``dst += dst_offset`` rebases to signed ``int`` logical offsets. backend.cpp's
+# dispatch_copy_into rejects launches unless src_offset (-low of the source
+# span), dst_offset, every source element (src_offset + src_idx within the
+# bound span) and every destination element (within [0, out.size())) fit in
+# [0, INT32_MAX], so these complete-offset preconditions are host-enforced.
+OPENGL_COPY_INDEX_ASSERTIONS = (
+    "src_offset",
+    "dst_offset",
+    "src + idx.x",
+    "dst + idx.y",
+)
+
+
+def _opengl_copy_index_assertions(target, sources):
+    if target != "opengl" or COPY_SOURCE not in sources:
+        return ""
+    return "".join(
+        "[[project.index_range_assertions]]\n"
+        f'source = "{COPY_SOURCE}"\n'
+        f'expression = "{expression}"\n'
+        "minimum = 0\n"
+        "maximum = 2147483647\n"
+        for expression in OPENGL_COPY_INDEX_ASSERTIONS
+    )
+
+
 def build_packages(root, output, target, *, family="base"):
     root = Path(root).resolve()
     if target not in {"opengl", "directx", "metal"}:
@@ -341,7 +368,8 @@ def build_packages(root, output, target, *, family="base"):
             )
             + '[project.source_options.metal]\nbinary32_fma_profile = "rne-flush"\n'
             + 'binary32_sqrt_profile = "flush-subnormals"\n'
-            + 'binary32_rsqrt_profile = "flush-subnormals"\n',
+            + 'binary32_rsqrt_profile = "flush-subnormals"\n'
+            + _opengl_copy_index_assertions(target, sources),
             encoding="utf-8",
         )
         try:

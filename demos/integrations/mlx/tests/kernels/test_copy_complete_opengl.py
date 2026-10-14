@@ -47,9 +47,9 @@ COPY_OPENGL_CONTRACT_PATH = (
     / "copy.opengl-translation.json"
 )
 COPY_OPENGL_CONTRACT_SHA256 = (
-    "82b597827181fdc5b62df6c6a9f76efeedbb48c139701352583260bcd2135bbc"
+    "34d6b76ed7c8df8b456d1852fc3a7a0aea29acde2d31c213aadcb7ee6f7a6f68"
 )
-COPY_OPENGL_CONTRACT_SIZE_BYTES = 874494
+COPY_OPENGL_CONTRACT_SIZE_BYTES = 875148
 COPY_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 6030156
 COPY_OPENGL_GENERATED_SIZE_MINIMUM = ("s_copybool_bool_", 1585)
 COPY_OPENGL_GENERATED_SIZE_MAXIMUM = (
@@ -65,6 +65,10 @@ INDEX_RANGE_ASSERTIONS = (
     ("dst_idx + dst_offset", 0, 2147483647),
     ("idx.x", 0, 2147483647),
     ("idx.y", 0, 2147483647),
+    ("src_offset", 0, 2147483647),
+    ("dst_offset", 0, 2147483647),
+    ("src + idx.x", 0, 2147483647),
+    ("dst + idx.y", 0, 2147483647),
 )
 CONTRACT_RESOURCE_ABI_FIELDS = (
     "name",

@@ -16118,6 +16118,10 @@ def test_copy_opengl_translation_evidence_records_complete_family():
             "dst_idx + dst_offset",
             "idx.x",
             "idx.y",
+            "src_offset",
+            "dst_offset",
+            "src + idx.x",
+            "dst + idx.y",
         ],
     }
     assert contract["portabilityPreconditions"] == {
@@ -16215,7 +16219,8 @@ def test_copy_opengl_translation_evidence_records_complete_family():
         in readme
     )
     assert "6,566 materializations, and 8,684 reflected target resources" in readme
-    assert "Eight explicit host/runtime index-range preconditions" in readme
+    assert "Twelve explicit host/runtime index-range preconditions" in readme
+    assert "`src_offset`, `dst_offset`, `src + idx.x`, and `dst + idx.y`" in readme
     assert "require 2,496 non-empty SPIR-V modules" in readme
     guide = " ".join(
         (ROOT / "docs" / "source" / "project-porting.rst")

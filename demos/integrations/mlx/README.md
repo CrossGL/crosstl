@@ -1327,12 +1327,17 @@ The current harness verifies:
   resources. Registered `complex_t_float` representations project through the
   real field for the 150 complex-to-scalar entries only after exact ordered
   `real`/`imag` float-shape validation; malformed registered shapes continue to
-  fail closed. Eight explicit host/runtime index-range preconditions bound
+  fail closed. Twelve explicit host/runtime index-range preconditions bound
   `offset + i`, `src_idx`, `dst_idx`, `dst_idx + i`,
-  `src_idx + src_offset`, `dst_idx + dst_offset`, `idx.x`, and `idx.y` to
+  `src_idx + src_offset`, `dst_idx + dst_offset`, `idx.x`, `idx.y`,
+  `src_offset`, `dst_offset`, `src + idx.x`, and `dst + idx.y` to
   signed 32-bit OpenGL index space. These are portability promises, not
   inferred or runtime-enforced checks, and unproven wide indices remain
-  rejected. Twenty-four required Linux CI shards retranslate every exact
+  rejected. The last four cover the dynamic general shapes, whose int64
+  `src += src_offset` rebases and subsequent `src[idx.x]`/`dst[idx.y]` reads
+  must keep the complete signed logical offset in range; the 26 affected
+  entries reproduce their accepted artifact identities byte-for-byte.
+  Twenty-four required Linux CI shards retranslate every exact
   entry, verify deterministic identity, materialization, workgroup metadata,
   and reflected ABI, compile for OpenGL/SPIR-V 1.3 with
   `glslangValidator`, validate with `spirv-val`, and require 2,496 non-empty

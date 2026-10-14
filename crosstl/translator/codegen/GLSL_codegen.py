@@ -28429,6 +28429,32 @@ class GLSLCodeGen:
             return f"{'    ' * indent}int {offset_name};\n"
         return f"{'    ' * indent}int {offset_name} = int({rendered_offset});\n"
 
+    def glsl_asserted_pointer_update_delta(self, target, operator, delta, base):
+        """Return an explicitly asserted wide delta for ``target += delta``.
+
+        Callers may assert either the delta itself or the complete updated
+        pointer ``target + delta`` (``target - delta`` for ``-=``), matching the
+        source pointer-arithmetic keys used for pointer-valued expressions. The
+        result is caller-trusted: the update still requires a proved base and
+        the subsequent subscripts keep their own complete-offset obligations.
+        """
+        asserted = self.glsl_index_asserted_range(delta)
+        if asserted is not None:
+            return asserted.minimum, asserted.maximum
+        target_name = expression_debug_name(target)
+        delta_name = expression_debug_name(delta)
+        if not target_name or not delta_name:
+            return None
+        symbol = "+" if operator == "+=" else "-"
+        complete = self.glsl_index_asserted_range(
+            f"{target_name} {symbol} {delta_name}"
+        )
+        if complete is None:
+            return None
+        if operator == "+=":
+            return complete.minimum - base[1], complete.maximum - base[0]
+        return base[0] - complete.maximum, base[1] - complete.minimum
+
     def generate_glsl_storage_pointer_assignment(self, node, indent):
         target = getattr(node, "target", getattr(node, "left", None))
         if not isinstance(target, (str, IdentifierNode, VariableNode)):
@@ -28465,6 +28491,10 @@ class GLSLCodeGen:
                     self.glsl_active_literal_int_constants(),
                     require_arithmetic_types=True,
                 )
+                if delta is None and base is not None:
+                    delta = self.glsl_asserted_pointer_update_delta(
+                        target, operator, right, base
+                    )
                 combined = None
                 accepted = IntegerRange(-(1 << 31), (1 << 31) - 1)
                 delta_fits = delta is not None and IntegerRange(*delta).is_within(
@@ -40744,6 +40774,65 @@ complex64_t crossgl_complex64_mod_assign(
             ),
         )
 
+    def glsl_rebased_access_asserted_range(self, indexed_expr, index_expr):
+        """Return an explicit complete-offset assertion for ``pointer[index]``.
+
+        ``pointer[index]`` denotes ``*(pointer + index)``. Pointer-valued source
+        expressions already use ``pointer + delta`` as their explicit range key
+        for the complete logical offset, so the same key covers a subscript
+        through a rebased storage pointer. Assertions on ``index`` alone still
+        do not establish the sum.
+        """
+        pointer_name = expression_debug_name(indexed_expr)
+        index_name = expression_debug_name(index_expr)
+        if not pointer_name or not index_name:
+            return None
+        return self.glsl_index_asserted_range(f"{pointer_name} + {index_name}")
+
+    def glsl_asserted_rebased_index_expression(
+        self,
+        rendered,
+        index_expr,
+        indexed_expr,
+        index_type,
+        index_info,
+        source_bits,
+        source_range,
+        complete_range,
+    ):
+        """Render a rebased subscript whose complete offset is asserted.
+
+        The caller-trusted range must lie in the signed target offset domain.
+        The relative index is still added to an ``int`` logical-offset local, so
+        it must be representable as ``int`` from its source type or from a
+        proved or asserted range.
+        """
+        accepted = IntegerRange(0, (1 << 31) - 1)
+        signed_int = IntegerRange(-(1 << 31), (1 << 31) - 1)
+        operand = source_range
+        if operand is None:
+            operand = self.glsl_integer_type_domain(index_expr, allow_wide=True)
+        if (
+            not complete_range.is_within(accepted)
+            or operand is None
+            or not operand.is_within(signed_int)
+        ):
+            self.glsl_index_type_error(
+                index_expr,
+                indexed_expr,
+                index_type,
+                "int",
+                "composed-pointer-index-range-unproven",
+                range_status="unproven",
+                source_range=complete_range,
+                accepted_range=accepted,
+            )
+        if index_info["family"] == "int" and source_bits <= 32:
+            return rendered
+        if operand.is_exact and operand.status == INDEX_RANGE_CONSTANT:
+            return self.glsl_target_index_literal(operand.minimum, "int")
+        return f"int({rendered})"
+
     def glsl_index_expression(
         self,
         index_expr,
@@ -40805,6 +40894,27 @@ complex64_t crossgl_complex64_mod_assign(
                     and source_range.minimum < 0
                 )
             ):
+                relative_range = source_range
+
+                def asserted_rebased_subscript():
+                    # Only an explicit assertion on the complete pointer
+                    # expression replaces a missing composed-offset proof.
+                    complete_range = self.glsl_rebased_access_asserted_range(
+                        indexed_expr, index_expr
+                    )
+                    if complete_range is None:
+                        return None
+                    return self.glsl_asserted_rebased_index_expression(
+                        rendered,
+                        index_expr,
+                        indexed_expr,
+                        index_type,
+                        index_info,
+                        source_bits,
+                        relative_range,
+                        complete_range,
+                    )
+
                 intervals = getattr(indexed_expr, "_glsl_control_flow_intervals", {})
                 base = self.glsl_checked_private_pointer_interval(
                     indexed_expr, intervals, self.glsl_active_literal_int_constants()
@@ -40817,6 +40927,9 @@ complex64_t crossgl_complex64_mod_assign(
                     )
                 accepted = IntegerRange(0, (1 << 31) - 1)
                 if base is None:
+                    asserted = asserted_rebased_subscript()
+                    if asserted is not None:
+                        return asserted
                     self.glsl_index_type_error(
                         index_expr,
                         indexed_expr,
@@ -40864,6 +40977,10 @@ complex64_t crossgl_complex64_mod_assign(
         )
         target_type = decision.target_type.name if decision.target_type else None
         if not decision.accepted:
+            if base_range is not None:
+                asserted = asserted_rebased_subscript()
+                if asserted is not None:
+                    return asserted
             self.glsl_index_type_error(
                 index_expr,
                 indexed_expr,

@@ -1309,7 +1309,13 @@ Signed relative subscripts may be negative after a pointer rebase. They acquire
 a narrowing proof only when checked bounds establish that the base and relative
 offset each fit the signed target representation and their complete sum is a
 non-negative index within the target limit and any known fixed extent. Trusted
-expression assertions alone cannot establish this composed proof. Negative
+assertions on an individual operand cannot establish this composed proof. An
+explicit assertion on the complete pointer expression (``pointer + index``, with
+``pointer + 0`` for a dereference) can replace a missing composed proof when its
+range lies in ``[0, 2147483647]`` and the relative index is still representable
+as ``int``. A wide update ``pointer += delta`` with a proved base likewise
+accepts an assertion on ``delta`` or on ``pointer + delta``; it does not
+describe later subscripts, which keep their own complete-offset obligations. Negative
 absolute indices, missing contracts, overflow, shadowing and escaped values remain
 rejected; runtime allocation checks are still required.
 A pointer base proved to be exactly zero remains an ordinary absolute subscript.
