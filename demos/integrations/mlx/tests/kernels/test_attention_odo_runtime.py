@@ -120,12 +120,17 @@ def _index_assertions(dimension, length):
         raise ValueError(
             "Attention fixture exceeds its signed 32-bit indexing contract"
         )
+    # Active threads have i < qL and bh < HEADS, so row < rows and every
+    # o_i[d] / co_i[d] read is the complete offset row * Dv + d < rows * Dv.
+    complete = max(0, rows * dimension - 1)
     return tuple(
         {"source": SOURCE, "expression": expression, "minimum": 0, "maximum": maximum}
         for expression, maximum in (
             (f"row * {dimension}", max(0, rows - 1) * dimension),
             ("row", max(0, rows - 1)),
             ("d", dimension - 1),
+            ("o_i + d", complete),
+            ("co_i + d", complete),
         )
     )
 
@@ -560,10 +565,19 @@ def test_attention_index_contract_rejects_unrepresentable_shapes(length):
 @pytest.mark.parametrize("length", [0, 1, 5])
 def test_attention_index_contract_matches_dispatched_rows(length):
     records = _index_assertions(72, length)
+    assert [record["expression"] for record in records] == [
+        "row * 72",
+        "row",
+        "d",
+        "o_i + d",
+        "co_i + d",
+    ]
     assert [record["maximum"] for record in records] == [
         max(0, HEADS * length - 1) * 72,
         max(0, HEADS * length - 1),
         71,
+        max(0, HEADS * length * 72 - 1),
+        max(0, HEADS * length * 72 - 1),
     ]
     assert all(
         record["minimum"] == 0 and record["source"] == SOURCE for record in records
