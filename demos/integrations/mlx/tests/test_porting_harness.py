@@ -6612,8 +6612,8 @@ void main() {
             "missingCapabilityCounts": {},
         },
         "project": {
-            "indexRangeAssertionCount": len(module.FFT_INDEX_RANGE_ASSERTIONS),
-            "indexRangeAssertions": list(module.FFT_INDEX_RANGE_ASSERTIONS),
+            "indexRangeAssertionCount": len(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
+            "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
             "workgroupAccessAssertionCount": len(
                 module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
             ),
@@ -6740,7 +6740,7 @@ def test_fft_opengl_toolchain_records_translation_and_native_validation(
         "templateMaterializationStatus": "materialized",
         "templateSpecializationCount": 99,
         "functionConstantCount": 22,
-        "indexRangeAssertions": list(module.FFT_INDEX_RANGE_ASSERTIONS),
+        "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
         "workgroupAccessAssertions": expected_workgroup_assertions,
         "toolchainRequired": True,
         "trackedIssues": [],
@@ -6768,7 +6768,7 @@ def test_fft_opengl_toolchain_records_translation_and_native_validation(
     assert f'include = ["{module.MLX_FFT_SOURCE}"]' in config
     assert 'targets = ["opengl"]' in config
     assert config.count("[[project.index_range_assertions]]") == len(
-        module.FFT_INDEX_RANGE_ASSERTIONS
+        module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS
     )
     assert config.count("[[project.workgroup_access_assertions]]") == len(
         module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
@@ -13735,7 +13735,7 @@ def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
         "function_constant_count": 22,
     }
     assert status["portability_preconditions"] == {
-        "index_range_assertions": list(module.FFT_INDEX_RANGE_ASSERTIONS),
+        "index_range_assertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
         "workgroup_access_assertions": list(
             module.FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS
         ),

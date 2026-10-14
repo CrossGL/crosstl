@@ -4182,25 +4182,25 @@
           "source": "mlx/backend/metal/kernels/fft.metal",
           "expression": "batch_idx + index",
           "minimum": 0,
-          "maximum": 4294967295
+          "maximum": 2147483647
         },
         {
           "source": "mlx/backend/metal/kernels/fft.metal",
           "expression": "batch_idx + index + 1",
           "minimum": 0,
-          "maximum": 4294967295
+          "maximum": 2147483647
         },
         {
           "source": "mlx/backend/metal/kernels/fft.metal",
           "expression": "batch_idx + index + next_in",
           "minimum": 0,
-          "maximum": 4294967295
+          "maximum": 2147483647
         },
         {
           "source": "mlx/backend/metal/kernels/fft.metal",
           "expression": "batch_idx + index + next_out",
           "minimum": 0,
-          "maximum": 4294967295
+          "maximum": 2147483647
         }
       ],
       "workgroup_access_assertions": [

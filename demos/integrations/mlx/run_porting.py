@@ -1046,6 +1046,12 @@ FFT_INDEX_RANGE_ASSERTIONS = tuple(
         "batch_idx + index + next_out",
     )
 )
+# OpenGL lowers storage-pointer offsets to signed int logical-offset locals, so
+# its FFT access expressions must fit [0, 2^31 - 1]; the unsigned DirectX bound
+# is rejected as index-range-out-of-target-range.
+FFT_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
+    {**assertion, "maximum": (1 << 31) - 1} for assertion in FFT_INDEX_RANGE_ASSERTIONS
+)
 FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS = tuple(
     {
         "source": MLX_FFT_SOURCE,
@@ -7998,7 +8004,7 @@ def _check_fft_opengl_toolchain(
             "max_template_specializations": FFT_MAX_TEMPLATE_SPECIALIZATIONS,
             "max_template_materialization_work": FFT_MAX_TEMPLATE_MATERIALIZATION_WORK,
         },
-        index_range_assertions=FFT_INDEX_RANGE_ASSERTIONS,
+        index_range_assertions=FFT_OPENGL_INDEX_RANGE_ASSERTIONS,
         workgroup_access_assertions=FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS,
     )
     result = _run_command(
@@ -8064,8 +8070,10 @@ def _check_fft_opengl_toolchain(
     ]
     _require(
         isinstance(project, Mapping)
-        and project.get("indexRangeAssertionCount") == len(FFT_INDEX_RANGE_ASSERTIONS)
-        and project.get("indexRangeAssertions") == list(FFT_INDEX_RANGE_ASSERTIONS)
+        and project.get("indexRangeAssertionCount")
+        == len(FFT_OPENGL_INDEX_RANGE_ASSERTIONS)
+        and project.get("indexRangeAssertions")
+        == list(FFT_OPENGL_INDEX_RANGE_ASSERTIONS)
         and project.get("workgroupAccessAssertionCount")
         == len(FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS)
         and project.get("workgroupAccessAssertions") == expected_workgroup_assertions,
@@ -8248,7 +8256,7 @@ def _check_fft_opengl_toolchain(
         "templateMaterializationStatus": "materialized",
         "templateSpecializationCount": FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT,
         "functionConstantCount": FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT,
-        "indexRangeAssertions": list(FFT_INDEX_RANGE_ASSERTIONS),
+        "indexRangeAssertions": list(FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
         "workgroupAccessAssertions": expected_workgroup_assertions,
         "toolchainRequired": require_toolchain,
         "trackedIssues": [],
