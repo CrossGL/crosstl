@@ -38,7 +38,7 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "7f90c60115a934c49cc7cb588f8a2dca84541a2960694ed04133bf2554bfbdf9"
+    "95febabb5aaf38ae7f75ddae8a00cf14f07d1e0110124851ac7f037c5e414e1e"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -259,7 +259,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5264433,
+        "generatedSizeBytesTotal": 5303901,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
@@ -298,7 +298,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 5264433
+    assert sum(entry["sizeBytes"] for entry in entries) == 5303901
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         3462,
         "v_Absint32int32",
@@ -605,7 +605,46 @@ def test_unary_artifact_refresh_preserves_corpus_scope():
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
             },
+            {
+                "reason": "Round unsigned 32-bit binary32 conversions once in HLSL.",
+                "previousContractSha256": (
+                    "7f90c60115a934c49cc7cb588f8a2dca84541a2960694ed04133bf2554bfbdf9"
+                ),
+                "changedEntryCount": 46,
+                "unaffectedEntryCount": 831,
+                "reviewedBodyCount": 46,
+                "nativeCompiledChangedEntryCount": 46,
+                "nativeCompiledEntryCount": 46,
+                "byteIdenticalDxilChangedEntryCount": 0,
+                "conversionModelInputCount": 4294967296,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
         ],
+    }
+
+
+def test_unary_unsigned_conversion_refresh_scope_is_exact():
+    # Payne-Hanek reduction converts two unsigned 32-bit words per Sin/Cos
+    # evaluation; complex Sinh/Cosh reuse the same real trigonometric helper,
+    # while real Sinh/Cosh use only exponentials.
+    affected = [
+        workload
+        for workload in UNARY_DIRECTX_WORKLOADS
+        if workload.operator_type in {"Sin", "Cos"}
+        or (
+            workload.operator_type in {"Sinh", "Cosh"}
+            and workload.input_type == "complex64_t"
+        )
+    ]
+    assert len(affected) == 46
+    assert Counter(workload.shape for workload in affected) == {
+        "v": 10,
+        "v2": 10,
+        "vn": 6,
+        "gn1": 10,
+        "gn4large": 10,
     }
 
 

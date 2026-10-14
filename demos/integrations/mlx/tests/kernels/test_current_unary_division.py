@@ -44,6 +44,9 @@ ENTRY = "v_Sigmoidbfloat16bfloat16"
 SOURCE = "mlx/backend/metal/kernels/unary.metal"
 SOURCE_SHA256 = "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b"
 PROFILE = "rne-flush"
+# The DirectX identity includes the explicit `precise` return locals of the
+# exponential/division helpers; removing only those locals reconstructs the
+# previous 11,114-byte source, and both strictly compile with DXC.
 ARTIFACTS = {
     "metal": {
         "sha256": "36bf16346124ecb209ccd5acb2ca2fea1b41f966b4128d45600a63f7658bbefa",
@@ -54,8 +57,8 @@ ARTIFACTS = {
         "sizeBytes": 10670,
     },
     "directx": {
-        "sha256": "0e1c4ed41748cbd1a19c41b7dff1c6d466102a725ba17305f5f4aa7cada34fad",
-        "sizeBytes": 11114,
+        "sha256": "d16c5a2ca22282d6445e13d642e80ef0d0e9f75761740a0e3cc125f99bb59169",
+        "sizeBytes": 11785,
     },
 }
 # Original Metal 3.1, -fno-fast-math readbacks at MLX_COMMIT. These cover the

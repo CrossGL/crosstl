@@ -397,7 +397,18 @@ def test_tail_counter_executes_natively(tmp_path, case):
         "size": ("int64", [size]),
     }
     inputs, outputs = {}, {}
-    for binding in descriptor["bindings"]:
+    # Generated execution inputs (DirectX workgroup-count metadata) have no
+    # source resource; the dispatch request derives them from the launch.
+    source_bindings = [
+        binding
+        for binding in descriptor["bindings"]
+        if "executionInput" not in binding["provenance"]
+    ]
+    assert {
+        binding["provenance"]["sourceResource"]["parameter"]
+        for binding in source_bindings
+    } == set(data)
+    for binding in source_bindings:
         name = binding["provenance"]["sourceResource"]["parameter"]
         dtype, items = data[name]
         inputs[binding["name"]] = dict(dtype=dtype, shape=[len(items)], values=items)
@@ -413,7 +424,7 @@ def test_tail_counter_executes_natively(tmp_path, case):
         dict(workgroupCount=list(grid), workgroupSize=[1, 1, 1]),
         observe_inputs=[
             binding["name"]
-            for binding in descriptor["bindings"]
+            for binding in source_bindings
             if binding["access"] == "read"
         ],
     )

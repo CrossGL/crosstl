@@ -1277,7 +1277,14 @@ The current harness verifies:
   A follow-up review updates 230 bodies for explicit precise helper returns
   and FP8 record construction, bringing the source total to 5,264,433 bytes.
   Of those bodies, 35 retain identical DXIL and 195 preserve additional
-  precision constraints. All 877 current artifacts compile with warnings fatal.
+  precision constraints. A further review updates the 46 Sin, Cos and complex
+  Sinh/Cosh bodies whose Payne-Hanek reduction converts unsigned 32-bit words;
+  they now call one correctly rounded unsigned-to-float helper, bringing the
+  source total to 5,303,901 bytes. Removing the helper and restoring the
+  `float(...)` constructors reconstructs all 46 accepted sources; old and new
+  bodies compile with warnings fatal and their DXIL differs. An exhaustive model
+  of the helper matches correctly rounded conversion for all 2^32 inputs.
+  All 877 current artifacts compile with warnings fatal.
   Source pins, classifications, materializations, resource bindings and dispatch
   contracts remain unchanged. The required Windows Square and ArcCos numerical tests retain
   their existing inputs, expected values and tolerances; the ArcCos source
@@ -1386,8 +1393,14 @@ The current harness verifies:
   materializations and 10,036 resources. The changes are unused structure
   fields and signed/unsigned casts of nonnegative 16-bit values before
   masking in bfloat-to-bool helpers. The review retains the historical source
-  pin and all launch contracts. Compiler equivalence does not establish
-  current-pin numerical execution or full upstream-suite parity;
+  pin and all launch contracts. A later conversion review updates the 80
+  unsigned 32-bit and 8-bit to float16, float32 and complex64 entries, which now
+  call one correctly rounded unsigned-to-float helper (5,719,550 source bytes in
+  total). Removing the helper and restoring `float(...)` reconstructs every
+  accepted source; all 80 old and new sources compile with warnings fatal, and
+  materializations and reflected resources are unchanged. Compiler
+  equivalence does not establish current-pin numerical execution or full
+  upstream-suite parity;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 4,122
   discovered current-pinned binary entries from ``binary.metal``. The complete
   contract spans 18 shapes and 11 concrete kernel templates, 24 operators, and
@@ -3429,11 +3442,11 @@ proof into the repository-level project report; it does not add runtime
 execution or numerical parity for those historical axis-size-4099 forward and
 axis-size-8192 VJP records.
 
-The reviewed forward artifact is 8,436 bytes with SHA-256
-`71b6c501a7ecdb44afcd0cbf8378fedf92ac92fae13127c73671af7e63e18216`;
-the VJP artifact is 10,228 bytes with SHA-256
-`15412a4ec3aeaeda0ec9b1ab50180e4d28da85c24c2821c0993ee613baa3c3bd`.
-Their complete body changes preserve the source's precise reciprocal-square-root
+The reviewed forward artifact is 9,308 bytes with SHA-256
+`04e8aef85da4a392ed30161537c231f3023802b94e90dafbc3fa02ca822fd3a0`;
+the VJP artifact is 11,152 bytes with SHA-256
+`4aac072f816ffb0972c380afe429ec4b7c605015e76810665ac2390d1b629c10`.
+Earlier complete body changes preserved the source's precise reciprocal-square-root
 and square-root operations, respectively. Resource interfaces, host dispatch
 contracts and source-map origins are unchanged. Both pass strict DXC compilation;
 the shared helpers have independent native arithmetic checks, but those checks
@@ -3454,6 +3467,16 @@ execution; both LogSumExp artifacts remain byte-identical. The four selected
 normalization loaders receive the same reviewed return-local update, with all
 inputs, reference values, guards and tolerances retained.
 
+A subsequent conversion update divides by `__crossgl_uint_to_float1(axis_size)`
+instead of relying on HLSL's implicit unsigned-to-float conversion in the same
+two LayerNorm and twelve RMSNorm artifacts. Removing the helper and restoring
+only those bare operands reconstructs every accepted source; interfaces,
+source-map origins and dispatch contracts remain unchanged. All old and current
+sources pass warning-fatal DXC `cs_6_6` compilation, and their fourteen modules
+differ. An exhaustive model of the helper matches correctly rounded conversion
+for all 2^32 inputs; axis sizes below 2^24 convert exactly either way. Both
+LogSumExp artifacts remain byte-identical.
+
 A separate historical proof selects the forward `layer_normfloat32` entry at
 commit `846d176227a0ac13d2667e58d2bb68b322109ab0` through
 [`contracts/layer_norm.native-loader.dispatch.json`](contracts/layer_norm.native-loader.dispatch.json).
@@ -3468,8 +3491,9 @@ Materialization emits the forward entry plus `initialize_buffer<1>` and
 `threadgroup_sum<1>` from six reachable specializations while pruning 194
 candidates.
 
-The generated HLSL artifact is 7,937 bytes with SHA-256
-`9cea1326d7cfc74b4c824809a2f72022931da16bcc63e58855bd34cac52711f7`.
+The generated HLSL artifact is 8,809 bytes with SHA-256
+`668cf734597226873e79e30459435ae49e281bbff380c8fba4f9fb340d2d3940`;
+its divisors use the correctly rounded `__crossgl_uint_to_float1(axis_size)`.
 It retains `[WaveSize(32)]`, two `WaveActiveSum` calls, and compiles as
 `cs_6_6` with `-enable-16bit-types`; Windows CI requires Direct3D 12 WARP
 execution. The generated GLSL artifact is 8,403 bytes with SHA-256
@@ -3487,6 +3511,14 @@ in helper structs. Removing those declarations reproduced its previous accepted
 source, and both complete shaders compiled to byte-identical DXIL with warnings
 fatal. The numerical test, resource layout and dispatch requirements were
 unchanged. The later precise-return update is reviewed separately above.
+
+A subsequent HLSL conversion update makes all four selected normalization
+loaders divide by `__crossgl_uint_to_float1(axis_size)` instead of relying on
+implicit unsigned-to-float conversion. Removing the helper and restoring only
+the bare operands reconstructs each accepted source; the previous and current
+HLSL pass warning-fatal `cs_6_6` DXC compilation, while GLSL, resource layouts,
+inputs, references and tolerances are unchanged. The selected axis size of 32
+converts exactly either way, and Windows execution remains required.
 
 The forward LayerNorm references now retain the source's explicit precise
 reciprocal-square-root helper. Complete body review found only that helper, its
@@ -3541,8 +3573,9 @@ shape and weighted-gradient provenance. Materialization selects
 `threadgroup_sum<3>`, and `threadgroup_sum<1>` from seven reachable
 specializations while pruning 194 candidates.
 
-The generated HLSL is 9,728 bytes with SHA-256
-`3b1ef17b831c0cbdca7509fd6eb01e678f67293be10f1c13812428b328bdf615`.
+The generated HLSL is 10,652 bytes with SHA-256
+`0002c8c3dccb067731cfec1300382c85898c0bae627a4c47488b302ff01ac067`;
+its four divisors use the correctly rounded `__crossgl_uint_to_float1(axis_size)`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, compiles as `cs_6_6` with `-enable-16bit-types`, and
 must execute numerically through Direct3D 12 WARP on Windows CI. The generated
@@ -4717,10 +4750,12 @@ preserving reachable constants, resolving
 materializes one `rms_single_row<float, RMS_N_READS>` specialization from four
 reachable specializations while pruning 168 unrelated candidates.
 
-The generated HLSL artifact is 6,207 bytes with SHA-256
-`eb21d6e723d5e46874d33c013e4d92fbeaf2c2bade653aa4afb68969a398fa61`;
+The generated HLSL artifact is 7,053 bytes with SHA-256
+`4ef21ff639d0bdd21b7a5da5c51b13893198d6a2c972c8a96280607af8b45198`;
 it retains `[WaveSize(32)]` and compiles as `cs_6_6` with
-`-enable-16bit-types`. The generated GLSL
+`-enable-16bit-types`. Its only change from the previous 6,207-byte source is
+the correctly rounded `__crossgl_uint_to_float1(axis_size)` divisor described
+above. The generated GLSL
 artifact is 6,882 bytes with SHA-256
 `04b447795637318a75158fac8025e189a6374dc8a97311d49597dc9f04f76fad`.
 Its explicit target-scoped 32-lane software subgroup lowers scalar
@@ -4758,8 +4793,9 @@ input and cotangent views. Materialization selects
 `vjp_rms_single_row<float, RMS_N_READS>` from four reachable specializations
 while pruning 168 unrelated candidates.
 
-The generated HLSL is 9,526 bytes with SHA-256
-`6edd8154b624ca1d66302dbb657f8d8a356b7d5e5824018e88e9630074eac83f`.
+The generated HLSL is 10,398 bytes with SHA-256
+`45e296590cddf7685c3d4f6daa4720db44fa664024c6bcef56238e2cdd1f047d`;
+its divisors use the correctly rounded `__crossgl_uint_to_float1(axis_size)`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, and compiles as `cs_6_6` with
 `-enable-16bit-types`. The generated software-subgroup GLSL is 10,257 bytes

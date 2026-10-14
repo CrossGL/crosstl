@@ -67,8 +67,8 @@ MLX_RMS_NORM_VJP_DISPATCH_CONTRACT = (
 )
 MLX_RMS_NORM_VJP_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "6edd8154b624ca1d66302dbb657f8d8a356b7d5e5824018e88e9630074eac83f",
-        "sizeBytes": 9526,
+        "sha256": "45e296590cddf7685c3d4f6daa4720db44fa664024c6bcef56238e2cdd1f047d",
+        "sizeBytes": 10398,
     },
     "opengl": {
         "sha256": "ac05c7d026a131807c9f0d4190642c0f8d015cd58ea4db8194ab470fb7c93ab7",
@@ -492,8 +492,9 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "constant_id" not in generated
         assert (
             "__crossgl_metal_precise_rsqrt_float(((sumx2 / "
-            "vjp_rmsfloat32_axis_size) + vjp_rmsfloat32_eps))"
+            "__crossgl_uint_to_float1(vjp_rmsfloat32_axis_size)) + vjp_rmsfloat32_eps))"
         ) in generated
+        assert generated.count("float __crossgl_uint_to_float1(uint value)") == 1
         assert dxc_compiler_arguments_for_source(generated) == ("-enable-16bit-types",)
         assert generated.count("WaveActiveSum(") == 4
         assert generated.count("GroupMemoryBarrierWithGroupSync();") == 3

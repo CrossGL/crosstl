@@ -57,8 +57,8 @@ MLX_RMS_NORM_DISPATCH_CONTRACT = (
 )
 MLX_RMS_NORM_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "eb21d6e723d5e46874d33c013e4d92fbeaf2c2bade653aa4afb68969a398fa61",
-        "sizeBytes": 6207,
+        "sha256": "4ef21ff639d0bdd21b7a5da5c51b13893198d6a2c972c8a96280607af8b45198",
+        "sizeBytes": 7053,
     },
     "opengl": {
         "sha256": "04b447795637318a75158fac8025e189a6374dc8a97311d49597dc9f04f76fad",
@@ -404,9 +404,10 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert generated.count("WaveActiveSum(") == 2
         assert generated.count("GroupMemoryBarrierWithGroupSync();") == 3
         assert (
-            "__crossgl_metal_precise_rsqrt_float(((acc / rmsfloat32_axis_size)"
-            in generated
+            "__crossgl_metal_precise_rsqrt_float(((acc / "
+            "__crossgl_uint_to_float1(rmsfloat32_axis_size))" in generated
         )
+        assert generated.count("float __crossgl_uint_to_float1(uint value)") == 1
         _assert_directx_compiles(generated_path, work_dir)
     else:
         assert "subgroupWidth" not in entry
