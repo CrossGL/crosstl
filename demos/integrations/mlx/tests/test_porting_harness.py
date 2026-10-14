@@ -11878,7 +11878,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "9774c9137e675b38ea059d3e8c5efd27b6dac7622680c2b32d3c0f66a303d234",
+        "sha256": "32520fa44f5e99e321c088c94771b04279944e1ab7cd98d1a718acd071d17874",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12499,7 +12499,7 @@ def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
         "schema_version": 1,
-        "sha256": "85ed57d2452a0912ce87ed4936bef91fced438622835e0efaa1ddc118833e150",
+        "sha256": "3a0a33e27705f51774810098f9122acc700d0ca884841bbf02a81f54b42889c6",
         "entry_identity_fields": [
             "entryPoint",
             "operator",
@@ -12660,7 +12660,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "4100c2b01edc56979d8af29e1b85df6d0c5cb66f284e2630ede2708286203d9e",
+        "sha256": "c8403b863c4b2af133ca9fd16d91fc33f93ca24ab616a443cbf6e1b5898b2d10",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12676,7 +12676,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
             "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json"
         ),
         "scalar_subset_sha256": (
-            "85ed57d2452a0912ce87ed4936bef91fced438622835e0efaa1ddc118833e150"
+            "3a0a33e27705f51774810098f9122acc700d0ca884841bbf02a81f54b42889c6"
         ),
     }
     contract_path = ROOT / status["contract"]["path"]
@@ -16917,7 +16917,7 @@ def test_quantized_metal_roundtrip_evidence_records_complete_family():
         "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
         "generated_size_range": artifact["generatedSizeRange"],
     }
-    assert artifact["generatedSizeBytesTotal"] == 40769784
+    assert artifact["generatedSizeBytesTotal"] == 43106796
 
     assert status["terminal_proof"] == {
         "candidate_base_commit": contract["proof"]["candidateBaseCommit"],

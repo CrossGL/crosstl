@@ -1138,7 +1138,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "9774c9137e675b38ea059d3e8c5efd27b6dac7622680c2b32d3c0f66a303d234",
+      "sha256": "32520fa44f5e99e321c088c94771b04279944e1ab7cd98d1a718acd071d17874",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1282,7 +1282,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 2199606,
+      "generated_size_bytes_total": 2205718,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absfloat16float16",
@@ -1775,7 +1775,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
       "schema_version": 1,
-      "sha256": "85ed57d2452a0912ce87ed4936bef91fced438622835e0efaa1ddc118833e150",
+      "sha256": "3a0a33e27705f51774810098f9122acc700d0ca884841bbf02a81f54b42889c6",
       "entry_identity_fields": [
         "entryPoint",
         "operator",
@@ -1871,7 +1871,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 240149,
+      "generated_size_bytes_total": 243029,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addfloat16",
@@ -1932,7 +1932,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "4100c2b01edc56979d8af29e1b85df6d0c5cb66f284e2630ede2708286203d9e",
+      "sha256": "c8403b863c4b2af133ca9fd16d91fc33f93ca24ab616a443cbf6e1b5898b2d10",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1945,7 +1945,7 @@
         "sizeBytes"
       ],
       "scalar_subset_path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
-      "scalar_subset_sha256": "85ed57d2452a0912ce87ed4936bef91fced438622835e0efaa1ddc118833e150"
+      "scalar_subset_sha256": "3a0a33e27705f51774810098f9122acc700d0ca884841bbf02a81f54b42889c6"
     },
     "shape_counts": {
       "g1": 238,
@@ -2043,7 +2043,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 6060680,
+      "generated_size_bytes_total": 6121412,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addfloat16",
@@ -2495,8 +2495,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "8866a5995152113a283952c5bfb0ad0a0f54c1d1cbe161a194a459eb3e8926a2",
-      "size_bytes": 2600524,
+      "sha256": "f528bbe9630004507c62be42aa08afaeda307caf6b5ea2ee802d6eb7f6609eaa",
+      "size_bytes": 2600527,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2679,15 +2679,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 2200378,
+      "generated_size_bytes_total": 2218266,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "g1_copybool_bool_",
           "sizeBytes": 577
         },
         "maximum": {
-          "entryPoint": "gn4large_copyuint8complex64",
-          "sizeBytes": 1902
+          "entryPoint": "gn4large_copyuint16complex64",
+          "sizeBytes": 1912
         }
       }
     },
@@ -2749,8 +2749,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "48155ee21098190b9b04e8ca3f9b8ce2c0a9c8029bf6d7fd09948023fa0d8f74",
-      "size_bytes": 1477022,
+      "sha256": "e0e4fef92d8c4b3dd42786f0ae5a4042a432afb5d80db6f121b3d00899c347a3",
+      "size_bytes": 1477025,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2834,7 +2834,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 20947648,
+      "generated_size_bytes_total": 21093776,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_andbool_",
@@ -2842,7 +2842,7 @@
         },
         "maximum": {
           "entryPoint": "col_reduce_looped_large_5_32_32_reduce_mincomplex64",
-          "sizeBytes": 18358
+          "sizeBytes": 18512
         }
       }
     },
@@ -2929,7 +2929,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/quantized.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "d64356daf0279c77e2ce797727b9a9f70e860a82daa87653d73009573c61df7e",
+      "sha256": "615f43f69a3cea42e5b3398c2a806049a3900b72c6a91f24f945757d7c8c3dab",
       "size_bytes": 1546482,
       "resource_contract_count": 30,
       "entry_identity_fields": [
@@ -3006,7 +3006,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 40769784,
+      "generated_size_bytes_total": 43106796,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "affine_dequantize_float16_t_gs_32_b_2",
@@ -3014,7 +3014,7 @@
         },
         "maximum": {
           "entryPoint": "affine_gather_qmm_rhs_nt_bfloat16_t_gs_128_b_8_bm_16_bn_32_bk_32_wm_1_wn_2",
-          "sizeBytes": 41683
+          "sizeBytes": 45509
         }
       }
     },

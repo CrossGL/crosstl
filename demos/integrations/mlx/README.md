@@ -1475,7 +1475,7 @@ The current harness verifies:
   `contracts/quantized.metal-roundtrip.json` contract covers 38 normalized
   variants over 17 source templates for three data types, group sizes 32/64/128,
   and bit widths 2/3/4/5/6/8. It pins 14,904 exact materializations and
-  40,769,784 generated Metal bytes without checking transient proof rows into
+  43,106,796 generated Metal bytes without checking transient proof rows into
   git. Thirty deduplicated exact ABI contracts span four- through
   twenty-two-resource interfaces and contain 31,374 reflected resources in
   aggregate, all with host-owned `[1, 1, 1]` workgroups. The original terminal external
@@ -4078,6 +4078,35 @@ warnings treated as errors and link to byte-identical Metal libraries. Entry
 selection, all 6,026 materializations and all 19,106 resource declarations
 remain unchanged. This is compiler-equivalence evidence, not an additional
 numerical or current-pin MLX test-suite result.
+
+The narrow-integer reference review at the same historical `846d1762` revision
+updates 3,735 Metal round-trip identities after the backend began preserving
+source 16-bit conversions and discarded narrow updates. They comprise 684
+binary (38 scalar), 692 copy, 1,140 reduce, 1,134 quantized and 85 unary
+(17 scalar) entries. Every accepted predecessor is recovered from the last
+passing CI source export and matches its recorded hash and byte count.
+Reversing only the reviewed rewrites recovers every accepted body exactly.
+These rewrites are `int(short(x))`/`uint(ushort(x))` conversions and their
+vector forms, widened compound updates and increments, and `(void)` casts
+around discarded narrow updates. Negative controls on sampled entries show that
+the same check rejects mutated loop bounds, widths, signedness, operators,
+indices and dropped lines.
+All 11,943 current sources compile with each contract's native compiler, with
+warnings fatal and a non-empty AIR object per entry. The 3,735 changed sources
+and their predecessors also compile with `-fno-fast-math` and empty compiler
+streams. Of the changed entries, 1,612 compile to byte-identical AIR and
+libraries, including all 692 copy entries. The other 2,123 differ where the
+explicit 16-bit conversions survive optimization. The original MLX sources
+declare those values as `short`, `ushort` or 16-bit vectors. For the 141 binary
+and unary entries in this group, original MLX, accepted and current Metal agree
+byte for byte on 32,178,480 output elements per path, with unchanged inputs and
+output guards.
+Binary operands use the 512 x 512 product of a fixed edge and random value
+set; unary inputs are exhaustive. The existing affine proof also passes for
+nine changed matrix entries. The remaining reduce and quantized entries have
+source and compiler review only. Materializations, resource ABI and shard
+coverage are unchanged. This is reference evidence for the historical pin, not
+current-pin coverage, whole-family numerical parity or an MLX test-suite claim.
 
 The 15 complex `LogAddExp` references have a separate arithmetic review.
 Their precise square-root helper preserves the explicit `metal::precise::sqrt`

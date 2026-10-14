@@ -1474,6 +1474,15 @@ guards and compare generated Metal against the original source. Metal short
 conversions and OpenGL/HLSL narrow component writes use the same source widths
 as the analysis; a successful compiler check alone is not numerical evidence.
 
+The historical MLX Metal round-trip references were reconciled for these 16-bit
+conversions and for explicit discarded narrow updates. Reversing only those
+rewrites recovers all 3,735 accepted bodies across the binary, copy, reduce,
+quantized and unary contracts. Of the changed artifacts, 1,612 compile to
+byte-identical AIR. The other 2,123 retain conversions that the original sources
+declare as 16-bit. Native comparisons with the original source cover 150 of
+them; the rest have source and compiler review only. The MLX demo README records
+the per-family scope.
+
 For straight-line top-level loops with at most 64 iterations, a conjunction of
 invariant affine integer guards can further constrain entry ranges. For example,
 ``x + i < width`` excludes the unused lane of a partial tile before deriving its
