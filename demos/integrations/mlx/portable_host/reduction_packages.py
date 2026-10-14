@@ -235,11 +235,25 @@ def build_packages(
         if target == "directx" and family != "init":
             options += 'relative_wave_shuffle_out_of_range = "self"\n'
         if family == "row" and target == "opengl":
-            options += (
+            # row_reduction_layout.validate_metadata requires rows >= 32,
+            # input_count == rows * row_size and
+            # input_count + 4 * group_width <= 131071 before dispatch. Every
+            # row_reduce_simple thread clamps out_idx to [0, rows - 4], so the
+            # rebased bases in_ + out_idx * row_size, inputs[] and
+            # out_ + out_idx stay below that bound, every inputs[j][i] read is
+            # below input_count and every out[i] write is below rows.
+            options += "".join(
                 "[[project.index_range_assertions]]\n"
                 f'source = "{SOURCE}"\n'
-                'expression = "inputs_offsets[(i - 1)] + reduction_size"\n'
+                f'expression = "{expression}"\n'
                 "minimum = 0\nmaximum = 131071\n"
+                for expression in (
+                    "inputs_offsets[(i - 1)] + reduction_size",
+                    "in_ + out_idx * int64(reduction_size)",
+                    "out_ + out_idx",
+                    "inputs[j] + i",
+                    "out_ + i",
+                )
             )
         config.write_text(
             f'[project]\nsource_roots = ["{source_root}"]\n'
