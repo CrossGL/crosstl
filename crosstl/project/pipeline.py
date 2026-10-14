@@ -18,13 +18,14 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from multiprocessing import get_context
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from threading import Lock
 from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
@@ -6152,23 +6153,28 @@ def _source_options_for_unit(
     return source_options
 
 
+FRONTEND_EXCLUDED_SOURCE_OPTIONS = frozenset(
+    {
+        TEMPLATE_VARIANTS_SOURCE_OPTION,
+        TARGET_SOURCE_OPTIONS_KEY,
+        SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
+        SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION,
+        DISPATCH_REGION_SOURCE_OPTION,
+        COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION,
+        COOPERATIVE_MATRIX_MMA_PROFILE_SOURCE_OPTION,
+        PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION,
+        DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
+        METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
+        METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
+    }
+)
+
+
 def _frontend_source_options(source_options: Mapping[str, Any]) -> dict[str, Any]:
     return {
         name: value
         for name, value in source_options.items()
-        if name not in {
-            TEMPLATE_VARIANTS_SOURCE_OPTION,
-            TARGET_SOURCE_OPTIONS_KEY,
-            SOFTWARE_SUBGROUP_WIDTH_SOURCE_OPTION,
-            SOFTWARE_SUBGROUP_APPLICABILITY_SOURCE_OPTION,
-            DISPATCH_REGION_SOURCE_OPTION,
-            COOPERATIVE_MATRIX_SOFTWARE_LOWERING_SOURCE_OPTION,
-            COOPERATIVE_MATRIX_MMA_PROFILE_SOURCE_OPTION,
-            PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION,
-            DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
-            METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
-            METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
-        }
+        if name not in FRONTEND_EXCLUDED_SOURCE_OPTIONS
     }
 
 
@@ -21970,6 +21976,147 @@ def _metal_dispatch_bool_callbacks_defer_to_frontend(
     )
 
 
+METAL_MATERIALIZATION_CACHE_LIMIT = 8
+# Dispatch and target-lowering options are applied after materialization. They
+# are withheld from it, so a reuse key over the remaining options covers every
+# option materialization can read. Its returned frontend options omit them too.
+METAL_MATERIALIZATION_WITHHELD_SOURCE_OPTIONS = FRONTEND_EXCLUDED_SOURCE_OPTIONS - {
+    TEMPLATE_VARIANTS_SOURCE_OPTION,
+    METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
+    METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
+}
+_metal_materialization_cache: OrderedDict[str, ProjectTemplateMaterializedSource] = (
+    OrderedDict()
+)
+_metal_materialization_cache_lock = Lock()
+
+
+def _metal_materialization_cache_token(value: Any) -> Any:
+    # Tag exact types and keep mapping order: manifests apply in order, and JSON
+    # alone would merge tuples with lists or integer keys with strings.
+    if value is None or type(value) is bool:
+        return value
+    if type(value) is str:
+        return ["str", value]
+    if type(value) is int:
+        return ["int", str(value)]
+    if type(value) is float:
+        return ["float", value.hex()]
+    if isinstance(value, Mapping):
+        return [
+            "map",
+            [
+                [
+                    _metal_materialization_cache_token(name),
+                    _metal_materialization_cache_token(item),
+                ]
+                for name, item in value.items()
+            ],
+        ]
+    if type(value) in {list, tuple}:
+        return [
+            type(value).__name__,
+            [_metal_materialization_cache_token(item) for item in value],
+        ]
+    raise TypeError(f"Unsupported materialization cache input {type(value)!r}")
+
+
+def _metal_materialization_text_token(text: str) -> list[str]:
+    digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+    return ["text", digest]
+
+
+def _metal_materialization_cache_key(
+    *,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    entry_point: str | None,
+    source: str,
+    expanded_discovery_source: str,
+    discovery_preprocessor: Any,
+    expanded_source: str,
+    preprocessor: Any,
+    defines: Mapping[str, str],
+    define_sources: Mapping[str, str] | None,
+    include_paths: Sequence[str],
+    source_options: Mapping[str, Any],
+) -> str | None:
+    # Every later step is a deterministic function of the expanded sources,
+    # macro tables and these inputs. Hidden state derived from the expansions is
+    # covered because the key uses them before any canonicalizing rewrite.
+    try:
+        unit_payload = json.dumps(
+            unit.to_json(), ensure_ascii=False, separators=(",", ":")
+        )
+        payload = [
+            ["unit", _metal_materialization_text_token(unit_payload)],
+            ["path", _metal_materialization_cache_token(os.fspath(unit.path))],
+            ["target", _metal_materialization_cache_token(target)],
+            ["variant", _metal_materialization_cache_token(variant)],
+            ["entryPoint", _metal_materialization_cache_token(entry_point)],
+            ["source", _metal_materialization_text_token(source)],
+            [
+                "expandedDiscoverySource",
+                _metal_materialization_text_token(expanded_discovery_source),
+            ],
+            [
+                "discoveryMacros",
+                _metal_materialization_cache_token(
+                    {
+                        name: asdict(macro)
+                        for name, macro in discovery_preprocessor.macros.items()
+                    }
+                ),
+            ],
+            ["expandedSource", _metal_materialization_text_token(expanded_source)],
+            [
+                "macros",
+                _metal_materialization_cache_token(
+                    {name: asdict(macro) for name, macro in preprocessor.macros.items()}
+                ),
+            ],
+            ["defines", _metal_materialization_cache_token(defines)],
+            ["defineSources", _metal_materialization_cache_token(define_sources)],
+            [
+                "includePaths",
+                _metal_materialization_cache_token(
+                    [os.fspath(path) for path in include_paths]
+                ),
+            ],
+            ["sourceOptions", _metal_materialization_cache_token(source_options)],
+        ]
+        encoded = json.dumps(
+            payload, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+        ).encode("ascii")
+    except (TypeError, ValueError, RecursionError):
+        return None
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _cached_metal_materialization(
+    key: str | None,
+) -> ProjectTemplateMaterializedSource | None:
+    with _metal_materialization_cache_lock:
+        result = _metal_materialization_cache.get(key)
+        if result is not None:
+            _metal_materialization_cache.move_to_end(key)
+            return copy.deepcopy(result)
+    return None
+
+
+def _retain_metal_materialization(
+    key: str | None, result: ProjectTemplateMaterializedSource
+) -> None:
+    if key is None or result.blocked or result.diagnostics:
+        return
+    with _metal_materialization_cache_lock:
+        _metal_materialization_cache[key] = copy.deepcopy(result)
+        _metal_materialization_cache.move_to_end(key)
+        while len(_metal_materialization_cache) > METAL_MATERIALIZATION_CACHE_LIMIT:
+            _metal_materialization_cache.popitem(last=False)
+
+
 def _project_template_materialization_for_artifact(
     *,
     unit: ProjectTranslationUnit,
@@ -21987,6 +22134,13 @@ def _project_template_materialization_for_artifact(
     if unit.source_backend != "metal" or not _is_template_hostile_target(target):
         return None
 
+    # Target lowering consumes these after materialization; withholding them
+    # here lets one materialization serve every dispatch contract.
+    source_options = {
+        name: value
+        for name, value in source_options.items()
+        if name not in METAL_MATERIALIZATION_WITHHELD_SOURCE_OPTIONS
+    }
     if source is None:
         try:
             source = unit.path.read_text(encoding="utf-8")
@@ -22040,6 +22194,7 @@ def _project_template_materialization_for_artifact(
             source,
             file_path=str(unit.path),
         )
+        expanded_discovery_source = discovery_source
         discovery_preprocessor._configure_integral_constant_contracts(discovery_source)
         discovery_source = _canonicalize_metal_template_aliases(
             discovery_preprocessor,
@@ -22127,6 +22282,26 @@ def _project_template_materialization_for_artifact(
             source,
             file_path=str(unit.path),
         )
+        # Includes and macros were expanded afresh above; reuse only matches the
+        # current expansion, never a previously observed file state.
+        cache_key = _metal_materialization_cache_key(
+            unit=unit,
+            target=target,
+            variant=variant,
+            entry_point=entry_point,
+            source=source,
+            expanded_discovery_source=expanded_discovery_source,
+            discovery_preprocessor=discovery_preprocessor,
+            expanded_source=preprocessed,
+            preprocessor=preprocessor,
+            defines=defines,
+            define_sources=define_sources,
+            include_paths=include_paths,
+            source_options=source_options,
+        )
+        cached = _cached_metal_materialization(cache_key)
+        if cached is not None:
+            return cached
         preprocessor._configure_integral_constant_contracts(preprocessed)
         preprocessed = _canonicalize_metal_struct_template_aliases(
             preprocessor,
@@ -23172,7 +23347,7 @@ def _project_template_materialization_for_artifact(
             error=message,
         )
 
-    return ProjectTemplateMaterializedSource(
+    result = ProjectTemplateMaterializedSource(
         text=materialized,
         metadata=metadata,
         defines=parser_defines,
@@ -23181,6 +23356,8 @@ def _project_template_materialization_for_artifact(
             "preprocess": False,
         },
     )
+    _retain_metal_materialization(cache_key, result)
+    return result
 
 
 def materialize_metal_source_for_target(

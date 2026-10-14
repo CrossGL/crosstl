@@ -11,7 +11,9 @@ import pytest
 
 from crosstl.backend.Metal import preprocessor as metal_preprocessor
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
-from crosstl.project import ProjectConfig, translate_project
+from crosstl.project import ProjectConfig
+from crosstl.project import pipeline as project_pipeline
+from crosstl.project import translate_project
 from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointRecorder,
     load_project_translation_checkpoint,
@@ -413,6 +415,9 @@ def test_project_parameter_comments_preserve_constrained_calls(tmp_path, target)
 @contextmanager
 def _uncached_discovery(monkeypatch):
     with monkeypatch.context() as patch:
+        patch.setattr(
+            project_pipeline, "_cached_metal_materialization", lambda key: None
+        )
         cached = metal_preprocessor._discover_preprocessed_metal_entries
         patch.setattr(
             metal_preprocessor,

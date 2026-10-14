@@ -516,6 +516,18 @@ Entry selection scopes shader or kernel translation; it does not infer host
 dispatch dimensions, runtime bindings, or backend integration. Record those
 requirements through the corresponding dispatch and runtime contracts.
 
+Repeated Metal project translations retain up to eight successful template
+materializations in memory. Includes and macros are expanded afresh before
+lookup. Reuse requires the same unit, source text, expanded sources, macro
+tables, entry, target, variant, defines, include paths and every source option
+that materialization reads, compared by exact type and order. Dispatch regions,
+subgroup widths and other target-lowering options are withheld from
+materialization, so one materialization can serve several dispatch contracts.
+Returned records are copied for each caller, and failed specializations are not
+retained. Target generation, dispatch contracts, reflection and package
+verification still run independently for each artifact. This cache is not a
+persistent translation checkpoint.
+
 The next MLX kernel-tree increment is pinned independently at
 ``9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8``. Entry discovery must report
 exactly 49 Metal units, 17,832 entries, and zero diagnostics. The compact
