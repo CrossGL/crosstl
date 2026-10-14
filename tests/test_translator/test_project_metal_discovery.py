@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from crosstl.backend.Metal import preprocessor as metal_preprocessor
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.project import ProjectConfig, translate_project
 from crosstl.project.translation_checkpoint import (
@@ -412,6 +413,12 @@ def test_project_parameter_comments_preserve_constrained_calls(tmp_path, target)
 @contextmanager
 def _uncached_discovery(monkeypatch):
     with monkeypatch.context() as patch:
+        cached = metal_preprocessor._discover_preprocessed_metal_entries
+        patch.setattr(
+            metal_preprocessor,
+            "_discover_preprocessed_metal_entries",
+            cached.__wrapped__,
+        )
         for name in (
             "template_functions",
             "non_template_function_definitions",
@@ -492,10 +499,15 @@ def test_discovery_reuse_preserves_entry_and_variant_artifacts(
     discovery_project, monkeypatch, target
 ):
     config = replace(discovery_project, targets=(target,))
+    cache = metal_preprocessor._discover_preprocessed_metal_entries
+    cache.cache_clear()
     with _uncached_discovery(monkeypatch):
         uncached = _translate(config)
+    assert cache.cache_info().misses == 0
     cached = _translate(config)
+    initial_hits = cache.cache_info().hits
     repeated = _translate(config)
+    assert cache.cache_info().hits > initial_hits
 
     assert cached[0]["diagnostics"] == []
     assert cached[0]["summary"]["translatedCount"] == 4

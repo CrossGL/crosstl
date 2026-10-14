@@ -44,6 +44,80 @@ def test_top_level_search_preserves_angle_tracking_policy(track_angles):
     assert result == (source.rfind(";") if track_angles else source.find(";"))
 
 
+@pytest.mark.parametrize("target,stop", [("{", ";"), (";", "{")])
+@pytest.mark.parametrize(
+    "header",
+    [
+        "type name",
+        "name<other<int; 2>> function()",
+        '[[attribute("{;}")]] type name',
+        "type name[sizeof(value; other)]",
+        "type name /* { ; */ // { ;\n",
+        "type operator /* { ; */ <<=(int value)",
+    ],
+)
+def test_declaration_search_stops_only_at_top_level_terminators(target, stop, header):
+    processor = MetalPreprocessor()
+    source = header + stop + " unrelated declaration " + target
+    assert processor._find_next_top_level_char(source, 0, target) == len(source) - 1
+    assert processor._find_next_top_level_char(source, 0, target, stop_at=stop) is None
+    source = header + target + " unrelated declaration " + stop
+    assert processor._find_next_top_level_char(source, 0, target, stop_at=stop) == len(
+        header
+    )
+
+
+@pytest.mark.parametrize("target,stop", [("{", ";"), (";", "{")])
+def test_declaration_terminator_does_not_scan_later_declarations(target, stop):
+    class BoundedSource(str):
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                assert key <= self.index(stop), "Read beyond the declaration terminator"
+            return super().__getitem__(key)
+
+    source = BoundedSource("name" + stop + " unrelated_identifier " * 4096 + target)
+    assert (
+        MetalPreprocessor()._find_next_top_level_char(source, 0, target, stop_at=stop)
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "kind", ["struct", "function", "trait", "span", "specialization"]
+)
+def test_forward_declarations_preserve_later_template_bodies(kind):
+    source = """
+template<class T> struct Forward;
+template<class T> T forward(T value);
+template<class T> struct Defined { using type = T; T value; };
+template<class T> T defined(T value) { return value; }
+template<> int forward<int>(int value);
+template<> int defined<int>(int value) { return value + 1; }
+"""
+    processor = MetalPreprocessor()
+    if kind == "struct":
+        records = processor._find_template_structs(
+            source, include_forward_declarations=True
+        )
+        assert [(item.name, item.is_forward_declaration) for item in records] == [
+            ("Forward", True),
+            ("Defined", False),
+        ]
+    elif kind == "function":
+        assert [item.name for item in processor._find_template_functions(source)] == [
+            "defined"
+        ]
+    elif kind == "trait":
+        assert processor._find_template_type_traits(source)["Defined"]["default"] == "T"
+    elif kind == "span":
+        assert len(processor._find_template_declaration_spans(source)) == 6
+    else:
+        assert processor._find_explicit_template_specialization_keys(source) == {
+            ("forward", ("int",)),
+            ("defined", ("int",)),
+        }
+
+
 @pytest.mark.parametrize("suffix", ["", "// ;", "/* ;", '"; tail', "'; tail"])
 def test_top_level_search_does_not_use_unterminated_comment_or_literal(suffix):
     assert (

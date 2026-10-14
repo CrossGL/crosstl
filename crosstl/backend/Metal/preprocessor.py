@@ -9,6 +9,7 @@ import struct as binary_struct
 from bisect import bisect_right
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from heapq import heappop, heappush
 from typing import (
     Any,
@@ -84,6 +85,7 @@ MLX_HOST_NAME_DECL_RE = re.compile(
 )
 DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT = 512
 SOURCE_ANALYSIS_CACHE_LIMIT = 8
+ENTRY_DISCOVERY_CACHE_LIMIT = 8
 CONTAINING_SPAN_CACHE_LIMIT = 64
 LEXICAL_SCOPE_CACHE_LIMIT = 64
 METAL_RECEIVER_DECLARATION_RE = re.compile(
@@ -3890,8 +3892,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             # Distinguish a definition (`struct Name { ... }`) from a forward
             # declaration / variable usage (`struct Name x;`). Skip anything that
             # is not immediately a `{` or a base-class clause `: ... {`.
-            body_start = self._find_next_top_level_char(code, after_name, "{")
-            semicolon = self._find_next_top_level_char(code, after_name, ";")
+            body_start = self._find_next_top_level_char(
+                code, after_name, "{", stop_at=";"
+            )
+            semicolon = self._find_next_top_level_char(
+                code, after_name, ";", stop_at="{"
+            )
             if body_start is None or (semicolon is not None and semicolon < body_start):
                 continue
             between = code[after_name:body_start]
@@ -22335,8 +22341,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
 
             declaration_start = angle_end + 1
-            body_start = self._find_next_top_level_char(code, declaration_start, "{")
-            semicolon = self._find_next_top_level_char(code, declaration_start, ";")
+            body_start = self._find_next_top_level_char(
+                code, declaration_start, "{", stop_at=";"
+            )
+            semicolon = self._find_next_top_level_char(
+                code, declaration_start, ";", stop_at="{"
+            )
             if body_start is None or (semicolon is not None and semicolon < body_start):
                 pos = declaration_start
                 continue
@@ -22436,8 +22446,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 pos = declaration_start
                 continue
 
-            body_start = self._find_next_top_level_char(code, declaration_start, "{")
-            semicolon = self._find_next_top_level_char(code, declaration_start, ";")
+            body_start = self._find_next_top_level_char(
+                code, declaration_start, "{", stop_at=";"
+            )
+            semicolon = self._find_next_top_level_char(
+                code, declaration_start, ";", stop_at="{"
+            )
             forward = semicolon is not None and (
                 body_start is None or semicolon < body_start
             )
@@ -25831,8 +25845,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
 
             declaration_start = angle_end + 1
-            body_start = self._find_next_top_level_char(code, declaration_start, "{")
-            semicolon = self._find_next_top_level_char(code, declaration_start, ";")
+            body_start = self._find_next_top_level_char(
+                code, declaration_start, "{", stop_at=";"
+            )
+            semicolon = self._find_next_top_level_char(
+                code, declaration_start, ";", stop_at="{"
+            )
             if body_start is not None and (semicolon is None or body_start < semicolon):
                 body_end = self._find_matching_brace(code, body_start)
                 if body_end is None:
@@ -26002,8 +26020,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         keys: Set[Tuple[str, Tuple[str, ...]]] = set()
         for match in re.finditer(r"\btemplate\s*<\s*>\s*", code):
             declaration_start = match.end()
-            body_start = self._find_next_top_level_char(code, declaration_start, "{")
-            semicolon = self._find_next_top_level_char(code, declaration_start, ";")
+            body_start = self._find_next_top_level_char(
+                code, declaration_start, "{", stop_at=";"
+            )
+            semicolon = self._find_next_top_level_char(
+                code, declaration_start, ";", stop_at="{"
+            )
             declaration_end = body_start
             if declaration_end is None or (
                 semicolon is not None and semicolon < declaration_end
@@ -27472,8 +27494,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 pos = start + len("template")
                 continue
             declaration_start = angle_end + 1
-            body_start = self._find_next_top_level_char(code, declaration_start, "{")
-            semicolon = self._find_next_top_level_char(code, declaration_start, ";")
+            body_start = self._find_next_top_level_char(
+                code, declaration_start, "{", stop_at=";"
+            )
+            semicolon = self._find_next_top_level_char(
+                code, declaration_start, ";", stop_at="{"
+            )
             if body_start is None or (semicolon is not None and semicolon < body_start):
                 pos = declaration_start
                 continue
@@ -28087,12 +28113,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         target: str,
         *,
         track_angles: bool = True,
+        stop_at: str = "",
     ) -> Optional[int]:
         # Skip identifiers and whitespace without allocating a source substring.
         # Operator names still need their own angle-bracket handling below.
         delimiters = re.compile(
             "["
-            + re.escape("()[]\"'/" + target + ("<>" if track_angles else ""))
+            + re.escape("()[]\"'/" + target + stop_at + ("<>" if track_angles else ""))
             + "]"
             + (r"|\boperator" if track_angles else "")
         )
@@ -28124,12 +28151,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                     i = end + 2
                     continue
             if (
-                ch == target
+                (ch == target or ch in stop_at)
                 and paren_depth == 0
                 and bracket_depth == 0
                 and (not track_angles or angle_depth == 0)
             ):
-                return i
+                # A terminator excludes bodies belonging to later declarations.
+                return i if ch == target else None
             if track_angles and ch == "o":
                 operator_name = METAL_ANGLE_OPERATOR_RE.match(code, i)
                 if operator_name is not None:
@@ -28614,14 +28642,6 @@ def discover_metal_entry_points(
     source_options: Optional[Mapping[str, Any]] = None,
 ):
     """Discover Metal entry points without materializing or translating kernels."""
-    from crosstl.translator.entry_discovery import (
-        ENTRY_DISCOVERY_AVAILABLE,
-        SourceEntryDiscovery,
-        SourceEntryDiscoveryDiagnostic,
-        SourceEntryPoint,
-        SourceEntryProvenance,
-    )
-
     options = dict(source_options or {})
     preprocessor = MetalPreprocessor(
         include_paths=list(include_paths or ()),
@@ -28634,6 +28654,24 @@ def discover_metal_entry_points(
             source, file_path=file_path
         )
 
+    # Always expand current inputs before lookup; cached records own no file state.
+    return replace(
+        deepcopy(_discover_preprocessed_metal_entries(source)),
+        source_path=file_path or "<memory>",
+    )
+
+
+@lru_cache(maxsize=ENTRY_DISCOVERY_CACHE_LIMIT)
+def _discover_preprocessed_metal_entries(source: str):
+    from crosstl.translator.entry_discovery import (
+        ENTRY_DISCOVERY_AVAILABLE,
+        SourceEntryDiscovery,
+        SourceEntryDiscoveryDiagnostic,
+        SourceEntryPoint,
+        SourceEntryProvenance,
+    )
+
+    preprocessor = MetalPreprocessor()
     comment_and_literal_spans = preprocessor._find_comment_and_literal_spans(source)
     template_functions = preprocessor._find_template_functions(source)
     template_entries = {
@@ -28761,7 +28799,7 @@ def discover_metal_entry_points(
 
     return SourceEntryDiscovery(
         source_backend="metal",
-        source_path=file_path or "<memory>",
+        source_path="<memory>",
         status=ENTRY_DISCOVERY_AVAILABLE,
         entries=tuple(entries),
         diagnostics=tuple(diagnostics),
