@@ -1407,7 +1407,7 @@ def test_ci_requires_selected_entry_workgroup_execution():
     assert selector not in comparison and workflow.count(selector) == 1
     assert 'CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES: "1"' in step
     assert "CROSTL_REQUIRE_ENTRY_WORKGROUP_RULES" not in comparison
-    assert "--timeout-seconds 360" in step
+    assert "--timeout-seconds 600" in step
     assert "continue-on-error" not in step and "if:" not in step
     assert (
         "if: failure() && runner.os == 'Windows' && !matrix.warp_qualification "

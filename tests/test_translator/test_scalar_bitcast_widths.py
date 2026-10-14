@@ -251,5 +251,5 @@ def test_scalar_bitcast_native_gate_uses_existing_runners():
     )
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_scalar_bitcast_widths.py" in step
-    assert "--timeout-seconds 360" in step
+    assert "--timeout-seconds 600" in step
     assert "continue-on-error" not in step

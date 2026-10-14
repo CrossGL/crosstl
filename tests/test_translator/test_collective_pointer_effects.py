@@ -283,7 +283,7 @@ def test_pointer_effect_execution_shares_required_native_job():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_collective_pointer_effects.py" in step
     assert "-n auto" in step and "continue-on-error" not in step
-    assert "--timeout-seconds 360" in step and "--junitxml=" in step
+    assert "--timeout-seconds 600" in step and "--junitxml=" in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
             ci_coverage.workflow_event_path_filters(workflow, event),

@@ -180,4 +180,4 @@ def test_template_grouping_execution_is_required_on_all_platforms():
     assert "if:" not in step and "continue-on-error" not in step
     assert "pytest -q -n auto" in step
     assert "--basetemp=" in step and "--junitxml=" in step
-    assert "--timeout-seconds 360" in step
+    assert "--timeout-seconds 600" in step

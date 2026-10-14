@@ -247,7 +247,7 @@ def test_narrow_extent_controls_share_existing_native_gate():
     )
     assert f"{path}::test_narrow_buffer_extent_execute" in step
     assert f'{REQUIRE_ENV}: "1"' in step
-    assert "--timeout-seconds 360" in step and "-n auto" in step
+    assert "--timeout-seconds 600" in step and "-n auto" in step
     assert "if:" not in step and "continue-on-error" not in step
     assert step.index(path) < step.index("test_subgroup_uniform_arguments.py")
     assert "--basetemp=" in step and "--junitxml=" in step

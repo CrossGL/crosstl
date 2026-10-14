@@ -335,7 +335,7 @@ explicit subnormal policies are tested independently of native Boolean casts
 and other arithmetic profiles, without adding a runner or extending the bound.
 
 The existing Windows host jobs also retain direct 16-bit buffer-load controls
-for 105- and 106-element inputs. They run in the existing 360-second collective
+for 105- and 106-element inputs. They run in the existing 600-second collective
 batch on both required and qualification runtimes, before the currently failing
 resource and partial-subgroup steps. They compare exact views, exact views in
 larger allocations, and explicitly

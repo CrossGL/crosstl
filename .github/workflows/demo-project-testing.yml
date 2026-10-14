@@ -1357,7 +1357,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/subgroup-arguments
-          python tools/run_bounded_command.py --timeout-seconds 360 --label "Collective helper arguments" -- \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Collective helper arguments" -- \
             python -m pytest -q -n auto -vv --durations=25 \
               --basetemp=.mlx-portable-host/subgroup-arguments/pytest \
               --junitxml=.mlx-portable-host/subgroup-arguments/results.xml \
@@ -1379,7 +1379,7 @@ jobs:
               tests/test_translator/test_resource_allocation_origins.py \
               2>&1 | tee .mlx-portable-host/subgroup-arguments.log
           mkdir -p .mlx-portable-host/resource-values
-          python tools/run_bounded_command.py --timeout-seconds 360 --label "Resource values and project execution" -- \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Resource values and project execution" -- \
             python -m pytest -q -n auto -vv --durations=25 \
               -k "execute or native or original_metal or prepared_uploads or dxc_compilation or fxc_comparison_preserves" \
               --basetemp=.mlx-portable-host/resource-values/pytest \
@@ -1896,7 +1896,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/gated-delta
-          python tools/run_bounded_command.py --timeout-seconds 300 --label "MLX DirectX gated-delta compilation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 150 --label "MLX DirectX gated-delta compilation" -- \
             python -m pytest -q -n auto \
               --basetemp=.mlx-portable-host/gated-delta/pytest \
               --junitxml=.mlx-portable-host/gated-delta/results.xml \
@@ -1910,7 +1910,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/gated-delta-runtime
-          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX DirectX gated-delta execution" -- \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX DirectX gated-delta execution" -- \
             python -m pytest -q -n auto --dist loadscope \
               --basetemp=.mlx-portable-host/gated-delta-runtime/pytest \
               --junitxml=.mlx-portable-host/gated-delta-runtime/results.xml \
@@ -1959,7 +1959,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/attention-ds
-          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX DirectX attention derivatives" -- \
+          python tools/run_bounded_command.py --timeout-seconds 240 --label "MLX DirectX attention derivatives" -- \
             python -m pytest -q -n auto --dist loadscope \
               --basetemp=.mlx-portable-host/attention-ds/pytest \
               --junitxml=.mlx-portable-host/attention-ds/results.xml \

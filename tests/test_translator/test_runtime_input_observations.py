@@ -255,7 +255,7 @@ def test_input_observations_are_required_in_native_ci():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_runtime_input_observations.py" in step
     assert "continue-on-error" not in step and "if:" not in step
-    assert "--timeout-seconds 360" in step
+    assert "--timeout-seconds 600" in step
 
 
 @pytest.mark.parametrize("case", ("scalar", "record", "offset-view"))

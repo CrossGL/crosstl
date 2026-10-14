@@ -3737,7 +3737,7 @@ def test_native_collective_batches_limit_software_driver_threads():
     assert job["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
     assert step["env"]["LP_NUM_THREADS"] == "2"
     assert "if" not in step and "continue-on-error" not in step
-    assert step["run"].count("--timeout-seconds 360") == 2
+    assert step["run"].count("--timeout-seconds 600") == 2
     assert step["run"].count("-n auto -vv --durations=25") == 2
     batches = step["run"].split("python -m pytest ")[1:]
     assert len(batches) == 2

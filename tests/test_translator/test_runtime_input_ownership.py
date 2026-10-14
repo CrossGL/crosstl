@@ -160,8 +160,10 @@ def test_prepared_uploads_ignore_late_input_mutation(tmp_path, case, monkeypatch
     request, expected = _request(tmp_path, target, case, False)
     dispatch = NativeRuntimeParityAdapter.dispatch
     observed = []
+    dispatched = []
 
     def mutate_after_prepare(adapter, state, native):
+        dispatched.append(native.entry_point)
         retained = []
         for binding in native.buffers.values():
             if isinstance(binding.value, list):
@@ -186,7 +188,14 @@ def test_prepared_uploads_ignore_late_input_mutation(tmp_path, case, monkeypatch
         else {}
     )
     _execute(request, expected, tmp_path, **options)
-    assert len(observed) == 3
+    # Metal also dispatches the unchanged original kernel as a control, and that
+    # control reuses the prepared bindings, so every dispatch must observe the
+    # same three upload snapshots despite the late caller mutation.
+    assert len(dispatched) == (2 if target == "metal" else 1)
+    if target == "metal":
+        assert dispatched[1] == "owned_inputs"
+    assert len(observed) == 3 * len(dispatched)
+    assert observed[3:] == observed[: len(observed) - 3]
     assert all(item["sizeBytes"] > 0 and len(item["sha256"]) == 64 for item in observed)
 
 

@@ -116,8 +116,10 @@ work units on the existing two workers. This avoids queueing both expensive
 controls behind one worker; per-case progress and durations are retained.
 The selected cases, inputs, compiler options and 120-second bound are unchanged.
 The larger collective and resource batches also cap software-OpenGL threads
-at two. Their complete module selections and separate 360-second deadlines
-remain unchanged; per-test progress and durations make timeout diagnosis visible.
+at two. Their complete module selections are unchanged. Each batch has a
+separate 600-second deadline: on macOS the two batches took 257-375 s and
+282-358 s, so the earlier 360-second bound stopped complete passing runs.
+Per-test progress and durations make timeout diagnosis visible.
 
 If the required Windows collective checks fail, the existing job compares the
 same precise scalar and cooperative-matrix controls with default pipeline flags

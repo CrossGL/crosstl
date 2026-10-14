@@ -532,5 +532,5 @@ def test_guarded_resource_indices_ci_contract():
     assert "pytest -q -n auto" in step
     assert "--basetemp=" in step and "--junitxml=" in step
     assert step.count("python tools/run_bounded_command.py") == 2
-    assert step.count("--timeout-seconds 360") == 2
+    assert step.count("--timeout-seconds 600") == 2
     assert "--junitxml=.mlx-portable-host/resource-values/results.xml" in step

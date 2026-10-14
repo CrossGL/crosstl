@@ -280,4 +280,4 @@ def test_reference_capture_is_required_on_all_native_platforms():
     assert "test_reference_capture.py" in step
     assert "pytest -q -n auto" in step
     assert "if:" not in step and "continue-on-error" not in step
-    assert "--timeout-seconds 360" in step
+    assert "--timeout-seconds 600" in step

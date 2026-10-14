@@ -31,7 +31,7 @@ def test_native_member_context_is_required_on_all_platforms():
     assert "if:" not in step and "continue-on-error" not in step
     assert "pytest -q -n auto" in step
     assert "--basetemp=" in step and "--junitxml=" in step
-    assert "--timeout-seconds 360" in step
+    assert "--timeout-seconds 600" in step
 
 
 def _source(route="explicit", alias="using item_t = Payload;"):
