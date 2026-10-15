@@ -695,3 +695,92 @@ def test_directx_bfloat_storage_narrows_canonical_buffer_store_values():
     assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
     assert " = uint16_t(value);" in generated
     assert " = value;" not in generated
+
+
+def test_directx_bfloat_fixed_array_returns_keep_payload_bits(tmp_path):
+    # Reduced from MLX 9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8,
+    # mlx/backend/metal/kernels/binary_ops.h (DivMod). A uint2 return used
+    # to coerce each bfloat16 payload numerically (uint(bf16_to_float(x))),
+    # so WARP stored 3 instead of the bfloat16 bits of 3.0.
+    (tmp_path / "divmod.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+            typedef bfloat bfloat16_t;
+
+            struct DivMod {
+              template <typename T>
+              metal::array<T, 2> operator()(T x, T y) {
+                return {x / y, x};
+              }
+            };
+
+            template <typename T>
+            struct Widen {
+              metal::array<T, 3> operator()(float x) {
+                return {static_cast<T>(x), static_cast<T>(2.0f)};
+              }
+            };
+
+            template <typename T>
+            [[kernel]] void divmod(
+                device const T* a [[buffer(0)]],
+                device const T* b [[buffer(1)]],
+                device T* c [[buffer(2)]],
+                device T* d [[buffer(3)]],
+                uint index [[thread_position_in_grid]]) {
+              auto out = DivMod{}(a[index], b[index]);
+              auto wide = Widen<T>{}(1.5f);
+              c[index] = out[0];
+              d[index] = out[1] + wide[2];
+            }
+
+            instantiate_kernel("divmod_bfloat", divmod, bfloat16_t)
+            instantiate_kernel("divmod_float", divmod, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        tmp_path,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    generated = (tmp_path / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    # bfloat16 arrays use the struct lowering whose fields keep the logical
+    # bfloat16 type, so payloads are copied bit-for-bit.
+    assert "struct CrossGLFixedArray_uint_2 {" in generated
+    assert (
+        "CrossGLFixedArray_uint_2 DivMod__operator_call__bfloat16_t("
+        "inout DivMod self, uint x, uint y) {" in generated
+    )
+    assert (
+        ".value1 = x;" in generated
+    ), "a bfloat16 lane must be copied, not numerically converted"
+    assert ".value0 = __crossgl_bfloat16_from_float(float((" in generated
+    assert "c[index] = uint16_t(out_.value0);" in generated
+    assert "uint2 DivMod__operator_call__bfloat16_t" not in generated
+    assert "uint(__crossgl_bfloat16_to_float(" not in generated
+    # Float lanes that initialize a bfloat16 array are rounded exactly once,
+    # and value-initialized lanes are bfloat16 zero payloads.
+    assert "struct CrossGLFixedArray_uint_3 {" in generated
+    assert ".value0 = __crossgl_bfloat16_from_float(float(x));" in generated
+    assert ".value1 = __crossgl_bfloat16_from_float(float(2.0));" in generated
+    assert ".value2 = uint(0);" in generated
+    # Arithmetic on a returned lane decodes the payload first.
+    assert (
+        "__crossgl_bfloat16_to_float(uint(out_.value1)) + "
+        "__crossgl_bfloat16_to_float(uint(wide.value2))" in generated
+    )
+
+    # Non-bfloat16 scalar arrays keep the compact vector lowering.
+    assert (
+        "float2 DivMod__operator_call__float(inout DivMod self, float x, float y)"
+        in generated
+    )

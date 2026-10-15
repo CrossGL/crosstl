@@ -11607,6 +11607,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         _type_text, base_type, component_count = components
         if component_count not in {2, 3, 4}:
             return None
+        if self.is_hlsl_bfloat16_type(base_type):
+            # bfloat16 lanes are uint payloads; a uintN vector would coerce
+            # each element numerically, so keep the logical element type in
+            # the fixed-array struct lowering instead.
+            return None
         mapped_base = self.map_type(base_type)
         if not self.is_scalar_value_type(mapped_base):
             return None
