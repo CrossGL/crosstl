@@ -1275,7 +1275,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/subgroup-products
-          python tools/run_bounded_command.py --timeout-seconds 180 --label "Software subgroup products" -- \
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Software subgroup products" -- \
             python -m pytest -q -n auto \
               --basetemp=.mlx-portable-host/subgroup-products/pytest \
               --junitxml=.mlx-portable-host/subgroup-products/results.xml \
@@ -4001,7 +4001,7 @@ jobs:
           set -euo pipefail
           mkdir -p fused-math-results
           python tools/run_bounded_command.py \
-            --label "binary32 arithmetic" --timeout-seconds 120 -- \
+            --label "binary32 arithmetic" --timeout-seconds 300 -- \
             python -m pytest -q -n auto --dist loadgroup -vv --durations=10 \
               -k "execute or original_metal or modules_link_together" \
               --basetemp="fused-math-results/pytest" \

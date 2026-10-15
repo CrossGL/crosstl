@@ -3893,6 +3893,20 @@ def test_resource_selection_retains_every_native_opt_in():
     ) in selected
 
 
+def test_portable_host_subgroup_products_budget_covers_llvmpipe_runs():
+    from tools import ci_coverage
+
+    workflow = (WORKFLOW_DIR / "demo-project-testing.yml").read_text()
+    step = ci_coverage.workflow_job_step_section(
+        workflow, "portable-host", "Validate software subgroup products"
+    )
+    # The 632 OpenGL software-subgroup tests passed in 114-122 s, and two of
+    # the last four OpenGL host runs exceeded the earlier 180 s budget at 91%.
+    assert '--timeout-seconds 300 --label "Software subgroup products"' in step
+    assert "tests/test_translator/test_software_subgroup_product.py" in step
+    assert 'CROSTL_REQUIRE_SOFTWARE_SUBGROUP_PRODUCT: "1"' in step
+
+
 def test_project_arithmetic_selection_retains_every_device_test():
     from tools import ci_coverage
 
@@ -3902,7 +3916,8 @@ def test_project_arithmetic_selection_retains_every_device_test():
     )
     expression = "execute or original_metal or modules_link_together"
     assert f'-k "{expression}"' in step
-    assert "--timeout-seconds 120" in step
+    # Two llvmpipe workers on Linux took 67-125 s across recent runs.
+    assert "--timeout-seconds 300" in step
     assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
     assert 'LP_NUM_THREADS: "2"' in step
     assert "--dist loadgroup -vv --durations=10" in step
