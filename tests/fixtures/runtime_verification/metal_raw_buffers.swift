@@ -1,12 +1,19 @@
 import Foundation
 import Metal
 
+struct BoolConstant: Decodable {
+    let index: Int
+    let value: Bool
+}
+
 struct Request: Decodable {
     let buffers: [String]
     let allocationIds: [Int]?
     let workgroupCount: [Int]
     let workgroupSize: [Int]
     let simdWidth: Int
+    // Boolean function constants, as MLX sets them with MTLFunctionConstantValues.
+    let boolConstants: [BoolConstant]?
 }
 
 enum ExecutionError: Error {
@@ -27,8 +34,23 @@ func run() throws {
         throw ExecutionError.unavailable("Invalid dispatch geometry or unavailable Metal device")
     }
     let library = try device.makeLibrary(URL: URL(fileURLWithPath: args[1]))
-    guard let function = library.makeFunction(name: args[2]) else {
-        throw ExecutionError.unavailable("Kernel entry point is missing")
+    let function: MTLFunction
+    if let constants = request.boolConstants, !constants.isEmpty {
+        guard Set(constants.map { $0.index }).count == constants.count,
+              constants.allSatisfy({ $0.index >= 0 }) else {
+            throw ExecutionError.unavailable("Invalid function constants")
+        }
+        let values = MTLFunctionConstantValues()
+        for constant in constants {
+            var value = constant.value
+            values.setConstantValue(&value, type: .bool, index: constant.index)
+        }
+        function = try library.makeFunction(name: args[2], constantValues: values)
+    } else {
+        guard let selected = library.makeFunction(name: args[2]) else {
+            throw ExecutionError.unavailable("Kernel entry point is missing")
+        }
+        function = selected
     }
     let pipeline = try device.makeComputePipelineState(function: function)
     guard pipeline.threadExecutionWidth == request.simdWidth,
