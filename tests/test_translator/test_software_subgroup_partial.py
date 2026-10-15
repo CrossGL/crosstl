@@ -426,7 +426,8 @@ def test_half_and_float_sums_keep_separate_helpers(tmp_path, target):
     _compile(generated, target, tmp_path)
 
 
-def test_masked_half_sum_requires_source_participation_contract():
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_masked_half_sum_requires_source_participation_contract(target):
     source = _canonical(
         (32, 1, 1),
         """
@@ -436,8 +437,56 @@ def test_masked_half_sum_requires_source_participation_contract():
     """,
     )
     with pytest.raises(ValueError) as caught:
-        _codegen("opengl").generate_stage(parse(source), "compute")
+        _codegen(target).generate_stage(parse(source), "compute")
     assert caught.value.reason == "half-masked-participation-unproven"
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize(
+    "guard",
+    [
+        # A lane term splits each subgroup.
+        "sid == 1u && invocation % 32u < 16u",
+        # Only the entry's own, never-written subgroup index is trusted.
+        "copy == 1u",
+        "sid + invocation == 1u",
+    ],
+)
+def test_masked_half_sum_rejects_guards_that_split_subgroups(tmp_path, target, guard):
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+kernel void split(const device uint* inputs [[buffer(0)]],
+                  device uint* outputs [[buffer(1)]],
+                  uint invocation [[thread_index_in_threadgroup]],
+                  uint sid [[simdgroup_index_in_threadgroup]]) {{
+    half value = as_type<half>(ushort(inputs[invocation]));
+    uint copy = sid;
+    half total = half(0);
+    if ({guard}) {{ total = simd_sum(value); }}
+    outputs[invocation] = uint(as_type<ushort>(total));
+}}
+"""
+    (tmp_path / "split.metal").write_text(source, encoding="utf-8")
+    options = {"software_subgroup_width": 32}
+    if target == "directx":
+        options["relative_wave_shuffle_out_of_range"] = "self"
+    payload = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            targets=(target,),
+            output_dir="out",
+            workgroup_size=(32, 3, 1),
+            source_options={"metal": {"target_options": {target: options}}},
+        ),
+        format_output=False,
+    ).to_json()
+    assert payload["summary"]["translatedCount"] == 0
+    (diagnostic,) = payload["diagnostics"]
+    assert diagnostic["code"] == f"project.translate.{target}-software-subgroup-invalid"
+    assert (
+        diagnostic["details"]["executionSpecialization"]["reason"]
+        == "half-masked-participation-unproven"
+    )
 
 
 def test_project_reports_unproven_masked_half_participation(tmp_path):
@@ -549,6 +598,172 @@ def test_half_sums_execute_with_partial_groups_and_scratch_reuse(tmp_path, shape
         tmp_path,
         original_source=source if target == "metal" else None,
         original_entry="half_sums",
+    )
+    evidence = json.loads((tmp_path / "evidence.json").read_text())
+    observations = evidence["records"]["generated"]["details"]["inputObservations"]
+    assert len(observations) == 1
+    assert all(item["unchanged"] for item in observations.values())
+
+
+# MLX's non-precise block softmax reduces binary16 values, and its bfloat16
+# overloads convert float reductions back, under ``simd_group_id == 0``. A guard
+# on the subgroup index alone includes each subgroup completely or not at all,
+# so the predicated reductions keep the unguarded rounding order.
+GUARDED_HALF_FIELDS = 5
+GUARDED_HALF_PATTERNS = (
+    [lane / 8 - 2 for lane in range(32)],
+    [-0.0] * 31 + [-1.0],
+    [0.1] * 32,
+    [2**-24] * 32,
+    [math.inf, -math.inf] + [0.5] * 30,
+    [(-1) ** lane * (lane + 1) * 0.25 for lane in range(32)],
+    [2048.0, 1.0, -2048.0, 1.0] * 8,
+)
+
+
+def _guarded_half_source(size):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+uint half_bits(half value) {{
+    return isnan(value) ? 0x7e00u : uint(as_type<ushort>(value));
+}}
+kernel void guarded_half(const device uint* inputs [[buffer(0)]],
+                         device uint* outputs [[buffer(1)]],
+                         uint invocation [[thread_index_in_threadgroup]],
+                         uint3 group [[threadgroup_position_in_grid]],
+                         uint sid [[simdgroup_index_in_threadgroup]]) {{
+    uint index = group.x * {size}u + invocation;
+    half value = as_type<half>(ushort(inputs[index]));
+    half largest = simd_max(value);
+    half smallest = simd_min(value);
+    half total = half(-1);
+    if (sid == 1u) {{
+        total = simd_sum(value);
+    }}
+    half guarded = half(-2);
+    if (sid != 1u) {{
+        guarded = simd_max(value);
+    }}
+    float widened = float(value);
+    half narrowed = half(-3);
+    if (sid == 0u) {{
+        narrowed = half(simd_sum(widened));
+    }}
+    outputs[index * {GUARDED_HALF_FIELDS}u] = half_bits(largest);
+    outputs[index * {GUARDED_HALF_FIELDS}u + 1u] = half_bits(smallest);
+    outputs[index * {GUARDED_HALF_FIELDS}u + 2u] = half_bits(total);
+    outputs[index * {GUARDED_HALF_FIELDS}u + 3u] = half_bits(guarded);
+    outputs[index * {GUARDED_HALF_FIELDS}u + 4u] = half_bits(narrowed);
+}}
+"""
+
+
+def _guarded_half_reference(size):
+    words, wanted = [], []
+    for pattern in GUARDED_HALF_PATTERNS:
+        group = [_half_word(pattern[index % 32]) for index in range(size)]
+        words.extend(group)
+        for start in range(0, size, 32):
+            lanes = group[start : start + 32]
+            values = [_half_value(word) for word in lanes]
+            subgroup = start // 32
+            largest = lanes[values.index(max(values))]
+            smallest = lanes[values.index(min(values))]
+            total = _half_sum_reference(lanes) if subgroup == 1 else 0xBC00
+            guarded = largest if subgroup != 1 else 0xC000
+            narrowed = 0xC200
+            if subgroup == 0:
+                # Every pattern's binary32 sum is exact, so any summation
+                # order gives the same value before the single rounding.
+                exact = sum(values)
+                narrowed = 0x7E00 if math.isnan(exact) else _half_word(exact)
+            wanted.extend([largest, smallest, total, guarded, narrowed] * len(lanes))
+    return words, wanted
+
+
+def test_guarded_half_reference_covers_edges():
+    _, wanted = _guarded_half_reference(96)
+    fields = [
+        wanted[index::GUARDED_HALF_FIELDS] for index in range(GUARDED_HALF_FIELDS)
+    ]
+    largest, smallest, total, guarded, narrowed = fields
+    assert 0x8000 in largest and 0x7C00 in largest and 0xFC00 in smallest
+    assert 0x0001 in largest and 0x0020 in total and 0x0020 in narrowed
+    # Rounding every binary16 partial gives 8 for this pattern, while one
+    # rounding of the exact float sum gives 16, so the converted reduction
+    # cannot reuse the binary16 helper.
+    assert 0x4800 in total and 0x4C00 in narrowed
+    assert 0x7E00 in total and 0x7E00 in narrowed
+    assert {0xBC00, 0xC000, 0xC200} <= set(total) | set(guarded) | set(narrowed)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("shape", [(32, 1, 1), (32, 3, 1), (80, 1, 1)])
+def test_guarded_half_package_predicates_reductions(tmp_path, target, shape):
+    _, descriptor, package = _package(
+        tmp_path,
+        target,
+        "float",
+        shape,
+        source=_guarded_half_source(math.prod(shape)),
+    )
+    generated = (package / descriptor["artifact"]["packagePath"]).read_text()
+    for name in ("simd_sum(", "simd_max(", "simd_min(", "WaveActive"):
+        assert name not in generated
+    if math.prod(shape) > 32 or target == "directx":
+        assert generated.count("crossglSoftwareSubgroupActive") >= 6
+    if target == "directx":
+        assert "float16_t __crossgl_software_subgroup_max_float16_t(" in generated
+        assert "float16_t __crossgl_software_subgroup_min_float16_t(" in generated
+        assert "uint leftBits = uint(asuint16(result));" in generated
+        if math.prod(shape) > 32:
+            assert "asfloat16(uint16_t(0x8000u))" in generated
+            assert "asfloat16(uint16_t(0xfc00u))" in generated
+    elif math.prod(shape) > 32:
+        assert "crossglSoftwareSubgroupSumHalf(" in generated
+        assert "uintBitsToFloat(0x80000000u)" in generated
+    compiled = tmp_path / "compiled"
+    compiled.mkdir()
+    _compile(generated, target, compiled)
+
+
+@pytest.mark.parametrize("shape", [(32, 1, 1), (32, 3, 1), (80, 1, 1)])
+def test_guarded_half_reductions_execute(tmp_path, shape):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required partial subgroup readbacks")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    size = math.prod(shape)
+    words, wanted = _guarded_half_reference(size)
+    wanted.extend([0xDEAD] * 32)
+    source, descriptor, package = _package(
+        tmp_path, target, "float", shape, source=_guarded_half_source(size)
+    )
+
+    def payload(data):
+        return dict(dtype="uint32", shape=[len(data)], values=data)
+
+    inputs = _bound_values(
+        descriptor,
+        {"inputs": payload(words), "outputs": payload([0xDEAD] * len(wanted))},
+    )
+    expected = _bound_values(descriptor, {"outputs": payload(wanted)})
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        dict(
+            workgroupCount=[len(GUARDED_HALF_PATTERNS), 1, 1],
+            workgroupSize=list(shape),
+        ),
+        observe_inputs=[name for name in inputs if name not in expected],
+    )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="guarded_half",
     )
     evidence = json.loads((tmp_path / "evidence.json").read_text())
     observations = evidence["records"]["generated"]["details"]["inputObservations"]

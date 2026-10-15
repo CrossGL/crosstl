@@ -5307,24 +5307,164 @@ class HLSLCodeGen:
 
     # Identity of each predicated reduction. Signed zero is the exact float
     # sum identity, so inactive invocations cannot change a -0.0 result, and
-    # the infinities bound every non-NaN float for min and max.
+    # the infinities bound every non-NaN float for min and max. Binary16 sums
+    # round every pairwise partial, so a masked binary16 sum additionally
+    # requires a guard that every invocation of a subgroup evaluates alike.
     HLSL_SOFTWARE_SUBGROUP_MASKED_IDENTITIES = {
         "WaveActiveSum": {
             "float": "asfloat(0x80000000u)",
+            "float16_t": "asfloat16(uint16_t(0x8000u))",
             "int": "0",
             "uint": "0u",
         },
         "WaveActiveMin": {
             "float": "asfloat(0x7f800000u)",
+            "float16_t": "asfloat16(uint16_t(0x7c00u))",
             "int": "2147483647",
             "uint": "0xffffffffu",
         },
         "WaveActiveMax": {
             "float": "asfloat(0xff800000u)",
+            "float16_t": "asfloat16(uint16_t(0xfc00u))",
             "int": "(-2147483647 - 1)",
             "uint": "0u",
         },
     }
+    HLSL_SOFTWARE_SUBGROUP_UNIFORM_GUARD_OPERATORS = {
+        "==",
+        "!=",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "&&",
+        "||",
+        "!",
+        "+",
+        "-",
+        "*",
+        "/",
+        "%",
+        "&",
+        "|",
+        "^",
+        "<<",
+        ">>",
+    }
+
+    def hlsl_software_subgroup_conversion_chain(self, expression):
+        """Split ``T(U(op(x)))`` into its scalar conversions and ``op(x)``.
+
+        MLX's bfloat16 ``simd_max`` and ``simd_sum`` reduce a float conversion
+        and convert the result back, so their collective sits under
+        single-argument scalar conversions.
+        """
+        wrappers = []
+        current = expression
+        while True:
+            if isinstance(current, CastNode):
+                target = self.type_name_string(current.target_type)
+                if scalar_storage_layout(target) is None:
+                    break
+                wrappers.append(current)
+                current = current.expression
+                continue
+            if isinstance(current, FunctionCallNode):
+                arguments = list(
+                    getattr(current, "arguments", getattr(current, "args", [])) or []
+                )
+                name = self.function_call_name(current)
+                if (
+                    len(arguments) != 1
+                    or not isinstance(name, str)
+                    or name in self.function_return_types
+                    or scalar_storage_layout(name) is None
+                ):
+                    break
+                wrappers.append(current)
+                current = arguments[0]
+                continue
+            break
+        return wrappers, current
+
+    def hlsl_software_subgroup_guard_is_subgroup_uniform(
+        self, condition, subgroup_names, constant_names
+    ):
+        """Whether every invocation of one software subgroup agrees on a guard.
+
+        The guard may combine the entry's subgroup index, which the entry never
+        writes, with literals and compile-time constants. Each subgroup then
+        takes part in a predicated reduction completely or not at all.
+        """
+
+        def uniform(expression):
+            if isinstance(expression, LiteralNode):
+                return True
+            if isinstance(expression, (IdentifierNode, VariableNode)):
+                name = getattr(expression, "name", None)
+                return name in subgroup_names or name in constant_names
+            if isinstance(expression, CastNode):
+                return uniform(expression.expression)
+            if isinstance(expression, BinaryOpNode):
+                operator = self.map_operator(
+                    getattr(expression, "op", getattr(expression, "operator", None))
+                )
+                return (
+                    operator in self.HLSL_SOFTWARE_SUBGROUP_UNIFORM_GUARD_OPERATORS
+                    and uniform(expression.left)
+                    and uniform(expression.right)
+                )
+            if isinstance(expression, UnaryOpNode):
+                operator = self.map_operator(
+                    getattr(expression, "op", getattr(expression, "operator", None))
+                )
+                return operator in {"!", "-", "~"} and uniform(expression.operand)
+            if isinstance(expression, FunctionCallNode):
+                wrappers, inner = self.hlsl_software_subgroup_conversion_chain(
+                    expression
+                )
+                return bool(wrappers) and uniform(inner)
+            return False
+
+        return bool(subgroup_names) and uniform(condition)
+
+    def hlsl_software_subgroup_entry_unwritten_names(self, entry_function, names):
+        """Return the ``names`` that the entry never rebinds or writes."""
+        names = set(names)
+        for node in self.walk_ast(getattr(entry_function, "body", None)):
+            if isinstance(node, VariableNode):
+                names.discard(node.name)
+            elif isinstance(node, AssignmentNode):
+                names.discard(self.hlsl_software_subgroup_assignment_target_name(node))
+            elif isinstance(node, UnaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"++", "--", "&"}:
+                names.discard(self.expression_name(getattr(node, "operand", None)))
+            elif isinstance(node, FunctionCallNode):
+                for argument in (
+                    getattr(node, "arguments", getattr(node, "args", [])) or []
+                ):
+                    if isinstance(argument, (IdentifierNode, VariableNode)) and (
+                        self.function_call_name(node) in self.function_return_types
+                    ):
+                        # A helper could receive the name by reference.
+                        names.discard(argument.name)
+        return names
+
+    def hlsl_software_subgroup_entry_subgroup_names(self, entry_function):
+        """Return subgroup-index parameters the entry never rebinds or writes."""
+        return self.hlsl_software_subgroup_entry_unwritten_names(
+            entry_function,
+            {
+                parameter.name
+                for parameter in getattr(entry_function, "parameters", []) or []
+                if getattr(parameter, "name", None)
+                and "gl_SubgroupID" in {
+                    self.semantic_from_node(parameter),
+                    self.hlsl_canonical_semantic(self.semantic_from_node(parameter)),
+                }
+            },
+        )
 
     def hlsl_software_subgroup_direct_operation(self, expression):
         records = self.hlsl_software_subgroup_operation_records(expression)
@@ -5334,11 +5474,15 @@ class HLSLCodeGen:
         arguments = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
         return operation, arguments, node
 
-    def hlsl_software_subgroup_masked_if_plan(self, node):
+    def hlsl_software_subgroup_masked_if_plan(
+        self, node, subgroup_names=frozenset(), constant_names=frozenset()
+    ):
         """Plan ``if (c) { prefix; x = simd_sum(v); suffix }`` as a masked sum.
 
         Every invocation then runs the reduction with the operation's identity
         when ``c`` is false, which matches a reduction over the active lanes.
+        The reduction may sit under scalar conversions, as in
+        ``x = bfloat16(simd_max(float(v)))``.
         """
 
         if (
@@ -5380,11 +5524,17 @@ class HLSLCodeGen:
                 != "="
             ):
                 continue
-            direct = self.hlsl_software_subgroup_direct_operation(
+            wrappers, inner = self.hlsl_software_subgroup_conversion_chain(
                 getattr(candidate, "value", getattr(candidate, "right", None))
             )
+            direct = self.hlsl_software_subgroup_direct_operation(inner)
             if direct is None or direct[2] is not records[0][1] or len(direct[1]) != 1:
                 continue
+            # Converted results reuse the source assignment, whose reduction is
+            # replaced by the predicated result; that substitution needs the
+            # canonical wave node.
+            if wrappers and not isinstance(direct[2], WaveOpNode):
+                return None
             target = getattr(candidate, "target", getattr(candidate, "left", None))
             if not isinstance(target, (IdentifierNode, VariableNode)) or not getattr(
                 target, "name", None
@@ -5397,11 +5547,26 @@ class HLSLCodeGen:
                 for prefix in statements[:index]
             ):
                 return None
-            return {"statementIndex": index, "operation": direct[0]}
+            return {
+                "statementIndex": index,
+                "operation": direct[0],
+                "wrapped": bool(wrappers),
+                "subgroupUniform": (
+                    self.hlsl_software_subgroup_guard_is_subgroup_uniform(
+                        condition, subgroup_names, constant_names
+                    )
+                ),
+            }
         return None
 
     def prepare_hlsl_software_subgroup_masked_if_plans(self, entry_function):
         self.hlsl_software_subgroup_masked_if_plans = {}
+        subgroup_names = self.hlsl_software_subgroup_entry_subgroup_names(
+            entry_function
+        )
+        constant_names = self.hlsl_software_subgroup_entry_unwritten_names(
+            entry_function, self.initial_literal_int_constants(entry_function)
+        )
         for statement in self.hlsl_software_subgroup_statement_list(
             getattr(entry_function, "body", None)
         ):
@@ -5409,7 +5574,9 @@ class HLSLCodeGen:
                 statement, IfNode
             ) or not self.hlsl_software_subgroup_operation_records(statement):
                 continue
-            plan = self.hlsl_software_subgroup_masked_if_plan(statement)
+            plan = self.hlsl_software_subgroup_masked_if_plan(
+                statement, subgroup_names, constant_names
+            )
             if plan is not None:
                 self.hlsl_software_subgroup_masked_if_plans[id(statement)] = plan
 
@@ -5422,10 +5589,11 @@ class HLSLCodeGen:
         assignment = statements[index]
         if isinstance(assignment, ExpressionStatementNode):
             assignment = assignment.expression
+        wrappers, inner = self.hlsl_software_subgroup_conversion_chain(
+            getattr(assignment, "value", getattr(assignment, "right", None))
+        )
         operation, arguments, operation_node = (
-            self.hlsl_software_subgroup_direct_operation(
-                getattr(assignment, "value", getattr(assignment, "right", None))
-            )
+            self.hlsl_software_subgroup_direct_operation(inner)
         )
         target = getattr(assignment, "target", getattr(assignment, "left", None))
         value_type = self.expression_result_type(arguments[0])
@@ -5435,14 +5603,31 @@ class HLSLCodeGen:
         )
         if (
             identity is None
-            or self.map_type(self.expression_result_type(target)) != mapped_value_type
+            or not wrappers
+            and self.map_type(self.expression_result_type(target)) != mapped_value_type
         ):
             raise self.hlsl_software_subgroup_error(
                 "DirectX masked software subgroup reductions require a matching "
-                "32-bit float, int, or uint payload and assignment target",
+                "32-bit float, int, or uint or binary16 payload and assignment "
+                "target",
                 workgroup_size=self.hlsl_software_subgroup_workgroup_size,
                 operation=operation,
                 reason="value-type-unsupported",
+                source_location=getattr(operation_node, "source_location", None),
+            )
+        if (
+            operation == "WaveActiveSum"
+            and mapped_value_type == "float16_t"
+            and not plan.get("subgroupUniform")
+        ):
+            # Pairwise binary16 partials round at every step, so a guard that
+            # splits a subgroup has no established source participation.
+            raise self.hlsl_software_subgroup_error(
+                "DirectX masked binary16 sums require a guard that every "
+                "invocation of a subgroup evaluates alike",
+                workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                operation=operation,
+                reason="half-masked-participation-unproven",
                 source_location=getattr(operation_node, "source_location", None),
             )
 
@@ -5476,10 +5661,25 @@ class HLSLCodeGen:
         call = self.hlsl_software_subgroup_call(operation, value_type, names["input"])
         code += f"{indent_str}{mapped_value_type} {names['result']} = {call};\n"
         code += f"{indent_str}if ({names['active']}) {{\n"
-        code += (
-            f"{inner_indent}{self.generate_expression(target)} = {names['result']};\n"
-        )
-        code += self.generate_scoped_statement_body(statements[index + 1 :], indent + 1)
+        if wrappers:
+            # Emit the source assignment, conversions included, with its
+            # reduction replaced by the result every invocation computed.
+            self.hlsl_software_subgroup_result_overrides[id(operation_node)] = names[
+                "result"
+            ]
+            try:
+                code += self.generate_scoped_statement_body(
+                    statements[index:], indent + 1
+                )
+            finally:
+                self.hlsl_software_subgroup_result_overrides.pop(
+                    id(operation_node), None
+                )
+        else:
+            code += f"{inner_indent}{self.generate_expression(target)} = {names['result']};\n"
+            code += self.generate_scoped_statement_body(
+                statements[index + 1 :], indent + 1
+            )
         code += f"{indent_str}}}\n"
         return code
 
@@ -5713,6 +5913,7 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_resource_names = set()
         self.hlsl_software_subgroup_uniform_returns = UniformReturnAnalysis({}, set())
         self.hlsl_software_subgroup_masked_if_plans = {}
+        self.hlsl_software_subgroup_result_overrides = {}
         if self.software_subgroup_width is None:
             return
 
@@ -6253,7 +6454,10 @@ class HLSLCodeGen:
                 else self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             )
         )
-        if operation == "WaveActiveSum" and mapped_value_type == "float16_t":
+        if (
+            operation in {"WaveActiveSum", "WaveActiveMin", "WaveActiveMax"}
+            and mapped_value_type == "float16_t"
+        ):
             valid_type = True
         if (
             operation == "WaveActiveProduct"
@@ -6271,9 +6475,9 @@ class HLSLCodeGen:
         if not valid_type:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup votes require scalar bool payloads; "
-                "arithmetic supports 32-bit float, int, and uint, plus binary16 sums; "
-                "shuffles also support signed and unsigned 16-bit and 64-bit "
-                "integers and two-word uint2 payloads",
+                "arithmetic supports 32-bit float, int, and uint, plus binary16 sums, "
+                "minima and maxima; shuffles also support signed and unsigned 16-bit "
+                "and 64-bit integers and two-word uint2 payloads",
                 workgroup_size=self.hlsl_software_subgroup_workgroup_size,
                 operation=operation,
                 reason="value-type-unsupported",
@@ -6312,7 +6516,7 @@ class HLSLCodeGen:
         active = "(lane & (2u * stride - 1u)) == 0u"
         if partial:
             active += " && lane + stride < activeCount"
-        if reducer == "product" or value_type == "float16_t":
+        if reducer == "product" or (value_type == "float16_t" and reducer == "sum"):
             operator = "*" if reducer == "product" else "+"
             return (
                 "    [unroll]\n"
@@ -6348,6 +6552,23 @@ class HLSLCodeGen:
                 "        } else if ((rightBits & 0x7fffffffu) <= 0x7f800000u) {\n"
                 "            if (((leftBits | rightBits) & 0x7fffffffu) == 0u) {\n"
                 f"                result = asfloat(leftBits {zero_operator} rightBits);\n"
+                "            } else {\n"
+                f"                result = {reducer}(result, operand);\n"
+                "            }\n"
+                "        }\n"
+            )
+        elif value_type == "float16_t":
+            # The binary16 form of the classification above; a comparison
+            # selects one operand, so no rounding is involved.
+            zero_operator = "|" if reducer == "min" else "&"
+            code += (
+                "        uint leftBits = uint(asuint16(result));\n"
+                "        uint rightBits = uint(asuint16(operand));\n"
+                "        if ((leftBits & 0x7fffu) > 0x7c00u) {\n"
+                "            result = operand;\n"
+                "        } else if ((rightBits & 0x7fffu) <= 0x7c00u) {\n"
+                "            if (((leftBits | rightBits) & 0x7fffu) == 0u) {\n"
+                f"                result = asfloat16(uint16_t(leftBits {zero_operator} rightBits));\n"
                 "            } else {\n"
                 f"                result = {reducer}(result, operand);\n"
                 "            }\n"
@@ -26742,6 +26963,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.HLSL_INTERPOLATION_INTRINSICS.get(func_name)
 
     def generate_wave_op_expression(self, expr):
+        # A predicated reduction already ran outside its guard; its source
+        # expression reads that result.
+        override = getattr(self, "hlsl_software_subgroup_result_overrides", {}).get(
+            id(expr)
+        )
+        if override is not None:
+            return override
         operation = getattr(expr, "operation", "")
         return self.generate_hlsl_wave_intrinsic_call(operation, expr.arguments)
 

@@ -106,17 +106,37 @@ def test_software_reductions_reject_unsupported_payloads(value_type):
         _codegen().generate_stage(parse(source), "compute")
 
 
-@pytest.mark.parametrize(
-    "operation",
-    ["WaveActiveMin", "WaveActiveMax", "WaveActiveProduct", "WavePrefixSum"],
-)
-def test_binary16_sum_support_does_not_enable_other_narrow_reductions(operation):
+@pytest.mark.parametrize("operation", ["WaveActiveProduct", "WavePrefixSum"])
+def test_binary16_support_does_not_enable_other_narrow_reductions(operation):
     source = _source(
         "uint",
         f"float16_t value = float16_t(1); float16_t total = {operation}(value);",
     )
-    with pytest.raises(DirectXSoftwareSubgroupError, match="binary16 sums"):
+    with pytest.raises(DirectXSoftwareSubgroupError, match="binary16 sums, minima"):
         _codegen().generate_stage(parse(source), "compute")
+
+
+@pytest.mark.parametrize("operation", ["WaveActiveMin", "WaveActiveMax"])
+def test_binary16_extrema_select_classified_operands(tmp_path, operation):
+    source = _source(
+        "uint",
+        f"""float16_t value = float16_t(float(inputWords[index] % 7u) - 3.0);
+        float16_t total = {operation}(value);
+        outputWords[index] = uint(float(total) + 8.0);""",
+    )
+    generated = _codegen().generate_stage(parse(source), "compute")
+    reducer = "min" if operation == "WaveActiveMin" else "max"
+    assert f"float16_t __crossgl_software_subgroup_{reducer}_float16_t(" in generated
+    assert "groupshared float16_t __crossgl_software_subgroup_scratch_float16_t" in (
+        generated
+    )
+    # NaN lanes never replace a number, signed zeros order as -0 < +0, and the
+    # result is always one of the operands.
+    assert "if ((leftBits & 0x7fffu) > 0x7c00u) {" in generated
+    zero = "|" if reducer == "min" else "&"
+    assert f"asfloat16(uint16_t(leftBits {zero} rightBits))" in generated
+    assert "stride <<= 1u" not in generated
+    _compile(generated, tmp_path, profile="cs_6_2", flags=("-enable-16bit-types",))
 
 
 def test_software_reductions_keep_helper_identity_and_single_evaluation(tmp_path):
