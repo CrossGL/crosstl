@@ -4012,12 +4012,14 @@ Linux CI retains this software artifact, its compilation outputs, package,
 input fixture, dispatch plan, availability and readback, including failed
 results. Evidence retention does not alter numerical comparisons.
 
-macOS CI records that the equivalent selected Metal round trip still fails
-closed at storage-backed vector pointer lowering under
-[#1903](https://github.com/CrossGL/crosstl/issues/1903); it does not claim native
-Metal compiler acceptance. These checks establish OpenGL numerical
-execution for one selected kernel workload and do not redirect MLX host
-dispatch, cover the float16 or bfloat16 dot entries, or run the MLX test suite.
+macOS CI translates the selected Metal round trip to a 2,887-byte artifact with
+SHA-256 `1008434054b323e8845546b6c4133793f9341a15786ee08dfcc745d493fc1c90`.
+MLX's `metal::vec<float, 4>` views stay native Metal vector pointer views, and
+the Metal compiler accepts the artifact. These checks establish OpenGL
+numerical execution for one selected kernel workload and do not redirect MLX
+host dispatch or run the MLX test suite. The pinned current-tree dot proof
+below covers all three dot entries, including float16 and bfloat16, on every
+backend.
 
 The current-corpus unary proofs select `v_Squarefloat32float32` and
 `v_ArcCosfloat32float32` from the full include-expanded `unary.metal` source.

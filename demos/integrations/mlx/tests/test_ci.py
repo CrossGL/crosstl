@@ -2740,19 +2740,16 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
 
     metal_step = ci_coverage.workflow_step_section(
         mlx_porting,
-        "Record pinned MLX dot Metal round-trip boundary",
+        "Prove pinned MLX dot Metal round-trip compilation",
     )
     assert "if: runner.os == 'macOS'" in metal_step
     assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in metal_step
-    assert (
-        f"{test_path}::test_pinned_mlx_dot_records_metal_roundtrip_boundary"
-        in metal_step
-    )
+    assert f"{test_path}::test_pinned_mlx_dot_roundtrips_through_metal" in metal_step
     assert "-n auto" in metal_step
     assert "-k" not in metal_step
     assert ci_coverage.workflow_step_after(
         mlx_porting,
-        "Record pinned MLX dot Metal round-trip boundary",
+        "Prove pinned MLX dot Metal round-trip compilation",
         "Checkout current MLX runtime proof corpus",
     )
 

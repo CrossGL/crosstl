@@ -4882,13 +4882,13 @@ jobs:
           python -m pytest -q -n auto
           demos/integrations/mlx/tests/kernels/test_unary_native_loader.py::test_pinned_mlx_unary_arccos_roundtrips_through_metal
 
-      - name: Record pinned MLX dot Metal round-trip boundary
+      - name: Prove pinned MLX dot Metal round-trip compilation
         if: runner.os == 'macOS'
         env:
           CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream
         run: >-
           python -m pytest -q -n auto
-          demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::test_pinned_mlx_dot_records_metal_roundtrip_boundary
+          demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::test_pinned_mlx_dot_roundtrips_through_metal
 
       - name: Prove pinned MLX FFT Direct3D native-loader execution
         id: fft_pinned_directx

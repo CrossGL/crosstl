@@ -11563,14 +11563,22 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     }
     assert status["artifacts"]["metal"] == {
         "target_entry_point": "dot_product_float32_it32_tg512_sg16",
-        "status": "blocked-before-emission",
-        "diagnostic_code": "project.translate.pointer-reinterpret-unsupported",
-        "missing_capability": "pointer.reinterpretation",
-        "reason": "target-lowering-unavailable",
-        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1903",
-        "test": (
-            "demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::"
-            "test_pinned_mlx_dot_records_metal_roundtrip_boundary"
+        "status": "translated-and-compiled",
+        "sha256": "1008434054b323e8845546b6c4133793f9341a15786ee08dfcc745d493fc1c90",
+        "size_bytes": 2887,
+        "storage_view_lowering": "native-metal-vector-pointer-view",
+        "toolchain_validation": {
+            "platform": "macos-latest",
+            "compiler": "xcrun metal",
+            "status": "required-on-ci",
+            "test": (
+                "demos/integrations/mlx/tests/kernels/test_dot_native_loader.py::"
+                "test_pinned_mlx_dot_roundtrips_through_metal"
+            ),
+        },
+        "current_tree_native_parity_test": (
+            "demos/integrations/mlx/tests/kernels/test_current_dot.py::"
+            "test_current_mlx_dot_native_parity"
         ),
     }
     assert status["workload"] == {
@@ -11585,7 +11593,7 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     }
     assert status["mlx_host_runtime_included"] is False
     assert status["runtime_integration_included"] is True
-    assert status["metal_roundtrip_included"] is False
+    assert status["metal_roundtrip_included"] is True
     assert status["selected_workload_numerical_parity_verified"] is False
     assert status["cross_target_selected_workload_numerical_parity_verified"] is False
     assert status["full_mlx_test_suite_included"] is False
@@ -11603,7 +11611,7 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     assert "file-level source remapping to `dot.metal`" in readme
     assert "strict DXC compilation produces identical DXIL" in readme
     assert "Mesa llvmpipe executes the same workload" in readme
-    assert "still fails closed at storage-backed vector pointer lowering" in readme
+    assert "macOS CI translates the selected Metal round trip" in readme
     assert "do not redirect MLX host dispatch" in readme
     assert "or run the MLX test suite" in readme
 

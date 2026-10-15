@@ -33,6 +33,9 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
+    _metal_library,
+)
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_DOT_SOURCE = "mlx/backend/metal/kernels/dot.metal"
@@ -51,6 +54,10 @@ MLX_DOT_GENERATED_ARTIFACTS = {
 MLX_DOT_SOFTWARE_OPENGL_ARTIFACT = {
     "sha256": "fdeafb72874a7759a2672eed005556fa928933381a6b9874366ee3fb01275943",
     "sizeBytes": 6360,
+}
+MLX_DOT_METAL_ARTIFACT = {
+    "sha256": "1008434054b323e8845546b6c4133793f9341a15786ee08dfcc745d493fc1c90",
+    "sizeBytes": 2887,
 }
 REQUIRE_PROOF_ENVS = {
     "directx": "CROSTL_REQUIRE_MLX_DOT_DIRECTX_NATIVE_LOADER",
@@ -356,7 +363,7 @@ def test_pinned_mlx_dot_translates_to_guarded_opengl_artifact():
         }
 
 
-def test_pinned_mlx_dot_records_metal_roundtrip_boundary():
+def test_pinned_mlx_dot_roundtrips_through_metal():
     mlx_root = _pinned_mlx_root()
     with tempfile.TemporaryDirectory(
         prefix=".crosstl-dot-metal-roundtrip-",
@@ -380,39 +387,39 @@ def test_pinned_mlx_dot_records_metal_roundtrip_boundary():
         )
         payload = report.to_json()
 
-    assert payload["summary"]["unitCount"] == 1
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 1
-    artifact = payload["artifacts"][0]
-    assert artifact["source"] == MLX_DOT_SOURCE
-    assert artifact["sourceHash"] == {
-        "algorithm": "sha256",
-        "value": MLX_DOT_SHA256,
-    }
-    assert artifact["target"] == "metal"
-    assert artifact["status"] == "failed"
-    assert artifact["error"] == (
-        "metal does not implement storage-backed pointer reinterpretation"
-    )
-    assert artifact["templateMaterialization"]["status"] == "materialized"
-    assert artifact["templateMaterialization"]["specializationCount"] == 1
-    assert not (mlx_root / artifact["path"]).exists()
+        assert payload["summary"]["unitCount"] == 1
+        assert payload["summary"]["translatedCount"] == 1
+        assert payload["summary"]["failedCount"] == 0
+        assert payload["diagnostics"] == []
+        artifact = payload["artifacts"][0]
+        assert artifact["source"] == MLX_DOT_SOURCE
+        assert artifact["sourceHash"] == {
+            "algorithm": "sha256",
+            "value": MLX_DOT_SHA256,
+        }
+        assert artifact["target"] == "metal"
+        assert artifact["status"] == "translated"
+        assert artifact["generatedHash"] == {
+            "algorithm": "sha256",
+            "value": MLX_DOT_METAL_ARTIFACT["sha256"],
+        }
+        assert artifact["generatedSizeBytes"] == MLX_DOT_METAL_ARTIFACT["sizeBytes"]
+        assert artifact["entryPoint"] == {
+            "source": MLX_DOT_ENTRY,
+            "target": MLX_DOT_ENTRY,
+            "stage": "compute",
+        }
+        assert artifact["templateMaterialization"]["status"] == "materialized"
+        assert artifact["templateMaterialization"]["specializationCount"] == 1
 
-    diagnostic = next(
-        item
-        for item in payload["diagnostics"]
-        if item["code"] == "project.translate.pointer-reinterpret-unsupported"
-    )
-    assert diagnostic["target"] == "metal"
-    assert diagnostic["missingCapabilities"] == ["pointer.reinterpretation"]
-    assert diagnostic["details"]["pointerReinterpretation"] == {
-        "reason": "target-lowering-unavailable",
-        "targetBackend": "metal",
-        "targetType": (
-            "VectorType(element_type=PrimitiveType(name=float, size_bits=None), "
-            "size=4)"
-        ),
-    }
+        generated_path = mlx_root / artifact["path"]
+        generated = generated_path.read_text(encoding="utf-8")
+        # MLX's ``metal::vec<float, 4>`` views stay native Metal vector views.
+        assert generated.count("*reinterpret_cast<const device float4*>(") == 2
+        assert generated.count("simd_sum(sum)") == 2
+        assert "threadgroup float smem[16];" in generated
+        if shutil.which("xcrun") is not None:
+            _metal_library(generated_path, work_dir / "dot.metallib", mlx_root)
 
 
 def _build_directx_runtime_package(
