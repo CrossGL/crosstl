@@ -235,3 +235,48 @@ def test_rebased_subscript_requires_the_complete_offset_assertion(
     assert conversion["reason"] == "composed-pointer-index-range-unproven"
     assert conversion["indexExpression"] == index
     assert conversion["rangeStatus"] == "unproven"
+
+
+# Inside a loop the current offset of an advancing pointer has no proved
+# interval, so the delta alone cannot bound the update. The complete pointer
+# assertion bounds every stored offset and the bounded delta keeps the int
+# conversion exact; both are required (the arg-reduce stride walk shape).
+LOOP_ADVANCE = (
+    "for (int i = 0; i < 4; i++) { result[i] = values[0]; values += offset; }"
+)
+
+
+def test_in_loop_wide_advance_accepts_complete_and_delta_assertions(tmp_path):
+    payload = _translate(
+        tmp_path,
+        LOOP_ADVANCE,
+        [("offset", 0, 4), ("values + offset", 0, 16), ("values + 0", 0, 16)],
+    )
+    generated = _generated(tmp_path, payload)
+    assert "values_offset += int(offset);" in generated
+    assert "result[i] = values[" in generated
+    assert "values_offset" in generated.split("result[i] = values[", 1)[1][:40]
+    _validate_spirv(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "assertions",
+    [
+        [("values + offset", 0, 16), ("values + 0", 0, 16)],
+        [("offset", 0, 4), ("values + 0", 0, 16)],
+        [("offset", 0, 4), ("values + offset", 0, INT_MAX + 1), ("values + 0", 0, 16)],
+        [("offset", 0, INT_MAX + 1), ("values + offset", 0, 16), ("values + 0", 0, 16)],
+        [("offset", 0, 4), ("values + offset", -1, 16), ("values + 0", 0, 16)],
+    ],
+    ids=[
+        "complete-without-delta",
+        "delta-without-complete",
+        "complete-too-wide",
+        "delta-too-wide",
+        "complete-negative",
+    ],
+)
+def test_in_loop_wide_advance_requires_both_bounded_assertions(tmp_path, assertions):
+    conversion = _rejection(_translate(tmp_path, LOOP_ADVANCE, assertions))
+    assert conversion["reason"] == "pointer-offset-range-unproven"
+    assert conversion["indexExpression"] == "offset"

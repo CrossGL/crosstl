@@ -193,9 +193,17 @@ def test_pinned_mlx_arg_reduce_dispatch_contract_is_exact():
 
 
 def _index_range_assertions() -> str:
+    # current_in starts at the asserted row element and advances by
+    # axis_stride inside the N_READS loop. OpenGL keeps it in a signed int
+    # logical offset, so the stride, the advanced pointer and each read must
+    # also fit [0, 2^31 - 1].
+    signed_index_maximum = (1 << 31) - 1
     assertions = (
         ("in_idx + current_index * axis_stride", 63),
         ("out_idx", 1),
+        ("current_in + 0", signed_index_maximum),
+        ("axis_stride", signed_index_maximum),
+        ("current_in + axis_stride", signed_index_maximum),
     )
     return "\n\n".join(textwrap.dedent(f"""
             [[project.index_range_assertions]]

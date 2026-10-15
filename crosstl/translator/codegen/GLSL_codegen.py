@@ -28429,14 +28429,50 @@ class GLSLCodeGen:
             return f"{'    ' * indent}int {offset_name};\n"
         return f"{'    ' * indent}int {offset_name} = int({rendered_offset});\n"
 
+    def glsl_asserted_complete_pointer_update(
+        self, target, operator, delta, proved_delta
+    ):
+        """Accept ``target += delta`` from an asserted result and bounded delta.
+
+        Inside a loop, or after an unproved rebase, the current offset has no
+        proved interval, so a complete-pointer assertion cannot be turned into
+        a delta range. It still bounds the updated offset itself. The emitted
+        ``offset += int(delta)`` is then exact when the wide delta is also
+        proved or separately asserted to fit ``int``: every value stored in the
+        ``int`` offset local is proved or asserted, so the ``int`` addition
+        cannot overflow. Either assertion alone is still insufficient.
+        """
+        delta_range = proved_delta
+        if delta_range is None:
+            asserted = self.glsl_index_asserted_range(delta)
+            if asserted is None:
+                return False
+            delta_range = (asserted.minimum, asserted.maximum)
+        signed_int = IntegerRange(-(1 << 31), (1 << 31) - 1)
+        if not IntegerRange(*delta_range).is_within(signed_int):
+            return False
+        target_name = expression_debug_name(target)
+        delta_name = expression_debug_name(delta)
+        if not target_name or not delta_name:
+            return False
+        symbol = "+" if operator == "+=" else "-"
+        complete = self.glsl_index_asserted_range(
+            f"{target_name} {symbol} {delta_name}"
+        )
+        return complete is not None and complete.is_within(
+            IntegerRange(0, (1 << 31) - 1)
+        )
+
     def glsl_asserted_pointer_update_delta(self, target, operator, delta, base):
         """Return an explicitly asserted wide delta for ``target += delta``.
 
         Callers may assert either the delta itself or the complete updated
         pointer ``target + delta`` (``target - delta`` for ``-=``), matching the
         source pointer-arithmetic keys used for pointer-valued expressions. The
-        result is caller-trusted: the update still requires a proved base and
-        the subsequent subscripts keep their own complete-offset obligations.
+        result is caller-trusted: deriving a delta from the complete key needs a
+        proved base (``glsl_asserted_complete_pointer_update`` covers updates
+        without one), and the subsequent subscripts keep their own
+        complete-offset obligations.
         """
         asserted = self.glsl_index_asserted_range(delta)
         if asserted is not None:
@@ -28491,6 +28527,7 @@ class GLSLCodeGen:
                     self.glsl_active_literal_int_constants(),
                     require_arithmetic_types=True,
                 )
+                proved_delta = delta
                 if delta is None and base is not None:
                     delta = self.glsl_asserted_pointer_update_delta(
                         target, operator, right, base
@@ -28508,6 +28545,8 @@ class GLSLCodeGen:
                     not delta_fits
                     or combined is None
                     or not combined.is_within(accepted)
+                ) and not self.glsl_asserted_complete_pointer_update(
+                    target, operator, right, proved_delta
                 ):
                     self.glsl_index_type_error(
                         right,

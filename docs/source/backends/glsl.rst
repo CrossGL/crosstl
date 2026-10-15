@@ -130,7 +130,10 @@ the complete offset at each indexed use to fit the signed target offset domain.
 Without a checked proof, an explicit project index-range assertion can supply
 either range, but only through the complete pointer expression: ``P + D`` (or
 the delta ``D``) for an update ``P += D`` with a proved base, and ``P + I`` for a
-subscript ``P[I]`` or ``*P`` (``P + 0``). The asserted delta and updated offset
+subscript ``P[I]`` or ``*P`` (``P + 0``). Without a proved base, for example a
+pointer advanced inside a loop, the update needs both an assertion on ``P + D``
+in ``[0, 2147483647]`` and a proved or asserted ``D`` that fits signed ``int``.
+The asserted delta and updated offset
 must fit signed ``int``; an asserted subscript offset must lie in
 ``[0, 2147483647]`` and ``I`` must still be representable as ``int``. An
 assertion on ``I`` alone, or on an update, does not cover a later subscript.

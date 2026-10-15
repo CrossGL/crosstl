@@ -1315,7 +1315,10 @@ explicit assertion on the complete pointer expression (``pointer + index``, with
 range lies in ``[0, 2147483647]`` and the relative index is still representable
 as ``int``. A wide update ``pointer += delta`` with a proved base likewise
 accepts an assertion on ``delta`` or on ``pointer + delta``; it does not
-describe later subscripts, which keep their own complete-offset obligations. Negative
+describe later subscripts, which keep their own complete-offset obligations.
+Without a proved base (a pointer advanced inside a loop), the update requires
+both an assertion on ``pointer + delta`` in ``[0, 2147483647]`` and a proved or
+asserted ``delta`` that fits signed ``int``. Negative
 absolute indices, missing contracts, overflow, shadowing and escaped values remain
 rejected; runtime allocation checks are still required.
 A pointer base proved to be exactly zero remains an ordinary absolute subscript.
