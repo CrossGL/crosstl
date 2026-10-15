@@ -2626,6 +2626,7 @@ class GLSLCodeGen:
         self.glsl_bfloat_integer_helper_name = None
         self.glsl_bfloat_wide_integer_helper_required = False
         self.glsl_float_selection_helper_names = {}
+        self.glsl_integer_float_helper_names = {}
         self.glsl_signed_remainder_helper_names = {}
         self.glsl_floating_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
@@ -7887,6 +7888,7 @@ class GLSLCodeGen:
         self.glsl_bfloat_integer_helper_name = None
         self.glsl_bfloat_wide_integer_helper_required = False
         self.glsl_float_selection_helper_names = {}
+        self.glsl_integer_float_helper_names = {}
         self.glsl_signed_remainder_helper_names = {}
         self.glsl_floating_remainder_helper_names = {}
         self.glsl_generating_global_initializer = False
@@ -9094,6 +9096,7 @@ class GLSLCodeGen:
             + self.generate_glsl_bfloat_helpers()
             + self.generate_glsl_bfloat_integer_helpers()
             + self.generate_glsl_float_selection_helpers()
+            + self.generate_glsl_integer_float_helpers()
             + self.generate_glsl_signed_remainder_helpers()
             + self.generate_glsl_floating_remainder_helpers()
             + self.generate_glsl_complex64_helpers()
@@ -33658,7 +33661,18 @@ complex64_t crossgl_complex64_mod_assign(
                     expected["source"],
                     "vector-width-mismatch",
                 )
-            converted = f"{expected['mapped']}({generated})"
+            integer = (
+                self.glsl_float_to_integer_conversion_info(expr)
+                if expected["family"] == "float" and narrow is None
+                else None
+            )
+            converted = (
+                self.generate_glsl_integer_float_conversion(
+                    expr, generated, integer, expected["mapped"]
+                )
+                if integer is not None
+                else None
+            ) or f"{expected['mapped']}({generated})"
 
         if narrow is not None:
             return self.glsl_apply_narrow_integer_contract(
@@ -37746,6 +37760,21 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 if converted_constructor is not None:
                     return converted_constructor
+                integer = (
+                    self.glsl_float_to_integer_conversion_info(expr.args[0])
+                    if len(expr.args) == 1
+                    else None
+                )
+                if self.glsl_integer_float_conversion_applies(integer, constructor):
+                    converted_integer = self.generate_glsl_integer_float_conversion(
+                        expr,
+                        self.generate_expression_with_expected(expr.args[0], None),
+                        integer,
+                        constructor,
+                    )
+                    return self.glsl_apply_narrow_float_contract(
+                        converted_integer, original_func_name, expr
+                    )
                 constructor_fields = list(
                     self.glsl_struct_member_types(constructor).values()
                 )
@@ -38073,6 +38102,99 @@ complex64_t crossgl_complex64_mod_assign(
                 f"    {mask_type} mask = {mask_type}(0u - uint(condition));\n"
                 "    return uintBitsToFloat((floatBitsToUint(yes) & mask) | "
                 "(floatBitsToUint(no) & ~mask));\n"
+                "}\n\n"
+            )
+        return code
+
+    def glsl_float_to_integer_conversion_info(self, expression):
+        """Integer type info when ``expression`` converts floating values."""
+        if not isinstance(expression, FunctionCallNode):
+            return None
+        arguments = list(getattr(expression, "arguments", []) or [])
+        name = self.function_call_name(expression)
+        if len(arguments) != 1 or name in self.function_return_types:
+            return None
+        if self.glsl_constructor_type(name) is None:
+            return None
+        target = self.glsl_value_type_info(name)
+        if target is None or target["family"] not in {"int", "uint"}:
+            return None
+        source = self.glsl_value_type_info(
+            self.glsl_source_expression_type(arguments[0])
+        )
+        if (
+            source is None
+            or source["family"] != "float"
+            or source["width"] not in {1, target["width"]}
+        ):
+            return None
+        return target
+
+    def glsl_integer_float_conversion_applies(self, integer, float_type):
+        if integer is None or self.glsl_generating_global_initializer:
+            return False
+        target = self.glsl_value_type_info(float_type)
+        return (
+            target is not None
+            and target["family"] == "float"
+            and target["bits"] == 32
+            and integer["width"] in {1, target["width"]}
+        )
+
+    def generate_glsl_integer_float_conversion(
+        self, node, generated, integer, float_type
+    ):
+        """Convert a float-to-integer result back to binary32 exactly.
+
+        Drivers fold ``float(int(x))`` into ``trunc(x)``, which keeps the sign
+        of a zero quotient; the integer round trip always produces +0.0.
+        Global initializers are constant expressions folded exactly by the
+        GLSL front end, so they keep the plain constructor.
+        """
+        if not self.glsl_integer_float_conversion_applies(integer, float_type):
+            return None
+        target = self.glsl_value_type_info(float_type)
+        for builtin in ("floatBitsToUint", "uintBitsToFloat", "equal"):
+            if (
+                builtin in self.function_return_types
+                or builtin in self.global_variable_types
+            ):
+                self.glsl_scalar_conversion_error(
+                    node,
+                    integer["source"],
+                    float_type,
+                    "conversion-target-builtin-shadowed",
+                )
+        mapped = integer["mapped"]
+        name = self.glsl_integer_float_helper_names.get(mapped)
+        if name is None:
+            used_names = self.glsl_module_used_identifier_names | getattr(
+                self, "glsl_numeric_helper_reserved_names", set()
+            )
+            name = self.glsl_unique_identifier(
+                f"crossgl_integer_float_{mapped}", used_names
+            )
+            self.glsl_module_used_identifier_names.add(name)
+            self.glsl_integer_float_helper_names[mapped] = name
+        converted = f"{name}({generated})"
+        if integer["width"] == 1 and target["width"] != 1:
+            return f"{target['mapped']}({converted})"
+        return converted
+
+    def generate_glsl_integer_float_helpers(self):
+        code = ""
+        for mapped, name in sorted(self.glsl_integer_float_helper_names.items()):
+            info = self.glsl_value_type_info(mapped)
+            width = info["width"]
+            if width == 1:
+                result, is_zero = "float", f"uint(value == {mapped}(0))"
+            else:
+                result = f"vec{width}"
+                is_zero = f"uvec{width}(equal(value, {mapped}(0)))"
+            code += (
+                f"{result} {name}({mapped} value) {{\n"
+                f"    return uintBitsToFloat(floatBitsToUint({result}(value)) & "
+                f"~({is_zero} << 31u));\n"
                 "}\n\n"
             )
         return code

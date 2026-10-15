@@ -337,6 +337,7 @@ def _execute(
     check_outputs=_check,
     metal_compile_flags=(),
     directx_compile_flags=(),
+    invocations=None,
 ):
     directory.mkdir()
     artifact, module = _compile(
@@ -389,7 +390,11 @@ def _execute(
         dispatch=RuntimeDispatchGeometry(
             entry_point=entry,
             workgroup_size=(1, 1, 1),
-            workgroup_count=(len(inputs), 1, 1),
+            workgroup_count=(
+                len(inputs) if invocations is None else invocations,
+                1,
+                1,
+            ),
         ),
     )
     runtime = {
