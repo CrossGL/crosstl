@@ -52,8 +52,8 @@ MLX_DOT_GENERATED_ARTIFACTS = {
     },
 }
 MLX_DOT_SOFTWARE_OPENGL_ARTIFACT = {
-    "sha256": "fdeafb72874a7759a2672eed005556fa928933381a6b9874366ee3fb01275943",
-    "sizeBytes": 6360,
+    "sha256": "2b378330ecee1f440abdb7705e1eff91b7ce370fea4c14ea2d0f6ae4c7d6d130",
+    "sizeBytes": 6385,
 }
 MLX_DOT_METAL_ARTIFACT = {
     "sha256": "1008434054b323e8845546b6c4133793f9341a15786ee08dfcc745d493fc1c90",
@@ -252,7 +252,10 @@ def _translate_dot_artifact(
         assert "uint subgroupBase = invocation - lane;" in generated
         assert generated.count("crossglSoftwareSubgroupSumFloat(sum)") == 1
         assert "crossglSoftwareSubgroupSumFloat(" in generated
-        assert "float crossglSoftwareSubgroupInput = 0.0;" in generated
+        assert (
+            "float crossglSoftwareSubgroupInput = uintBitsToFloat(0x80000000u);"
+            in generated
+        )
         assert "if (crossglSoftwareSubgroupActive)" in generated
     else:
         assert "layout(local_size_x = 512" in generated

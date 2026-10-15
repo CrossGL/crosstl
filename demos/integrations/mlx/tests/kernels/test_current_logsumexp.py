@@ -653,6 +653,10 @@ def _assert_lowering(text, target, entry, size):
         assert (
             "float crossglSoftwareSubgroupInput = uintBitsToFloat(0xff800000u);" in text
         ) is predicated
+        assert (
+            "float crossglSoftwareSubgroupInput_2 = uintBitsToFloat(0x80000000u);"
+            in text
+        ) is predicated
     if target == "directx":
         assert "WaveActiveSum" not in text and "WaveActiveMax" not in text
         assert "[WaveSize" not in text

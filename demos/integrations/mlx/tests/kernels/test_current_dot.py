@@ -529,6 +529,10 @@ def test_current_mlx_dot_native_parity(current_mlx, metal_reference, tmp_path, e
                 assert "subgroupAdd" not in text and "gl_Subgroup" not in text
                 assert text.count("crossglSoftwareSubgroupSumFloat(") == 3
                 assert "bool crossglSoftwareSubgroupActive = (tid < 16);" in text
+                assert (
+                    "float crossglSoftwareSubgroupInput = uintBitsToFloat(0x80000000u);"
+                    in text
+                )
             if target == "directx":
                 assert "WaveActiveSum" not in text and "[WaveSize" not in text
                 assert text.count("__crossgl_software_subgroup_sum_float(") == 3

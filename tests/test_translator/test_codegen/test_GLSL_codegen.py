@@ -26594,7 +26594,10 @@ def test_glsl_software_subgroup_lowers_multiple_subgroups_and_masked_sum(
         "bool crossglSoftwareSubgroupActive = (gl_LocalInvocationIndex < 16u);"
         in generated
     )
-    assert "float crossglSoftwareSubgroupInput = 0.0;" in generated
+    assert (
+        "float crossglSoftwareSubgroupInput = uintBitsToFloat(0x80000000u);"
+        in generated
+    )
     assert "crossglSoftwareSubgroupSumFloat(crossglSoftwareSubgroupInput)" in generated
     assert "GL_KHR_shader_subgroup" not in generated
     assert "gl_Subgroup" not in generated

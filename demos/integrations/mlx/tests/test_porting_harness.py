@@ -10669,9 +10669,9 @@ def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():
     )
     assert software["block-float32-axis-32-two-rows"]["size_bytes"] == 5755
     assert software["block-float32-axis-2049"]["sha256"] == (
-        "f0db9cf9b930224322cdd4aa2a01d6c910c1fa34a479705bd7b41de9247916be"
+        "1ea2c58cd8588b9a61ce3b1414b02cd578ec8b16fe77f9d0a2637c706a087174"
     )
-    assert software["block-float32-axis-2049"]["size_bytes"] == 7374
+    assert software["block-float32-axis-2049"]["size_bytes"] == 7399
     assert software["block-float32-axis-2049"]["logical_subgroup_count"] == 17
     assert software["block-float32-axis-2049"]["masked_collective_count"] == 2
     for workload_id in (
@@ -11532,9 +11532,9 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
         "software_runtime_artifact": {
             "target_entry_point": "main",
             "sha256": (
-                "fdeafb72874a7759a2672eed005556fa928933381a6b9874366ee3fb01275943"
+                "2b378330ecee1f440abdb7705e1eff91b7ce370fea4c14ea2d0f6ae4c7d6d130"
             ),
-            "size_bytes": 6360,
+            "size_bytes": 6385,
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "software_subgroup_width": 32,
             "software_subgroup_count": 16,
@@ -11604,7 +11604,8 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     assert "selects `dot_product_float32_it32_tg512_sg16`" in readme
     assert "preserve the read-only `float4` storage views" in readme
     assert "requires a readback of `256.0`" in readme
-    assert "separate software artifact is 6,360 bytes" in readme
+    assert "separate software artifact is 6,385 bytes" in readme
+    assert "exact additive identity `-0.0`" in readme
     assert "sixteen independent 32-lane logical subgroups" in readme
     assert "four control barriers, three shared-memory barriers" in readme
     assert "no group-nonuniform instruction" in readme

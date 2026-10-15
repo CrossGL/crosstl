@@ -611,8 +611,8 @@ value, so both gather the four lanes element by element instead of
 reinterpreting storage bits; DirectX decodes bfloat16 lanes with an exact shift.
 OpenGL and DirectX reduce in software 32-lane groups. The second reduction runs
 under `tid < SIMD_GROUPS`, so both targets predicate it: every invocation
-reaches the barriers and inactive invocations contribute the sum identity
-(-0.0 on DirectX). Native DirectX waves remain subject to
+reaches the barriers and inactive invocations contribute the exact sum identity
+-0.0, so an all -0.0 sum keeps its sign. Native DirectX waves remain subject to
 [#2120](https://github.com/CrossGL/crosstl/issues/2120). Required CI executes
 all three entries on Metal, Mesa EGL and Direct3D 12 WARP over 13 cases from 1
 to 40,000 elements, crossing vector tails, SIMD blocks and three groups. Eleven
@@ -634,7 +634,7 @@ looped kernel with 1,024 threads, so the block kernel is pinned at 32, 288 and
 software 32-lane groups. The block kernel's second maximum and sum run under
 `simd_group_id == 0`, so both targets predicate them: every invocation reaches
 the barriers and inactive invocations contribute the identity (-inf for the
-maximum, -0.0 for the DirectX sum). Required CI executes all six entries on
+maximum, -0.0 for the sum). Required CI executes all six entries on
 Metal, Mesa EGL and Direct3D 12 WARP over 17 cases of 1 to 20,000 elements, each
 dispatched with the kernel and threadgroup size MLX would choose. The cases
 include partial reads, idle threads, a last SIMD group with one active thread,
@@ -3397,8 +3397,8 @@ Official DXC 1.9.2602.24 accepts `CSMain` under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors, producing 9,000 bytes of DXIL.
 Its 32 physical waves receive unique workgroup-synchronized subgroup IDs; no
 lane-varying `SV_GroupIndex / WaveGetLaneCount()` derivation remains. The
-12,387-byte explicit software-subgroup GLSL artifact has SHA-256
-`04f5c58fc3c4590c77583677f8edf261c1f5c9278a4163461c239c9e820ad9e8`.
+12,412-byte explicit software-subgroup GLSL artifact has SHA-256
+`6362cdedda2d3f0eec553bb60579236157ed38707cb15d7406ecc8feb1098268`.
 It partitions 1,024 invocations into 32 logical subgroups and synchronizes the
 source subgroup-ID-strided runtime loop across every workgroup round. Inactive
 subgroups contribute typed collective identities, so all generated barriers
@@ -4059,8 +4059,8 @@ guarded hardware-subgroup artifact.
 The runtime proof opts into explicit software subgroups instead, producing a
 5,755-byte axis-32 artifact with SHA-256
 `c77ddf1ad3c364b6e1898232f7d4ce99e2d5f859cc515089368044eb80667573`
-and a 7,374-byte axis-2049 artifact with SHA-256
-`f0db9cf9b930224322cdd4aa2a01d6c910c1fa34a479705bd7b41de9247916be`.
+and a 7,399-byte axis-2049 artifact with SHA-256
+`1ea2c58cd8588b9a61ce3b1414b02cd578ec8b16fe77f9d0a2637c706a087174`.
 Complete comparison against the recovered originals accounts for exactly six
 shared-memory fences in the subgroup helpers. Computation, resource bindings,
 launch geometry and control barriers are unchanged. The tests require all six
@@ -4131,12 +4131,13 @@ command and compiled artifacts, and returned values under `mlx-dot-directx`,
 including when validation fails. These records describe the native request and
 readback; they do not establish the exact bytes uploaded by the driver.
 
-A separate software artifact is 6,360 bytes with SHA-256
-`fdeafb72874a7759a2672eed005556fa928933381a6b9874366ee3fb01275943`.
+A separate software artifact is 6,385 bytes with SHA-256
+`2b378330ecee1f440abdb7705e1eff91b7ce370fea4c14ea2d0f6ae4c7d6d130`.
 It allocates 512 shared float elements and partitions them into sixteen
 independent 32-lane logical subgroups. The first sum reduces within each
 partition. For the second sum beneath `tid < 16`, inactive lanes contribute the
-additive identity while all 512 invocations reach the helper barriers uniformly;
+exact additive identity `-0.0`, so they cannot change any sum, including one of
+`-0.0` values, while all 512 invocations reach the helper barriers uniformly;
 only the active lanes consume the subgroup-zero result. The artifact emits no
 KHR subgroup extension, hardware `gl_Subgroup*` builtin, or group-nonuniform
 SPIR-V operation. `glslangValidator` and `spirv-val` accept its SPIR-V 1.3

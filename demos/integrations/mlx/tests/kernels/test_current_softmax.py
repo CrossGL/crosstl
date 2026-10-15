@@ -848,7 +848,13 @@ def _assert_lowering(text, target, entry, size):
         )
         assert text.count(sum_helper) == 3
         assert text.count("crossglSoftwareSubgroupMaxFloat(") == 3
-        assert ("crossglSoftwareSubgroupActive" in text) is (block and size > SIMD_SIZE)
+        predicated = block and size > SIMD_SIZE
+        assert ("crossglSoftwareSubgroupActive" in text) is predicated
+        # Inactive invocations add the exact identity -0.0 to the normalizer.
+        assert (
+            "float crossglSoftwareSubgroupInput_2 = uintBitsToFloat(0x80000000u);"
+            in text
+        ) is predicated
         return
     assert "WaveActiveSum" not in text and "WaveActiveMax" not in text
     assert "[WaveSize" not in text

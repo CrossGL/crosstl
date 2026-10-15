@@ -136,12 +136,12 @@
           "sizeBytes": 5755
         },
         "288": {
-          "sha256": "22ee1dca73f69263985c098a74e3443a749f0c5c7d1f0fd6600507d3ac47b238",
-          "sizeBytes": 7374
+          "sha256": "a2c490c96101b73a444f3f49770d8941aef60ce75e45126ad8cf159a92a1eb92",
+          "sizeBytes": 7399
         },
         "1024": {
-          "sha256": "ce72e771ee9507934cbd8196edd83c54825f105094d96156a89a82fb3d7d9364",
-          "sizeBytes": 7376
+          "sha256": "c6a172c41891ba3328fff3af0a9b157c4896a899c674766528b4ff5681477ab0",
+          "sizeBytes": 7401
         }
       },
       "looped_softmax_float32": {
@@ -176,12 +176,12 @@
           "sizeBytes": 6490
         },
         "288": {
-          "sha256": "4ee1d4f0e0be0aad8818264306dad669dcd021e4c8df9aeaeb55a401885a3d12",
-          "sizeBytes": 8109
+          "sha256": "e220334217e122765e721eb8c08ff2bcef5a06beff44decc34a7aebb88872020",
+          "sizeBytes": 8134
         },
         "1024": {
-          "sha256": "1146e2634b9fb4c1bcda99e70c9e42207d4e12041e8013c542337291e5bdd604",
-          "sizeBytes": 8111
+          "sha256": "75c81ec9261eaa5c1003c780e417c7df14f6deca5b28481db88e4c7d58caf378",
+          "sizeBytes": 8136
         }
       },
       "looped_softmax_bfloat16": {
@@ -196,12 +196,12 @@
           "sizeBytes": 7230
         },
         "288": {
-          "sha256": "515c70ace930cd63add50f9981f87b85f0a922e6d50c51eb1526c2c40fec2c9a",
-          "sizeBytes": 8849
+          "sha256": "b80ddebb521c5b3c4e24b626420ee4e93fa0c11f289403c4c826ce084d38e478",
+          "sizeBytes": 8874
         },
         "1024": {
-          "sha256": "d0a6f9833a5fa4e0cfcdec791e5401bf2a3a7145a7f1c5a2e5eb39872858151c",
-          "sizeBytes": 8851
+          "sha256": "f35fd8da8803d6a217883283ff7cb776d4be6f7c2dd8e95a72cb9847acd2afee",
+          "sizeBytes": 8876
         }
       },
       "looped_softmax_precise_float16": {
@@ -216,12 +216,12 @@
           "sizeBytes": 6229
         },
         "288": {
-          "sha256": "a85250bc9e62cef0602b5f368f4bd776d9e044be1c4c9af2bc557d7f960a7202",
-          "sizeBytes": 7848
+          "sha256": "ca4f843f0e0b660183404899730c7aae21a8320ec204ce75b7fe300cb8c94e55",
+          "sizeBytes": 7873
         },
         "1024": {
-          "sha256": "0515ce8b8eb4f55472f96c9da75bf8f83f7da08063f7514bc7315c7846fd6e8a",
-          "sizeBytes": 7850
+          "sha256": "351db0a5cf136a771c78105dcb0255f0505499596162e054a4eb9e82b09fee06",
+          "sizeBytes": 7875
         }
       },
       "looped_softmax_precise_bfloat16": {

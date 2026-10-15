@@ -976,3 +976,173 @@ def test_guarded_sequence_executes(tmp_path, shape):
     observations = evidence["records"]["generated"]["details"]["inputObservations"]
     assert len(observations) == 1
     assert all(item["unchanged"] for item in observations.values())
+
+
+# MLX's dot product sums SIMD-group partials under ``if (tid < SIMD_GROUPS)``,
+# which leaves part of one subgroup inactive. Inactive invocations contribute
+# each reduction's exact identity (-0.0 for sums, +/-infinity for min and max),
+# so an all -0.0 sum stays -0.0 and the NaN payloads of inactive invocations
+# never reach a result.
+MASKED_LANE_FIELDS = 3
+MASKED_LANE_GROUPS = 3
+MASKED_LANE_IDENTITIES = {
+    "opengl": (
+        "uintBitsToFloat(0x80000000u)",
+        "uintBitsToFloat(0x7f800000u)",
+        "uintBitsToFloat(0xff800000u)",
+    ),
+    "directx": (
+        "asfloat(0x80000000u)",
+        "asfloat(0x7f800000u)",
+        "asfloat(0xff800000u)",
+    ),
+}
+
+
+def _masked_lane_source(size):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+kernel void masked_lanes(const device uint* inputs [[buffer(0)]],
+                         device uint* outputs [[buffer(1)]],
+                         uint invocation [[thread_index_in_threadgroup]],
+                         uint3 group [[threadgroup_position_in_grid]]) {{
+    uint index = group.x * {size}u + invocation;
+    float value = as_type<float>(inputs[index]);
+    float total = 1.0;
+    float low = 2.0;
+    float high = 3.0;
+    if (invocation >= 8u && invocation < 24u) {{
+        total = simd_sum(value);
+        low = simd_min(value);
+        high = simd_max(value);
+    }}
+    outputs[index * {MASKED_LANE_FIELDS}u] = as_type<uint>(total);
+    outputs[index * {MASKED_LANE_FIELDS}u + 1u] = as_type<uint>(low);
+    outputs[index * {MASKED_LANE_FIELDS}u + 2u] = as_type<uint>(high);
+}}
+"""
+
+
+def _masked_lane_reference(size):
+    active = range(8, 24)
+    words, wanted = [], []
+    for group in range(MASKED_LANE_GROUPS):
+        values = []
+        for lane in range(size):
+            if lane not in active:
+                # Quiet NaNs of both signs and an infinity; none may leak.
+                values.append((0x7FC00001, 0xFFC00002, 0x7F800000)[lane % 3])
+            elif group == 0:
+                values.append(0x80000000)
+            elif group == 2 and lane == 13:
+                values.append(0xFF800000)
+            else:
+                values.append(_float_word(float(lane * 3 % 7 - 3 + group)))
+        words.extend(values)
+        floats = [
+            struct.unpack("<f", struct.pack("<I", values[lane]))[0] for lane in active
+        ]
+        total = -0.0
+        for value in floats:
+            total += value
+        # Integers and infinities keep every sum exact in any order, and no
+        # active set mixes +0.0 with -0.0, so min and max are unambiguous.
+        result = [
+            _float_word(total),
+            _float_word(min(floats)),
+            _float_word(max(floats)),
+        ]
+        for lane in range(size):
+            if lane in active:
+                wanted.extend(result)
+            else:
+                wanted.extend([_float_word(1.0), _float_word(2.0), _float_word(3.0)])
+    return words, wanted
+
+
+def test_masked_lane_reference_covers_edges():
+    _, wanted = _masked_lane_reference(80)
+    lane = MASKED_LANE_FIELDS * 8
+    group = MASKED_LANE_FIELDS * 80
+    assert wanted[lane : lane + 3] == [0x80000000] * 3
+    assert wanted[group + lane : group + lane + 3] == [
+        _float_word(19.0),
+        _float_word(-2.0),
+        _float_word(4.0),
+    ]
+    assert wanted[2 * group + lane : 2 * group + lane + 3] == [
+        0xFF800000,
+        0xFF800000,
+        _float_word(5.0),
+    ]
+    assert wanted[:3] == [_float_word(1.0), _float_word(2.0), _float_word(3.0)]
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("shape", [(32, 1, 1), (64, 1, 1), (80, 1, 1)])
+def test_masked_lane_package_uses_exact_identities(tmp_path, target, shape):
+    _, descriptor, package = _package(
+        tmp_path,
+        target,
+        "float",
+        shape,
+        source=_masked_lane_source(math.prod(shape)),
+    )
+    generated = (package / descriptor["artifact"]["packagePath"]).read_text()
+    for name in ("simd_sum(", "simd_min(", "simd_max(", "WaveActive", "subgroupAdd"):
+        assert name not in generated
+    assert generated.count("bool crossglSoftwareSubgroupActive") == 1
+    lines = [line.strip() for line in generated.splitlines()]
+    inputs = [
+        line.split(" = ", 1)[1].rstrip(";")
+        for line in lines
+        if line.startswith("float crossglSoftwareSubgroupInput")
+    ]
+    assert tuple(inputs) == MASKED_LANE_IDENTITIES[target]
+    compiled = tmp_path / "compiled"
+    compiled.mkdir()
+    _compile(generated, target, compiled)
+
+
+@pytest.mark.parametrize("shape", [(32, 1, 1), (64, 1, 1), (80, 1, 1)])
+def test_masked_lanes_execute_with_exact_identities(tmp_path, shape):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required partial subgroup readbacks")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    size = math.prod(shape)
+    words, wanted = _masked_lane_reference(size)
+    wanted.extend([0xDEADBEEF] * 32)
+    source, descriptor, package = _package(
+        tmp_path, target, "float", shape, source=_masked_lane_source(size)
+    )
+
+    def payload(data):
+        return dict(dtype="uint32", shape=[len(data)], values=data)
+
+    inputs = _bound_values(
+        descriptor,
+        {"inputs": payload(words), "outputs": payload([0xDEADBEEF] * len(wanted))},
+    )
+    expected = _bound_values(descriptor, {"outputs": payload(wanted)})
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        dict(
+            workgroupCount=[MASKED_LANE_GROUPS, 1, 1],
+            workgroupSize=list(shape),
+        ),
+        observe_inputs=[name for name in inputs if name not in expected],
+    )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="masked_lanes",
+    )
+    evidence = json.loads((tmp_path / "evidence.json").read_text())
+    observations = evidence["records"]["generated"]["details"]["inputObservations"]
+    assert len(observations) == 1
+    assert all(item["unchanged"] for item in observations.values())

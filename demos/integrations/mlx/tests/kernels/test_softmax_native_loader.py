@@ -112,8 +112,8 @@ MLX_SOFTMAX_SOFTWARE_OPENGL_ARTIFACTS = {
         "sizeBytes": 5755,
     },
     544: {
-        "sha256": "f0db9cf9b930224322cdd4aa2a01d6c910c1fa34a479705bd7b41de9247916be",
-        "sizeBytes": 7374,
+        "sha256": "1ea2c58cd8588b9a61ce3b1414b02cd578ec8b16fe77f9d0a2637c706a087174",
+        "sizeBytes": 7399,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_SOFTMAX_DIRECTX_NATIVE_LOADER"

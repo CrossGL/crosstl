@@ -73,8 +73,8 @@ MLX_ATTENTION_GENERATED_ARTIFACTS = {
         "sizeBytes": 9116,
     },
     "opengl": {
-        "sha256": "04f5c58fc3c4590c77583677f8edf261c1f5c9278a4163461c239c9e820ad9e8",
-        "sizeBytes": 12387,
+        "sha256": "6362cdedda2d3f0eec553bb60579236157ed38707cb15d7406ecc8feb1098268",
+        "sizeBytes": 12412,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_ATTENTION_DIRECTX_NATIVE_LOADER"

@@ -2154,9 +2154,9 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
         },
         "block-float32-axis-2049": {
             "sha256": (
-                "f0db9cf9b930224322cdd4aa2a01d6c910c1fa34a479705bd7b41de9247916be"
+                "1ea2c58cd8588b9a61ce3b1414b02cd578ec8b16fe77f9d0a2637c706a087174"
             ),
-            "size_bytes": 7374,
+            "size_bytes": 7399,
             "workgroup_size": [544, 1, 1],
             "logical_subgroup_count": 17,
             "masked_collective_count": 2,

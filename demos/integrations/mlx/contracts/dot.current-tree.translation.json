@@ -36,16 +36,16 @@
     },
     "opengl": {
       "dot_product_float32_it32_tg512_sg16": {
-        "sha256": "fdeafb72874a7759a2672eed005556fa928933381a6b9874366ee3fb01275943",
-        "sizeBytes": 6360
+        "sha256": "2b378330ecee1f440abdb7705e1eff91b7ce370fea4c14ea2d0f6ae4c7d6d130",
+        "sizeBytes": 6385
       },
       "dot_product_float16_it32_tg512_sg16": {
-        "sha256": "e705d7f7c1c37cfe2d80933f122a9aacfcef66285586986e83d54910d41367c6",
-        "sizeBytes": 6078
+        "sha256": "347a8e1e8a7bcd56f6c07a15b27dccb6d871fe9dd001ed0a5650612bb331bf05",
+        "sizeBytes": 6103
       },
       "dot_product_bfloat16_it32_tg512_sg16": {
-        "sha256": "ea35340ad93f2d1b1c9eed6bedfe01700048c95ba532dafba394e1b8a3ce0173",
-        "sizeBytes": 6082
+        "sha256": "5f83ef934170c3c4cb7d6ee0cb03dd01209322f98b013ae9d57227eddb0ca987",
+        "sizeBytes": 6107
       }
     },
     "metal": {

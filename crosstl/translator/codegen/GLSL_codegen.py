@@ -39871,8 +39871,15 @@ complex64_t crossgl_complex64_mod_assign(
         for reduction in reductions:
             operation = reduction["operation"]
             mapped_value_type = reduction["mapped_value_type"]
+            # -0.0 is the exact float sum identity: x + -0.0 == x for every x,
+            # including every rounded binary16 partial, so inactive invocations
+            # cannot turn an all -0.0 sum into +0.0.
             identity = {
-                "WaveActiveSum": {"float": "0.0", "int": "0", "uint": "0u"},
+                "WaveActiveSum": {
+                    "float": "uintBitsToFloat(0x80000000u)",
+                    "int": "0",
+                    "uint": "0u",
+                },
                 "WaveActiveMin": {
                     "float": "uintBitsToFloat(0x7f800000u)",
                     "int": "2147483647",
@@ -39884,9 +39891,6 @@ complex64_t crossgl_complex64_mod_assign(
                     "uint": "0u",
                 },
             }[operation][mapped_value_type]
-            if reduction["half_sum"]:
-                # -0.0 is the exact identity of every rounded binary16 partial.
-                identity = "uintBitsToFloat(0x80000000u)"
             code += (
                 f"{indent_str}{mapped_value_type} {reduction['input']} = {identity};\n"
             )
