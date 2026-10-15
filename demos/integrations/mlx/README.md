@@ -766,6 +766,45 @@ in signed 32-bit range; Metal and DirectX use none. This covers 212/17,832
 entries; it does not run the upstream MLX test suite or redirect the MLX host
 runtime.
 
+`contracts/binary_two.current-tree.translation.json` pins all 225
+`binary_two.metal` `DivMod` entries and their 675 artifacts: the 15 base
+kernels for each of the 13 element types, and the `svn`, `vsn` and `vvn`
+work-per-thread kernels for the ten types narrower than eight bytes. Each
+kernel writes MLX's `FloorDivide` result to `c` and its `Remainder` result to
+`d` from one `metal::array<T, 2>` value. Metal output keeps that value as
+`array<T, 2>`, since Metal functions cannot return C arrays, and OpenGL keeps a
+`T[2]` array. DirectX returns a two-component vector, or a two-member struct for
+complex64. Required CI compiles every entry with the platform validator and
+executes it on Metal, Mesa EGL and Direct3D 12 WARP, two cases per kernel (450
+dispatches per target). The scalar kernel writes one and six outputs. Flat
+kernels run 37 elements, ending inside a work-per-thread tile, and 80
+elements. `*2` grids of 3x2 and 4x3 threads cover the 64-bit offset path, the
+3x2 grid with a short last tile. The strided kernels run 1-D to 5-D shapes with
+transposed, permuted and stride-0 broadcast operands, through both the 32-bit
+and the 64-bit (`large`) index paths. The operand pairs cover every sign
+combination with integer extremes for each width, booleans, signed zeros,
+infinities, NaNs, subnormals, the largest finite values and quotients that
+round to an integer. The same-index kernels realize every pair of each type.
+Integer results are compared exactly against floor division and a remainder
+with the divisor's sign, narrowed after integer promotion. Floating results are
+compared bit for bit with an exact model of Metal's binary32 division, its
+remainder and its binary16 remainder, which the same per-operator profiles
+reproduce on OpenGL and DirectX; any NaN matches any NaN. A float16 quotient
+is floored after binary16 rounding, so 39.90625 / 6.65234375 floors to 6 while
+its remainder, 6.64453125, keeps the truncated quotient 5, as upstream does.
+Complex64 uses exactly representable components, so its quotient and truncated
+remainder do not depend on contraction. Its remainder is
+`a - b * static_cast<int64_t>(a / b)`; Mesa folds that integer round trip into
+`trunc()`, whose -0.0 turns a -0.0 dividend's remainder into +0.0, so OpenGL
+converts such integers back to float through a helper that returns +0.0 for a
+zero integer, as Metal does. Every dispatch checks 16 guards per output, four
+decoys after each operand and that every input is unchanged. Metal also runs
+the unchanged upstream kernel against the same expected words. OpenGL relies on
+seven host preconditions that the flat, 64-bit and composed strided indices fit
+in signed 32-bit range; Metal and DirectX use none. This covers 225/17,832
+entries; it does not run the upstream MLX test suite or redirect the MLX host
+runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

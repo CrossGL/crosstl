@@ -875,6 +875,9 @@ class MetalCodeGen:
         self.function_overloads_by_name = {}
         self.metal_skipped_function_parameter_indices = {}
         self.function_return_types = {}
+        # Locals of the current function that must be ``array<T, N>`` values
+        # because the function returns them as its array result.
+        self.current_metal_value_array_locals = frozenset()
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
         self.function_global_resource_dependencies = {}
@@ -4650,6 +4653,7 @@ class MetalCodeGen:
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
         previous_function_return_wrapper = self.current_function_return_wrapper
+        previous_metal_value_array_locals = self.current_metal_value_array_locals
         previous_local_identifier_remaps = self.current_local_identifier_remaps
         previous_stage_output_return_active = getattr(
             self, "current_metal_stage_output_return_active", False
@@ -4774,6 +4778,9 @@ class MetalCodeGen:
         self.current_metal_graphics_builtin_parameter_names = {}
         self.current_metal_compute_builtin_parameter_names = {}
         self.local_variable_types = {}
+        self.current_metal_value_array_locals = self.metal_value_array_returned_locals(
+            func
+        )
         self.current_address_space_variables = {}
         self.current_metal_native_width_local_array_declaration_ids = (
             self.metal_native_width_local_array_declaration_ids(func)
@@ -5191,11 +5198,16 @@ class MetalCodeGen:
             effective_return_type = self.metal_effective_function_return_type(func)
             raw_return_type = self.type_name_string(effective_return_type)
             if "[" in raw_return_type:
-                raise ValueError(
-                    "Metal output does not support C-style array return types; "
-                    "wrap the array in a struct or use an output parameter"
-                )
-            if isinstance(effective_return_type, PointerType):
+                # Metal cannot return C arrays; ``array<T, N>`` keeps the
+                # value semantics of a source ``metal::array`` result.
+                return_type = self.metal_value_array_type(raw_return_type)
+                if return_type is None:
+                    raise ValueError(
+                        "Metal output does not support unsized C-style array "
+                        "return types; wrap the array in a struct or use an "
+                        "output parameter"
+                    )
+            elif isinstance(effective_return_type, PointerType):
                 return_type = self.format_metal_pointer_return_type(
                     effective_return_type
                 )
@@ -5232,6 +5244,7 @@ class MetalCodeGen:
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper
+            self.current_metal_value_array_locals = previous_metal_value_array_locals
             self.current_local_identifier_remaps = previous_local_identifier_remaps
             self.local_variable_types = previous_local_variable_types
             self.current_address_space_variables = previous_address_space_variables
@@ -5327,6 +5340,7 @@ class MetalCodeGen:
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper
+            self.current_metal_value_array_locals = previous_metal_value_array_locals
             self.current_local_identifier_remaps = previous_local_identifier_remaps
             self.local_variable_types = previous_local_variable_types
             self.current_address_space_variables = previous_address_space_variables
@@ -5776,6 +5790,7 @@ class MetalCodeGen:
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
+        self.current_metal_value_array_locals = previous_metal_value_array_locals
         self.current_local_identifier_remaps = previous_local_identifier_remaps
         self.current_metal_stage_output_return_active = (
             previous_stage_output_return_active
@@ -7513,9 +7528,14 @@ class MetalCodeGen:
                 )
 
             local_name = self.metal_local_identifier_name(stmt.name)
-            declaration = format_c_style_array_declaration(
-                self.metal_local_storage_declaration_type(stmt, var_type), local_name
-            )
+            value_array_type = self.metal_local_value_array_type(stmt, var_type)
+            if value_array_type is not None:
+                declaration = f"{value_array_type} {local_name}"
+            else:
+                declaration = format_c_style_array_declaration(
+                    self.metal_local_storage_declaration_type(stmt, var_type),
+                    local_name,
+                )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             declaration = self.maybe_format_unused_local_declaration(
                 declaration, stmt.name
@@ -14737,6 +14757,66 @@ class MetalCodeGen:
         if pointer_type is not None:
             return pointer_type
         return self.type_name_string(getattr(func, "return_type", "void"))
+
+    def metal_value_array_type(self, type_name):
+        """Spell a sized C-style array type as nested Metal ``array<T, N>``.
+
+        Returns None for unsized or malformed array suffixes.
+        """
+        base_type, suffix = split_array_type_suffix(str(type_name or "").strip())
+        base_type = base_type.strip()
+        sizes = []
+        while suffix:
+            match = re.match(r"\[([^\[\]]+)\]\s*", suffix)
+            if match is None or not match.group(1).strip():
+                return None
+            sizes.append(match.group(1).strip())
+            suffix = suffix[match.end() :]
+        if not sizes or not base_type:
+            return None
+        spelled = self.map_type(base_type)
+        for size in reversed(sizes):
+            spelled = f"array<{spelled}, {size}>"
+        return spelled
+
+    def metal_value_array_returned_locals(self, func):
+        """Name the locals a function returns as its array-valued result."""
+        return_type = self.metal_effective_function_return_type(func)
+        if not isinstance(return_type, str) or "[" not in return_type:
+            return frozenset()
+        names = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", None)):
+            if not isinstance(node, (ReturnNode, BackendReturnNode)):
+                continue
+            value = getattr(node, "value", None)
+            if isinstance(value, (IdentifierNode, VariableNode)) and isinstance(
+                getattr(value, "name", None), str
+            ):
+                names.add(value.name)
+        return frozenset(names)
+
+    def metal_expression_returns_value_array(self, expression):
+        if not isinstance(expression, FunctionCallNode):
+            return False
+        return_type = self.function_return_types.get(
+            self.function_call_name(expression)
+        )
+        return isinstance(return_type, str) and "[" in return_type
+
+    def metal_local_value_array_type(self, node, declared_type):
+        """Return ``array<T, N>`` for a local that holds an array result."""
+        if "[" not in str(declared_type):
+            return None
+        if self.local_variable_address_space(node) == "threadgroup":
+            return None
+        if not (
+            getattr(node, "name", None) in self.current_metal_value_array_locals
+            or self.metal_expression_returns_value_array(
+                getattr(node, "initial_value", None)
+            )
+        ):
+            return None
+        return self.metal_value_array_type(declared_type)
 
     def format_metal_pointer_return_type(self, pointer_type):
         address_space = self.normalized_address_space(pointer_type.address_space)

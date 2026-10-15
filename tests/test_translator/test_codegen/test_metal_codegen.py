@@ -6030,20 +6030,98 @@ def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():
         assert invalid_token not in generated_code
 
 
-def test_metal_array_return_aliases_are_rejected_with_clear_diagnostic():
+def test_metal_array_returns_use_value_arrays_and_compile():
+    # MLX binary_two.metal returns metal::array<T, 2> from DivMod; Metal
+    # cannot return C arrays, so array results travel as array<T, N>.
     shader = """
     shader AliasReturnArraySmoke {
-        uint64_t[2] makeCounters() {
+        uint64_t[2] makeCounters(uint64_t first) {
             uint64_t counters[2];
+            counters[0] = first;
+            counters[1] = first + 1;
             return counters;
+        }
+        int[2][3] makeGrid(int seed) {
+            return makeGridCopy(seed);
+        }
+        int[2][3] makeGridCopy(int seed) {
+            int[2][3] grid;
+            for (int row = 0; row < 2; row++) {
+                for (int col = 0; col < 3; col++) {
+                    grid[row][col] = seed + row * 3 + col;
+                }
+            }
+            return grid;
+        }
+        compute {
+            void main(
+                RWStructuredBuffer<uint64_t> output @buffer(0),
+                uint3 tid @ gl_GlobalInvocationID) {
+                uint64_t[2] values = makeCounters(uint64_t(tid.x));
+                int[2][3] grid = makeGrid(int(tid.x));
+                int scratch[2];
+                scratch[0] = grid[1][2];
+                scratch[1] = grid[0][1];
+                output[tid.x] = values[0] + values[1] + uint64_t(scratch[0] + scratch[1]);
+            }
         }
     }
     """
 
-    with pytest.raises(
-        ValueError, match="Metal output does not support C-style array return"
-    ):
-        generate_code(parse_code(tokenize_code(shader)))
+    generated = generate_code(parse_code(tokenize_code(shader)))
+    compact = re.sub(r"\s+", " ", generated)
+    assert "array<uint64_t, 2> makeCounters(uint64_t first) {" in compact
+    assert "array<uint64_t, 2> counters;" in compact
+    assert "array<array<int, 3>, 2> makeGrid(int seed) {" in compact
+    assert "array<array<int, 3>, 2> grid;" in compact
+    assert "array<uint64_t, 2> values = makeCounters(" in compact
+    assert "array<array<int, 3>, 2> grid = makeGrid(" in compact
+    # Locals that never hold an array result keep their C-array spelling.
+    assert "int scratch[2];" in compact
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"], capture_output=True, check=False, text=True
+    )
+    if lookup.returncode != 0:
+        pytest.skip("Metal compiler is not available")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(generated, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(source_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if result.returncode != 0 and _missing_metal_toolchain(result):
+            pytest.skip("Metal toolchain is not installed")
+        assert result.returncode == 0, result.stderr
+        assert output_path.stat().st_size > 0
+
+
+def test_metal_unsized_array_returns_are_rejected_with_clear_diagnostic():
+    codegen = MetalCodeGen()
+    assert codegen.metal_value_array_type("float[4]") == "array<float, 4>"
+    assert codegen.metal_value_array_type("float[2][3]") == (
+        "array<array<float, 3>, 2>"
+    )
+    assert codegen.metal_value_array_type("float[]") is None
+    assert codegen.metal_value_array_type("float[4][]") is None
+    assert codegen.metal_value_array_type("float") is None
 
 
 def test_metal_fixed_width_nested_cbuffer_array_aliases_map_to_valid_types():

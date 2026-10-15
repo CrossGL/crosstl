@@ -689,6 +689,25 @@ runs the unchanged upstream kernel. OpenGL relies on 11 host index-range
 preconditions in signed 32-bit range. This is a 212/17,832 increment; it does
 not run the upstream MLX test suite or redirect the MLX host runtime.
 
+``binary_two.current-tree.translation.json`` pins all 225 ``binary_two.metal``
+``DivMod`` entries and their 675 artifacts: 15 base kernels for each of the 13
+element types plus the ``svn``, ``vsn`` and ``vvn`` work-per-thread kernels
+for the ten types narrower than eight bytes. ``DivMod`` returns its floor
+quotient and remainder as one ``metal::array<T, 2>``; Metal output keeps it as
+``array<T, 2>``, OpenGL as ``T[2]`` and DirectX as a two-component vector, or a
+two-member struct for complex64. Every entry is compiled by the platform
+validator and executed on Metal, Mesa EGL and Direct3D 12 WARP, two cases per
+kernel over the same flat, 2-D and strided layouts as ``ternary.metal``.
+Operands cover every sign combination, integer extremes, booleans, signed
+zeros, infinities, NaNs, subnormals and complex64 values with exactly
+representable parts. Results must match exact integer and floating models word
+for word, any NaN matching any NaN, including the upstream float16 floor of a
+binary16-rounded quotient. Every dispatch checks 16 output guards, four decoys
+after each operand and that every input is unchanged, and Metal also runs the
+unchanged upstream kernel. OpenGL relies on seven host index-range
+preconditions in signed 32-bit range. This is a 225/17,832 increment; it does
+not run the upstream MLX test suite or redirect the MLX host runtime.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs
