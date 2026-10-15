@@ -1,5 +1,6 @@
 """Shared contracts for storage-backed pointer reinterpretation."""
 
+import re
 from dataclasses import dataclass
 
 
@@ -61,6 +62,64 @@ _SCALAR_LAYOUTS = {
     "uint64_t": ScalarStorageLayout("uint64", "integer", 64),
     "double": ScalarStorageLayout("double", "floating", 64),
 }
+
+
+_LANE_VIEW_SPELLING = re.compile(r"(?:metal::)?([A-Za-z_][A-Za-z0-9_]*?)([234])")
+# CrossGL spells narrow vectors with a lane-type prefix, for example ``f16vec4``.
+_CROSSGL_LANE_VIEW_COMPONENTS = {
+    "f16vec": "float16",
+    "bfloat16vec": "bfloat16",
+    "i8vec": "int8",
+    "u8vec": "uint8",
+    "i16vec": "int16",
+    "u16vec": "uint16",
+}
+
+
+def same_scalar_lane_view(target_type, source_layout):
+    """Return ``(lanes, component)`` when a view gathers source scalars as lanes.
+
+    ``*reinterpret_cast<const device vec<T, N>*>(p)`` over a ``T`` buffer reads
+    the N consecutive ``T`` elements at ``p`` as one vector. A target that keeps
+    one physical element per logical ``T`` element can gather those lanes
+    element by element, which needs no bit-level reinterpretation of the
+    backing words. ``component`` is the source spelling of the lane type.
+    """
+
+    from ..ast import VectorType
+
+    if source_layout is None or target_type is None:
+        return None
+    generic_args = list(getattr(target_type, "generic_args", None) or [])
+    if isinstance(target_type, VectorType):
+        component = getattr(getattr(target_type, "element_type", None), "name", None)
+        lanes = getattr(target_type, "size", None)
+    elif generic_args:
+        # ``vec<T, N>`` whose lane type the frontend could not resolve.
+        name = str(getattr(target_type, "name", "")).rsplit("::", 1)[-1]
+        if name not in {"vec", "vector"} or len(generic_args) != 2:
+            return None
+        component = getattr(generic_args[0], "name", None)
+        lanes = getattr(generic_args[1], "value", None)
+        if isinstance(lanes, str) and lanes.isdigit():
+            lanes = int(lanes)
+    else:
+        spelling = getattr(target_type, "name", target_type)
+        if not isinstance(spelling, str):
+            return None
+        match = _LANE_VIEW_SPELLING.fullmatch(spelling.strip())
+        if match is None:
+            return None
+        component, lanes = match.group(1), int(match.group(2))
+        component = _CROSSGL_LANE_VIEW_COMPONENTS.get(component, component)
+    if (
+        not isinstance(component, str)
+        or isinstance(lanes, bool)
+        or lanes not in {2, 3, 4}
+        or scalar_storage_layout(component) != source_layout
+    ):
+        return None
+    return lanes, component
 
 
 def scalar_storage_layout(type_name):
@@ -364,6 +423,32 @@ def _metal_homogeneous_scalar_array_struct_contract(struct_node):
     }
 
 
+def _metal_vector_pointee_name(pointee):
+    """Spell a 2- to 4-lane scalar vector pointee such as ``float4``.
+
+    Metal sources often spell such views as ``metal::vec<T, N>``, which the
+    frontend resolves to a structural vector type without a name. The view is a
+    native Metal vector, so it needs no record layout proof; the renderer still
+    proves the source pointer, address space and constness.
+    """
+
+    from ..ast import PrimitiveType, VectorType
+
+    if not isinstance(pointee, VectorType):
+        return None
+    element = getattr(pointee, "element_type", None)
+    size = getattr(pointee, "size", None)
+    element_name = getattr(element, "name", None)
+    if (
+        not isinstance(element, PrimitiveType)
+        or not element_name
+        or isinstance(size, bool)
+        or size not in {2, 3, 4}
+    ):
+        return None
+    return f"{element_name}{size}"
+
+
 def _metal_storage_pointer_reinterpret_contract(
     expression, structs_by_name, parent=None, grandparent=None
 ):
@@ -397,7 +482,7 @@ def _metal_storage_pointer_reinterpret_contract(
         expression, parent, grandparent
     )
     pointee = getattr(target_pointer, "pointee_type", None)
-    target_name = getattr(pointee, "name", None)
+    target_name = getattr(pointee, "name", None) or _metal_vector_pointee_name(pointee)
     if not target_name:
         return None
     byte_view_contract = None

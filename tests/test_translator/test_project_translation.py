@@ -52956,71 +52956,67 @@ def test_translate_project_parses_generic_metal_pointer_reinterpretation(tmp_pat
     assert "project.translate.crossgl-function-body-parse-failed" not in (
         diagnostic_codes
     )
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 2
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 1
     assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.pointer-reinterpret-unsupported": 2
+        "project.translate.pointer-reinterpret-unsupported": 1
     }
     assert payload["summary"]["missingCapabilityCounts"] == {
-        "pointer.reinterpretation": 2
+        "pointer.reinterpretation": 1
     }
 
     artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
     assert set(artifacts) == {"directx", "opengl"}
-    expected_errors = {
-        "directx": (
-            "DirectX storage pointer reinterpretation requires an 8- or 32-bit scalar "
-            "backing element and either an 8-, 16-, or 32-bit scalar view or a "
-            "2- to 4-lane 32-bit vector view"
-        ),
-        "opengl": (
-            "OpenGL storage pointer reinterpretation requires a 32-bit scalar "
-            "backing element and either an 8-, 16-, or 32-bit scalar view or a "
-            "2- to 4-lane 32-bit vector view"
-        ),
-    }
-    for target, artifact in artifacts.items():
-        assert artifact["status"] == "failed"
-        assert artifact["error"] == expected_errors[target]
-        assert not (repo / artifact["path"]).exists()
 
-    diagnostics = {
-        diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
+    # OpenGL widens each bfloat16 element to one binary32 array element, so the
+    # vector view gathers four consecutive elements rather than storage bits.
+    assert artifacts["opengl"]["status"] == "translated"
+    opengl = (repo / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
+    assert "readonly buffer baseBuffer { float base[]; };" in opengl
+    assert opengl.count("base[int(") == 4
+    assert "floatBitsToUint(base" not in opengl
+    assert_compute_glsl_validates_if_available(opengl, tmp_path)
+
+    # DirectX has no bfloat16 vector arithmetic, so a view that is not
+    # immediately converted to a float vector stays rejected.
+    message = (
+        "DirectX bfloat16 vector storage views must be converted to a float "
+        "vector immediately"
+    )
+    assert artifacts["directx"]["status"] == "failed"
+    assert artifacts["directx"]["error"] == message
+    assert not (repo / artifacts["directx"]["path"]).exists()
+
+    (diagnostic,) = payload["diagnostics"]
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["code"] == "project.translate.pointer-reinterpret-unsupported"
+    assert diagnostic["severity"] == "error"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["missingCapabilities"] == ["pointer.reinterpretation"]
+    assert diagnostic["message"] == message
+    assert diagnostic["location"] == {
+        "file": "generic_vector_pointer.metal",
+        "line": 1,
+        "column": 1,
+        "offset": 0,
+        "length": 0,
+        "endLine": 1,
+        "endColumn": 1,
+        "endOffset": 0,
     }
-    assert set(diagnostics) == {"directx", "opengl"}
-    expected_source_types = {"directx": "bfloat16", "opengl": "bfloat16"}
-    for target, diagnostic in diagnostics.items():
-        assert diagnostic["code"] == (
-            "project.translate.pointer-reinterpret-unsupported"
-        )
-        assert diagnostic["severity"] == "error"
-        assert diagnostic["sourceBackend"] == "metal"
-        assert diagnostic["missingCapabilities"] == ["pointer.reinterpretation"]
-        assert diagnostic["message"] == expected_errors[target]
-        assert diagnostic["location"] == {
-            "file": "generic_vector_pointer.metal",
-            "line": 1,
-            "column": 1,
-            "offset": 0,
-            "length": 0,
-            "endLine": 1,
-            "endColumn": 1,
-            "endOffset": 0,
-        }
-        assert diagnostic["details"] == {
-            "pointerReinterpretation": {
-                "access": "read",
-                "addressSpace": "storage",
-                "reason": "unsupported-scalar-layout",
-                "sourceType": expected_source_types[target],
-                "targetType": "bfloat16vec4",
-            },
-            "sourcePath": "generic_vector_pointer.metal",
-            "targetArtifact": (
-                f"out/{target}/generic_vector_pointer."
-                f"{'hlsl' if target == 'directx' else 'glsl'}"
-            ),
-        }
+    assert diagnostic["details"] == {
+        "pointerReinterpretation": {
+            "access": "read",
+            "addressSpace": "storage",
+            "alignment": 2,
+            "reason": "bfloat16-vector-view-requires-float-conversion",
+            "sourceType": "bfloat16",
+            "targetBackend": "directx",
+            "targetType": "vec<bfloat16, 4>",
+        },
+        "sourcePath": "generic_vector_pointer.metal",
+        "targetArtifact": "out/directx/generic_vector_pointer.hlsl",
+    }
 
 
 def test_translate_project_reports_reinterpreted_pointer_writes(tmp_path):

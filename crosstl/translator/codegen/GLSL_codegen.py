@@ -359,6 +359,7 @@ from .match_utils import (
 )
 from .pointer_reinterpret import (
     PointerReinterpretationError,
+    same_scalar_lane_view,
     scalar_storage_layout,
 )
 from .private_vector_views import lower_private_vector_views
@@ -26105,6 +26106,15 @@ class GLSLCodeGen:
         view_layout = scalar_storage_layout(view_type_name)
         source_layout = scalar_storage_layout(source_type_name)
         target_layout = scalar_storage_layout(target_type_name)
+        lane_gather = self.glsl_same_scalar_lane_gather_binding(
+            binding,
+            target_type,
+            source_type_name=source_type_name,
+            source_layout=source_layout,
+            view_layout=view_layout,
+        )
+        if lane_gather is not None:
+            return lane_gather
         target_width = 1
         if (
             target_layout is None
@@ -26170,6 +26180,54 @@ class GLSLCodeGen:
                 "source_layout": source_layout,
                 "target_layout": target_layout,
                 "target_width": target_width,
+            },
+        }
+
+    def glsl_same_scalar_lane_gather_binding(
+        self,
+        binding,
+        target_type,
+        *,
+        source_type_name,
+        source_layout,
+        view_layout,
+    ):
+        """Gather a ``vec<T, N>`` view of a widened 8- or 16-bit buffer.
+
+        OpenGL stores each 8- or 16-bit storage element in one 32-bit array
+        element, so a vector view of a ``T`` buffer is the N consecutive array
+        elements. Bit-level views of those widened words stay rejected.
+        """
+
+        if source_layout is None or source_layout.bit_width not in {8, 16}:
+            return None
+        lane_view = same_scalar_lane_view(target_type, source_layout)
+        if (
+            lane_view is None
+            or view_layout != source_layout
+            or binding.get("pointer_reinterpretation") is not None
+            or str(binding.get("byte_offset", "0")) not in {"0", "0u"}
+            or binding.get("element_type") != self.map_type(source_type_name)
+        ):
+            return None
+        lanes, component = lane_view
+        vector_type = f"vec<{component}, {lanes}>"
+        rendered_offset = self.glsl_workgroup_pointer_offset_expression(binding)
+        byte_offset = rendered_offset
+        if source_layout.byte_width != 1 and rendered_offset not in {"0", "0u"}:
+            byte_offset = f"({rendered_offset} * {source_layout.byte_width})"
+        return {
+            **binding,
+            "offset": 0,
+            "byte_offset": byte_offset,
+            "element_type": self.map_type(vector_type),
+            "view_element_type": vector_type,
+            "source_element_type": source_type_name,
+            "pointer_reinterpretation": {
+                "source_layout": source_layout,
+                "target_layout": source_layout,
+                "target_width": lanes,
+                "lane_gather": True,
             },
         }
 
@@ -27942,6 +28000,7 @@ class GLSLCodeGen:
             byte_index = f"({byte_offset} + {element_bytes})"
 
         if target_width > 1:
+            lane_gather = bool(reinterpretation.get("lane_gather"))
             components = []
             for lane in range(target_width):
                 lane_byte_index = byte_index
@@ -27951,6 +28010,10 @@ class GLSLCodeGen:
                     )
                 source_index = f"int(({lane_byte_index}) / {source_layout.byte_width})"
                 source_value = f"{binding['root']}[{source_index}]"
+                if lane_gather:
+                    # Each widened array element holds one logical lane.
+                    components.append(source_value)
+                    continue
                 if source_layout.kind == "floating":
                     source_bits = f"floatBitsToUint({source_value})"
                 elif source_layout.signed:

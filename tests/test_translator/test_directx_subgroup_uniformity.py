@@ -1,5 +1,7 @@
 """Conservative workgroup-uniform proofs for software subgroup barriers."""
 
+import struct
+
 import pytest
 
 from crosstl.project import ProjectConfig, translate_project
@@ -198,3 +200,129 @@ def test_uniform_builtin_facts_do_not_survive_generator_reuse(tmp_path):
     generated = codegen.generate_stage(parse(clean), "compute")
     assert generated == _codegen().generate_stage(parse(clean), "compute")
     _compile(generated, tmp_path)
+
+
+# MLX's dot product reduces SIMD-group partials under ``if (tid < SIMD_GROUPS)``.
+# The masked lowering runs the reduction in every invocation, with inactive
+# invocations contributing the sum identity.
+MASKED_SUMS = {
+    "uint": (
+        """uint value = inputWords[index];
+        uint total = 7u;
+        if (invocation < 16u) {
+            total = value * 2u;
+            total = WaveActiveSum(total);
+            outputWords[index] = total;
+        }"""
+    ),
+    "float": (
+        """float value = asfloat(inputWords[index]);
+        float total = 1.0;
+        if (invocation >= 8u && invocation < 24u) {
+            total = WaveActiveSum(value);
+            outputWords[index] = asuint(total);
+        }"""
+    ),
+}
+
+
+def _masked_sum_words(value_type):
+    if value_type == "uint":
+        return [index * 3 + 1 for index in range(384)]
+    # The first group is all -0.0, whose sum stays -0.0 only if inactive
+    # invocations contribute -0.0 rather than +0.0.
+    return [0x80000000] * 128 + [
+        struct.unpack("<I", struct.pack("<f", float(index % 7 - 3)))[0]
+        for index in range(128, 384)
+    ]
+
+
+def _masked_sum_expected(value_type, words):
+    expected = []
+    for index in range(len(words)):
+        base, local = index // 128 * 128, index % 128
+        if value_type == "uint":
+            active = range(16)
+            if local not in active:
+                expected.append(0xDEADBEEF)
+                continue
+            expected.append(sum(2 * words[base + lane] for lane in active) % 2**32)
+            continue
+        active = range(8, 24)
+        if local not in active:
+            expected.append(0xDEADBEEF)
+            continue
+        values = [
+            struct.unpack("<f", struct.pack("<I", words[base + lane]))[0]
+            for lane in active
+        ]
+        total = -0.0
+        for value in values:
+            total += value
+        expected.append(struct.unpack("<I", struct.pack("<f", total))[0])
+    return expected
+
+
+@pytest.mark.parametrize("value_type", ["uint", "float"])
+def test_masked_sum_reaches_every_barrier(tmp_path, value_type):
+    generated = _codegen().generate_stage(
+        parse(_source(value_type, MASKED_SUMS[value_type])), "compute"
+    )
+    assert "WaveActiveSum" not in generated
+    identity = "asfloat(0x80000000u)" if value_type == "float" else "0u"
+    assert f"{value_type} crossglSoftwareSubgroupInput = {identity};" in generated
+    call = f"__crossgl_software_subgroup_sum_{value_type}(crossglSoftwareSubgroupInput"
+    assert generated.count(call) == 1
+    # The reduction sits outside both predicated blocks.
+    lines = [line.strip() for line in generated.splitlines()]
+    reduction = next(index for index, line in enumerate(lines) if call in line)
+    assert lines[reduction - 1] == "}" and lines[reduction + 1].startswith("if (")
+    _compile(generated, tmp_path)
+
+
+@pytest.mark.parametrize("value_type", ["uint", "float"])
+def test_masked_sum_executes(tmp_path, directx_runtime, value_type):
+    generated = _codegen().generate_stage(
+        parse(_source(value_type, MASKED_SUMS[value_type])), "compute"
+    )
+    words = _masked_sum_words(value_type)
+    expected = _masked_sum_expected(value_type, words)
+    assert expected[8] == (0x80000000 if value_type == "float" else expected[8])
+    assert _execute_words(tmp_path, generated, words, expected) == expected
+
+
+@pytest.mark.parametrize(
+    "body,helpers",
+    [
+        (
+            "if (invocation < 16u) { total = WaveActiveSum(value); } else { total = 1u; }",
+            "",
+        ),
+        (
+            "if (invocation < 16u) { uint doubled = value * 2u; total = WaveActiveSum(doubled); }",
+            "",
+        ),
+        (
+            "if (invocation < 16u) { total = WaveActiveSum(value); total += reduce_value(value); }",
+            "uint reduce_value(uint value) { return WaveActiveSum(value); }",
+        ),
+        ("if (invocation < 16u) { total = WaveActiveSum(value); return; }", ""),
+        ("if (invocation < 16u) { total = WaveActiveMin(value); }", ""),
+        (
+            "if (invocation < 16u) { total = WaveActiveSum(value); total = WaveActiveSum(total); }",
+            "",
+        ),
+        ("if (invocation < 16u) { total += WaveActiveSum(value); }", ""),
+        ("if ((total++) < 16u) { total = WaveActiveSum(value); }", ""),
+        ("{ if (invocation < 16u) { total = WaveActiveSum(value); } }", ""),
+    ],
+)
+def test_masked_sum_rejects_unplanned_divergence(body, helpers):
+    source = _source(
+        "uint",
+        f"uint value = inputWords[index]; uint total = 0u; {body} "
+        "outputWords[index] = total;",
+        helpers,
+    )
+    with pytest.raises(DirectXSoftwareSubgroupError):
+        _codegen().generate_stage(parse(source), "compute")
