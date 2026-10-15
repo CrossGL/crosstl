@@ -17966,7 +17966,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         where it occurs, which is exact when that scope runs once and no later
         statement outside it refers to the pointer. A first rebase inside a
         loop, or one whose pointer is referenced after the enclosing statement,
-        must instead update one offset declared at entry.
+        must instead update one offset declared at entry. A local declaration
+        that shadows the parameter hides it for the rest of its scope, so
+        assignments to that local are not pointer rebases.
         """
         parameter_names = {
             getattr(parameter, "name", None)
@@ -17986,7 +17988,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return list(getattr(body, "statements", None) or [])
             return [body]
 
-        def rebased_name(node):
+        def rebased_name(node, shadowed):
             if not isinstance(node, AssignmentNode):
                 return None
             if getattr(node, "operator", "=") not in {"=", "+=", "-="}:
@@ -17995,8 +17997,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if (
                 isinstance(target, (IdentifierNode, VariableNode))
                 and target.name in parameter_names
+                and target.name not in shadowed
             ):
                 return target.name
+            return None
+
+        def shadowing_declaration(statement):
+            if isinstance(statement, VariableNode) and statement.name in (
+                parameter_names
+            ):
+                return statement.name
             return None
 
         def references(statements, name):
@@ -18006,9 +18016,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
         def children(statement):
-            # Returns nested statement bodies and the expressions evaluated by
-            # the statement itself. Switch and match arms may fall through or
-            # share scope, so they are handled like loops.
+            # Returns nested statement bodies, the expressions evaluated by the
+            # statement itself, whether it repeats, and the parameter names its
+            # own declarations shadow inside it. Switch and match arms may fall
+            # through or share scope, so they are handled like loops and share
+            # every arm's declarations.
             if isinstance(statement, IfNode):
                 bodies = [
                     getattr(statement, "then_branch", None),
@@ -18019,19 +18031,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     getattr(statement, "condition", None),
                     *(getattr(statement, "else_if_conditions", None) or []),
                 ]
-                return bodies, expressions, False
+                return bodies, expressions, False, set()
             if isinstance(statement, ForNode):
+                local = shadowing_declaration(statement.init)
                 return (
                     [statement.body],
                     [statement.init, statement.condition, statement.update],
                     True,
+                    {local} if local else set(),
                 )
             if isinstance(statement, ForInNode):
-                return [statement.body], [statement.iterable], True
+                return [statement.body], [statement.iterable], True, set()
             if isinstance(statement, (WhileNode, DoWhileNode)):
-                return [statement.body], [statement.condition], True
+                return [statement.body], [statement.condition], True, set()
             if isinstance(statement, LoopNode):
-                return [statement.body], [], True
+                return [statement.body], [], True, set()
             if isinstance(statement, SwitchNode):
                 bodies = [
                     getattr(case, "statements", None) or getattr(case, "body", None)
@@ -18044,26 +18058,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         if not isinstance(default, list)
                         else default
                     )
-                return bodies, [statement.expression], True
+                shared = {
+                    local
+                    for body in bodies
+                    for local in map(shadowing_declaration, statements_of(body))
+                    if local
+                }
+                return bodies, [statement.expression], True, shared
             if isinstance(statement, MatchNode):
                 bodies = [
                     getattr(arm, "body", None)
                     for arm in getattr(statement, "arms", None) or []
                 ]
-                return bodies, [statement.expression], True
+                return bodies, [statement.expression], True, set()
             if isinstance(statement, BlockNode):
-                return [statement], [], False
-            return [], [statement], False
+                return [statement], [], False, set()
+            return [], [statement], False, set()
 
-        def visit(statements, frames, in_loop, declared):
+        def visit(statements, frames, in_loop, declared, shadowed):
             declared = set(declared)
+            shadowed = set(shadowed)
             for index, statement in enumerate(statements):
+                local = shadowing_declaration(statement)
+                if local is not None:
+                    shadowed.add(local)
+                    continue
                 expression = (
                     statement.expression
                     if isinstance(statement, ExpressionStatementNode)
                     else statement
                 )
-                name = rebased_name(expression)
+                name = rebased_name(expression, shadowed)
                 if name is not None:
                     if name not in declared:
                         declared.add(name)
@@ -18076,9 +18101,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         ):
                             hoisted.add(name)
                     continue
-                bodies, expressions, is_loop = children(statement)
+                bodies, expressions, is_loop, scope_locals = children(statement)
+                inner_shadowed = shadowed | scope_locals
                 for node in self.walk_ast(expressions):
-                    embedded = rebased_name(node)
+                    embedded = rebased_name(node, inner_shadowed)
                     if embedded is not None:
                         hoisted.add(embedded)
                 for body in bodies:
@@ -18087,10 +18113,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         frames + [(statements, index)],
                         in_loop or is_loop,
                         declared,
+                        inner_shadowed,
                     )
 
         body = getattr(function, "body", None)
-        visit(statements_of(body), [], False, set())
+        visit(statements_of(body), [], False, set(), set())
         return hoisted
 
     def hlsl_mutable_resource_pointer_argument_names(self, function):

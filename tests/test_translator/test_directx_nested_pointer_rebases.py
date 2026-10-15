@@ -137,3 +137,28 @@ def test_entry_scope_rebase_before_loop_is_unchanged(tmp_path):
     assert lines.count(DECLARATION) == 1
     assert "input_offset += int(2);" in lines
     _compile(generated, tmp_path)
+
+
+SHADOWED = {
+    # The switch body shares one scope: the case-local `input` is the target.
+    "switch": (
+        "switch (count) { case 3: uint input; input = 11; output[1] = input;"
+        " break; default: output[1] = 0; break; } output[0] = input[1];"
+    ),
+    "block": "{ uint input = 5; input += 2; output[2] = input; } output[0] = input[1];",
+    "for-initializer": (
+        "for (uint input = 0; input < 2; input += 1) { output[input] = input; }"
+        " output[0] = input[1];"
+    ),
+}
+
+
+@pytest.mark.parametrize("case", SHADOWED)
+def test_shadowing_locals_are_not_entry_pointer_rebases(tmp_path, case):
+    # Assignments to a local that shadows the entry pointer must neither hoist
+    # nor update the pointer offset; the later read uses the unrebased buffer.
+    generated, lines = _entry(tmp_path, SHADOWED[case])
+    assert DECLARATION not in lines
+    assert "input_offset" not in generated
+    assert "output[0] = input.Load(1);" in lines
+    _compile(generated, tmp_path)
