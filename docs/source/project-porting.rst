@@ -2102,6 +2102,44 @@ compiler's optional contraction of products with surrounding additions or
 subtractions. Qualify the policy against the source build and device before
 using it for a project. It does not establish whole-project numerical parity.
 
+Metal compiles default arithmetic with expression-level contraction, including
+under ``-fno-fast-math``: an addition or subtraction that directly consumes a
+floating product of the same type in the same expression is one fused
+operation. Targets that round the product first can differ in the last place.
+An opt-in policy reproduces those fused pairs:
+
+.. code-block:: toml
+
+   [project.source_options.metal.target_options.directx]
+   floating_contraction_profile = "rne-flush"
+
+The selection follows the source compiler: ``a * b + c``, ``c + a * b``,
+``a * b - c``, ``c - a * b`` and proven side-effect-free ``+=``/``-=`` of a
+product are fused; for ``a * b + c * d`` only the left product is fused.
+Negated products such as ``-(a * b) + c``, products stored in a separate
+statement, products widened, narrowed or splatted before the addition,
+integer products, products of two literals and source-defined operators remain
+separate operations. binary32 pairs use the portable single-rounding
+multiply-add; ``rne-flush`` treats subnormal operands as signed zero and
+flushes exact results below the smallest normal value, ``rne-gradual`` keeps
+them. binary16 pairs form the exact product in binary32 and round the sum once
+to binary16. bfloat pairs use the binary32 multiply-add of the selected mode,
+then round once to bfloat. Scalars and two- to four-lane vectors are supported;
+wider vectors, compound updates that need a destination conversion and
+unproven compound destinations produce
+``project.translate.metal-contraction-profile-unsupported``.
+
+Native regressions compare the unchanged Metal source, compiled with
+``-fno-fast-math``, against an exact oracle for every selected and unselected
+pattern, then require the same words from the translated OpenGL and DirectX
+programs. On the characterized Apple GPU, binary32 contraction flushed
+subnormals, binary16 contraction kept them and bfloat contraction flushed them
+in binary32. The profile reproduces only the fused pairs. Combine it with the
+binary32 additive and multiplication profiles when the remaining separate
+operations must also be protected from target compiler contraction. Reports,
+manifests and runtime packages retain ``floatingContractionProfile`` and
+validate it against resolved source, target and path-specific options.
+
 Metal source contraction controls are not yet preserved across translation.
 Active ``#pragma clang fp contract(...)``, ``#pragma STDC FP_CONTRACT`` and
 ``#pragma OPENCL FP_CONTRACT`` directives, including their ``_Pragma`` forms,

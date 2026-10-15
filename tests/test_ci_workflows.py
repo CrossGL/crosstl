@@ -3987,11 +3987,13 @@ def test_native_arithmetic_selection_retains_every_device_test():
     assert "--timeout-seconds 180" in power_step
     assert "--timeout-seconds 240" in step
     modules = re.findall(r"tests/test_translator/test_[a-z_]+\.py", step)
-    assert len(modules) == len(set(modules)) == 10
+    assert len(modules) == len(set(modules)) == 11
     assert 'CROSTL_REQUIRE_METAL_POWER: "1"' in step
     assert "tests/test_translator/test_metal_power.py" in modules
     assert 'CROSTL_REQUIRE_MULTIPLICATION_PROFILE: "1"' in step
     assert "tests/test_translator/test_metal_multiplication_profile.py" in modules
+    assert 'CROSTL_REQUIRE_CONTRACTION_PROFILE: "1"' in step
+    assert "tests/test_translator/test_metal_contraction_profile.py" in modules
     selected = set()
     required = set()
     for module in modules:
@@ -4017,7 +4019,11 @@ def test_native_arithmetic_selection_retains_every_device_test():
                 for node in ast.walk(function)
             ):
                 required.add(identity)
-    assert len(required) == 19
+    assert len(required) == 20
+    assert (
+        "tests/test_translator/test_metal_contraction_profile.py",
+        "test_contraction_profiles_execute",
+    ) in required
     assert (
         "tests/test_translator/test_metal_power.py",
         "test_power_executes_exact_identity",

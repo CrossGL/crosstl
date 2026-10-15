@@ -22716,6 +22716,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
             "binary32RemainderProfile",
             "binary32AdditiveProfile",
             "binary32MultiplicationProfile",
+            "floatingContractionProfile",
             "binary32Atan2Profile",
             "binary32LogProfile",
             "binary32Log2OperandProfile",

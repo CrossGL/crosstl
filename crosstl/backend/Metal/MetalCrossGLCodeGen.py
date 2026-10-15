@@ -199,6 +199,23 @@ class MetalMultiplicationProfileError(ValueError):
         )
 
 
+class MetalContractionProfileError(ValueError):
+    """Raised when a selected floating-point contraction cannot be represented."""
+
+    project_diagnostic_code = "project.translate.metal-contraction-profile-unsupported"
+    missing_capabilities = ("metal.contraction-profile-lowering",)
+
+    def __init__(self, profile, operand_type, reason, source_location=None):
+        self.profile = profile
+        self.operand_type = operand_type
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot apply Metal floating contraction profile '{profile}' to "
+            f"'{operand_type or '<unknown>'}': {reason}"
+        )
+
+
 class MetalComparisonProfileError(ValueError):
     """Raised when a selected comparison profile cannot be represented."""
 
@@ -1373,11 +1390,22 @@ class MetalToCrossGLConverter:
         binary32_rsqrt_profile=None,
         binary32_power_operand_profile=None,
         binary32_power_accuracy_profile=None,
+        floating_contraction_profile=None,
         preserve_resource_origins=False,
     ):
         if type(preserve_resource_origins) is not bool:
             raise ValueError("preserve_resource_origins must be a boolean")
         self.preserve_resource_origins = preserve_resource_origins
+        if floating_contraction_profile not in (None, "rne-gradual", "rne-flush"):
+            raise ValueError(
+                "floating_contraction_profile must be 'rne-gradual', 'rne-flush', "
+                "or None"
+            )
+        # Metal compiles with expression-level contraction even under
+        # -fno-fast-math: a product feeding an addition in the same expression
+        # becomes one fused operation. The profile selects how binary32
+        # subnormals are treated by the portable single-rounding lowering.
+        self.floating_contraction_profile = floating_contraction_profile
         if binary32_power_accuracy_profile not in (None, "portable-finite"):
             raise ValueError(
                 "binary32_power_accuracy_profile must be 'portable-finite' or None"
@@ -1910,6 +1938,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_rsqrt_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
+        self.required_metal_fmuladd_widths = set()
         self.required_metal_division_widths = set()
         self.required_metal_half_remainder_widths = set()
         self.required_metal_half_widening_widths = set()
@@ -3132,6 +3161,7 @@ class MetalToCrossGLConverter:
         self.required_metal_precise_rsqrt_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
         self.required_metal_fma_widths = set()
+        self.required_metal_fmuladd_widths = set()
         self.required_metal_division_widths = set()
         self.required_metal_half_remainder_widths = set()
         self.required_metal_half_widening_widths = set()
@@ -10897,6 +10927,9 @@ class MetalToCrossGLConverter:
         return f"{helper}({vector}, {index})"
 
     def generate_assignment(self, node, is_main):
+        contracted_assignment = self.generate_metal_contracted_assignment(node, is_main)
+        if contracted_assignment is not None:
+            return contracted_assignment
         if (
             node.operator in {"/=", "+=", "-=", "*="}
             and self.metal_arithmetic_profile(node.operator[:-1])[0] is not None
@@ -11356,6 +11389,10 @@ class MetalToCrossGLConverter:
                 profiled = self.generate_profiled_metal_comparison(expr, is_main)
                 if profiled is not None:
                     return profiled
+            if self.floating_contraction_profile is not None and expr.op in {"+", "-"}:
+                contracted = self.generate_metal_contracted_arithmetic(expr, is_main)
+                if contracted is not None:
+                    return contracted
             cooperative_matrix_operation = {
                 "*": "cooperative_matrix_multiply",
                 "+": "cooperative_matrix_add",
@@ -15577,6 +15614,7 @@ float {scalar}(float base, float exponent) {{
     def generate_metal_fma_support_code(self, indent=0):
         if not (
             self.required_metal_fma_widths
+            or self.required_metal_fmuladd_widths
             or self.required_metal_half_remainder_widths
             or (
                 self.required_metal_additive_operations
@@ -15610,8 +15648,222 @@ float {scalar}(float base, float exponent) {{
                 f"    return vec{width}({arguments});\n"
                 "}\n"
             )
+        if self.required_metal_fmuladd_widths:
+            contracted = self.metal_fmuladd_helper_name(1)
+            contraction_flush = (
+                "true" if self.floating_contraction_profile == "rne-flush" else "false"
+            )
+            code += (
+                f"@metal_static\nfloat {contracted}(float a, float b, float c) {{\n"
+                f"    return asfloat({names['bits']}(asuint(a), asuint(b), asuint(c), "
+                f"{contraction_flush}));\n"
+                "}\n"
+            )
+            for width in sorted(self.required_metal_fmuladd_widths - {1}):
+                vector = self.metal_fmuladd_helper_name(width)
+                arguments = ", ".join(
+                    f"{contracted}(a.{lane}, b.{lane}, c.{lane})"
+                    for lane in "xyzw"[:width]
+                )
+                code += (
+                    f"@metal_static\nvec{width} {vector}(vec{width} a, vec{width} b, vec{width} c) {{\n"
+                    f"    return vec{width}({arguments});\n"
+                    "}\n"
+                )
         pad = "    " * indent
         return "".join(pad + line + "\n" for line in code.strip().splitlines())
+
+    def metal_fmuladd_helper_name(self, width):
+        suffix = "" if width == 1 else str(width)
+        return self.metal_precise_math_unique_helper_name(
+            f"fmuladd-float{suffix}", f"__crossgl_metal_fmuladd_float{suffix}"
+        )
+
+    @staticmethod
+    def metal_contraction_constant_operand(operand):
+        """Return whether Metal folds the operand before forming a product."""
+        while isinstance(operand, UnaryOpNode) and operand.op in {"-", "+"}:
+            operand = operand.operand
+        return isinstance(operand, str)
+
+    def metal_contraction_family(self, metal_type):
+        """Return the floating family and width of a contractible value type."""
+        if metal_type is None:
+            return None
+        if self.metal_pointer_pointee_type_once(metal_type) is not None:
+            return None
+        info = self.metal_math_builtin_type_info(metal_type)
+        if info is None:
+            return None
+        if info["category"] == "bfloat":
+            family = "bfloat"
+        elif info["category"] == "floating":
+            element = self.normalized_metal_type(
+                self.resolve_type_alias(info["element_type"])
+            )
+            if element not in {"float", "half"}:
+                return None
+            family = element
+        else:
+            return None
+        return family, info["width"]
+
+    def metal_contraction_plan(self, expression):
+        """Mirror clang's expression-level fmuladd selection for one addition.
+
+        Metal's compiler forms a fused multiply-add when an addition or
+        subtraction directly consumes a floating product of the same type in
+        the same expression; the left product is preferred. Negated products,
+        widened or narrowed products, and products of two constants are not
+        fused.
+        """
+        if (
+            self.floating_contraction_profile is None
+            or not isinstance(expression, BinaryOpNode)
+            or expression.op not in {"+", "-"}
+            or self.current_function is None
+        ):
+            return None
+        result_type = self.metal_binary_expression_type(expression)
+        family = self.metal_contraction_family(result_type)
+        if family is None:
+            return None
+        for index, operand in enumerate((expression.left, expression.right)):
+            operand = self.metal_contraction_product(operand, family)
+            if operand is None:
+                continue
+            if all(
+                self.metal_contraction_constant_operand(value)
+                for value in (operand.left, operand.right)
+            ):
+                continue
+            location = getattr(operand, "source_location", None)
+            if (
+                self.resolve_metal_free_operator(
+                    "*", (operand.left, operand.right), location
+                )
+                is not None
+            ):
+                continue
+            product_type = self.metal_binary_expression_type(operand)
+            if self.metal_contraction_family(product_type) != family:
+                continue
+            if family[1] not in {1, 2, 3, 4}:
+                raise MetalContractionProfileError(
+                    self.floating_contraction_profile,
+                    result_type,
+                    "the contracted width must be between one and four lanes",
+                    getattr(expression, "source_location", None),
+                )
+            addend = expression.right if index == 0 else expression.left
+            return {
+                "result_type": result_type,
+                "family": family,
+                "product": operand,
+                "product_index": index,
+                "addend": addend,
+                "negate_product": expression.op == "-" and index == 1,
+                "negate_addend": expression.op == "-" and index == 0,
+            }
+        return None
+
+    def metal_contraction_product(self, operand, family):
+        """Return the product an operand evaluates without a conversion.
+
+        Casts to the product's own type emit no instruction, so the source
+        compiler still sees the product as the addition's operand.
+        """
+        while True:
+            if isinstance(operand, BinaryOpNode) and operand.op == "*":
+                return operand
+            if isinstance(operand, CastNode):
+                target, inner = operand.target_type, operand.expression
+            elif isinstance(operand, VectorConstructorNode) and len(operand.args) == 1:
+                target, inner = operand.vector_type, operand.args[0]
+            else:
+                return None
+            if self.metal_contraction_family(str(target)) != family:
+                return None
+            operand = inner
+
+    def render_metal_contraction_operand(self, operand, computation_type, is_main):
+        """Convert one operand to the computation type, then widen to binary32."""
+        value = self.generate_expression(operand, is_main)
+        family, width = self.metal_contraction_family(computation_type)
+        wide = "float" if width == 1 else f"vec{width}"
+        source = self.metal_contraction_family(self.expression_metal_type(operand))
+        if source != (family, width) and family != "float":
+            # Apply the source's usual arithmetic conversion before widening.
+            value = f"{self.map_type(computation_type)}({value})"
+        return f"{wide}({value})"
+
+    def generate_metal_contracted_arithmetic(self, expression, is_main=False):
+        plan = self.metal_contraction_plan(expression)
+        if plan is None:
+            return None
+        result_type = plan["result_type"]
+        family, width = plan["family"]
+        product = plan["product"]
+        # binary16 and bfloat16 values widen exactly to binary32.
+        operands = [
+            self.render_metal_contraction_operand(value, result_type, is_main)
+            for value in (product.left, product.right, plan["addend"])
+        ]
+        if plan["negate_product"]:
+            operands[0] = f"-{operands[0]}"
+        if plan["negate_addend"]:
+            operands[2] = f"-{operands[2]}"
+        if family == "half":
+            # binary16 operands give an exact binary32 product, and the single
+            # binary32 sum rounds to binary16 without double-rounding error.
+            return (
+                f"{self.map_type(result_type)}"
+                f"({operands[0]} * {operands[1]} + {operands[2]})"
+            )
+        self.required_metal_fmuladd_widths.add(width)
+        call = f"{self.metal_fmuladd_helper_name(width)}({', '.join(operands)})"
+        if family == "bfloat":
+            # Metal fuses bfloat arithmetic in binary32, then rounds once.
+            call = f"{self.map_type(result_type)}({call})"
+        return call
+
+    def generate_metal_contracted_assignment(self, node, is_main):
+        if (
+            self.floating_contraction_profile is None
+            or node.operator not in {"+=", "-="}
+            or self.current_function is None
+        ):
+            return None
+        operator = node.operator[:-1]
+        expression = BinaryOpNode(node.left, operator, node.right)
+        if hasattr(node, "source_location"):
+            expression.source_location = node.source_location
+        plan = self.metal_contraction_plan(expression)
+        if plan is None or plan["product_index"] != 1:
+            return None
+        location = getattr(node, "source_location", None)
+        if self.metal_contraction_family(
+            self.expression_metal_type(node.left)
+        ) != self.metal_contraction_family(plan["result_type"]):
+            raise MetalContractionProfileError(
+                self.floating_contraction_profile,
+                plan["result_type"],
+                "the compound destination requires a conversion; explicitly "
+                "convert and assign the contracted result",
+                location,
+            )
+        if not self.discarded_expression_is_proven_side_effect_free(node.left):
+            raise MetalContractionProfileError(
+                self.floating_contraction_profile,
+                plan["result_type"],
+                "the compound destination is not proven side-effect-free; "
+                "explicitly sequence it before the contracted update",
+                location,
+            )
+        assignment = AssignmentNode(node.left, expression, "=")
+        if hasattr(node, "source_location"):
+            assignment.source_location = node.source_location
+        return self.generate_assignment(assignment, is_main)
 
     def metal_multiplication_helper_name(self, width):
         suffix = "" if width == 1 else str(width)

@@ -1866,6 +1866,7 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(
         "binary32RemainderProfile",
         "binary32AdditiveProfile",
         "binary32MultiplicationProfile",
+        "floatingContractionProfile",
         "binary32Atan2Profile",
         "binary32LogProfile",
         "binary32Log2OperandProfile",
@@ -28887,6 +28888,20 @@ def _translate_project_impl(
                         artifact["provenance"][
                             "binary32MultiplicationProfile"
                         ] = multiplication_profile
+                    contraction_profile = source_options.get(
+                        "floating_contraction_profile"
+                    )
+                    if (
+                        unit.source_backend == "metal"
+                        and contraction_profile is not None
+                    ):
+                        if contraction_profile not in ("rne-gradual", "rne-flush"):
+                            raise ValueError(
+                                "floating_contraction_profile must be 'rne-gradual', 'rne-flush', or None"
+                            )
+                        artifact["provenance"][
+                            "floatingContractionProfile"
+                        ] = contraction_profile
                     additive_profile = source_options.get("binary32_additive_profile")
                     if unit.source_backend == "metal" and additive_profile is not None:
                         if additive_profile not in (
@@ -47267,6 +47282,18 @@ def _provenance_contract_reasons(
             reasons.append(
                 f"{prefix}.binary32AdditiveProfile must be rne-gradual, rne-flush or native-precise"
             )
+    if "floatingContractionProfile" in provenance:
+        if artifact.get("sourceBackend") != "metal":
+            reasons.append(
+                f"{prefix}.floatingContractionProfile requires a Metal source"
+            )
+        if provenance["floatingContractionProfile"] not in (
+            "rne-gradual",
+            "rne-flush",
+        ):
+            reasons.append(
+                f"{prefix}.floatingContractionProfile must be rne-gradual or rne-flush"
+            )
     if "binary32MultiplicationProfile" in provenance:
         if artifact.get("sourceBackend") != "metal":
             reasons.append(
@@ -47476,6 +47503,15 @@ def _provenance_contract_reasons(
         ):
             reasons.append(
                 f"{prefix}.binary32MultiplicationProfile must match the resolved project source options"
+            )
+        expected_contraction_profile = (
+            options.get("floating_contraction_profile")
+            if artifact["sourceBackend"] == "metal"
+            else None
+        )
+        if provenance.get("floatingContractionProfile") != expected_contraction_profile:
+            reasons.append(
+                f"{prefix}.floatingContractionProfile must match the resolved project source options"
             )
         expected_comparison_profile = (
             options.get("binary32_comparison_profile")
