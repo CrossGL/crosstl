@@ -553,3 +553,159 @@ def test_masked_extremum_executes(tmp_path, directx_runtime, name):
     words = _masked_extremum_words(name)
     expected = _masked_extremum_expected(name, value_type, words)
     assert _execute_words(tmp_path, generated, words, expected) == expected
+
+
+# MLX's one-pass attention walks keys with ``for (i = simd_gid; i < N; i +=
+# BN)``, so subgroups can disagree on the trip count. Every invocation runs the
+# workgroup's rounds instead and predicates its key on ``i < N``; the guarded
+# score reduction is masked within the round. Workgroups 0, 1 and 2 walk 2, 5
+# and 8 keys with four subgroups, so the second runs a round in which only one
+# subgroup is active, and keys 1 and 5 are masked.
+STRIDED_KEEP = (1, 0, 1, 1, 1, 0, 1, 1)
+STRIDED_LOOP = """
+        float value = asfloat(inputWords[index]);
+        float total = -1.0;
+        float last = -2.0;
+        uint rounds = 0u;
+        const int count = int(group.x) * 3 + 2;
+        for (int i = int(sid); i < count; i += 4) {
+            bool use = true;
+            if (inputWords[384u + uint(i)] == 0u) {
+                use = false;
+            }
+            if (use) {
+                float score = -0.0;
+                score += value * float(i + 1);
+                score = WaveActiveSum(score);
+                last = score;
+                total += score;
+            }
+            rounds += 1u;
+        }
+        outputWords[index * 3u] = asuint(total);
+        outputWords[index * 3u + 1u] = asuint(last);
+        outputWords[index * 3u + 2u] = rounds;
+"""
+
+
+def _strided_source(body=STRIDED_LOOP):
+    return f"""shader StridedRounds {{
+        StructuredBuffer<uint> inputWords @register(t0);
+        RWStructuredBuffer<uint> outputWords @register(u1);
+        compute {{
+            @numthreads(32, 4, 1)
+            void main(uint invocation @gl_LocalInvocationIndex,
+                      uvec3 group @gl_WorkGroupID,
+                      uint sid @gl_SubgroupID) {{
+                uint index = group.x * 128u + invocation;
+                {body}
+            }}
+        }}
+    }}"""
+
+
+def _float_word(value):
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _strided_words():
+    # The first subgroup of the first workgroup holds -0.0 only; its scores
+    # stay -0.0 only if the hoisted -0.0 initializer and the sum keep the sign.
+    values = [-0.0 if index < 32 else float(index * 5 % 7 - 3) for index in range(384)]
+    return [_float_word(value) for value in values] + list(STRIDED_KEEP)
+
+
+def _strided_expected(words):
+    values = [struct.unpack("<f", struct.pack("<I", word))[0] for word in words[:384]]
+    expected = []
+    for index in range(384):
+        group, local = divmod(index, 128)
+        base = index - local % 32
+        total, last, rounds = -1.0, -2.0, 0
+        for key in range(local // 32, group * 3 + 2, 4):
+            if words[384 + key]:
+                # Small integer products sum exactly in any order.
+                score = -0.0
+                for lane in range(32):
+                    score += -0.0 + values[base + lane] * (key + 1)
+                last = score
+                total += score
+            rounds += 1
+        expected += [_float_word(total), _float_word(last), rounds]
+    return expected
+
+
+def test_strided_cases_cover_divergent_rounds():
+    expected = _strided_expected(_strided_words())
+    rounds = expected[2::3]
+    # Workgroup 1's first subgroup runs two rounds and the others one;
+    # workgroup 0's last two subgroups run none.
+    assert rounds[128] == 2 and rounds[160] == 1 and rounds[64] == 0
+    assert expected[1] == 0x80000000 and expected[0] == _float_word(-1.0)
+    lasts = expected[1::3]
+    assert _float_word(-2.0) in lasts and len(set(lasts)) > 6
+
+
+def test_strided_rounds_reach_every_barrier(tmp_path):
+    generated = _codegen().generate_stage(parse(_strided_source()), "compute")
+    assert "WaveActiveSum" not in generated
+    lines = [line.strip() for line in generated.splitlines()]
+    loop = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("for (int crossglSoftwareSubgroupBase = 0;")
+    )
+    assert lines[loop].endswith("crossglSoftwareSubgroupBase += 4) {")
+    assert lines[loop + 1].startswith("int i = (crossglSoftwareSubgroupBase + ")
+    assert lines[loop + 2] == "bool use = true;"
+    assert lines[loop + 3].startswith("bool crossglSoftwareSubgroupLoopActive = ")
+    assert lines[loop + 4] == "if (crossglSoftwareSubgroupLoopActive) {"
+    # The score's declaration leaves the guard so the suffix can assign it.
+    declaration = lines.index("float score = -0.0;")
+    assert lines[declaration + 1] == (
+        "bool crossglSoftwareSubgroupActive = "
+        "(crossglSoftwareSubgroupLoopActive && (use));"
+    )
+    call = "__crossgl_software_subgroup_sum_float(crossglSoftwareSubgroupInput"
+    assert generated.count(call) == 1
+    assert "rounds += 1u;" in generated
+    _compile(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "replacements",
+    [
+        # The stride must be the subgroup count, and the counter must start
+        # at the subgroup index.
+        (("i += 4", "i += 3"),),
+        (("int i = int(sid)", "int i = int(invocation)"),),
+        # A declaration before the guard runs in every invocation, so it must
+        # be uniform and must not read memory.
+        (("bool use = true;", "bool use = inputWords[384u + uint(i)] != 0u;"),),
+        # The hoisted target may not be declared or named outside the guard,
+        # where it would replace an outer variable of the same name.
+        (("rounds += 1u;", "rounds += 1u; float score = 1.0;"),),
+        (
+            ("float total = -1.0;", "float total = -1.0; float score = 5.0;"),
+            ("rounds += 1u;", "rounds += uint(score);"),
+        ),
+        # Exits, counter writes and further collectives keep the loop rejected.
+        (("rounds += 1u;", "rounds += 1u; if (rounds > 7u) { break; }"),),
+        (("rounds += 1u;", "rounds += WaveActiveSum(1u);"),),
+        (("total += score;", "total += score; i += 1;"),),
+    ],
+)
+def test_strided_rounds_reject_unplanned_shapes(replacements):
+    body = STRIDED_LOOP
+    for original, replacement in replacements:
+        assert original in body
+        body = body.replace(original, replacement)
+    with pytest.raises(DirectXSoftwareSubgroupError):
+        _codegen().generate_stage(parse(_strided_source(body)), "compute")
+
+
+def test_strided_rounds_execute(tmp_path, directx_runtime):
+    generated = _codegen().generate_stage(parse(_strided_source()), "compute")
+    words = _strided_words()
+    expected = _strided_expected(words)
+    assert _execute_words(tmp_path, generated, words, expected) == expected

@@ -5626,6 +5626,7 @@ class HLSLCodeGen:
         constant_names=frozenset(),
         *,
         allow_multiple=False,
+        allow_hoisted_target=False,
     ):
         """Plan ``if (c) { prefix; x = simd_sum(v); suffix }`` as a masked sum.
 
@@ -5639,6 +5640,11 @@ class HLSLCodeGen:
         ``if (c) { a = simd_sum(u); b = simd_sum(v); }``. The reductions then
         run in source order in every invocation, and each statement between
         them still runs only where ``c`` held, after the previous assignment.
+
+        With ``allow_hoisted_target``, the prefix of a single reduction may
+        declare its target once with a speculatively safe initializer, as in
+        MLX's ``U score = 0; ...; score = simd_sum(score);``. The declaration
+        then precedes the guard, so the target stays in scope for the suffix.
         """
 
         if (
@@ -5708,11 +5714,31 @@ class HLSLCodeGen:
                 return None
         if not indices:
             return None
+        hoisted_index = None
+        if allow_hoisted_target and len(indices) == 1:
+            assignment = statements[indices[0]]
+            if isinstance(assignment, ExpressionStatementNode):
+                assignment = assignment.expression
+            target_name = self.expression_name(
+                getattr(assignment, "target", getattr(assignment, "left", None))
+            )
+            declarations = [
+                index
+                for index, prefix in enumerate(statements[: indices[0]])
+                if isinstance(prefix, VariableNode) and prefix.name == target_name
+            ]
+            if len(declarations) == 1:
+                declaration = statements[declarations[0]]
+                if self.hlsl_software_subgroup_speculatively_safe_expression(
+                    getattr(declaration, "initial_value", None)
+                ):
+                    hoisted_index = declarations[0]
         # Each later block starts a new scope, so declarations before the last
         # reduction would fall out of scope.
         if any(
             isinstance(prefix, (VariableNode, ArrayNode))
-            for prefix in statements[: indices[-1]]
+            for index, prefix in enumerate(statements[: indices[-1]])
+            if index != hoisted_index
         ):
             return None
         plan = {
@@ -5723,6 +5749,8 @@ class HLSLCodeGen:
                 condition, subgroup_names, constant_names
             ),
         }
+        if hoisted_index is not None:
+            plan["hoistedTargetDeclarationIndex"] = hoisted_index
         if len(indices) > 1:
             plan.update(
                 statementIndices=tuple(indices),
@@ -5756,11 +5784,322 @@ class HLSLCodeGen:
             if plan is not None:
                 self.hlsl_software_subgroup_masked_if_plans[id(statement)] = plan
 
-    def generate_hlsl_software_subgroup_masked_if(self, node, indent):
+    def hlsl_software_subgroup_speculatively_safe_expression(self, expression):
+        """Whether ``expression`` may also run where its guard is false.
+
+        A hoisted initializer runs in every invocation, so it must not write,
+        read memory, dereference, divide or shift.
+        """
+        if expression is None or self.hlsl_expression_has_observable_side_effects(
+            expression, allow_numeric_constructors=True
+        ):
+            return False
+        for child in self.walk_ast(expression):
+            if isinstance(child, (ArrayAccessNode, MemberAccessNode)):
+                return False
+            if isinstance(child, UnaryOpNode) and self.map_operator(
+                getattr(child, "op", getattr(child, "operator", None))
+            ) in {"*", "&"}:
+                return False
+            if isinstance(child, BinaryOpNode) and self.map_operator(
+                getattr(child, "op", getattr(child, "operator", None))
+            ) in {"/", "%", "<<", ">>"}:
+                return False
+            if isinstance(child, (IdentifierNode, VariableNode)) and (
+                getattr(child, "name", None)
+                in self.hlsl_software_subgroup_resource_names
+            ):
+                return False
+        return True
+
+    def hlsl_software_subgroup_subgroup_id_expression(self, expression):
+        """Whether ``expression`` is the entry's never-written subgroup index.
+
+        Integer conversions of the index qualify.
+        """
+        current = expression
+        while True:
+            if isinstance(current, CastNode):
+                current = current.expression
+                continue
+            if isinstance(current, FunctionCallNode):
+                arguments = list(
+                    getattr(current, "arguments", getattr(current, "args", [])) or []
+                )
+                if len(arguments) != 1 or self.function_call_name(current) not in {
+                    "int",
+                    "uint",
+                    "int32_t",
+                    "uint32_t",
+                }:
+                    return False
+                current = arguments[0]
+                continue
+            break
+        return isinstance(current, (IdentifierNode, VariableNode)) and (
+            getattr(current, "name", None)
+            in getattr(self, "hlsl_software_subgroup_guard_names", frozenset())
+        )
+
+    def hlsl_software_subgroup_strided_for_plan(
+        self, node, uniform_names, uniform_components, constants
+    ):
+        """Plan ``for (i = simd_gid; i < n; i += simd_groups)`` in the entry.
+
+        Each subgroup takes every ``simd_groups``-th iteration, so subgroups can
+        disagree on the trip count. Every invocation instead runs the rounds of
+        the whole workgroup from zero while ``base < n`` and predicates its
+        iteration ``i = base + simd_gid`` on the source condition. The body must
+        hold one collective, a reduction under a guard that a masked-if plan
+        predicates; declarations before that guard must be uniform and
+        speculatively safe, as they then run in every invocation.
+        """
+        invocation_count = self.hlsl_software_subgroup_invocation_count
+        if self.software_subgroup_width is None or not invocation_count:
+            return None
+        initializer = getattr(node, "init", None)
+        if not isinstance(initializer, VariableNode) or not initializer.name:
+            return None
+        loop_name = initializer.name
+        loop_type = self.map_type(getattr(initializer, "var_type", None))
+        if loop_type not in {
+            "int",
+            "uint",
+        } or not self.hlsl_software_subgroup_subgroup_id_expression(
+            getattr(initializer, "initial_value", None)
+        ):
+            return None
+        names = set(uniform_names) - {loop_name}
+        components = {
+            name: value
+            for name, value in uniform_components.items()
+            if name != loop_name
+        }
+        condition = getattr(node, "condition", None)
+        if (
+            not isinstance(condition, BinaryOpNode)
+            or self.map_operator(
+                getattr(condition, "op", getattr(condition, "operator", None))
+            )
+            != "<"
+            or self.expression_name(condition.left) != loop_name
+            or loop_name in self.hlsl_software_subgroup_expression_identifier_names(
+                condition.right
+            )
+            or not self.hlsl_software_subgroup_uniform_expression(
+                condition.right, names, components
+            )
+        ):
+            return None
+        update = getattr(node, "update", None)
+        if (
+            not isinstance(update, AssignmentNode)
+            or self.map_operator(
+                getattr(update, "op", getattr(update, "operator", None))
+            )
+            != "+="
+            or self.hlsl_software_subgroup_assignment_target_name(update) != loop_name
+        ):
+            return None
+        step = evaluate_literal_int_expression(
+            getattr(update, "value", getattr(update, "right", None)),
+            {
+                name: value
+                for name, value in constants.items()
+                if name in names and name != loop_name
+            },
+        )
+        subgroup_count = -(-invocation_count // self.software_subgroup_width)
+        if step != subgroup_count:
+            return None
+        body = getattr(node, "body", None)
+        records = self.hlsl_software_subgroup_operation_records(body)
+        if len(records) != 1 or (
+            records[0][0] not in self.HLSL_SOFTWARE_SUBGROUP_MASKED_IDENTITIES
+        ):
+            return None
+        if any(
+            isinstance(child, (BreakNode, ContinueNode, ReturnNode))
+            for child in self.walk_ast(body)
+        ):
+            return None
+        statements = self.hlsl_software_subgroup_statement_list(body)
+        operation_if_indices = [
+            index
+            for index, statement in enumerate(statements)
+            if isinstance(statement, IfNode)
+            and self.hlsl_software_subgroup_operation_records(statement)
+        ]
+        if len(operation_if_indices) != 1:
+            return None
+        operation_if_index = operation_if_indices[0]
+        masked_if_plan = self.hlsl_software_subgroup_masked_if_plan(
+            statements[operation_if_index],
+            getattr(self, "hlsl_software_subgroup_guard_names", frozenset()),
+            getattr(self, "hlsl_software_subgroup_guard_constant_names", frozenset()),
+            allow_hoisted_target=True,
+        )
+        if masked_if_plan is None:
+            return None
+        hoisted_target = masked_if_plan.get("hoistedTargetDeclarationIndex")
+        if hoisted_target is not None:
+            operation_body = self.hlsl_software_subgroup_statement_list(
+                getattr(
+                    statements[operation_if_index],
+                    "then_branch",
+                    getattr(statements[operation_if_index], "if_body", None),
+                )
+            )
+            hoisted_name = operation_body[hoisted_target].name
+            # The declaration moves out of the guard's scope: no other
+            # statement of the loop body may declare or name the target.
+            for index, statement in enumerate(statements):
+                if index == operation_if_index:
+                    continue
+                if (
+                    hoisted_name
+                    in self.hlsl_software_subgroup_expression_identifier_names(
+                        statement
+                    )
+                    or any(
+                        isinstance(child, (VariableNode, ArrayNode))
+                        and getattr(child, "name", None) == hoisted_name
+                        for child in self.walk_ast(statement)
+                    )
+                ):
+                    return None
+        control_names = {loop_name} | (
+            self.hlsl_software_subgroup_expression_identifier_names(condition.right)
+        )
+        for child in self.walk_ast(body):
+            if isinstance(child, AssignmentNode) and (
+                self.hlsl_software_subgroup_assignment_target_name(child)
+                in control_names
+            ):
+                return None
+            if isinstance(child, UnaryOpNode) and self.map_operator(
+                getattr(child, "op", getattr(child, "operator", None))
+            ) in {"++", "--", "&"}:
+                if (
+                    self.hlsl_software_subgroup_expression_identifier_names(
+                        getattr(child, "operand", None)
+                    )
+                    & control_names
+                ):
+                    return None
+            if (
+                isinstance(child, VariableNode)
+                and getattr(child, "name", None) in control_names
+            ):
+                return None
+            if (
+                isinstance(child, FunctionCallNode)
+                and self.function_call_name(child) in self.function_return_types
+                and self.hlsl_software_subgroup_expression_identifier_names(child)
+                & control_names
+            ):
+                # A helper could receive the counter or bound by reference.
+                return None
+        hoisted = []
+        for index, statement in enumerate(statements[:operation_if_index]):
+            if isinstance(statement, ArrayNode):
+                return None
+            if not isinstance(statement, VariableNode):
+                continue
+            initial = getattr(statement, "initial_value", None)
+            if not (
+                self.hlsl_software_subgroup_uniform_expression(
+                    initial, names, components
+                )
+                and self.hlsl_software_subgroup_speculatively_safe_expression(initial)
+            ):
+                return None
+            hoisted.append(index)
+        return {
+            "operationIfIndex": operation_if_index,
+            "maskedIfPlan": masked_if_plan,
+            "hoistedPrefixDeclarationIndices": tuple(hoisted),
+            "loopType": loop_type,
+            "step": step,
+        }
+
+    def generate_hlsl_software_subgroup_strided_for(self, node, indent, plan):
+        """Emit a subgroup-strided loop as uniform rounds of the workgroup."""
+        initializer = node.init
+        declaration = self.generate_for_initializer(initializer)
+        target, separator, initial_value = declaration.partition(" = ")
+        if not separator:
+            raise self.hlsl_software_subgroup_error(
+                "DirectX subgroup-strided loops require an initialized counter",
+                workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                reason="potentially-divergent-control-flow",
+                source_location=getattr(node, "source_location", None),
+            )
+        loop_type = plan["loopType"]
+        used_names = set(self.local_variable_types)
+        used_names.update(self.global_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
+        base_name = self.hlsl_unique_local_identifier(
+            "crossglSoftwareSubgroupBase", used_names
+        )
+        used_names.add(base_name)
+        active_name = self.hlsl_unique_local_identifier(
+            "crossglSoftwareSubgroupLoopActive", used_names
+        )
+        self.local_variable_types[base_name] = loop_type
+        self.local_variable_types[active_name] = "bool"
+        bound = self.generate_expression_with_expected(
+            node.condition.right, getattr(initializer, "var_type", None)
+        )
+        suffix_u = "u" if loop_type == "uint" else ""
+        indent_str = "    " * indent
+        body_indent = "    " * (indent + 1)
+        code = (
+            f"{indent_str}for ({loop_type} {base_name} = 0{suffix_u}; "
+            f"{base_name} < {bound}; {base_name} += {plan['step']}{suffix_u}) {{\n"
+            f"{body_indent}{target} = ({base_name} + {initial_value});\n"
+        )
+        statements = self.hlsl_software_subgroup_statement_list(node.body)
+        operation_if_index = plan["operationIfIndex"]
+        prefix = list(statements[:operation_if_index])
+        suffix = list(statements[operation_if_index + 1 :])
+        hoisted = set(plan["hoistedPrefixDeclarationIndices"])
+        for index in sorted(hoisted):
+            code += self.generate_statement(prefix[index], indent + 1)
+        guarded_prefix = [
+            statement for index, statement in enumerate(prefix) if index not in hoisted
+        ]
+        condition = self.hlsl_condition_expression(node.condition)
+        code += f"{body_indent}bool {active_name} = {condition};\n"
+        if guarded_prefix:
+            code += f"{body_indent}if ({active_name}) {{\n"
+            code += self.generate_scoped_statement_body(guarded_prefix, indent + 2)
+            code += f"{body_indent}}}\n"
+        code += self.generate_hlsl_software_subgroup_masked_if(
+            statements[operation_if_index],
+            indent + 1,
+            additional_condition=active_name,
+        )
+        if suffix:
+            code += f"{body_indent}if ({active_name}) {{\n"
+            code += self.generate_scoped_statement_body(suffix, indent + 2)
+            code += f"{body_indent}}}\n"
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_hlsl_software_subgroup_masked_if(
+        self, node, indent, *, additional_condition=None
+    ):
         plan = self.hlsl_software_subgroup_masked_if_plans[id(node)]
         statements = self.hlsl_software_subgroup_statement_list(
             getattr(node, "then_branch", getattr(node, "if_body", None))
         )
+        code = ""
+        hoisted_index = plan.get("hoistedTargetDeclarationIndex")
+        if hoisted_index is not None:
+            # Declared before the guard, the target stays in scope for the
+            # assignment after the reduction.
+            code += self.generate_statement(statements[hoisted_index], indent)
         reductions = []
         for index in plan.get("statementIndices", (plan["statementIndex"],)):
             assignment = statements[index]
@@ -5848,7 +6187,9 @@ class HLSLCodeGen:
         condition = self.hlsl_condition_expression(
             getattr(node, "condition", getattr(node, "if_condition", None))
         )
-        code = f"{indent_str}bool {active_name} = {condition};\n"
+        if additional_condition is not None:
+            condition = f"({additional_condition} && ({condition}))"
+        code += f"{indent_str}bool {active_name} = {condition};\n"
         previous = None
         for reduction in reductions:
             mapped_value_type = reduction["mapped_value_type"]
@@ -5859,7 +6200,14 @@ class HLSLCodeGen:
             code += f"{indent_str}if ({active_name}) {{\n"
             if previous is None:
                 code += self.generate_scoped_statement_body(
-                    statements[: reduction["index"]], indent + 1
+                    [
+                        statement
+                        for index, statement in enumerate(
+                            statements[: reduction["index"]]
+                        )
+                        if index != hoisted_index
+                    ],
+                    indent + 1,
                 )
             else:
                 # The previous assignment and the statements up to this
@@ -6104,6 +6452,7 @@ class HLSLCodeGen:
                         validate_statements(branch, set(names), dict(components))
                     continue
                 if isinstance(statement, ForNode):
+                    strided_plan = None
                     if not self.hlsl_software_subgroup_uniform_for(
                         statement,
                         names,
@@ -6112,21 +6461,44 @@ class HLSLCodeGen:
                         loop_constants.get(id(statement), {}),
                         metadata_bounds,
                     ):
-                        raise self.hlsl_software_subgroup_error(
-                            "DirectX software subgroup barriers require a "
-                            "statically uniform for loop",
-                            workgroup_size=self.hlsl_software_subgroup_workgroup_size,
-                            operation=operation,
-                            reason="potentially-divergent-control-flow",
-                            source_location=getattr(
-                                statement, "source_location", source_location
-                            ),
+                        strided_plan = (
+                            self.hlsl_software_subgroup_strided_for_plan(
+                                statement,
+                                names,
+                                components,
+                                loop_constants.get(id(statement), {}),
+                            )
+                            if entry
+                            else None
                         )
+                        if strided_plan is None:
+                            raise self.hlsl_software_subgroup_error(
+                                "DirectX software subgroup barriers require a "
+                                "statically uniform for loop",
+                                workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                                operation=operation,
+                                reason="potentially-divergent-control-flow",
+                                source_location=getattr(
+                                    statement, "source_location", source_location
+                                ),
+                            )
+                        # Every invocation runs the workgroup's rounds; the
+                        # reduction's guard is predicated with the counter test.
+                        self.hlsl_software_subgroup_strided_for_plans[id(statement)] = (
+                            strided_plan
+                        )
+                        operation_if = self.hlsl_software_subgroup_statement_list(
+                            statement.body
+                        )[strided_plan["operationIfIndex"]]
+                        masked_if_plans[id(operation_if)] = strided_plan["maskedIfPlan"]
                     initializer = getattr(statement, "init", None)
                     nested_names = set(names)
                     nested_components = dict(components)
                     if isinstance(initializer, VariableNode) and initializer.name:
-                        nested_names.add(initializer.name)
+                        if strided_plan is None:
+                            nested_names.add(initializer.name)
+                        else:
+                            nested_names.discard(initializer.name)
                         nested_components.pop(initializer.name, None)
                     validate_statements(
                         getattr(statement, "body", None),
@@ -6219,6 +6591,7 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_resource_names = set()
         self.hlsl_software_subgroup_uniform_returns = UniformReturnAnalysis({}, set())
         self.hlsl_software_subgroup_masked_if_plans = {}
+        self.hlsl_software_subgroup_strided_for_plans = {}
         self.hlsl_software_subgroup_result_overrides = {}
         self.hlsl_software_subgroup_guard_names = set()
         self.hlsl_software_subgroup_guard_constant_names = set()
@@ -22896,6 +23269,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.current_hlsl_bounded_loop_indices[loop_name] = (
                     loop_start,
                     loop_stop,
+                )
+            strided_plan = getattr(
+                self, "hlsl_software_subgroup_strided_for_plans", {}
+            ).get(id(node))
+            if strided_plan is not None:
+                return self.generate_hlsl_software_subgroup_strided_for(
+                    node, indent, strided_plan
                 )
             init = ""
             condition = ""

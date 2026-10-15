@@ -1146,3 +1146,173 @@ def test_masked_lanes_execute_with_exact_identities(tmp_path, shape):
     observations = evidence["records"]["generated"]["details"]["inputObservations"]
     assert len(observations) == 1
     assert all(item["unchanged"] for item in observations.values())
+
+
+# MLX's one-pass attention walks keys with ``for (i = simd_gid; i < N; i +=
+# BN)``, BN being the number of SIMD groups, and reduces each key's score under
+# a mask. Subgroups then disagree on the trip count; the lowering runs the
+# workgroup's rounds in every invocation and predicates each key. With
+# 2 * groups + 1 keys the first subgroup takes three rounds and the others two,
+# and the masked keys differ between workgroups.
+STRIDED_FIELDS = 3
+STRIDED_GROUPS = 3
+
+
+def _strided_subgroups(size):
+    return -(-size // 32)
+
+
+def _strided_keys(size):
+    return 2 * _strided_subgroups(size) + 1
+
+
+def _strided_source(size):
+    groups = _strided_subgroups(size)
+    total = size * STRIDED_GROUPS
+    return f"""#include <metal_stdlib>
+using namespace metal;
+kernel void strided_rounds(const device uint* inputs [[buffer(0)]],
+                           device uint* outputs [[buffer(1)]],
+                           const constant int& count [[buffer(2)]],
+                           uint invocation [[thread_index_in_threadgroup]],
+                           uint3 group [[threadgroup_position_in_grid]],
+                           uint sid [[simdgroup_index_in_threadgroup]]) {{
+    uint index = group.x * {size}u + invocation;
+    float value = as_type<float>(inputs[index]);
+    float total = -1.0;
+    float last = -2.0;
+    uint rounds = 0u;
+    uint row = {total}u + group.x * uint(count);
+    for (int i = sid; i < count; i += {groups}) {{
+        bool use = true;
+        if (inputs[row + uint(i)] == 0u) {{
+            use = false;
+        }}
+        if (use) {{
+            float score = -0.0;
+            score += value * float(i + 1);
+            score = simd_sum(score);
+            last = score;
+            total += score;
+        }}
+        rounds += 1u;
+    }}
+    outputs[index * {STRIDED_FIELDS}u] = as_type<uint>(total);
+    outputs[index * {STRIDED_FIELDS}u + 1u] = as_type<uint>(last);
+    outputs[index * {STRIDED_FIELDS}u + 2u] = rounds;
+}}
+"""
+
+
+def _strided_reference(size):
+    groups = _strided_subgroups(size)
+    keys = _strided_keys(size)
+    # The first subgroup of the first workgroup holds -0.0 only, so its scores
+    # stay -0.0 only if the predicated sum keeps the sign. Small integer
+    # products sum exactly in any order.
+    values = [
+        -0.0 if index < 32 else float(index * 5 % 7 - 3)
+        for index in range(size * STRIDED_GROUPS)
+    ]
+    keep = [
+        int((group + key) % 3 != 1)
+        for group in range(STRIDED_GROUPS)
+        for key in range(keys)
+    ]
+    words = [_float_word(value) for value in values] + keep
+    wanted = []
+    for group in range(STRIDED_GROUPS):
+        for invocation in range(size):
+            sid = invocation // 32
+            first = group * size + sid * 32
+            lanes = range(first, group * size + min(size, sid * 32 + 32))
+            total, last, rounds = -1.0, -2.0, 0
+            for key in range(sid, keys, groups):
+                if keep[group * keys + key]:
+                    score = -0.0
+                    for lane in lanes:
+                        score += -0.0 + values[lane] * (key + 1)
+                    last = score
+                    total += score
+                rounds += 1
+            wanted += [_float_word(total), _float_word(last), rounds]
+    return words, wanted
+
+
+def test_strided_reference_covers_divergent_rounds():
+    for size in (64, 80, 1024):
+        _, wanted = _strided_reference(size)
+        rounds = wanted[2::STRIDED_FIELDS]
+        groups = _strided_subgroups(size)
+        # The first subgroup takes one more round than the others.
+        assert [rounds[sid * 32] for sid in range(groups)] == [3] + [2] * (groups - 1)
+        assert wanted[1] == 0x80000000
+        lasts = wanted[1::STRIDED_FIELDS]
+        assert len(set(lasts)) > 3
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("shape", [(64, 1, 1), (80, 1, 1), (1024, 1, 1)])
+def test_strided_package_predicates_rounds(tmp_path, target, shape):
+    size = math.prod(shape)
+    _, descriptor, package = _package(
+        tmp_path, target, "float", shape, source=_strided_source(size)
+    )
+    generated = (package / descriptor["artifact"]["packagePath"]).read_text()
+    for name in ("simd_sum(", "WaveActive", "subgroupAdd"):
+        assert name not in generated
+    groups = _strided_subgroups(size)
+    assert f"crossglSoftwareSubgroupBase += {groups})" in generated
+    assert generated.count("bool crossglSoftwareSubgroupLoopActive") == 1
+    assert generated.count("bool crossglSoftwareSubgroupActive") == 1
+    compiled = tmp_path / "compiled"
+    compiled.mkdir()
+    _compile(generated, target, compiled)
+
+
+@pytest.mark.parametrize("shape", [(64, 1, 1), (80, 1, 1), (1024, 1, 1)])
+def test_strided_rounds_execute(tmp_path, shape):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required partial subgroup readbacks")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    size = math.prod(shape)
+    words, wanted = _strided_reference(size)
+    wanted.extend([0xDEADBEEF] * 32)
+    source, descriptor, package = _package(
+        tmp_path, target, "float", shape, source=_strided_source(size)
+    )
+
+    def payload(data):
+        return dict(dtype="uint32", shape=[len(data)], values=data)
+
+    inputs = _bound_values(
+        descriptor,
+        {"inputs": payload(words), "outputs": payload([0xDEADBEEF] * len(wanted))},
+    )
+    # DirectX prefixes constant members with the entry name.
+    (count,) = (
+        binding["name"]
+        for binding in descriptor["bindings"]
+        if binding["scalarLayout"].get("memberName", binding["name"]).endswith("count")
+    )
+    inputs[count] = dict(dtype="int32", shape=[1], values=[_strided_keys(size)])
+    expected = _bound_values(descriptor, {"outputs": payload(wanted)})
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        dict(workgroupCount=[STRIDED_GROUPS, 1, 1], workgroupSize=list(shape)),
+        observe_inputs=[name for name in inputs if name not in expected],
+    )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="strided_rounds",
+    )
+    evidence = json.loads((tmp_path / "evidence.json").read_text())
+    observations = evidence["records"]["generated"]["details"]["inputObservations"]
+    assert len(observations) == 2
+    assert all(item["unchanged"] for item in observations.values())
