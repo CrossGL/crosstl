@@ -32,8 +32,8 @@ MLX_COPY_ENTRY = "v_copyfloat32float32"
 MLX_COPY_TEMPLATE_ARGUMENTS = {"N": "1", "T": "float", "U": "float"}
 MLX_COPY_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "023227a86b82cfeff6c32219e2526efbb658d018a4679b47f06c8369186a3495",
-        "sizeBytes": 1234,
+        "sha256": "59d93116085edb8601223a23b024548c9e1bb5f955d6009c2334cf703da52123",
+        "sizeBytes": 1546,
     },
     "opengl": {
         "sha256": "fac13358ba17271c622634c3e42f9b3cd0863adb75bcfe71aca7ce13aa5628cb",

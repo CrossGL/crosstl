@@ -11386,8 +11386,8 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     }
     assert status["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "023227a86b82cfeff6c32219e2526efbb658d018a4679b47f06c8369186a3495",
-        "size_bytes": 1234,
+        "sha256": "59d93116085edb8601223a23b024548c9e1bb5f955d6009c2334cf703da52123",
+        "size_bytes": 1546,
         "workgroup_size": [1, 1, 1],
         "resource_layouts": {
             "input_storage": "hlsl-structured-buffer",
