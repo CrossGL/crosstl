@@ -6158,6 +6158,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         "float",
         "double",
     }
+    _METAL_NATIVE_SCALAR_SPELLINGS: Dict[str, str] = {
+        "bfloat": "bfloat16_t",
+        "bfloat16": "bfloat16_t",
+    }
     _METAL_FLOATING_SCALAR_TYPES: Set[str] = {
         "half",
         "float16_t",
@@ -6242,6 +6246,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             if len(arguments) != 2:
                 return None
             base = self._normalize_inferred_type(arguments[0])
+            base = self._METAL_NATIVE_SCALAR_SPELLINGS.get(base, base)
             if base not in self._METAL_SCALAR_TYPE_SIZES:
                 return None
             width_text = self._proven_integral_constant_value("int", arguments[1])
@@ -6255,6 +6260,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         if match is None:
             return None
         base = match.group("base")
+        # MLX's `bfloat16_t` is a typedef of Metal's native `bfloat`; resolved
+        # template arguments use the native spelling, including vectors.
+        base = self._METAL_NATIVE_SCALAR_SPELLINGS.get(base, base)
         if base not in self._METAL_SCALAR_TYPE_SIZES:
             # A width suffix that is actually part of the name (e.g. an unknown
             # type) — treat the whole token as the base.

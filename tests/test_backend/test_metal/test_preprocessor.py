@@ -13921,3 +13921,25 @@ def test_inferred_sfinae_helper_collision_preserves_target_call_identity(
     assert "result[0] = select_value_int_1(value);" in generated
     assert "result[1] = select_value_int(value);" in generated
     assert "result[2] = select_value_int_1(value);" in generated
+
+
+@pytest.mark.parametrize("spelling", ("bfloat", "bfloat16", "bfloat16_t"))
+def test_preprocessor_type_traits_accept_native_bfloat_spellings(spelling):
+    # MLX declares `typedef bfloat bfloat16_t`, so resolved template arguments
+    # reach trait evaluation with Metal's native spelling.
+    pp = MetalPreprocessor()
+    assert pp._is_floating_point_concrete_type(spelling) is True
+    assert pp._is_integral_concrete_type(spelling) is False
+    assert pp._is_signed_concrete_type(spelling) is True
+    assert pp._scalar_and_width(
+        f"{spelling}4" if spelling == "bfloat" else spelling
+    ) == (
+        "bfloat16_t",
+        4 if spelling == "bfloat" else 1,
+    )
+    assert (
+        pp._evaluate_template_constraint(
+            "metal::is_floating_point_v<T>", {"T": spelling}
+        )
+        is True
+    )
