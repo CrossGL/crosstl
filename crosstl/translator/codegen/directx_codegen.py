@@ -10593,6 +10593,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             mutable_resource_offsets = (
                 self.hlsl_mutable_resource_pointer_argument_names(func)
+                | self.hlsl_nested_entry_resource_rebase_names(func)
             )
             self.apply_hlsl_promoted_entry_resource_parameter_aliases(
                 param_list,
@@ -17957,6 +17958,140 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             in self.hlsl_omitted_resource_pointer_parameter_keys
         )
+
+    def hlsl_nested_entry_resource_rebase_names(self, function):
+        """Return entry pointer parameters whose rebases need an entry offset.
+
+        The first rebase of an entry pointer in a scope declares its offset
+        where it occurs, which is exact when that scope runs once and no later
+        statement outside it refers to the pointer. A first rebase inside a
+        loop, or one whose pointer is referenced after the enclosing statement,
+        must instead update one offset declared at entry.
+        """
+        parameter_names = {
+            getattr(parameter, "name", None)
+            for parameter in getattr(function, "parameters", None) or []
+        }
+        parameter_names.discard(None)
+        hoisted = set()
+        if not parameter_names:
+            return hoisted
+
+        def statements_of(body):
+            if body is None:
+                return []
+            if isinstance(body, list):
+                return body
+            if isinstance(body, BlockNode):
+                return list(getattr(body, "statements", None) or [])
+            return [body]
+
+        def rebased_name(node):
+            if not isinstance(node, AssignmentNode):
+                return None
+            if getattr(node, "operator", "=") not in {"=", "+=", "-="}:
+                return None
+            target = getattr(node, "target", None)
+            if (
+                isinstance(target, (IdentifierNode, VariableNode))
+                and target.name in parameter_names
+            ):
+                return target.name
+            return None
+
+        def references(statements, name):
+            return any(
+                isinstance(node, (IdentifierNode, VariableNode)) and node.name == name
+                for node in self.walk_ast(statements)
+            )
+
+        def children(statement):
+            # Returns nested statement bodies and the expressions evaluated by
+            # the statement itself. Switch and match arms may fall through or
+            # share scope, so they are handled like loops.
+            if isinstance(statement, IfNode):
+                bodies = [
+                    getattr(statement, "then_branch", None),
+                    *(getattr(statement, "else_if_bodies", None) or []),
+                    getattr(statement, "else_branch", None),
+                ]
+                expressions = [
+                    getattr(statement, "condition", None),
+                    *(getattr(statement, "else_if_conditions", None) or []),
+                ]
+                return bodies, expressions, False
+            if isinstance(statement, ForNode):
+                return (
+                    [statement.body],
+                    [statement.init, statement.condition, statement.update],
+                    True,
+                )
+            if isinstance(statement, ForInNode):
+                return [statement.body], [statement.iterable], True
+            if isinstance(statement, (WhileNode, DoWhileNode)):
+                return [statement.body], [statement.condition], True
+            if isinstance(statement, LoopNode):
+                return [statement.body], [], True
+            if isinstance(statement, SwitchNode):
+                bodies = [
+                    getattr(case, "statements", None) or getattr(case, "body", None)
+                    for case in getattr(statement, "cases", None) or []
+                ]
+                default = getattr(statement, "default_case", None)
+                if default is not None:
+                    bodies.append(
+                        getattr(default, "statements", default)
+                        if not isinstance(default, list)
+                        else default
+                    )
+                return bodies, [statement.expression], True
+            if isinstance(statement, MatchNode):
+                bodies = [
+                    getattr(arm, "body", None)
+                    for arm in getattr(statement, "arms", None) or []
+                ]
+                return bodies, [statement.expression], True
+            if isinstance(statement, BlockNode):
+                return [statement], [], False
+            return [], [statement], False
+
+        def visit(statements, frames, in_loop, declared):
+            declared = set(declared)
+            for index, statement in enumerate(statements):
+                expression = (
+                    statement.expression
+                    if isinstance(statement, ExpressionStatementNode)
+                    else statement
+                )
+                name = rebased_name(expression)
+                if name is not None:
+                    if name not in declared:
+                        declared.add(name)
+                        if frames and (
+                            in_loop
+                            or any(
+                                references(block[position + 1 :], name)
+                                for block, position in frames
+                            )
+                        ):
+                            hoisted.add(name)
+                    continue
+                bodies, expressions, is_loop = children(statement)
+                for node in self.walk_ast(expressions):
+                    embedded = rebased_name(node)
+                    if embedded is not None:
+                        hoisted.add(embedded)
+                for body in bodies:
+                    visit(
+                        statements_of(body),
+                        frames + [(statements, index)],
+                        in_loop or is_loop,
+                        declared,
+                    )
+
+        body = getattr(function, "body", None)
+        visit(statements_of(body), [], False, set())
+        return hoisted
 
     def hlsl_mutable_resource_pointer_argument_names(self, function):
         names = set()

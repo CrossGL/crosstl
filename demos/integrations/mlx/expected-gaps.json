@@ -4893,8 +4893,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "2d6d7f4dec61bc3a19066a76f83192df59fe10cc1d5aef27ea5e8065fe6e8ca9",
-        "size_bytes": 8718,
+        "sha256": "83147db50ee4ad454227c5c579b9056c83bdb87a6eb88dc9355051d73894f5d7",
+        "size_bytes": 8748,
         "subgroup_id_lowering": "flattened-logical-software-subgroups",
         "relative_shuffle_out_of_range": "calling-invocation-value",
         "software_subgroup_width": 32,

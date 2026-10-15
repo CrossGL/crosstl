@@ -2746,8 +2746,8 @@ and
 
 Entry-scoped translation materializes only the selected GEMV and
 `elem_to_loc_uint`, with no unsupported record or project diagnostic. The
-8,718-byte HLSL has SHA-256
-`2d6d7f4dec61bc3a19066a76f83192df59fe10cc1d5aef27ea5e8065fe6e8ca9`,
+8,748-byte HLSL has SHA-256
+`83147db50ee4ad454227c5c579b9056c83bdb87a6eb88dc9355051d73894f5d7`,
 retains `[numthreads(32, 2, 1)]` and `[WaveSize(32)]`, and passes official DXC
 1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors.
 Direct3D does not guarantee that a multidimensional workgroup's flattened
@@ -3125,8 +3125,10 @@ with variant ID
 and artifact ID
 `sha256:dd0138695bd82e1f8ea49bd667052b484420ee96cb2849c6eed20ba5eae39a89`.
 
-The 9,153-byte HLSL artifact has SHA-256
-`552850818feb3a8a133b5cd36628f11eb2598a18a76181d91c9ec2f8da84bc7b`.
+The 9,116-byte HLSL artifact has SHA-256
+`b6c596dfce2e3695f0d5c28eaf7b837ee97bda579169885ff19cba52c0bbc553`.
+The guarded mask rebases before the key loop and the guarded mask advances
+inside it update one entry-scoped `int64_t` offset per mask pointer.
 Official DXC 1.9.2602.24 accepts `CSMain` under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors, producing 9,000 bytes of DXIL.
 Its 32 physical waves receive unique workgroup-synchronized subgroup IDs; no
