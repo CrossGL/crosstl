@@ -2750,10 +2750,15 @@ and
 
 Entry-scoped translation materializes only the selected GEMV and
 `elem_to_loc_uint`, with no unsupported record or project diagnostic. The
-8,748-byte HLSL has SHA-256
-`83147db50ee4ad454227c5c579b9056c83bdb87a6eb88dc9355051d73894f5d7`,
+9,099-byte HLSL has SHA-256
+`e26c5e45a11d9ea861468bbf641bcfe8905d8c023b3de9439c03e9f3095065b7`,
 retains `[numthreads(32, 2, 1)]` and `[WaveSize(32)]`, and passes official DXC
 1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors.
+`GEMVTKernel::run` repeats the entry's `[[buffer(n)]]` attributes on ordinary
+pointer parameters, so the HLSL helper takes each `mat`, `in_vec`, `bias` and
+`out_vec` view as a resource plus an `int64_t` element offset and the entry
+forwards its `tid.z` batch rebases; an earlier artifact indexed the unrebased
+roots whenever `tid.z` was nonzero.
 Direct3D does not guarantee that a multidimensional workgroup's flattened
 `SV_GroupIndex` values are contiguous within each physical wave, so this entry
 explicitly enables target-scoped 32-lane software subgroups. Logical subgroup

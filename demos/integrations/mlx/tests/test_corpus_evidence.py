@@ -531,9 +531,34 @@ def test_selected_workload_retains_native_results_without_suppressing_failures(
         details={"device": "unit-test-only"},
         message=None,
     )
+    results = {id(request): result}
+    if family == "gemv":
+        batched_request = SimpleNamespace(
+            fixture=SimpleNamespace(to_json=lambda: {"batched": True}),
+            execution_plan=SimpleNamespace(to_json=lambda: plan),
+        )
+        batched_values = proof._batched_gemv_workload()[-1]
+        monkeypatch.setattr(
+            proof,
+            "_batched_dispatch_request",
+            lambda *a: (batched_request, "out", batched_values),
+        )
+        batched_result = SimpleNamespace(
+            status="ok",
+            outputs={
+                "out": {
+                    "dtype": "float32",
+                    "shape": [len(batched_values)],
+                    "values": batched_values,
+                }
+            },
+            details={"device": "unit-test-only"},
+            message=None,
+        )
+        results[id(batched_request)] = batched_result
     executor = SimpleNamespace(
         is_available=lambda request: SimpleNamespace(available=True),
-        run=lambda request: result,
+        run=lambda request: results[id(request)],
     )
     monkeypatch.setattr(proof, "RuntimeParityExecutor", lambda *a, **kw: executor)
     execute = (
@@ -552,6 +577,17 @@ def test_selected_workload_retains_native_results_without_suppressing_failures(
         "executionPlan": plan,
     }
     assert json.loads((work_dir / "result.json").read_text()) == vars(result)
+    if family == "gemv":
+        batched_dir = work_dir / "batched"
+        assert json.loads((batched_dir / "request.json").read_text()) == {
+            "commit": proof.MLX_COMMIT,
+            "workload": proof.BATCHED_WORKLOAD_ID,
+            "fixture": {"batched": True},
+            "executionPlan": plan,
+        }
+        assert json.loads((batched_dir / "result.json").read_text()) == vars(
+            batched_result
+        )
 
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))

@@ -58,8 +58,8 @@ MLX_GEMV_VARIANT_ID = (
 )
 MLX_GEMV_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "83147db50ee4ad454227c5c579b9056c83bdb87a6eb88dc9355051d73894f5d7",
-        "sizeBytes": 8748,
+        "sha256": "e26c5e45a11d9ea861468bbf641bcfe8905d8c023b3de9439c03e9f3095065b7",
+        "sizeBytes": 9099,
     },
     "opengl": {
         "sha256": "7a82ff4b75a71aaebd4a5b5a3f62882d82aca2b24a1ed27b9ec6bece9a87e8ea",
@@ -72,6 +72,8 @@ INPUT_SIZE = 32
 OUTPUT_SIZE = 32
 WORKGROUP_SIZE = (32, 2, 1)
 WORKGROUP_COUNT = (1, 1, 1)
+BATCH_COUNT = 2
+BATCHED_WORKLOAD_ID = "vector-matrix-float32-m1-n32-k32-batch2-contiguous"
 ABSOLUTE_TOLERANCE = 1e-5
 RELATIVE_TOLERANCE = 1e-5
 INDEX_ASSERTION = {
@@ -559,18 +561,31 @@ def _gemv_workload() -> tuple[list[float], list[float], list[float]]:
     return matrix, vector, expected
 
 
-def _dispatch_request(target: str, descriptor: dict, package_dir: Path):
-    names = _binding_names(target)
+def _batched_gemv_workload() -> tuple[list[float], list[float], list[float]]:
     matrix, vector, expected = _gemv_workload()
+    # The second batch doubles the matrix and quadruples the vector, so its
+    # exact product is eight times the first. Dropping the matrix, vector or
+    # output batch rebase therefore changes the second half of the result.
+    return (
+        matrix + [2.0 * value for value in matrix],
+        vector + [4.0 * value for value in vector],
+        expected + [8.0 * value for value in expected],
+    )
+
+
+def _workload_inputs(
+    target: str, matrix: list[float], vector: list[float], batch_count: int
+) -> dict:
+    names = _binding_names(target)
     inputs = {
         names["matrix"]: {
             "dtype": "float32",
-            "shape": [INPUT_SIZE * OUTPUT_SIZE],
+            "shape": [len(matrix)],
             "values": matrix,
         },
         names["vector"]: {
             "dtype": "float32",
-            "shape": [INPUT_SIZE],
+            "shape": [len(vector)],
             "values": vector,
         },
         names["bias"]: {
@@ -581,17 +596,17 @@ def _dispatch_request(target: str, descriptor: dict, package_dir: Path):
         names["batch_shape"]: {
             "dtype": "int32",
             "shape": [1],
-            "values": [1],
+            "values": [batch_count],
         },
         names["vector_stride"]: {
             "dtype": "int64",
             "shape": [1],
-            "values": [0],
+            "values": [INPUT_SIZE if batch_count > 1 else 0],
         },
         names["matrix_stride"]: {
             "dtype": "int64",
             "shape": [1],
-            "values": [0],
+            "values": [INPUT_SIZE * OUTPUT_SIZE if batch_count > 1 else 0],
         },
         names["bias_stride_array"]: {
             "dtype": "int64",
@@ -613,7 +628,13 @@ def _dispatch_request(target: str, descriptor: dict, package_dir: Path):
             "shape": [1],
             "values": [value],
         }
+    return inputs
 
+
+def _dispatch_request(target: str, descriptor: dict, package_dir: Path):
+    names = _binding_names(target)
+    matrix, vector, expected = _gemv_workload()
+    inputs = _workload_inputs(target, matrix, vector, 1)
     request = build_native_loader_dispatch_request(
         descriptor,
         package_dir,
@@ -637,6 +658,35 @@ def _dispatch_request(target: str, descriptor: dict, package_dir: Path):
     assert request.execution_plan.dispatch.workgroup_size == WORKGROUP_SIZE
     assert request.execution_plan.dispatch.workgroup_count == WORKGROUP_COUNT
     assert request.execution_plan.dispatch.global_size == WORKGROUP_SIZE
+    return request, names["output"], expected
+
+
+def _batched_dispatch_request(target: str, descriptor: dict, package_dir: Path):
+    names = _binding_names(target)
+    matrix, vector, expected = _batched_gemv_workload()
+    workgroup_count = (1, 1, BATCH_COUNT)
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package_dir,
+        _workload_inputs(target, matrix, vector, BATCH_COUNT),
+        {
+            names["output"]: {
+                "dtype": "float32",
+                "shape": [BATCH_COUNT * OUTPUT_SIZE],
+                "values": expected,
+                "tolerance": {
+                    "absolute": ABSOLUTE_TOLERANCE,
+                    "relative": RELATIVE_TOLERANCE,
+                },
+            }
+        },
+        workgroup_count,
+        expected_target=target,
+    )
+    assert request.execution_plan is not None
+    assert request.execution_plan.diagnostics == ()
+    assert request.execution_plan.dispatch.workgroup_size == WORKGROUP_SIZE
+    assert request.execution_plan.dispatch.workgroup_count == workgroup_count
     return request, names["output"], expected
 
 
@@ -692,12 +742,37 @@ def _execute_current_mlx_gemv(target: str) -> None:
             )
         result = executor.run(request)
         record_native_result(work_dir, result)
+        # The pinned workload has one batch, so tid.z is always zero there.
+        # Two batches prove that the helper reads through the entry's rebased
+        # matrix, vector and output views.
+        batched_request, _batched_name, batched_expected = _batched_dispatch_request(
+            target,
+            descriptor,
+            package_dir,
+        )
+        batched_dir = work_dir / "batched"
+        batched_dir.mkdir()
+        record_native_request(
+            batched_dir,
+            batched_request,
+            commit=MLX_COMMIT,
+            workload_id=BATCHED_WORKLOAD_ID,
+        )
+        batched = executor.run(batched_request)
+        record_native_result(batched_dir, batched)
 
     assert result.status == "ok"
     assert result.outputs[output_name]["dtype"] == "float32"
     assert result.outputs[output_name]["shape"] == [OUTPUT_SIZE]
     assert result.outputs[output_name]["values"] == pytest.approx(
         expected,
+        abs=ABSOLUTE_TOLERANCE,
+        rel=RELATIVE_TOLERANCE,
+    )
+    assert batched.status == "ok", batched.message
+    assert batched.outputs[output_name]["shape"] == [BATCH_COUNT * OUTPUT_SIZE]
+    assert batched.outputs[output_name]["values"] == pytest.approx(
+        batched_expected,
         abs=ABSOLUTE_TOLERANCE,
         rel=RELATIVE_TOLERANCE,
     )
