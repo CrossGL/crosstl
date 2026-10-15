@@ -5037,7 +5037,49 @@ class GLSLCodeGen:
                 return False
         return True
 
-    def glsl_software_subgroup_masked_if_plan(self, node):
+    def glsl_software_subgroup_masked_reduction(self, statement, operation_node):
+        """Return ``(wrapped,)`` when ``statement`` is ``x = op(v)``.
+
+        ``op`` must be ``operation_node`` itself, optionally under scalar
+        conversions, and ``x`` a side-effect-free name. Return ``None`` when
+        the statement has another shape and ``False`` when its shape cannot be
+        predicated.
+        """
+        candidate = statement
+        if isinstance(candidate, ExpressionStatementNode):
+            candidate = getattr(candidate, "expression", None)
+        if not isinstance(candidate, AssignmentNode):
+            return None
+        operator = self.map_operator(
+            getattr(candidate, "operator", getattr(candidate, "op", "="))
+        )
+        if operator != "=":
+            return None
+        value = getattr(candidate, "value", getattr(candidate, "right", None))
+        wrappers, inner = self.glsl_software_subgroup_conversion_chain(value)
+        direct = self.glsl_software_subgroup_direct_operation(inner)
+        if direct is None or id(direct[2]) != id(operation_node) or len(direct[1]) != 1:
+            return None
+        # Converted results reuse the source assignment, whose reduction is
+        # replaced by the predicated result; that substitution needs the
+        # canonical wave node.
+        if wrappers and not isinstance(direct[2], WaveOpNode):
+            return False
+        target = getattr(candidate, "target", getattr(candidate, "left", None))
+        target_name = self.expression_name(target)
+        if not target_name or not self.glsl_side_effect_free_expression(target):
+            return False
+        return (bool(wrappers),)
+
+    def glsl_software_subgroup_masked_if_plan(self, node, *, allow_multiple=False):
+        """Plan ``if (c) { prefix; x = subgroupAdd(v); suffix }`` as masked.
+
+        With ``allow_multiple``, every top-level statement of the body that
+        holds a collective must be such a reduction, as in MLX's RMS VJP
+        ``if (c) { a = simd_sum(u); b = simd_sum(v); }``. The reductions then
+        run in source order in every invocation, and each statement between
+        them still runs only where ``c`` held, after the previous assignment.
+        """
         if (
             getattr(node, "else_if_conditions", None)
             or getattr(node, "else_if_bodies", None)
@@ -5048,6 +5090,17 @@ class GLSLCodeGen:
         if not self.glsl_side_effect_free_expression(condition):
             return None
         records = self.glsl_software_subgroup_operation_records(node)
+        if (
+            len(records) > 1
+            and allow_multiple
+            and all(
+                operation in {"WaveActiveSum", "WaveActiveMin", "WaveActiveMax"}
+                for operation, _node in records
+            )
+        ):
+            return self.glsl_software_subgroup_masked_if_sequence_plan(
+                node, condition, [record_node for _operation, record_node in records]
+            )
         if len(records) != 1 or records[0][0] not in {
             "WaveActiveSum",
             "WaveActiveMin",
@@ -5122,6 +5175,51 @@ class GLSLCodeGen:
                 ),
             }
         return None
+
+    def glsl_software_subgroup_masked_if_sequence_plan(
+        self, node, condition, operation_nodes
+    ):
+        statements = self.glsl_software_subgroup_statement_list(node.if_body)
+        if any(
+            isinstance(child, (BreakNode, ContinueNode, ReturnNode))
+            for child in self.walk_ast(node.if_body)
+        ):
+            return None
+        pending = list(operation_nodes)
+        indices = []
+        wrapped = []
+        for index, statement in enumerate(statements):
+            if not self.glsl_software_subgroup_operation_records(statement):
+                continue
+            reduction = (
+                self.glsl_software_subgroup_masked_reduction(statement, pending[0])
+                if pending
+                else None
+            )
+            if not reduction:
+                return None
+            pending.pop(0)
+            indices.append(index)
+            wrapped.append(reduction[0])
+        if pending or not indices:
+            return None
+        # Each later block starts a new scope, so declarations before the last
+        # reduction would fall out of scope.
+        if any(
+            isinstance(statement, (VariableNode, ArrayNode))
+            for statement in statements[: indices[-1]]
+        ):
+            return None
+        return {
+            "statementIndex": indices[0],
+            "hoistedTargetDeclarationIndex": None,
+            "wrapped": wrapped[0],
+            "subgroupUniform": self.glsl_software_subgroup_guard_is_subgroup_uniform(
+                condition
+            ),
+            "statementIndices": tuple(indices),
+            "wrappedReductions": tuple(wrapped),
+        }
 
     GLSL_SOFTWARE_SUBGROUP_UNIFORM_GUARD_OPERATORS = {
         "==",
@@ -5419,6 +5517,22 @@ class GLSLCodeGen:
             plan = self.glsl_software_subgroup_masked_if_plan(statement)
             if plan is not None:
                 self.glsl_software_subgroup_masked_if_plans[id(statement)] = plan
+
+    def glsl_software_subgroup_on_demand_masked_if_plan(self, node):
+        """Plan an entry if whose guard the uniformity analysis cannot prove.
+
+        Such an if may sit in a uniform loop, as MLX's RMS VJP row loop, or
+        guard several reductions. Enclosing loops and branches are still
+        proven uniform where they are generated, before their bodies.
+        """
+        if (
+            self.software_subgroup_width is None
+            or self.current_glsl_source_function_id
+            != self.glsl_software_subgroup_entry_function_id
+            or not self.glsl_software_subgroup_operation_records(node)
+        ):
+            return None
+        return self.glsl_software_subgroup_masked_if_plan(node, allow_multiple=True)
 
     def prepare_glsl_software_subgroup_strided_for_plans(
         self,
@@ -36046,6 +36160,10 @@ complex64_t crossgl_complex64_mod_assign(
             return self.generate_glsl_software_subgroup_masked_if(node, indent)
 
         if id(node) not in self.glsl_software_subgroup_uniform_if_node_ids:
+            plan = self.glsl_software_subgroup_on_demand_masked_if_plan(node)
+            if plan is not None:
+                self.glsl_software_subgroup_masked_if_plans[id(node)] = plan
+                return self.generate_glsl_software_subgroup_masked_if(node, indent)
             self.reject_glsl_software_subgroup_control_flow(node)
         condition = self.generate_glsl_boolean_context(
             node.condition if hasattr(node, "condition") else node.if_condition
@@ -39664,15 +39782,6 @@ complex64_t crossgl_complex64_mod_assign(
         plan = self.glsl_software_subgroup_masked_if_plans[id(node)]
         statements = self.glsl_software_subgroup_statement_list(node.if_body)
         operation_index = plan["statementIndex"]
-        assignment = statements[operation_index]
-        if isinstance(assignment, ExpressionStatementNode):
-            assignment = assignment.expression
-        value = getattr(assignment, "value", getattr(assignment, "right", None))
-        wrappers, inner = self.glsl_software_subgroup_conversion_chain(value)
-        operation, arguments, operation_node = (
-            self.glsl_software_subgroup_direct_operation(inner)
-        )
-        target = getattr(assignment, "target", getattr(assignment, "left", None))
 
         indent_str = "    " * indent
         inner_indent = "    " * (indent + 1)
@@ -39687,110 +39796,159 @@ complex64_t crossgl_complex64_mod_assign(
                 if index != hoisted_index
             ]
 
-        value_type = self.glsl_source_expression_type(arguments[0])
-        mapped_value_type = (
-            self.map_type(value_type) if value_type is not None else None
-        )
-        target_type = self.glsl_source_expression_type(target)
-        mapped_target_type = (
-            self.map_type(target_type) if target_type is not None else None
-        )
-        half_sum = (
-            operation == "WaveActiveSum" and self.glsl_half_width(value_type) == 1
-        )
-        if half_sum and not plan.get("subgroupUniform"):
-            # Pairwise binary16 partials round at every step, so a guard that
-            # splits a subgroup has no established source participation.
-            raise self.glsl_software_subgroup_error(
-                "OpenGL masked binary16 sums require an established source active-lane contract",
-                operation=operation,
-                reason="half-masked-participation-unproven",
-                source_location=getattr(operation_node, "source_location", None),
+        reductions = []
+        for index in plan.get("statementIndices", (operation_index,)):
+            assignment = statements[index]
+            if isinstance(assignment, ExpressionStatementNode):
+                assignment = assignment.expression
+            value = getattr(assignment, "value", getattr(assignment, "right", None))
+            wrappers, inner = self.glsl_software_subgroup_conversion_chain(value)
+            operation, arguments, operation_node = (
+                self.glsl_software_subgroup_direct_operation(inner)
             )
-        if mapped_value_type not in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES or (
-            not wrappers and mapped_target_type != mapped_value_type
-        ):
-            raise self.glsl_software_subgroup_error(
-                "OpenGL masked software subgroup reduction requires a matching "
-                "32-bit numeric scalar payload and assignment target",
-                operation=operation,
-                reason="value-type-unsupported",
-                source_location=getattr(operation_node, "source_location", None),
+            target = getattr(assignment, "target", getattr(assignment, "left", None))
+            value_type = self.glsl_source_expression_type(arguments[0])
+            mapped_value_type = (
+                self.map_type(value_type) if value_type is not None else None
+            )
+            target_type = self.glsl_source_expression_type(target)
+            mapped_target_type = (
+                self.map_type(target_type) if target_type is not None else None
+            )
+            half_sum = (
+                operation == "WaveActiveSum" and self.glsl_half_width(value_type) == 1
+            )
+            if half_sum and not plan.get("subgroupUniform"):
+                # Pairwise binary16 partials round at every step, so a guard that
+                # splits a subgroup has no established source participation.
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL masked binary16 sums require an established source active-lane contract",
+                    operation=operation,
+                    reason="half-masked-participation-unproven",
+                    source_location=getattr(operation_node, "source_location", None),
+                )
+            if mapped_value_type not in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES or (
+                not wrappers and mapped_target_type != mapped_value_type
+            ):
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL masked software subgroup reduction requires a matching "
+                    "32-bit numeric scalar payload and assignment target",
+                    operation=operation,
+                    reason="value-type-unsupported",
+                    source_location=getattr(operation_node, "source_location", None),
+                )
+            reductions.append(
+                {
+                    "index": index,
+                    "wrappers": wrappers,
+                    "operation": operation,
+                    "arguments": arguments,
+                    "operation_node": operation_node,
+                    "target": target,
+                    "value_type": value_type,
+                    "mapped_value_type": mapped_value_type,
+                    "half_sum": half_sum,
+                }
             )
 
         active_name = self.glsl_synthetic_local_identifier(
             "crossglSoftwareSubgroupActive"
         )
-        input_name = self.glsl_synthetic_local_identifier(
-            "crossglSoftwareSubgroupInput"
-        )
-        result_name = self.glsl_synthetic_local_identifier(
-            "crossglSoftwareSubgroupResult"
-        )
+        for reduction in reductions:
+            reduction["input"] = self.glsl_synthetic_local_identifier(
+                "crossglSoftwareSubgroupInput"
+            )
+            reduction["result"] = self.glsl_synthetic_local_identifier(
+                "crossglSoftwareSubgroupResult"
+            )
         condition = self.generate_glsl_boolean_context(
             getattr(node, "condition", getattr(node, "if_condition", None))
         )
         if additional_condition is not None:
             condition = f"({additional_condition} && ({condition}))"
-        identity = {
-            "WaveActiveSum": {"float": "0.0", "int": "0", "uint": "0u"},
-            "WaveActiveMin": {
-                "float": "uintBitsToFloat(0x7f800000u)",
-                "int": "2147483647",
-                "uint": "0xffffffffu",
-            },
-            "WaveActiveMax": {
-                "float": "uintBitsToFloat(0xff800000u)",
-                "int": "(-2147483647 - 1)",
-                "uint": "0u",
-            },
-        }[operation][mapped_value_type]
-        if half_sum:
-            # -0.0 is the exact identity of every rounded binary16 partial.
-            identity = "uintBitsToFloat(0x80000000u)"
         code += f"{indent_str}bool {active_name} = {condition};\n"
-        code += f"{indent_str}{mapped_value_type} {input_name} = {identity};\n"
-        code += f"{indent_str}if ({active_name}) {{\n"
-        code += self.generate_scoped_statement_body(prefix, indent + 1)
-        payload = self.generate_expression_with_expected(
-            arguments[0], mapped_value_type
-        )
-        code += f"{inner_indent}{input_name} = {payload};\n"
-        code += f"{indent_str}}}\n"
+        previous = None
+        for reduction in reductions:
+            operation = reduction["operation"]
+            mapped_value_type = reduction["mapped_value_type"]
+            identity = {
+                "WaveActiveSum": {"float": "0.0", "int": "0", "uint": "0u"},
+                "WaveActiveMin": {
+                    "float": "uintBitsToFloat(0x7f800000u)",
+                    "int": "2147483647",
+                    "uint": "0xffffffffu",
+                },
+                "WaveActiveMax": {
+                    "float": "uintBitsToFloat(0xff800000u)",
+                    "int": "(-2147483647 - 1)",
+                    "uint": "0u",
+                },
+            }[operation][mapped_value_type]
+            if reduction["half_sum"]:
+                # -0.0 is the exact identity of every rounded binary16 partial.
+                identity = "uintBitsToFloat(0x80000000u)"
+            code += (
+                f"{indent_str}{mapped_value_type} {reduction['input']} = {identity};\n"
+            )
+            code += f"{indent_str}if ({active_name}) {{\n"
+            if previous is None:
+                code += self.generate_scoped_statement_body(prefix, indent + 1)
+            else:
+                # The previous assignment and the statements up to this
+                # reduction keep their source order under the guard.
+                code += self.generate_glsl_software_subgroup_masked_assignment(
+                    previous,
+                    statements[previous["index"] : reduction["index"]],
+                    indent + 1,
+                )
+            payload = self.generate_expression_with_expected(
+                reduction["arguments"][0], mapped_value_type
+            )
+            code += f"{inner_indent}{reduction['input']} = {payload};\n"
+            code += f"{indent_str}}}\n"
 
-        helper_type = (
-            self.glsl_software_subgroup_payload_type(operation, value_type)
-            if half_sum
-            else mapped_value_type
-        )
-        self.required_glsl_software_subgroup_helpers.add((operation, helper_type))
-        helper = self.glsl_software_subgroup_helper_name(operation, helper_type)
-        code += (
-            f"{indent_str}{mapped_value_type} {result_name} = {helper}({input_name});\n"
-        )
+            helper_type = (
+                self.glsl_software_subgroup_payload_type(
+                    operation, reduction["value_type"]
+                )
+                if reduction["half_sum"]
+                else mapped_value_type
+            )
+            self.required_glsl_software_subgroup_helpers.add((operation, helper_type))
+            helper = self.glsl_software_subgroup_helper_name(operation, helper_type)
+            code += (
+                f"{indent_str}{mapped_value_type} {reduction['result']} = "
+                f"{helper}({reduction['input']});\n"
+            )
+            previous = reduction
         code += f"{indent_str}if ({active_name}) {{\n"
-        if wrappers:
-            # Emit the source assignment, conversions included, with its
-            # reduction replaced by the result every invocation computed.
-            self.glsl_software_subgroup_result_overrides[id(operation_node)] = (
-                result_name
-            )
-            try:
-                code += self.generate_scoped_statement_body(
-                    statements[operation_index:], indent + 1
-                )
-            finally:
-                self.glsl_software_subgroup_result_overrides.pop(
-                    id(operation_node), None
-                )
-        else:
-            target_text = self.generate_glsl_buffer_block_mutation_target(target)
-            code += f"{inner_indent}{target_text} = {result_name};\n"
-            code += self.generate_scoped_statement_body(
-                statements[operation_index + 1 :], indent + 1
-            )
+        code += self.generate_glsl_software_subgroup_masked_assignment(
+            previous, statements[previous["index"] :], indent + 1
+        )
         code += f"{indent_str}}}\n"
         return code
+
+    def generate_glsl_software_subgroup_masked_assignment(
+        self, reduction, statements, indent
+    ):
+        """Emit a predicated reduction's assignment and the statements after it.
+
+        ``statements`` starts with the reduction's source assignment.
+        """
+        if reduction["wrappers"]:
+            # Emit the source assignment, conversions included, with its
+            # reduction replaced by the result every invocation computed.
+            key = id(reduction["operation_node"])
+            self.glsl_software_subgroup_result_overrides[key] = reduction["result"]
+            try:
+                return self.generate_scoped_statement_body(statements, indent)
+            finally:
+                self.glsl_software_subgroup_result_overrides.pop(key, None)
+        target_text = self.generate_glsl_buffer_block_mutation_target(
+            reduction["target"]
+        )
+        code = f"{'    ' * indent}{target_text} = {reduction['result']};\n"
+        return code + self.generate_scoped_statement_body(statements[1:], indent)
 
     def validate_glsl_software_subgroup_function(
         self, operation, *, source_location=None

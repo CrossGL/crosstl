@@ -313,12 +313,23 @@ def test_masked_sum_executes(tmp_path, directx_runtime, value_type):
         ),
         ("if (invocation < 16u) { total = WaveActiveMax(value) + 1u; }", ""),
         (
-            "if (invocation < 16u) { total = WaveActiveSum(value); total = WaveActiveSum(total); }",
+            "if (invocation < 16u) { total = WaveActiveSum(value); total = WaveActiveSum(total) + 1u; }",
+            "",
+        ),
+        (
+            "if (invocation < 16u) { total = WaveActiveSum(value); uint kept = total; total = WaveActiveSum(kept); }",
             "",
         ),
         ("if (invocation < 16u) { total += WaveActiveSum(value); }", ""),
         ("if ((total++) < 16u) { total = WaveActiveSum(value); }", ""),
-        ("{ if (invocation < 16u) { total = WaveActiveSum(value); } }", ""),
+        (
+            "if (invocation < 64u) { if (invocation < 16u) { total = WaveActiveSum(value); } }",
+            "",
+        ),
+        (
+            "for (uint step = 0u; step < invocation; ++step) { if (invocation < 16u) { total = WaveActiveSum(value); } }",
+            "",
+        ),
     ],
 )
 def test_masked_sum_rejects_unplanned_divergence(body, helpers):
@@ -330,6 +341,75 @@ def test_masked_sum_rejects_unplanned_divergence(body, helpers):
     )
     with pytest.raises(DirectXSoftwareSubgroupError):
         _codegen().generate_stage(parse(source), "compute")
+
+
+# MLX's RMS VJP reduces two partials under one ``simd_group_id == 0`` guard
+# inside its row loop. Each reduction runs in every invocation in source
+# order, so the second payload sees the first result, and a guarded reduction
+# nested in a block or a uniform loop is predicated where it stands.
+PREDICATED_SEQUENCES = {
+    "sequence": (
+        "if (invocation < 16u) { total = WaveActiveSum(value); "
+        "total = WaveActiveSum(total); }",
+        lambda partial: 16 * partial,
+    ),
+    "block": (
+        "{ if (invocation < 16u) { total = WaveActiveSum(value); } }",
+        lambda partial: partial,
+    ),
+    "loop": (
+        "uint stop = group.x + 2u; if (stop > 2u) { stop = 2u; } "
+        "for (uint step = 0u; step < stop; ++step) { "
+        "if (invocation < 16u) { total = WaveActiveSum(total + value); } }",
+        lambda partial: 17 * partial,
+    ),
+}
+
+
+def _predicated_sequence(name):
+    return _source(
+        "uint",
+        "uint value = inputWords[index]; uint total = 0u; "
+        f"{PREDICATED_SEQUENCES[name][0]} outputWords[index] = total;",
+    )
+
+
+def _predicated_sequence_expected(name, words):
+    expected = []
+    for index in range(len(words)):
+        base, local = index // 128 * 128, index % 128
+        partial = sum(words[base : base + 16])
+        expected.append(
+            PREDICATED_SEQUENCES[name][1](partial) % 2**32 if local < 16 else 0
+        )
+    return expected
+
+
+@pytest.mark.parametrize("name", sorted(PREDICATED_SEQUENCES))
+def test_masked_sequences_reach_every_barrier(tmp_path, name):
+    generated = _codegen().generate_stage(parse(_predicated_sequence(name)), "compute")
+    assert "WaveActiveSum" not in generated
+    calls = [
+        line.strip()
+        for line in generated.splitlines()
+        if "= __crossgl_software_subgroup_sum_uint(crossglSoftwareSubgroupInput" in line
+    ]
+    assert len(calls) == (2 if name == "sequence" else 1)
+    if name == "sequence":
+        # The first result is assigned under the guard before the second
+        # payload reads it.
+        lines = [line.strip() for line in generated.splitlines()]
+        start = lines.index("total = crossglSoftwareSubgroupResult;")
+        assert lines[start + 1] == "crossglSoftwareSubgroupInput_ = total;"
+    _compile(generated, tmp_path)
+
+
+@pytest.mark.parametrize("name", sorted(PREDICATED_SEQUENCES))
+def test_masked_sequences_execute(tmp_path, directx_runtime, name):
+    generated = _codegen().generate_stage(parse(_predicated_sequence(name)), "compute")
+    words = [index * 3 + 1 for index in range(384)]
+    expected = _predicated_sequence_expected(name, words)
+    assert _execute_words(tmp_path, generated, words, expected) == expected
 
 
 # MLX's block logsumexp reduces SIMD-group maxima under

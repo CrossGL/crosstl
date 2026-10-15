@@ -5305,6 +5305,114 @@ class HLSLCodeGen:
             for node in self.walk_ast(root)
         )
 
+    def hlsl_software_subgroup_written_names(self, root):
+        """Return the names that assignments and increments in ``root`` write."""
+        names = set()
+        for node in self.walk_ast(root):
+            if isinstance(node, AssignmentNode):
+                names.add(self.hlsl_software_subgroup_assignment_target_name(node))
+            elif isinstance(node, UnaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"++", "--"}:
+                names.add(self.expression_name(getattr(node, "operand", None)))
+        names.discard(None)
+        return names
+
+    def hlsl_software_subgroup_reassigned_candidates(
+        self, function, mutable_names, call_mutations
+    ):
+        """Return written locals whose uniformity can follow their writes.
+
+        Each is a value declared once with an initializer and written only by
+        plain ``name = value;`` statements outside loops, as MLX's RMS VJP
+        clamps ``row_end`` to ``n_rows``. Address-taking, increments, other
+        writes, reference views and possibly mutating calls disqualify a name.
+        """
+        body = getattr(function, "body", None)
+        parameters = {
+            parameter.name
+            for parameter in getattr(function, "parameters", []) or []
+            if getattr(parameter, "name", None)
+        }
+        counts = {}
+        declarations = {}
+        for node in self.walk_ast(body):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                counts[node.name] = counts.get(node.name, 0) + 1
+                declarations[node.name] = node
+        analysis = self.hlsl_software_subgroup_uniform_returns
+        candidates = {
+            name
+            for name, declaration in declarations.items()
+            if counts[name] == 1
+            and name not in parameters
+            and name in mutable_names
+            and getattr(declaration, "initial_value", None) is not None
+            and analysis.value_type(declaration.var_type)
+            and not analysis._qualified(declaration, {"volatile"})
+            and not analysis._qualified(declaration.var_type, {"volatile"})
+        }
+        if not candidates:
+            return set()
+        followed_writes = set()
+
+        def visit(statements, in_loop):
+            for statement in self.hlsl_software_subgroup_statement_list(statements):
+                node = statement
+                if isinstance(node, ExpressionStatementNode):
+                    node = getattr(node, "expression", None)
+                if isinstance(node, AssignmentNode):
+                    if (
+                        not in_loop
+                        and isinstance(
+                            getattr(node, "target", getattr(node, "left", None)),
+                            IdentifierNode,
+                        )
+                        and self.map_operator(
+                            getattr(node, "operator", getattr(node, "op", "="))
+                        )
+                        == "="
+                    ):
+                        followed_writes.add(id(node))
+                elif isinstance(node, IfNode):
+                    visit(node.then_branch, in_loop)
+                    for branch in getattr(node, "else_if_bodies", []) or []:
+                        visit(branch, in_loop)
+                    visit(node.else_branch, in_loop)
+                elif isinstance(
+                    node, (ForNode, WhileNode, DoWhileNode, LoopNode, ForInNode)
+                ):
+                    visit(getattr(node, "body", None), True)
+                elif isinstance(node, BlockNode):
+                    visit(node, in_loop)
+
+        visit(body, False)
+        for node in self.walk_ast(body):
+            if isinstance(node, AssignmentNode):
+                if id(node) not in followed_writes:
+                    candidates.discard(
+                        self.hlsl_software_subgroup_assignment_target_name(node)
+                    )
+            elif isinstance(node, UnaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"++", "--", "&"}:
+                candidates.difference_update(
+                    self.hlsl_software_subgroup_expression_identifier_names(
+                        node.operand
+                    )
+                )
+            elif isinstance(node, FunctionCallNode):
+                candidates.difference_update(call_mutations.get(id(node), set()))
+            elif isinstance(node, VariableNode) and isinstance(
+                getattr(node, "var_type", None), (PointerType, ReferenceType)
+            ):
+                candidates.difference_update(
+                    self.hlsl_software_subgroup_expression_identifier_names(
+                        node.initial_value
+                    )
+                )
+        return candidates
+
     # Identity of each predicated reduction. Signed zero is the exact float
     # sum identity, so inactive invocations cannot change a -0.0 result, and
     # the infinities bound every non-NaN float for min and max. Binary16 sums
@@ -5474,8 +5582,50 @@ class HLSLCodeGen:
         arguments = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
         return operation, arguments, node
 
+    def hlsl_software_subgroup_masked_reduction(self, statement, record_node):
+        """Return ``(operation, wrapped)`` when ``statement`` is ``x = op(v)``.
+
+        ``op`` must be ``record_node`` itself, optionally under scalar
+        conversions, and ``x`` a plain name. Return ``None`` when the statement
+        has another shape and ``False`` when its shape cannot be predicated.
+        """
+        candidate = statement
+        if isinstance(candidate, ExpressionStatementNode):
+            candidate = getattr(candidate, "expression", None)
+        if not isinstance(candidate, AssignmentNode):
+            return None
+        if (
+            self.map_operator(
+                getattr(candidate, "operator", getattr(candidate, "op", "="))
+            )
+            != "="
+        ):
+            return None
+        wrappers, inner = self.hlsl_software_subgroup_conversion_chain(
+            getattr(candidate, "value", getattr(candidate, "right", None))
+        )
+        direct = self.hlsl_software_subgroup_direct_operation(inner)
+        if direct is None or direct[2] is not record_node or len(direct[1]) != 1:
+            return None
+        # Converted results reuse the source assignment, whose reduction is
+        # replaced by the predicated result; that substitution needs the
+        # canonical wave node.
+        if wrappers and not isinstance(direct[2], WaveOpNode):
+            return False
+        target = getattr(candidate, "target", getattr(candidate, "left", None))
+        if not isinstance(target, (IdentifierNode, VariableNode)) or not getattr(
+            target, "name", None
+        ):
+            return False
+        return direct[0], bool(wrappers)
+
     def hlsl_software_subgroup_masked_if_plan(
-        self, node, subgroup_names=frozenset(), constant_names=frozenset()
+        self,
+        node,
+        subgroup_names=frozenset(),
+        constant_names=frozenset(),
+        *,
+        allow_multiple=False,
     ):
         """Plan ``if (c) { prefix; x = simd_sum(v); suffix }`` as a masked sum.
 
@@ -5483,6 +5633,12 @@ class HLSLCodeGen:
         when ``c`` is false, which matches a reduction over the active lanes.
         The reduction may sit under scalar conversions, as in
         ``x = bfloat16(simd_max(float(v)))``.
+
+        With ``allow_multiple``, every top-level statement of the body that
+        holds a collective must be such a reduction, as in MLX's RMS VJP
+        ``if (c) { a = simd_sum(u); b = simd_sum(v); }``. The reductions then
+        run in source order in every invocation, and each statement between
+        them still runs only where ``c`` held, after the previous assignment.
         """
 
         if (
@@ -5501,8 +5657,13 @@ class HLSLCodeGen:
             return None
         records = self.hlsl_software_subgroup_operation_records(body)
         if (
-            len(records) != 1
-            or records[0][0] not in self.HLSL_SOFTWARE_SUBGROUP_MASKED_IDENTITIES
+            not records
+            or len(records) != 1
+            and not allow_multiple
+            or any(
+                operation not in self.HLSL_SOFTWARE_SUBGROUP_MASKED_IDENTITIES
+                for operation, _node in records
+            )
         ):
             return None
         if any(
@@ -5511,53 +5672,64 @@ class HLSLCodeGen:
         ):
             return None
         statements = self.hlsl_software_subgroup_statement_list(body)
-        for index, statement in enumerate(statements):
-            candidate = statement
-            if isinstance(candidate, ExpressionStatementNode):
-                candidate = getattr(candidate, "expression", None)
-            if not isinstance(candidate, AssignmentNode):
-                continue
-            if (
-                self.map_operator(
-                    getattr(candidate, "operator", getattr(candidate, "op", "="))
+        indices = []
+        operations = []
+        wrapped = []
+        if len(records) == 1:
+            for index, statement in enumerate(statements):
+                reduction = self.hlsl_software_subgroup_masked_reduction(
+                    statement, records[0][1]
                 )
-                != "="
-            ):
-                continue
-            wrappers, inner = self.hlsl_software_subgroup_conversion_chain(
-                getattr(candidate, "value", getattr(candidate, "right", None))
+                if reduction is None:
+                    continue
+                if reduction is False:
+                    return None
+                indices.append(index)
+                operations.append(reduction[0])
+                wrapped.append(reduction[1])
+                break
+        else:
+            pending = [node for _operation, node in records]
+            for index, statement in enumerate(statements):
+                if not self.hlsl_software_subgroup_operation_records(statement):
+                    continue
+                reduction = (
+                    self.hlsl_software_subgroup_masked_reduction(statement, pending[0])
+                    if pending
+                    else None
+                )
+                if not reduction:
+                    return None
+                pending.pop(0)
+                indices.append(index)
+                operations.append(reduction[0])
+                wrapped.append(reduction[1])
+            if pending:
+                return None
+        if not indices:
+            return None
+        # Each later block starts a new scope, so declarations before the last
+        # reduction would fall out of scope.
+        if any(
+            isinstance(prefix, (VariableNode, ArrayNode))
+            for prefix in statements[: indices[-1]]
+        ):
+            return None
+        plan = {
+            "statementIndex": indices[0],
+            "operation": operations[0],
+            "wrapped": wrapped[0],
+            "subgroupUniform": self.hlsl_software_subgroup_guard_is_subgroup_uniform(
+                condition, subgroup_names, constant_names
+            ),
+        }
+        if len(indices) > 1:
+            plan.update(
+                statementIndices=tuple(indices),
+                operations=tuple(operations),
+                wrappedReductions=tuple(wrapped),
             )
-            direct = self.hlsl_software_subgroup_direct_operation(inner)
-            if direct is None or direct[2] is not records[0][1] or len(direct[1]) != 1:
-                continue
-            # Converted results reuse the source assignment, whose reduction is
-            # replaced by the predicated result; that substitution needs the
-            # canonical wave node.
-            if wrappers and not isinstance(direct[2], WaveOpNode):
-                return None
-            target = getattr(candidate, "target", getattr(candidate, "left", None))
-            if not isinstance(target, (IdentifierNode, VariableNode)) or not getattr(
-                target, "name", None
-            ):
-                return None
-            # The suffix runs in a second block, so prefix declarations would
-            # fall out of scope.
-            if any(
-                isinstance(prefix, (VariableNode, ArrayNode))
-                for prefix in statements[:index]
-            ):
-                return None
-            return {
-                "statementIndex": index,
-                "operation": direct[0],
-                "wrapped": bool(wrappers),
-                "subgroupUniform": (
-                    self.hlsl_software_subgroup_guard_is_subgroup_uniform(
-                        condition, subgroup_names, constant_names
-                    )
-                ),
-            }
-        return None
+        return plan
 
     def prepare_hlsl_software_subgroup_masked_if_plans(self, entry_function):
         self.hlsl_software_subgroup_masked_if_plans = {}
@@ -5567,6 +5739,10 @@ class HLSLCodeGen:
         constant_names = self.hlsl_software_subgroup_entry_unwritten_names(
             entry_function, self.initial_literal_int_constants(entry_function)
         )
+        # Validation plans guarded ifs that it cannot prove uniform with the
+        # same facts.
+        self.hlsl_software_subgroup_guard_names = subgroup_names
+        self.hlsl_software_subgroup_guard_constant_names = constant_names
         for statement in self.hlsl_software_subgroup_statement_list(
             getattr(entry_function, "body", None)
         ):
@@ -5585,103 +5761,150 @@ class HLSLCodeGen:
         statements = self.hlsl_software_subgroup_statement_list(
             getattr(node, "then_branch", getattr(node, "if_body", None))
         )
-        index = plan["statementIndex"]
-        assignment = statements[index]
-        if isinstance(assignment, ExpressionStatementNode):
-            assignment = assignment.expression
-        wrappers, inner = self.hlsl_software_subgroup_conversion_chain(
-            getattr(assignment, "value", getattr(assignment, "right", None))
-        )
-        operation, arguments, operation_node = (
-            self.hlsl_software_subgroup_direct_operation(inner)
-        )
-        target = getattr(assignment, "target", getattr(assignment, "left", None))
-        value_type = self.expression_result_type(arguments[0])
-        mapped_value_type = self.map_type(value_type)
-        identity = self.HLSL_SOFTWARE_SUBGROUP_MASKED_IDENTITIES[operation].get(
-            mapped_value_type
-        )
-        if (
-            identity is None
-            or not wrappers
-            and self.map_type(self.expression_result_type(target)) != mapped_value_type
-        ):
-            raise self.hlsl_software_subgroup_error(
-                "DirectX masked software subgroup reductions require a matching "
-                "32-bit float, int, or uint or binary16 payload and assignment "
-                "target",
-                workgroup_size=self.hlsl_software_subgroup_workgroup_size,
-                operation=operation,
-                reason="value-type-unsupported",
-                source_location=getattr(operation_node, "source_location", None),
+        reductions = []
+        for index in plan.get("statementIndices", (plan["statementIndex"],)):
+            assignment = statements[index]
+            if isinstance(assignment, ExpressionStatementNode):
+                assignment = assignment.expression
+            wrappers, inner = self.hlsl_software_subgroup_conversion_chain(
+                getattr(assignment, "value", getattr(assignment, "right", None))
             )
-        if (
-            operation == "WaveActiveSum"
-            and mapped_value_type == "float16_t"
-            and not plan.get("subgroupUniform")
-        ):
-            # Pairwise binary16 partials round at every step, so a guard that
-            # splits a subgroup has no established source participation.
-            raise self.hlsl_software_subgroup_error(
-                "DirectX masked binary16 sums require a guard that every "
-                "invocation of a subgroup evaluates alike",
-                workgroup_size=self.hlsl_software_subgroup_workgroup_size,
-                operation=operation,
-                reason="half-masked-participation-unproven",
-                source_location=getattr(operation_node, "source_location", None),
+            operation, arguments, operation_node = (
+                self.hlsl_software_subgroup_direct_operation(inner)
+            )
+            target = getattr(assignment, "target", getattr(assignment, "left", None))
+            value_type = self.expression_result_type(arguments[0])
+            mapped_value_type = self.map_type(value_type)
+            identity = self.HLSL_SOFTWARE_SUBGROUP_MASKED_IDENTITIES[operation].get(
+                mapped_value_type
+            )
+            if (
+                identity is None
+                or not wrappers
+                and self.map_type(self.expression_result_type(target))
+                != mapped_value_type
+            ):
+                raise self.hlsl_software_subgroup_error(
+                    "DirectX masked software subgroup reductions require a matching "
+                    "32-bit float, int, or uint or binary16 payload and assignment "
+                    "target",
+                    workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                    operation=operation,
+                    reason="value-type-unsupported",
+                    source_location=getattr(operation_node, "source_location", None),
+                )
+            if (
+                operation == "WaveActiveSum"
+                and mapped_value_type == "float16_t"
+                and not plan.get("subgroupUniform")
+            ):
+                # Pairwise binary16 partials round at every step, so a guard that
+                # splits a subgroup has no established source participation.
+                raise self.hlsl_software_subgroup_error(
+                    "DirectX masked binary16 sums require a guard that every "
+                    "invocation of a subgroup evaluates alike",
+                    workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                    operation=operation,
+                    reason="half-masked-participation-unproven",
+                    source_location=getattr(operation_node, "source_location", None),
+                )
+            reductions.append(
+                {
+                    "index": index,
+                    "wrappers": wrappers,
+                    "operation": operation,
+                    "arguments": arguments,
+                    "operation_node": operation_node,
+                    "target": target,
+                    "value_type": value_type,
+                    "mapped_value_type": mapped_value_type,
+                    "identity": identity,
+                }
             )
 
         used_names = set(self.local_variable_types)
         used_names.update(self.global_variable_types)
         used_names.update(self.current_identifier_aliases.values())
-        names = {}
-        for role, value_name in (
-            ("active", "crossglSoftwareSubgroupActive"),
-            ("input", "crossglSoftwareSubgroupInput"),
-            ("result", "crossglSoftwareSubgroupResult"),
-        ):
-            names[role] = self.hlsl_unique_local_identifier(value_name, used_names)
-            used_names.add(names[role])
-        self.local_variable_types[names["active"]] = "bool"
-        self.local_variable_types[names["input"]] = mapped_value_type
-        self.local_variable_types[names["result"]] = mapped_value_type
+
+        def unique_name(value_name):
+            name = self.hlsl_unique_local_identifier(value_name, used_names)
+            used_names.add(name)
+            return name
+
+        active_name = unique_name("crossglSoftwareSubgroupActive")
+        self.local_variable_types[active_name] = "bool"
+        for reduction in reductions:
+            reduction["input"] = unique_name("crossglSoftwareSubgroupInput")
+            reduction["result"] = unique_name("crossglSoftwareSubgroupResult")
+            self.local_variable_types[reduction["input"]] = reduction[
+                "mapped_value_type"
+            ]
+            self.local_variable_types[reduction["result"]] = reduction[
+                "mapped_value_type"
+            ]
 
         indent_str = "    " * indent
         inner_indent = "    " * (indent + 1)
         condition = self.hlsl_condition_expression(
             getattr(node, "condition", getattr(node, "if_condition", None))
         )
-        code = f"{indent_str}bool {names['active']} = {condition};\n"
-        code += f"{indent_str}{mapped_value_type} {names['input']} = {identity};\n"
-        code += f"{indent_str}if ({names['active']}) {{\n"
-        code += self.generate_scoped_statement_body(statements[:index], indent + 1)
-        payload = self.generate_expression_with_expected(arguments[0], value_type)
-        code += f"{inner_indent}{names['input']} = {payload};\n"
-        code += f"{indent_str}}}\n"
-        call = self.hlsl_software_subgroup_call(operation, value_type, names["input"])
-        code += f"{indent_str}{mapped_value_type} {names['result']} = {call};\n"
-        code += f"{indent_str}if ({names['active']}) {{\n"
-        if wrappers:
-            # Emit the source assignment, conversions included, with its
-            # reduction replaced by the result every invocation computed.
-            self.hlsl_software_subgroup_result_overrides[id(operation_node)] = names[
-                "result"
-            ]
-            try:
-                code += self.generate_scoped_statement_body(
-                    statements[index:], indent + 1
-                )
-            finally:
-                self.hlsl_software_subgroup_result_overrides.pop(
-                    id(operation_node), None
-                )
-        else:
-            code += f"{inner_indent}{self.generate_expression(target)} = {names['result']};\n"
-            code += self.generate_scoped_statement_body(
-                statements[index + 1 :], indent + 1
+        code = f"{indent_str}bool {active_name} = {condition};\n"
+        previous = None
+        for reduction in reductions:
+            mapped_value_type = reduction["mapped_value_type"]
+            code += (
+                f"{indent_str}{mapped_value_type} {reduction['input']} = "
+                f"{reduction['identity']};\n"
             )
+            code += f"{indent_str}if ({active_name}) {{\n"
+            if previous is None:
+                code += self.generate_scoped_statement_body(
+                    statements[: reduction["index"]], indent + 1
+                )
+            else:
+                # The previous assignment and the statements up to this
+                # reduction keep their source order under the guard.
+                code += self.generate_hlsl_software_subgroup_masked_assignment(
+                    previous,
+                    statements[previous["index"] : reduction["index"]],
+                    indent + 1,
+                )
+            payload = self.generate_expression_with_expected(
+                reduction["arguments"][0], reduction["value_type"]
+            )
+            code += f"{inner_indent}{reduction['input']} = {payload};\n"
+            code += f"{indent_str}}}\n"
+            call = self.hlsl_software_subgroup_call(
+                reduction["operation"], reduction["value_type"], reduction["input"]
+            )
+            code += f"{indent_str}{mapped_value_type} {reduction['result']} = {call};\n"
+            previous = reduction
+        code += f"{indent_str}if ({active_name}) {{\n"
+        code += self.generate_hlsl_software_subgroup_masked_assignment(
+            previous, statements[previous["index"] :], indent + 1
+        )
         code += f"{indent_str}}}\n"
         return code
+
+    def generate_hlsl_software_subgroup_masked_assignment(
+        self, reduction, statements, indent
+    ):
+        """Emit a predicated reduction's assignment and the statements after it.
+
+        ``statements`` starts with the reduction's source assignment.
+        """
+        if reduction["wrappers"]:
+            # Emit the source assignment, conversions included, with its
+            # reduction replaced by the result every invocation computed.
+            key = id(reduction["operation_node"])
+            self.hlsl_software_subgroup_result_overrides[key] = reduction["result"]
+            try:
+                return self.generate_scoped_statement_body(statements, indent)
+            finally:
+                self.hlsl_software_subgroup_result_overrides.pop(key, None)
+        target = self.generate_expression(reduction["target"])
+        code = f"{'    ' * indent}{target} = {reduction['result']};\n"
+        return code + self.generate_scoped_statement_body(statements[1:], indent)
 
     def validate_hlsl_software_subgroup_control_flow(
         self,
@@ -5715,16 +5938,76 @@ class HLSLCodeGen:
             mutable_names,
             self.walk_ast,
         )
+        reassigned_names = self.hlsl_software_subgroup_reassigned_candidates(
+            function, mutable_names, call_mutations
+        )
+        masked_if_plans = getattr(self, "hlsl_software_subgroup_masked_if_plans", {})
+
+        def apply_reassignments(statement, names, components):
+            """Follow the writes of ``reassigned_names`` in ``statement``."""
+            written = reassigned_names & self.hlsl_software_subgroup_written_names(
+                statement
+            )
+            if not written:
+                return
+            node = statement
+            if isinstance(node, ExpressionStatementNode):
+                node = getattr(node, "expression", None)
+            if isinstance(node, AssignmentNode):
+                name = self.hlsl_software_subgroup_assignment_target_name(node)
+                if self.map_operator(
+                    getattr(node, "operator", getattr(node, "op", "="))
+                ) == "=" and self.hlsl_software_subgroup_uniform_expression(
+                    getattr(node, "value", getattr(node, "right", None)),
+                    names,
+                    components,
+                ):
+                    names.add(name)
+                else:
+                    names.discard(name)
+                return
+            if isinstance(node, (BlockNode, list)):
+                for child in self.hlsl_software_subgroup_statement_list(node):
+                    apply_reassignments(child, names, components)
+                return
+            if (
+                isinstance(node, IfNode)
+                and not getattr(node, "else_if_conditions", None)
+                and self.hlsl_software_subgroup_uniform_expression(
+                    node.condition, names, components
+                )
+            ):
+                # Every invocation takes the same branch, so a fact holds
+                # afterwards when it holds at the end of both branches.
+                results = []
+                for branch in (node.then_branch, node.else_branch):
+                    branch_names = set(names)
+                    for child in self.hlsl_software_subgroup_statement_list(branch):
+                        apply_reassignments(child, branch_names, components)
+                    results.append(branch_names)
+                merged = set.intersection(*results)
+                names.clear()
+                names.update(merged)
+                return
+            names.difference_update(written)
 
         def validate_statements(statements, names, components):
+            previous = None
             for statement in self.hlsl_software_subgroup_statement_list(statements):
+                if previous is not None:
+                    apply_reassignments(previous, names, components)
+                previous = statement
                 if isinstance(statement, VariableNode):
                     # Facts are lexical and apply only to locals never written
-                    # or passed to a possibly mutating call in this function.
+                    # or passed to a possibly mutating call in this function,
+                    # or written only where their writes can be followed.
                     names.discard(statement.name)
                     components.pop(statement.name, None)
                     if (
-                        statement.name not in mutable_names
+                        (
+                            statement.name not in mutable_names
+                            or statement.name in reassigned_names
+                        )
                         and (
                             self.hlsl_software_subgroup_uniform_returns.value_type(
                                 statement.var_type
@@ -5751,25 +6034,48 @@ class HLSLCodeGen:
                     validate_statements(statement, set(names), dict(components))
                     continue
                 if isinstance(statement, IfNode):
+                    conditions = [statement.condition] + list(
+                        getattr(statement, "else_if_conditions", []) or []
+                    )
+                    calls_helpers = any(
+                        isinstance(node, FunctionCallNode)
+                        and id(node) in dependent_calls
+                        for node in self.walk_ast(statement)
+                    )
                     if (
                         entry
-                        and id(statement)
-                        in getattr(self, "hlsl_software_subgroup_masked_if_plans", {})
-                        and not any(
-                            isinstance(node, FunctionCallNode)
-                            and id(node) in dependent_calls
-                            for node in self.walk_ast(statement)
+                        and id(statement) not in masked_if_plans
+                        and not calls_helpers
+                        and not all(
+                            self.hlsl_software_subgroup_uniform_expression(
+                                condition, names, components
+                            )
+                            for condition in conditions
                         )
                     ):
+                        # A guard that may diverge can still predicate its
+                        # reductions, even inside a uniform loop.
+                        plan = self.hlsl_software_subgroup_masked_if_plan(
+                            statement,
+                            getattr(
+                                self, "hlsl_software_subgroup_guard_names", frozenset()
+                            ),
+                            getattr(
+                                self,
+                                "hlsl_software_subgroup_guard_constant_names",
+                                frozenset(),
+                            ),
+                            allow_multiple=True,
+                        )
+                        if plan is not None:
+                            masked_if_plans[id(statement)] = plan
+                    if entry and id(statement) in masked_if_plans and not calls_helpers:
                         # Every invocation reaches the predicated collective;
                         # only the planned prefix and suffix stay conditional.
                         validate_statements(
                             statement.then_branch, set(names), dict(components)
                         )
                         continue
-                    conditions = [statement.condition] + list(
-                        getattr(statement, "else_if_conditions", []) or []
-                    )
                     if not all(
                         self.hlsl_software_subgroup_uniform_expression(
                             condition, names, components
@@ -5914,6 +6220,8 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_uniform_returns = UniformReturnAnalysis({}, set())
         self.hlsl_software_subgroup_masked_if_plans = {}
         self.hlsl_software_subgroup_result_overrides = {}
+        self.hlsl_software_subgroup_guard_names = set()
+        self.hlsl_software_subgroup_guard_constant_names = set()
         if self.software_subgroup_width is None:
             return
 

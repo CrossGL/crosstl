@@ -769,3 +769,210 @@ def test_guarded_half_reductions_execute(tmp_path, shape):
     observations = evidence["records"]["generated"]["details"]["inputObservations"]
     assert len(observations) == 1
     assert all(item["unchanged"] for item in observations.values())
+
+
+# MLX's RMS VJP reduces two partials under one ``simd_group_id == 0`` guard,
+# inside a row loop whose bound is clamped before the loop. Every invocation
+# runs each predicated reduction in source order, so a later payload sees the
+# earlier result, and the statements between them still run only where the
+# guard held. A second guard splits a subgroup.
+GUARDED_SEQUENCE_FIELDS = 4
+GUARDED_SEQUENCE_GROUPS = 3
+
+
+def _guarded_sequence_source(size):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+kernel void guarded_sequence(const device uint* inputs [[buffer(0)]],
+                             device uint* outputs [[buffer(1)]],
+                             uint invocation [[thread_index_in_threadgroup]],
+                             uint3 group [[threadgroup_position_in_grid]],
+                             uint sid [[simdgroup_index_in_threadgroup]]) {{
+    uint index = group.x * {size}u + invocation;
+    float value = as_type<float>(inputs[index]);
+    float first = -1.0;
+    float second = -2.0;
+    float scaled = -3.0;
+    uint count = 5u;
+    uint end = group.x + 2u;
+    if (end > 3u) {{
+        end = 3u;
+    }}
+    for (uint step = group.x; step < end; ++step) {{
+        if (sid == 0u) {{
+            scaled = value * float(step + 1u);
+            first = simd_sum(scaled);
+            scaled = first + value;
+            second = simd_max(scaled);
+        }}
+        if (invocation < 40u) {{
+            count = simd_sum(count + step);
+        }}
+    }}
+    outputs[index * {GUARDED_SEQUENCE_FIELDS}u] = as_type<uint>(first);
+    outputs[index * {GUARDED_SEQUENCE_FIELDS}u + 1u] = as_type<uint>(second);
+    outputs[index * {GUARDED_SEQUENCE_FIELDS}u + 2u] = as_type<uint>(scaled);
+    outputs[index * {GUARDED_SEQUENCE_FIELDS}u + 3u] = count;
+}}
+"""
+
+
+def _float_word(value):
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _guarded_sequence_reference(size):
+    words, wanted = [], []
+    for group in range(GUARDED_SEQUENCE_GROUPS):
+        # The first group's guarded subgroup holds -0.0 only, which the sums
+        # keep only if inactive invocations contribute -0.0. Other values are
+        # small integers, so every binary32 sum is exact in any order.
+        values = [
+            -0.0 if group == 0 and lane < 32 else float((lane * 5 + group) % 11 - 5)
+            for lane in range(size)
+        ]
+        words.extend(_float_word(value) for value in values)
+        first, second, scaled = [-1.0] * size, [-2.0] * size, [-3.0] * size
+        count = [5] * size
+        guarded = range(min(32, size))
+        for step in range(group, min(group + 2, 3)):
+            total = -0.0
+            for lane in guarded:
+                scaled[lane] = values[lane] * (step + 1)
+                total += scaled[lane]
+            for lane in guarded:
+                first[lane] = total
+                scaled[lane] = total + values[lane]
+            largest = max(scaled[lane] for lane in guarded)
+            for lane in guarded:
+                second[lane] = largest
+            for start in range(0, size, 32):
+                active = range(start, min(start + 32, size, 40))
+                partial = sum(count[lane] + step for lane in active) % 2**32
+                for lane in active:
+                    count[lane] = partial
+        for lane in range(size):
+            wanted.extend(
+                [
+                    _float_word(first[lane]),
+                    _float_word(second[lane]),
+                    _float_word(scaled[lane]),
+                    count[lane],
+                ]
+            )
+    return words, wanted
+
+
+def test_guarded_sequence_reference_covers_edges():
+    _, wanted = _guarded_sequence_reference(80)
+    first = wanted[0::GUARDED_SEQUENCE_FIELDS]
+    count = wanted[3::GUARDED_SEQUENCE_FIELDS]
+    # -0.0 survives the predicated sum, untouched lanes keep their values, and
+    # the clamped bound runs the last group once.
+    assert first[0] == 0x80000000 and _float_word(-1.0) in first
+    assert count[79] == 5 and count[39] != count[40] and count[32] != count[0]
+    _, single = _guarded_sequence_reference(32)
+    assert 5 not in single[3::GUARDED_SEQUENCE_FIELDS]
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("shape", [(32, 1, 1), (64, 1, 1), (80, 1, 1)])
+def test_guarded_sequence_package_predicates_reductions(tmp_path, target, shape):
+    _, descriptor, package = _package(
+        tmp_path,
+        target,
+        "float",
+        shape,
+        source=_guarded_sequence_source(math.prod(shape)),
+    )
+    generated = (package / descriptor["artifact"]["packagePath"]).read_text()
+    for name in ("simd_sum(", "simd_max(", "WaveActive", "subgroupAdd"):
+        assert name not in generated
+    # The split guard is always predicated; the subgroup guard is when the
+    # group holds more than one subgroup.
+    actives = generated.count("bool crossglSoftwareSubgroupActive")
+    assert actives == (1 if math.prod(shape) == 32 else 2)
+    lines = [line.strip() for line in generated.splitlines()]
+    if math.prod(shape) > 32:
+        # The second payload follows the first result under the guard.
+        first = next(
+            index
+            for index, line in enumerate(lines)
+            if line.startswith("first = crossglSoftwareSubgroupResult")
+        )
+        assert lines[first + 1].startswith("scaled = ")
+        assert lines[first + 2].startswith("crossglSoftwareSubgroupInput")
+    compiled = tmp_path / "compiled"
+    compiled.mkdir()
+    _compile(generated, target, compiled)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_guarded_sequence_rejects_divergent_loop_bounds(tmp_path, target):
+    # A bound clamped only where an invocation-dependent guard holds is not
+    # uniform, so the loop around the collectives stays rejected.
+    source = _guarded_sequence_source(64).replace(
+        "if (end > 3u) {", "if (invocation > 3u) {"
+    )
+    (tmp_path / "products.metal").write_text(source, encoding="utf-8")
+    target_options = {"software_subgroup_width": 32}
+    if target == "directx":
+        target_options["relative_wave_shuffle_out_of_range"] = "self"
+    report = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("products.metal",),
+            targets=(target,),
+            output_dir="out",
+            workgroup_size=(64, 1, 1),
+            source_options={"metal": {"target_options": {target: target_options}}},
+        ),
+        format_output=False,
+    ).to_json()
+    assert report["summary"]["failedCount"] == 1
+    messages = [item["message"] for item in report["diagnostics"]]
+    assert any("statically uniform" in message for message in messages), messages
+
+
+@pytest.mark.parametrize("shape", [(32, 1, 1), (64, 1, 1), (80, 1, 1)])
+def test_guarded_sequence_executes(tmp_path, shape):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required partial subgroup readbacks")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    size = math.prod(shape)
+    words, wanted = _guarded_sequence_reference(size)
+    wanted.extend([0xDEADBEEF] * 32)
+    source, descriptor, package = _package(
+        tmp_path, target, "float", shape, source=_guarded_sequence_source(size)
+    )
+
+    def payload(data):
+        return dict(dtype="uint32", shape=[len(data)], values=data)
+
+    inputs = _bound_values(
+        descriptor,
+        {"inputs": payload(words), "outputs": payload([0xDEADBEEF] * len(wanted))},
+    )
+    expected = _bound_values(descriptor, {"outputs": payload(wanted)})
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        dict(
+            workgroupCount=[GUARDED_SEQUENCE_GROUPS, 1, 1],
+            workgroupSize=list(shape),
+        ),
+        observe_inputs=[name for name in inputs if name not in expected],
+    )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="guarded_sequence",
+    )
+    evidence = json.loads((tmp_path / "evidence.json").read_text())
+    observations = evidence["records"]["generated"]["details"]["inputObservations"]
+    assert len(observations) == 1
+    assert all(item["unchanged"] for item in observations.values())
