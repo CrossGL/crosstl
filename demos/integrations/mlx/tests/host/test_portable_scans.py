@@ -661,7 +661,7 @@ def test_scan_bounded_verification_requires_complete_result_records(
     (packages / "index.json").write_text(json.dumps({"target": "metal"}))
 
     def run(command, **kwargs):
-        assert command[2:4] == ["--timeout-seconds", "900"]
+        assert command[2:4] == ["--timeout-seconds", "1800"]
         assert command[-2:] == ["--output-dir", str(output)]
         output.mkdir()
         records = []

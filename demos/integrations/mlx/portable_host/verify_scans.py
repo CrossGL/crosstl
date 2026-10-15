@@ -372,8 +372,10 @@ def run_bounded(root, packages, output):
     command = [
         sys.executable,
         str(Path(__file__).resolve().parents[4] / "tools/run_bounded_command.py"),
+        # WARP needs about 17 s per case; 900 s covered only 49 of the 54
+        # cases on a slow Windows runner.
         "--timeout-seconds",
-        "900",
+        "1800",
         "--label",
         "MLX scan host verification",
         "--",
