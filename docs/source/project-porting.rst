@@ -634,6 +634,22 @@ branch. Float32 results must stay within 5e-5 plus 2^-21 relative of a float64
 reference, and 16-bit results must be a correct rounding of a value in that
 interval. This is a 6/17,832 increment.
 
+``softmax.current-tree.translation.json`` pins the ten ``softmax.metal`` entries
+and their 60 artifacts at the same block and looped group sizes. The non-precise
+float16 and bfloat16 kernels accumulate in their storage type, so OpenGL and
+DirectX predicate binary16 sums and maxima and the bfloat16 overloads' converted
+float reductions under ``simd_group_id == 0``. A predicated binary16 sum is only
+planned when the guard depends on the subgroup index alone, so each subgroup
+takes part completely or not at all and the pairwise rounding order is the
+unguarded one; guards that split a subgroup report
+``half-masked-participation-unproven``. DirectX also lowers binary16 minima and
+maxima, ordering signed zeros and ignoring NaN lanes as the binary32 lowering
+does. All three backends execute every element of the logsumexp cases. Results
+must be a correct rounding of a value within a per-element bound on the kernel's
+own rounding (one rounding per operation in the accumulation type, Metal's
+``fast::exp`` allowance and each reduction's depth), and rows containing
+``+inf`` must be NaN as in MLX. This is a 10/17,832 increment.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

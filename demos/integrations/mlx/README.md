@@ -654,6 +654,33 @@ upstream. Rows whose every element is `-inf` are not covered because GLSL
 leaves `log(0)` undefined. This covers 6/17,832 entries; it does not run the
 upstream MLX test suite or redirect the MLX host runtime.
 
+`contracts/softmax.current-tree.translation.json` pins the ten `softmax.metal`
+entries (block and looped kernels for float32, float16 and bfloat16, plus the
+precise float16 and bfloat16 variants that accumulate in float) and their 60
+artifacts, at the same 32-, 288- and 1,024-thread block groups and 1,024-thread
+looped groups as logsumexp. The non-precise float16 and bfloat16 kernels
+accumulate in their storage type, so OpenGL and DirectX now predicate binary16
+sums and maxima, and the bfloat16 overloads' converted float reductions, under
+`simd_group_id == 0`. A predicated binary16 sum requires a guard on the
+subgroup index alone, so each subgroup takes part completely or not at all and
+the pairwise rounding order is unchanged; guards that split a subgroup are
+still rejected. Required CI executes all ten entries on Metal, Mesa EGL and
+Direct3D 12 WARP over the logsumexp cases, checking every element of every row.
+Each output is checked against a float64 softmax with a per-element bound on the
+kernel's own rounding: one rounding per operation in the accumulation type,
+Metal's `fast::exp` allowance of 3 + 2|x| binary32 units in the last place, and
+the depth of each reduction (31 sequential binary32 additions or the five
+rounded levels of the binary16 tree). Results must be a correct rounding of a
+value inside that bound, so the binary32 and precise variants stay within about
+1e-5 relative while the bound for the worst-case binary16 and bfloat16 chains of
+the looped kernel reaches 4% and 18%. Rows that contain `+inf` must be NaN, as
+in MLX's kernel. Every dispatch pads the input with 16 NaNs and checks 16 output
+guards and two unchanged inputs, and Metal also runs the unchanged upstream
+kernel against the same bounds. OpenGL relies on host preconditions that the
+row offsets and composed element indices fit in signed 32-bit range. This covers
+10/17,832 entries; it does not run the upstream MLX test suite or redirect the
+MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
