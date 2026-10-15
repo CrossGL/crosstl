@@ -181,10 +181,11 @@ OFFSET_GUARD = 1 << 20
 # relative), divisions within DIVISION_ERROR (2.5 units), exp2 within the
 # larger of four and 3 + 2|y| units (GLSL's exp2 bound, D3D's 21 bits, Metal's
 # precise exp2) and the angle error propagates through exp2. Metal's
-# fast::cos and fast::sin, which the translation lowers to each target's
-# default cos and sin, may be TRIG_ABSOLUTE + TRIG_RELATIVE * |theta| from the
-# exact value: twice the worst error of Apple's fast functions measured on the
-# pinned upstream kernel's arguments, and many times that of precise cos/sin.
+# fast::cos and fast::sin, which translated Metal keeps and OpenGL and DirectX
+# lower to their default cos and sin, may be TRIG_ABSOLUTE + TRIG_RELATIVE *
+# |theta| from the exact value: twice the worst error of Apple's fast functions
+# measured on the pinned upstream kernel's arguments, and many times that of
+# precise cos/sin.
 # Results must then be a correct rounding to the storage type of a value within
 # the bound; elements rope does not rotate must keep their exact bits.
 OP_ERROR = 2.0**-23
@@ -655,7 +656,7 @@ def _expected_validation_contract():
             "trigRelative": TRIG_RELATIVE,
             "tiny": TINY,
         },
-        "fastMathLowering": "metal-fast-cos-sin-become-default-cos-sin",
+        "fastMathLowering": "metal-keeps-fast-cos-sin-others-use-default-cos-sin",
         "results": "correct-rounding-of-a-value-within-the-error-bound",
         "unrotatedElements": "exact-bits-of-the-input-copy",
         "inputGuardCount": INPUT_GUARD_COUNT,
@@ -1181,8 +1182,14 @@ def _dispatch(descriptor, package, target, entry, data):
 
 def _assert_lowering(text, target, entry, constants):
     assert "unsupported" not in text
-    # fast::cos and fast::sin become each target's default functions.
-    assert "fast::" not in text
+    if target == "metal":
+        # rope.metal's fast::cos and fast::sin keep their namespace.
+        assert text.count("metal::fast::cos(theta)") == 1
+        assert text.count("metal::fast::sin(theta)") == 1
+        assert text.count("fast::") == 2
+    else:
+        # OpenGL and DirectX call their default cos and sin.
+        assert "fast::" not in text
     assert text.count("cos(theta)") == text.count("sin(theta)") == 1
     assert ("exp2(" in text) is not _freqs(entry)
     for name, value in constants.items():
@@ -1341,6 +1348,14 @@ def test_current_mlx_rope_native_parity(
                 ),
                 encoding="utf-8",
             )
+            if target == "metal":
+                # The round trip keeps fast::cos and fast::sin, so the
+                # translated kernel reproduces the upstream kernel bit for bit.
+                assert [
+                    case["case"]
+                    for case in evidence
+                    if not case["upstream"]["bitIdenticalToTranslated"]
+                ] == []
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
 

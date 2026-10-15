@@ -937,14 +937,15 @@ EXTERNAL_FIXTURES = [
         "source_path": "mlx/backend/metal/kernels/rope.metal",
         "roundtrip": True,
         "contains": [
-            "float costheta = cos(theta);",
-            "float sintheta = sin(theta);",
+            "float costheta = fast::cos(theta);",
+            "float sintheta = fast::sin(theta);",
             "float inv_freq = exp2((-d) * base);",
         ],
         "not_contains": [
             "metal_u3a_u3afast_u3a_u3acos",
             "metal_u3a_u3afast_u3a_u3asin",
             "metal_u3a_u3aexp2",
+            "fast::exp2",
         ],
         "source": (
             """

@@ -140,7 +140,7 @@ float default_mode(float x) { return metal::log2(x); }
     generated = _translate(tmp_path, source, operand=operand, accuracy=accuracy)
     assert "return log2__metal_overload_1(x);" in generated
     assert "return log2__metal_overload_2(x);" in generated
-    assert "return log2(x);" in generated
+    assert "return fast::log2(x);" in generated
     assert generated.count("return __crossgl_metal_log2_float(float(x));") == (
         2 if operand or accuracy else 0
     )

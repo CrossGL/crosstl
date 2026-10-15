@@ -99,7 +99,8 @@ def test_precise_trig_preserves_other_modes_and_user_functions(tmp_path, operati
         "crossgl",
     )
     assert generated.count(f"return __crossgl_metal_precise_{operation}_float(x);") == 2
-    assert generated.count(f"return {operation}(x);") == 2
+    assert generated.count(f"return {operation}(x);") == 1
+    assert generated.count(f"return fast::{operation}(x);") == 1
     assert f"return {operation}__metal_overload_1(x);" in generated
     other = "sin" if operation == "cos" else "cos"
     assert f"__crossgl_metal_precise_{other}_" not in generated

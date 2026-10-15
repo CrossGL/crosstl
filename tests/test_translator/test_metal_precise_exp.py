@@ -94,7 +94,8 @@ def test_precise_exp_keeps_other_modes_and_source_functions(tmp_path):
         "crossgl",
     )
     assert generated.count("return __crossgl_metal_precise_exp_float(x);") == 2
-    assert generated.count("return exp(x);") == 2
+    assert generated.count("return exp(x);") == 1
+    assert generated.count("return fast::exp(x);") == 1
     assert "return exp__metal_overload_1(x);" in generated
 
 

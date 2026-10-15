@@ -578,9 +578,10 @@ an exact pass and three passes with a tail, plus negative targets, masked
 within 5e-5 absolute plus 5e-5 relative of a float64 reference; 16-bit VJP
 results must be within one unit in the last place, with at least 99% correctly
 rounded. OpenGL relies on host preconditions that row offsets and element
-indices fit in signed 32-bit range. The Metal round trip lowers ``fast::exp`` to
-the default ``exp``, so translated Metal is close to, not bit-identical with,
-upstream. Metal also runs both unchanged upstream kernels. Together these cover
+indices fit in signed 32-bit range. The Metal round trip keeps ``fast::exp``,
+so translated Metal must match the upstream kernel bit for bit; OpenGL and
+DirectX call their default ``exp``. Metal also runs both unchanged upstream
+kernels. Together these cover
 7/17,832 entries.
 
 ``arange.current-tree.translation.json`` pins all 11 ``arange.metal`` entries
@@ -632,7 +633,8 @@ length, covering masked ``-inf`` entries, values that overflow ``exp`` without
 the maximum, running-sum rescaling across passes and the infinite-maximum
 branch. Float32 results must stay within 5e-5 plus 2^-21 relative of a float64
 reference, and 16-bit results must be a correct rounding of a value in that
-interval. This is a 6/17,832 increment.
+interval. The Metal round trip keeps ``fast::exp`` and must match the unchanged
+upstream kernel bit for bit. This is a 6/17,832 increment.
 
 ``softmax.current-tree.translation.json`` pins the ten ``softmax.metal`` entries
 and their 60 artifacts at the same block and looped group sizes. The non-precise
@@ -648,7 +650,8 @@ does. All three backends execute every element of the logsumexp cases. Results
 must be a correct rounding of a value within a per-element bound on the kernel's
 own rounding (one rounding per operation in the accumulation type, Metal's
 ``fast::exp`` allowance and each reduction's depth), and rows containing
-``+inf`` must be NaN as in MLX. This is a 10/17,832 increment.
+``+inf`` must be NaN as in MLX. Translated Metal keeps ``fast::exp`` and must
+match the unchanged upstream kernel bit for bit. This is a 10/17,832 increment.
 
 ``layer_norm.current-tree.translation.json`` pins the twelve ``layer_norm.metal``
 entries and their 108 artifacts: the single-row forward kernel at 32, 288 and
@@ -716,9 +719,10 @@ the host can select. DirectX materializes the constants; Metal and OpenGL
 specialize them when the runtime creates the pipeline. All three backends
 execute 504 dispatches covering decode offsets, ragged head groups, per-batch
 offsets, partial rotations, strided and transposed inputs and a 4,000-position
-context. Translation lowers ``fast::cos`` and ``fast::sin`` to each target's
-default functions, so results are checked against a per-element bound on the
-kernel's binary32 rounding that allows ``2^-19 + 2^-20 * abs(theta)`` per
+context. Translated Metal keeps ``fast::cos`` and ``fast::sin`` and must match
+the unchanged upstream kernel bit for bit. OpenGL and DirectX lower them to
+their default functions, so results are checked against a per-element bound on
+the kernel's binary32 rounding that allows ``2^-19 + 2^-20 * abs(theta)`` per
 trigonometric value, about twice the measured error of Apple's fast
 functions; unrotated elements must keep their exact bits. Metal also runs the
 unchanged upstream kernel against the same bound. OpenGL relies on one host

@@ -11588,7 +11588,10 @@ def test_codegen_prefers_qualified_bfloat_builtin_overload_result():
         == 2
     )
     assert "return consume__metal_overload_1(sincos(value, cosine));" in reference
-    assert "return consume__metal_overload_1(exp(value));" in fast
+    # fast:: selects the float overload (half converts implicitly) and keeps
+    # its namespace for the Metal backend.
+    assert "return consume__metal_overload_1(fast::exp(value));" in fast
+    assert "consume__metal_overload_2(fast::exp(value))" not in fast
     assert "consume__metal_overload_2(exp(value))" not in fast
     assert "consume__metal_overload_3(exp(value))" not in standard
     assert "consume__metal_overload_3(exp(value))" not in custom

@@ -26,62 +26,62 @@
     "metal": {
       "block_logsumexp_float32": {
         "32": {
-          "sha256": "aac63681ad11717ac099b488198767e89231ecb127acf931ecd68840f755d5ab",
-          "sizeBytes": 2273
+          "sha256": "d6e19ddba8c4e2e77809774bd6cedfd6ea064717d5276808c06728dd72883400",
+          "sizeBytes": 2286
         },
         "288": {
-          "sha256": "aac63681ad11717ac099b488198767e89231ecb127acf931ecd68840f755d5ab",
-          "sizeBytes": 2273
+          "sha256": "d6e19ddba8c4e2e77809774bd6cedfd6ea064717d5276808c06728dd72883400",
+          "sizeBytes": 2286
         },
         "1024": {
-          "sha256": "aac63681ad11717ac099b488198767e89231ecb127acf931ecd68840f755d5ab",
-          "sizeBytes": 2273
+          "sha256": "d6e19ddba8c4e2e77809774bd6cedfd6ea064717d5276808c06728dd72883400",
+          "sizeBytes": 2286
         }
       },
       "looped_logsumexp_float32": {
         "1024": {
-          "sha256": "106b5fdab60aca830c67876e6beda25e7008cfa83c6773c2e05a9d8d89167526",
-          "sizeBytes": 2339
+          "sha256": "453bfb58d92359288ef1ee0bda27cec54ecc7e5aa69bea5f63d92f13e0907b8d",
+          "sizeBytes": 2391
         }
       },
       "block_logsumexp_float16": {
         "32": {
-          "sha256": "aac0cb2860b6499f9c8679b190081ad4da2e10089550a6207d99423d8f18258e",
-          "sizeBytes": 2269
+          "sha256": "cfcd84f7446d5e6f675a86156562f91f91997c7d6e68ccabf0e280c2d6a5d91d",
+          "sizeBytes": 2282
         },
         "288": {
-          "sha256": "aac0cb2860b6499f9c8679b190081ad4da2e10089550a6207d99423d8f18258e",
-          "sizeBytes": 2269
+          "sha256": "cfcd84f7446d5e6f675a86156562f91f91997c7d6e68ccabf0e280c2d6a5d91d",
+          "sizeBytes": 2282
         },
         "1024": {
-          "sha256": "aac0cb2860b6499f9c8679b190081ad4da2e10089550a6207d99423d8f18258e",
-          "sizeBytes": 2269
+          "sha256": "cfcd84f7446d5e6f675a86156562f91f91997c7d6e68ccabf0e280c2d6a5d91d",
+          "sizeBytes": 2282
         }
       },
       "looped_logsumexp_float16": {
         "1024": {
-          "sha256": "eb9db7af5d861dc0e5a399f5d68c3dd9cc53e6e922fd92c0b3023503bc76987f",
-          "sizeBytes": 2335
+          "sha256": "a3798dd9f0aa5fcf15fea0948decf2c209093230e63922da4b046fe4c70385ab",
+          "sizeBytes": 2387
         }
       },
       "block_logsumexp_bfloat16": {
         "32": {
-          "sha256": "5ae7ec4fd702d2a40080fa3713e58d0f1316b333e45b6fe7f82673a4f8f25ed6",
-          "sizeBytes": 2278
+          "sha256": "a2c909fbcf03a997ff9e783bd4a95a7bb2babc55167a3f2eae88dd9be3348b23",
+          "sizeBytes": 2291
         },
         "288": {
-          "sha256": "5ae7ec4fd702d2a40080fa3713e58d0f1316b333e45b6fe7f82673a4f8f25ed6",
-          "sizeBytes": 2278
+          "sha256": "a2c909fbcf03a997ff9e783bd4a95a7bb2babc55167a3f2eae88dd9be3348b23",
+          "sizeBytes": 2291
         },
         "1024": {
-          "sha256": "5ae7ec4fd702d2a40080fa3713e58d0f1316b333e45b6fe7f82673a4f8f25ed6",
-          "sizeBytes": 2278
+          "sha256": "a2c909fbcf03a997ff9e783bd4a95a7bb2babc55167a3f2eae88dd9be3348b23",
+          "sizeBytes": 2291
         }
       },
       "looped_logsumexp_bfloat16": {
         "1024": {
-          "sha256": "407793eb5dcb5fe73c6238ef54542160eb198e9ea637be2fece50186a17ee567",
-          "sizeBytes": 2344
+          "sha256": "47861555a5f51025eee39e8cc06b2906d58e9c267c63c170ebfd2bdca33bfd54",
+          "sizeBytes": 2396
         }
       }
     },
@@ -416,7 +416,7 @@
       "looped_logsumexp_bfloat16": 9
     },
     "completeCorpusEntryCount": 17832,
-    "fastMathLowering": "metal-fast-exp-becomes-default-exp",
+    "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
     "allMaskedRowsCovered": false,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false

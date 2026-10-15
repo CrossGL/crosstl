@@ -50,6 +50,7 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..math_namespaces import METAL_FAST_MATH_FUNCTIONS, METAL_MATH_NAMESPACE_ANNOTATION
 from ..resource_identity import resource_identity_marker
 from ..source_licenses import source_license_comments
 from ..structure_conversions import (
@@ -11054,6 +11055,8 @@ class MetalCodeGen:
                     )
                 else:
                     args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                if self.metal_fast_math_call(expr, func_name):
+                    return f"metal::fast::{func_name}({args})"
                 call_name = (
                     f"metal::{func_name}"
                     if self.metal_function_name_is_shadowed(func_name)
@@ -11491,6 +11494,31 @@ class MetalCodeGen:
             func_name in self.local_variable_types
             or func_name in self.user_function_names
         )
+
+    # Metal's fast:: overloads take float scalars and vectors; half and bfloat
+    # scalars convert implicitly, exactly as in the source call.
+    METAL_FAST_MATH_ARGUMENT_TYPES = frozenset(
+        {"float", "float2", "float3", "float4", "half", "bfloat"}
+    )
+
+    def metal_fast_math_call(self, expr, func_name):
+        """Return whether a builtin call keeps its source ``metal::fast::`` name."""
+        if func_name not in METAL_FAST_MATH_FUNCTIONS:
+            return False
+        get_annotation = getattr(expr, "get_annotation", None)
+        if not callable(get_annotation):
+            return False
+        if get_annotation(METAL_MATH_NAMESPACE_ANNOTATION) != "fast":
+            return False
+        if self.metal_function_name_is_shadowed(func_name):
+            return False
+        for argument in expr.args:
+            argument_type = self.expression_result_type(argument)
+            if argument_type is None:
+                return False
+            if self.map_type(argument_type) not in self.METAL_FAST_MATH_ARGUMENT_TYPES:
+                return False
+        return True
 
     def metal_explicit_as_type_target(self, func_name, args):
         if (

@@ -77,28 +77,28 @@
     },
     "metal": {
       "cross_entropy_float32": {
-        "sha256": "b078800bd5689a583b19978efe38f7f3478ef5bd116e7f15e22a9f497488b3ec",
-        "sizeBytes": 3008
+        "sha256": "1ed8a2b1b2c7fcc84df4d84c0ce9f68d360b930475421c528ed25ae38fb40577",
+        "sizeBytes": 3060
       },
       "cross_entropy_vjp_float32": {
-        "sha256": "e636c3a2b50207ab61b82703876444cd17404333dc54afad1540daa361eeaf19",
-        "sizeBytes": 1872
+        "sha256": "85f2c36ab628a0a0fa1fa1809938bc0f0559aa2852558749d12e702cda1d4694",
+        "sizeBytes": 1898
       },
       "cross_entropy_float16": {
-        "sha256": "87db7e894150164c3d32ffddb87d39f6899661687b285d00b80188cf79b5348e",
-        "sizeBytes": 3007
+        "sha256": "91569e4f79bdc79e0a020ae1d228a72e905b167ff6a0df68c782d642ff5f3fdf",
+        "sizeBytes": 3059
       },
       "cross_entropy_vjp_float16": {
-        "sha256": "23716a08ca1bcb8cd6faba25330caddeae423abb23f251b8bbe7ed1dda3013a4",
-        "sizeBytes": 1868
+        "sha256": "91e8bd5e138d51b839b244e21f21d11006f73e7d707598aafb2e2996a70dc547",
+        "sizeBytes": 1894
       },
       "cross_entropy_bfloat16": {
-        "sha256": "28fdffe8cf2d423e52f9d4e7dd8f32951a6e664d63ff86b258337c31034e7738",
-        "sizeBytes": 3010
+        "sha256": "212846540589530d9076dc032d0e1f641dfb8425ccffd81920115db584d728d8",
+        "sizeBytes": 3062
       },
       "cross_entropy_vjp_bfloat16": {
-        "sha256": "bb886bfbb0149883cb7f09af7c81b2a55601da3f3e5581d67f48aec163151cb1",
-        "sizeBytes": 1877
+        "sha256": "b6b34468ffb3ee4df63624c3a2cd7bab2b87b2b4da405ff5264cef6d6bcd4413",
+        "sizeBytes": 1903
       }
     }
   },
@@ -294,7 +294,7 @@
       "cross_entropy_vjp_bfloat16": 4945
     },
     "completeCorpusEntryCount": 17832,
-    "fastMathLowering": "metal-fast-exp-becomes-default-exp",
+    "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
     "donatedInputAliasingCovered": false,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false

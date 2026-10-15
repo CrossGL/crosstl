@@ -120,7 +120,8 @@ def test_precise_log_keeps_other_modes_and_source_functions(tmp_path):
     """,
     )
     assert generated.count("return __crossgl_metal_precise_log_float(x);") == 2
-    assert generated.count("return log(x);") == 2
+    assert generated.count("return log(x);") == 1
+    assert generated.count("return fast::log(x);") == 1
     assert "return log__metal_overload_1(x);" in generated
 
 

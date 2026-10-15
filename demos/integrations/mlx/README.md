@@ -548,9 +548,10 @@ conversion fails this check. Every dispatch checks 16 output guards and three
 or five unchanged inputs, and Metal also runs the unchanged upstream kernel.
 OpenGL relies on host preconditions that the row offset and composed element
 indices fit in signed 32-bit range: five expressions for the forward kernel and
-six for the VJP. The Metal round trip lowers `fast::exp` to the default `exp`,
-which is the precise variant under `-fno-fast-math`, so translated Metal is not
-bit-identical to upstream; both stay within the tolerance. The VJP's
+six for the VJP. The Metal round trip keeps `fast::exp`, so translated Metal
+calls the same relaxed exponential as upstream and must reproduce the
+unchanged upstream kernel bit for bit; OpenGL and DirectX call their default
+`exp`, and all three stay within the tolerance. The VJP's
 donated-input aliasing of `out` and `in` is not covered. These two increments
 cover 7/17,832 entries; they do not run the upstream MLX test suite or redirect
 the MLX host runtime.
@@ -648,9 +649,9 @@ conversions and one-ulp slips. Every dispatch pads the input with 16 NaNs and
 checks 16 output guards and two unchanged inputs, and Metal also runs the
 unchanged upstream kernel against the same bounds. OpenGL relies on host
 preconditions that the row offset and the composed element indices fit in
-signed 32-bit range. As for cross entropy, the Metal round trip lowers
-`fast::exp` to the default `exp`, so translated Metal is not bit-identical to
-upstream. Rows whose every element is `-inf` are not covered because GLSL
+signed 32-bit range. As for cross entropy, the Metal round trip keeps
+`fast::exp` and must reproduce the upstream kernel bit for bit. Rows whose every
+element is `-inf` are not covered because GLSL
 leaves `log(0)` undefined. This covers 6/17,832 entries; it does not run the
 upstream MLX test suite or redirect the MLX host runtime.
 
@@ -676,7 +677,8 @@ value inside that bound, so the binary32 and precise variants stay within about
 the looped kernel reaches 4% and 18%. Rows that contain `+inf` must be NaN, as
 in MLX's kernel. Every dispatch pads the input with 16 NaNs and checks 16 output
 guards and two unchanged inputs, and Metal also runs the unchanged upstream
-kernel against the same bounds. OpenGL relies on host preconditions that the
+kernel against the same bounds; the Metal round trip keeps `fast::exp` and must
+match that kernel bit for bit. OpenGL relies on host preconditions that the
 row offsets and composed element indices fit in signed 32-bit range. This covers
 10/17,832 entries; it does not run the upstream MLX test suite or redirect the
 MLX host runtime.
@@ -829,8 +831,9 @@ partial rotation, a strided 3-D view whose skipped elements are NaN, and a
 strided frequencies. Each output is checked against a float64 rotation with a
 per-element bound on the kernel's binary32 rounding: one unit in the last
 place per operation, 2.5 per division, and the larger of four and 3 + 2|y|
-units for `exp2`, carried through the angle. Translation lowers `fast::cos`
-and `fast::sin` to each target's default functions, so each may be
+units for `exp2`, carried through the angle. Translated Metal keeps
+`fast::cos` and `fast::sin` and must match the upstream kernel bit for bit;
+OpenGL and DirectX lower them to their default functions, so each may be
 `2^-19 + 2^-20 * abs(theta)` from the exact value, about twice the worst error
 of Apple's fast functions measured on these arguments. Results must be a
 correct rounding of a value inside that bound, and unrotated elements must

@@ -433,7 +433,7 @@ def _expected_scope():
             for entry in ENTRIES
         },
         "completeCorpusEntryCount": 17832,
-        "fastMathLowering": "metal-fast-exp-becomes-default-exp",
+        "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
         "allMaskedRowsCovered": False,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
@@ -836,8 +836,12 @@ def _assert_lowering(text, target, entry, size):
     accumulator = _accumulator(entry)
     block = _kind(entry) == "block"
     if target == "metal":
+        # softmax_exp keeps softmax.h's fast::exp.
+        assert text.count("metal::fast::exp(") == text.count("fast::") == 1
         assert text.count("simd_max(") == 2 and text.count("simd_sum(") == 2
         return
+    # OpenGL and DirectX call their default exp.
+    assert "fast::" not in text
     if target == "opengl":
         assert "subgroupAdd" not in text and "subgroupMax" not in text
         assert "gl_Subgroup" not in text
@@ -1018,6 +1022,14 @@ def test_current_mlx_softmax_native_parity(
                 ),
                 encoding="utf-8",
             )
+            if target == "metal":
+                # The round trip keeps fast::exp, so the translated kernel
+                # reproduces the unchanged upstream kernel bit for bit.
+                assert [
+                    case["case"]
+                    for case in evidence
+                    if not case["upstream"]["bitIdenticalToTranslated"]
+                ] == []
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
 

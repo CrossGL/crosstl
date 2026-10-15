@@ -30,102 +30,102 @@
     "metal": {
       "block_softmax_float32": {
         "32": {
-          "sha256": "ede7804228184f2da1020cc86089e253fdc3a32215dcab47dbfef43564919d08",
-          "sizeBytes": 3067
+          "sha256": "776502adb05c96638ddbdb80da07a11fee366ab73ae4dda2449e4eb58b7b025c",
+          "sizeBytes": 3080
         },
         "288": {
-          "sha256": "ede7804228184f2da1020cc86089e253fdc3a32215dcab47dbfef43564919d08",
-          "sizeBytes": 3067
+          "sha256": "776502adb05c96638ddbdb80da07a11fee366ab73ae4dda2449e4eb58b7b025c",
+          "sizeBytes": 3080
         },
         "1024": {
-          "sha256": "ede7804228184f2da1020cc86089e253fdc3a32215dcab47dbfef43564919d08",
-          "sizeBytes": 3067
+          "sha256": "776502adb05c96638ddbdb80da07a11fee366ab73ae4dda2449e4eb58b7b025c",
+          "sizeBytes": 3080
         }
       },
       "looped_softmax_float32": {
         "1024": {
-          "sha256": "7a6f5015c62b05adfe2f69141d9a5af5f037d7135856613d14d2028e0ea72b54",
-          "sizeBytes": 3247
+          "sha256": "fbaae4a01a61913eb14fa1454c4e306639a0c71bf276af03446a8a436627c3ea",
+          "sizeBytes": 3260
         }
       },
       "block_softmax_float16": {
         "32": {
-          "sha256": "b50b3f1bd3ef231d8b73247cb39f7a5bbb65055cde7e35cc0d6f5d7080ef8ac8",
-          "sizeBytes": 3049
+          "sha256": "5237905d69cf89f738c7589a1165d71c06dd48b2ff24bb56d5636420622c2a57",
+          "sizeBytes": 3062
         },
         "288": {
-          "sha256": "b50b3f1bd3ef231d8b73247cb39f7a5bbb65055cde7e35cc0d6f5d7080ef8ac8",
-          "sizeBytes": 3049
+          "sha256": "5237905d69cf89f738c7589a1165d71c06dd48b2ff24bb56d5636420622c2a57",
+          "sizeBytes": 3062
         },
         "1024": {
-          "sha256": "b50b3f1bd3ef231d8b73247cb39f7a5bbb65055cde7e35cc0d6f5d7080ef8ac8",
-          "sizeBytes": 3049
+          "sha256": "5237905d69cf89f738c7589a1165d71c06dd48b2ff24bb56d5636420622c2a57",
+          "sizeBytes": 3062
         }
       },
       "looped_softmax_float16": {
         "1024": {
-          "sha256": "a15a7d044831b0b6b9d64965d0d310df69ccbae651f23b75b33d97c342101f99",
-          "sizeBytes": 3218
+          "sha256": "168f2ba3a6f7467da02ca2ab5873b8a2a1fc9189446bd6ddb8762320f131c27f",
+          "sizeBytes": 3231
         }
       },
       "block_softmax_bfloat16": {
         "32": {
-          "sha256": "70ca371a0301d9b309dda6e513f4443ce56bff1fff3e4a90cfb60ed130cd69a6",
-          "sizeBytes": 3312
+          "sha256": "bf4399e79ade337f66b8e5da707bcd99d82e1e15e57d6c46af85503ff6cf7f1b",
+          "sizeBytes": 3325
         },
         "288": {
-          "sha256": "70ca371a0301d9b309dda6e513f4443ce56bff1fff3e4a90cfb60ed130cd69a6",
-          "sizeBytes": 3312
+          "sha256": "bf4399e79ade337f66b8e5da707bcd99d82e1e15e57d6c46af85503ff6cf7f1b",
+          "sizeBytes": 3325
         },
         "1024": {
-          "sha256": "70ca371a0301d9b309dda6e513f4443ce56bff1fff3e4a90cfb60ed130cd69a6",
-          "sizeBytes": 3312
+          "sha256": "bf4399e79ade337f66b8e5da707bcd99d82e1e15e57d6c46af85503ff6cf7f1b",
+          "sizeBytes": 3325
         }
       },
       "looped_softmax_bfloat16": {
         "1024": {
-          "sha256": "97ccf8dfb21b7d6d0cac90b390e097dbf8d664e54845c10155febf94f05e1553",
-          "sizeBytes": 3501
+          "sha256": "12df3e786ca105037190a4228c20644ad58cf8700d169edf73c2fdeca8a1f193",
+          "sizeBytes": 3514
         }
       },
       "block_softmax_precise_float16": {
         "32": {
-          "sha256": "f40fe83cdf16e70b2884999125276f2d4d543be3279185d220490de7b51f9dac",
-          "sizeBytes": 3071
+          "sha256": "519a3b303239ddaa852b1eb3bddd3ef068b88903b30e8d779953a1278fb829c5",
+          "sizeBytes": 3084
         },
         "288": {
-          "sha256": "f40fe83cdf16e70b2884999125276f2d4d543be3279185d220490de7b51f9dac",
-          "sizeBytes": 3071
+          "sha256": "519a3b303239ddaa852b1eb3bddd3ef068b88903b30e8d779953a1278fb829c5",
+          "sizeBytes": 3084
         },
         "1024": {
-          "sha256": "f40fe83cdf16e70b2884999125276f2d4d543be3279185d220490de7b51f9dac",
-          "sizeBytes": 3071
+          "sha256": "519a3b303239ddaa852b1eb3bddd3ef068b88903b30e8d779953a1278fb829c5",
+          "sizeBytes": 3084
         }
       },
       "looped_softmax_precise_float16": {
         "1024": {
-          "sha256": "596037a47ff2fd12d59b42ae978f10945657ef9f260cb94b61f8a475ec25da21",
-          "sizeBytes": 3251
+          "sha256": "f2056e6b71c2f8da586a0715c213e9b90dec5115bad9dcafc6031acc3ac54a3a",
+          "sizeBytes": 3264
         }
       },
       "block_softmax_precise_bfloat16": {
         "32": {
-          "sha256": "6de17b28b8091f4b8fa04d7bfcd057551d471ed8cb88d24508c2092ad044dac3",
-          "sizeBytes": 3080
+          "sha256": "e7d1a6d600a74f27d26da6aa7601308cceef9bc97e0c66f442f87a00039dbb50",
+          "sizeBytes": 3093
         },
         "288": {
-          "sha256": "6de17b28b8091f4b8fa04d7bfcd057551d471ed8cb88d24508c2092ad044dac3",
-          "sizeBytes": 3080
+          "sha256": "e7d1a6d600a74f27d26da6aa7601308cceef9bc97e0c66f442f87a00039dbb50",
+          "sizeBytes": 3093
         },
         "1024": {
-          "sha256": "6de17b28b8091f4b8fa04d7bfcd057551d471ed8cb88d24508c2092ad044dac3",
-          "sizeBytes": 3080
+          "sha256": "e7d1a6d600a74f27d26da6aa7601308cceef9bc97e0c66f442f87a00039dbb50",
+          "sizeBytes": 3093
         }
       },
       "looped_softmax_precise_bfloat16": {
         "1024": {
-          "sha256": "582871361d79ec2490dcd24df712eb40518beb6e1839e618de24d3945cf8b06e",
-          "sizeBytes": 3274
+          "sha256": "9f692d2f9e66cb4fae482a48e92290c4c97682f98d358d64eee3a0acb879eef0",
+          "sizeBytes": 3287
         }
       }
     },
@@ -586,7 +586,7 @@
       "looped_softmax_precise_bfloat16": 63382
     },
     "completeCorpusEntryCount": 17832,
-    "fastMathLowering": "metal-fast-exp-becomes-default-exp",
+    "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
     "allMaskedRowsCovered": false,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false

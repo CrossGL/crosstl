@@ -316,7 +316,7 @@ def _expected_scope():
             for entry in ENTRIES
         },
         "completeCorpusEntryCount": 17832,
-        "fastMathLowering": "metal-fast-exp-becomes-default-exp",
+        "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
         "allMaskedRowsCovered": False,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
@@ -645,6 +645,17 @@ def _dispatch(descriptor, package, target, entry, name, values):
 def _assert_lowering(text, target, entry, size):
     assert "unsupported" not in text
     predicated = _kind(entry) == "block" and size > SIMD_SIZE
+    if target == "metal":
+        # Every fast::exp of logsumexp.h keeps its namespace: one in the block
+        # kernel, four in the looped kernel.
+        assert (
+            text.count("metal::fast::exp(")
+            == text.count("fast::")
+            == (1 if _kind(entry) == "block" else 4)
+        )
+    else:
+        # OpenGL and DirectX call their default exp.
+        assert "fast::" not in text
     if target == "opengl":
         assert "subgroupAdd" not in text and "subgroupMax" not in text
         assert "gl_Subgroup" not in text
@@ -806,6 +817,14 @@ def test_current_mlx_logsumexp_native_parity(
                 ),
                 encoding="utf-8",
             )
+            if target == "metal":
+                # The round trip keeps fast::exp, so the translated kernel
+                # reproduces the unchanged upstream kernel bit for bit.
+                assert [
+                    case["case"]
+                    for case in evidence
+                    if not case["upstream"]["bitIdenticalToTranslated"]
+                ] == []
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
 

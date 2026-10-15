@@ -123,7 +123,8 @@ def test_precise_sqrt_keeps_other_modes_and_source_functions(tmp_path):
     """,
     )
     assert generated.count("return __crossgl_metal_precise_sqrt_float(x);") == 2
-    assert generated.count("return sqrt(x);") == 2
+    assert generated.count("return sqrt(x);") == 1
+    assert generated.count("return fast::sqrt(x);") == 1
     assert "return sqrt__metal_overload_1(x);" in generated
 
 

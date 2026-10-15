@@ -186,7 +186,7 @@ def test_power_keeps_fast_mode_integer_helpers_and_source_overloads(tmp_path):
     assert (
         generated.count("return __crossgl_metal_power_float(float(a), float(b));") == 2
     )
-    assert "return pow(a, b);" in generated
+    assert "return fast::pow(a, b);" in generated
     assert "return pow__metal_overload_1(a, b);" in generated
     assert "return pow__metal_overload_2(a, b);" in generated
 

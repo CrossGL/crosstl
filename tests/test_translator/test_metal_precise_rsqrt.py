@@ -134,7 +134,8 @@ def test_precise_rsqrt_keeps_other_modes_and_source_functions(tmp_path):
     """,
     )
     assert generated.count("return __crossgl_metal_precise_rsqrt_float(x);") == 2
-    assert generated.count("return rsqrt(x);") == 2
+    assert generated.count("return rsqrt(x);") == 1
+    assert generated.count("return fast::rsqrt(x);") == 1
     assert "return rsqrt__metal_overload_1(x);" in generated
 
 

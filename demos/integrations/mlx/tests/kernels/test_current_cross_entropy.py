@@ -443,7 +443,7 @@ def test_current_mlx_cross_entropy_contract_is_exact():
         "runtimeCoveredEntryCount": 6,
         "checkedValueCountByEntry": value_counts,
         "completeCorpusEntryCount": 17832,
-        "fastMathLowering": "metal-fast-exp-becomes-default-exp",
+        "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
         "donatedInputAliasingCovered": False,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
@@ -782,6 +782,17 @@ def test_current_mlx_cross_entropy_native_parity(
             text = generated.read_text(encoding="utf-8")
             assert "unsupported" not in text
             software = target in SOFTWARE_SUBGROUP_TARGETS and not _is_vjp(entry)
+            if target == "metal":
+                # Every fast::exp of cross_entropy.h keeps its namespace: four
+                # in the forward kernel, two in the VJP.
+                assert (
+                    text.count("metal::fast::exp(")
+                    == text.count("fast::")
+                    == (2 if _is_vjp(entry) else 4)
+                )
+            else:
+                # OpenGL and DirectX call their default exp.
+                assert "fast::" not in text
             if target == "opengl":
                 assert ("subgroupAdd" in text) is False
                 assert ("crossglSoftwareSubgroupSumFloat" in text) is software
@@ -890,6 +901,14 @@ def test_current_mlx_cross_entropy_native_parity(
                 ),
                 encoding="utf-8",
             )
+            if target == "metal":
+                # The round trip keeps fast::exp, so the translated kernel
+                # reproduces the unchanged upstream kernel bit for bit.
+                assert [
+                    case["case"]
+                    for case in evidence
+                    if not case["upstream"]["bitIdenticalToTranslated"]
+                ] == []
         finally:
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
 
