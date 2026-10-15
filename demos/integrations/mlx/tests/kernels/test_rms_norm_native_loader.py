@@ -72,6 +72,11 @@ ROW_COUNT = 2
 EPSILON = 1e-5
 ABSOLUTE_TOLERANCE = 3e-5
 RELATIVE_TOLERANCE = 3e-5
+OPENGL_INDEX_RANGE_ASSERTIONS = (
+    "gid * uint64(axis_size) + lid * RMS_N_READS",
+    "x + i",
+    "out_ + i",
+)
 
 
 def _directx_project_config(*, output_dir: str, dispatch_contract: str) -> str:
@@ -90,6 +95,16 @@ def _directx_project_config(*, output_dir: str, dispatch_contract: str) -> str:
 
 
 def _opengl_project_config(*, output_dir: str) -> str:
+    # OpenGL keeps the rebased row pointers in signed int logical offsets, so
+    # the size_t row rebase and each composed row access must fit
+    # [0, 2^31 - 1].
+    assertions = "\n\n".join(textwrap.dedent(f"""
+            [[project.index_range_assertions]]
+            source = "{MLX_RMS_NORM_SOURCE}"
+            expression = "{expression}"
+            minimum = 0
+            maximum = 2147483647
+            """).strip() for expression in OPENGL_INDEX_RANGE_ASSERTIONS)
     return textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
@@ -109,7 +124,7 @@ def _opengl_project_config(*, output_dir: str) -> str:
 
         [project.source_options.metal.target_options.opengl]
         software_subgroup_width = 32
-        """).strip()
+        """).strip() + "\n\n" + assertions
 
 
 def _write_json(path: Path, payload: dict) -> None:

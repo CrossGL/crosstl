@@ -4918,8 +4918,8 @@
       },
       "opengl": {
         "target_entry_point": "main",
-        "sha256": "2a295b13be5c7bed11f01b86025dd7e0509c9003e515958fb1b24bc0b5ed07f1",
-        "size_bytes": 7754,
+        "sha256": "7a82ff4b75a71aaebd4a5b5a3f62882d82aca2b24a1ed27b9ec6bece9a87e8ea",
+        "size_bytes": 7752,
         "workgroup_size": [
           32,
           2,
@@ -4988,7 +4988,25 @@
         "source": "mlx/backend/metal/kernels/gemv.metal",
         "expression": "uint64(bm + tm) * marix_ld + out_col + tn",
         "minimum": 0,
-        "maximum": 4294967295
+        "maximum": 2147483647
+      },
+      {
+        "source": "mlx/backend/metal/kernels/gemv.metal",
+        "expression": "mat + uint64(bm + tm) * marix_ld + out_col + tn",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      {
+        "source": "mlx/backend/metal/kernels/gemv.metal",
+        "expression": "tid.z * buffer_load(vector_batch_stride, 0)",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      {
+        "source": "mlx/backend/metal/kernels/gemv.metal",
+        "expression": "tid.z * buffer_load(matrix_batch_stride, 0)",
+        "minimum": 0,
+        "maximum": 2147483647
       }
     ],
     "runtime_package": {

@@ -2769,10 +2769,15 @@ its reduction substituted logical lanes 5 through 8 with physical lanes 21
 through 24, with maximum absolute error 1.90625. That exact signature rules out
 a tolerance adjustment or merely guarding invalid high-lane reads.
 
-The OpenGL target needs only the selected matrix-index assertion
-`uint64(bm + tm) * marix_ld + out_col + tn` in the unsigned 32-bit range. Its
-7,754-byte GLSL has SHA-256
-`2a295b13be5c7bed11f01b86025dd7e0509c9003e515958fb1b24bc0b5ed07f1`
+OpenGL keeps each batch rebase in a signed `int` logical offset, so the
+target asserts four expressions in `[0, 2^31 - 1]`: the selected matrix index
+`uint64(bm + tm) * marix_ld + out_col + tn`, its complete rebased form
+`mat + uint64(bm + tm) * marix_ld + out_col + tn`, and the two batch offsets
+`tid.z * buffer_load(vector_batch_stride, 0)` and
+`tid.z * buffer_load(matrix_batch_stride, 0)` (the lowered spelling of
+`vector_batch_stride[0]` and `matrix_batch_stride[0]`). The batch offsets reach
+the helper as `int` logical offsets. Its 7,752-byte GLSL has SHA-256
+`7a82ff4b75a71aaebd4a5b5a3f62882d82aca2b24a1ed27b9ec6bece9a87e8ea`
 and partitions the 64-thread workgroup into two logical 32-lane subgroups with
 a 64-float shared shuffle scratch array.
 
@@ -4809,7 +4814,10 @@ A sibling current-corpus VJP proof selects `vjp_rmsfloat32` through
 It fixes one float32 row of axis size 32, `has_w=true` through function constant
 ID `20`, a `[32, 1, 1]` workgroup and 32-lane subgroup, one dispatch workgroup,
 and the two explicit 0-through-31 index-range assertions needed by the bounded
-input and cotangent views. Materialization selects
+input and cotangent views. OpenGL additionally asserts the four composed row
+accesses `x_in + i`, `g_in + i`, `gx_out + i`, and `gw + i` in
+`[0, 2147483647]`, because it keeps each rebased row pointer in a signed `int`
+logical offset. Materialization selects
 `vjp_rms_single_row<float, RMS_N_READS>` from four reachable specializations
 while pruning 168 unrelated candidates.
 

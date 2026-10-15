@@ -14076,9 +14076,9 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "2a295b13be5c7bed11f01b86025dd7e0509c9003e515958fb1b24bc0b5ed07f1"
+                "7a82ff4b75a71aaebd4a5b5a3f62882d82aca2b24a1ed27b9ec6bece9a87e8ea"
             ),
-            "size_bytes": 7754,
+            "size_bytes": 7752,
             "workgroup_size": [32, 2, 1],
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
@@ -14149,10 +14149,16 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
     assert status["index_range_assertions"] == [
         {
             "source": module.MLX_GEMV_SOURCE,
-            "expression": "uint64(bm + tm) * marix_ld + out_col + tn",
+            "expression": expression,
             "minimum": 0,
-            "maximum": (1 << 32) - 1,
+            "maximum": (1 << 31) - 1,
         }
+        for expression in (
+            "uint64(bm + tm) * marix_ld + out_col + tn",
+            "mat + uint64(bm + tm) * marix_ld + out_col + tn",
+            "tid.z * buffer_load(vector_batch_stride, 0)",
+            "tid.z * buffer_load(matrix_batch_stride, 0)",
+        )
     ]
     assert status["runtime_package"] == {
         "artifact_count_per_target": 1,

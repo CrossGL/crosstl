@@ -78,8 +78,34 @@ INDEX_ASSERTION = {
     "source": MLX_GEMV_SOURCE,
     "expression": "uint64(bm + tm) * marix_ld + out_col + tn",
     "minimum": 0,
-    "maximum": (1 << 32) - 1,
+    "maximum": (1 << 31) - 1,
 }
+# The helper reads the batch-rebased matrix pointer. OpenGL keeps each batch
+# rebase in a signed int logical offset, so the vector and matrix batch
+# offsets, the complete matrix element index and the composed in-matrix index
+# all have to fit [0, 2^31 - 1]. The batch keys use the lowered buffer_load
+# spelling of `vector_batch_stride[0]` and `matrix_batch_stride[0]`.
+INDEX_ASSERTIONS = (
+    INDEX_ASSERTION,
+    {
+        "source": MLX_GEMV_SOURCE,
+        "expression": "mat + uint64(bm + tm) * marix_ld + out_col + tn",
+        "minimum": 0,
+        "maximum": (1 << 31) - 1,
+    },
+    {
+        "source": MLX_GEMV_SOURCE,
+        "expression": "tid.z * buffer_load(vector_batch_stride, 0)",
+        "minimum": 0,
+        "maximum": (1 << 31) - 1,
+    },
+    {
+        "source": MLX_GEMV_SOURCE,
+        "expression": "tid.z * buffer_load(matrix_batch_stride, 0)",
+        "minimum": 0,
+        "maximum": (1 << 31) - 1,
+    },
+)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -187,13 +213,13 @@ def _project_config(target: str, *, output_dir: str) -> str:
                 "{MLX_GEMV_SOURCE}" = 32
                 """).strip())
     elif target == "opengl":
-        sections.append(textwrap.dedent(f"""
-                [[project.index_range_assertions]]
-                source = "{INDEX_ASSERTION['source']}"
-                expression = "{INDEX_ASSERTION['expression']}"
-                minimum = {INDEX_ASSERTION['minimum']}
-                maximum = {INDEX_ASSERTION['maximum']}
-                """).strip())
+        sections.append("\n\n".join(textwrap.dedent(f"""
+                    [[project.index_range_assertions]]
+                    source = "{assertion['source']}"
+                    expression = "{assertion['expression']}"
+                    minimum = {assertion['minimum']}
+                    maximum = {assertion['maximum']}
+                    """).strip() for assertion in INDEX_ASSERTIONS))
     else:
         raise ValueError(f"Unsupported GEMV test target: {target}")
     sections.append(textwrap.dedent("""
@@ -361,8 +387,8 @@ def _build_runtime_package(
             }
         }
     elif target == "opengl":
-        assert payload["project"]["indexRangeAssertions"] == [INDEX_ASSERTION]
-        assert payload["project"]["indexRangeAssertionCount"] == 1
+        assert payload["project"]["indexRangeAssertions"] == list(INDEX_ASSERTIONS)
+        assert payload["project"]["indexRangeAssertionCount"] == len(INDEX_ASSERTIONS)
 
     artifact = payload["artifacts"][0]
     expected_identity = MLX_GEMV_GENERATED_ARTIFACTS[target]

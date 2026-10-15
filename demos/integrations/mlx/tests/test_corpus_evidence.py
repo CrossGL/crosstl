@@ -464,8 +464,8 @@ def test_gemv_retains_failed_translation_before_artifact_checks(
                         }
                     }
                 },
-                "indexRangeAssertions": [proof.INDEX_ASSERTION],
-                "indexRangeAssertionCount": 1,
+                "indexRangeAssertions": list(proof.INDEX_ASSERTIONS),
+                "indexRangeAssertionCount": len(proof.INDEX_ASSERTIONS),
             },
             "artifacts": [
                 {

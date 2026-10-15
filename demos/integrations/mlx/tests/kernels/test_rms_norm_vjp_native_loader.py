@@ -89,16 +89,47 @@ INDEX_RANGE_ASSERTIONS = (
     "uint64(row) * axis_size + lid * RMS_N_READS",
     "uint64(gid) * axis_size + lid * RMS_N_READS",
 )
+# OpenGL keeps each rebased row pointer in a signed int logical offset, so every
+# composed row access must also fit [0, 2^31 - 1].
+OPENGL_INDEX_RANGE_ASSERTIONS = (
+    "x_in + i",
+    "g_in + i",
+    "gx_out + i",
+    "gw + i",
+)
 
 
-def _index_range_assertions() -> str:
+def _index_range_assertions(*, target: str = "directx") -> str:
     return "\n\n".join(textwrap.dedent(f"""
             [[project.index_range_assertions]]
             source = "{MLX_RMS_NORM_SOURCE}"
-            expression = "{expression}"
+            expression = "{assertion['expression']}"
             minimum = 0
-            maximum = 31
-            """).strip() for expression in INDEX_RANGE_ASSERTIONS)
+            maximum = {assertion['maximum']}
+            """).strip() for assertion in _expected_index_range_assertions(target))
+
+
+def _expected_index_range_assertions(target: str) -> list[dict]:
+    assertions = [
+        {
+            "source": MLX_RMS_NORM_SOURCE,
+            "expression": expression,
+            "minimum": 0,
+            "maximum": 31,
+        }
+        for expression in INDEX_RANGE_ASSERTIONS
+    ]
+    if target == "opengl":
+        assertions.extend(
+            {
+                "source": MLX_RMS_NORM_SOURCE,
+                "expression": expression,
+                "minimum": 0,
+                "maximum": 2147483647,
+            }
+            for expression in OPENGL_INDEX_RANGE_ASSERTIONS
+        )
+    return assertions
 
 
 def _directx_project_config(*, output_dir: str, dispatch_contract: str) -> str:
@@ -142,7 +173,7 @@ def _opengl_project_config(*, output_dir: str) -> str:
         [project.specialization_constants]
         "20" = true
 
-        {_index_range_assertions()}
+        {_index_range_assertions(target="opengl")}
 
         [project.source_options.metal.target_options.opengl]
         software_subgroup_width = 32
@@ -413,15 +444,9 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
     assert payload["summary"]["diagnosticCounts"]["error"] == 0
-    assert payload["project"]["indexRangeAssertions"] == [
-        {
-            "source": MLX_RMS_NORM_SOURCE,
-            "expression": expression,
-            "minimum": 0,
-            "maximum": 31,
-        }
-        for expression in INDEX_RANGE_ASSERTIONS
-    ]
+    assert payload["project"][
+        "indexRangeAssertions"
+    ] == _expected_index_range_assertions(target)
 
     artifact = payload["artifacts"][0]
     expected = MLX_RMS_NORM_VJP_GENERATED_ARTIFACTS[target]

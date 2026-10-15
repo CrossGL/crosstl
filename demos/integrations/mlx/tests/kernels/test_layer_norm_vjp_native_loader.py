@@ -116,6 +116,28 @@ def _directx_project_config(*, output_dir: str, dispatch_contract: str) -> str:
         """).strip()
 
 
+OPENGL_INDEX_RANGE_ASSERTIONS = (
+    "gid * uint64(axis_size) + lid * 8",
+    "x + i",
+    "g + i",
+    "gx + i",
+    "gw + i",
+)
+
+
+def _opengl_index_range_assertions() -> str:
+    # OpenGL keeps the rebased row pointers in signed int logical offsets, so
+    # the size_t row rebase and each composed row access must fit
+    # [0, 2^31 - 1].
+    return "\n\n".join(textwrap.dedent(f"""
+            [[project.index_range_assertions]]
+            source = "{MLX_LAYER_NORM_SOURCE}"
+            expression = "{expression}"
+            minimum = 0
+            maximum = 2147483647
+            """).strip() for expression in OPENGL_INDEX_RANGE_ASSERTIONS)
+
+
 def _opengl_project_config(*, output_dir: str) -> str:
     # The software-subgroup path intentionally omits the hardware subgroup-width
     # rule. The checked dispatch contract supplies the same entry, workgroup,
@@ -145,7 +167,7 @@ def _opengl_project_config(*, output_dir: str) -> str:
 
         [project.source_options.metal.target_options.opengl]
         software_subgroup_width = 32
-        """).strip()
+        """).strip() + "\n\n" + _opengl_index_range_assertions()
 
 
 def _write_json(path: Path, payload: dict) -> None:

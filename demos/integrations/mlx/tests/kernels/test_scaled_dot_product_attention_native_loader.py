@@ -93,6 +93,15 @@ SPECIALIZATION_NAMES = {
     24: "float_mask",
     25: "has_sinks",
 }
+# OpenGL keeps the rebased key and value pointers in signed int logical
+# offsets, so the wide head/sequence rebases and the composed per-thread reads
+# must fit [0, 2^31 - 1].
+OPENGL_INDEX_RANGE_ASSERTIONS = (
+    "kv_head_idx * k_head_stride + simd_gid * k_seq_stride + simd_lid * qk_per_thread",
+    "kv_head_idx * v_head_stride + simd_gid * v_seq_stride + simd_lid * v_per_thread",
+    "keys + j",
+    "values + j",
+)
 
 
 def _project_config(
@@ -145,6 +154,13 @@ def _project_config(
                 [project.source_options.metal.target_options.opengl]
                 software_subgroup_width = 32
                 """).strip())
+        sections.append("\n\n".join(textwrap.dedent(f"""
+                    [[project.index_range_assertions]]
+                    source = "{MLX_ATTENTION_SOURCE}"
+                    expression = "{expression}"
+                    minimum = 0
+                    maximum = 2147483647
+                    """).strip() for expression in OPENGL_INDEX_RANGE_ASSERTIONS))
     else:
         raise ValueError(f"Unsupported attention test target: {target}")
     return "\n\n".join(sections)

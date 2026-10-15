@@ -89,12 +89,28 @@ MLX_LOGSUMEXP_DISPATCH_CONTRACT = (
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_LOGSUMEXP_DIRECTX_NATIVE_LOADER"
 REQUIRE_OPENGL_PROOF_ENV = "CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_TOOLCHAIN"
 REQUIRE_OPENGL_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_LOGSUMEXP_OPENGL_NATIVE_LOADER"
+# OpenGL keeps the rebased row pointer in a signed int logical offset, so the
+# size_t row rebase and each composed row read must fit [0, 2^31 - 1].
+OPENGL_INDEX_RANGE_ASSERTIONS = (
+    "gid * uint64(axis_size) + lid * 4",
+    "in_ + i",
+)
+
+
+def _opengl_index_range_assertions() -> str:
+    return "\n\n".join(textwrap.dedent(f"""
+            [[project.index_range_assertions]]
+            source = "{MLX_LOGSUMEXP_SOURCE}"
+            expression = "{expression}"
+            minimum = 0
+            maximum = 2147483647
+            """).strip() for expression in OPENGL_INDEX_RANGE_ASSERTIONS)
 
 
 def _project_config(
     *, output_dir: str, dispatch_contract: str, target: str = "directx"
 ) -> str:
-    return textwrap.dedent(f"""
+    config = textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
         include = ["{MLX_LOGSUMEXP_SOURCE}"]
@@ -106,6 +122,9 @@ def _project_config(
         [project.sources]
         "**/*.metal" = "metal"
         """).strip()
+    if target == "opengl":
+        config += "\n\n" + _opengl_index_range_assertions()
+    return config
 
 
 def _software_opengl_project_config(*, output_dir: str) -> str:
@@ -128,7 +147,7 @@ def _software_opengl_project_config(*, output_dir: str) -> str:
 
         [project.source_options.metal.target_options.opengl]
         software_subgroup_width = 32
-        """).strip()
+        """).strip() + "\n\n" + _opengl_index_range_assertions()
 
 
 def _axis_32_dispatch_variant():

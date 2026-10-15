@@ -119,6 +119,13 @@ MLX_SOFTMAX_SOFTWARE_OPENGL_ARTIFACTS = {
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_SOFTMAX_DIRECTX_NATIVE_LOADER"
 REQUIRE_OPENGL_TOOLCHAIN_ENV = "CROSTL_REQUIRE_MLX_SOFTMAX_OPENGL_TOOLCHAIN"
 REQUIRE_OPENGL_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_SOFTMAX_OPENGL_NATIVE_LOADER"
+# OpenGL keeps rebased row pointers in signed int logical offsets, so the
+# size_t row rebase and each composed row access must fit [0, 2^31 - 1].
+OPENGL_INDEX_RANGE_ASSERTIONS = (
+    "gid * uint64(axis_size) + lid * SOFTMAX_N_READS",
+    "in_ + i",
+    "out_ + i",
+)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -190,10 +197,20 @@ def test_pinned_mlx_softmax_dispatch_contract_is_exact():
     _evaluated_variants()
 
 
+def _opengl_index_range_assertions() -> str:
+    return "\n\n".join(textwrap.dedent(f"""
+            [[project.index_range_assertions]]
+            source = "{MLX_SOFTMAX_SOURCE}"
+            expression = "{expression}"
+            minimum = 0
+            maximum = 2147483647
+            """).strip() for expression in OPENGL_INDEX_RANGE_ASSERTIONS)
+
+
 def _dispatch_project_config(
     *, output_dir: str, dispatch_contract: str, target: str
 ) -> str:
-    return textwrap.dedent(f"""
+    config = textwrap.dedent(f"""
         [project]
         source_roots = ["mlx/backend/metal/kernels"]
         include = ["{MLX_SOFTMAX_SOURCE}"]
@@ -209,6 +226,9 @@ def _dispatch_project_config(
         max_template_specializations = 64
         max_template_materialization_work = 4096
         """).strip()
+    if target == "opengl":
+        config += "\n\n" + _opengl_index_range_assertions()
+    return config
 
 
 def _selected_project_config(
@@ -246,6 +266,7 @@ def _selected_project_config(
                 [project.source_options.metal.target_options.opengl]
                 software_subgroup_width = 32
                 """).strip())
+        sections.append(_opengl_index_range_assertions())
     return "\n\n".join(sections)
 
 
