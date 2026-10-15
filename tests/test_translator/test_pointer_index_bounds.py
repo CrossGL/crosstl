@@ -1060,6 +1060,43 @@ STORED_OPERANDS = {
         "long(narrowed.x)",
         1,
     ),
+    # MLX helpers such as GEMVTKernel::run repeat the entry's [[buffer(n)]]
+    # attributes on ordinary pointer parameters. The helper must still read
+    # through the caller's rebased pointer.
+    "buffer-helper-rebase": ("input += 2;", "1l", 3),
+    "buffer-helper-branch": (
+        "if (input[0] != 0) { input += 2; } else { input += 4; }",
+        "1l",
+        3,
+    ),
+    "buffer-helper-nested": ("input += 2;", "1l", 4),
+    "buffer-helper-argument": ("input += 2;", "1l", 3),
+}
+
+BUFFER_HELPERS = """template <typename T>
+struct BufferReader {
+  static void run(const device T* input [[buffer(0)]],
+                  device T* output [[buffer(1)]],
+                  const int at) {
+    output[0] = input[at];
+  }
+};
+template <typename T>
+struct BufferForwarder {
+  static void run(const device T* input [[buffer(0)]],
+                  device T* output [[buffer(1)]],
+                  const int at) {
+    input += 1;
+    BufferReader<T>::run(input, output, at);
+  }
+};
+"""
+
+BUFFER_HELPER_CALLS = {
+    "buffer-helper-rebase": "BufferReader<uint>::run(input, output, int(at));",
+    "buffer-helper-branch": "BufferReader<uint>::run(input, output, int(at));",
+    "buffer-helper-nested": "BufferForwarder<uint>::run(input, output, int(at));",
+    "buffer-helper-argument": "BufferReader<uint>::run(input + at, output, 0);",
 }
 
 
@@ -1090,6 +1127,15 @@ def _stored_operand_source(kind):
         scalar = kind.split("-", 1)[1]
         helper = f"long typed_offset(int value) {{ {scalar}2 stored = {scalar}2(value); return long(stored.x); }}\n"
         source = source.replace("kernel void", helper + "kernel void")
+    if kind in BUFFER_HELPER_CALLS:
+        read = (
+            "    const device uint* selected = input + at;\n"
+            "    output[0] = selected[0];\n"
+        )
+        assert read in source
+        source = source.replace(read, f"    {BUFFER_HELPER_CALLS[kind]}\n").replace(
+            "kernel void", BUFFER_HELPERS + "kernel void"
+        )
     return source
 
 

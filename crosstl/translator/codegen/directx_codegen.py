@@ -174,6 +174,7 @@ from .glsl_buffer_layout import (
     matrix_column_offsets,
     vector_component_offsets,
 )
+from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_half_storage import HLSLHalfStorage
 from .image_access_contracts import (
     TEXTURE_COMPARE_INTRINSIC_NAMES,
@@ -3165,6 +3166,10 @@ class HLSLCodeGen:
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "directx")
+        # HLSL resource parameters cannot carry a caller's pointer rebase, so
+        # Metal helpers whose pointer parameters merely carry [[buffer(n)]]
+        # attributes take the storage-pointer offset ABI instead.
+        ast = lower_helper_buffer_parameters(ast, self.stage_entry_types())
         self.hlsl_type_aliases = {
             node.name: getattr(node, "var_type", None)
             for node in getattr(ast, "global_variables", []) or []

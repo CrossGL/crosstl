@@ -11882,6 +11882,31 @@ class GLSLCodeGen:
 
         visit_sequence(body, dict(aliases))
 
+    def glsl_resource_specializations_replace(self, function):
+        """Whether resource specializations stand in for ``function`` entirely.
+
+        GLSL cannot pass buffer blocks to functions, so a helper declared with
+        StructuredBuffer parameters (Metal helpers whose pointer parameters
+        carry ``[[buffer(n)]]``) only has a valid GLSL form once a call binds
+        those parameters to concrete blocks.  The unspecialized original would
+        declare unsized array parameters, which GLSL rejects.
+        """
+        if getattr(function, "_glsl_resource_source_name", None) is not None:
+            return False
+        name = getattr(function, "name", None)
+        if not name or not self.glsl_function_structured_buffer_parameter_aliases(
+            function
+        ):
+            return False
+        target_name = self.glsl_module_identifier_name(name)
+        return any(
+            self.glsl_module_identifier_name(
+                getattr(specialization, "_glsl_resource_source_name", None) or ""
+            )
+            == target_name
+            for specialization in self.glsl_resource_function_specializations.values()
+        )
+
     def glsl_resource_function_emission_list(self, source_name):
         if not source_name:
             return []
@@ -18996,7 +19021,10 @@ class GLSLCodeGen:
         _private_pointer_variant=None,
     ):
         """Render a function or GLSL ``main`` stage entry point."""
-        if shader_type is None and self.should_elide_glsl_function(func):
+        if shader_type is None and (
+            self.should_elide_glsl_function(func)
+            or self.glsl_resource_specializations_replace(func)
+        ):
             return ""
         function_key = self.glsl_function_declaration_name(func)
         variants = self.function_private_pointer_backing_variants.get(function_key)
