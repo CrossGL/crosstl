@@ -805,6 +805,45 @@ in signed 32-bit range; Metal and DirectX use none. This covers 225/17,832
 entries; it does not run the upstream MLX test suite or redirect the MLX host
 runtime.
 
+`contracts/rope.current-tree.translation.json` pins all 18 `rope.metal`
+entries and their 360 artifacts: the single-step and general kernels, each
+with base-derived or explicit frequencies, the general kernels with 32-bit and
+64-bit (`large`) indices, for float16, bfloat16 and float32. `rope.cpp`
+specializes three function constants, `forward` (1), `traditional` (2) and
+`hs_transpose` (3), and the single kernels read only the first two, so each
+single kernel is pinned in four specializations and each general kernel in
+eight, 120 per target. DirectX materializes the constants; Metal and OpenGL
+keep a function or specialization constant that the runtime sets when it
+creates the pipeline, so every specialization of an entry shares one
+artifact. As `rope.cpp` dispatches them, the kernels run one thread per
+rotated pair, and one-thread workgroups give OpenGL and DirectX the same
+`threads_per_grid`. Required CI executes every specialization on Metal, Mesa
+EGL and Direct3D 12 WARP, 504 dispatches per target. The single kernels run
+five decode cases with zero, negative and 4,000-position offsets and a partial
+rotation of a copied row. The general kernels run six cases: head counts that
+leave one, two or three heads in the last group of four, per-batch offsets, a
+partial rotation, a strided 3-D view whose skipped elements are NaN, and a
+4,000-position context. With `hs_transpose` set they run two cases on a
+`[B, T, N, D]` buffer viewed as `[B, N, T, D]`, the one layout for which
+`rope.cpp` sets it. Explicit frequencies use strides 1 and 2, with NaN between
+strided frequencies. Each output is checked against a float64 rotation with a
+per-element bound on the kernel's binary32 rounding: one unit in the last
+place per operation, 2.5 per division, and the larger of four and 3 + 2|y|
+units for `exp2`, carried through the angle. Translation lowers `fast::cos`
+and `fast::sin` to each target's default functions, so each may be
+`2^-19 + 2^-20 * abs(theta)` from the exact value, about twice the worst error
+of Apple's fast functions measured on these arguments. Results must be a
+correct rounding of a value inside that bound, and unrotated elements must
+keep their exact bits. Every dispatch pads each input with 16 NaNs, or offsets
+with positions far from any case, and checks 16 output guards and that every
+input is unchanged. Metal also runs the unchanged upstream kernel, with all
+three function constants, against the same bounds. The 64-bit index kernels
+run the same small cases, although MLX selects them only above `INT32_MAX`
+elements. OpenGL relies on host preconditions that the frequency, offset and
+composed element indices fit in signed 32-bit range: one for the single
+kernels and six for the general kernels. This covers 18/17,832 entries; it
+does not run the upstream MLX test suite or redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

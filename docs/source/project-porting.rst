@@ -708,6 +708,24 @@ unchanged upstream kernel. OpenGL relies on seven host index-range
 preconditions in signed 32-bit range. This is a 225/17,832 increment; it does
 not run the upstream MLX test suite or redirect the MLX host runtime.
 
+``rope.current-tree.translation.json`` pins all 18 ``rope.metal`` entries and
+their 360 artifacts: single-step and general kernels, with base-derived or
+explicit frequencies and 32-bit or 64-bit indices, in every specialization of
+the ``forward``, ``traditional`` and ``hs_transpose`` function constants that
+the host can select. DirectX materializes the constants; Metal and OpenGL
+specialize them when the runtime creates the pipeline. All three backends
+execute 504 dispatches covering decode offsets, ragged head groups, per-batch
+offsets, partial rotations, strided and transposed inputs and a 4,000-position
+context. Translation lowers ``fast::cos`` and ``fast::sin`` to each target's
+default functions, so results are checked against a per-element bound on the
+kernel's binary32 rounding that allows ``2^-19 + 2^-20 * abs(theta)`` per
+trigonometric value, about twice the measured error of Apple's fast
+functions; unrotated elements must keep their exact bits. Metal also runs the
+unchanged upstream kernel against the same bound. OpenGL relies on one host
+index-range precondition for the single kernels and six for the general
+kernels. This is an 18/17,832 increment; it does not run the upstream MLX test
+suite or redirect the MLX host runtime.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs
