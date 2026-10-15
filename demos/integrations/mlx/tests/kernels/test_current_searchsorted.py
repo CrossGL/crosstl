@@ -339,6 +339,14 @@ def _runtime_value(target, dtype, values):
             (_half_bits if dtype == "float16" else _bfloat_bits)(value)
             for value in values
         ]
+        if element_type == "uint16" and dtype == "float16":
+            # DirectX binary16 storage takes logical float16 words.
+            return {
+                "dtype": "float16",
+                "shape": [len(values)],
+                "encoding": FLOAT16_BITS,
+                "values": bits,
+            }
         if element_type == "uint16":
             return {"dtype": "uint16", "shape": [len(values)], "values": bits}
         if element_type == "float32":
@@ -523,7 +531,12 @@ def test_searchsorted_cases_cover_ordering_edges(dtype):
 def test_searchsorted_runtime_values_match_physical_storage(target, dtype):
     case = _case(dtype, "strided")
     value = _runtime_value(target, dtype, case["storage"])
-    assert value["dtype"] == _element_type(target, dtype)
+    if target == "directx" and dtype == "float16":
+        # Physical uint16 storage carries logical binary16 words.
+        assert _element_type(target, dtype) == "uint16"
+        assert value["dtype"] == "float16" and value["encoding"] == FLOAT16_BITS
+    else:
+        assert value["dtype"] == _element_type(target, dtype)
     width = 2 if dtype == "complex64" else 1
     assert value["shape"][0] * width == len(value["values"]) or dtype != "complex64"
     if target == "metal":
@@ -679,7 +692,16 @@ def _dispatch(descriptor, package, target, entry, dtype, case):
             re.sub(r"_+", "_", entry) + "_"
         )
         value = data[name]
-        assert layout["elementType"] == value["dtype"], (name, layout)
+        storage = layout.get("storageEncoding")
+        if storage is None:
+            assert layout["elementType"] == value["dtype"], (name, layout)
+        else:
+            assert layout["elementType"] == "uint16", (name, layout)
+            assert storage == {
+                "encoding": FLOAT16_BITS,
+                "logicalElementType": value["dtype"],
+            }
+            assert value["encoding"] == FLOAT16_BITS
         inputs[binding["name"]] = value
         if name == "out_":
             output_name = binding["name"]

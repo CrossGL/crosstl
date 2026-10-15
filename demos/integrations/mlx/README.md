@@ -489,7 +489,9 @@ boundaries and NaN ordering for float16, bfloat16, float32 and complex64.
 Every dispatch checks 16 output guards and four unchanged inputs; Metal also
 compares the unchanged upstream kernel. OpenGL uses two host index-range
 preconditions, `int64(mid) * a_stride` and `offset` in signed 32-bit range.
-Metal and DirectX use none. This increment required two translator fixes.
+Metal and DirectX use none. DirectX float16 buffers carry logical binary16
+words in their reflected 16-bit storage. This increment required two translator
+fixes.
 Metal-source type traits now treat the native `bfloat` spelling behind
 `bfloat16_t` as floating point, so `LessThan<bfloat16_t>` keeps its NaN
 ordering. DirectX helpers now index widened 8-bit root storage one carrier per
