@@ -14,6 +14,9 @@ struct Request: Decodable {
     let simdWidth: Int
     // Boolean function constants, as MLX sets them with MTLFunctionConstantValues.
     let boolConstants: [BoolConstant]?
+    // Report the pipeline's limits, as MLX's check_kernel_threadgroup_size
+    // reads them, without dispatching.
+    let pipelineOnly: Bool?
 }
 
 enum ExecutionError: Error {
@@ -53,6 +56,14 @@ func run() throws {
         function = selected
     }
     let pipeline = try device.makeComputePipelineState(function: function)
+    if request.pipelineOnly == true {
+        let limits = try JSONSerialization.data(withJSONObject: ["device": device.name,
+            "simdWidth": pipeline.threadExecutionWidth,
+            "maxTotalThreadsPerThreadgroup": pipeline.maxTotalThreadsPerThreadgroup],
+            options: [.sortedKeys])
+        FileHandle.standardOutput.write(limits)
+        return
+    }
     guard pipeline.threadExecutionWidth == request.simdWidth,
           request.workgroupSize.reduce(1, *) <= pipeline.maxTotalThreadsPerThreadgroup else {
         throw ExecutionError.unavailable("Unsupported SIMD width or workgroup size")
@@ -109,7 +120,8 @@ func run() throws {
     }
     let result = try JSONSerialization.data(withJSONObject: ["device": device.name,
         "simdWidth": pipeline.threadExecutionWidth, "bufferBytes": buffers.map { $0.length },
-        "allocationIds": allocationIds, "uniqueAllocations": allocations.count],
+        "allocationIds": allocationIds, "uniqueAllocations": allocations.count,
+        "maxTotalThreadsPerThreadgroup": pipeline.maxTotalThreadsPerThreadgroup],
         options: [.sortedKeys])
     FileHandle.standardOutput.write(result)
 }

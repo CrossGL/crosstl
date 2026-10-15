@@ -730,6 +730,33 @@ index-range precondition for the single kernels and six for the general
 kernels. This is an 18/17,832 increment; it does not run the upstream MLX test
 suite or redirect the MLX host runtime.
 
+``scaled_dot_product_attention.current-tree.translation.json`` pins 46 of the
+82 ``scaled_dot_product_attention.metal`` entries and their 642 artifacts: the
+blocked scale-copy and causal-mask kernels, and every one-pass ``sdpa_vector``
+and ``sdpa_vector_2pass_2`` aggregation kernel. Each one-pass kernel is pinned
+in eight specializations of its six function constants that pair every mask
+mode with both query layouts and both sink settings. DirectX materializes the
+constants; Metal and OpenGL specialize them when the runtime creates the
+pipeline. OpenGL and DirectX lower the SIMD reductions to 32-lane software
+subgroups. OpenGL and DirectX execute 642 dispatches, and Metal every one whose
+threadgroup the device fits, covering grouped-query
+decode, multi-query prefill, transposed and cached keys and values, per-head,
+broadcast and transposed masks with fully masked rows, attention sinks, and
+first-pass partials over 32 to 128 blocks. Attention outputs are checked
+against a per-element bound on the kernel's binary32 rounding, with
+``fast::exp`` kept on Metal and lowered to the default ``exp`` on OpenGL and
+DirectX; rows without keys must
+be exactly zero and the blocked kernels bit-exact. Metal also runs the
+unchanged upstream kernel against the same bounds, and the translation must
+reproduce it bit for bit. Where MLX's own pipeline cannot run the 1,024 threads
+it requests (``check_kernel_threadgroup_size`` would throw), the Metal gate
+records both pipelines' limits and skips that dispatch; elsewhere the
+translation must fit them too. OpenGL relies on seven host
+index-range preconditions. The 36 two-pass first-pass entries translate back to
+Metal but not yet to OpenGL or DirectX, and the contract records their exact
+diagnostics. This is a 46/17,832 increment; it does not run the upstream MLX
+test suite or redirect the MLX host runtime.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs
