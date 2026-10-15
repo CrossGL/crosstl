@@ -69,12 +69,12 @@ ENTRY_CONTRACTS = {
 }
 GENERATED_ARTIFACTS = {
     MLX_QUANTIZED_ENTRY_POINT: {
-        "sha256": "9e7e4af1ceb66b2fa93e1029d370b67e91c2972c27c70bc8892c0866fb6b76b9",
-        "sizeBytes": 4557,
+        "sha256": "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0",
+        "sizeBytes": 5704,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
-        "sha256": "c3a0b1b98cd7bfe3619f5be64c0b041028c2dcf61836e4b7c2de831be61bc9d9",
-        "sizeBytes": 16461,
+        "sha256": "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be",
+        "sizeBytes": 17865,
     },
 }
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-directx"

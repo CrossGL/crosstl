@@ -9851,7 +9851,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
     assert "`[numthreads(32, 2, 1)]`" in normalized_readme
     assert "`[WaveSize(32)]`" in normalized_readme
-    assert "16,461 bytes" in normalized_readme
+    assert "17,865 bytes" in normalized_readme
     assert "materializes the overloaded `elem_to_loc` helper" in normalized_readme
     assert "independent shape and stride resource offsets" in normalized_readme
     assert "passes its logical offset as `inout int64_t`" in normalized_readme
@@ -9885,8 +9885,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["compiler_target_profiles"] == ["directx-12"]
     assert directx["required_capabilities"] == []
     assert directx["generated_hlsl"] == {
-        "sha256": "9e7e4af1ceb66b2fa93e1029d370b67e91c2972c27c70bc8892c0866fb6b76b9",
-        "size_bytes": 4557,
+        "sha256": "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0",
+        "size_bytes": 5704,
     }
     assert directx["materialization"] == {
         "reachable_specialization_count": 5,
@@ -10076,8 +10076,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "c3a0b1b98cd7bfe3619f5be64c0b041028c2dcf61836e4b7c2de831be61bc9d9",
-        "size_bytes": 16461,
+        "sha256": "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be",
+        "size_bytes": 17865,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",

@@ -320,15 +320,15 @@ def test_quantized_directx_proof_pins_revision_source_header_and_entry():
     assert module.GENERATED_ARTIFACTS == {
         module.MLX_QUANTIZED_ENTRY_POINT: {
             "sha256": (
-                "9e7e4af1ceb66b2fa93e1029d370b67e91c2972c27c70bc8892c0866fb6b76b9"
+                "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0"
             ),
-            "sizeBytes": 4557,
+            "sizeBytes": 5704,
         },
         module.MLX_QUANTIZED_GATHER_ENTRY_POINT: {
             "sha256": (
-                "c3a0b1b98cd7bfe3619f5be64c0b041028c2dcf61836e4b7c2de831be61bc9d9"
+                "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be"
             ),
-            "sizeBytes": 16461,
+            "sizeBytes": 17865,
         },
     }
     assert module.DIRECTX_TARGET_PROFILE == "directx-12"
