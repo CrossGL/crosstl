@@ -265,7 +265,7 @@ def _translated_gather_payload(module, mlx_root, work_dir, generated=None):
     payload = {
         "kind": "crosstl-project-portability-report",
         "project": {
-            "indexRangeAssertionCount": 4,
+            "indexRangeAssertionCount": len(assertions),
             "indexRangeAssertions": assertions,
             "workgroupSize": None,
             "workgroupSizeRules": {
@@ -611,7 +611,7 @@ def test_quantized_gather_opengl_artifact_execution_and_semantics_are_exact(tmp_
         entry_point=entry_point,
     )
 
-    assert index_contract["assertionCount"] == 4
+    assert index_contract["assertionCount"] == 9
     assert artifact["requiredCapabilities"] == []
     assert resolved == artifact_path
     assert generated_checks["workgroupSize"] == [32, 2, 1]
