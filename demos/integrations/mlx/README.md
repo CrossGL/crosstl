@@ -477,6 +477,27 @@ This is a 24/17,832 deterministic translation and native-compiler increment with
 14/17,832 common required numerical entries, not full-tree
 coverage, upstream MLX test-suite execution, or MLX host-runtime redirection.
 
+`contracts/searchsorted.current-tree.translation.json` pins all 26 entries of
+`searchsorted.metal` (13 element types, left and right) and the 78
+deterministic Metal, OpenGL and DirectX artifacts at the same pin. Required CI
+compiles each entry with the platform validator and executes all 26 on Metal,
+Mesa EGL and Direct3D 12 WARP. Each entry runs three sequences: length 1,
+length 33, and length 40 with stride 2 and decoy padding. Each sequence is
+searched with 48 queries on 1D and 3D grids, which checks MLX's flattened output
+offset. The queries cover duplicates, absent extremes, unsigned sign-bit
+boundaries and NaN ordering for float16, bfloat16, float32 and complex64.
+Every dispatch checks 16 output guards and four unchanged inputs; Metal also
+compares the unchanged upstream kernel. OpenGL uses two host index-range
+preconditions, `int64(mid) * a_stride` and `offset` in signed 32-bit range.
+Metal and DirectX use none. This increment required two translator fixes.
+Metal-source type traits now treat the native `bfloat` spelling behind
+`bfloat16_t` as floating point, so `LessThan<bfloat16_t>` keeps its NaN
+ordering. DirectX helpers now index widened 8-bit root storage one carrier per
+element ([#2145](https://github.com/CrossGL/crosstl/issues/2145)). That second
+fix also re-pins 104 row-reduction entries of the 846d DirectX reduce contract.
+The increment covers 26/17,832 entries. It does not run the upstream MLX test
+suite or redirect the MLX host runtime.
+
 The compiler and runtime tests use the same checked-metadata configuration for
 all 24 entries. The 14 numerical entries retain all 112 cases per backend and
 use six upload-validated metadata requirements with no trusted index-range

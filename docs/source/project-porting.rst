@@ -550,6 +550,19 @@ implemented. Strict JSON runtime requests encode non-finite float32 inputs with
 the exact strings ``nan``, ``+infinity``, and ``-infinity`` before
 deterministic IEEE-754 packing.
 
+``searchsorted.current-tree.translation.json`` pins all 26 discovered
+``searchsorted.metal`` entries (13 element types, left and right) and their 78
+Metal, OpenGL and DirectX artifacts at the same revision. Every entry is
+compiled by the platform validator and executed on Metal, Mesa EGL and
+Direct3D 12 WARP: three sequences (length 1, length 33, and length 40 with
+stride 2) against 48 queries on 1D and 3D grids, with 16 output guards and four
+unchanged inputs. Queries cover duplicates, absent extremes, sign-bit
+boundaries and NaN ordering for floating and complex values. Metal also runs
+the unchanged upstream kernel. OpenGL relies on two host index-range
+preconditions (``int64(mid) * a_stride`` and ``offset`` in signed 32-bit
+range). This is a 26/17,832 increment; it does not run the upstream MLX test
+suite or redirect the MLX host runtime.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs
