@@ -594,6 +594,20 @@ and 227 of 4,096 float32, float16 and bfloat16 results of one case. Each
 dispatch checks 16 output guards and two unchanged constants, and Metal also
 runs the unchanged upstream kernel. This is an 11/17,832 increment.
 
+``random.current-tree.translation.json`` pins both ``random.metal`` entries,
+``rbitsc`` and ``rbits``, and their six artifacts. One-thread workgroups make
+``threads_per_grid`` equal the dispatched workgroup count, the ``rbits`` union
+lowers to a packed word pair, and the ``char`` output widens to sign-extended
+32-bit slots on OpenGL and DirectX. All three backends must match every byte of
+24 cases (21,403 key bytes). 15 cases reproduce the Threefry 2x32 known answers
+pinned by MLX's ``tests/random_tests.cpp``, including the vmapped row and column
+key layouts; the rest cover wrapping key schedules, every word-count parity and
+edge-byte combination, 2,193 workgroups, broadcast and permuted key views and
+unread decoy words. Each dispatch checks 16 output guards and its unchanged
+inputs, and Metal also runs the unchanged upstream kernel. OpenGL relies on host
+preconditions that the per-key byte offset and composed byte index fit in
+signed 32-bit range. This is a 2/17,832 increment.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

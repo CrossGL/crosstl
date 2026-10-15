@@ -4048,7 +4048,7 @@ jobs:
           git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-tree-upstream
           git -C mlx-current-tree-upstream config core.autocrlf false
           git -C mlx-current-tree-upstream sparse-checkout init --cone
-          git -C mlx-current-tree-upstream sparse-checkout set mlx/backend/metal/kernels python/tests
+          git -C mlx-current-tree-upstream sparse-checkout set mlx/backend/metal/kernels python/tests tests
           git -C mlx-current-tree-upstream checkout --detach "$MLX_CURRENT_TREE_COMMIT"
           test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = "$MLX_CURRENT_TREE_COMMIT"
 
@@ -4656,6 +4656,32 @@ jobs:
               --basetemp=mlx-current-results/arange \
               --junitxml=mlx-current-results/arange.xml \
               demos/integrations/mlx/tests/kernels/test_current_arange.py
+
+      - name: Prove current MLX random native parity
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_RANDOM: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX random native parity" --timeout-seconds 900 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/random \
+              --junitxml=mlx-current-results/random.xml \
+              demos/integrations/mlx/tests/kernels/test_current_random.py
 
       - name: Upload current MLX runtime diagnostics
         if: always()

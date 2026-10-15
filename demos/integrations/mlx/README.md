@@ -575,6 +575,32 @@ words. Metal itself keeps the native expression, which its compiler contracts
 in the same way. This covers 11/17,832 entries; it does not run the upstream
 MLX test suite or redirect the MLX host runtime.
 
+`contracts/random.current-tree.translation.json` pins both `random.metal`
+entries (`rbitsc` for row-contiguous keys and `rbits` for strided keys) and
+their six artifacts. Both kernels are non-template, so the project-level
+`workgroup_size = [1, 1, 1]` makes `threads_per_grid` equal the
+(keys, half_size + odd) workgroup count that MLX dispatches; DirectX reads it
+from the generated dispatch-count constant buffer. The `rbits` union of a
+`uint2` and two `uchar4` views lowers to one packed word pair on OpenGL and
+DirectX, and the `char` output widens to sign-extended 32-bit slots. Required CI
+executes both entries on Metal, Mesa EGL and Direct3D 12 WARP over 24 cases and
+21,403 key bytes, and every byte must match exactly. 15 cases reproduce the
+Threefry 2x32 known answers that MLX's C++ suite (`tests/random_tests.cpp`,
+generated with JAX) pins for `random::bits` at widths 4, 2 and 1, for odd and
+even word counts with edge bytes, and for the vmapped row and column key
+layouts. The other cases cover all-ones and sign-bit keys that wrap the key
+schedule, every combination of word-count parity and edge bytes, 2,193
+workgroups, broadcast and permuted key views, and unread decoy words between
+strided keys. Widths 1 and 2 still store the whole dropped-last word, so their
+expected stores include the bytes after the key. Each dispatch checks 16 output
+guards and three or six unchanged inputs; Metal runs every case under two
+complementary byte guards and also runs the unchanged upstream kernel. OpenGL
+relies on host preconditions that the per-key byte offset and the composed byte
+index fit in signed 32-bit range. CI now also checks out MLX's `tests`
+directory so the gate can verify the known-answer file. This covers 2/17,832
+entries; it does not run the upstream MLX test suite or redirect the MLX host
+runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
