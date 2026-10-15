@@ -151,5 +151,8 @@ def test_metal_keeps_unnamed_vector_pointee_views(tmp_path):
     generated = _translate(
         tmp_path, _gather_source("float", "metal::vec<float, 4>"), "metal"
     )
-    assert "reinterpret_cast<const device float4 *>(values + tid * 4u)" in generated
+    # Compare without whitespace: clang-format (when installed) rewrites
+    # ``float4*`` as ``float4 *`` and may wrap the cast across lines.
+    compact = "".join(generated.split())
+    assert "reinterpret_cast<constdevicefloat4*>(values+tid*4u)" in compact
     _compile(generated, "metal", tmp_path)
