@@ -583,6 +583,17 @@ the default ``exp``, so translated Metal is close to, not bit-identical with,
 upstream. Metal also runs both unchanged upstream kernels. Together these cover
 7/17,832 entries.
 
+``arange.current-tree.translation.json`` pins all 11 ``arange.metal`` entries
+and their 33 artifacts. Every entry executes exactly on all three backends:
+integer cases wrap modulo the type width and form 64-bit products above 2^32,
+and floating cases cover the fused ``start + index * step`` rounding, binary32
+subnormal flushing, overflow, binary16 subnormals and index rounding up to
+65,534. OpenGL and DirectX select ``floating_contraction_profile = "rne-flush"``
+to reproduce Metal's contraction; separate rounding would differ in 1,269, 906
+and 227 of 4,096 float32, float16 and bfloat16 results of one case. Each
+dispatch checks 16 output guards and two unchanged constants, and Metal also
+runs the unchanged upstream kernel. This is an 11/17,832 increment.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

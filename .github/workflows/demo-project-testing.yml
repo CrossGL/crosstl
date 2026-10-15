@@ -4631,6 +4631,32 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_gather_mm_offsets.py \
               demos/integrations/mlx/tests/kernels/test_current_cross_entropy.py
 
+      - name: Prove current MLX arange native parity
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_ARANGE: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX arange native parity" --timeout-seconds 900 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/arange \
+              --junitxml=mlx-current-results/arange.xml \
+              demos/integrations/mlx/tests/kernels/test_current_arange.py
+
       - name: Upload current MLX runtime diagnostics
         if: always()
         uses: actions/upload-artifact@v4

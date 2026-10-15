@@ -555,6 +555,26 @@ donated-input aliasing of `out` and `in` is not covered. These two increments
 cover 7/17,832 entries; they do not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+`contracts/arange.current-tree.translation.json` pins all 11 `arange.metal`
+entries (eight integer types, float16, float32 and bfloat16) and their 33
+artifacts. Each entry dispatches one thread per element on Metal, Mesa EGL and
+Direct3D 12 WARP and must match exactly. Integer cases wrap modulo the type
+width, step downwards through unsigned wraparound, and form 64-bit products
+above 2^32; int64 cases stay within the signed range because Metal's signed
+overflow is undefined. Metal fuses `start + index * step` even under
+`-fno-fast-math`, so OpenGL and DirectX select
+`floating_contraction_profile = "rne-flush"`. For 0.1 + index * 0.3,
+separate rounding would differ from the pinned library in 1,269, 906 and 227 of
+4,096 float32, float16 and bfloat16 results. The floating cases also cover
+binary32 subnormal flushing of operands and of an exact result below the
+smallest normal value, binary32 and binary16 overflow, binary16 subnormal
+results, and integer-to-binary16 and integer-to-bfloat16 rounding of indices up
+to 65,534. Every dispatch checks 16 output guards and two unchanged constants,
+and Metal also runs the unchanged upstream kernel against the same expected
+words. Metal itself keeps the native expression, which its compiler contracts
+in the same way. This covers 11/17,832 entries; it does not run the upstream
+MLX test suite or redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
