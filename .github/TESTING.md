@@ -81,9 +81,13 @@ Metal setup uses `tools/ensure_metal_toolchain.py` in each existing download
 step. A completed download may precede executable toolchain activation on a
 fresh runner. After one successful download, the helper retries only the
 explicit missing-toolchain error, at most ten probes within sixty seconds.
-Download, command and activation waits are bounded. Other compiler errors fail
-immediately, and the existing language-version and native compilation probes
-still run unchanged. No runner, test deadline or compiler fallback is added.
+Download, command and activation waits are bounded. The first compiler probe
+may take up to three minutes, because a fresh runner's first `xcrun` call
+resolves the SDK through `xcodebuild` and has exceeded ten seconds; later
+probes take five to eight seconds and are bounded at thirty. Other compiler
+errors fail immediately, and the existing language-version and native
+compilation probes still run unchanged. No runner, test deadline or compiler
+fallback is added.
 
 The open-source porting demo runs its portable tests and all-target reference
 comparison once on Ubuntu, using two pytest workers. Windows and macOS retain

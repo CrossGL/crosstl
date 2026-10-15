@@ -6,7 +6,11 @@ import subprocess
 import sys
 import time
 
-PROBE_TIMEOUT_SECONDS = 10
+# A fresh runner's first xcrun call resolves the SDK and toolchain through
+# xcodebuild before it runs the compiler, and has exceeded ten seconds on
+# GitHub's macOS images. Later probes there take five to eight seconds.
+INITIAL_PROBE_TIMEOUT_SECONDS = 180
+PROBE_TIMEOUT_SECONDS = 30
 DOWNLOAD_TIMEOUT_SECONDS = 480
 ACTIVATION_TIMEOUT_SECONDS = 60
 ACTIVATION_ATTEMPTS = 10
@@ -53,7 +57,7 @@ def _missing_component(result):
 
 def main(argv=None):
     argparse.ArgumentParser(description=__doc__).parse_args(argv)
-    result = _probe()
+    result = _probe(INITIAL_PROBE_TIMEOUT_SECONDS)
     if result.returncode == 0 or not _missing_component(result):
         return result.returncode
     download = _run(

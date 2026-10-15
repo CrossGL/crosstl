@@ -21,7 +21,11 @@ def _commands(monkeypatch, statuses, *, download_status=0, probe_seconds=0):
             assert not capture_output
             return subprocess.CompletedProcess(command, download_status)
         assert command == ["xcrun", "--sdk", "macosx", "metal", "--version"]
-        assert capture_output and 0 < timeout <= setup.PROBE_TIMEOUT_SECONDS
+        assert capture_output
+        if sum(called[0] == "xcrun" for called, _ in calls) == 1:
+            assert timeout == setup.INITIAL_PROBE_TIMEOUT_SECONDS
+        else:
+            assert 0 < timeout <= setup.PROBE_TIMEOUT_SECONDS
         clock[0] += min(probe_seconds, timeout)
         status, message = next(statuses)
         return subprocess.CompletedProcess(
@@ -100,6 +104,59 @@ def test_activation_deadline_includes_probe_execution(monkeypatch):
     assert len(calls) < setup.ACTIVATION_ATTEMPTS + 2
     assert clock[0] == setup.PROBE_TIMEOUT_SECONDS + setup.ACTIVATION_TIMEOUT_SECONDS
     assert all(0 < delay <= setup.RETRY_DELAY_SECONDS for delay in sleeps)
+
+
+def _probes_taking(monkeypatch, seconds, first_status):
+    """Fake xcrun calls that take `seconds` and are killed at their bound."""
+    timeouts = []
+
+    def run(command, *, check, text, capture_output, timeout):
+        timeouts.append(timeout)
+        if command[0] == "xcodebuild":
+            return subprocess.CompletedProcess(command, 0)
+        if seconds > timeout:
+            raise subprocess.TimeoutExpired(command, timeout)
+        status, message = first_status if len(timeouts) == 1 else READY
+        return subprocess.CompletedProcess(
+            command, status, "Metal compiler\n" if not status else "", message
+        )
+
+    monkeypatch.setattr(setup.subprocess, "run", run)
+    return timeouts
+
+
+@pytest.mark.parametrize(
+    "seconds",
+    (11, setup.PROBE_TIMEOUT_SECONDS + 1, setup.INITIAL_PROBE_TIMEOUT_SECONDS),
+)
+def test_cold_first_probe_may_outlast_the_warm_probe_bound(monkeypatch, seconds):
+    # GitHub's fresh macOS runners have spent more than ten seconds in the
+    # first xcrun call while it resolved the SDK through xcodebuild.
+    timeouts = _probes_taking(monkeypatch, seconds, READY)
+    assert setup.main([]) == 0
+    assert timeouts == [setup.INITIAL_PROBE_TIMEOUT_SECONDS]
+
+
+def test_cold_first_probe_is_still_bounded(monkeypatch, capsys):
+    seconds = setup.INITIAL_PROBE_TIMEOUT_SECONDS + 1
+    timeouts = _probes_taking(monkeypatch, seconds, READY)
+    assert setup.main([]) == 124
+    assert timeouts == [setup.INITIAL_PROBE_TIMEOUT_SECONDS]
+    assert "timed out" in capsys.readouterr().err
+
+
+def test_activation_probes_keep_the_warm_bound(monkeypatch, capsys):
+    # Only the first call is cold: probes after a download stay at the warm
+    # bound, and a probe that outlasts it fails without another download.
+    timeouts = _probes_taking(monkeypatch, setup.PROBE_TIMEOUT_SECONDS + 1, MISSING)
+    monkeypatch.setattr(setup.time, "sleep", lambda seconds: None)
+    assert setup.main([]) == 124
+    assert timeouts == [
+        setup.INITIAL_PROBE_TIMEOUT_SECONDS,
+        setup.DOWNLOAD_TIMEOUT_SECONDS,
+        setup.PROBE_TIMEOUT_SECONDS,
+    ]
+    assert "timed out" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("stage", ("probe", "download"))
