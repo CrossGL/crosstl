@@ -389,6 +389,11 @@ def test_quantized_opengl_proof_pins_revision_files_entry_and_ranges():
         "tid.z * rhs_strides[0]",
         "idx.x",
         "idx.y",
+        "x_idx * x_strides[0]",
+        "w_idx * w_strides[0]",
+        "w_idx * s_strides[0]",
+        "w_idx * b_strides[0]",
+        "idx.z",
     )
     assert [dict(assertion) for assertion in module.GATHER_INDEX_RANGE_ASSERTIONS] == [
         {

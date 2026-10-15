@@ -2474,12 +2474,16 @@ broader subgroup fallback coverage.
 
 The historical `4367c73b60541ddd5a266ce4644fd93d20223b6e` corpus retains a
 separate compile-only OpenGL gate for `affine_gather_qmv_fast_float_gs_32_b_2`.
-It emits a 16,042-byte GLSL artifact with SHA-256
-`652a1b94628622537d565ff5da0174bfb096b77653971f89a0614e2425548cff`, zero
+It emits a 16,040-byte GLSL artifact with SHA-256
+`402565bb6227de79fdf324193857653ddead7da0d010acea51ebcd60b8f264ea`, zero
 project diagnostics, 10 reachable specializations, and eight concrete
 materializations. The project report retains the pinned `32 x 2 x 1`
-workgroup rule and four explicit index-range preconditions for the gather
-resource lookups. The generated `load_vector` and `qdot` helpers preserve the
+workgroup rule and nine explicit index-range preconditions in
+`[0, 2147483647]`: four for the gather resource lookups and five for the
+`adjust_matrix_offsets` batch rebases (`x_idx * x_strides[0]`,
+`w_idx * w_strides[0]`, `w_idx * s_strides[0]`, `w_idx * b_strides[0]`, and
+the broadcast bias offset `idx.z`), which OpenGL keeps in signed `int` logical
+offsets. The generated `load_vector` and `qdot` helpers preserve the
 16-element private array. Reinterpreted storage pointers pass their root byte
 base separately from their logical byte-view offset, so `qdot` composes the
 incoming word offset, row offset, and loop index without capturing caller-local
@@ -4761,6 +4765,14 @@ OpenGL SPIR-V 1.3 and validates all 24 binaries with `spirv-val`; that result
 does not establish the source's 32-lane simdgroup or `simd_sum` semantics. The
 bounded LogSumExp proof above exercises the exact-width OpenGL contract without
 inflating the RMSNorm claim.
+OpenGL keeps each rebased row pointer in a signed `int` logical offset, so the
+OpenGL project configuration supplies 14 caller-trusted index-range assertions
+in `[0, 2147483647]`: the `size_t` row rebase
+`gid * uint64(axis_size) + lid * RMS_N_READS`, the in-row loop indices `i + r`
+and `r + i`, and the 11 complete row accesses (`x + i`, `out_ + i`, `g + i`,
+`gx + i`, `gw + i`, `x + i + r`, `x + r + i`, `out_ + r + i`, `g + i + r`,
+`gx + i + r`, and `gw + i + r`). The proof requires the report to record
+exactly these assertions.
 
 The 24-artifact specialization proof above remains translation and native
 compilation evidence only. A separate bounded proof selects the historical

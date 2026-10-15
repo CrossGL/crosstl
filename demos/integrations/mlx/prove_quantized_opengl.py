@@ -60,6 +60,15 @@ GATHER_INDEX_RANGE_EXPRESSIONS = (
     "tid.z * rhs_strides[0]",
     "idx.x",
     "idx.y",
+    # adjust_matrix_offsets rebases x, w, scales and biases by gathered batch
+    # offsets. OpenGL keeps each rebase in a signed int logical offset, so the
+    # wide one-dimensional batch products and the broadcast bias offset must
+    # also be bounded; the other broadcast offsets reuse idx.x and idx.y.
+    "x_idx * x_strides[0]",
+    "w_idx * w_strides[0]",
+    "w_idx * s_strides[0]",
+    "w_idx * b_strides[0]",
+    "idx.z",
 )
 GATHER_INDEX_RANGE_ASSERTIONS = tuple(
     {
