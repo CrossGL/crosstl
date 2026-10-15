@@ -178,7 +178,21 @@ def test_crossgl_parser_normalizes_fast_calls():
     assert METAL_MATH_NAMESPACE_ANNOTATION not in unknown.annotations
 
 
-@pytest.mark.parametrize("target", ["opengl", "directx", "vulkan", "cuda"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "opengl",
+        "directx",
+        "dx12",
+        "vulkan",
+        "cuda",
+        "hip",
+        "rust",
+        "mojo",
+        "slang",
+        "webgpu",
+    ],
+)
 def test_other_targets_ignore_the_fast_namespace(tmp_path, target):
     outputs = []
     for label, prefix in (("plain", ""), ("fast", "fast::"), ("q", "metal::fast::")):
