@@ -674,6 +674,21 @@ rounding of a value within a per-element bound on the kernel's binary32
 rounding and its 16-bit output arithmetic, and a VJP without a weight must
 leave ``gw`` untouched. This is a 12/17,832 increment.
 
+``ternary.current-tree.translation.json`` pins all 212 ``ternary.metal``
+``Select`` entries and their 636 artifacts: 14 base kernels for each of the 13
+element types plus the ``vn``, ``vsn`` and ``svn`` work-per-thread kernels for
+the ten types narrower than eight bytes. Every entry is compiled by the
+platform validator and executed on Metal, Mesa EGL and Direct3D 12 WARP, two
+cases per kernel: flat runs that end inside a work-per-thread tile, scalar
+operands, 2-D ``v2`` grids, and 1-D to 5-D strided shapes with transposed,
+permuted and broadcast operands on both the 32-bit and 64-bit index paths.
+Results must match bit for bit, including signaling NaN payloads, signed zeros,
+subnormals and integer extremes. Every dispatch checks 16 output guards, four
+decoys after each operand and that every input is unchanged, and Metal also
+runs the unchanged upstream kernel. OpenGL relies on 11 host index-range
+preconditions in signed 32-bit range. This is a 212/17,832 increment; it does
+not run the upstream MLX test suite or redirect the MLX host runtime.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

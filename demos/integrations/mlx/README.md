@@ -737,6 +737,35 @@ composed element indices fit in signed 32-bit range. The host's `gw_temp`
 column reduction is not part of this gate. This covers 12/17,832 entries; it
 does not run the upstream MLX test suite or redirect the MLX host runtime.
 
+`contracts/ternary.current-tree.translation.json` pins all 212 `ternary.metal`
+`Select` entries and their 636 artifacts: the 14 base kernels for each of the
+13 element types, and the `vn`, `vsn` and `svn` work-per-thread kernels for
+the ten types narrower than eight bytes. Required CI compiles every entry with
+the platform validator and executes it on Metal, Mesa EGL and Direct3D 12 WARP,
+two cases per kernel (424 dispatches per target). Flat kernels run 37 elements,
+ending inside a work-per-thread tile, and 64 elements, with a scalar `b` or `c`
+for the `sv` and `vs` kernels. `v2` grids of 3x2 and 4x3 threads cover the
+64-bit offset path, the 3x2 grid with a short last tile. The strided kernels
+run 1-D to 5-D shapes with transposed, permuted and stride-0 broadcast
+operands, through both the 32-bit and the 64-bit (`large`) index paths.
+`Select` must move every payload bit unchanged, so each result is compared
+bit for bit. The inputs include integer extremes and sign boundaries, signed
+zeros, infinities, quiet and signaling NaNs with payloads, subnormals, the
+largest finite values, booleans and complex64 pairs with NaN and infinite
+parts. Every operand is followed by four decoys that no valid output may read.
+Every dispatch checks 16 output guards and that every input is unchanged.
+Metal also runs the unchanged upstream kernel and compares its output bytes.
+OpenGL widens bool and 8- and 16-bit integer storage to 32-bit words, and holds
+float16 and bfloat16 values as their exact binary32 widening. The readback
+therefore checks the widened NaN payloads and signaling bits. DirectX keeps
+16-bit integer storage and carries float16 and bfloat16 as 16-bit words.
+OpenGL selects float32, float16 and bfloat16 values through their bit
+patterns, and DirectX selects float16 words the same way. OpenGL relies on
+11 host preconditions that the flat, 64-bit and composed strided indices fit
+in signed 32-bit range; Metal and DirectX use none. This covers 212/17,832
+entries; it does not run the upstream MLX test suite or redirect the MLX host
+runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
