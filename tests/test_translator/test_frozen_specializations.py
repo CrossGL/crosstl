@@ -398,3 +398,111 @@ def test_frozen_specialization_native_execution(tmp_path, enabled):
     descriptor, package = _package(tmp_path, target, enabled=enabled, source=source)
     request, outputs = _request(descriptor, package, enabled=enabled)
     _execute(request, outputs, tmp_path, validate=_validate)
+
+
+# MLX's two-pass SDPA strides its key loop by the int function constant
+# ``blocks``. Frozen, the stride is a literal that collective-loop proofs read.
+INT_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+constant int scale [[function_constant(12)]];
+kernel void read_value(constant uint* values [[buffer(0)]],
+                       device uint* output [[buffer(2)]]) {
+    output[0] = values[0] * uint(scale);
+}
+"""
+INT_FROZEN = [dict(name="scale", id=12, dtype="int32", value=-5, frozen=True)]
+
+
+def _int_request(descriptor, package, *, override=None):
+    inputs, outputs = {}, {}
+    for binding in descriptor["bindings"]:
+        name = binding["provenance"]["sourceResource"]["parameter"]
+        values = {"values": [43], "output": [0, 12345]}[name]
+        inputs[binding["name"]] = dict(
+            dtype="uint32", shape=[len(values)], values=values
+        )
+        if name == "output":
+            outputs[binding["name"]] = dict(
+                dtype="uint32", shape=[2], values=[(43 * -5) & 0xFFFFFFFF, 12345]
+            )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        {"workgroupCount": [1, 1, 1], "workgroupSize": [1, 1, 1]},
+        specialization_values={} if override is None else {12: override},
+    )
+    return request, outputs
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_frozen_int32_specialization_is_materialized(tmp_path, target):
+    descriptor, package = _package(
+        tmp_path, target, source=INT_SOURCE, values={"scale": -5}
+    )
+    (constant,) = descriptor["specializationConstants"]
+    assert constant["frozen"] is True and constant["value"] == -5
+    source = (package / descriptor["artifact"]["packagePath"]).read_text()
+    assert parse_frozen_specializations(source) == INT_FROZEN
+    assert "function_constant" not in source and "constant_id" not in source
+    for override in (None, -5):
+        request, _ = _int_request(descriptor, package, override=override)
+        assert not request.adapter_contract.specialization_constants
+        assert request.adapter_contract.metadata["frozenSpecializations"] == (
+            INT_FROZEN
+        )
+    with pytest.raises(NativeLoaderDispatchError, match="override"):
+        _int_request(descriptor, package, override=5)
+    with pytest.raises(NativeLoaderDispatchError):
+        _int_request(descriptor, package, override=True)
+    assert validate_project_report(tmp_path / "report.json")["success"]
+
+
+@pytest.mark.parametrize(
+    "values,code",
+    [
+        ({"scale": True}, "project.translate.specialization-value-type-incompatible"),
+        ({"scale": 1 << 31}, None),
+    ],
+)
+def test_frozen_int32_values_must_match_the_constant(tmp_path, values, code):
+    report = _translate(tmp_path, "opengl", source=INT_SOURCE, values=values)
+    assert report["summary"]["translatedCount"] == 0
+    assert code is None or any(item["code"] == code for item in report["diagnostics"])
+
+
+@pytest.mark.parametrize("fault", ["bool-value", "wide-value", "dtype"])
+def test_frozen_int32_header_rejects_mismatched_values(fault):
+    source = frozen_specialization_header(INT_FROZEN)
+    if fault == "bool-value":
+        source = source.replace('"value":-5', '"value":true')
+    elif fault == "wide-value":
+        source = source.replace('"value":-5', '"value":2147483648')
+    else:
+        source = source.replace('"dtype":"int32"', '"dtype":"float32"')
+    with pytest.raises(ValueError):
+        parse_frozen_specializations(source)
+
+
+def test_frozen_int32_constants_do_not_fold_branches():
+    count = IdentifierNode("count")
+    branch = IfNode(count, BlockNode([IdentifierNode("yes")]), None)
+    function = FunctionNode("run", PrimitiveType("void"), [], BlockNode([branch]))
+    records = [dict(name="count", id=1, dtype="int", value=0, frozen=True)]
+    fold_frozen_specialization_branches(function, records)
+    assert function.body.statements[0] is branch
+
+
+def test_frozen_int32_specialization_native_execution(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_FROZEN_SPECIALIZATION") != "1":
+        pytest.skip("set CROSTL_REQUIRE_FROZEN_SPECIALIZATION=1 for native controls")
+    from tests.runtime_helpers import _validate
+    from tests.test_translator.test_loop_updates import _execute
+
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    descriptor, package = _package(
+        tmp_path, target, source=INT_SOURCE, values={"scale": -5}
+    )
+    request, outputs = _int_request(descriptor, package)
+    _execute(request, outputs, tmp_path, validate=_validate)

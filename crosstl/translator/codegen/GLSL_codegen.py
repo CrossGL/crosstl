@@ -349,6 +349,7 @@ from .loop_induction import (
     loop_constant_bindings,
     metadata_loop_bindings,
     metadata_parameter_bindings,
+    walk_control_scopes,
 )
 from .match_utils import (
     generate_match_expression_assignment,
@@ -6737,7 +6738,10 @@ class GLSLCodeGen:
                 constants,
                 normalized_operator,
                 **(
-                    {"metadata_bounds": metadata_bounds}
+                    {
+                        "metadata_bounds": metadata_bounds,
+                        "any_start": initial_value is None,
+                    }
                     if proof is fixed_stride_loop_terminates
                     else {}
                 ),
@@ -6751,11 +6755,13 @@ class GLSLCodeGen:
             else set()
         )
         control_names = bound_names | stride_names | {loop_name}
-        for child in self.walk_ast(getattr(node, "body", None)):
+        for child, visible in walk_control_scopes(
+            getattr(node, "body", None), control_names
+        ):
             if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
                 return False
             if isinstance(child, VariableNode):
-                if child.name in control_names:
+                if child.name in visible:
                     return False
                 if (
                     isinstance(child.var_type, (PointerType, ReferenceType))
@@ -6765,18 +6771,18 @@ class GLSLCodeGen:
                             child.initial_value
                         ),
                     )
-                    & control_names
+                    & visible
                 ):
                     return False
             if isinstance(child, AssignmentNode):
                 target_name = self.glsl_software_subgroup_assignment_target_name(child)
-                if target_name in control_names:
+                if target_name in visible:
                     return False
             if isinstance(child, UnaryOpNode) and self.map_operator(
                 getattr(child, "op", getattr(child, "operator", None))
             ) in {"++", "--", "&"}:
                 target_name = self.expression_name(getattr(child, "operand", None))
-                if target_name in control_names:
+                if target_name in visible:
                     return False
             if isinstance(child, FunctionCallNode):
                 observed = self.glsl_software_subgroup_call_mutations.get(
@@ -6789,7 +6795,7 @@ class GLSLCodeGen:
                         )
                     ),
                 )
-                if observed & control_names:
+                if observed & visible:
                     return False
         return True
 

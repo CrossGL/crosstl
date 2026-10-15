@@ -3809,8 +3809,12 @@ def test_resource_selection_retains_every_native_opt_in():
                 required.add(identity)
             if any(term in name for term in expression.split(" or ")):
                 selected.add(identity)
-    assert len(required) == 66
+    assert len(required) == 67
     assert required <= selected
+    assert (
+        "tests/test_translator/test_frozen_specializations.py",
+        "test_frozen_int32_specialization_native_execution",
+    ) in selected
     assert (
         "tests/test_translator/test_pointer_index_bounds.py",
         "test_pointer_array_recurrence_executes_natively",

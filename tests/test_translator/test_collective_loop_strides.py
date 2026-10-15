@@ -115,7 +115,14 @@ def test_fixed_stride_collectives_compile(tmp_path, case, stride_target):
         "int step = -2; step < 8u; step += 2",
         "int step = 0; step < 16; step += invocation",
         "int step = 0; step < invocation; step += 8",
-        "int step = int(group.x); step < 16; step += 8",
+        "int step = int(invocation); step < 16; step += 8",
+        # A uniform start of unknown value must fit every start: the largest
+        # terminating update follows the bound by one stride.
+        "int step = int(group.x); step < 2147483641; step += 8",
+        "int step = int(group.x); step <= 2147483640; step += 8",
+        "int step = int(group.x); step > -2147483642; step -= 8",
+        "int step = int(group.x); step < 16u; step += 8",
+        "uint step = group.x; step > 0u; step -= 8u",
         "int step = 0; step < 16; step += unknown()",
         "int step = 0; step < 16; step += (2147483647 + 8) - 2147483647",
         "int step = 0; step < 16; step += ((-2147483647 - 1) % -1) + 8",
@@ -143,6 +150,52 @@ def test_fixed_stride_collectives_compile(tmp_path, case, stride_target):
 def test_unproved_or_overflowing_induction_is_rejected(header, stride_target):
     with pytest.raises(STRIDE_ERRORS):
         _generator(stride_target).generate_stage(parse(_canonical(header)), "compute")
+
+
+# Uniform starts whose value the proof does not know, as MLX's two-pass SDPA
+# ``for (int i = block_idx; i < N; i += blocks)``: every visited value precedes
+# the bound, so the proof holds for any start of the counter's type. Values
+# map a workgroup index to the visited counter values.
+UNIFORM_START_CASES = {
+    "ascending": (
+        "int step = int(group.x); step < 16; step += 8",
+        lambda group: range(group, 16, 8),
+    ),
+    "descending": (
+        "int step = 7 - int(group.x); step > -2; step -= 3",
+        lambda group: range(7 - group, -2, -3),
+    ),
+    "boundary": (
+        "int step = int(group.x) + 2147483630; step < 2147483640; step += 8",
+        lambda group: range(2147483630 + group, 2147483640, 8),
+    ),
+    "inclusive-boundary": (
+        "int step = int(group.x) + 2147483630; step <= 2147483639; step += 8",
+        lambda group: range(2147483630 + group, 2147483640, 8),
+    ),
+    "zero-trip": (
+        "int step = int(group.x) + 16; step < 16; step += 8",
+        lambda group: (),
+    ),
+    "unsigned": (
+        "uint step = group.x; step < 64u; step += 32u",
+        lambda group: range(group, 64, 32),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", UNIFORM_START_CASES)
+def test_uniform_unknown_starts_compile(tmp_path, case, stride_target):
+    generator = _generator(stride_target)
+    ast = parse(_canonical(UNIFORM_START_CASES[case][0]))
+    generated = generator.generate_stage(ast, "compute")
+    assert (
+        "GroupMemoryBarrierWithGroupSync"
+        if stride_target == "directx"
+        else "barrier();"
+    ) in generated
+    assert "WaveActiveSum(" not in generated
+    _compile(generated, stride_target, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -489,6 +542,150 @@ def test_fixed_stride_helpers_execute(tmp_path, case):
         original_source=source if target == "metal" else None,
         original_entry="accumulate",
     )
+
+
+def _uniform_start_source(case):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+kernel void accumulate(device uint* output [[buffer(0)]],
+                       uint lane [[thread_index_in_threadgroup]],
+                       uint3 group [[threadgroup_position_in_grid]]) {{
+    if (group.x >= 2u) {{ return; }}
+    uint result = 0u;
+    for ({UNIFORM_START_CASES[case][0]}) {{ result += simd_sum(lane + uint(step)); }}
+    output[4u + group.x * 64u + lane] = result;
+}}
+"""
+
+
+def _uniform_start_request(root, target, source, steps, offset=0):
+    source, descriptor, package = _package(
+        root, target, "uint", (32, 2, 1), source=source
+    )
+    guard = 0xDEADBEEF
+    expected = [guard] * 201
+    for lane in range(128):
+        first = (lane % 64) // 32 * 32
+        expected[4 + lane] = (
+            sum(
+                neighbor + (step & 0xFFFFFFFF) + offset
+                for step in steps(lane // 64)
+                for neighbor in range(first, first + 32)
+            )
+            & 0xFFFFFFFF
+        )
+    (binding,) = descriptor["bindings"]
+    inputs = {
+        binding["name"]: {"dtype": "uint32", "shape": [201], "values": [guard] * 201}
+    }
+    outputs = {binding["name"]: {"dtype": "uint32", "shape": [201], "values": expected}}
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        {"workgroupCount": [3, 1, 1], "workgroupSize": [32, 2, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    return source, request, outputs
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize("case", [*UNIFORM_START_CASES, "shadowed"])
+def test_uniform_start_loops_translate_and_compile(tmp_path, target, case):
+    _, request, _ = _uniform_start_request(tmp_path, target, *_uniform_start(case))
+    generated = request.artifact_path.read_text()
+    if target != "metal":
+        assert "simd_sum" not in generated and "WaveActiveSum" not in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("case", [*UNIFORM_START_CASES, "shadowed"])
+def test_uniform_start_loops_execute(tmp_path, case):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required fixed-stride execution")
+    target = {"darwin": "metal", "win32": "directx"}.get(sys.platform, "opengl")
+    source, request, outputs = _uniform_start_request(
+        tmp_path, target, *_uniform_start(case)
+    )
+    _execute(
+        request,
+        outputs,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="accumulate",
+    )
+
+
+# MLX's two-pass SDPA reuses its key-loop counter ``i`` for the nested loops
+# over a thread's head dimensions. The nested counter must stay a distinct
+# variable: a translation that wrote the outer counter would change every
+# later sum and the outer trip count.
+SHADOWED_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+kernel void accumulate(device uint* output [[buffer(0)]],
+                       uint lane [[thread_index_in_threadgroup]],
+                       uint3 group [[threadgroup_position_in_grid]]) {
+    if (group.x >= 2u) { return; }
+    uint result = 0u;
+    for (int step = int(group.x); step < 16; step += 8) {
+        uint inner = 0u;
+        for (int step = 0; step < 3; step++) { inner += uint(step); }
+        result += simd_sum(lane + uint(step) + inner);
+    }
+    output[4u + group.x * 64u + lane] = result;
+}
+"""
+
+
+def _uniform_start(case):
+    if case == "shadowed":
+        return SHADOWED_SOURCE, lambda group: range(group, 16, 8), 3
+    return _uniform_start_source(case), UNIFORM_START_CASES[case][1], 0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "for (int step = 0; step < 2; step++) { result += uint(step); }",
+        "{ int step = int(invocation); step += 1; result += uint(step); }",
+        "if (invocation == 0u) { int step = 3; ++step; result += uint(step); }",
+    ],
+)
+@pytest.mark.parametrize(
+    "header",
+    (
+        "int step = 0; step < 16; step += 8",
+        "int step = int(group.x); step < 16; step += 8",
+    ),
+)
+def test_nested_scopes_may_reuse_the_counter_name(
+    tmp_path, body, header, stride_target
+):
+    generated = _generator(stride_target).generate_stage(
+        parse(_canonical(header, body)), "compute"
+    )
+    _compile(generated, stride_target, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{ step += 1; }",
+        "{ int step = 5; } step += 1;",
+        "{ int step = 5; { step = 1; } } { step = 2; }",
+        "for (int step = 0; step < 2; step++) { } ++step;",
+        "for (int other = step++; other < 2; other++) { }",
+        "for (int other = 0; other < 2; other++) { step = other; }",
+        "for (int other = 0; other < 2; other++) { int& alias = step; alias = 1; }",
+    ],
+)
+def test_counter_writes_outside_a_shadowing_scope_are_rejected(body, stride_target):
+    with pytest.raises(STRIDE_ERRORS):
+        _generator(stride_target).generate_stage(
+            parse(_canonical("int step = 0; step < 16; step += 8", body)), "compute"
+        )
 
 
 def test_fixed_stride_execution_is_required_in_existing_ci_job():

@@ -2005,7 +2005,7 @@ def _specialization_constants(
             if (
                 constant["frozen"] is not True
                 or not has_descriptor_value
-                or dtype != "bool"
+                or dtype not in {"bool", "int32"}
             ):
                 raise NativeLoaderDispatchError(
                     "frozen-specialization-invalid",

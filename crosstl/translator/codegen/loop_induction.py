@@ -144,10 +144,100 @@ def metadata_parameter_bindings(function, records, mutable_names, walk_ast):
                 yield parameter.name, record
 
 
+def walk_control_scopes(body, names):
+    """Yield ``(node, visible)`` for ``body`` and every node below it.
+
+    ``visible`` holds the ``names`` that still denote the enclosing loop's
+    controls at ``node``. A nested scope may hide one: a nested ``for`` that
+    declares it, as MLX's ``for (int i = 0; i < qk_per_thread; i++)`` inside
+    its key loop over ``i``, or a declaration in a nested block, for the rest
+    of that block. Writes to the hiding variable then leave the control
+    unchanged. A declaration directly in ``body``'s own statement list, the
+    loop's outermost scope, hides nothing: C++ and GLSL reject it, so callers
+    still see it and reject the loop. Initializers are visited with the names
+    of the enclosing scope, which only over-approximates the writes they make.
+    """
+    names = frozenset(names)
+    visited = set()
+
+    def walk(value, visible, outermost=False):
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                yield from walk(item, visible)
+            return
+        if isinstance(value, (list, tuple)):
+            yield from sequence(value, visible, outermost)
+            return
+        if isinstance(value, set):
+            for item in value:
+                yield from walk(item, visible)
+            return
+        if id(value) in visited:
+            return
+        visited.add(id(value))
+        if isinstance(value, VariableNode) and not outermost and value.name in visible:
+            yield value, visible - {value.name}
+        else:
+            yield value, visible
+        if isinstance(value, BlockNode):
+            for field, child in vars(value).items():
+                if field == "statements":
+                    yield from sequence(child or (), visible, outermost)
+                else:
+                    yield from walk(child, visible)
+            return
+        if isinstance(value, ForNode):
+            initializer = value.init
+            inner = visible
+            if isinstance(initializer, VariableNode) and initializer.name in visible:
+                inner = visible - {initializer.name}
+            for field, child in vars(value).items():
+                if field == "init":
+                    yield from walk(child, visible)
+                else:
+                    yield from walk(child, inner)
+            return
+        if hasattr(value, "__dict__"):
+            for child in vars(value).values():
+                yield from walk(child, visible)
+
+    def sequence(items, visible, outermost):
+        current = visible
+        for item in items:
+            yield from walk(
+                item, current, outermost and not isinstance(item, BlockNode)
+            )
+            if (
+                not outermost
+                and isinstance(item, VariableNode)
+                and getattr(item, "name", None) in current
+            ):
+                current = current - {item.name}
+
+    yield from walk(body, names, True)
+
+
 def fixed_stride_loop_terminates(
-    type_name, start, bound, update, constants, operator, *, metadata_bounds=None
+    type_name,
+    start,
+    bound,
+    update,
+    constants,
+    operator,
+    *,
+    metadata_bounds=None,
+    any_start=False,
 ):
-    """Prove the terminating update as well as every visited induction value."""
+    """Prove the terminating update as well as every visited induction value.
+
+    With ``any_start`` the caller has proved the start uniform but not its
+    value, so the proof must hold for every value of the counter's type, as in
+    MLX's ``for (int i = block_idx; i < N; i += blocks)``. A loop then visits
+    only values before the bound, so only the terminating update can leave
+    the type: ``bound - 1 + stride`` for an ascending ``<`` loop.
+    """
     if not isinstance(type_name, str) or not type_name.isidentifier():
         return False
     shape = source_integer_shape(
@@ -164,11 +254,17 @@ def fixed_stride_loop_terminates(
     minimum = 0 if unsigned else -(1 << (shape[1] - 1))
     maximum = (1 << (shape[1] - (not unsigned))) - 1
 
-    start = checked_induction_value(start, constants)
-    stop = checked_induction_value(bound, constants)
-    amount = 1 if unary else checked_induction_value(update.value, constants)
-    if start is None or amount is None:
+    known_start = checked_induction_value(start, constants)
+    if known_start is None and any_start:
+        starts = None
+    elif known_start is None:
         return False
+    else:
+        starts = (known_start,)
+    amount = 1 if unary else checked_induction_value(update.value, constants)
+    if amount is None:
+        return False
+    stop = checked_induction_value(bound, constants)
     stops = [stop]
     if stop is None:
         record = (metadata_bounds or {}).get(
@@ -178,17 +274,37 @@ def fixed_stride_loop_terminates(
             return False
         convert = _UnsignedLiteralInt if record["dtype"].startswith("u") else int
         stops = [convert(record["minimum"]), convert(record["maximum"])]
-    if not all(minimum <= value <= maximum for value in (start, amount, *stops)):
+    if not all(
+        minimum <= value <= maximum for value in (*(starts or ()), amount, *stops)
+    ):
         return False
     # Mixed unsigned arithmetic can change comparisons before assignment.
     if unsigned or any(
-        isinstance(value, _UnsignedLiteralInt) for value in (start, amount, *stops)
+        isinstance(value, _UnsignedLiteralInt)
+        for value in (*(starts or ()), amount, *stops)
     ):
-        if min(start, amount, *stops) < 0:
+        if min(*(starts or ()), amount, *stops) < 0:
+            return False
+        if starts is None and not unsigned:
+            # An unknown signed start may convert to a large unsigned value.
             return False
     step = int(amount) * (1 if update.operator in {"+=", "++"} else -1)
     if step == 0 or (step > 0) != (operator in {"<", "<="}):
         return False
+    if starts is None:
+        # Every value before termination satisfies the condition, so the
+        # largest terminating value follows the extreme bound by one stride.
+        for stop in stops:
+            inclusive = operator in {"<=", ">="}
+            final = (
+                int(stop) - (not inclusive) + step
+                if step > 0
+                else int(stop) + (not inclusive) + step
+            )
+            if not minimum <= final <= maximum:
+                return False
+        return True
+    (start,) = starts
     # For a fixed start and stride, the final value is monotone in the bound.
     # Checking both endpoints includes zero-trip paths and the terminating update.
     for stop in stops:

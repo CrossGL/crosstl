@@ -1,4 +1,9 @@
-"""Immutable Boolean specialization contracts and conservative branch folding."""
+"""Immutable specialization contracts and conservative Boolean branch folding.
+
+Frozen constants are Boolean or 32-bit signed integer values. Only Boolean
+constants fold branches; an integer, such as MLX's two-pass SDPA ``blocks``
+loop stride, is materialized so that collective-loop proofs can read it.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +29,15 @@ from .ast import (
     VariableNode,
 )
 
+# Source and descriptor spellings of each frozen dtype.
+FROZEN_SPECIALIZATION_DTYPES = {"bool": "bool", "int": "int32", "int32": "int32"}
+
+
+def _frozen_value_matches(dtype, value):
+    if dtype == "bool":
+        return type(value) is bool
+    return type(value) is int and -(1 << 31) <= value < (1 << 31)
+
 
 def frozen_specializations(records):
     """Normalize the immutable subset without copying unrelated report fields."""
@@ -39,21 +53,24 @@ def frozen_specializations(records):
             record.get("id"),
             record.get("value"),
         )
+        dtype = FROZEN_SPECIALIZATION_DTYPES.get(record.get("dtype"))
         if (
             not isinstance(name, str)
             or not re.fullmatch(r"[A-Za-z_]\w*", name, re.ASCII)
             or type(constant_id) is not int
             or not 0 <= constant_id <= 0xFFFFFFFF
-            or record.get("dtype") != "bool"
-            or type(value) is not bool
+            or dtype is None
+            or not _frozen_value_matches(dtype, value)
             or name in names
             or constant_id in ids
         ):
-            raise ValueError("Invalid or duplicate frozen Boolean specialization.")
+            raise ValueError(
+                "Invalid or duplicate frozen Boolean or int32 specialization."
+            )
         names.add(name)
         ids.add(constant_id)
         result.append(
-            dict(name=name, id=constant_id, dtype="bool", value=value, frozen=True)
+            dict(name=name, id=constant_id, dtype=dtype, value=value, frozen=True)
         )
     if len(result) > 256:
         raise ValueError("Too many frozen specialization constants.")
@@ -149,7 +166,9 @@ def fold_frozen_specialization_branches(ast, records):
     Blocks and source locations are retained; general arithmetic is not folded.
     """
     constants = {
-        item["name"]: item["value"] for item in frozen_specializations(records)
+        item["name"]: item["value"]
+        for item in frozen_specializations(records)
+        if item["dtype"] == "bool"
     }
     if not constants:
         return ast

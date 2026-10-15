@@ -348,6 +348,7 @@ from .loop_induction import (
     geometric_loop_terminates,
     loop_constant_bindings,
     metadata_loop_bindings,
+    walk_control_scopes,
 )
 from .match_utils import (
     generate_match_expression_assignment,
@@ -5071,7 +5072,14 @@ class HLSLCodeGen:
         )
 
     def hlsl_software_subgroup_fixed_stride(
-        self, initializer, bound, update, constants, operator, metadata_bounds=None
+        self,
+        initializer,
+        bound,
+        update,
+        constants,
+        operator,
+        metadata_bounds=None,
+        any_start=False,
     ):
         if self.hlsl_software_subgroup_uniform_returns._qualified(
             initializer, {"volatile"}
@@ -5092,7 +5100,7 @@ class HLSLCodeGen:
             constants,
             operator,
             **(
-                {"metadata_bounds": metadata_bounds}
+                {"metadata_bounds": metadata_bounds, "any_start": any_start}
                 if proof is fixed_stride_loop_terminates
                 else {}
             ),
@@ -5246,7 +5254,13 @@ class HLSLCodeGen:
             )
         )
         if checked_stride and not self.hlsl_software_subgroup_fixed_stride(
-            initializer, bound, update, constants, normalized_operator, metadata_bounds
+            initializer,
+            bound,
+            update,
+            constants,
+            normalized_operator,
+            metadata_bounds,
+            any_start=initial_value is None,
         ):
             return False
 
@@ -5257,10 +5271,12 @@ class HLSLCodeGen:
             else set()
         )
         control_names = bound_names | stride_names | {loop_name}
-        for child in self.walk_ast(getattr(node, "body", None)):
+        for child, visible in walk_control_scopes(
+            getattr(node, "body", None), control_names
+        ):
             if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
                 return False
-            if isinstance(child, VariableNode) and child.name in control_names:
+            if isinstance(child, VariableNode) and child.name in visible:
                 return False
             if (
                 isinstance(child, VariableNode)
@@ -5271,7 +5287,7 @@ class HLSLCodeGen:
                         child.initial_value
                     ),
                 )
-                & control_names
+                & visible
             ):
                 return False
             if (
@@ -5280,20 +5296,20 @@ class HLSLCodeGen:
                 and self.hlsl_software_subgroup_expression_identifier_names(
                     child.operand
                 )
-                & control_names
+                & visible
             ):
                 return False
-            if call_mutations.get(id(child), set()) & control_names:
+            if call_mutations.get(id(child), set()) & visible:
                 return False
             if isinstance(child, AssignmentNode):
                 target_name = self.hlsl_software_subgroup_assignment_target_name(child)
-                if target_name in control_names:
+                if target_name in visible:
                     return False
             if isinstance(child, UnaryOpNode) and self.map_operator(
                 getattr(child, "op", getattr(child, "operator", None))
             ) in {"++", "--"}:
                 target_name = self.expression_name(getattr(child, "operand", None))
-                if target_name in control_names:
+                if target_name in visible:
                     return False
         return True
 
@@ -5841,6 +5857,31 @@ class HLSLCodeGen:
             in getattr(self, "hlsl_software_subgroup_guard_names", frozenset())
         )
 
+    def hlsl_software_subgroup_hoisted_target_is_private(
+        self, statements, operation_if, plan
+    ):
+        """Whether a masked reduction's target may move before its guard.
+
+        The declaration then shares the scope of ``statements``, so no other
+        statement there may declare or name it.
+        """
+        operation_body = self.hlsl_software_subgroup_statement_list(
+            getattr(operation_if, "then_branch", getattr(operation_if, "if_body", None))
+        )
+        hoisted_name = operation_body[plan["hoistedTargetDeclarationIndex"]].name
+        for statement in statements:
+            if statement is operation_if:
+                continue
+            if hoisted_name in self.hlsl_software_subgroup_expression_identifier_names(
+                statement
+            ) or any(
+                isinstance(child, (VariableNode, ArrayNode))
+                and getattr(child, "name", None) == hoisted_name
+                for child in self.walk_ast(statement)
+            ):
+                return False
+        return True
+
     def hlsl_software_subgroup_strided_for_plan(
         self, node, uniform_names, uniform_components, constants
     ):
@@ -5942,32 +5983,12 @@ class HLSLCodeGen:
         if masked_if_plan is None:
             return None
         hoisted_target = masked_if_plan.get("hoistedTargetDeclarationIndex")
-        if hoisted_target is not None:
-            operation_body = self.hlsl_software_subgroup_statement_list(
-                getattr(
-                    statements[operation_if_index],
-                    "then_branch",
-                    getattr(statements[operation_if_index], "if_body", None),
-                )
+        if hoisted_target is not None and not (
+            self.hlsl_software_subgroup_hoisted_target_is_private(
+                statements, statements[operation_if_index], masked_if_plan
             )
-            hoisted_name = operation_body[hoisted_target].name
-            # The declaration moves out of the guard's scope: no other
-            # statement of the loop body may declare or name the target.
-            for index, statement in enumerate(statements):
-                if index == operation_if_index:
-                    continue
-                if (
-                    hoisted_name
-                    in self.hlsl_software_subgroup_expression_identifier_names(
-                        statement
-                    )
-                    or any(
-                        isinstance(child, (VariableNode, ArrayNode))
-                        and getattr(child, "name", None) == hoisted_name
-                        for child in self.walk_ast(statement)
-                    )
-                ):
-                    return None
+        ):
+            return None
         control_names = {loop_name} | (
             self.hlsl_software_subgroup_expression_identifier_names(condition.right)
         )
@@ -6341,7 +6362,8 @@ class HLSLCodeGen:
 
         def validate_statements(statements, names, components):
             previous = None
-            for statement in self.hlsl_software_subgroup_statement_list(statements):
+            sibling_statements = self.hlsl_software_subgroup_statement_list(statements)
+            for statement in sibling_statements:
                 if previous is not None:
                     apply_reassignments(previous, names, components)
                 previous = statement
@@ -6402,7 +6424,11 @@ class HLSLCodeGen:
                         )
                     ):
                         # A guard that may diverge can still predicate its
-                        # reductions, even inside a uniform loop.
+                        # reductions, even inside a uniform loop. A single
+                        # reduction may declare its target in the guard, as
+                        # MLX's two-pass SDPA ``U score = 0; ...; score =
+                        # simd_sum(score);``, when the declaration can move
+                        # before the guard without capturing another name.
                         plan = self.hlsl_software_subgroup_masked_if_plan(
                             statement,
                             getattr(
@@ -6414,7 +6440,16 @@ class HLSLCodeGen:
                                 frozenset(),
                             ),
                             allow_multiple=True,
+                            allow_hoisted_target=True,
                         )
+                        if (
+                            plan is not None
+                            and plan.get("hoistedTargetDeclarationIndex") is not None
+                            and not self.hlsl_software_subgroup_hoisted_target_is_private(
+                                sibling_statements, statement, plan
+                            )
+                        ):
+                            plan = None
                         if plan is not None:
                             masked_if_plans[id(statement)] = plan
                     if entry and id(statement) in masked_if_plans and not calls_helpers:

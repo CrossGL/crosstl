@@ -188,7 +188,7 @@ def test_uncontracted_runtime_bound_remains_rejected(tmp_path, target):
         ("j < axis_size", "j < axis_size + 1"),
         ("j < axis_size", "j < lane"),
         ("j += 32", "j += axis_size"),
-        ("j = 0", "j = axis_size"),
+        ("j = 0", "j = lane"),
         ("j += 32", "j *= 2"),
         ("uint j = 0", "volatile uint j = 0"),
         ("constant size_t&", "constant volatile size_t&"),
@@ -204,6 +204,23 @@ def test_metadata_does_not_prove_other_expressions_or_mutable_values(
         _loop_config(tmp_path, target, source=source), format_output=False
     ).to_json()
     assert payload["summary"]["translatedCount"] == 0, payload
+
+
+@pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.parametrize("start", ["axis_size", "uint(group.x)"])
+def test_uniform_starts_need_no_value_with_a_bounded_stop(tmp_path, target, start):
+    # Every visited value precedes axis_size <= 65535, so no start of the
+    # counter's type reaches past 65535 + 31 before the loop exits.
+    source = SOURCE.replace("uint j = 0", f"uint j = {start}")
+    payload = translate_project(
+        _loop_config(tmp_path, target, source=source), format_output=False
+    ).to_json()
+    assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
+    unbounded = translate_project(
+        _loop_config(tmp_path / "unbounded", target, source=source, conditions=()),
+        format_output=False,
+    ).to_json()
+    assert unbounded["summary"]["translatedCount"] == 0, unbounded
 
 
 @pytest.mark.parametrize("target", TARGETS)

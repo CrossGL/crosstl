@@ -26448,11 +26448,13 @@ def _resolved_project_specialization_constants(
             record["status"] = "override"
             record["valueProvenance"] = dict(provenance)
             if config.freeze_specialization_constants:
-                if (
-                    declaration.source_type != "bool"
-                    or type(concrete_value) is not bool
-                    or target not in {"metal", "opengl", "directx"}
-                ):
+                if not (
+                    declaration.source_type == "bool"
+                    and type(concrete_value) is bool
+                    or declaration.source_type == "int"
+                    and type(concrete_value) is int
+                    and -(1 << 31) <= concrete_value < (1 << 31)
+                ) or target not in {"metal", "opengl", "directx"}:
                     diagnostics.append(
                         _specialization_diagnostic(
                             declaration,
@@ -26460,7 +26462,7 @@ def _resolved_project_specialization_constants(
                             target,
                             variant,
                             code="project.translate.frozen-specialization-unsupported",
-                            message="Frozen specializations require Boolean constants and Metal, DirectX or OpenGL targets.",
+                            message="Frozen specializations require Boolean or 32-bit integer constants and Metal, DirectX or OpenGL targets.",
                         )
                     )
                 else:

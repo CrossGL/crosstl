@@ -709,3 +709,108 @@ def test_strided_rounds_execute(tmp_path, directx_runtime):
     words = _strided_words()
     expected = _strided_expected(words)
     assert _execute_words(tmp_path, generated, words, expected) == expected
+
+
+# MLX's two-pass SDPA first pass walks keys with ``for (i = block_idx; i < N;
+# i += blocks)``: the start is the workgroup index, so every invocation runs
+# the same keys, and the guarded score reduction declares its score inside the
+# guard, under nested loops that reuse ``i``. The declaration moves before the
+# guard so the masked sum can assign it. The guard splits subgroups, so masked
+# lanes contribute the -0.0 identity; the first subgroup holds -0.0 only.
+UNIFORM_MASKED_LOOP = """
+        float value = asfloat(inputWords[index]);
+        float total = -1.0;
+        float last = -2.0;
+        uint rounds = 0u;
+        for (int i = int(group.x); i < 7; i += 3) {
+            bool use = ((uint(i) + invocation) % 3u) != 0u;
+            if (use) {
+                float score = -0.0;
+                for (int i = 0; i < 2; i++) {
+                    score += value * float(i + 1);
+                }
+                score = WaveActiveSum(score);
+                last = score;
+                total += score;
+            }
+            rounds += 1u;
+        }
+        outputWords[index * 3u] = asuint(total);
+        outputWords[index * 3u + 1u] = asuint(last);
+        outputWords[index * 3u + 2u] = rounds;
+"""
+
+
+def _uniform_masked_expected(words):
+    values = [struct.unpack("<f", struct.pack("<I", word))[0] for word in words[:384]]
+    expected = []
+    for index in range(384):
+        group, local = divmod(index, 128)
+        base = index - local % 32
+        total, last, rounds = -1.0, -2.0, 0
+        for key in range(group, 7, 3):
+            if (key + local) % 3:
+                # Small integer products sum exactly in any order.
+                score = -0.0
+                for lane in range(32):
+                    if (key + (base % 128) + lane) % 3:
+                        score += -0.0 + values[base + lane] + values[base + lane] * 2
+                last = score
+                total += score
+            rounds += 1
+        expected += [_float_word(total), _float_word(last), rounds]
+    return expected
+
+
+def test_uniform_loop_masked_reductions_hoist_their_target(tmp_path):
+    generated = _codegen().generate_stage(
+        parse(_source("float", UNIFORM_MASKED_LOOP)), "compute"
+    )
+    assert "WaveActiveSum" not in generated
+    lines = [line.strip() for line in generated.splitlines()]
+    loop = lines.index("for (int i = int(group.x); (i < 7); i += 3) {")
+    declaration = lines.index("float score = -0.0;")
+    assert loop < declaration
+    assert lines[declaration + 1] == "bool crossglSoftwareSubgroupActive = use;"
+    assert lines.count("for (int i = 0; (i < 2); i++) {") == 1
+    _compile(generated, tmp_path)
+    expected = _uniform_masked_expected(_strided_words())
+    # Row 0 never sees an active key; row 1 sums -0.0 scores of the first
+    # subgroup, which keep their sign only with the -0.0 identity.
+    assert expected[1] == _float_word(-2.0) and expected[2] == 3
+    assert expected[4] == _float_word(-0.0)
+    assert expected[3 * 128 + 2] == 2 and expected[3 * 256 + 2] == 2
+
+
+@pytest.mark.parametrize(
+    "replacements",
+    [
+        # The hoisted target may not be declared or named outside its guard.
+        (("rounds += 1u;", "rounds += 1u; float score = 1.0;"),),
+        (
+            ("float total = -1.0;", "float total = -1.0; float score = 5.0;"),
+            ("rounds += 1u;", "rounds += uint(score);"),
+        ),
+        # A second collective needs its own guard, and the key counter may
+        # only change through the loop's update; the nested loops own theirs.
+        (("last = score;", "last = WaveActiveSum(score);"),),
+        (("rounds += 1u;", "rounds += 1u; i += 1;"),),
+        (("rounds += 1u;", "rounds += 1u; for (int j = 0; j < 1; j++) { i = j; }"),),
+    ],
+)
+def test_uniform_loop_masked_hoists_reject_unplanned_shapes(replacements):
+    body = UNIFORM_MASKED_LOOP
+    for original, replacement in replacements:
+        assert original in body
+        body = body.replace(original, replacement)
+    with pytest.raises(DirectXSoftwareSubgroupError):
+        _codegen().generate_stage(parse(_source("float", body)), "compute")
+
+
+def test_uniform_loop_masked_reductions_execute(tmp_path, directx_runtime):
+    generated = _codegen().generate_stage(
+        parse(_source("float", UNIFORM_MASKED_LOOP)), "compute"
+    )
+    words = _strided_words()
+    expected = _uniform_masked_expected(words)
+    assert _execute_words(tmp_path, generated, words, expected) == expected
