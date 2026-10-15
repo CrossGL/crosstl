@@ -307,7 +307,11 @@ def test_masked_sum_executes(tmp_path, directx_runtime, value_type):
             "uint reduce_value(uint value) { return WaveActiveSum(value); }",
         ),
         ("if (invocation < 16u) { total = WaveActiveSum(value); return; }", ""),
-        ("if (invocation < 16u) { total = WaveActiveMin(value); }", ""),
+        (
+            "if (invocation < 16u) { uint low = value; total = WaveActiveMin(low); }",
+            "",
+        ),
+        ("if (invocation < 16u) { total = WaveActiveMax(value) + 1u; }", ""),
         (
             "if (invocation < 16u) { total = WaveActiveSum(value); total = WaveActiveSum(total); }",
             "",
@@ -326,3 +330,146 @@ def test_masked_sum_rejects_unplanned_divergence(body, helpers):
     )
     with pytest.raises(DirectXSoftwareSubgroupError):
         _codegen().generate_stage(parse(source), "compute")
+
+
+# MLX's block logsumexp reduces SIMD-group maxima under
+# ``if (simd_group_id == 0)``. Inactive invocations contribute the extremum's
+# identity, and the active lanes below hold values that would win if inactive
+# invocations took part with their own inputs.
+MASKED_EXTREMA = {
+    "max-float": (
+        "float",
+        "WaveActiveMax",
+        "asfloat(0xff800000u)",
+        """float value = asfloat(inputWords[index]);
+        float largest = -1.0;
+        if ((invocation & 31u) >= 4u && invocation < 96u) {
+            largest = WaveActiveMax(value);
+            outputWords[index] = asuint(largest);
+        }""",
+    ),
+    "min-int": (
+        "int",
+        "WaveActiveMin",
+        "2147483647",
+        """int value = asint(inputWords[index]);
+        int smallest = 0;
+        if ((invocation & 31u) < 20u) {
+            smallest = WaveActiveMin(value);
+            outputWords[index] = asuint(smallest);
+        }""",
+    ),
+    "max-uint": (
+        "uint",
+        "WaveActiveMax",
+        "0u",
+        """uint value = inputWords[index];
+        uint largest = 5u;
+        if (invocation >= 32u && (invocation & 1u) == 0u) {
+            largest = WaveActiveMax(value);
+            outputWords[index] = largest;
+        }""",
+    ),
+}
+
+
+def _masked_extremum_active(name, local):
+    lane = local % 32
+    if name == "max-float":
+        return lane >= 4 and local < 96
+    if name == "min-int":
+        return lane < 20
+    return local >= 32 and local % 2 == 0
+
+
+def _masked_extremum_words(name):
+    words = []
+    for index in range(384):
+        local = index % 128
+        active = _masked_extremum_active(name, local)
+        if name == "max-float":
+            # Inactive lanes hold +1000, active lanes stay within [-50, 50], and
+            # the second subgroup's active lanes are all -inf.
+            value = float(index % 101 - 50)
+            if not active:
+                value = 1000.0
+            elif local // 32 == 1:
+                value = float("-inf")
+            words.append(struct.unpack("<I", struct.pack("<f", value))[0])
+        elif name == "min-int":
+            value = -(2**31) if not active else (index * 7919) % 2001 - 1000
+            words.append(value % 2**32)
+        else:
+            words.append(0xFFFFFFFF if not active else (index * 2654435761) % 2**31)
+    return words
+
+
+def _masked_extremum_expected(name, value_type, words):
+    def decode(word):
+        if value_type == "float":
+            return struct.unpack("<f", struct.pack("<I", word))[0]
+        if value_type == "int":
+            return word - 2**32 if word >= 2**31 else word
+        return word
+
+    expected = []
+    for index in range(len(words)):
+        local = index % 128
+        if not _masked_extremum_active(name, local):
+            expected.append(0xDEADBEEF)
+            continue
+        base = index - local % 32
+        values = [
+            decode(words[base + lane])
+            for lane in range(32)
+            if _masked_extremum_active(name, base % 128 + lane)
+        ]
+        result = min(values) if name == "min-int" else max(values)
+        if value_type == "float":
+            expected.append(struct.unpack("<I", struct.pack("<f", result))[0])
+        else:
+            expected.append(result % 2**32)
+    return expected
+
+
+@pytest.mark.parametrize("name", MASKED_EXTREMA)
+def test_masked_extremum_reaches_every_barrier(tmp_path, name):
+    value_type, operation, identity, body = MASKED_EXTREMA[name]
+    generated = _codegen().generate_stage(parse(_source(value_type, body)), "compute")
+    assert operation not in generated
+    assert f"{value_type} crossglSoftwareSubgroupInput = {identity};" in generated
+    helper = "max" if operation == "WaveActiveMax" else "min"
+    call = (
+        f"__crossgl_software_subgroup_{helper}_{value_type}"
+        "(crossglSoftwareSubgroupInput"
+    )
+    assert generated.count(call) == 1
+    lines = [line.strip() for line in generated.splitlines()]
+    reduction = next(index for index, line in enumerate(lines) if call in line)
+    assert lines[reduction - 1] == "}" and lines[reduction + 1].startswith("if (")
+    _compile(generated, tmp_path)
+
+
+def test_masked_extremum_cases_detect_inactive_participation():
+    for name, (value_type, _, _, _) in MASKED_EXTREMA.items():
+        words = _masked_extremum_words(name)
+        expected = _masked_extremum_expected(name, value_type, words)
+        # Every subgroup with an active lane has an inactive lane whose value
+        # would replace the result if it took part.
+        assert len(set(expected)) > 4
+        assert any(word != 0xDEADBEEF for word in expected)
+        for index, word in enumerate(expected):
+            if word != 0xDEADBEEF:
+                assert word not in {0x447A0000, 0x80000000, 0xFFFFFFFF}, name
+    float_words = _masked_extremum_words("max-float")
+    float_expected = _masked_extremum_expected("max-float", "float", float_words)
+    assert float_expected[36] == 0xFF800000  # the all -inf subgroup
+
+
+@pytest.mark.parametrize("name", MASKED_EXTREMA)
+def test_masked_extremum_executes(tmp_path, directx_runtime, name):
+    value_type, _, _, body = MASKED_EXTREMA[name]
+    generated = _codegen().generate_stage(parse(_source(value_type, body)), "compute")
+    words = _masked_extremum_words(name)
+    expected = _masked_extremum_expected(name, value_type, words)
+    assert _execute_words(tmp_path, generated, words, expected) == expected

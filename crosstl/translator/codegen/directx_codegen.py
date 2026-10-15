@@ -5306,11 +5306,22 @@ class HLSLCodeGen:
         )
 
     # Identity of each predicated reduction. Signed zero is the exact float
-    # sum identity, so inactive invocations cannot change a -0.0 result.
+    # sum identity, so inactive invocations cannot change a -0.0 result, and
+    # the infinities bound every non-NaN float for min and max.
     HLSL_SOFTWARE_SUBGROUP_MASKED_IDENTITIES = {
         "WaveActiveSum": {
             "float": "asfloat(0x80000000u)",
             "int": "0",
+            "uint": "0u",
+        },
+        "WaveActiveMin": {
+            "float": "asfloat(0x7f800000u)",
+            "int": "2147483647",
+            "uint": "0xffffffffu",
+        },
+        "WaveActiveMax": {
+            "float": "asfloat(0xff800000u)",
+            "int": "(-2147483647 - 1)",
             "uint": "0u",
         },
     }
