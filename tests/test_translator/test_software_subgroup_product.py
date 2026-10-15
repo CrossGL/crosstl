@@ -43,7 +43,7 @@ def test_product_gate_is_required_on_every_native_target():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "-n auto" in step and "continue-on-error" not in step and "if:" not in step
     assert (
-        "--timeout-seconds 180" in step
+        "--timeout-seconds 300" in step
         and "--junitxml=" in step
         and "--basetemp=" in step
     )

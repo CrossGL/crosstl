@@ -374,7 +374,7 @@ def test_value_structs_share_the_required_native_gate():
     )
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "test_subgroup_value_structs.py" in step
-    assert "--timeout-seconds 180" in step and "-n auto" in step
+    assert "--timeout-seconds 300" in step and "-n auto" in step
     assert "continue-on-error" not in step and "if:" not in step
 
 

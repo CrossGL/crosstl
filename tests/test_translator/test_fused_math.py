@@ -205,7 +205,10 @@ def test_ci_requires_native_fma_on_all_three_platforms(job):
     assert "mkdir -p" in step
     assert "--basetemp=" in step
     assert "--junitxml=" in step
-    assert "--timeout-seconds 120" in step
+    # The porting job runs two llvmpipe workers (67-125 s observed); the
+    # native host job keeps its narrower selection inside 120 s.
+    budget = 300 if job == "mlx-metal-porting" else 120
+    assert f"--timeout-seconds {budget}" in step
     assert "pytest -q -n auto" in step
 
 

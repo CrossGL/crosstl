@@ -43,7 +43,7 @@ def test_shuffle_fill_gate_is_required_on_native_demo_platforms():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "-n auto" in step and "continue-on-error" not in step and "if:" not in step
     assert (
-        "--timeout-seconds 180" in step
+        "--timeout-seconds 300" in step
         and "--basetemp=" in step
         and "--junitxml=" in step
     )
