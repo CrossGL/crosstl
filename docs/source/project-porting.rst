@@ -620,6 +620,20 @@ bit, the rounding case must stay within its summation bound and the infinite
 case must produce +inf. Metal's partial sums must equal the unchanged upstream
 kernel's bit for bit. This is a 3/17,832 increment.
 
+``logsumexp.current-tree.translation.json`` pins the six ``logsumexp.metal``
+entries and their 36 artifacts: the block kernel at the 32-, 288- and
+1,024-thread groups that MLX derives from the row length, and the looped kernel
+at 1,024 threads. OpenGL and DirectX reduce in software 32-lane groups and
+predicate the block kernel's second reductions under ``simd_group_id == 0``, so
+inactive invocations contribute the maximum's -inf or the sum's identity while
+every invocation reaches the barriers. All three backends execute 17 cases of
+up to 20,000 elements with MLX's kernel and group-size choice for each row
+length, covering masked ``-inf`` entries, values that overflow ``exp`` without
+the maximum, running-sum rescaling across passes and the infinite-maximum
+branch. Float32 results must stay within 5e-5 plus 2^-21 relative of a float64
+reference, and 16-bit results must be a correct rounding of a value in that
+interval. This is a 6/17,832 increment.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

@@ -625,6 +625,35 @@ translated kernel's bit for bit. This covers 3/17,832 entries. The
 host-side all-reduce of the partials is not covered, the upstream MLX test suite
 is not run, and the MLX host runtime is not redirected.
 
+`contracts/logsumexp.current-tree.translation.json` pins the six
+`logsumexp.metal` entries (block and looped kernels for float32, float16 and
+bfloat16) and their 36 artifacts. MLX sizes block threadgroups by row length
+(32 threads per 128 elements, up to 4,096 elements) and runs longer rows on the
+looped kernel with 1,024 threads, so the block kernel is pinned at 32, 288 and
+1,024 threads and the looped kernel at 1,024. OpenGL and DirectX reduce in
+software 32-lane groups. The block kernel's second maximum and sum run under
+`simd_group_id == 0`, so both targets predicate them: every invocation reaches
+the barriers and inactive invocations contribute the identity (-inf for the
+maximum, -0.0 for the DirectX sum). Required CI executes all six entries on
+Metal, Mesa EGL and Direct3D 12 WARP over 17 cases of 1 to 20,000 elements, each
+dispatched with the kernel and threadgroup size MLX would choose. The cases
+include partial reads, idle threads, a last SIMD group with one active thread,
+masked `-inf` entries, values near 1,000 that overflow `exp` without the
+maximum, a rising row that forces the looped kernel to rescale its running sum
+in each of three passes, and a `+inf` entry that selects MLX's
+infinite-maximum branch in the second pass. Float32 results must be within
+5e-5 plus 2^-21 relative of a float64 reference; float16 and bfloat16 results
+must be a correct rounding of a value in that interval, which rejects truncating
+conversions and one-ulp slips. Every dispatch pads the input with 16 NaNs and
+checks 16 output guards and two unchanged inputs, and Metal also runs the
+unchanged upstream kernel against the same bounds. OpenGL relies on host
+preconditions that the row offset and the composed element indices fit in
+signed 32-bit range. As for cross entropy, the Metal round trip lowers
+`fast::exp` to the default `exp`, so translated Metal is not bit-identical to
+upstream. Rows whose every element is `-inf` are not covered because GLSL
+leaves `log(0)` undefined. This covers 6/17,832 entries; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
