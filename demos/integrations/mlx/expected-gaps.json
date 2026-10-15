@@ -4695,7 +4695,7 @@
         "BM"
       ],
       "subgroup_width_rule": 32,
-      "index_range_assertion_count": 5
+      "index_range_assertion_count": 15
     },
     "materialization": {
       "status": "materialized",
@@ -4776,7 +4776,7 @@
         "fallback_tracked_by": "https://github.com/CrossGL/crosstl/issues/1894"
       },
       "index_range_assertions": {
-        "count": 5,
+        "count": 15,
         "contract_kind": "explicit-host-runtime-portability-preconditions",
         "inferred": false,
         "runtime_enforced": false

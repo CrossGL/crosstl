@@ -985,6 +985,12 @@ GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE = (
 )
 GEMV_DIRECTX_EXPECTED_LIBRARY_WARNING_COUNT = GEMV_EXPECTED_ENTRY_POINT_COUNT
 GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 1500
+# OpenGL lowers every checked storage-pointer offset to a signed int logical
+# offset, so each offset the aggregate GEMV gate rebases (row offsets, helper
+# load offsets, batch offsets and their complete pointer-rebased forms) must
+# be asserted in [0, 2^31 - 1]. Only the two gather batch offsets, which
+# subscript the index buffers directly instead of rebasing a pointer, keep the
+# unsigned [0, 2^32 - 1] bound.
 GEMV_OPENGL_INDEX_RANGE_ASSERTIONS = (
     {
         "expression": "batch_offsets.x",
@@ -996,21 +1002,24 @@ GEMV_OPENGL_INDEX_RANGE_ASSERTIONS = (
         "minimum": 0,
         "maximum": (1 << 32) - 1,
     },
-    {
-        "expression": "buffer_load(index_batch_strides, 0) * tid.z",
-        "minimum": 0,
-        "maximum": (1 << 31) - 1,
-    },
-    {
-        "expression": "buffer_load(index_batch_strides, batch_ndim) * tid.z",
-        "minimum": 0,
-        "maximum": (1 << 31) - 1,
-    },
-    {
-        "expression": "uint64(bm + tm) * marix_ld + out_col + tn",
-        "minimum": 0,
-        "maximum": (1 << 32) - 1,
-    },
+    *(
+        {"expression": expression, "minimum": 0, "maximum": (1 << 31) - 1}
+        for expression in (
+            "buffer_load(index_batch_strides, 0) * tid.z",
+            "buffer_load(index_batch_strides, batch_ndim) * tid.z",
+            "uint64(bm + tm) * marix_ld + out_col + tn",
+            "uint64(out_row) * matrix_ld",
+            "mat + uint64(out_row) * matrix_ld",
+            "src_offset + tn",
+            "src + src_offset + tn",
+            "tid.z * buffer_load(vector_batch_stride, 0)",
+            "tid.z * buffer_load(matrix_batch_stride, 0)",
+            "tid.z * buffer_load(bias_batch_stride, 0)",
+            "indx_vec * buffer_load(vector_batch_stride, 0)",
+            "indx_mat * buffer_load(matrix_batch_stride, 0)",
+            "mat + uint64(bm + tm) * marix_ld + out_col + tn",
+        )
+    ),
 )
 GEMV_OPENGL_SUBGROUP_WIDTH_FALLBACK_ISSUE = (
     "https://github.com/CrossGL/crosstl/issues/1894"

@@ -1847,7 +1847,11 @@ The current harness verifies:
 - full project materialization of pinned `gemv.metal` for OpenGL. The gate
   requires all 226 specializations materialized, all 224 entry-scoped GLSL
   artifacts emitted, exact workgroup and subgroup execution records, and the
-  five explicit host index-range preconditions used for 64-bit source indices.
+  fifteen explicit host index-range preconditions used for 64-bit source
+  indices. Thirteen of them bound row, helper-load and batch offsets and their
+  complete pointer-rebased forms to `[0, 2^31 - 1]`, because OpenGL carries
+  each checked pointer offset in a signed `int`; the two gather batch offsets
+  `batch_offsets.x` and `batch_offsets.y` keep `[0, 2^32 - 1]`.
   Linux CI compiles every artifact with `glslangValidator` and validates every
   resulting SPIR-V 1.3 module with `spirv-val`. This historical aggregate gate
   does not establish runtime execution or numerical parity; a distinct bounded

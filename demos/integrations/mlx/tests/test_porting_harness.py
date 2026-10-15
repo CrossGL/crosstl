@@ -13946,7 +13946,7 @@ def test_gemv_opengl_evidence_records_all_entry_toolchain_validation():
     assert "all 226 specializations materialized" in readme
     assert "all 224 entry-scoped GLSL artifacts" in readme
     assert "validates every resulting SPIR-V 1.3 module" in readme
-    assert "five explicit host index-range preconditions" in readme
+    assert "fifteen explicit host index-range preconditions" in readme
     assert "does not establish runtime execution or numerical parity" in readme
 
 
