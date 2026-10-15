@@ -601,6 +601,30 @@ directory so the gate can verify the known-answer file. This covers 2/17,832
 entries; it does not run the upstream MLX test suite or redirect the MLX host
 runtime.
 
+`contracts/dot.current-tree.translation.json` pins the three `dot.metal`
+entries (float32, float16 and bfloat16; 32 items per thread, 512-thread groups
+of 16 SIMD groups) and their nine artifacts. MLX reads four consecutive
+elements through `*reinterpret_cast<const device metal::vec<T, 4>*>`. Metal
+keeps that native vector view. OpenGL widens 16-bit storage to one binary32 array
+element per value and DirectX keeps one 16-bit structured-buffer element per
+value, so both gather the four lanes element by element instead of
+reinterpreting storage bits; DirectX decodes bfloat16 lanes with an exact shift.
+OpenGL and DirectX reduce in software 32-lane groups. The second reduction runs
+under `tid < SIMD_GROUPS`, so both targets predicate it: every invocation
+reaches the barriers and inactive invocations contribute the sum identity
+(-0.0 on DirectX). Native DirectX waves remain subject to
+[#2120](https://github.com/CrossGL/crosstl/issues/2120). Required CI executes
+all three entries on Metal, Mesa EGL and Direct3D 12 WARP over 13 cases from 1
+to 40,000 elements, crossing vector tails, SIMD blocks and three groups. Eleven
+cases use multiples of 1/8, so every partial sum is exact in any order and must
+match bit for bit. A rounding case must stay within 128 * 2^-24 of the sum of
+absolute products, and an infinite case must produce +inf. Each dispatch pads
+both inputs with 16 NaNs, checks 16 output guards and three unchanged inputs.
+Metal also runs the unchanged upstream kernel, whose partial sums must equal the
+translated kernel's bit for bit. This covers 3/17,832 entries. The
+host-side all-reduce of the partials is not covered, the upstream MLX test suite
+is not run, and the MLX host runtime is not redirected.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

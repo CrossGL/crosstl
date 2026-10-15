@@ -608,6 +608,18 @@ inputs, and Metal also runs the unchanged upstream kernel. OpenGL relies on host
 preconditions that the per-key byte offset and composed byte index fit in
 signed 32-bit range. This is a 2/17,832 increment.
 
+``dot.current-tree.translation.json`` pins the three ``dot.metal`` entries and
+their nine artifacts. MLX's ``metal::vec<T, 4>`` storage views stay native
+Metal vector views. OpenGL and DirectX keep one physical element per 16-bit
+value, so they gather the lanes element by element; DirectX decodes bfloat16
+lanes with an exact shift. Both reduce in software 32-lane groups and predicate
+the reduction under ``tid < SIMD_GROUPS``. Inactive invocations contribute the
+sum identity while every invocation reaches the barriers. All three backends
+execute 13 cases of up to 40,000 elements. The exact cases must match bit for
+bit, the rounding case must stay within its summation bound and the infinite
+case must produce +inf. Metal's partial sums must equal the unchanged upstream
+kernel's bit for bit. This is a 3/17,832 increment.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs
