@@ -661,6 +661,19 @@ Results must be a correct rounding of a value within a per-element bound on
 the kernel's binary32 rounding and its 16-bit output arithmetic, and a VJP
 without a weight must leave ``gw`` untouched. This is a 12/17,832 increment.
 
+``rms_norm.current-tree.translation.json`` pins the twelve ``rms_norm.metal``
+entries and their 126 artifacts: the single-row forward kernel at 32, 288 and
+1,024 threads, the single-row VJP at 32, 64, 288 and 1,024, and both looped
+kernels at 1,024, each VJP with and without a weight. The single-row VJP loops
+over the rows of its threadgroup and reduces two partials under one
+``simd_group_id == 0`` guard, so the OpenGL and DirectX software subgroups
+predicate both sums in source order inside that loop. All three backends
+execute every element of 14 forward and 16 VJP cases, including 513 and 1,025
+rows whose last threadgroup covers fewer rows. Results must be a correct
+rounding of a value within a per-element bound on the kernel's binary32
+rounding and its 16-bit output arithmetic, and a VJP without a weight must
+leave ``gw`` untouched. This is a 12/17,832 increment.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs
