@@ -169,7 +169,14 @@ def test_glsl_emits_only_bound_specializations_of_buffer_helpers(tmp_path):
     shader = tmp_path / "helper.comp"
     shader.write_text(generated, encoding="utf-8")
     result = subprocess.run(
-        [compiler, "--target-env", "opengl", str(shader)],
+        [
+            compiler,
+            "--target-env",
+            "opengl",
+            str(shader),
+            "-o",
+            str(tmp_path / "helper.spv"),
+        ],
         capture_output=True,
         text=True,
         timeout=120,
