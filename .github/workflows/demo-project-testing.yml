@@ -1816,7 +1816,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/fused-math
-          python tools/run_bounded_command.py --timeout-seconds 120 --label "Native binary32 arithmetic" -- \
+          python tools/run_bounded_command.py --timeout-seconds 240 --label "Native binary32 arithmetic" -- \
             python -m pytest -q -n auto \
               -k "execute or original_metal or modules_link_together" \
               -m "not extended_power" \

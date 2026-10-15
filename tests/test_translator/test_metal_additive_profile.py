@@ -612,4 +612,4 @@ def test_ci_requires_additive_profiles_in_existing_native_job():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert step.count("tests/test_translator/test_metal_additive_profile.py") == 1
     assert "tests/test_translator/test_metal_additive_profile.py" in step
-    assert "--timeout-seconds 120" in step
+    assert "--timeout-seconds 240" in step

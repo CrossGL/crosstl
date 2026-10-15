@@ -469,4 +469,4 @@ def test_ci_requires_multiplication_profiles_in_existing_native_job():
         == 1
     )
     assert "tests/test_translator/test_metal_multiplication_profile.py" in step
-    assert "--timeout-seconds 120" in step
+    assert "--timeout-seconds 240" in step
