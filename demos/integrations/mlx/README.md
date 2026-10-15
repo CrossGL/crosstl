@@ -477,6 +477,20 @@ This is a 24/17,832 deterministic translation and native-compiler increment with
 14/17,832 common required numerical entries, not full-tree
 coverage, upstream MLX test-suite execution, or MLX host-runtime redirection.
 
+The compiler and runtime tests use the same checked-metadata configuration for
+all 24 entries. The 14 numerical entries retain all 112 cases per backend and
+use six upload-validated metadata requirements with no trusted index-range
+assertions. Each dispatch
+observes all seven read-only inputs and checks 32 output guards; Metal also
+compares the unchanged upstream kernel. The input allocation includes space for
+pointer formation by inactive lanes and the terminal pointer update, with
+extremal padding outside the original rows. Row values, strides, tail conditions
+and expected indices are unchanged. The pinned artifact identities now cover
+this checked package path. DirectX execution remains required by the existing
+Windows job, with the actual DXIL and packed resource bindings retained before
+dispatch. A passing compiler check does not qualify numerical execution, the
+full MLX runtime or the upstream test suite.
+
 `contracts/searchsorted.current-tree.translation.json` pins all 26 entries of
 `searchsorted.metal` (13 element types, left and right) and the 78
 deterministic Metal, OpenGL and DirectX artifacts at the same pin. Required CI
@@ -500,19 +514,46 @@ fix also re-pins 104 row-reduction entries of the 846d DirectX reduce contract.
 The increment covers 26/17,832 entries. It does not run the upstream MLX test
 suite or redirect the MLX host runtime.
 
-The compiler and runtime tests use the same checked-metadata configuration for
-all 24 entries. The 14 numerical entries retain all 112 cases per backend and
-use six upload-validated metadata requirements with no trusted index-range
-assertions. Each dispatch
-observes all seven read-only inputs and checks 32 output guards; Metal also
-compares the unchanged upstream kernel. The input allocation includes space for
-pointer formation by inactive lanes and the terminal pointer update, with
-extremal padding outside the original rows. Row values, strides, tail conditions
-and expected indices are unchanged. The pinned artifact identities now cover
-this checked package path. DirectX execution remains required by the existing
-Windows job, with the actual DXIL and packed resource bindings retained before
-dispatch. A passing compiler check does not qualify numerical execution, the
-full MLX runtime or the upstream test suite.
+Two units are new at `9c3d3557`: `gather_mm_offsets.metal` and
+`cross_entropy.metal` do not exist at either earlier pin. The
+`contracts/gather_mm_offsets.current-tree.translation.json` contract pins the
+single `gather_mm_offsets` entry and its three artifacts. The kernel is not a
+template, so the project-level `workgroup_size = [1, 1, 1]` reproduces MLX's
+one-thread-per-group grid; Metal records no execution entry because it sets the
+threadgroup size at dispatch time. Required CI compiles and executes it on
+Metal, Mesa EGL and Direct3D 12 WARP over six cases: no rows, one row, grouped
+and empty experts, 1,000 sorted rows, unsigned sign-bit indices that a signed
+comparison would misorder, and an unsorted sequence that checks the exact
+midpoint and branch order. Each case pads the indices with four decoys that
+would change the result if read, checks 16 output guards and two unchanged
+inputs, and Metal also runs the unchanged upstream kernel. No backend needs an
+index-range assertion.
+
+`contracts/cross_entropy.current-tree.translation.json` pins all six
+`cross_entropy.metal` entries (forward and VJP for float32, float16 and
+bfloat16) and their 18 artifacts. Each entry uses a 128-thread workgroup, so
+the forward kernel's four SIMD groups exercise the threadgroup reduction.
+OpenGL and DirectX lower the forward SIMD reductions to software 32-lane groups,
+so results do not depend on the device's subgroup width; the VJP has no
+subgroup operations and uses no subgroup options. Required CI executes all six
+entries on all three backends over rows of 7, 512 and 1,300 classes, which cover
+idle threads, one exact pass and three passes with a tail. The cases include
+negative targets, masked `-inf` classes, logits near 1,000 that need the
+running maximum, and (forward only) a `+inf` logit that selects MLX's
+infinite-maximum branch. Float32 results must be within 5e-5 absolute plus 5e-5
+relative of a float64 reference, the tolerance of the existing softmax and
+logsumexp proofs. 16-bit VJP results must be within one unit in the last place,
+and at least 99% must equal the correctly rounded value; a truncating
+conversion fails this check. Every dispatch checks 16 output guards and three
+or five unchanged inputs, and Metal also runs the unchanged upstream kernel.
+OpenGL relies on host preconditions that the row offset and composed element
+indices fit in signed 32-bit range: five expressions for the forward kernel and
+six for the VJP. The Metal round trip lowers `fast::exp` to the default `exp`,
+which is the precise variant under `-fno-fast-math`, so translated Metal is not
+bit-identical to upstream; both stay within the tolerance. The VJP's
+donated-input aliasing of `out` and `in` is not covered. These two increments
+cover 7/17,832 entries; they do not run the upstream MLX test suite or redirect
+the MLX host runtime.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized

@@ -563,6 +563,26 @@ preconditions (``int64(mid) * a_stride`` and ``offset`` in signed 32-bit
 range). This is a 26/17,832 increment; it does not run the upstream MLX test
 suite or redirect the MLX host runtime.
 
+Two units are new at that revision. ``gather_mm_offsets.current-tree.translation.json``
+pins the single ``gather_mm_offsets`` entry; it is not a template, so a
+project-level ``workgroup_size = [1, 1, 1]`` reproduces MLX's one-thread-per-group
+grid. Six cases (no rows, one row, grouped and empty experts, 1,000 sorted rows,
+unsigned sign-bit indices and an unsorted sequence) run on all three backends
+with decoy padding, 16 output guards and two unchanged inputs.
+``cross_entropy.current-tree.translation.json`` pins all six forward and VJP
+entries for float32, float16 and bfloat16. A 128-thread workgroup exercises the
+forward kernel's four-group reduction, which OpenGL and DirectX lower to
+software 32-lane groups. Rows of 7, 512 and 1,300 classes cover idle threads,
+an exact pass and three passes with a tail, plus negative targets, masked
+``-inf`` classes, large logits and a ``+inf`` logit. Float32 results must be
+within 5e-5 absolute plus 5e-5 relative of a float64 reference; 16-bit VJP
+results must be within one unit in the last place, with at least 99% correctly
+rounded. OpenGL relies on host preconditions that row offsets and element
+indices fit in signed 32-bit range. The Metal round trip lowers ``fast::exp`` to
+the default ``exp``, so translated Metal is close to, not bit-identical with,
+upstream. Metal also runs both unchanged upstream kernels. Together these cover
+7/17,832 entries.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

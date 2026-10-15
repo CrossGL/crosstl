@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-gather-mm-offsets-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/gather_mm_offsets.metal",
+    "sourceSha256": "e2b3839ba16c384d65cad76f7426da38f7c11931f5e55bba75c6f70a5f7a98d4"
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "gather_mm_offsets"
+  ],
+  "artifacts": {
+    "directx": {
+      "gather_mm_offsets": {
+        "sha256": "9c3e97211fed3437b2db47753c1946ff00ee5a78534d4d38be94ccc098f530af",
+        "sizeBytes": 599
+      }
+    },
+    "opengl": {
+      "gather_mm_offsets": {
+        "sha256": "da273356a249345d4dd24fcf13871a057beea19bb1008e411607fac0be324deb",
+        "sizeBytes": 642
+      }
+    },
+    "metal": {
+      "gather_mm_offsets": {
+        "sha256": "fef4f655977732379d98b2ac0532aefd5fcff2d4d68a12c6fd558d8e8f895730",
+        "sizeBytes": 473
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSize": [
+      1,
+      1,
+      1
+    ],
+    "indexRangeAssertions": {
+      "metal": [],
+      "opengl": [],
+      "directx": []
+    },
+    "cases": {
+      "empty": {
+        "M": 0,
+        "groups": 8
+      },
+      "single": {
+        "M": 1,
+        "groups": 7
+      },
+      "grouped": {
+        "M": 37,
+        "groups": 40
+      },
+      "dense": {
+        "M": 1000,
+        "groups": 64
+      },
+      "unsigned": {
+        "M": 11,
+        "groups": 12
+      },
+      "unsorted": {
+        "M": 13,
+        "groups": 16
+      }
+    },
+    "outputGuardCount": 16,
+    "inputDecoyCount": 4,
+    "observedInputCount": 2,
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ]
+  },
+  "scope": {
+    "coveredEntryCount": 1,
+    "runtimeCoveredEntryCount": 1,
+    "caseCount": 6,
+    "offsetCountByTarget": {
+      "metal": 147,
+      "opengl": 147,
+      "directx": 147
+    },
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}
