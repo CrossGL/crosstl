@@ -650,6 +650,17 @@ own rounding (one rounding per operation in the accumulation type, Metal's
 ``fast::exp`` allowance and each reduction's depth), and rows containing
 ``+inf`` must be NaN as in MLX. This is a 10/17,832 increment.
 
+``layer_norm.current-tree.translation.json`` pins the twelve ``layer_norm.metal``
+entries and their 108 artifacts: the single-row forward kernel at 32, 288 and
+832 threads, the single-row VJP at 32, 288 and 1,024, and both looped kernels
+at 1,024, each VJP with and without a weight. DirectX materializes the
+``has_w`` function constant; Metal and OpenGL specialize it when the runtime
+creates the pipeline. All three backends execute every element of 14 forward
+and 14 VJP cases with weight strides 0, 1 and 2 and bias strides 0 and 1.
+Results must be a correct rounding of a value within a per-element bound on
+the kernel's binary32 rounding and its 16-bit output arithmetic, and a VJP
+without a weight must leave ``gw`` untouched. This is a 12/17,832 increment.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

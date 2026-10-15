@@ -681,6 +681,33 @@ row offsets and composed element indices fit in signed 32-bit range. This covers
 10/17,832 entries; it does not run the upstream MLX test suite or redirect the
 MLX host runtime.
 
+`contracts/layer_norm.current-tree.translation.json` pins the twelve
+`layer_norm.metal` entries (single-row and looped forward and VJP kernels for
+float32, float16 and bfloat16) and their 108 artifacts. MLX sizes single-row
+groups by row length, so the forward kernel is pinned at 32, 288 and 832
+threads (its 6,656-element limit) and the VJP at 32, 288 and 1,024 (8,192
+elements); looped kernels run 1,024 threads. The VJP specializes `has_w`
+(function constant 20) on whether a weight was given: DirectX materializes
+both values, while Metal and OpenGL keep a function or specialization constant
+that the runtime sets when it creates the pipeline. Required CI executes every
+variant on Metal, Mesa EGL and Direct3D 12 WARP over 14 forward and 14 VJP cases
+of 1 to 20,000 elements, with weights of stride 0, 1 and 2 (NaN between strided
+elements), biases of stride 0 and 1, constant rows, rows whose mean is 32 times
+their spread, and rows whose variance is comparable to eps. Without a weight,
+the VJP must leave `gw` untouched. Each output is checked against a float64
+reference with a per-element bound on the kernel's binary32 rounding (the
+depth of each sum, 2.5 units in the last place per division and 2 per precise
+root) and on the 16-bit output arithmetic. Results must be a correct rounding
+of a value inside that bound. Every dispatch pads the inputs with 16 NaNs and
+checks 16 guards per output and that every input is unchanged, and Metal also
+runs the unchanged upstream kernel, with the same function constants, against
+the same bounds. Idle threads of MLX's single-row kernels run the padding loop
+from a negative start, so they store below `thread_x`; the translation keeps
+those stores as written. OpenGL relies on host preconditions that the row
+offsets and composed element indices fit in signed 32-bit range. This covers
+12/17,832 entries; it does not run the upstream MLX test suite or redirect the
+MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
