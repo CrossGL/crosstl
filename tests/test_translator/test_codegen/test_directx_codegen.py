@@ -12055,16 +12055,19 @@ def test_hlsl_metal_nested_physical_storage_pointer_array_preserves_logical_type
         "uint((lsize_x * 4));" in generated
     )
     assert f"{scalar_type}* inputs" not in generated
+    # The entry buffer stores one logical element per carrier, so the helper
+    # pointer array must index carriers rather than packed word lanes (#2145).
+    assert "% 4) * 8" not in generated
+    assert "/ 4" not in generated
+    if narrow_kind is not None:
+        assert (
+            "inputs[uint(inputs_offsets[uint((inputs_base + int64_t(j)))])]"
+            in generated
+        )
     if narrow_kind == "signed":
-        assert "/ 4" in generated
-        assert "% 4) * 8" in generated
-        assert ">> 24" in generated
+        assert "<< 24u) >> 24)" in generated
     elif narrow_kind == "unsigned":
-        assert "/ 4" in generated
-        assert "% 4) * 8" in generated
         assert "& 255u" in generated
-    else:
-        assert "% 4) * 8" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_warnings_clean_if_available(generated, tmp_path)
 

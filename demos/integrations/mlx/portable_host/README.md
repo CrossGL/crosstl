@@ -276,9 +276,17 @@ in the existing three-platform scalar-alias gate. This does not establish
 support for general aggregate reinterpretation, reference copies,
 volatile accesses or address-space changes. Argument loads require a resolved
 matching value parameter; reference parameters and explicit copy constructors
-are not replaced with field-wise copies. Passing packed and widened byte storage
-through the same pointer parameter remains a separate layout issue
-([#2145](https://github.com/CrossGL/crosstl/issues/2145)). Concrete scale conversion
+are not replaced with field-wise copies. DirectX helper pointer parameters now
+take the byte layout of their callers
+([#2145](https://github.com/CrossGL/crosstl/issues/2145)). Helpers reached only
+from widened root buffers, including through local aliases, pointer arithmetic,
+nested calls and storage-pointer arrays, index one 32-bit carrier per element.
+Helpers reached only through byte views cast from 32-bit words keep packed lanes.
+A helper that receives both layouts is rejected with a project diagnostic
+instead of guessing one layout; per-layout specialization is not implemented.
+Writes through reinterpreted views remain unsupported. The scalar-alias gate
+executes widened signed and unsigned bytes and packed unsigned bytes through
+nested helpers on all three platforms. Concrete scale conversion
 is covered by source-level regressions
 ([#1744](https://github.com/CrossGL/crosstl/issues/1744)); explicit logarithm policies
 address the all-zero MX scale boundary

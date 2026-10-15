@@ -3151,10 +3151,198 @@ class HLSLCodeGen:
             self.hlsl_software_subgroup_stage_entries(ast, target_stage),
             self.metadata_preconditions,
         )
-        code = self._generate_program(ast, target_stage)
+        code = self.generate_hlsl_program_with_narrow_pointer_layouts(ast, target_stage)
         if records:
             code = with_metadata_precondition_header(code, records)
         return with_dispatch_region_header(code, region)
+
+    HLSL_NARROW_POINTER_LAYOUT_PASS_LIMIT = 4
+
+    def generate_hlsl_program_with_narrow_pointer_layouts(self, ast, target_stage):
+        """Generate HLSL whose helper pointers keep their callers' byte layout.
+
+        A DirectX root buffer stores each 8- or 16-bit source element in its own
+        32-bit carrier, while a narrow view cast from a 32-bit buffer keeps
+        several elements in each word. A helper pointer parameter cannot tell
+        these layouts apart from its declaration (#2145). Every generation pass
+        records the layout of each call-site argument; helpers whose callers all
+        pass widened storage are regenerated with element-indexed reads, and a
+        helper that receives both layouts is rejected. Output is returned only
+        from a complete pass whose recorded layouts reproduce its assumptions.
+        """
+        self.hlsl_widened_narrow_pointer_parameters = frozenset()
+        if not self.hlsl_ast_has_narrow_storage_pointer_parameters(ast):
+            self.hlsl_narrow_pointer_argument_layouts = None
+            return self._generate_program(ast, target_stage)
+        widened = frozenset()
+        try:
+            for _attempt in range(self.HLSL_NARROW_POINTER_LAYOUT_PASS_LIMIT):
+                self.hlsl_widened_narrow_pointer_parameters = widened
+                self.hlsl_narrow_pointer_argument_layouts = {}
+                try:
+                    code = self._generate_program(deepcopy(ast), target_stage)
+                except Exception:
+                    # An incomplete pass can still prove widened callers for
+                    # helpers emitted before the failure. Retry only when that
+                    # adds information; otherwise keep the original error.
+                    solved = self.solve_hlsl_narrow_pointer_parameter_layouts(
+                        self.hlsl_narrow_pointer_argument_layouts
+                    )
+                    if solved <= widened:
+                        raise
+                    widened = widened | solved
+                    continue
+                solved = self.solve_hlsl_narrow_pointer_parameter_layouts(
+                    self.hlsl_narrow_pointer_argument_layouts
+                )
+                if solved == widened:
+                    return code
+                widened = solved
+        finally:
+            self.hlsl_narrow_pointer_argument_layouts = None
+        raise DirectXResourcePointerParameterError(
+            "DirectX narrow storage pointer layouts did not converge across "
+            "helper call sites",
+            reason="narrow-storage-layout-unresolved",
+        )
+
+    def hlsl_ast_has_narrow_storage_pointer_parameters(self, ast):
+        functions = list(getattr(ast, "functions", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            functions.extend(getattr(stage, "local_functions", []) or [])
+        for function in functions:
+            parameters = getattr(
+                function, "parameters", getattr(function, "params", [])
+            )
+            for parameter in parameters or []:
+                type_node = getattr(parameter, "param_type", None) or getattr(
+                    parameter, "vtype", None
+                )
+                while isinstance(type_node, ArrayType):
+                    type_node = type_node.element_type
+                if not isinstance(type_node, PointerType):
+                    continue
+                layout = scalar_storage_layout(
+                    self.type_name_string(type_node.pointee_type)
+                )
+                if self.hlsl_narrow_storage_layout(layout):
+                    return True
+        return False
+
+    @staticmethod
+    def hlsl_narrow_storage_layout(layout):
+        return (
+            layout is not None
+            and layout.kind == "integer"
+            and layout.bit_width in {8, 16}
+        )
+
+    def hlsl_narrow_pointer_parameter_key(self, function_name, parameter_name):
+        return (str(function_name), str(parameter_name))
+
+    def hlsl_narrow_pointer_parameter_is_widened(self, function_name, parameter_name):
+        return self.hlsl_narrow_pointer_parameter_key(
+            function_name, parameter_name
+        ) in getattr(self, "hlsl_widened_narrow_pointer_parameters", frozenset())
+
+    def hlsl_narrow_pointer_parameter_alias_binding(
+        self, contract, *, function_name, parameter_name, root, offset
+    ):
+        """Bind a helper storage pointer with its call-site-proven layout."""
+
+        key = self.hlsl_narrow_pointer_parameter_key(function_name, parameter_name)
+        binding = self.hlsl_resource_pointer_parameter_alias_binding(
+            contract,
+            root=root,
+            offset=offset,
+            logical_storage=self.hlsl_narrow_pointer_parameter_is_widened(
+                function_name, parameter_name
+            ),
+        )
+        reinterpretation = binding.get("pointer_reinterpretation")
+        if reinterpretation is not None and reinterpretation.get(
+            "physical_storage_mapping"
+        ):
+            # Forwarded arguments resolve to this parameter's eventual layout.
+            binding["narrow_storage_origin"] = key
+        return binding
+
+    def hlsl_narrow_pointer_argument_layout(self, element_type, binding):
+        view_layout = scalar_storage_layout(element_type)
+        if not self.hlsl_narrow_storage_layout(view_layout):
+            return None
+        physical_layout = scalar_storage_layout(
+            self.hlsl_resource_pointer_element_type(binding.get("resource_type"))
+        )
+        if physical_layout is None or physical_layout.bit_width != 32:
+            return None
+        reinterpretation = binding.get("pointer_reinterpretation")
+        if reinterpretation is None:
+            return ("widened", None)
+        origin = binding.get("narrow_storage_origin")
+        if reinterpretation.get("physical_storage_mapping") and origin is not None:
+            return ("parameter", origin)
+        return ("packed", None)
+
+    def record_hlsl_narrow_pointer_argument(
+        self, function_name, parameter_name, element_type, binding, argument
+    ):
+        records = getattr(self, "hlsl_narrow_pointer_argument_layouts", None)
+        if records is None:
+            return
+        layout = self.hlsl_narrow_pointer_argument_layout(element_type, binding)
+        if layout is None:
+            return
+        key = self.hlsl_narrow_pointer_parameter_key(function_name, parameter_name)
+        observations = records.setdefault(key, {})
+        observations.setdefault(layout, getattr(argument, "source_location", None))
+
+    def solve_hlsl_narrow_pointer_parameter_layouts(self, records):
+        """Return helper parameters whose every caller passes widened storage."""
+
+        records = records or {}
+        state = {}
+        changed = True
+        while changed:
+            changed = False
+            for key, observations in records.items():
+                kinds = set()
+                for kind, origin in observations:
+                    if kind != "parameter":
+                        kinds.add(kind)
+                    elif origin not in records:
+                        # An origin without recorded callers keeps the
+                        # default packed interpretation of its own reads.
+                        kinds.add("packed")
+                    elif origin in state:
+                        kinds.add(state[origin])
+                if not kinds:
+                    continue
+                resolved = "mixed" if len(kinds) > 1 else next(iter(kinds))
+                if state.get(key) != resolved:
+                    state[key] = resolved
+                    changed = True
+        for key, resolved in state.items():
+            if resolved != "mixed":
+                continue
+            function_name, parameter_name = key
+            locations = [
+                location for location in records[key].values() if location is not None
+            ]
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer parameter "
+                f"'{function_name}.{parameter_name}' receives both widened "
+                "narrow-element storage and packed words; one helper cannot "
+                "preserve both layouts",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                address_space="storage",
+                reason="mixed-narrow-storage-layout",
+                source_location=locations[0] if locations else None,
+            )
+        return frozenset(
+            key for key, resolved in state.items() if resolved == "widened"
+        )
 
     def _generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points."""
@@ -10719,8 +10907,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 parameter_prologue_statements.append(
                     f"int64_t {base_local_name} = int64_t({base_parameter_name});"
                 )
-                array_binding = self.hlsl_resource_pointer_parameter_alias_binding(
+                array_binding = self.hlsl_narrow_pointer_parameter_alias_binding(
                     pointer_array_contract,
+                    function_name=materialized_function_name,
+                    parameter_name=p.name,
                     root=declaration_name,
                     offset="0",
                 )
@@ -10917,8 +11107,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.current_identifier_reserved_names.add(offset_name)
                 self.local_variable_types[offset_name] = "int64_t"
                 self.current_hlsl_resource_pointer_aliases[p.name] = (
-                    self.hlsl_resource_pointer_parameter_alias_binding(
+                    self.hlsl_narrow_pointer_parameter_alias_binding(
                         resource_pointer_contract,
+                        function_name=self.hlsl_function_declaration_name(func),
+                        parameter_name=p.name,
                         root=self.hlsl_declaration_identifier_name(p.name),
                         offset=offset_name,
                     )
@@ -18419,6 +18611,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="mutable-offset-lvalue-unresolved",
                 source_location=getattr(argument, "source_location", None),
             )
+        self.record_hlsl_narrow_pointer_argument(
+            (
+                function_name
+                if function_name in self.function_hlsl_resource_pointer_array_parameters
+                else materialized_name
+            ),
+            parameter_name,
+            contract.get("element_type"),
+            binding,
+            argument,
+        )
         return {
             **binding,
             "contract": contract,
@@ -18734,6 +18937,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         binding["call_contract"] = contract
         binding["call_function_name"] = materialized_name
         binding["call_parameter_name"] = parameter_name
+        self.record_hlsl_narrow_pointer_argument(
+            (
+                function_name
+                if function_name in self.function_hlsl_resource_pointer_parameters
+                else materialized_name
+            ),
+            parameter_name,
+            contract["element_type"],
+            binding,
+            argument,
+        )
         binding["call_offset_direction"] = (
             self.hlsl_resource_pointer_offset_parameter_direction(parameter)
         )
@@ -19307,6 +19521,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ),
                 "byte_offset": replacement.get("byte_offset", "0"),
                 "pointer_reinterpretation": reinterpretation,
+                "narrow_storage_origin": replacement.get("narrow_storage_origin"),
                 "required_access": required_access,
                 "access": required_access,
                 "offset_array": offset_name,
