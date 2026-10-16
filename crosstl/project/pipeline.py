@@ -28334,7 +28334,10 @@ def _finalize_project_generated_artifact(
     header = frozen_specialization_header(artifact.get("specializationConstants", []))
     if header:
         generated_source = with_artifact_contract_header(generated_source, header)
-        output_path.write_text(generated_source, encoding="utf-8")
+        # Match the first write: no host newline translation, so a frozen
+        # artifact has the same bytes and hash on Windows as elsewhere.
+        with output_path.open("w", encoding="utf-8", newline="") as output_file:
+            output_file.write(generated_source)
     mojo_diagnostics = _mojo_unresolved_target_construct_diagnostics(
         artifact, generated_source
     )

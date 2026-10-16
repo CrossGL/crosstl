@@ -1,7 +1,9 @@
 """Frozen project variants reject overrides and discard only inactive branches."""
 
+import builtins
 import copy
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -193,6 +195,51 @@ def test_formatter_preserves_frozen_header(tmp_path, target):
     assert parse_frozen_specializations(formatted) == parse_frozen_specializations(
         source
     )
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_frozen_artifact_bytes_ignore_the_host_newline(tmp_path, target, monkeypatch):
+    """Frozen artifacts keep LF bytes where text writes default to CRLF.
+
+    On Windows a text write without ``newline`` turns every ``\\n`` into
+    ``\\r\\n``. The frozen-header rewrite used such a write, so the same
+    frozen translation hashed differently on Windows than on Linux and macOS.
+    The patched ``open`` applies that translation on every host.
+    """
+    expected = _translate(tmp_path / "posix", target)
+    (expected_artifact,) = expected["artifacts"]
+    real_open = open
+
+    def windows_open(
+        file,
+        mode="r",
+        buffering=-1,
+        encoding=None,
+        errors=None,
+        newline=None,
+        closefd=True,
+        opener=None,
+    ):
+        if newline is None and "b" not in mode and "+" not in mode and mode[0] in "wax":
+            newline = "\r\n"
+        return real_open(
+            file, mode, buffering, encoding, errors, newline, closefd, opener
+        )
+
+    monkeypatch.setattr(io, "open", windows_open)
+    monkeypatch.setattr(builtins, "open", windows_open)
+    report = _translate(tmp_path / "windows", target)
+    monkeypatch.undo()
+    assert report["diagnostics"] == []
+    (artifact,) = report["artifacts"]
+    payload = (tmp_path / "windows" / artifact["path"]).read_bytes()
+    assert parse_frozen_specializations(payload.decode("utf-8"))[0]["frozen"] is True
+    assert b"\r" not in payload
+    assert artifact["generatedHash"] == {
+        "algorithm": "sha256",
+        "value": hashlib.sha256(payload).hexdigest(),
+    }
+    assert artifact["generatedHash"] == expected_artifact["generatedHash"]
 
 
 @pytest.mark.parametrize("fault", ["removed", "value", "nonbool"])
