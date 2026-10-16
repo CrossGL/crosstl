@@ -377,6 +377,28 @@ def test_glsl_unsigned_remainder_and_constant_initializers_remain_legal():
     assert " / 128) * 128)" in generated
 
 
+def test_glsl_wide_integer_parameters_receive_explicit_literal_arguments():
+    # Initializers accept a 32-bit literal for a 64-bit integer, but Mesa
+    # resolves calls without an implicit int -> 64-bit integer conversion.
+    source = """shader Test {
+        uint64_t at(uint64_t offset, int64_t delta) { return offset + uint64_t(delta); }
+        uint64_t combine(int index, uint64_t wide) {
+            uint64_t start = 0;
+            uint64_t total = at(0, 3);
+            total += at(index, index);
+            total += at(wide, -1);
+            total += at(start, int64_t(2));
+            return total;
+        }
+    }"""
+    generated = GLSLCodeGen().generate(parse(source))
+    assert "uint64_t start = 0;" in generated
+    assert "at(uint64_t(0), int64_t(3))" in generated
+    assert "at(uint64_t(index), int64_t(index))" in generated
+    assert "at(wide, int64_t((-1)))" in generated
+    assert "at(start, int64_t(2))" in generated
+
+
 def test_glsl_remainder_rejects_rhs_that_may_change_indexed_target():
     source = """shader Test { void combine(int a[2], int index) {
         a[index] %= index++;

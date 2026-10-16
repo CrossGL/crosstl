@@ -42684,7 +42684,39 @@ complex64_t crossgl_complex64_mod_assign(
                     source_location=getattr(arg, "source_location", None),
                 )
             return self.generate_expression(arg)
-        return self.generate_expression_with_expected(arg, param_type)
+        return self.glsl_wide_integer_literal_argument(
+            arg,
+            self.generate_expression_with_expected(arg, param_type),
+            param_type,
+        )
+
+    def glsl_wide_integer_literal_argument(self, argument, generated, param_type):
+        """Convert an integer literal argument of a 64-bit parameter explicitly.
+
+        Assignments and initializers accept a 32-bit literal for a 64-bit
+        integer, but overload resolution does not: Mesa rejects a call such as
+        ``f(0)`` to ``void f(uint64_t offset)`` because it applies no implicit
+        conversion from ``int`` to a 64-bit integer.
+        """
+        if (
+            param_type is None
+            or not isinstance(generated, str)
+            or not self.is_numeric_literal_expression(argument)
+        ):
+            return generated
+        expected = self.glsl_value_type_info(self.type_name_string(param_type))
+        if (
+            expected is None
+            or expected["family"] not in {"int", "uint"}
+            or expected["bits"] != 64
+            or expected["width"] != 1
+            or expected["narrow"] is not None
+            or self.glsl_is_explicit_type_constructor_expression(
+                generated, expected["mapped"]
+            )
+        ):
+            return generated
+        return f"{expected['mapped']}({generated})"
 
     def glsl_reference_parameter_type_name(self, param_type):
         type_name = self.type_name_string(param_type)
