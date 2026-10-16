@@ -387,6 +387,7 @@ from .stage_utils import (
     stage_matches,
 )
 from .subgroup_control_flow import (
+    converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
     converge_subgroup_guarded_returns,
 )
@@ -3374,6 +3375,12 @@ class HLSLCodeGen:
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_guarded_returns(
                 ast, self.walk_ast, self.map_operator
+            )
+            ast = converge_subgroup_bounded_loops(
+                ast,
+                self.hlsl_software_subgroup_stage_entries(ast, target_stage),
+                self.walk_ast,
+                self.map_operator,
             )
             ast = converge_subgroup_conditional_calls(
                 ast,

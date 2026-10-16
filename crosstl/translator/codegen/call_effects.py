@@ -2,6 +2,8 @@
 
 _BUILTIN_ARGUMENT_WRITES = {
     ("round", 1): (),
+    # MLX's GQA attention calls ``fast::exp`` inside its uniform head loop.
+    ("exp", 1): (),
     ("buffer_load", 2): (),
     ("buffer_store", 3): (0,),
 }

@@ -9,8 +9,11 @@ from ..ast import (
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
+    BreakNode,
     CastNode,
     ConstructorNode,
+    ContinueNode,
+    CooperativeMatrixOpNode,
     ExpressionStatementNode,
     ForNode,
     FunctionCallNode,
@@ -35,6 +38,7 @@ from .loop_induction import (
     checked_induction_value,
     fixed_stride_loop_terminates,
     geometric_loop_terminates,
+    walk_control_scopes,
 )
 
 _FLOATS = {
@@ -1198,4 +1202,509 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     for index, child in enumerate(value):
                         if child is branch:
                             value[index] = replacement
+    return result
+
+
+_INT32 = {"int", "int32_t"}
+_SPECULATIVE_OPERATORS = {
+    "+",
+    "-",
+    "*",
+    "==",
+    "!=",
+    "<",
+    "<=",
+    ">",
+    ">=",
+    "&&",
+    "||",
+    "&",
+    "|",
+    "^",
+    "<<",
+    ">>",
+}
+
+
+def _call_name(node):
+    function = node.function
+    return function if isinstance(function, str) else getattr(function, "name", None)
+
+
+def _qualifiers(declaration):
+    return set(declaration.qualifiers or []) | set(
+        getattr(declaration.var_type, "qualifiers", []) or []
+    )
+
+
+def _const_int(declaration):
+    return (
+        isinstance(declaration, VariableNode)
+        and isinstance(declaration.var_type, PrimitiveType)
+        and _type_name(declaration.var_type) in _INT32
+        and "const" in _qualifiers(declaration)
+        and declaration.initial_value is not None
+        and not declaration.attributes
+    )
+
+
+def _int_literal(node):
+    return (
+        isinstance(node, LiteralNode)
+        and type(node.value) is int
+        and _type_name(node.literal_type) in _INT32
+    )
+
+
+def _effect_checker(nodes, walk_ast):
+    """Return ``effects(root)``: the synchronizing operations ``root`` may run.
+
+    ``"collective"`` marks subgroup and cooperative matrix operations and
+    ``"barrier"`` every barrier. A call to a user function inherits whatever
+    any function of that name reaches; an unnamed callee counts as both.
+    """
+    functions = {}
+    for node in nodes:
+        if isinstance(node, FunctionNode):
+            functions.setdefault(node.name, []).append(node)
+    summaries = {}
+
+    def direct(node):
+        if isinstance(node, (WaveOpNode, CooperativeMatrixOpNode)):
+            return {"collective"}
+        if not isinstance(node, FunctionCallNode):
+            return set()
+        name = _call_name(node)
+        if not isinstance(name, str):
+            return {"collective", "barrier"}
+        if name in functions:
+            return set().union(*(summary(function) for function in functions[name]))
+        if "barrier" in name.lower():
+            return {"barrier"}
+        if name.startswith(("Wave", "Quad", "subgroup", "simd_", "quad_")):
+            return {"collective"}
+        return set()
+
+    def summary(function):
+        key = id(function)
+        if key not in summaries:
+            # A recursive cycle conservatively reaches everything.
+            summaries[key] = {"collective", "barrier"}
+            summaries[key] = effects(function.body)
+        return summaries[key]
+
+    def effects(root):
+        return set().union(*(direct(child) for child in walk_ast(root)))
+
+    return effects
+
+
+def _speculative(node, map_operator):
+    """Whether every invocation may evaluate ``node`` without side effects.
+
+    Inactive invocations evaluate the headers of the loops that keep their
+    collectives unguarded, so those headers may not call, read memory or
+    write anything other than their counters.
+    """
+    if isinstance(node, (LiteralNode, IdentifierNode)):
+        return True
+    if isinstance(node, CastNode):
+        return _speculative(node.expression, map_operator)
+    if isinstance(node, MemberAccessNode):
+        return isinstance(node.object_expr, IdentifierNode)
+    if isinstance(node, UnaryOpNode):
+        return map_operator(node.operator) in {"+", "-", "!", "~"} and _speculative(
+            node.operand, map_operator
+        )
+    if isinstance(node, BinaryOpNode):
+        return map_operator(node.operator) in _SPECULATIVE_OPERATORS and all(
+            _speculative(part, map_operator) for part in (node.left, node.right)
+        )
+    return False
+
+
+def _speculative_header(loop, map_operator):
+    initializer, condition, update = loop.init, loop.condition, loop.update
+    if (
+        not isinstance(initializer, VariableNode)
+        or isinstance(initializer.var_type, (PointerType, ReferenceType))
+        or initializer.initial_value is None
+        or not _speculative(initializer.initial_value, map_operator)
+        or condition is None
+        or not _speculative(condition, map_operator)
+    ):
+        return False
+    if isinstance(update, UnaryOpNode):
+        return (
+            map_operator(update.operator) in {"++", "--"}
+            and isinstance(update.operand, IdentifierNode)
+            and update.operand.name == initializer.name
+        )
+    return (
+        isinstance(update, AssignmentNode)
+        and map_operator(update.operator) in {"+=", "-="}
+        and isinstance(update.target, IdentifierNode)
+        and update.target.name == initializer.name
+        and _speculative(update.value, map_operator)
+    )
+
+
+def _guarded_segment(segment, later, active, walk_ast):
+    """Guard collective-free ``segment``; keep names that ``later`` reads.
+
+    A declaration that a later statement may name moves before the guard.
+    Only uninitialized locals move: inactive invocations would otherwise skip
+    their initialization, and an earlier use of the name in the segment would
+    otherwise bind to the moved declaration instead of an outer one.
+    """
+    if not segment:
+        return []
+    named = {
+        child.name for child in walk_ast(later) if isinstance(child, IdentifierNode)
+    }
+    hoisted, guarded = [], []
+    for statement in segment:
+        if isinstance(statement, VariableNode) and statement.name in named:
+            if (
+                statement.initial_value is not None
+                or "const" in _qualifiers(statement)
+                or statement.attributes
+                or isinstance(statement.var_type, (PointerType, ReferenceType))
+                or any(
+                    isinstance(child, IdentifierNode) and child.name == statement.name
+                    for child in walk_ast(guarded)
+                )
+            ):
+                return None
+            hoisted.append(statement)
+        else:
+            guarded.append(statement)
+    if guarded:
+        hoisted.append(IfNode(IdentifierNode(active), BlockNode(guarded)))
+    return hoisted
+
+
+def _guarded_statements(statements, active, effects, map_operator, walk_ast):
+    """Predicate ``statements`` on ``active`` while every collective still runs.
+
+    Without a loop that holds a collective, the statements form one guarded
+    block, whose reductions the software subgroup lowering masks. A loop
+    holding a collective instead runs in every invocation, with its body
+    guarded in turn; its header must be speculative, and the code generator
+    still proves its trip count uniform. Collective-free statements between
+    such loops are guarded. Any other collective placement is rejected.
+    """
+    kinds = [effects(statement) for statement in statements]
+    loops = [
+        isinstance(statement, ForNode) and "collective" in kind
+        for statement, kind in zip(statements, kinds)
+    ]
+    if not any(loops):
+        return [IfNode(IdentifierNode(active), BlockNode(list(statements)))]
+    result, segment = [], []
+    for index, (statement, kind, loop) in enumerate(zip(statements, kinds, loops)):
+        if not kind:
+            segment.append(statement)
+            continue
+        if not loop or not _speculative_header(statement, map_operator):
+            return None
+        flushed = _guarded_segment(segment, statements[index:], active, walk_ast)
+        body = _guarded_statements(
+            _statements(statement.body), active, effects, map_operator, walk_ast
+        )
+        if flushed is None or body is None:
+            return None
+        result.extend(flushed)
+        result.append(
+            ForNode(
+                statement.init,
+                statement.condition,
+                statement.update,
+                BlockNode(body),
+                source_location=getattr(statement, "source_location", None),
+            )
+        )
+        segment = []
+    flushed = _guarded_segment(segment, [], active, walk_ast)
+    return None if flushed is None else result + flushed
+
+
+def _unit_increment(update, counter, map_operator):
+    if isinstance(update, UnaryOpNode):
+        return (
+            map_operator(update.operator) == "++"
+            and isinstance(update.operand, IdentifierNode)
+            and update.operand.name == counter
+        )
+    return (
+        isinstance(update, AssignmentNode)
+        and map_operator(update.operator) == "+="
+        and isinstance(update.target, IdentifierNode)
+        and update.target.name == counter
+        and _int_literal(update.value)
+        and update.value.value == 1
+    )
+
+
+def _capped_stride(value, start, map_operator, functions):
+    """Return ``R`` from ``min(X, start + R)`` with either operand order."""
+    if (
+        not isinstance(value, FunctionCallNode)
+        or _call_name(value) != "min"
+        or "min" in functions
+        or getattr(value, "generic_args", None)
+        or len(value.arguments) != 2
+    ):
+        return None
+    for argument in value.arguments:
+        if (
+            not isinstance(argument, BinaryOpNode)
+            or map_operator(argument.operator) != "+"
+        ):
+            continue
+        for first, second in (
+            (argument.left, argument.right),
+            (argument.right, argument.left),
+        ):
+            if isinstance(first, IdentifierNode) and first.name == start:
+                if isinstance(second, IdentifierNode) or _int_literal(second):
+                    return second
+    return None
+
+
+def _counter_written(body, counter, functions, map_operator, walk_ast):
+    def root(node):
+        while isinstance(node, (ArrayAccessNode, MemberAccessNode)):
+            node = (
+                node.array_expr
+                if isinstance(node, ArrayAccessNode)
+                else node.object_expr
+            )
+        return node.name if isinstance(node, IdentifierNode) else None
+
+    for node, visible in walk_control_scopes(body, {counter}):
+        if counter not in visible:
+            continue
+        if isinstance(node, AssignmentNode) and root(node.target) == counter:
+            return True
+        if (
+            isinstance(node, UnaryOpNode)
+            and map_operator(node.operator) in {"++", "--", "&"}
+            and root(node.operand) == counter
+        ):
+            return True
+        if (
+            isinstance(node, VariableNode)
+            and isinstance(node.var_type, (PointerType, ReferenceType))
+            and any(
+                isinstance(child, IdentifierNode) and child.name == counter
+                for child in walk_ast(node.initial_value)
+            )
+        ):
+            return True
+        if (
+            isinstance(node, FunctionCallNode)
+            and _call_name(node) in functions
+            and any(root(argument) == counter for argument in node.arguments)
+        ):
+            return True
+    return False
+
+
+def _bounded_loop_plan(statements, index, effects, functions, map_operator, walk_ast):
+    loop = statements[index]
+    initializer, condition = loop.init, loop.condition
+    if (
+        not isinstance(initializer, VariableNode)
+        or not isinstance(initializer.var_type, PrimitiveType)
+        or _type_name(initializer.var_type) not in _INT32
+        or initializer.attributes
+        or _qualifiers(initializer)
+        or not isinstance(initializer.initial_value, IdentifierNode)
+        or not isinstance(condition, BinaryOpNode)
+        or map_operator(condition.operator) != "<"
+        or not isinstance(condition.left, IdentifierNode)
+        or condition.left.name != initializer.name
+        or not isinstance(condition.right, IdentifierNode)
+    ):
+        return None
+    counter = initializer.name
+    start, bound = initializer.initial_value.name, condition.right.name
+    if len({counter, start, bound}) != 3 or not _unit_increment(
+        loop.update, counter, map_operator
+    ):
+        return None
+    positions = {
+        statement.name: position
+        for position, statement in enumerate(statements[:index])
+        if isinstance(statement, VariableNode)
+    }
+    if (
+        start not in positions
+        or bound not in positions
+        or positions[start] > positions[bound]
+        or not _const_int(statements[positions[start]])
+        or not _const_int(statements[positions[bound]])
+    ):
+        return None
+    stride = _capped_stride(
+        statements[positions[bound]].initial_value, start, map_operator, functions
+    )
+    if stride is None:
+        return None
+    if isinstance(stride, IdentifierNode) and (
+        stride.name in {counter, start, bound}
+        or stride.name not in positions
+        or positions[stride.name] > positions[bound]
+        or not _const_int(statements[positions[stride.name]])
+    ):
+        return None
+    kinds = effects(loop.body)
+    if (
+        "collective" not in kinds
+        or "barrier" in kinds
+        or any(
+            isinstance(child, (BreakNode, ContinueNode, ReturnNode))
+            for child in walk_ast(loop.body)
+        )
+        or any(
+            isinstance(statement, VariableNode) and statement.name == counter
+            for statement in _statements(loop.body)
+        )
+        or _counter_written(loop.body, counter, functions, map_operator, walk_ast)
+    ):
+        return None
+    return {"counter": counter, "start": start, "bound": bound, "stride": stride}
+
+
+def converge_subgroup_bounded_loops(ast, entries, walk_ast, map_operator):
+    """Give per-subgroup key ranges a workgroup-uniform trip count.
+
+    MLX's two-pass GQA attention gives each SIMD group its own key range::
+
+        const int s1 = min(kend, s0 + sub);
+        for (int t = s0; t < s1; t++) { ... simd_sum(score) ... }
+
+    ``s0`` depends on the SIMD group, so the trip count differs between the
+    groups of a workgroup and software subgroup barriers inside the loop
+    would diverge. ``s1 <= s0 + R`` caps every trip count at ``R``, so the
+    loop becomes::
+
+        for (int step = 0; step < R; step++) {
+            int t = s0 + step;
+            bool active = t >= s0 && t < s1;
+            if (active) { ... }  // collectives stay unguarded
+        }
+
+    Only ``const int`` locals of the loop's own statement list (or an integer
+    literal for ``R``) may form the bounds, so they keep their values, and
+    the body may not write ``t``, exit early or reach a barrier. For
+    ``R >= 0`` this visits exactly the source's ``t = s0, ..., s1 - 1``: when
+    ``s0 + R`` does not overflow, ``s1 - s0 <= R``; when it wraps upwards,
+    ``s1 < s0``, the source loop is empty, and ``t >= s0`` rejects every
+    wrapped ``t``. A negative ``R`` empties both loops unless ``s0 + R``
+    wraps downwards, which source integer overflow would require. The code
+    generator still proves ``R`` uniform and masks the guarded reductions;
+    inactive invocations contribute identities and publish nothing.
+    """
+    nodes = list(walk_ast(ast))
+    functions = {node.name for node in nodes if isinstance(node, FunctionNode)}
+    effects = _effect_checker(nodes, walk_ast)
+    candidates = []
+    for stage, entry, _config in entries:
+        if stage != "compute":
+            continue
+        lists = [entry.body] if isinstance(entry.body, list) else []
+        lists += [
+            node.statements
+            for node in walk_ast(entry.body)
+            if isinstance(node, BlockNode)
+        ]
+        for statements in lists:
+            for index, statement in enumerate(statements):
+                if not isinstance(statement, ForNode):
+                    continue
+                plan = _bounded_loop_plan(
+                    statements, index, effects, functions, map_operator, walk_ast
+                )
+                if plan is not None and (
+                    _guarded_statements(
+                        _statements(statement.body),
+                        "active",
+                        effects,
+                        map_operator,
+                        walk_ast,
+                    )
+                    is not None
+                ):
+                    candidates.append((statement, plan))
+    nested = {
+        id(child)
+        for loop, _plan in candidates
+        for child in walk_ast(loop.body)
+        if child is not loop
+    }
+    candidates = [(loop, plan) for loop, plan in candidates if id(loop) not in nested]
+    if not candidates:
+        return ast
+    reserved = {
+        node.name for node in nodes if isinstance(getattr(node, "name", None), str)
+    }
+
+    def fresh(base):
+        name = base
+        while name in reserved:
+            name += "_"
+        reserved.add(name)
+        return name
+
+    memo = {}
+    result = deepcopy(ast, memo)
+    for original, plan in candidates:
+        loop = memo[id(original)]
+        location = getattr(loop, "source_location", None)
+        step = fresh("__crossgl_subgroup_step")
+        active = fresh("__crossgl_subgroup_active")
+        counter, start, bound = plan["counter"], plan["start"], plan["bound"]
+        body = _guarded_statements(
+            _statements(loop.body), active, effects, map_operator, walk_ast
+        )
+        if body is None:  # pragma: no cover - the copy has the planned shape
+            continue
+        loop.body = BlockNode(
+            [
+                VariableNode(
+                    counter,
+                    deepcopy(loop.init.var_type),
+                    BinaryOpNode(IdentifierNode(start), "+", IdentifierNode(step)),
+                    source_location=location,
+                ),
+                VariableNode(
+                    active,
+                    PrimitiveType("bool"),
+                    BinaryOpNode(
+                        BinaryOpNode(
+                            IdentifierNode(counter), ">=", IdentifierNode(start)
+                        ),
+                        "&&",
+                        BinaryOpNode(
+                            IdentifierNode(counter), "<", IdentifierNode(bound)
+                        ),
+                    ),
+                    source_location=location,
+                ),
+                *body,
+            ],
+            source_location=location,
+        )
+        loop.init = VariableNode(
+            step,
+            PrimitiveType("int"),
+            LiteralNode(0, PrimitiveType("int")),
+            source_location=location,
+        )
+        loop.condition = BinaryOpNode(
+            IdentifierNode(step), "<", deepcopy(plan["stride"])
+        )
+        loop.update = UnaryOpNode("++", IdentifierNode(step), is_postfix=True)
     return result

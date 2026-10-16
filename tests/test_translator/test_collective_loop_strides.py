@@ -8,6 +8,7 @@ import pytest
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
+from crosstl.translator.ast import ForNode, IfNode
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
 from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
@@ -15,6 +16,10 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLSoftwareSubgroupError,
 )
 from crosstl.translator.codegen.loop_induction import loop_constant_bindings
+from crosstl.translator.codegen.subgroup_control_flow import (
+    converge_subgroup_bounded_loops,
+)
+from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_directx_software_reductions import _codegen, _source
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -701,3 +706,272 @@ def test_fixed_stride_execution_is_required_in_existing_ci_job():
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_collective_loop_strides.py" in step
     assert "-n auto" in step and "continue-on-error" not in step
+
+
+# MLX's two-pass GQA attention gives each SIMD group its own key range
+# ``[s0, min(kend, s0 + sub))``. The ranges differ in length between the
+# groups of a workgroup, so the software subgroup lowering runs ``sub`` rounds
+# in every invocation and guards each round on the invocation's own range.
+def _bounded(bound="min(count, s0 + sub)", update="t++", body=None, sub="const int"):
+    if body is None:
+        body = """
+        uint[2] row;
+        for (int i = 0; i < 2; i++) { row[i] = inputWords[uint(t) * 2u + uint(i)]; }
+        for (int j = 0; j < 2; j++) {
+            uint score = 0u;
+            score += row[j] * (invocation + 1u);
+            score = WaveActiveSum(score);
+            total += score + uint(t);
+        }
+        """
+    return _source(
+        "uint",
+        f"""
+        const int count = 10;
+        {sub} sub = (count + 3) / 4;
+        const int g = int(invocation) / 32;
+        const int s0 = g * sub;
+        const int s1 = {bound};
+        uint total = 0u;
+        for (int t = s0; t < s1; {update}) {{ {body} }}
+        outputWords[index] = total;
+        """,
+    )
+
+
+BOUNDED_CASES = {
+    "nested": _bounded(),
+    "swapped": _bounded("min(sub + s0, count)", "t += 1"),
+    "literal": _bounded("min(count, s0 + 3)"),
+    "direct": _bounded(body="""
+        uint score = 0u;
+        score += inputWords[uint(t)] * (invocation + 1u);
+        score = WaveActiveSum(score);
+        total += score + uint(t);
+        """),
+}
+
+
+@pytest.mark.parametrize("case", BOUNDED_CASES)
+def test_bounded_subgroup_ranges_compile(tmp_path, case, stride_target):
+    generated = _generator(stride_target).generate_stage(
+        parse(BOUNDED_CASES[case]), "compute"
+    )
+    assert "WaveActiveSum(" not in generated
+    assert (
+        "GroupMemoryBarrierWithGroupSync"
+        if stride_target == "directx"
+        else "barrier();"
+    ) in generated
+    assert "crossgl_subgroup_step" in generated
+    _compile(generated, stride_target, tmp_path)
+
+
+def _entries(ast):
+    generator = GLSLCodeGen(software_subgroup_width=32)
+    return generator, generator.glsl_software_subgroup_stage_entries(ast, "compute")
+
+
+def test_bounded_subgroup_ranges_get_a_uniform_trip_count():
+    ast = parse(BOUNDED_CASES["nested"])
+    generator, entries = _entries(ast)
+    before = generator.generate_stage(parse(BOUNDED_CASES["nested"]), "compute")
+    result = converge_subgroup_bounded_loops(
+        ast, entries, generator.walk_ast, generator.map_operator
+    )
+    assert result is not ast
+    (entry,) = (
+        function
+        for _stage, function, _config in GLSLCodeGen(
+            software_subgroup_width=32
+        ).glsl_software_subgroup_stage_entries(result, "compute")
+    )
+    loops = [node for node in entry.body.statements if isinstance(node, ForNode)]
+    (loop,) = loops
+    assert (loop.init.name, loop.init.initial_value.value) == (
+        "__crossgl_subgroup_step",
+        0,
+    )
+    assert (loop.condition.operator, loop.condition.right.name) == ("<", "sub")
+    counter, active, row, loads, heads = loop.body.statements
+    assert (counter.name, counter.initial_value.left.name) == ("t", "s0")
+    assert active.name == "__crossgl_subgroup_active"
+    assert row.name == "row" and row.initial_value is None
+    assert isinstance(loads, IfNode) and loads.condition.name == active.name
+    (guard,) = heads.body.statements
+    assert isinstance(guard, IfNode) and guard.condition.name == active.name
+    # The input AST is unchanged and translates as before.
+    assert generator.generate_stage(ast, "compute") == before
+
+
+@pytest.mark.parametrize(
+    "source,converges",
+    [
+        (_bounded(body="t += 0;"), False),
+        (
+            _bounded(
+                body="uint score = WaveActiveSum(1u); if (score > 99u) { break; }"
+            ),
+            False,
+        ),
+        (_bounded(sub="int"), False),
+        (_bounded(bound="count"), False),
+        # The cap converges, but the code generator still rejects a cap that
+        # differs between subgroups.
+        (_bounded(bound="min(count, s0 + g)"), True),
+        (
+            _bounded(body="""
+                uint base = uint(t);
+                for (int j = 0; j < 2; j++) {
+                    uint score = 0u;
+                    score += base;
+                    score = WaveActiveSum(score);
+                    total += score;
+                }
+                """),
+            False,
+        ),
+        (
+            _bounded(
+                body="uint score = WaveActiveSum(1u); workgroupBarrier(); total += score;"
+            ),
+            False,
+        ),
+    ],
+)
+def test_unproved_bounded_ranges_stay_rejected(source, converges, stride_target):
+    ast = parse(source)
+    generator, entries = _entries(ast)
+    result = converge_subgroup_bounded_loops(
+        ast, entries, generator.walk_ast, generator.map_operator
+    )
+    assert (result is not ast) == converges
+    with pytest.raises(STRIDE_ERRORS):
+        _generator(stride_target).generate_stage(parse(source), "compute")
+
+
+BOUNDED_GROUPS = 3
+BOUNDED_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+kernel void ranges(const device uint* inputs [[buffer(0)]],
+                   device uint* outputs [[buffer(1)]],
+                   const constant int& count [[buffer(2)]],
+                   uint lane [[thread_index_in_simdgroup]],
+                   uint3 local [[thread_position_in_threadgroup]],
+                   uint3 group [[threadgroup_position_in_grid]]) {
+    const int g = local.y;
+    const int sub = (count + 2) / 3;
+    const int s0 = g * sub;
+    const int s1 = min(count, s0 + sub);
+    uint totals[2] = {0u, 0u};
+    uint rounds = 0u;
+    for (int t = s0; t < s1; t++) {
+        uint row[2];
+        for (int i = 0; i < 2; i++) {
+            row[i] = inputs[((group.x * uint(count) + uint(t)) * 2u + uint(i)) * 32u + lane];
+        }
+        rounds += 1u;
+        for (int j = 0; j < 2; j++) {
+            uint score = 0u;
+            score += row[j] * (uint(t) + 1u);
+            score = simd_sum(score);
+            totals[j] += score;
+        }
+    }
+    uint index = (group.x * 3u + uint(g)) * 32u + lane;
+    outputs[index * 3u] = totals[0];
+    outputs[index * 3u + 1u] = totals[1];
+    outputs[index * 3u + 2u] = rounds;
+}
+"""
+
+
+def _bounded_reference(count, workgroups=2):
+    sub = (count + BOUNDED_GROUPS - 1) // BOUNDED_GROUPS
+    words = [
+        (index * 2654435761 >> 7) % 1009 for index in range(workgroups * count * 2 * 32)
+    ]
+    wanted = []
+    for group in range(workgroups):
+        for g in range(BOUNDED_GROUPS):
+            s0 = g * sub
+            keys = range(s0, min(count, s0 + sub))
+            for _lane in range(32):
+                totals = [
+                    sum(
+                        words[((group * count + t) * 2 + j) * 32 + lane] * (t + 1)
+                        for t in keys
+                        for lane in range(32)
+                    )
+                    & 0xFFFFFFFF
+                    for j in range(2)
+                ]
+                wanted += [*totals, len(keys)]
+    return words, wanted
+
+
+def test_bounded_reference_covers_unequal_and_empty_ranges():
+    # Ten keys over three groups give 4, 4 and 2 keys; four give 2, 2 and 0.
+    for count, rounds in ((10, [4, 4, 2]), (4, [2, 2, 0])):
+        _, wanted = _bounded_reference(count)
+        assert wanted[2 :: 3 * 32][:BOUNDED_GROUPS] == rounds
+
+
+def _bounded_request(root, target, count):
+    source, descriptor, package = _package(
+        root, target, "uint", (32, BOUNDED_GROUPS, 1), source=BOUNDED_SOURCE
+    )
+    words, wanted = _bounded_reference(count)
+    wanted.extend([0xDEADBEEF] * 32)
+
+    def payload(data):
+        return dict(dtype="uint32", shape=[len(data)], values=data)
+
+    inputs = _bound_values(
+        descriptor,
+        {"inputs": payload(words), "outputs": payload([0xDEADBEEF] * len(wanted))},
+    )
+    # DirectX prefixes constant members with the entry name.
+    (name,) = (
+        binding["name"]
+        for binding in descriptor["bindings"]
+        if binding["scalarLayout"].get("memberName", binding["name"]).endswith("count")
+    )
+    inputs[name] = dict(dtype="int32", shape=[1], values=[count])
+    expected = _bound_values(descriptor, {"outputs": payload(wanted)})
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        dict(workgroupCount=[2, 1, 1], workgroupSize=[32, BOUNDED_GROUPS, 1]),
+        observe_inputs=[item for item in inputs if item not in expected],
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    return source, request, expected
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+def test_bounded_ranges_translate_and_compile(tmp_path, target):
+    _, request, _ = _bounded_request(tmp_path, target, 10)
+    generated = request.artifact_path.read_text()
+    if target != "metal":
+        assert "simd_sum" not in generated and "WaveActiveSum" not in generated
+        assert "crossgl_subgroup_step" in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("count", [4, 10])
+def test_bounded_ranges_execute(tmp_path, count):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required fixed-stride execution")
+    target = {"darwin": "metal", "win32": "directx"}.get(sys.platform, "opengl")
+    source, request, expected = _bounded_request(tmp_path, target, count)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="ranges",
+    )
