@@ -268,6 +268,7 @@ from .translation_checkpoint import (
     load_project_translation_checkpoint,
     validate_project_translation_checkpoint,
 )
+from .uniform_layout import pack_uniform_block
 
 __all__ = [
     "DISPATCH_ARTIFACT_PLAN_KIND",
@@ -405,6 +406,7 @@ __all__ = [
     "RuntimeTolerance",
     "RuntimeValue",
     "pack_storage_records",
+    "pack_uniform_block",
     "RuntimeValidationHook",
     "RuntimeVariantDispatchError",
     "RuntimeVerificationError",

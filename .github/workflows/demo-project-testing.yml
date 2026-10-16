@@ -490,6 +490,7 @@ jobs:
           CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_CONSTRAINED_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_SCATTER_AXIS: "1"
+          CROSTL_REQUIRE_DIRECTX_CONSTANT_BUFFER_RECORDS: "1"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
         run: |
           set -euo pipefail
@@ -532,6 +533,7 @@ jobs:
               tests/test_translator/test_metal_constexpr_branches.py \
               tests/test_translator/test_metal_constrained_calls.py \
               demos/integrations/mlx/tests/kernels/test_scatter_axis_runtime.py \
+              tests/test_translator/test_uniform_block_layouts.py \
               2>&1 | tee .mlx-gather-directx/execution.log
       - name: Validate translated DirectX random kernels
         run: |

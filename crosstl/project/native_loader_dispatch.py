@@ -36,7 +36,10 @@ from crosstl.project.runtime_verification import (
     prepare_runtime_execution,
 )
 from crosstl.project.storage_record_layout import validate_storage_record_layout
-from crosstl.project.uniform_layout import validate_std140_block_layout
+from crosstl.project.uniform_layout import (
+    UNIFORM_BLOCK_STORAGE_LAYOUTS,
+    validate_uniform_block_layout,
+)
 from crosstl.translator.dispatch_region_contract import (
     DISPATCH_REGION_PREFIX,
     check_dispatch_region_geometry,
@@ -1531,7 +1534,7 @@ def _validated_scalar_layout(
         )
     if "blockMembers" in layout or "payloadEncoding" in layout:
         try:
-            block_size = validate_std140_block_layout(layout)
+            block_size = validate_uniform_block_layout(layout)
         except ValueError as exc:
             raise NativeLoaderDispatchError(
                 "resource-layout-invalid",
@@ -1540,14 +1543,14 @@ def _validated_scalar_layout(
                 details={"binding": runtime_value.name},
             ) from exc
         if (
-            target != "opengl"
+            layout["storageLayout"] != UNIFORM_BLOCK_STORAGE_LAYOUTS.get(target)
             or resource_kind != "constant-buffer"
             or runtime_value.dtype != "uint32"
             or math.prod(runtime_value.shape) * 4 != block_size
         ):
             raise NativeLoaderDispatchError(
                 "resource-layout-mismatch",
-                "Aggregate uniforms require the complete std140 block as uint32 words, including padding.",
+                "Aggregate uniforms require the complete reflected block as uint32 words, including padding.",
                 path=path,
                 details={"binding": runtime_value.name, "blockSizeBytes": block_size},
             )

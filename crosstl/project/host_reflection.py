@@ -22,7 +22,10 @@ from crosstl.project.storage_record_layout import (
     MAX_STORAGE_RECORD_ARRAY_LENGTH,
     storage_record_layout,
 )
-from crosstl.project.uniform_layout import std140_block_layout
+from crosstl.project.uniform_layout import (
+    hlsl_constant_buffer_block_layout,
+    std140_block_layout,
+)
 from crosstl.translator.codegen.stage_utils import compute_local_size
 from crosstl.translator.dispatch_region_contract import parse_dispatch_region_header
 from crosstl.translator.frozen_specializations import parse_frozen_specializations
@@ -1232,6 +1235,14 @@ def _reflect_hlsl_source(
                     struct_declarations,
                     storage_layout="hlsl-structured-buffer",
                 )
+        if scalar_layout is None:
+            constant_match = re.fullmatch(
+                r"ConstantBuffer\s*<\s*([A-Za-z_]\w*)\s*>", type_name
+            )
+            if constant_match is not None:
+                scalar_layout = _hlsl_constant_buffer_record_layout(
+                    constant_match.group(1), struct_declarations
+                )
         if scalar_layout is not None:
             resource["scalarLayout"] = scalar_layout
         resources.append(resource)
@@ -1384,6 +1395,26 @@ def _hlsl_value_block_layout(
         runtime_sized=False,
         block_size_bytes=16,
     )
+
+
+def _hlsl_constant_buffer_record_layout(
+    type_name: str,
+    declarations: Mapping[str, list[tuple[str, str, int | None]]],
+) -> dict[str, Any] | None:
+    """Lay out ``ConstantBuffer<T>`` for a struct of scalars and scalar arrays."""
+    members = declarations.get(type_name)
+    if members is None:
+        return None
+    try:
+        return hlsl_constant_buffer_block_layout(
+            type_name,
+            [
+                (base, name) if extent is None else (base, name, extent)
+                for base, name, extent in members
+            ],
+        )
+    except ValueError:
+        return None
 
 
 STRUCT_ARRAY_EXTENT_TOKEN_RE = re.compile(
@@ -1726,8 +1757,9 @@ def _reflect_glsl_source(
                     ReflectionDiagnostic(
                         REFLECTION_INCOMPLETE_OUTPUT,
                         "Uniform block layout requires explicit std140 scalar/vector "
-                        "members; arrays, matrices, nested types and member qualifiers "
-                        "require additional physical-layout support.",
+                        "members or fixed-length arrays of them; matrices, nested "
+                        "types, runtime-sized arrays and member qualifiers require "
+                        "additional physical-layout support.",
                         details={
                             "resource": name,
                             "reasonKind": "uniform-block-layout-unsupported",
@@ -1917,10 +1949,19 @@ def _glsl_aggregate_block_layout(type_name: str, body: str) -> dict[str, Any] | 
     if parts[-1].strip():
         return None
     for part in parts[:-1]:
-        match = re.fullmatch(r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*", part)
+        match = re.fullmatch(
+            r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?:\[([^\[\]{};]*)\])?\s*", part
+        )
         if match is None:
             return None
-        declarations.append((match[1], match[2]))
+        if match[3] is None:
+            declarations.append((match[1], match[2]))
+            continue
+        # Only literal extents are proven; runtime-sized arrays stay unsupported.
+        extent = _struct_array_extent(match[3])
+        if extent is None:
+            return None
+        declarations.append((match[1], match[2], extent))
     try:
         return std140_block_layout(type_name, declarations)
     except ValueError:

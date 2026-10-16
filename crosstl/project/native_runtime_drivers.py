@@ -26,7 +26,10 @@ from .runtime_verification import (
     _NativeRuntimeUploadSnapshot,
 )
 from .storage_record_layout import validate_storage_record_layout
-from .uniform_layout import validate_std140_block_layout
+from .uniform_layout import (
+    UNIFORM_BLOCK_STORAGE_LAYOUTS,
+    validate_uniform_block_layout,
+)
 
 
 @dataclass(frozen=True)
@@ -4376,15 +4379,19 @@ def _scalar_block_size(
 
     if "blockMembers" in raw_layout or "payloadEncoding" in raw_layout:
         try:
-            block_size = validate_std140_block_layout(raw_layout)
+            block_size = validate_uniform_block_layout(raw_layout)
         except ValueError as exc:
             raise _scalar_block_error(
                 target, str(exc), "uniform-block-layout-invalid", resource=binding.name
             ) from exc
-        if target != "opengl" or dtype != "uint32" or payload_size != block_size:
+        if (
+            raw_layout["storageLayout"] != UNIFORM_BLOCK_STORAGE_LAYOUTS[target]
+            or dtype != "uint32"
+            or payload_size != block_size
+        ):
             raise _scalar_block_error(
                 target,
-                "Aggregate uniforms require the complete std140 block as uint32 words, including padding.",
+                "Aggregate uniforms require the complete reflected block as uint32 words, including padding.",
                 "uniform-block-payload-mismatch",
                 resource=binding.name,
                 dtype=dtype,
