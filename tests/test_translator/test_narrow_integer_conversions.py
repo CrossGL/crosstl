@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -597,3 +598,45 @@ def test_hlsl_preserves_exact_byte_aliases_and_rejects_unknown_overlap(
         generated = translate(str(source), backend="directx", format_output=False)
         assert "change_shared_references" in generated
         _compile(generated, "directx", tmp_path)
+
+
+@pytest.mark.parametrize("kind", ("char", "uchar"))
+@pytest.mark.parametrize(
+    ("arguments", "disjoint"),
+    (
+        ("values[j], values[j + 1]", True),
+        ("values[j + 2], values[j]", True),
+        ("values[j], values[index]", False),
+    ),
+)
+def test_hlsl_byte_references_at_constant_offsets_are_disjoint(
+    tmp_path, kind, arguments, disjoint
+):
+    # MLX's thread sort swaps neighbouring register elements of 8-bit keys,
+    # `thread_swap(vals[j + 1], vals[j])`: the elements differ at one call.
+    source = tmp_path / "neighbours.metal"
+    source.write_text(
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        f"void order(thread {kind}& first, thread {kind}& second) {{\n"
+        f"  if (second < first) {{ {kind} t = first; first = second; second = t; }}\n"
+        "}\n"
+        "kernel void neighbours(device uint* outputs [[buffer(0)]],\n"
+        "                       uint index [[thread_position_in_grid]]) {\n"
+        f"  {kind} values[4] = {{{kind}(4), {kind}(3), {kind}(2), {kind}(1)}};\n"
+        f"  for (int j = 0; j < 2; j++) {{ order({arguments}); }}\n"
+        "  outputs[index] = uint(values[3]);\n"
+        "}\n"
+    )
+    if not disjoint:
+        with pytest.raises(DirectXContextualConversionError) as error:
+            translate(str(source), backend="directx", format_output=False)
+        assert error.value.reason == "byte-reference-alias-unsupported"
+        return
+    generated = translate(str(source), backend="directx", format_output=False)
+    assert "order_shared_references" not in generated
+    assert re.search(
+        r"order\(values\[__crossgl_integer_index\w*\], "
+        r"values\[__crossgl_integer_index\w*\]\)",
+        generated,
+    ), generated
+    _compile(generated, "directx", tmp_path)

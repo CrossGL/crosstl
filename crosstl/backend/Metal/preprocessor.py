@@ -7376,6 +7376,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             if open_bracket == -1:
                 break
             text = text[:open_bracket].rstrip()
+        # A reference-to-array declarator, `thread T (&vals)[N]`, names the
+        # parenthesized identifier; MLX's sort helpers take their per-thread
+        # register arrays this way.
+        reference = re.search(r"\(\s*&\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*$", text)
+        if reference is not None:
+            return reference.group(1)
         match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", text)
         if match is None:
             return None
@@ -20645,6 +20651,22 @@ class MetalPreprocessor(HLSLPreprocessor):
         text = self._strip_metal_attributes(text).strip()
         if not text:
             return None
+        # `thread T (&vals)[N]` binds a reference to an array: subscripts yield
+        # T exactly as for the array declarator `thread T vals[N]`.
+        reference = re.fullmatch(
+            r"(?P<type>[^()\[\]]+?)\s*\(\s*&\s*[A-Za-z_][A-Za-z0-9_]*\s*\)"
+            r"\s*(?:\[[^\[\]]*\]\s*)+",
+            text,
+        )
+        if reference is not None:
+            type_text = reference.group("type").strip()
+            element_type = self._normalize_inferred_type(type_text)
+            if not element_type:
+                return None
+            return _MetalSubscriptableType(
+                element_type,
+                self._normalize_known_address_space_pointer_type(f"{type_text}*"),
+            )
         if "[" in text:
             type_text = text[: text.find("[")]
             type_text = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\s*$", "", type_text).strip()

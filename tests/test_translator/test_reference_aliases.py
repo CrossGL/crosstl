@@ -13,15 +13,18 @@ from crosstl.translator import parse
 from crosstl.translator.ast import (
     BlockNode,
     ForInNode,
+    FunctionCallNode,
     IdentifierNode,
     IdentifierPatternNode,
     LambdaNode,
+    LiteralNode,
     MatchArmNode,
     ReturnNode,
 )
 from crosstl.translator.codegen.reference_aliases import (
     ReferenceAliasError,
     lower_reference_aliases,
+    references_provably_disjoint,
 )
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
@@ -273,6 +276,57 @@ def test_reference_aliases_reject_side_effecting_sibling_argument(tmp_path):
     )
     with pytest.raises(ReferenceAliasError, match="argument-evaluation-unsupported"):
         lower_reference_aliases(parse(text))
+
+
+def _disjoint_call_arguments(arguments):
+    ast = parse(
+        "shader Disjoint { int f(int value) { return value; }"
+        " void use(int a, int b) { }"
+        " compute { void main() {"
+        " int values[4]; int other[4]; int j = 0; int k = 1;"
+        f" use({arguments}); }} }} }}"
+    )
+    for node in ast.walk():
+        if (
+            isinstance(node, FunctionCallNode)
+            and getattr(node.function, "name", None) == "use"
+        ):
+            return node.arguments
+    raise AssertionError(arguments)
+
+
+def _literal_int(value):
+    if isinstance(value, LiteralNode) and type(value.value) is int:
+        return value.value
+    return None
+
+
+@pytest.mark.parametrize(
+    ("arguments", "disjoint"),
+    (
+        ("values[j + 1], values[j]", True),
+        ("values[j], values[j - 1]", True),
+        ("values[1 + j], values[j + 2]", True),
+        ("values[0], values[3]", True),
+        ("values[j * 2], values[j * 2 + 1]", True),
+        ("values[j + 2147483647], values[j]", True),
+        # The same element, unrelated or impure indices, or another array.
+        ("values[j], values[j]", False),
+        ("values[j + 1], values[1 + j]", False),
+        ("values[j], values[k]", False),
+        ("values[j + 1], other[j]", False),
+        ("values[f(j)], values[f(j) + 1]", False),
+        # A difference of 2**31 or more may vanish in wrapped index arithmetic.
+        ("values[j + 2147483648], values[j]", False),
+        ("values[j - 4294967296], values[j]", False),
+    ),
+)
+def test_references_provably_disjoint_requires_constant_index_offsets(
+    arguments, disjoint
+):
+    first, second = _disjoint_call_arguments(arguments)
+    assert references_provably_disjoint(first, second, _literal_int) is disjoint
+    assert references_provably_disjoint(second, first, _literal_int) is disjoint
 
 
 def test_reference_aliases_required_on_native_platforms():

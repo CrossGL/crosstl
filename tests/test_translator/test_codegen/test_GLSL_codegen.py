@@ -11649,6 +11649,104 @@ def test_glsl_boolean_ternary_preserves_boolean_branch_types():
     assert "? int(input_values[0])" not in generated
 
 
+def test_glsl_storage_structure_selection_arms_copy_through_value_helper(tmp_path):
+    # glslang 12 stores a buffer-typed structure straight into the selection
+    # result (an OpStore spirv-val rejects); MLX's complex sort and reduce
+    # kernels select complex values read from storage against a fallback.
+    code = """
+    shader StorageStructureSelection {
+        struct Pair {
+            float real;
+            float imag;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<Pair> input @buffer(0),
+                RWStructuredBuffer<Pair> output @buffer(1),
+                RWStructuredBuffer<float> reals @buffer(2),
+                uint i @gl_GlobalInvocationID
+            ) {
+                Pair fallback = Pair(0.0, 1.0);
+                output[i] = i < 2u ? buffer_load(input, i) : fallback;
+                output[i + 4u] = i < 3u ? fallback : input[i + 1u];
+                output[i + 8u] = i < 5u ? Pair(input[i]) : output[i];
+                reals[i] = i < 1u ? input[i].real : fallback.imag;
+                Pair local = i < 6u ? fallback : Pair(1.0, 0.0);
+                output[i + 12u] = local;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert generated.count("Pair crossgl_copy_Pair(Pair value) {") == 1
+    assert "output_[i] = ((i < 2u) ? crossgl_copy_Pair(input_[i]) : fallback);" in (
+        generated
+    )
+    assert (
+        "output_[(i + 4u)] = ((i < 3u) ? fallback : "
+        "crossgl_copy_Pair(input_[(i + 1u)]));"
+    ) in generated
+    assert (
+        "output_[(i + 8u)] = ((i < 5u) ? crossgl_copy_Pair(input_[i]) : "
+        "crossgl_copy_Pair(output_[i]));"
+    ) in generated
+    # Scalar members and structures that are not read from storage are kept.
+    assert "reals[i] = ((i < 1u) ? input_[i].real : fallback.imag);" in generated
+    assert "Pair local = ((i < 6u) ? fallback : Pair(1.0, 0.0));" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "storage_structure_selection",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_storage_structure_copy_helper_avoids_source_identifiers():
+    code = """
+    shader StorageStructureSelectionCollision {
+        struct Pair {
+            float real;
+            float imag;
+        }
+
+        Pair crossgl_copy_Pair(Pair value) {
+            return Pair(value.imag, value.real);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<Pair> input @buffer(0),
+                RWStructuredBuffer<Pair> output @buffer(1),
+                uint i @gl_GlobalInvocationID
+            ) {
+                Pair fallback = crossgl_copy_Pair(Pair(0.0, 1.0));
+                output[i] = i < 2u ? input[i] : fallback;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    helper = re.search(
+        r"\? (crossgl_copy_Pair\w+)\(input_\[i\]\) : fallback\)", generated
+    )
+    assert helper is not None, generated
+    assert helper.group(1) != "crossgl_copy_Pair"
+    assert f"Pair {helper.group(1)}(Pair value) {{\n    return value;\n}}" in (
+        generated
+    )
+    assert "return Pair(value.imag, value.real);" in generated
+
+
 def test_opengl_normalizes_scalar_truthiness_in_all_boolean_contexts(tmp_path):
     code = """
     shader ScalarTruthiness {

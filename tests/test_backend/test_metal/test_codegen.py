@@ -1501,6 +1501,142 @@ def test_codegen_pointer_reference_direction_is_independent_of_pointee_constness
     )
 
 
+CONST_THREADGROUP_VIEW_SOURCE = """
+#include <metal_stdlib>
+using namespace metal;
+float first_two(const threadgroup float* view) { return view[0] + view[1]; }
+kernel void partitions(device float* output [[buffer(0)]],
+                       uint i [[thread_position_in_grid]]) {
+  threadgroup float tile[8];
+  tile[2] = 1.0f;
+  tile[3] = 2.0f;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const threadgroup float* view = tile + 2;
+  output[i] = first_two(view);
+}
+"""
+
+
+@pytest.mark.parametrize("preserve", [False, True], ids=["dropped", "preserved"])
+def test_codegen_const_threadgroup_pointer_local_follows_parameter_pointee_policy(
+    tmp_path, preserve
+):
+    # MLX's merge sort passes `const threadgroup T*` partition views to helper
+    # parameters declared the same way; both must drop or keep pointee const.
+    ast = MetalParser(MetalLexer(CONST_THREADGROUP_VIEW_SOURCE).tokenize()).parse()
+    crossgl = MetalToCrossGLConverter(preserve_pointer_pointee_const=preserve).generate(
+        ast
+    )
+
+    qualifier = "const " if preserve else ""
+    assert f"float first_two({qualifier}threadgroup float* view)" in crossgl
+    assert re.search(
+        rf"^\s*{qualifier}threadgroup float\* view = tile \+ 2;", crossgl, re.MULTILINE
+    ), crossgl
+    if not preserve:
+        assert "const threadgroup float* view" not in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert f"{qualifier}threadgroup float* view = tile + 2;" in metal
+    if shutil.which("xcrun") is None:
+        return
+    source = tmp_path / "partitions.metal"
+    source.write_text(metal, encoding="utf-8")
+    result = subprocess.run(
+        [
+            "xcrun",
+            "-sdk",
+            "macosx",
+            "metal",
+            "-Werror",
+            "-c",
+            str(source),
+            "-o",
+            str(tmp_path / "partitions.air"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if "unable to find utility" in result.stderr:
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+REFERENCE_TO_ARRAY_SORT_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+
+template <typename T>
+METAL_FUNC void thread_swap(thread T& a, thread T& b) {
+  T w = a;
+  a = b;
+  b = w;
+}
+
+template <typename T, short N>
+struct ThreadSort {
+  static METAL_FUNC void sort(thread T (&vals)[N], thread uint (&idxs)[N]) {
+    for (short i = 0; i < N; ++i) {
+      for (short j = i & 1; j < N - 1; j += 2) {
+        if (vals[j + 1] < vals[j]) {
+          thread_swap(vals[j + 1], vals[j]);
+          thread_swap(idxs[j + 1], idxs[j]);
+        }
+      }
+    }
+  }
+};
+
+template <typename T, short N>
+[[kernel]] void sort_rows(const device T* input [[buffer(0)]],
+                          device T* output [[buffer(1)]],
+                          device uint* order [[buffer(2)]],
+                          uint i [[thread_position_in_grid]]) {
+  T vals[N];
+  uint idxs[N];
+  for (short k = 0; k < N; ++k) {
+    vals[k] = input[N * i + k];
+    idxs[k] = uint(k);
+  }
+  ThreadSort<T, N>::sort(vals, idxs);
+  for (short k = 0; k < N; ++k) {
+    output[N * i + k] = vals[k];
+    order[N * i + k] = idxs[k];
+  }
+}
+
+template [[host_name("sort_rows_float_4")]] [[kernel]] void sort_rows<float, 4>(
+    const device float* input [[buffer(0)]], device float* output [[buffer(1)]],
+    device uint* order [[buffer(2)]], uint i [[thread_position_in_grid]]);
+template [[host_name("sort_rows_uchar_4")]] [[kernel]] void sort_rows<uchar, 4>(
+    const device uchar* input [[buffer(0)]], device uchar* output [[buffer(1)]],
+    device uint* order [[buffer(2)]], uint i [[thread_position_in_grid]]);
+"""
+
+
+@pytest.mark.parametrize("backend", ["opengl", "directx"])
+@pytest.mark.parametrize(
+    ("entry", "element"),
+    [("sort_rows_float_4", "float"), ("sort_rows_uchar_4", "uchar")],
+)
+def test_codegen_reference_to_array_subscripts_deduce_helper_templates(
+    tmp_path, backend, entry, element
+):
+    # MLX's ThreadSort takes its registers as `thread T (&vals)[N]` and swaps
+    # `vals[j + 1]` with `vals[j]`: deduction must see the element type.
+    source = tmp_path / "sort_rows.metal"
+    source.write_text(REFERENCE_TO_ARRAY_SORT_SOURCE, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(source), backend=backend, format_output=False, entry_point=entry
+    )
+
+    element_swap = f"thread_swap_{element}"
+    assert re.search(rf"\b{element_swap}\(", generated), generated
+    assert re.search(r"\bthread_swap_uint\(", generated), generated
+    assert "inout uint idxs[4]" in generated
+
+
 def test_codegen_writable_c_array_parameter_preserves_aliasing():
     code = """
     #include <metal_stdlib>

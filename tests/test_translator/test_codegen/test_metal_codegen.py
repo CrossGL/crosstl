@@ -188,6 +188,96 @@ def test_metal_unregistered_structure_lookalike_is_not_projected():
     assert "(value).real" not in generated
 
 
+def test_metal_registered_complex_assignments_lower_implicit_conversions():
+    # MLX's complex_t converts implicitly from scalars (imag = 0) and to
+    # scalars (the real part); the plain translated struct needs both spelled.
+    shader = """
+    shader MetalComplexAssignments {
+        struct complex_t_float {
+            float real;
+            float imag;
+        }
+        compute {
+            void main(
+                uint3 tid @ gl_GlobalInvocationID,
+                device complex_t_float* values,
+                device uint* indices,
+                threadgroup uint* scratch
+            ) {
+                values[tid.x] = indices[tid.x];
+                indices[tid.x] = values[tid.x];
+                values[1] = 2.5;
+                scratch[0] = values[0];
+                values[2] = values[3];
+                indices[2] = scratch[1];
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "values[tid.x] = complex_t_float{float(indices[tid.x]), float(0)};" in generated
+    )
+    assert "indices[tid.x] = uint((values[tid.x]).real);" in generated
+    assert "values[1] = complex_t_float{float(2.5), float(0)};" in generated
+    assert "scratch[0] = uint((values[0]).real);" in generated
+    assert "values[2] = values[3];" in generated
+    assert "indices[2] = scratch[1];" in generated
+
+
+def test_metal_registered_complex_assignment_rejects_wrong_shape():
+    shader = """
+    shader MetalInvalidComplexAssignment {
+        struct complex_t_float {
+            float real;
+            int imag;
+        }
+        compute {
+            void main(device complex_t_float* values, device uint* indices) {
+                values[0] = indices[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(MetalStructConversionError) as exc_info:
+        MetalCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+    error = exc_info.value
+    assert error.destination_type == "complex_t_float"
+    assert error.source_type == "uint"
+    assert error.conversion_kind == "scalar-promotion"
+    assert error.reason == "destination-shape-mismatch"
+
+
+def test_metal_unregistered_structure_assignment_is_not_converted():
+    shader = """
+    shader MetalUnregisteredAssignment {
+        struct Pair {
+            float real;
+            float imag;
+        }
+        compute {
+            void main(device Pair* values, device uint* indices) {
+                values[0] = indices[0];
+                indices[1] = values[1];
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "values[0] = indices[0];" in generated
+    assert "indices[1] = values[1];" in generated
+
+
 @pytest.mark.parametrize(
     "expression,expected",
     [

@@ -54,17 +54,17 @@ REDUCE_DIRECTX_CONTRACT_PATH = (
     / "reduce.directx-translation.json"
 )
 REDUCE_DIRECTX_CONTRACT_SHA256 = (
-    "9a0a24e1494911f7747b4b63547702fc94b911c870e8780761d2de879e2854a3"
+    "5eb613d148675271ab2382f031309d1ed02deb77a897976ec3ace88015125d16"
 )
-REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1796130
+REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1796236
 REDUCE_DIRECTX_SPECIALIZATION_COUNT = 9216
 REDUCE_DIRECTX_REFLECTED_RESOURCE_COUNT = 27382
-REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37787631
-REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24216752
+REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37722167
+REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24198628
 REDUCE_DIRECTX_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1976)
 REDUCE_DIRECTX_GENERATED_SIZE_MAXIMUM = (
     "row_reduce_looped_large_5_reduce_mincomplex64",
-    30902,
+    30398,
 )
 REDUCE_DIRECTX_DXIL_SIZE_MINIMUM = ("init_reduce_andbool_", 2852)
 REDUCE_DIRECTX_DXIL_SIZE_MAXIMUM = (
@@ -307,34 +307,39 @@ def test_current_mlx_reduce_directx_contract_is_complete_and_classified() -> Non
 def test_reduce_artifact_refresh_preserves_compiled_identities() -> None:
     assert REDUCE_DIRECTX_CONTRACT["artifactIdentityRefresh"] == {
         "reason": (
-            "Index widened 8-bit row-reduction helper storage one 32-bit carrier "
-            "per element instead of as packed bytes (#2145)."
+            "Threadgroup complex64 partials are declared without lowering their "
+            "default construction: Metal never applies threadgroup initializers "
+            "on the device, and the per-thread construction loops raced with "
+            "the first writes of other threads."
         ),
         "previousContractSha256": (
-            "9cf9dafe373d770be867700f1ae32c05635f5465ad4c90c4e09a650759ddd6f8"
+            "9a0a24e1494911f7747b4b63547702fc94b911c870e8780761d2de879e2854a3"
         ),
-        "changedEntryCount": 104,
-        "unaffectedEntryCount": 2292,
-        "regeneratedEightBitEntryCount": 308,
-        "byteIdenticalEightBitEntryCount": 204,
-        "nativeCompiledChangedEntryCount": 104,
+        "changedEntryCount": 128,
+        "unaffectedEntryCount": 2268,
+        "regeneratedComplexEntryCount": 156,
+        "byteIdenticalComplexEntryCount": 28,
+        "nativeCompiledChangedEntryCount": 128,
         "changedDxilCompilerVersion": "1.9.0.5191",
         "unchangedSourceAndInterfaceContracts": True,
         "numericalReferencesUnchanged": True,
         "numericalExecution": False,
         "fullUpstreamSuite": False,
     }
-    changed = [
+    complex_entries = [
+        entry for entry in REDUCE_DIRECTX_ENTRIES if entry["inputType"] == "complex64_t"
+    ]
+    assert len(complex_entries) == 156
+    # Only complex64 has a constructor, and only reductions that stage partials
+    # in threadgroup memory declare it there: init kernels and the per-simdgroup
+    # small row reductions keep their artifacts byte for byte.
+    unchanged = [
         entry
-        for entry in REDUCE_DIRECTX_ENTRIES
-        if entry["shape"].startswith(("row-reduce-looped", "row-reduce-small"))
-        or entry["shape"] == "row-simple"
+        for entry in complex_entries
+        if entry["shape"] == "init" or entry["shape"].startswith("row-reduce-small")
     ]
-    eight_bit = [
-        entry for entry in changed if entry["inputType"] in {"int8_t", "uint8_t"}
-    ]
-    # Only row reductions pass the widened 8-bit input through helper pointers.
-    assert len(eight_bit) == 104
+    assert len(unchanged) == 28
+    assert len(complex_entries) - len(unchanged) == 128
 
 
 def _shard_parameters():

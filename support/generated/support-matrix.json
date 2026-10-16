@@ -178,7 +178,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 2158
+        "test_count": 2164
       },
       "translator_codegen": {
         "exists": true,
@@ -358,7 +358,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2372
+        "test_count": 2380
       },
       "translator_codegen": {
         "exists": true,
@@ -636,7 +636,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 625,
+        "unsupported_marker_count": 627,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -780,7 +780,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2587
+        "test_count": 2597
       },
       "translator_codegen": {
         "exists": true,

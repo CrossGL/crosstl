@@ -120,6 +120,56 @@ def _location(node):
     ) and _pure(node)
 
 
+def _constant_offset_index(index, integer_value):
+    """Split a pure index into ``(structural base or None, constant offset)``."""
+    value = integer_value(index)
+    if value is not None:
+        return None, value
+    if isinstance(index, BinaryOpNode) and index.operator in {"+", "-"}:
+        right = integer_value(index.right)
+        if right is not None:
+            left = _constant_offset_index(index.left, integer_value)
+            if left is not None:
+                return left[0], left[1] + (right if index.operator == "+" else -right)
+        left = integer_value(index.left)
+        if left is not None and index.operator == "+":
+            base = _constant_offset_index(index.right, integer_value)
+            if base is not None:
+                return base[0], base[1] + left
+    if _pure(index):
+        return _key(index), 0
+    return None
+
+
+def references_provably_disjoint(first, second, integer_value):
+    """Whether two pure element references always name different elements.
+
+    Both references must index the same pure array expression, and their pure
+    integer indices must differ by a nonzero constant, as in ``values[j + 1]``
+    and ``values[j]``. The indices are evaluated together at one call, so the
+    shared base has one value and the elements cannot coincide. The constant
+    difference stays below ``2**31`` so it cannot vanish in wrapped 32- or
+    64-bit index arithmetic. Anything else, including unrelated variable
+    indices, is left to the conservative caller.
+    """
+    if not (
+        isinstance(first, ArrayAccessNode)
+        and isinstance(second, ArrayAccessNode)
+        and _pure(first)
+        and _pure(second)
+        and _key(first.array_expr) == _key(second.array_expr)
+    ):
+        return False
+    first_index = _constant_offset_index(first.index_expr, integer_value)
+    second_index = _constant_offset_index(second.index_expr, integer_value)
+    return (
+        first_index is not None
+        and second_index is not None
+        and first_index[0] == second_index[0]
+        and 0 < abs(first_index[1] - second_index[1]) < 2**31
+    )
+
+
 class _Lowering:
     def __init__(self, ast):
         self.ast = ast

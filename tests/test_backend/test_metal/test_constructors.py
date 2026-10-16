@@ -378,6 +378,93 @@ def test_uninitialized_constructor_array_default_constructs_each_element():
     assert_crossgl_parses(generated)
 
 
+THREADGROUP_COMPLEX_STRUCT = """
+struct Complex {
+  float real;
+  float imag;
+  constexpr Complex(float r, float i) : real(r), imag(i) {}
+  constexpr Complex() : real(0), imag(0) {}
+  constexpr Complex() threadgroup : real(0), imag(0) {}
+};
+"""
+
+
+def test_threadgroup_default_construction_emits_no_runtime_initialization():
+    # Metal folds a threadgroup default constructor into a static initializer
+    # the device never applies. Running it per thread would also race with
+    # other threads' first writes (MLX's complex reduce and sort tiles).
+    source = THREADGROUP_COMPLEX_STRUCT + """
+    kernel void reduce_values(device Complex* output [[buffer(0)]],
+                              uint lid [[thread_position_in_threadgroup]]) {
+      threadgroup Complex shared_vals[32];
+      threadgroup Complex total;
+      Complex local_vals[2];
+      shared_vals[lid] = Complex(float(lid), 1.0f);
+      if (lid == 0) {
+        total = Complex(1.0f, 2.0f);
+      }
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      output[lid] = shared_vals[31 - lid];
+      output[lid].imag += local_vals[1].real + total.real;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert "threadgroup Complex[32] shared_vals;" in generated
+    assert "threadgroup Complex total;" in generated
+    assert "shared_vals[_crosstl_constructor_index" not in generated
+    assert "total = crosstl_ctor_Complex_1(1.0f, 2.0f);" in generated
+    # Thread-local storage is still default constructed element by element.
+    assert generated.count("for (int _crosstl_constructor_index") == 1
+    assert (
+        "local_vals[_crosstl_constructor_index] = crosstl_ctor_Complex_2();"
+        in generated
+    )
+    assert "crosstl_ctor_Complex_3" not in generated
+    assert_crossgl_parses(generated)
+
+
+def test_threadgroup_default_construction_requires_a_threadgroup_constructor():
+    source = """
+    struct Complex {
+      float real;
+      float imag;
+      Complex() thread : real(0), imag(0) {}
+      Complex() threadgroup = delete;
+    };
+
+    kernel void reduce_values(device Complex* output [[buffer(0)]],
+                              uint lid [[thread_position_in_threadgroup]]) {
+      threadgroup Complex shared_vals[4];
+      shared_vals[lid] = output[lid];
+      output[lid] = shared_vals[3 - lid];
+    }
+    """
+
+    with pytest.raises(MetalConstructorContractError) as raised:
+        convert(source)
+
+    assert "the selected constructor is delete" in str(raised.value)
+
+
+def test_threadgroup_constructor_array_initializer_reports_contract_error():
+    source = THREADGROUP_COMPLEX_STRUCT + """
+    kernel void reduce_values(device Complex* output [[buffer(0)]],
+                              uint lid [[thread_position_in_threadgroup]]) {
+      threadgroup Complex shared_vals[2] = {Complex(1.0f, 0.0f), Complex(0.0f, 1.0f)};
+      output[lid] = shared_vals[lid];
+    }
+    """
+
+    with pytest.raises(MetalConstructorContractError) as raised:
+        convert(source)
+
+    assert "threadgroup array initializer is never applied on the device" in str(
+        raised.value
+    )
+
+
 def test_constructor_array_loop_index_avoids_source_identifier_collision():
     source = """
     struct Value {

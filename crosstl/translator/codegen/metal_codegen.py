@@ -54,6 +54,7 @@ from ..math_namespaces import METAL_FAST_MATH_FUNCTIONS, METAL_MATH_NAMESPACE_AN
 from ..resource_identity import resource_identity_marker
 from ..source_licenses import source_license_comments
 from ..structure_conversions import (
+    ScalarKind,
     StructureConversionKind,
     StructureFieldValue,
     registered_structure_conversion_for_identity,
@@ -9001,6 +9002,103 @@ class MetalCodeGen:
             return f"float({rendered})"
         return rendered
 
+    METAL_STRUCTURE_PROMOTION_SCALAR_KINDS = {
+        "bool": ScalarKind.BOOLEAN,
+        "char": ScalarKind.SIGNED_INTEGER,
+        "short": ScalarKind.SIGNED_INTEGER,
+        "int": ScalarKind.SIGNED_INTEGER,
+        "long": ScalarKind.SIGNED_INTEGER,
+        "int64_t": ScalarKind.SIGNED_INTEGER,
+        "uchar": ScalarKind.UNSIGNED_INTEGER,
+        "ushort": ScalarKind.UNSIGNED_INTEGER,
+        "uint": ScalarKind.UNSIGNED_INTEGER,
+        "ulong": ScalarKind.UNSIGNED_INTEGER,
+        "uint64_t": ScalarKind.UNSIGNED_INTEGER,
+        "half": ScalarKind.FLOATING,
+        "float": ScalarKind.FLOATING,
+        "bfloat": ScalarKind.FLOATING,
+        "double": ScalarKind.FLOATING,
+    }
+
+    def metal_registered_structure_assignment(self, target, value):
+        """Lower an implicit registered-structure conversion in ``target = value``.
+
+        MLX's ``complex_t`` converts implicitly from a scalar (``real`` takes the
+        value, ``imag`` is zero) and to a scalar (its ``real`` part). CrossGL
+        carries the plain fields, so Metal accepts neither assignment between
+        the structure and a scalar without an explicit conversion. Returns the
+        converted right-hand side, or ``None`` when no such conversion applies.
+        """
+        target_type = self.type_name_string(self.expression_result_type(target))
+        value_type = self.type_name_string(self.expression_result_type(value))
+        if not target_type or not value_type:
+            return None
+        mapped_target = self.map_type(target_type)
+        mapped_value = self.map_type(value_type)
+        target_kind = self.METAL_STRUCTURE_PROMOTION_SCALAR_KINDS.get(mapped_target)
+        value_kind = self.METAL_STRUCTURE_PROMOTION_SCALAR_KINDS.get(mapped_value)
+        if target_kind is not None and value_kind is None:
+            return self.metal_registered_structure_scalar_conversion(
+                value, target_type, [value]
+            )
+        if value_kind is None or target_kind is not None:
+            return None
+        struct_name = self.resolve_metal_type_alias(target_type)
+        contracts = {
+            contract
+            for identity in {target_type, struct_name, mapped_target}
+            if (contract := registered_structure_conversion_for_identity(identity))
+            is not None
+        }
+        if len(contracts) != 1:
+            return None
+        (contract,) = contracts
+        member_types = self.struct_member_types.get(
+            struct_name
+        ) or self.struct_member_types.get(mapped_target)
+        actual_shape = (
+            None
+            if member_types is None
+            else tuple(
+                (name, self.map_type(member_type))
+                for name, member_type in member_types.items()
+            )
+        )
+        expected_shape = tuple(
+            (field.name, self.map_type(field.type_name)) for field in contract.fields
+        )
+        reason = None
+        if actual_shape != expected_shape:
+            reason = (
+                "destination-shape-unknown"
+                if actual_shape is None
+                else "destination-shape-mismatch"
+            )
+        elif value_kind not in contract.source_kinds:
+            reason = "source-kind-unsupported"
+        elif contract.scalar_source_use_count != 1:
+            reason = "source-single-evaluation-unsupported"
+        if reason is not None:
+            raise MetalStructConversionError(
+                "Metal cannot preserve registered structure scalar promotion "
+                f"from '{value_type}' to '{target_type}': "
+                f"{reason.replace('-', ' ')}",
+                destination_type=target_type,
+                source_type=value_type,
+                conversion_kind=StructureConversionKind.SCALAR_PROMOTION.value,
+                reason=reason,
+                source_location=getattr(value, "source_location", None),
+            )
+        rendered = self.generate_expression_with_expected(value, None)
+        fields = []
+        for field in contract.fields:
+            field_type = self.map_type(field.type_name)
+            if field.scalar_value is StructureFieldValue.ZERO:
+                fields.append(f"{field_type}(0)")
+            else:
+                fields.append(f"{field_type}({rendered})")
+        return f"{mapped_target}{{{', '.join(fields)}}}"
+
     def metal_registered_structure_scalar_conversion(
         self,
         expr,
@@ -9904,6 +10002,10 @@ class MetalCodeGen:
                 value, self.expression_result_type(target)
             )
             op = getattr(node, "operator", "=")
+        if op == "=":
+            converted = self.metal_registered_structure_assignment(target, value)
+            if converted is not None:
+                rhs = converted
 
         reference_declaration = self.generate_local_reference_assignment_declaration(
             target, value, rhs

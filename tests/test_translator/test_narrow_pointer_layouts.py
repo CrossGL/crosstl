@@ -202,6 +202,70 @@ def test_mixed_narrow_helper_layouts_are_rejected(tmp_path, case):
     assert "both widened narrow-element storage and packed words" in str(error.value)
 
 
+def widened_store_source(scalar):
+    return """#include <metal_stdlib>
+using namespace metal;
+void write_byte(device {scalar}* bytes, uint index, {scalar} value) {{
+    bytes[index] = value;
+}}
+void forward_write(device {scalar}* bytes, uint index) {{
+    write_byte(bytes + 1u, index, {scalar}(index + 7u));
+}}
+kernel void write_widened(device {scalar}* values [[buffer(0)]],
+                          uint i [[thread_position_in_grid]]) {{
+    forward_write(values, i);
+    write_byte(values, i + 20u, {scalar}(3));
+}}
+""".format(scalar=scalar)
+
+
+PACKED_STORE_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+void write_byte(device uchar* bytes, uint index, uchar value) {
+    bytes[index] = value;
+}
+kernel void write_packed(device uint* words [[buffer(0)]],
+                         uint i [[thread_position_in_grid]]) {
+    write_byte((device uchar*)words, i, uchar(i));
+}
+"""
+
+
+@pytest.mark.parametrize("scalar", ("uchar", "char"))
+def test_widened_helper_stores_write_one_carrier_per_element(tmp_path, scalar):
+    # Helpers precede their callers, so the first pass reaches the store
+    # through the default packed view before any call site is recorded; the
+    # widened layout is assumed once and proven by the complete pass.
+    generated = _translate(tmp_path, widened_store_source(scalar))
+
+    carrier = "int" if scalar == "char" else "uint"
+    assert f"RWStructuredBuffer<{carrier}> values" in generated
+    assert (
+        f"void write_byte(RWStructuredBuffer<{carrier}> bytes, "
+        f"int64_t bytes_offset, uint index, {carrier} value) {{"
+    ) in generated
+    assert "bytes[uint((bytes_offset + index))] = " in generated
+    assert "write_byte(bytes, int64_t((bytes_offset + 1u)), index, " in generated
+    assert "forward_write(values, int64_t(0), i);" in generated
+    assert "ByteAddressBuffer" not in generated
+    assert "/ 4" not in generated and "% 4) * 8" not in generated
+    if shutil.which("dxc"):
+        _compile(generated, "directx", tmp_path)
+
+
+def test_packed_helper_store_still_requires_byte_address_storage(tmp_path):
+    from crosstl.translator.codegen.pointer_reinterpret import (
+        PointerReinterpretationError,
+    )
+
+    # The hypothesis cannot be proven when the only caller passes packed
+    # words, so the write keeps its original diagnostic.
+    with pytest.raises(PointerReinterpretationError) as error:
+        _translate(tmp_path, PACKED_STORE_SOURCE)
+
+    assert error.value.reason == "write-requires-byte-address-storage"
+
+
 @pytest.mark.parametrize("case", sorted(MIXED_SOURCES))
 def test_mixed_narrow_helper_layout_is_a_project_diagnostic(tmp_path, case):
     (tmp_path / "mixed.metal").write_text(MIXED_SOURCES[case], encoding="utf-8")

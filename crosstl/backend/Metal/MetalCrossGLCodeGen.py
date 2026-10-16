@@ -4398,13 +4398,49 @@ class MetalToCrossGLConverter:
                 "aggregate assignment",
                 getattr(declaration, "source_location", None),
             )
+        receiver_address_space = self.declaration_constructor_receiver_address_space(
+            declaration
+        )
+        if receiver_address_space == "threadgroup":
+            self.validate_threadgroup_default_construction(
+                owner, getattr(declaration, "source_location", None)
+            )
+            return None
         return self.generate_explicit_constructor_call(
             owner,
             [],
             is_main,
             getattr(declaration, "source_location", None),
-            self.declaration_constructor_receiver_address_space(declaration),
+            receiver_address_space,
         )
+
+    def validate_threadgroup_default_construction(self, owner, source_location=None):
+        """Check a ``threadgroup`` declaration without lowering its construction.
+
+        Metal folds the default constructor of a threadgroup variable into a
+        static initializer of threadgroup memory, which the device does not
+        apply: the storage holds unspecified values until a thread writes it.
+        Lowering the construction to assignments would make every thread
+        store into the whole allocation without a barrier, racing with the
+        first writes of the other threads. The declaration therefore carries
+        no runtime initialization; the type must still be default
+        constructible in threadgroup memory, as Metal requires.
+        """
+        selected = self.resolve_metal_constructor(
+            owner, [], source_location, "threadgroup"
+        )
+        if selected is None:
+            return
+        constructor, _value_bindings, type_bindings = selected
+        kind = getattr(constructor, "declaration_kind", "definition")
+        if kind in {"delete", "declaration"}:
+            raise MetalConstructorContractError(
+                owner,
+                [],
+                [self.constructor_candidate_signature(constructor, type_bindings)],
+                f"the selected constructor is {kind}",
+                source_location or getattr(constructor, "source_location", None),
+            )
 
     def local_constructor_array_contract(self, declaration, source_location=None):
         element_type = self.effective_metal_variable_type(declaration)
@@ -4596,6 +4632,20 @@ class MetalToCrossGLConverter:
             )
 
         declaration_text = self.format_decl(declaration, include_semantic=False)
+        if info["receiver_address_space"] == "threadgroup":
+            if elements:
+                raise MetalConstructorContractError(
+                    info["element_type"],
+                    (),
+                    info["candidates"],
+                    "a threadgroup array initializer is never applied on the "
+                    "device, and element assignments by every thread would race",
+                    location,
+                )
+            self.validate_threadgroup_default_construction(
+                info["element_type"], location
+            )
+            return f"{declaration_text};"
         name = self.render_identifier(declaration.name)
         lines = [f"{declaration_text};"]
         for index, element in enumerate(elements):
@@ -8901,6 +8951,23 @@ class MetalToCrossGLConverter:
             and "const" in pointee_qualifier_names
             and self.pointer_element_type(resolved_effective_type) is not None
         )
+        # A leading `const` on a threadgroup pointer local qualifies its pointee
+        # (`const threadgroup T* view = tile + offset;`). Parameters drop that
+        # qualifier when pointee constness is not preserved, so the local must
+        # follow the same policy: otherwise the view cannot be passed to the
+        # helper parameter it was declared for (MLX's merge sort partitions).
+        threadgroup_pointee_const_local = bool(
+            not self.preserve_pointer_pointee_const
+            and getattr(var, "is_const", False)
+            and "threadgroup" in qualifiers
+            and pointee_qualifiers is not None
+            and "const" in pointee_qualifier_names
+            and "const" not in {
+                str(qualifier).lower()
+                for qualifier in getattr(var, "indirection_qualifiers", None) or ()
+            }
+            and self.pointer_element_type(resolved_effective_type) is not None
+        )
         const_device_indirection = bool(
             "const" in qualifiers
             and "device" in qualifiers
@@ -8913,7 +8980,10 @@ class MetalToCrossGLConverter:
         const_str = (
             "const "
             if (
-                getattr(var, "is_const", False)
+                (
+                    getattr(var, "is_const", False)
+                    and not threadgroup_pointee_const_local
+                )
                 or (
                     "const" in qualifiers
                     and (

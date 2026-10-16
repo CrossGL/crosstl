@@ -49225,6 +49225,163 @@ def test_hlsl_workgroup_pointer_static_null_selection_rejects_observation(
     assert excinfo.value.reason == "null-pointer-observed"
 
 
+BARE_NULL_WORKGROUP_POINTER_SHADER = """
+shader BareNullWorkgroupPointer {{
+    void sort_values(threadgroup float* values, threadgroup uint* indices) {{
+        values[0] = values[1];
+        {indices_use}
+    }}
+
+    void forward(threadgroup float* values, threadgroup uint* indices) {{
+        sort_values(values, indices);
+    }}
+
+    compute {{
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main(device float* output) {{
+            threadgroup float storage[4];
+            threadgroup uint order[4];
+            storage[1] = 2.0;
+            forward(storage, nullptr);
+            forward(storage, order);
+            output[0] = storage[0];
+        }}
+    }}
+}}
+"""
+
+
+def test_hlsl_bare_null_workgroup_pointer_argument_binds_inert_variant(tmp_path):
+    # MLX's non-arg block sort passes `nullptr` for its index tile; the
+    # helpers only touch it on statically dead paths.
+    generated = HLSLCodeGen().generate(
+        crosstl.translator.parse(
+            BARE_NULL_WORKGROUP_POINTER_SHADER.format(
+                indices_use="if (false) { indices[0] = 1u; }"
+            )
+        )
+    )
+
+    null_forward = "forward__crosstl_workgroup_values_main_storage_4_indices_nullptr_0"
+    null_sort = "sort_values__crosstl_workgroup_values_main_storage_4_indices_nullptr_0"
+    bound_forward = (
+        "forward__crosstl_workgroup_values_main_storage_4_indices_main_order_4"
+    )
+    assert f"void {null_forward}(int values_offset, int indices_offset)" in generated
+    assert f"void {null_sort}(int values_offset, int indices_offset)" in generated
+    # The null slot is inert: forwarding passes a literal offset, not the
+    # parameter, and nothing indexes it.
+    assert f"{null_sort}(int(values_offset), int(0));" in generated
+    assert f"{null_forward}(int(0), int(0));" in generated
+    assert f"{bound_forward}(int(0), int(0));" in generated
+    assert (
+        "main_order["
+        not in generated.split(f"void {null_sort}(", 2)[2].split("\n}\n", 1)[0]
+    )
+    assert "nullptr" not in generated.replace("_nullptr_0", "")
+    assert "float*" not in generated and "uint*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "indices_use",
+    [
+        pytest.param("indices[0] = 1u;", id="store"),
+        pytest.param("uint first = indices[0];", id="load"),
+    ],
+)
+def test_hlsl_bare_null_workgroup_pointer_observation_fails_closed(indices_use):
+    with pytest.raises(DirectXWorkgroupPointerError) as excinfo:
+        HLSLCodeGen().generate(
+            crosstl.translator.parse(
+                BARE_NULL_WORKGROUP_POINTER_SHADER.format(indices_use=indices_use)
+            )
+        )
+
+    assert excinfo.value.reason == "null-pointer-observed"
+    assert excinfo.value.parameter_name == "indices"
+
+
+SCOPED_WORKGROUP_POINTER_SHADER = """
+shader ScopedWorkgroupPointer {{
+    void consume(threadgroup float* view, device float* output, int pass) {{
+        output[pass] = view[0];
+    }}
+
+    compute {{
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main(device float* output, uint3 tid @ gl_LocalInvocationID) {{
+            threadgroup float tile[16];
+            tile[tid.x] = float(tid.x);
+            {body}
+        }}
+    }}
+}}
+"""
+
+
+def test_hlsl_workgroup_pointer_reassignment_in_declaring_loop_scope(tmp_path):
+    # MLX's merge sort declares its partition views inside the merge loop and
+    # advances them (`As += partition`) in that same straight-line scope.
+    body = """
+            for (int pass = 0; pass < 2; pass++) {
+                threadgroup float* view = tile + 4;
+                view += 2;
+                consume(view, output, pass);
+            }
+    """
+    generated = HLSLCodeGen().generate(
+        crosstl.translator.parse(SCOPED_WORKGROUP_POINTER_SHADER.format(body=body))
+    )
+
+    consume = "consume__crosstl_workgroup_view_main_tile_16"
+    assert "int view_offset = int(4);" in generated
+    assert "view_offset += int(2);" in generated
+    assert f"{consume}(int(view_offset), output, int64_t(0), pass);" in generated
+    assert "main_tile[uint(view_offset)]" in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            """
+            for (int pass = 0; pass < 2; pass++) {
+                threadgroup float* view = tile + 4;
+                if (tid.x > 0u) {
+                    view += 2;
+                }
+                consume(view, output, pass);
+            }
+            """,
+            id="nested-branch",
+        ),
+        pytest.param(
+            """
+            threadgroup float* view = tile;
+            for (int pass = 0; pass < 2; pass++) {
+                view += 2;
+                consume(view, output, pass);
+            }
+            """,
+            id="outer-declaration",
+        ),
+    ],
+)
+def test_hlsl_workgroup_pointer_reassignment_outside_declaring_scope_fails(body):
+    with pytest.raises(DirectXWorkgroupPointerError) as excinfo:
+        HLSLCodeGen().generate(
+            crosstl.translator.parse(SCOPED_WORKGROUP_POINTER_SHADER.format(body=body))
+        )
+
+    assert excinfo.value.reason == "dynamic-control-flow-reassignment"
+    assert excinfo.value.parameter_name == "view"
+
+
 def test_hlsl_workgroup_pointer_variants_preserve_lexical_shadowing(tmp_path):
     shader = """
     shader WorkgroupPointerShadowing {

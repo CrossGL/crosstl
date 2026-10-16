@@ -2628,6 +2628,7 @@ class GLSLCodeGen:
         self.glsl_bfloat_integer_helper_name = None
         self.glsl_bfloat_wide_integer_helper_required = False
         self.glsl_float_selection_helper_names = {}
+        self.glsl_storage_structure_copy_helper_names = {}
         self.glsl_integer_float_helper_names = {}
         self.glsl_signed_remainder_helper_names = {}
         self.glsl_floating_remainder_helper_names = {}
@@ -7901,6 +7902,7 @@ class GLSLCodeGen:
         self.glsl_bfloat_integer_helper_name = None
         self.glsl_bfloat_wide_integer_helper_required = False
         self.glsl_float_selection_helper_names = {}
+        self.glsl_storage_structure_copy_helper_names = {}
         self.glsl_integer_float_helper_names = {}
         self.glsl_signed_remainder_helper_names = {}
         self.glsl_floating_remainder_helper_names = {}
@@ -9109,6 +9111,7 @@ class GLSLCodeGen:
             + self.generate_glsl_bfloat_helpers()
             + self.generate_glsl_bfloat_integer_helpers()
             + self.generate_glsl_float_selection_helpers()
+            + self.generate_glsl_storage_structure_copy_helpers()
             + self.generate_glsl_integer_float_helpers()
             + self.generate_glsl_signed_remainder_helpers()
             + self.generate_glsl_floating_remainder_helpers()
@@ -15977,6 +15980,7 @@ class GLSLCodeGen:
                 error_type=OpenGLWorkgroupPointerError,
                 pointer_kind="workgroup",
             )
+        self.glsl_fold_null_workgroup_pointer_locals(clone)
         clone.name = self.glsl_resource_specialization_name(func_name, bindings)
         clone.parameters = [
             param
@@ -27585,17 +27589,24 @@ class GLSLCodeGen:
         function,
         parameter_name,
         active=None,
+        *,
+        declaration=None,
     ):
         """Prove whether a workgroup pointer is used along a reachable path.
 
         References bind to declarations rather than names so lexical shadows do
         not keep an otherwise unused null pointer alive. Direct forwarding is
         followed through the exact call-site overload; unresolved forwarding
-        and recursive cycles remain conservatively reachable.
+        and recursive cycles remain conservatively reachable. ``declaration``
+        selects a local pointer declaration instead of the named parameter.
         """
 
         active = set() if active is None else active
-        active_key = (id(function), parameter_name)
+        active_key = (
+            id(function),
+            parameter_name,
+            None if declaration is None else id(declaration),
+        )
         if active_key in active:
             return True
         active.add(active_key)
@@ -27604,16 +27615,20 @@ class GLSLCodeGen:
         lexical_call_source_types = lexical_bindings["call_source_types"]
         reference_bindings = lexical_bindings["reference_bindings"]
         declarations = lexical_bindings["declarations"]
-        parameter = next(
-            (
-                candidate
-                for candidate in (
-                    getattr(function, "parameters", getattr(function, "params", []))
-                    or []
-                )
-                if getattr(candidate, "name", None) == parameter_name
-            ),
-            None,
+        parameter = (
+            declaration
+            if declaration is not None
+            else next(
+                (
+                    candidate
+                    for candidate in (
+                        getattr(function, "parameters", getattr(function, "params", []))
+                        or []
+                    )
+                    if getattr(candidate, "name", None) == parameter_name
+                ),
+                None,
+            )
         )
         parameter_binding_id = id(parameter) if parameter is not None else None
 
@@ -27748,10 +27763,25 @@ class GLSLCodeGen:
             if value_id in visited:
                 return False
             visited.add(value_id)
+            if declaration is not None and value is declaration:
+                # The tracked local's own declaration is not a use of it.
+                return references(getattr(value, "initial_value", None))
             if is_parameter_reference(value):
                 return True
             if isinstance(value, FunctionCallNode):
                 return forwarded_call_uses_parameter(value)
+            if isinstance(value, TernaryOpNode):
+                # A statically selected conditional evaluates only one arm, so
+                # `ARG_SORT ? view + offset : nullptr` never reads `view` when
+                # the condition folds to false.
+                literal_condition = evaluate_literal_int_expression(
+                    value.condition,
+                    self.glsl_active_literal_int_constants(),
+                )
+                if literal_condition is not None:
+                    return references(value.condition) or references(
+                        value.true_expr if literal_condition else value.false_expr
+                    )
             if isinstance(value, IfNode):
                 condition = getattr(
                     value, "condition", getattr(value, "if_condition", None)
@@ -28040,6 +28070,72 @@ class GLSLCodeGen:
         finally:
             active.remove(active_key)
 
+    def glsl_fold_null_workgroup_pointer_locals(self, function):
+        """Elide workgroup pointer locals that are statically ``nullptr``.
+
+        A specialization can select ``nullptr`` for a view such as
+        ``const threadgroup uint* idx = ARG_SORT ? tile + offset : nullptr``.
+        Such a local has no shared backing, so no ``int`` offset can represent
+        it. When it is never reassigned or address-taken and every reachable
+        use forwards it to a helper parameter that is itself proven unused,
+        every reference bound to it becomes ``nullptr`` and its declaration
+        emits nothing: call sites then elide the callee parameter, and
+        references in statically dead branches are dropped with them. Any other
+        reachable use keeps the declaration, which fails closed.
+        """
+
+        body = getattr(function, "body", None)
+        candidates = {
+            id(node): node
+            for node in self.walk_ast(body)
+            if isinstance(node, VariableNode)
+            and self.glsl_workgroup_pointer_element_type(node) is not None
+            and self.glsl_workgroup_pointer_null_expression(
+                getattr(node, "initial_value", None)
+            )
+        }
+        if not candidates:
+            return
+        reference_bindings = self.glsl_scalar_array_view_lexical_bindings(function)[
+            "reference_bindings"
+        ]
+        for node in self.walk_ast(body):
+            target = None
+            if isinstance(node, AssignmentNode):
+                target = getattr(node, "target", getattr(node, "left", None))
+            elif isinstance(node, UnaryOpNode) and self.map_operator(node.op) in {
+                "++",
+                "--",
+                "&",
+            }:
+                target = node.operand
+            if isinstance(target, (IdentifierNode, VariableNode)):
+                candidates.pop(reference_bindings.get(id(target)), None)
+        candidates = {
+            key: declaration
+            for key, declaration in candidates.items()
+            if not self.glsl_workgroup_pointer_parameter_has_reachable_use(
+                function,
+                declaration.name,
+                declaration=declaration,
+            )
+        }
+        if not candidates:
+            return
+        rewritten = set()
+        for node in self.walk_ast(body):
+            if (
+                isinstance(node, IdentifierNode)
+                and reference_bindings.get(id(node)) in candidates
+            ):
+                node.name = "nullptr"
+                node.identifier = "nullptr"
+                rewritten.add(id(node))
+        for declaration in candidates.values():
+            declaration._glsl_null_workgroup_pointer_local = True
+        if rewritten:
+            self.glsl_fold_null_literal_conditionals(function, rewritten)
+
     def glsl_replace_null_pointer_parameter_references(
         self,
         function,
@@ -28101,6 +28197,7 @@ class GLSLCodeGen:
                 if binding_id in target_binding_ids:
                     node.name = "nullptr"
                     node.identifier = "nullptr"
+                    replaced.add(node_id)
                 return
             if hasattr(node, "child_nodes"):
                 for child in node.child_nodes():
@@ -28111,7 +28208,64 @@ class GLSLCodeGen:
                     if field not in {"annotations", "parent", "source_location"}:
                         replace(child)
 
+        replaced = set()
         replace(getattr(function, "body", None))
+        if replaced:
+            self.glsl_fold_null_literal_conditionals(function, replaced)
+
+    def glsl_fold_null_literal_conditionals(self, function, replaced_ids):
+        """Keep only the live arm of literal conditionals naming elided nulls.
+
+        Use analysis ignores the unselected arm of a statically selected
+        conditional such as ``false ? float(view[0]) : 0.5``. Once ``view`` is
+        an elided null parameter, that dead arm cannot be emitted, so the
+        conditional is replaced by its selected arm, which is the only arm it
+        ever evaluates. Conditionals without such a reference are unchanged.
+        """
+
+        constants = self.glsl_active_literal_int_constants()
+
+        def live(node):
+            while isinstance(node, TernaryOpNode):
+                condition = evaluate_literal_int_expression(node.condition, constants)
+                if condition is None:
+                    break
+                dead = node.false_expr if condition else node.true_expr
+                if not any(id(item) in replaced_ids for item in self.walk_ast(dead)):
+                    break
+                node = node.true_expr if condition else node.false_expr
+            return node
+
+        visited = set()
+
+        def rewrite(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if id(node) in visited:
+                return
+            visited.add(id(node))
+            if isinstance(node, list):
+                for index, child in enumerate(node):
+                    selected = live(child)
+                    if selected is not child:
+                        node[index] = selected
+                    rewrite(selected)
+                return
+            if isinstance(node, (tuple, set, dict)):
+                for child in node.values() if isinstance(node, dict) else node:
+                    rewrite(child)
+                return
+            if not hasattr(node, "__dict__"):
+                return
+            for field, child in list(vars(node).items()):
+                if field in {"annotations", "parent", "source_location"}:
+                    continue
+                selected = live(child)
+                if selected is not child:
+                    setattr(node, field, selected)
+                rewrite(selected)
+
+        rewrite(getattr(function, "body", None))
 
     def glsl_workgroup_pointer_aliases(self, aliases=None):
         return {
@@ -28449,6 +28603,9 @@ class GLSLCodeGen:
         )
 
     def generate_glsl_workgroup_pointer_alias_declaration(self, node, indent):
+        if getattr(node, "_glsl_null_workgroup_pointer_local", False):
+            # Folded to nullptr: references were rewritten, nothing is stored.
+            return ""
         initial_value = getattr(node, "initial_value", None)
         binding = self.glsl_workgroup_pointer_binding(
             initial_value,
@@ -38009,6 +38166,12 @@ complex64_t crossgl_complex64_mod_assign(
                 false_expr = self.generate_expression_with_expected(
                     expr.false_expr, operand_types[1]
                 )
+            true_expr = self.glsl_copied_storage_structure_arm(
+                expr.true_expr, true_expr
+            )
+            false_expr = self.glsl_copied_storage_structure_arm(
+                expr.false_expr, false_expr
+            )
             selection = self.generate_glsl_float_selection(
                 expr, condition, true_expr, false_expr
             )
@@ -38017,6 +38180,88 @@ complex64_t crossgl_complex64_mod_assign(
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
+
+    def glsl_expression_reads_storage_buffer(self, expression):
+        """True when ``expression`` names a value stored in a storage buffer.
+
+        Follows member and element selection, and copy construction of a
+        structure from a value of the same structure type, back to its root:
+        a structured buffer load, an element of a storage pointer or buffer
+        root, or the pointee of a storage pointer.
+        """
+        aliases = self.glsl_storage_pointer_aliases()
+        node = expression
+        while True:
+            if isinstance(node, FunctionCallNode):
+                arguments = list(getattr(node, "arguments", None) or [])
+                name = self.function_call_name(node)
+                if not isinstance(name, str) or name in self.function_return_types:
+                    return False
+                if name == "buffer_load":
+                    return len(arguments) == 2
+                if len(arguments) != 1 or self.glsl_struct_node(name) is None:
+                    return False
+                argument_type = self.glsl_source_expression_type(arguments[0])
+                if argument_type is None or self.map_type(
+                    argument_type
+                ) != self.map_type(name):
+                    return False
+                node = arguments[0]
+                continue
+            if isinstance(node, MemberAccessNode):
+                node = node.object
+                continue
+            if isinstance(node, PointerAccessNode):
+                return (
+                    self.glsl_storage_pointer_binding(node.pointer_expr, aliases)
+                    is not None
+                )
+            if isinstance(node, ArrayAccessNode):
+                if self.glsl_storage_pointer_binding(node.array, aliases) is not None:
+                    return True
+                node = node.array
+                continue
+            if isinstance(node, UnaryOpNode) and self.map_operator(node.op) == "*":
+                return (
+                    self.glsl_storage_pointer_binding(node.operand, aliases) is not None
+                )
+            return False
+
+    def glsl_copied_storage_structure_arm(self, arm, rendered):
+        """Copy a structure read from a storage buffer before ``?:`` selects it.
+
+        glslang 12 stores a structure loaded from a storage buffer straight
+        into the selection's function-scope result variable. The loaded value
+        has the buffer's explicitly laid out structure type, so the store mixes
+        two structure types and spirv-val rejects the module. A by-value helper
+        call makes glslang copy the value member-wise into a function-scope
+        parameter first; the arm is still evaluated only when it is selected.
+        """
+        if self.glsl_generating_global_initializer:
+            return rendered
+        source_type = self.glsl_source_expression_type(arm)
+        if source_type is None or self.glsl_struct_node(source_type) is None:
+            return rendered
+        if not self.glsl_expression_reads_storage_buffer(arm):
+            return rendered
+        mapped = self.map_type(source_type)
+        name = self.glsl_storage_structure_copy_helper_names.get(mapped)
+        if name is None:
+            used_names = self.glsl_module_used_identifier_names | getattr(
+                self, "glsl_numeric_helper_reserved_names", set()
+            )
+            name = self.glsl_unique_identifier(f"crossgl_copy_{mapped}", used_names)
+            self.glsl_module_used_identifier_names.add(name)
+            self.glsl_storage_structure_copy_helper_names[mapped] = name
+        return f"{name}({rendered})"
+
+    def generate_glsl_storage_structure_copy_helpers(self):
+        return "".join(
+            f"{mapped} {name}({mapped} value) {{\n    return value;\n}}\n\n"
+            for mapped, name in sorted(
+                self.glsl_storage_structure_copy_helper_names.items()
+            )
+        )
 
     def glsl_signed_remainder_type(self, left_type, right_type):
         common = self.glsl_common_arithmetic_type(left_type, right_type, "%")

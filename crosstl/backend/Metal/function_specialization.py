@@ -30,6 +30,20 @@ def _metal_declared_type_and_name(declaration: str) -> tuple[str, str] | None:
     cleaned = cleaned.rstrip(";").strip()
     if not cleaned or cleaned == "void":
         return None
+    # A reference to an array, `thread T (&vals)[N]`, binds the caller's array
+    # itself. Its subscripts and template deduction match the array declarator
+    # `thread T vals[N]`, so record the element type with the extents.
+    reference = re.fullmatch(
+        r"(?P<type>[^()\[\]]+?)\s*\(\s*&\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\)"
+        r"\s*(?P<extents>(?:\[[^\[\]]*\]\s*)+)",
+        cleaned,
+    )
+    if reference is not None:
+        extents = re.sub(r"\s+", "", reference.group("extents"))
+        return (
+            _normalize_metal_type_text(f"{reference.group('type')}{extents}"),
+            reference.group("name"),
+        )
     name_match = re.search(
         r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\]\s*)*$",
         cleaned,

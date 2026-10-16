@@ -363,7 +363,7 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .private_vector_views import lower_private_vector_views
-from .reference_aliases import lower_reference_aliases
+from .reference_aliases import lower_reference_aliases, references_provably_disjoint
 from .resource_aggregates import lower_resource_aggregates
 from .resource_arrays import (
     collect_resource_array_size_hints,
@@ -394,6 +394,11 @@ from .subgroup_control_flow import (
 from .uniform_returns import UniformReturnAnalysis
 from .union_layout import UnionLayoutCollector
 from .workgroup_access_contracts import parse_workgroup_access_assertions
+
+# Specialization contract for a workgroup pointer parameter bound to ``nullptr``.
+# ``nullptr`` cannot name a groupshared array and real backings always have a
+# positive extent, so the pair cannot collide with a concrete contract.
+HLSL_NULL_WORKGROUP_POINTER_CONTRACT = ("nullptr", 0)
 
 
 class DirectXUnresolvedSourceTypeError(ValueError):
@@ -3178,19 +3183,38 @@ class HLSLCodeGen:
             self.hlsl_narrow_pointer_argument_layouts = None
             return self._generate_program(ast, target_stage)
         widened = frozenset()
+        hypotheses = set()
+        attempts = 0
         try:
-            for _attempt in range(self.HLSL_NARROW_POINTER_LAYOUT_PASS_LIMIT):
+            while attempts < self.HLSL_NARROW_POINTER_LAYOUT_PASS_LIMIT + len(
+                hypotheses
+            ):
+                attempts += 1
                 self.hlsl_widened_narrow_pointer_parameters = widened
                 self.hlsl_narrow_pointer_argument_layouts = {}
                 try:
                     code = self._generate_program(deepcopy(ast), target_stage)
-                except Exception:
+                except Exception as error:
                     # An incomplete pass can still prove widened callers for
                     # helpers emitted before the failure. Retry only when that
                     # adds information; otherwise keep the original error.
                     solved = self.solve_hlsl_narrow_pointer_parameter_layouts(
                         self.hlsl_narrow_pointer_argument_layouts
                     )
+                    origin = getattr(error, "hlsl_narrow_storage_origin", None)
+                    if (
+                        origin is not None
+                        and origin not in widened
+                        and origin not in hypotheses
+                    ):
+                        # Helpers precede their callers, so a store through a
+                        # helper's default packed view can stop the pass before
+                        # any call site is recorded. Assume the widened layout
+                        # once: output still requires a complete pass whose
+                        # recorded call sites prove every assumed layout.
+                        hypotheses.add(origin)
+                        widened = widened | solved | {origin}
+                        continue
                     if solved <= widened:
                         raise
                     widened = widened | solved
@@ -12107,6 +12131,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     else "read_write"
                 )
                 element_type = self.hlsl_workgroup_pointer_element_type(p)
+                if (root, extent) == HLSL_NULL_WORKGROUP_POINTER_CONTRACT:
+                    self.current_hlsl_resource_pointer_aliases[p.name] = {
+                        **self.hlsl_null_workgroup_pointer_binding(
+                            element_type, offset=base_name
+                        ),
+                        "access": access,
+                        "is_pointer_alias": True,
+                    }
+                    continue
                 self.current_hlsl_resource_pointer_aliases[p.name] = {
                     "kind": "workgroup-pointer",
                     "root": root,
@@ -20198,28 +20231,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if parameter_name is None:
             return None
 
-        binding = self.hlsl_resource_pointer_binding(argument)
-        if binding is None or binding.get("kind") != "workgroup-pointer":
-            raise self.hlsl_workgroup_pointer_error(
-                "DirectX workgroup pointer argument for "
-                f"'{function_name}.{parameter_name}' has no concrete shared-array "
-                "backing object",
-                function_name=function_name,
-                parameter_name=parameter_name,
-                reason="call-backing-unresolved",
-                node=argument,
-            )
-        extent = binding.get("array_size")
-        if not isinstance(extent, int) or extent <= 0:
-            raise self.hlsl_workgroup_pointer_error(
-                "DirectX workgroup pointer argument for "
-                f"'{function_name}.{parameter_name}' has no concrete shared-array "
-                "extent",
-                function_name=function_name,
-                parameter_name=parameter_name,
-                reason="missing-concrete-size",
-                node=argument,
-            )
         parameters = self.function_hlsl_workgroup_pointer_parameters.get(
             function_name, []
         )
@@ -20232,6 +20243,39 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if parameter is not None
             else None
         )
+        binding = self.hlsl_resource_pointer_binding(argument)
+        if binding is None and self.hlsl_null_pointer_expression(argument):
+            binding = self.hlsl_null_workgroup_pointer_binding(expected_type)
+        if binding is None or binding.get("kind") != "workgroup-pointer":
+            raise self.hlsl_workgroup_pointer_error(
+                "DirectX workgroup pointer argument for "
+                f"'{function_name}.{parameter_name}' has no concrete shared-array "
+                "backing object",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                reason="call-backing-unresolved",
+                node=argument,
+            )
+        if binding.get("root_kind") == "null":
+            # Null contracts carry no storage; the callee specialization was
+            # proven never to observe the parameter, so its offset slot is inert.
+            return {
+                **self.hlsl_null_workgroup_pointer_binding(
+                    binding.get("element_type") or expected_type
+                ),
+                "offset": "0",
+            }
+        extent = binding.get("array_size")
+        if not isinstance(extent, int) or extent <= 0:
+            raise self.hlsl_workgroup_pointer_error(
+                "DirectX workgroup pointer argument for "
+                f"'{function_name}.{parameter_name}' has no concrete shared-array "
+                "extent",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                reason="missing-concrete-size",
+                node=argument,
+            )
         if expected_type and binding.get("element_type") != expected_type:
             raise self.hlsl_workgroup_pointer_error(
                 "DirectX workgroup pointer argument for "
@@ -20874,6 +20918,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(expression, (IdentifierNode, VariableNode)):
             return str(getattr(expression, "name", "")).strip() == "nullptr"
         return False
+
+    @staticmethod
+    def hlsl_null_workgroup_pointer_binding(element_type, *, offset="0"):
+        """Binding for a workgroup pointer that is statically ``nullptr``.
+
+        The parameter keeps its integer offset slot so every specialization has
+        the same call shape, but no groupshared array backs it: analysis rejects
+        any reachable observation and emission refuses to index it.
+        """
+
+        root, extent = HLSL_NULL_WORKGROUP_POINTER_CONTRACT
+        return {
+            "kind": "workgroup-pointer",
+            "root": root,
+            "root_kind": "null",
+            "offset": offset,
+            "array_size": extent,
+            "element_type": element_type,
+            "source_element_type": element_type,
+            "resource_type": "groupshared",
+            "access": "read_write",
+            "selected_null": True,
+        }
 
     def hlsl_resource_pointer_binding(self, expression):
         if expression is None:
@@ -22458,6 +22525,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         binding = self.hlsl_resource_pointer_binding(pointer_expression)
         if binding is None:
             return None
+        if binding.get("root_kind") == "null":
+            self.hlsl_workgroup_pointer_null_observation_error(
+                function_name=self.current_function_name,
+                parameter_name=self.expression_name(pointer_expression),
+                node=pointer_expression,
+            )
         binding_access = binding.get("access")
         if require_write and not self.hlsl_resource_pointer_access_satisfies(
             binding_access, "write"
@@ -22489,7 +22562,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         reinterpretation = binding.get("pointer_reinterpretation")
         if require_write and reinterpretation is not None:
-            raise PointerReinterpretationError(
+            error = PointerReinterpretationError(
                 "DirectX cannot preserve writes through a reinterpreted typed "
                 "storage-buffer view",
                 source_type=reinterpretation["source_layout"].name,
@@ -22500,6 +22573,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="write-requires-byte-address-storage",
                 source_location=getattr(pointer_expression, "source_location", None),
             )
+            # A helper parameter's packed view is only its default layout; the
+            # narrow-layout passes may still prove every caller passes widened
+            # storage, which makes this write an element store.
+            error.hlsl_narrow_storage_origin = binding.get("narrow_storage_origin")
+            raise error
 
         resource_name = self.hlsl_resource_type_name(binding.get("resource_type"))
         if binding.get("kind") != "workgroup-pointer" and resource_name not in {
@@ -38586,6 +38664,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         ):
                             continue
 
+                        if binding.get("root_kind") == "null":
+                            # A null contract has no backing storage: the callee
+                            # must not observe it on any reachable path.
+                            if (
+                                callee_observed
+                                or callee_range is not None
+                                or callee_unprovable
+                            ):
+                                self.hlsl_workgroup_pointer_null_observation_error(
+                                    function_name=callee_name,
+                                    parameter_name=parameter_name,
+                                    node=call["node"],
+                                )
+                            continue
+
                         composed_range = None
                         if callee_range is not None:
                             offset_range = self.hlsl_private_pointer_interval(
@@ -38948,7 +39041,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         callee_variant = []
                         for parameter in pointer_parameters[call["callee"]]:
                             binding = call["bindings"][parameter.name]
-                            if binding.get("root_kind") == "concrete":
+                            if binding.get("root_kind") == "null":
+                                root, extent = HLSL_NULL_WORKGROUP_POINTER_CONTRACT
+                            elif binding.get("root_kind") == "concrete":
                                 root = binding.get("root")
                                 extent = binding.get("array_size")
                             elif binding.get("root_kind") == "parameter":
@@ -38970,6 +39065,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                                 root = None
                                 extent = None
                             if (
+                                root,
+                                extent,
+                            ) != HLSL_NULL_WORKGROUP_POINTER_CONTRACT and (
                                 not isinstance(root, str)
                                 or not root
                                 or not isinstance(extent, int)
@@ -39244,6 +39342,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "element_type": (
                         declared_type or initial_binding.get("element_type")
                     ),
+                    # Reassignments in the declaring straight-line scope keep
+                    # one statically known offset per iteration of any
+                    # enclosing loop; only nested control flow is path-dependent.
+                    "declaration_scope": id(aliases),
                 }
                 return
             if isinstance(value, AssignmentNode):
@@ -39282,7 +39384,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 operator = self.map_operator(
                     getattr(value, "operator", getattr(value, "op", "="))
                 )
-                if control_depth > 0:
+                if control_depth > 0 and current.get("declaration_scope") != id(
+                    aliases
+                ):
                     raise self.hlsl_workgroup_pointer_error(
                         "DirectX cannot preserve workgroup pointer reassignment "
                         f"for '{target_name}' across nested control flow",
@@ -39339,7 +39443,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         reason="element-type-mismatch",
                         node=value,
                     )
-                aliases[target_name] = replacement
+                aliases[target_name] = {
+                    **replacement,
+                    "declaration_scope": current.get("declaration_scope"),
+                }
                 return
             if isinstance(value, FunctionCallNode):
                 arguments = list(
@@ -39356,9 +39463,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     ].items():
                         pointer_argument_indices.add(index)
                         argument = arguments[index] if index < len(arguments) else None
+                        parameter = next(
+                            parameter
+                            for parameter in pointer_parameters[callee_name]
+                            if parameter.name == parameter_name
+                        )
+                        expected_type = self.hlsl_workgroup_pointer_element_type(
+                            parameter
+                        )
                         binding = self.hlsl_static_workgroup_pointer_binding(
                             argument, aliases, constants
                         )
+                        if binding is None and self.hlsl_null_pointer_expression(
+                            argument
+                        ):
+                            binding = self.hlsl_null_workgroup_pointer_binding(
+                                expected_type, offset=0
+                            )
                         if binding is None:
                             raise self.hlsl_workgroup_pointer_error(
                                 "DirectX workgroup pointer argument for "
@@ -39369,14 +39490,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                                 reason="call-backing-unresolved",
                                 node=argument or value,
                             )
-                        parameter = next(
-                            parameter
-                            for parameter in pointer_parameters[callee_name]
-                            if parameter.name == parameter_name
-                        )
-                        expected_type = self.hlsl_workgroup_pointer_element_type(
-                            parameter
-                        )
                         if binding.get("element_type") != expected_type:
                             raise self.hlsl_workgroup_pointer_error(
                                 "DirectX workgroup pointer argument for "
@@ -42939,11 +43052,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             name = self.expression_name(owner)
             if not name:
                 continue
-            for previous_name, previous_byte, previous_writable in references:
+            for (
+                previous_arg,
+                previous_name,
+                previous_byte,
+                previous_writable,
+            ) in references:
                 if (
                     name == previous_name
                     and (byte or previous_byte)
                     and (writable or previous_writable)
+                    and not references_provably_disjoint(
+                        previous_arg,
+                        arg,
+                        lambda value: self.literal_int_value(value, {}),
+                    )
                 ):
                     raise DirectXContextualConversionError(
                         "DirectX cannot preserve potentially overlapping byte "
@@ -42954,7 +43077,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         reason="byte-reference-alias-unsupported",
                         source_location=getattr(call_node, "source_location", None),
                     )
-            references.append((name, byte, writable))
+            references.append((arg, name, byte, writable))
 
     def generate_call_arguments_from_rendered(
         self,
