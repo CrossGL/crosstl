@@ -4990,6 +4990,24 @@ class HLSLCodeGen:
                 records.append((operation, node))
         return records
 
+    SOFTWARE_SUBGROUP_SYSTEM_INPUTS = frozenset(
+        {
+            "gl_SubgroupInvocationID",
+            "gl_SubgroupSize",
+            "gl_SubgroupID",
+            "gl_NumSubgroups",
+        }
+    )
+
+    def hlsl_software_subgroup_uses_system_inputs(self, root):
+        """Whether ``root`` reads a subgroup lane, ID, size or count input."""
+        inputs = self.SOFTWARE_SUBGROUP_SYSTEM_INPUTS
+        return any(
+            self.semantic_from_node(node) in inputs
+            or (isinstance(node, IdentifierNode) and node.name in inputs)
+            for node in self.walk_ast(root)
+        )
+
     def hlsl_software_subgroup_stage_entries(self, ast, target_stage=None):
         entries = []
         seen = set()
@@ -6703,7 +6721,14 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_workgroup_size = concrete_workgroup_size
         self.hlsl_software_subgroup_invocation_count = invocation_count
 
-        if self.relative_wave_shuffle_out_of_range != "self":
+        all_records = self.hlsl_software_subgroup_operation_records(ast)
+        # Subgroup system inputs without collective operations need only the
+        # logical split of SV_GroupIndex into subgroup and lane IDs. That split
+        # is exact under any control flow, so no shuffle policy applies.
+        system_inputs_only = (
+            not all_records and self.hlsl_software_subgroup_uses_system_inputs(ast)
+        )
+        if self.relative_wave_shuffle_out_of_range != "self" and not system_inputs_only:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software relative shuffles require the explicit "
                 "calling-lane out-of-range policy",
@@ -6711,7 +6736,8 @@ class HLSLCodeGen:
                 reason="out-of-range-policy-unproven",
                 source_location=getattr(entry_function, "source_location", None),
             )
-        self.prepare_hlsl_software_subgroup_masked_if_plans(entry_function)
+        if not system_inputs_only:
+            self.prepare_hlsl_software_subgroup_masked_if_plans(entry_function)
 
         wave_attributes = [
             attribute
@@ -6734,7 +6760,8 @@ class HLSLCodeGen:
                     source_location=getattr(attribute, "source_location", None),
                 )
 
-        all_records = self.hlsl_software_subgroup_operation_records(ast)
+        if system_inputs_only:
+            return
         if not all_records:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup lowering was requested but no subgroup "

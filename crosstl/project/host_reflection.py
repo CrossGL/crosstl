@@ -18,7 +18,10 @@ from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
-from crosstl.project.storage_record_layout import storage_record_layout
+from crosstl.project.storage_record_layout import (
+    MAX_STORAGE_RECORD_ARRAY_LENGTH,
+    storage_record_layout,
+)
 from crosstl.project.uniform_layout import std140_block_layout
 from crosstl.translator.codegen.stage_utils import compute_local_size
 from crosstl.translator.dispatch_region_contract import parse_dispatch_region_header
@@ -763,7 +766,7 @@ def _reflect_metal_source(
 
 def _metal_buffer_layout(
     resource: Mapping[str, Any],
-    struct_declarations: Mapping[str, list[tuple[str, str]]],
+    struct_declarations: Mapping[str, list[tuple[str, str, int | None]]],
 ) -> dict[str, Any] | None:
     if resource["kind"] not in {"buffer", "constant-buffer"}:
         return None
@@ -788,13 +791,21 @@ def _metal_buffer_layout(
         type_name,
     )
     if scalar is None:
-        return (
-            _struct_buffer_layout(
+        if pointer:
+            return _struct_buffer_layout(
                 type_name, struct_declarations, storage_layout="metal-buffer"
             )
-            if pointer
-            else None
+        if "constant" not in qualifiers:
+            return None
+        # ``constant Record&`` reads the first record of its buffer binding,
+        # so the binding must hold at least one complete record.
+        layout = _struct_buffer_layout(
+            type_name, struct_declarations, storage_layout="metal-buffer"
         )
+        if layout is None or layout.get("elementType") != "record":
+            return None
+        layout["minimumBindingSizeBytes"] = layout["elementStrideBytes"]
+        return layout
     base, width_text = scalar.groups()
     base = {
         "long": "int64_t",
@@ -1375,7 +1386,82 @@ def _hlsl_value_block_layout(
     )
 
 
-def _scalar_struct_declarations(source: str) -> dict[str, list[tuple[str, str]]]:
+STRUCT_ARRAY_EXTENT_TOKEN_RE = re.compile(
+    r"\s*(?:(?P<literal>[0-9][0-9A-Za-z']*)|(?P<op>[-+*()]))"
+)
+
+
+def _struct_array_extent(text: str) -> int | None:
+    """Evaluate a literal fixed array extent such as ``4`` or ``(2 + 2)``.
+
+    Generated declarations spell template-dependent extents as literal
+    arithmetic. Anything else, including named constants, is left unproven.
+    """
+    tokens = []
+    position = 0
+    while position < len(text):
+        match = STRUCT_ARRAY_EXTENT_TOKEN_RE.match(text, position)
+        if match is None or match.end() == position:
+            if text[position:].strip():
+                return None
+            break
+        position = match.end()
+        if match.group("literal") is not None:
+            try:
+                tokens.append(parse_c_family_integral_literal(match.group("literal")))
+            except CFamilyIntegralLiteralError:
+                return None
+        else:
+            tokens.append(match.group("op"))
+    if not tokens or len(tokens) > 32:
+        return None
+    index = 0
+
+    def factor() -> int:
+        nonlocal index
+        if index >= len(tokens):
+            raise ValueError("incomplete extent")
+        token = tokens[index]
+        index += 1
+        if isinstance(token, int):
+            return token
+        if token != "(":
+            raise ValueError("unexpected extent token")
+        value = expression()
+        if index >= len(tokens) or tokens[index] != ")":
+            raise ValueError("unbalanced extent")
+        index += 1
+        return value
+
+    def term() -> int:
+        nonlocal index
+        value = factor()
+        while index < len(tokens) and tokens[index] == "*":
+            index += 1
+            value *= factor()
+        return value
+
+    def expression() -> int:
+        nonlocal index
+        value = term()
+        while index < len(tokens) and tokens[index] in {"+", "-"}:
+            operator = tokens[index]
+            index += 1
+            value = value + term() if operator == "+" else value - term()
+        return value
+
+    try:
+        value = expression()
+    except ValueError:
+        return None
+    if index != len(tokens) or not 1 <= value <= MAX_STORAGE_RECORD_ARRAY_LENGTH:
+        return None
+    return value
+
+
+def _scalar_struct_declarations(
+    source: str,
+) -> dict[str, list[tuple[str, str, int | None]]]:
     declarations = {}
     seen = set()
     for match in re.finditer(r"\bstruct\s+([A-Za-z_]\w*)\s*\{", source):
@@ -1391,16 +1477,23 @@ def _scalar_struct_declarations(source: str) -> dict[str, list[tuple[str, str]]]
             continue
         members = []
         position = 0
-        for member in re.finditer(r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*;", body):
+        for member in re.finditer(
+            r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?:\[([^\[\]{};]*)\])?\s*;", body
+        ):
             if member.start() != position:
                 break
-            members.append((member.group(1), member.group(2)))
+            extent = None
+            if member.group(3) is not None:
+                extent = _struct_array_extent(member.group(3))
+                if extent is None:
+                    break
+            members.append((member.group(1), member.group(2), extent))
             position = member.end()
         if body[position:].strip() or not 1 <= len(members) <= 64:
             continue
         types = {member[0] for member in members}
         names = {member[1] for member in members}
-        if not types <= SCALAR_PHYSICAL_TYPES.keys():
+        if not types <= SCALAR_PHYSICAL_TYPES.keys() | {"bool"}:
             continue
         if len(names) != len(members):
             continue
@@ -1410,7 +1503,7 @@ def _scalar_struct_declarations(source: str) -> dict[str, list[tuple[str, str]]]
 
 def _struct_buffer_layout(
     type_name: str,
-    declarations: Mapping[str, list[tuple[str, str]]],
+    declarations: Mapping[str, list[tuple[str, str, int | None]]],
     *,
     storage_layout: str,
     member_name: str | None = None,
@@ -1418,7 +1511,9 @@ def _struct_buffer_layout(
     members = declarations.get(type_name)
     if members is None:
         return None
-    if len({base for base, _ in members}) != 1:
+    if len({base for base, _, _ in members}) != 1 or any(
+        base == "bool" or extent is not None for base, _, extent in members
+    ):
         try:
             layout = storage_record_layout(
                 type_name, members, storage_layout=storage_layout
@@ -1456,7 +1551,7 @@ def _struct_buffer_layout(
         "componentCount": len(members),
         "structMembers": [
             {"name": name, "physicalType": base, "offsetBytes": index * scalar_size}
-            for index, (base, name) in enumerate(members)
+            for index, (base, name, _) in enumerate(members)
         ],
     }
     if member_name is not None:

@@ -17,25 +17,51 @@ _SCALARS = {
     "int64_t": ("int64", 8, "q"),
     "uint64_t": ("uint64", 8, "Q"),
 }
-_STORAGE_LAYOUTS = {"metal-buffer", "hlsl-structured-buffer", "std430"}
+# Metal stores ``bool`` in one byte. HLSL structured buffers and std430 blocks
+# store it in one 32-bit word, and any nonzero word reads as true.
+_BOOLEAN_SIZES = {"metal-buffer": 1, "hlsl-structured-buffer": 4, "std430": 4}
+_STORAGE_LAYOUTS = frozenset(_BOOLEAN_SIZES)
+MAX_STORAGE_RECORD_ARRAY_LENGTH = 4096
+
+
+def _field_declaration(declaration: Any) -> tuple[Any, Any, int | None]:
+    if not isinstance(declaration, (tuple, list)) or len(declaration) not in (2, 3):
+        raise ValueError(
+            "Storage record fields require (type, name) or (type, name, length)."
+        )
+    physical_type, name = declaration[0], declaration[1]
+    length = declaration[2] if len(declaration) == 3 else None
+    if length is not None and (
+        type(length) is not int
+        or not 1 <= length <= MAX_STORAGE_RECORD_ARRAY_LENGTH
+        or physical_type == "bool"
+    ):
+        raise ValueError(
+            "Storage record arrays require 1-4096 32/64-bit scalar elements."
+        )
+    return physical_type, name, length
 
 
 def storage_record_layout(
     type_name: str,
-    declarations: Sequence[tuple[str, str]],
+    declarations: Sequence[tuple[str, str] | tuple[str, str, int | None]],
     *,
     storage_layout: str,
 ) -> dict[str, Any]:
     """Describe target record arrays, not uniform-block or vector packing.
 
-    These scalar types have natural field alignment in all three supported
-    storage layouts. Record strides include trailing alignment padding.
+    Fields are 32/64-bit scalars, fixed-length arrays of them, or ``bool``.
+    These have natural alignment in all three supported storage layouts, and
+    array elements are tightly strided. Only ``bool`` differs by layout: one
+    byte in Metal buffers, one 32-bit word in HLSL structured buffers and
+    std430 blocks. Record strides include trailing alignment padding.
     Transport words preserve physical bits; they are not record member types.
     """
     if not isinstance(type_name, str) or not _IDENTIFIER.fullmatch(type_name):
         raise ValueError("Storage record type must be an identifier.")
     if (
         type_name in _SCALARS
+        or type_name == "bool"
         or not isinstance(storage_layout, str)
         or storage_layout not in _STORAGE_LAYOUTS
     ):
@@ -45,10 +71,15 @@ def storage_record_layout(
     members = []
     names = set()
     offset, alignment = 0, 1
-    for physical_type, name in declarations:
-        if not isinstance(physical_type, str) or physical_type not in _SCALARS:
+    for declaration in declarations:
+        physical_type, name, length = _field_declaration(declaration)
+        if physical_type == "bool":
+            dtype, size = "bool", _BOOLEAN_SIZES[storage_layout]
+        elif isinstance(physical_type, str) and physical_type in _SCALARS:
+            dtype, size, _ = _SCALARS[physical_type]
+        else:
             raise ValueError(
-                "Storage record fields require supported 32/64-bit scalars."
+                "Storage record fields require supported 32/64-bit scalars or bool."
             )
         if (
             not isinstance(name, str)
@@ -57,19 +88,20 @@ def storage_record_layout(
         ):
             raise ValueError("Storage record field names must be unique identifiers.")
         names.add(name)
-        dtype, size, _ = _SCALARS[physical_type]
         offset = (offset + size - 1) // size * size
-        members.append(
-            {
-                "name": name,
-                "physicalType": physical_type,
-                "elementType": dtype,
-                "offsetBytes": offset,
-                "sizeBytes": size,
-                "alignmentBytes": size,
-            }
-        )
-        offset += size
+        member = {
+            "name": name,
+            "physicalType": physical_type,
+            "elementType": dtype,
+            "offsetBytes": offset,
+            "sizeBytes": size * (length or 1),
+            "alignmentBytes": size,
+        }
+        if length is not None:
+            member["arrayLength"] = length
+            member["arrayStrideBytes"] = size
+        members.append(member)
+        offset += member["sizeBytes"]
         alignment = max(alignment, size)
     stride = (offset + alignment - 1) // alignment * alignment
     return {
@@ -95,7 +127,14 @@ def validate_storage_record_layout(layout: Mapping[str, Any]) -> int:
         raise ValueError("Storage record members must be a list of field records.")
     expected = storage_record_layout(
         layout.get("physicalType"),
-        [(member.get("physicalType"), member.get("name")) for member in members],
+        [
+            (
+                member.get("physicalType"),
+                member.get("name"),
+                member.get("arrayLength"),
+            )
+            for member in members
+        ],
         storage_layout=layout.get("storageLayout"),
     )
     if "memberName" in layout:
@@ -117,14 +156,37 @@ def validate_storage_record_layout(layout: Mapping[str, Any]) -> int:
     return expected["elementStrideBytes"]
 
 
+def _pack_field(payload: bytearray, offset: int, member: Mapping[str, Any], value):
+    dtype = member["elementType"]
+    if dtype == "bool":
+        if type(value) is not bool:
+            raise ValueError(f"Storage field {member['name']} requires a bool value.")
+        code = "B" if member["alignmentBytes"] == 1 else "I"
+        struct.pack_into("<" + code, payload, offset, int(value))
+        return
+    _, _, code = _SCALARS[member["physicalType"]]
+    if (dtype == "float32" and type(value) not in (int, float)) or (
+        dtype != "float32" and type(value) is not int
+    ):
+        raise ValueError(f"Storage field {member['name']} requires a {dtype} value.")
+    try:
+        struct.pack_into("<" + code, payload, offset, value)
+    except (OverflowError, struct.error) as exc:
+        raise ValueError(
+            f"Storage field {member['name']} is outside {dtype} storage."
+        ) from exc
+
+
 def pack_storage_records(
     layout: Mapping[str, Any], records: Sequence[Mapping[str, Any]]
 ) -> list[int]:
     """Pack named records into little-endian uint32 words with zeroed padding.
 
-    Use the words with dtype='uint32' and shape=(record_count, stride // 4).
-    Callers needing particular floating-point bit patterns may supply physical
-    words directly through the same validated reflected layout.
+    Array fields take a list or tuple with exactly ``arrayLength`` values and
+    ``bool`` fields take Python booleans, stored as 0 or 1 in their reflected
+    width. Use the words with dtype='uint32' and shape=(record_count,
+    stride // 4). Callers needing particular floating-point bit patterns may
+    supply physical words directly through the same validated reflected layout.
     """
     stride = validate_storage_record_layout(layout)
     if not isinstance(records, Sequence) or isinstance(
@@ -143,19 +205,20 @@ def pack_storage_records(
             )
         for member in members:
             value = record[member["name"]]
-            dtype, _, code = _SCALARS[member["physicalType"]]
-            if (dtype == "float32" and type(value) not in (int, float)) or (
-                dtype != "float32" and type(value) is not int
-            ):
+            offset = index * stride + member["offsetBytes"]
+            length = member.get("arrayLength")
+            if length is None:
+                _pack_field(payload, offset, member, value)
+                continue
+            if not isinstance(value, (list, tuple)) or len(value) != length:
                 raise ValueError(
-                    f"Storage field {member['name']} requires a {dtype} value."
+                    f"Storage field {member['name']} requires {length} values."
                 )
-            try:
-                struct.pack_into(
-                    "<" + code, payload, index * stride + member["offsetBytes"], value
+            for position, element in enumerate(value):
+                _pack_field(
+                    payload,
+                    offset + position * member["arrayStrideBytes"],
+                    member,
+                    element,
                 )
-            except (OverflowError, struct.error) as exc:
-                raise ValueError(
-                    f"Storage field {member['name']} is outside {dtype} storage."
-                ) from exc
     return list(struct.unpack("<" + "I" * (len(payload) // 4), payload))

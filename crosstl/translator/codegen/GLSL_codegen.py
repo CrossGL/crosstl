@@ -4408,6 +4408,24 @@ class GLSLCodeGen:
                 records.append((operation, node))
         return records
 
+    SOFTWARE_SUBGROUP_SYSTEM_INPUTS = frozenset(
+        {
+            "gl_SubgroupInvocationID",
+            "gl_SubgroupSize",
+            "gl_SubgroupID",
+            "gl_NumSubgroups",
+        }
+    )
+
+    def glsl_software_subgroup_uses_system_inputs(self, root):
+        """Whether ``root`` reads a subgroup lane, ID, size or count input."""
+        inputs = self.SOFTWARE_SUBGROUP_SYSTEM_INPUTS
+        return any(
+            self.semantic_from_node(node) in inputs
+            or (isinstance(node, IdentifierNode) and node.name in inputs)
+            for node in self.walk_ast(root)
+        )
+
     def glsl_software_subgroup_stage_entries(self, ast, target_stage=None):
         entries = []
         seen = set()
@@ -5691,6 +5709,11 @@ class GLSLCodeGen:
             ast,
             discover_zero_trip=True,
         )
+        if not all_records and self.glsl_software_subgroup_uses_system_inputs(ast):
+            # Subgroup system inputs without collective operations need only
+            # the logical split of gl_LocalInvocationIndex into subgroup and
+            # lane IDs, which is exact under any control flow.
+            return
         if not all_records:
             raise self.glsl_software_subgroup_error(
                 "OpenGL software subgroup lowering was requested but no subgroup "

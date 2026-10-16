@@ -330,16 +330,28 @@ def test_mixed_entry_policy_executes(tmp_path):
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize(
-    "semantic",
+    "semantic,canonical,lowered",
     (
-        "thread_index_in_simdgroup",
-        "threads_per_simdgroup",
-        "simdgroup_index_in_threadgroup",
-        "simdgroups_per_threadgroup",
+        (
+            "thread_index_in_simdgroup",
+            "gl_SubgroupInvocationID",
+            {"directx": "(groupIndex % 32u)", "opengl": "gl_LocalInvocationIndex"},
+        ),
+        ("threads_per_simdgroup", "gl_SubgroupSize", {"directx": "32u"}),
+        (
+            "simdgroup_index_in_threadgroup",
+            "gl_SubgroupID",
+            {"directx": "(groupIndex / 32u)", "opengl": "float(0u)"},
+        ),
+        (
+            "simdgroups_per_threadgroup",
+            "gl_NumSubgroups",
+            {"directx": "(32u / 32u)"},
+        ),
     ),
 )
-def test_subgroup_system_inputs_do_not_silently_use_hardware(
-    tmp_path, target, semantic
+def test_subgroup_system_inputs_use_logical_lanes_not_hardware(
+    tmp_path, target, semantic, canonical, lowered
 ):
     config = _config(tmp_path / "repo", target)
     source = SOURCE.replace(
@@ -349,7 +361,104 @@ def test_subgroup_system_inputs_do_not_silently_use_hardware(
     (config.root / "mixed.metal").write_text(source)
     config = replace(config, entry_points={"mixed.metal": ("pointwise",)})
     data = project.translate_project(config, format_output=False).to_json()
-    assert data["summary"]["failedCount"] == 1, data
+    assert data["summary"]["failedCount"] == 0, data["diagnostics"]
+    (artifact,) = data["artifacts"]
+    # Without collective operations, the inputs still select the logical
+    # 32-lane decomposition rather than the device's physical subgroups.
+    assert artifact["provenance"]["softwareSubgroupPolicy"] == {
+        "applicability": "when-used",
+        "requestedWidth": 32,
+        "effectiveWidth": 32,
+        "requirements": [f"input:{canonical}"],
+    }
+    text = (Path(data["project"]["root"]) / artifact["path"]).read_text()
+    for token in (
+        "WaveGetLane",
+        "gl_Subgroup",
+        "GL_KHR_shader_subgroup",
+        "__crossgl_physical_subgroup_id",
+        "groupshared",
+        "GroupMemoryBarrier",
+        "barrier()",
+    ):
+        assert token not in text
+    if target in lowered:
+        assert lowered[target] in text
+
+
+LANES_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+kernel void lanes(device uint* output [[buffer(0)]],
+                  uint linear [[thread_index_in_threadgroup]],
+                  uint group [[simdgroup_index_in_threadgroup]],
+                  uint lane [[thread_index_in_simdgroup]]) {
+    output[linear] = group * 32u + lane;
+}
+"""
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_subgroup_inputs_split_multi_subgroup_workgroups(tmp_path, target):
+    # MLX's depthwise convolution rebuilds its linear thread index this way,
+    # which is only exact when subgroups have 32 lanes.
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "lanes.metal").write_text(LANES_SOURCE, encoding="utf-8")
+    config = project.ProjectConfig(
+        root=root,
+        targets=(target,),
+        include_patterns=("*.metal",),
+        output_dir="out",
+        entry_points={"lanes.metal": ("lanes",)},
+        workgroup_size=(8, 8, 4),
+        # No relative-shuffle policy: no collective operation is present.
+        source_options={
+            "metal": {"target_options": {target: {"software_subgroup_width": 32}}}
+        },
+    )
+    data = project.translate_project(config, format_output=False).to_json()
+    assert data["summary"]["failedCount"] == 0, data["diagnostics"]
+    (artifact,) = data["artifacts"]
+    text = (Path(data["project"]["root"]) / artifact["path"]).read_text()
+    if target == "directx":
+        # The lane split reuses the entry's SV_GroupIndex parameter.
+        assert "uint linear_ : SV_GroupIndex" in text
+        index, width = "linear_", "32u"
+    else:
+        index, width = "gl_LocalInvocationIndex", "CROSSTL_SOFTWARE_SUBGROUP_WIDTH"
+    assert f"({index} / {width})" in text
+    assert f"({index} % {width})" in text
+    assert "WaveGetLane" not in text and "gl_Subgroup" not in text
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_software_subgroups_still_reject_kernels_without_subgroup_use(tmp_path, target):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "lanes.metal").write_text(
+        LANES_SOURCE.replace(
+            ",\n                  uint group [[simdgroup_index_in_threadgroup]],\n"
+            "                  uint lane [[thread_index_in_simdgroup]]",
+            "",
+        ).replace("group * 32u + lane", "linear"),
+        encoding="utf-8",
+    )
+    assert "simdgroup" not in (root / "lanes.metal").read_text()
+    options = {"software_subgroup_width": 32}
+    if target == "directx":
+        # Otherwise the missing shuffle policy is reported first.
+        options["relative_wave_shuffle_out_of_range"] = "self"
+    config = project.ProjectConfig(
+        root=root,
+        targets=(target,),
+        include_patterns=("*.metal",),
+        output_dir="out",
+        entry_points={"lanes.metal": ("lanes",)},
+        workgroup_size=(8, 8, 4),
+        source_options={"metal": {"target_options": {target: options}}},
+    )
+    data = project.translate_project(config, format_output=False).to_json()
+    assert data["summary"]["failedCount"] == 1
     assert any(
         d.get("details", {}).get("executionSpecialization", {}).get("reason")
         == "operation-set-empty"
