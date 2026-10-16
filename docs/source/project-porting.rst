@@ -788,6 +788,25 @@ upstream kernel, and the translation must reproduce it bit for bit. No backend
 needs an index-range precondition. This is a 72/17,832 increment; it does not
 run the upstream MLX test suite or redirect the MLX host runtime.
 
+``gated_delta_update_vjp.current-tree.translation.json`` pins all 72
+``gated_delta_vjp_seq`` entries of ``gated_delta_update_vjp.metal`` and their
+216 artifacts. Each entry replays every checkpoint segment's entry states into
+registers and walks it backward, adding the query, key, decay and beta
+gradients through ``mlx_atomic<float>``: Metal keeps ``atomic_float``,
+OpenGL uses a compare-and-swap loop on ``uint`` words and DirectX an
+``InterlockedCompareExchangeFloatBitwise`` loop, and both lower the four
+32-lane reductions to software subgroups. OpenGL needs one index-range
+precondition, bounding the complete offset of every atomic update. Each target
+executes 216 dispatches with MLX's grid: one step, three steps of two batches,
+and 2 * Ckpt + 1 steps across three checkpoint segments. All six gradients are
+checked against a float64 backward recurrence with a per-element bound on the
+kernel's binary32 rounding, including any summation order of the atomic
+contributions. Metal also runs the unchanged upstream kernel: it must meet the
+same bounds and match the translation bit for bit in the value and
+initial-state gradients, which do not depend on thread order. This is a
+72/17,832 increment; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

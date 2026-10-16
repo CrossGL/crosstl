@@ -52,11 +52,12 @@ Core and demo tests also remain part of the complete test suite.
 The longest current-tree kernel families run in the `mlx-current-native-parity`
 job rather than the MLX Metal project porting job: ternary and `binary_two`
 (group `elementwise`), scaled dot-product attention and its two-pass first pass
-(`attention`), and rope and gated delta (`sequence`). The job has one matrix leg
-per runner and group. Each leg repeats the porting job's toolchain setup and
-pinned kernel checkout, runs only its group's bounded steps, and uploads its
-results as `mlx-current-parity-<os>-<group>`. A workflow test checks that each
-group's step deadlines, plus 30 minutes for setup, fit within the leg's timeout.
+(`attention`), and rope, gated delta and its backward (`sequence`). The job has
+one matrix leg per runner and group. Each leg repeats the porting job's
+toolchain setup and pinned kernel checkout, runs only its group's bounded
+steps, and uploads its results as `mlx-current-parity-<os>-<group>`. A
+workflow test checks that each group's step deadlines, plus 30 minutes for
+setup, fit within the leg's timeout.
 
 Independent native regression batches, the portable host build, package
 translation and upstream test execution use explicit prerequisites, so an
@@ -993,6 +994,44 @@ float64 simulation of the kernel's own pointer arithmetic matches the
 reference, and 14 injected defects are rejected. No backend needs an
 index-range precondition. This covers 72/17,832 entries; it does not run the
 upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/gated_delta_update_vjp.current-tree.translation.json` pins all 72
+`gated_delta_vjp_seq` entries of `gated_delta_update_vjp.metal` and their 216
+artifacts: float32, bfloat16 and float16 storage, the six head layouts that
+`supported_gated_delta_shape()` accepts, and checkpoint intervals 1, 4, 8 and
+16, such as `seq_gated_delta_vjp_float16_t_128_128_16_64_4`. MLX's sequential
+backward host path always selects interval 1; the other intervals are
+instantiated in the metallib and replay their segments from sparser
+checkpoints. Each SIMD group walks one state row backward through every
+checkpoint segment, first replaying the segment's entry states into a
+`float seg[Ckpt][4]` register array. The query, key, decay and beta gradients
+are added to zero-filled buffers through `mlx_atomic<float>`: Metal keeps
+`atomic_fetch_add_explicit` on `atomic_float`, OpenGL lowers it to a
+compare-and-swap loop on `uint` words that hold the float bits, and DirectX to
+an `InterlockedCompareExchangeFloatBitwise` loop. OpenGL and DirectX lower the
+four 32-lane reductions to software subgroups. OpenGL needs one index-range
+precondition: the complete element offset `object + offset` of every atomic
+update must fit signed int range. Required CI executes every entry on Metal,
+Mesa EGL and Direct3D 12 WARP with MLX's `(32, Dv, B * Hv)` grid of
+`(32, 4, 1)` groups, 216 dispatches per target: one step, three steps of two
+batches, and 2 * Ckpt + 1 steps, three checkpoint segments with a partial last
+one. The checkpoint cache holds the exact forward states of a random initial
+state rounded to float, and the cotangents are random. All six gradients are
+checked element by element against a float64 backward recurrence with a bound
+on the kernel's binary32 rounding: each segment's replay error starts from its
+checkpoint, the cotangent state carries its error through `g (I - beta k k^T)`
+across all steps, and the atomic gradients allow any summation order of their
+128 to 512 contributions. Results must be a correct rounding of a value inside
+that bound; a binary32 evaluation in the kernel's own operation order uses
+under 10% of it in every case. Every dispatch pads each input with 16 NaNs and
+checks 16 guards per output and that every input is unchanged; the value and
+initial-state gradients start as guard words, so an unwritten element fails.
+Metal also runs the unchanged upstream kernel: it must meet the same bounds,
+and its value and initial-state gradients, which do not depend on thread order,
+must match the translation bit for bit. A float64 simulation of the kernel's
+own pointer arithmetic matches the reference, and 18 injected defects are
+rejected. This covers 72/17,832 entries; it does not run the upstream MLX test
+suite or redirect the MLX host runtime.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
@@ -2703,8 +2742,11 @@ by `DivMod::operator()` ([#2093](https://github.com/CrossGL/crosstl/issues/2093)
 This is separate from constructor bitcast typing and does not establish native
 execution of these complete files or full-tree parity.
 
-The current-pin gated-delta backward kernels still need OpenGL floating-point
-atomic lowering ([#1986](https://github.com/CrossGL/crosstl/issues/1986)). Struct
+OpenGL lowers the current-pin gated-delta backward kernels' `mlx_atomic<float>`
+additions to compare-and-swap loops on `uint` words, and the current-tree gate
+above executes all 72 sequential entries natively; general floating-point
+atomic support remains tracked by
+[#1986](https://github.com/CrossGL/crosstl/issues/1986). Struct
 selection now preserves anonymous type-parameter defaults and evaluates supported
 `enable_if` partial specializations ([#1985](https://github.com/CrossGL/crosstl/issues/1985)).
 The selected `seq_gated_delta_vjp_float_128_128_24_24_1` entry retains the floating
