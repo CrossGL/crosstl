@@ -945,6 +945,46 @@ bounding the advanced key and value pointers and their 64-bit sequence
 strides. This covers 82/17,832 entries; it does not run the upstream MLX test
 suite or redirect the MLX host runtime.
 
+`contracts/gated_delta_update.current-tree.translation.json` pins the 72
+sequential `gated_delta_seq` entries of `gated_delta_update.metal` and their
+432 artifacts: float32, bfloat16 and float16 storage, the six head layouts
+that `supported_gated_delta_shape()` accepts, and checkpoint intervals 1, 4, 8
+and 16. The host names keep the C++ type spellings, such as
+`seq_gated_delta_float16_t_128_128_16_64_1`. The 18 eight-step
+`gated_delta_fused_chunk` entries are recorded as pending: they hold their
+tiles in `simdgroup_float8x8` values addressed through `thread_elements()`,
+which no target translates yet, and required CI checks that each still fails
+with that diagnostic on every target. `gated_delta_update.cpp` clears function
+constant 200, `save_state`, for inference and sets it for the backward's
+sequential save pass, so each entry is pinned in both specializations, 144 per
+target. DirectX materializes the constant; Metal and OpenGL keep a function or
+specialization constant, so both specializations share one artifact. Each
+SIMD group updates one row of a head's 128 x 128 state, and OpenGL and DirectX
+lower its two reductions to 32-lane software subgroups. Required CI executes
+every specialization on Metal, Mesa EGL and Direct3D 12 WARP with MLX's
+`(32, Dv, B * Hv)` grid of `(32, 4, 1)` groups, 288 dispatches per target.
+Inference decodes one token and prefills eight tokens of two batches, the
+longest sequence MLX's inference sends to this kernel; the save pass decodes
+one token and runs 2 * Ckpt + 1 steps, so it stores three checkpoint slots.
+Queries and keys are unit-norm rows rounded to the storage type; values,
+decays in [0.5, 1), betas in [0, 1) and the initial state are random. Every
+output, every final-state element and every stored checkpoint is checked
+against a float64 recurrence with a per-element bound on the kernel's binary32
+rounding: one rounding of relative size 2^-24 per operation, an allowance for
+flushed subnormal results, any summation order of each 128-term dot product
+across the 32 lanes, and the error each state row carries from step to step,
+which `g (I - beta k k^T)` does not amplify while `beta |k|^2 <= 2`. Results
+must be a correct rounding to their storage type of a value inside that
+bound, which stays below 2^-12 of their root mean square. Without
+`save_state` the cache must stay untouched. Every dispatch pads each input
+with 16 NaNs and checks 16 guards per output and that every input is
+unchanged. Metal also runs the unchanged upstream kernel with the same
+function constant, and the translation must reproduce it bit for bit. A
+float64 simulation of the kernel's own pointer arithmetic matches the
+reference, and 14 injected defects are rejected. No backend needs an
+index-range precondition. This covers 72/17,832 entries; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

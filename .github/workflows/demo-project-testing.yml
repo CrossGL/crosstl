@@ -3586,7 +3586,7 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7" numpy==2.2.6
 
       - name: Install macOS Metal Toolchain
         if: runner.os == 'macOS'
@@ -4949,6 +4949,33 @@ jobs:
               --basetemp=mlx-current-results/sdpa-first-pass \
               --junitxml=mlx-current-results/sdpa-first-pass.xml \
               demos/integrations/mlx/tests/kernels/test_current_sdpa.py::test_current_mlx_sdpa_first_pass_native_parity
+
+      - name: Prove current MLX gated delta native parity
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GATED_DELTA: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX gated delta native parity" \
+            --timeout-seconds 3600 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gated-delta \
+              --junitxml=mlx-current-results/gated-delta.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gated_delta.py
 
       - name: Upload current MLX runtime diagnostics
         if: always()

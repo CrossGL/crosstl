@@ -769,6 +769,25 @@ the steps past its keys, keeping every software-subgroup reduction uniform.
 This is an 82/17,832 increment; it does not run the upstream MLX test suite or
 redirect the MLX host runtime.
 
+``gated_delta_update.current-tree.translation.json`` pins the 72 sequential
+``gated_delta_seq`` entries of ``gated_delta_update.metal`` and their 432
+artifacts, and records the 18 ``gated_delta_fused_chunk`` entries as pending
+because their ``simdgroup_float8x8`` tiles do not translate yet; required CI
+confirms that each still fails to translate on every target. Each entry is
+pinned with function constant 200, ``save_state``, off for inference and on
+for the backward's save pass; DirectX materializes the constant, while Metal
+and OpenGL specialize it when the runtime creates the pipeline. OpenGL and
+DirectX lower the two 32-lane reductions to software subgroups. Each target
+executes 288 dispatches with MLX's grid: a one-token decode and an
+eight-token, two-batch prefill for inference, and a one-token decode and
+2 * Ckpt + 1 steps, three checkpoint slots, for the save pass. Outputs, final
+states and checkpoints are checked against a float64 recurrence with a
+per-element bound on the kernel's binary32 rounding that carries each state
+row's error through ``g (I - beta k k^T)``. Metal also runs the unchanged
+upstream kernel, and the translation must reproduce it bit for bit. No backend
+needs an index-range precondition. This is a 72/17,832 increment; it does not
+run the upstream MLX test suite or redirect the MLX host runtime.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs
