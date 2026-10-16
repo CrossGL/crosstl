@@ -1771,7 +1771,7 @@
       "winograd_conv_2d_input_transform_float16_bc32",
       "winograd_conv_2d_output_transform_float16_bo32"
     ],
-    "uncoveredReason": "the Winograd transforms use simdgroup_matrix<T, 8, 8>::thread_elements(), which translation does not lower yet",
+    "uncoveredReason": "the Winograd transforms have their own gate, test_current_winograd.py",
     "artifactCountByTarget": 42,
     "dispatchCountByTarget": 114,
     "checkedElementCountByEntry": {

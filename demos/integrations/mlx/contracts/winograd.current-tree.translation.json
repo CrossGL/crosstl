@@ -1,0 +1,339 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-winograd-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/conv.metal",
+    "sourceSha256": "d0604f69e144ffb65dcfc99e6383880b6d2d61645fa73147f35230034a1cd874",
+    "headers": {
+      "mlx/backend/metal/kernels/steel/conv/params.h": "354a832c5bf37791f4ad42ddc3ca9456a9c1ebbf3216650bb4a10c18110e03a8",
+      "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
+    }
+  },
+  "entries": [
+    "winograd_conv_2d_weight_transform_float32_bc32",
+    "winograd_conv_2d_weight_transform_bfloat16_bc32",
+    "winograd_conv_2d_weight_transform_float16_bc32"
+  ],
+  "pendingEntries": {
+    "winograd_conv_2d_input_transform_float32_bc32": {
+      "diagnostics": {
+        "metal": null,
+        "opengl": "project.translate.opengl-software-subgroup-invalid",
+        "directx": "project.translate.directx-software-subgroup-invalid"
+      }
+    },
+    "winograd_conv_2d_output_transform_float32_bo32": {
+      "diagnostics": {
+        "metal": null,
+        "opengl": "project.translate.opengl-software-subgroup-invalid",
+        "directx": "project.translate.directx-software-subgroup-invalid"
+      }
+    },
+    "winograd_conv_2d_input_transform_bfloat16_bc32": {
+      "diagnostics": {
+        "metal": null,
+        "opengl": "project.translate.opengl-software-subgroup-invalid",
+        "directx": "project.translate.directx-software-subgroup-invalid"
+      }
+    },
+    "winograd_conv_2d_output_transform_bfloat16_bo32": {
+      "diagnostics": {
+        "metal": null,
+        "opengl": "project.translate.opengl-software-subgroup-invalid",
+        "directx": "project.translate.directx-software-subgroup-invalid"
+      }
+    },
+    "winograd_conv_2d_input_transform_float16_bc32": {
+      "diagnostics": {
+        "metal": null,
+        "opengl": "project.translate.opengl-software-subgroup-invalid",
+        "directx": "project.translate.directx-software-subgroup-invalid"
+      }
+    },
+    "winograd_conv_2d_output_transform_float16_bo32": {
+      "diagnostics": {
+        "metal": null,
+        "opengl": "project.translate.opengl-software-subgroup-invalid",
+        "directx": "project.translate.directx-software-subgroup-invalid"
+      }
+    }
+  },
+  "artifacts": {
+    "metal": {
+      "winograd_conv_2d_weight_transform_float32_bc32": {
+        "sha256": "7b744b8e0a722f9d36f62c9185f300fb616bc00e4c669fecc1a7fad87f3277c2",
+        "sizeBytes": 3922
+      },
+      "winograd_conv_2d_weight_transform_bfloat16_bc32": {
+        "sha256": "ec14329cd267a9d399120b482dc2cf3331014a985cd2749500418cc1daca5d83",
+        "sizeBytes": 3948
+      },
+      "winograd_conv_2d_weight_transform_float16_bc32": {
+        "sha256": "9396077e7425deafc326cae3262600dcbe7914ba054fb6791a8a19c3e16ac7bf",
+        "sizeBytes": 3913
+      }
+    },
+    "opengl": {
+      "winograd_conv_2d_weight_transform_float32_bc32": {
+        "sha256": "5833140b18c0b9a2068b5b392698534d1ad06cac318381490ac1f0e8223b8cb5",
+        "sizeBytes": 29010
+      },
+      "winograd_conv_2d_weight_transform_bfloat16_bc32": {
+        "sha256": "c34d4e070288d75a4c852ca49759fbfdf63c370fdae3ae1859022579f0b1a02e",
+        "sizeBytes": 29370
+      },
+      "winograd_conv_2d_weight_transform_float16_bc32": {
+        "sha256": "7865f32c03354060e8fd3725f0d5262173355ce3bc48929f358b4aeeec07a95e",
+        "sizeBytes": 30371
+      }
+    },
+    "directx": {
+      "winograd_conv_2d_weight_transform_float32_bc32": {
+        "sha256": "d95a492dcb143b8a161e2dbfc3395206081bb2e689a6c0bb190639eba50f7d91",
+        "sizeBytes": 20525
+      },
+      "winograd_conv_2d_weight_transform_bfloat16_bc32": {
+        "sha256": "a22840ff30626696eb06fe151beb872b2b86d3cbb4045e5ddb27b8450e14f3ee",
+        "sizeBytes": 21926
+      },
+      "winograd_conv_2d_weight_transform_float16_bc32": {
+        "sha256": "33c7bfe70d2341af090b4ab52dc66163c7634824edb66889318926cbf945b371",
+        "sizeBytes": 21888
+      }
+    }
+  },
+  "validationContract": {
+    "comparison": "exact words",
+    "matrixProducts": {
+      "profile": "fma-rne-gradual",
+      "definition": "each element is a chain of fused binary32 multiply-adds from +0.0 in increasing k, ties to even, with gradual underflow",
+      "softwareTargets": [
+        "opengl",
+        "directx"
+      ]
+    },
+    "fragmentMapping": {
+      "mapping": "tile_4x4_row_pair",
+      "provenance": "mlx_conv_winograd_lane_coordinates"
+    },
+    "softwareSubgroupWidth": {
+      "targets": [
+        "opengl",
+        "directx"
+      ],
+      "width": 32
+    },
+    "workgroupSize": [
+      32,
+      4,
+      1
+    ],
+    "grid": "[O / 4, 1, 1] groups, C % 32 == 0, O % 32 == 0",
+    "cases": {
+      "one-block": {
+        "C": 32,
+        "O": 64,
+        "grid": [
+          16,
+          1,
+          1
+        ]
+      },
+      "three-blocks": {
+        "C": 96,
+        "O": 32,
+        "grid": [
+          8,
+          1,
+          1
+        ]
+      }
+    },
+    "transformWords": [
+      [
+        "0x3f800000",
+        "0x00000000",
+        "0x00000000"
+      ],
+      [
+        "0xbe638e39",
+        "0xbe638e39",
+        "0xbe638e39"
+      ],
+      [
+        "0xbe638e39",
+        "0x3e638e39",
+        "0xbe638e39"
+      ],
+      [
+        "0x3c360b61",
+        "0x3cb60b61",
+        "0x3d360b61"
+      ],
+      [
+        "0x3c360b61",
+        "0xbcb60b61",
+        "0x3d360b61"
+      ],
+      [
+        "0x3f360b61",
+        "0x3eb60b61",
+        "0x3e360b61"
+      ],
+      [
+        "0x3f360b61",
+        "0xbeb60b61",
+        "0x3e360b61"
+      ],
+      [
+        "0x00000000",
+        "0x00000000",
+        "0x3f800000"
+      ]
+    ],
+    "specialSlices": {
+      "negativeZero": [
+        1,
+        3
+      ],
+      "impulse": {
+        "slice": [
+          2,
+          5
+        ],
+        "tap": [
+          1,
+          2
+        ]
+      }
+    },
+    "metadataPreconditions": {
+      "metal": [],
+      "opengl": [
+        {
+          "parameter": "C",
+          "minimum": 0,
+          "maximum": 2147483616
+        }
+      ],
+      "directx": [
+        {
+          "parameter": "C",
+          "minimum": 0,
+          "maximum": 2147483616
+        }
+      ]
+    },
+    "indexRangeAssertions": {
+      "opengl": [
+        {
+          "expression": "ko * 3 * 3 * C",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "ohw_0 * C * O + ko",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "ohw_1 * C * O + ko",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "wt_in + kh * 3 * C + kw * C + kc",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "wt_out_0 + c * O",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "wt_out_1 + c * O",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      ],
+      "metal": [],
+      "directx": []
+    },
+    "pendingOpenglIndexRangeAssertions": {
+      "input": [
+        "tid.z * params.in_strides[0] + bh * params.in_strides[1] + bw * params.in_strides[2]",
+        "ohw_0 * N_TILES * params.C + tile_id * params.C",
+        "ohw_1 * N_TILES * params.C + tile_id * params.C",
+        "in_ptr + c"
+      ],
+      "output": [
+        "tid.z * params.out_strides[0] + bh * params.out_strides[1] + bw * params.out_strides[2]",
+        "ohw_0 * N_TILES * params.O + tile_id * params.O",
+        "ohw_1 * N_TILES * params.O + tile_id * params.O"
+      ]
+    },
+    "outputGuard": -32768.0,
+    "outputGuardCount": 16,
+    "inputGuard": "nan",
+    "inputGuardCount": 16,
+    "elementTypes": {
+      "metal": {
+        "float32": "float32",
+        "bfloat16": "bfloat16",
+        "float16": "float16"
+      },
+      "opengl": {
+        "float32": "float32",
+        "bfloat16": "float32",
+        "float16": "float32"
+      },
+      "directx": {
+        "float32": "float32",
+        "bfloat16": "uint16",
+        "float16": "uint16"
+      }
+    },
+    "dispatchCountByTarget": 6,
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ]
+  },
+  "scope": {
+    "instantiatedEntryCount": 9,
+    "coveredEntryCount": 3,
+    "runtimeCoveredEntryCount": 3,
+    "pendingEntries": [
+      "winograd_conv_2d_input_transform_float32_bc32",
+      "winograd_conv_2d_output_transform_float32_bo32",
+      "winograd_conv_2d_input_transform_bfloat16_bc32",
+      "winograd_conv_2d_output_transform_bfloat16_bo32",
+      "winograd_conv_2d_input_transform_float16_bc32",
+      "winograd_conv_2d_output_transform_float16_bo32"
+    ],
+    "pendingReason": "the input and output transforms loop to params.C and params.O, which metadata preconditions cannot bound yet, and start their matrix loops at the SIMD-group index, which translation cannot yet prove uniform for OpenGL and DirectX software subgroup barriers",
+    "artifactCountByTarget": 3,
+    "dispatchCountByTarget": 6,
+    "checkedElementCountByEntry": {
+      "winograd_conv_2d_weight_transform_float32_bc32": 327680,
+      "winograd_conv_2d_weight_transform_bfloat16_bc32": 327680,
+      "winograd_conv_2d_weight_transform_float16_bc32": 327680
+    },
+    "completeCorpusEntryCount": 17832,
+    "partialThreadgroupsExercised": false,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

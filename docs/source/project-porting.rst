@@ -847,9 +847,24 @@ and DirectX cannot clip partial groups, covering padding, strides, dilation,
 flipped kernels, batches, row tiles and ragged edges. Inputs keep every
 product and sum exact, so each output word is compared exactly; Metal also
 runs the unchanged upstream kernels, which must produce the same words. The
-nine Winograd transforms, which use ``simdgroup_matrix::thread_elements()``,
-are not covered. This is a 27/17,832 increment; it does not run the upstream
-MLX test suite or redirect the MLX host runtime.
+nine Winograd transforms have their own gate. This is a 27/17,832 increment;
+it does not run the upstream MLX test suite or redirect the MLX host runtime.
+
+``winograd.current-tree.translation.json`` pins the three
+``winograd_conv_2d_weight_transform`` entries of ``conv.metal``. Each
+SIMD-group forms ``G g G^T`` with two ``simdgroup_matrix<float, 8, 8>``
+products, which Metal keeps and OpenGL and DirectX lower with 32-lane software
+subgroups as the ``fma-rne-gradual`` software multiply-accumulate: fused
+binary32 steps from +0.0 in increasing k, ties to even, gradual underflow, as
+on Apple's matrices. ``G``'s non-dyadic constants make nearly every step
+round, so the reference comes from an exact fused multiply-add oracle and each
+output word is compared exactly; Metal also runs the unchanged upstream
+kernel. The channel loop holds barriers, so OpenGL and DirectX check the
+metadata precondition ``C <= INT_MAX - 31``. The six input and output
+transforms stay pending on OpenGL and DirectX: their loops run to
+``params.C`` and ``params.O`` and start at the SIMD-group index, which
+translation cannot yet bound and prove uniform. This is a 3/17,832 increment;
+it does not run the upstream MLX test suite or redirect the MLX host runtime.
 
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size

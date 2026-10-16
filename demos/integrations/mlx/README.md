@@ -53,8 +53,8 @@ The longest current-tree kernel families run in the `mlx-current-native-parity`
 job rather than the MLX Metal project porting job: ternary and `binary_two`
 (group `elementwise`), scaled dot-product attention and its two-pass first pass
 (`attention`), rope and gated delta (`sequence`), the gated delta backward
-(`backward`), sort (`ordering`), and the unfold and depthwise convolutions
-(`convolution`). The job has one matrix leg per runner and group. Each leg
+(`backward`), sort (`ordering`), and the unfold, depthwise and Winograd
+convolutions (`convolution`). The job has one matrix leg per runner and group. Each leg
 repeats the porting job's toolchain setup and pinned kernel checkout, runs only
 its group's bounded steps, and uploads its results as
 `mlx-current-parity-<os>-<group>`. A workflow test checks that each group's
@@ -1118,10 +1118,41 @@ that every input is unchanged. Metal also runs the unchanged upstream
 kernels, which must produce the same words. Simulations of the kernels' own
 index arithmetic and tile loads match the references, and injected flip,
 padding, stride, dilation, row-offset, layout, batch and channel defects are
-rejected. The nine Winograd transforms are not covered: they use
-`simdgroup_matrix::thread_elements()`, which translation does not lower yet.
+rejected. The nine Winograd transforms have their own gate, described next.
 This covers 27/17,832 entries; it does not run the upstream MLX test suite or
 redirect the MLX host runtime.
+
+`contracts/winograd.current-tree.translation.json` pins the three
+`winograd_conv_2d_weight_transform` entries of `conv.metal` (float32, bfloat16
+and float16) and their nine artifacts. `winograd_conv_2D_gpu` runs them before
+its batched GEMM: each SIMD-group forms `G g G^T` for one output filter and
+channel with two `simdgroup_matrix<float, 8, 8>` products, the lanes holding
+the row pairs of Apple's 4x4-tile layout (`tile_4x4_row_pair`). Metal keeps
+the hardware matrices. OpenGL and DirectX lower each product with 32-lane
+software subgroups as the software multiply-accumulate with the
+`fma-rne-gradual` profile: every element is a chain of fused binary32
+multiply-adds from +0.0 in increasing k with ties to even and gradual
+underflow, which Apple's matrices match. `G` holds non-dyadic constants such
+as -2/9, which every compiler rounds once to binary32, so nearly every step
+rounds and the reference comes from an exact fused multiply-add oracle. The
+channel loop holds barriers, so OpenGL and DirectX carry a checked metadata
+precondition `C <= INT_MAX - 31`, and OpenGL index-range preconditions keep
+the composed offsets in signed int range. Required CI executes every entry on
+Metal, Mesa EGL and Direct3D 12 WARP with `conv.cpp`'s `(32, 4, 1)` groups
+over `(O / 4, 1, 1)`, for 64 filters of one channel block and 32 filters of
+three blocks, and compares all 8 x 8 x C x O output words exactly. All -0.0
+taps must give +0.0 words and a unit impulse the outer product of two `G`
+columns. Inputs are padded with NaN, 16 output guards are checked and every
+input must be unchanged; Metal also runs the unchanged upstream kernel, which
+must produce the same words. A replay of the kernel's index arithmetic matches
+the reference layout, and unfused products, a transposed filter, an
+untransposed right factor and neighbouring channels or filters are rejected.
+The six input and output transforms stay pending on OpenGL and DirectX, a
+record the gate checks: their channel loops run to `params.C` and `params.O`,
+which metadata preconditions cannot bound yet, and their matrix loops start
+at the SIMD-group index, which translation cannot yet prove uniform for the
+software subgroup barriers. This covers 3/17,832 entries; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized

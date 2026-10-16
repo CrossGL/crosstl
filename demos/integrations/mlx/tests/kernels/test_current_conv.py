@@ -9,7 +9,7 @@ and DirectX and executes them natively with ``conv.cpp``'s launch geometry.
 The unfold kernels copy distinct values, and the depthwise inputs are quarters
 and weights halves in ``[-1, 1]``, so every product and partial sum is exact in
 the storage type and each output word is compared exactly. The nine Winograd
-transforms are not covered: they use ``simdgroup_matrix::thread_elements()``.
+transforms have their own gate, ``test_current_winograd.py``.
 """
 
 import functools
@@ -1277,8 +1277,7 @@ def _expected_scope():
         "runtimeCoveredEntryCount": len(ENTRIES),
         "uncoveredEntries": list(WINOGRAD_ENTRIES),
         "uncoveredReason": (
-            "the Winograd transforms use simdgroup_matrix<T, 8, 8>::"
-            "thread_elements(), which translation does not lower yet"
+            "the Winograd transforms have their own gate, test_current_winograd.py"
         ),
         "artifactCountByTarget": len(VARIANTS),
         "dispatchCountByTarget": _dispatch_count(),
