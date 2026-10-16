@@ -2243,7 +2243,9 @@ def test_opengl_cooperative_matrix_software_lowering_resets_generation_state():
     [
         ("load", "non-lane-local-operation"),
         ("store", "non-lane-local-operation"),
-        ("multiply", "non-lane-local-operation"),
+        # A plain product is a multiply-accumulate into +0.0 and takes the
+        # same software MMA path, which checks its operands first.
+        ("multiply", "invalid-argument-count"),
         ("multiply_accumulate", "invalid-argument-count"),
     ],
 )

@@ -23,6 +23,7 @@ from tests.test_translator.test_directx_cooperative_matrix import (
 from tests.test_translator.test_directx_matrix_rounding import (
     PROFILES,
     _edge_case,
+    _plain_product_case,
     _profile_case,
 )
 from tests.test_translator.test_loop_updates import _execute
@@ -123,6 +124,28 @@ def test_matrix_rejects_invalid_operands(arguments, reason):
             "compute",
         )
     assert error.value.reason == reason
+
+
+def test_matrix_plain_products_accumulate_into_positive_zero(tmp_path):
+    # Metal's operator* equals simdgroup_multiply_accumulate into a zero
+    # matrix; MLX's Winograd transforms chain two: (G * g) * Gt.
+    body = f"""{MATRIX} result = cooperative_matrix_multiply(
+            cooperative_matrix_multiply(left, right), accumulator);
+        outputWords[index * 2u] = floatBitsToUint(cooperative_matrix_element(result, 0));
+        outputWords[index * 2u + 1u] = floatBitsToUint(cooperative_matrix_element(result, 1));"""
+    generated = _codegen().generate_stage(parse(_source(body)), "compute")
+    assert "cooperative_matrix_multiply(" not in generated
+    assert generated.count("(float[2](float(0), float(0))))") == 2
+    assert generated.count("barrier();") == 2
+    _compile(generated, "opengl", tmp_path)
+
+
+@pytest.mark.parametrize("arguments", ["left", "left, right, accumulator"])
+def test_matrix_plain_product_requires_two_operands(arguments):
+    body = f"{MATRIX} result = cooperative_matrix_multiply({arguments});"
+    with pytest.raises(OpenGLCooperativeMatrixError) as error:
+        _codegen().generate_stage(parse(_source(body)), "compute")
+    assert error.value.reason == "invalid-argument-count"
 
 
 @pytest.mark.parametrize("replacement", ["int", "uint"])
@@ -404,5 +427,23 @@ def test_project_matrix_rounding_native_edges(tmp_path, profile, inputs):
             else _profile_case(profile, rounding=inputs == "rounding", products=1)
         ),
         single_product=True,
+    )
+    _execute(request, expected, tmp_path)
+
+
+@pytest.mark.parametrize("profile", ["fma-rne-gradual", "rne-gradual"])
+def test_project_matrix_plain_products_native_package(tmp_path, profile):
+    if os.environ.get("CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME=1 for native matrix execution"
+        )
+    if not sys.platform.startswith("linux"):
+        pytest.skip("OpenGL execution requires the Linux runtime job")
+    _, request, expected = _project_request(
+        tmp_path,
+        "opengl",
+        mma_profile=profile,
+        word_case=_plain_product_case(profile),
+        plain_products=True,
     )
     _execute(request, expected, tmp_path)

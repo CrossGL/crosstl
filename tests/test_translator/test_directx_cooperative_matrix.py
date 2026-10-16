@@ -191,6 +191,28 @@ def test_software_matrix_rejects_invalid_operands(arguments, reason):
     assert error.value.reason == reason
 
 
+def test_software_matrix_plain_products_accumulate_into_positive_zero(tmp_path):
+    # Metal's operator* equals simdgroup_multiply_accumulate into a zero
+    # matrix; MLX's Winograd transforms chain two: (G * g) * Gt.
+    body = f"""{MATRIX} result = cooperative_matrix_multiply(
+            cooperative_matrix_multiply(left, right), accumulator);
+        outputWords[index * 2u] = asuint(cooperative_matrix_element(result, 0));
+        outputWords[index * 2u + 1u] = asuint(cooperative_matrix_element(result, 1));"""
+    generated = _codegen().generate_stage(parse(_source(body)), "compute")
+    assert "cooperative_matrix_multiply(" not in generated
+    assert generated.count("float2(0.0f, 0.0f), uint(") == 2
+    assert generated.count("GroupMemoryBarrierWithGroupSync();") == 2
+    _compile(generated, tmp_path)
+
+
+@pytest.mark.parametrize("arguments", ["left", "left, right, accumulator"])
+def test_software_matrix_plain_product_requires_two_operands(arguments):
+    body = f"{MATRIX} result = cooperative_matrix_multiply({arguments});"
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as error:
+        _codegen().generate_stage(parse(_source(body)), "compute")
+    assert error.value.reason == "invalid-operation-arity"
+
+
 def test_software_matrix_helpers_avoid_user_identifiers(tmp_path):
     helper = "float __crossgl_software_matrix_mma(float value) { return value; }"
     body = f"""float __crossgl_software_matrix_left = 3.0;
@@ -673,7 +695,7 @@ def test_software_matrix_sdk_comparison_executes(
     assert actual == expected
 
 
-def _metal_source(*, single_product=False):
+def _metal_source(*, single_product=False, plain_products=False):
     loads = "\n".join(
         f"metal::simdgroup_matrix<float, 8, 8> {name};\n"
         f"reinterpret_cast<thread float2&>({name}.thread_elements()) = "
@@ -681,11 +703,22 @@ def _metal_source(*, single_product=False):
         f"inputWords[index * 6u + {offset + 1}u]));"
         for name, offset in (("left", 0), ("right", 2), ("accumulator", 4))
     )
-    second_product = (
-        ""
-        if single_product
-        else "simdgroup_multiply_accumulate(accumulator, right, left, accumulator);"
-    )
+    if plain_products:
+        # MLX's Winograd transforms chain operator* products: (G * g) * Gt.
+        products = (
+            "metal::simdgroup_matrix<float, 8, 8> product = left * right;\n"
+            "    accumulator = product * accumulator;"
+        )
+    else:
+        second_product = (
+            ""
+            if single_product
+            else "simdgroup_multiply_accumulate(accumulator, right, left, accumulator);"
+        )
+        products = (
+            "simdgroup_multiply_accumulate(accumulator, left, right, accumulator);\n"
+            f"    {second_product}"
+        )
     return f"""#include <metal_stdlib>
 #include <metal_simdgroup_matrix>
 using namespace metal;
@@ -695,8 +728,7 @@ kernel void matrix_products(const device uint* inputWords [[buffer(0)]],
                             uint3 group [[threadgroup_position_in_grid]]) {{
     uint index = group.x * 128u + invocation;
     {loads}
-    simdgroup_multiply_accumulate(accumulator, left, right, accumulator);
-    {second_product}
+    {products}
     outputWords[index * 2u] = as_type<uint>(accumulator.thread_elements()[0]);
     outputWords[index * 2u + 1u] = as_type<uint>(accumulator.thread_elements()[1]);
 }}
@@ -712,8 +744,9 @@ def _project_request(
     mma_profile=None,
     word_case=None,
     single_product=False,
+    plain_products=False,
 ):
-    source = _metal_source(single_product=single_product)
+    source = _metal_source(single_product=single_product, plain_products=plain_products)
     (root / "matrix.metal").write_text(source)
     options = {
         "cooperative_matrix_fragment_mapping": "tile_4x4_row_pair",

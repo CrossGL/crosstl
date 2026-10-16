@@ -100,6 +100,40 @@ METAL_RECEIVER_DECLARATION_RE = re.compile(
     r"(?:\s+(?:const|volatile|restrict|__restrict|__restrict__))*)"
     r"\s*\b(?P<name>[A-Za-z_]\w*)\b\s*(?=[,;)=\[\{(])"
 )
+# Metal library templates whose member functions the frontend lowers itself,
+# such as ``simdgroup_matrix::thread_elements()`` and ``texture2d::read()``.
+# Struct-method lowering leaves calls on receivers declared with them alone.
+METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATES = frozenset(
+    {
+        "simdgroup_matrix",
+        "texture1d",
+        "texture1d_array",
+        "texture2d",
+        "texture2d_array",
+        "texture2d_ms",
+        "texture2d_ms_array",
+        "texture3d",
+        "texturecube",
+        "texturecube_array",
+        "texture_buffer",
+        "depth2d",
+        "depth2d_array",
+        "depth2d_ms",
+        "depth2d_ms_array",
+        "depthcube",
+        "depthcube_array",
+    }
+)
+METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATE_RE = re.compile(
+    r"(?<![A-Za-z0-9_:])(?:metal\s*::\s*)?(?P<base>"
+    + "|".join(sorted(METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATES, key=len, reverse=True))
+    + r")\s*<"
+)
+METAL_RECEIVER_DECLARATOR_PREFIX_RE = re.compile(
+    r"(?:\s+(?:const|volatile|thread|threadgroup|threadgroup_imageblock|device"
+    r"|constant))*\s*(?:\*+|&&|&)?"
+    r"(?:\s*(?:const|volatile|restrict|__restrict|__restrict__)\b)*\s*"
+)
 
 
 class MetalStructMethodError(ValueError):
@@ -13869,6 +13903,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 return None
             arg_open, explicit_template_arguments = call_suffix
             if struct_type is None:
+                if self._receiver_has_builtin_member_type_at(
+                    code, ident, ident_start, receiver_declaration
+                ):
+                    return None
                 arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
                 location_end = arg_close + 1 if arg_close is not None else arg_open + 1
                 receiver_type = (
@@ -14410,6 +14448,52 @@ class MetalPreprocessor(HLSLPreprocessor):
         if resolved_type not in struct_names:
             return declaration, None
         return declaration, resolved_type
+
+    def _receiver_has_builtin_member_type_at(
+        self,
+        code: str,
+        receiver: str,
+        position: int,
+        receiver_declaration: Optional[_MetalReceiverDeclaration],
+    ) -> bool:
+        """Whether ``receiver`` is visibly declared as a Metal library template.
+
+        The receiver scan only reads plain type names, so a declaration such as
+        ``simdgroup_matrix<float, 8, 8> G`` or a ``texture2d<float> tex``
+        parameter is invisible to it. Such a receiver's member calls are
+        library operations the frontend lowers, not struct methods. The nearest
+        visible declaration wins, so a later plain declaration that shadows the
+        library-typed one still fails closed.
+        """
+        ignored_spans = self._find_comment_and_literal_spans(code)
+        scopes = self._find_lexical_brace_scopes(code)
+        name_re = re.compile(rf"{re.escape(receiver)}\b\s*(?=[,;)=\[\{{(])")
+        nearest = None
+        for match in METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATE_RE.finditer(
+            code, 0, position
+        ):
+            start = match.start()
+            if self._containing_span(start, ignored_spans) is not None:
+                continue
+            close = self._find_matching_angle(code, match.end() - 1)
+            if close is None or close >= position:
+                continue
+            prefix = METAL_RECEIVER_DECLARATOR_PREFIX_RE.match(code, close + 1)
+            cursor = prefix.end() if prefix is not None else close + 1
+            declared = name_re.match(code, cursor)
+            if declared is None or declared.end() > position:
+                continue
+            scope_start, scope_end = self._innermost_lexical_scope(
+                scopes, start, len(code)
+            )
+            if scope_start <= position < scope_end:
+                nearest = start
+        if nearest is None:
+            return False
+        return (
+            receiver_declaration is None
+            or receiver_declaration.declaration_position < nearest
+        )
 
     def _receiver_contract_from_type_text(
         self,

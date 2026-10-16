@@ -258,6 +258,40 @@ def _profile_case(profile, *, rounding=True, products=2):
     return words, expected
 
 
+def _plain_product_case(profile):
+    """``(left * right) * accumulator`` with each product into a +0.0 matrix."""
+    words, _ = _case(rounding=True)
+    zero = [[0] * 8 for _ in range(8)]
+    expected = []
+    for subgroup in range(12):
+        matrices = [[[0] * 8 for _ in range(8)] for _ in range(3)]
+        for lane in range(32):
+            for operand, matrix in enumerate(matrices):
+                for element, (row, column) in enumerate(_coordinates(lane)):
+                    matrix[row][column] = words[
+                        (subgroup * 32 + lane) * 6 + operand * 2 + element
+                    ]
+        left, right, accumulator = matrices
+        product = _multiply_words(left, right, zero, profile)
+        result = _multiply_words(product, accumulator, zero, profile)
+        expected.extend(
+            result[row][column]
+            for lane in range(32)
+            for row, column in _coordinates(lane)
+        )
+    return words, expected
+
+
+def test_plain_product_oracle_differs_from_accumulation():
+    _, plain = _plain_product_case("fma-rne-gradual")
+    _, accumulated = _profile_case("fma-rne-gradual")
+    _, separately_rounded = _plain_product_case("rne-gradual")
+    assert len(plain) == len(accumulated) == 12 * 64
+    assert plain != accumulated
+    # Fusing each inner product changes some of the rounded plain products.
+    assert any(a != b for a, b in zip(plain, separately_rounded))
+
+
 def _edge_case(profile):
     triples = [
         PRECISE_OPERANDS,
@@ -431,6 +465,43 @@ def test_original_metal_matrix_matches_fused_reference(tmp_path):
         pytest.skip("The original Metal matrix control requires macOS")
     source, request, expected = _project_request(
         tmp_path, "metal", rounding=True, word_case=_profile_case("fma-rne-gradual")
+    )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source,
+        original_entry="matrix_products",
+    )
+
+
+@pytest.mark.parametrize("profile", ["fma-rne-gradual", "rne-gradual"])
+def test_project_matrix_plain_products_native_package(tmp_path, profile):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for DirectX matrix execution")
+    assert sys.platform == "win32", "DirectX matrix execution requires Windows"
+    _, request, expected = _project_request(
+        tmp_path,
+        "directx",
+        mma_profile=profile,
+        word_case=_plain_product_case(profile),
+        plain_products=True,
+    )
+    _execute(request, expected, tmp_path)
+
+
+def test_original_metal_plain_products_match_fused_reference(tmp_path):
+    if os.environ.get("CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME=1 for matrix execution"
+        )
+    if sys.platform != "darwin":
+        pytest.skip("The original Metal matrix control requires macOS")
+    source, request, expected = _project_request(
+        tmp_path,
+        "metal",
+        word_case=_plain_product_case("fma-rne-gradual"),
+        plain_products=True,
     )
     _execute(
         request,

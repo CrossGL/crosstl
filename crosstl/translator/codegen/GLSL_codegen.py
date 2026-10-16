@@ -4389,7 +4389,7 @@ class GLSLCodeGen:
             if (
                 self.cooperative_matrix_software_lowering
                 and isinstance(node, CooperativeMatrixOpNode)
-                and node.operation == "multiply_accumulate"
+                and node.operation in {"multiply_accumulate", "multiply"}
             ):
                 records.append(("CooperativeMatrixMultiplyAccumulate", node))
                 continue
@@ -25937,11 +25937,32 @@ class GLSLCodeGen:
             or self.glsl_function_uses_structured_buffer_pointer_alias(function)
         )
 
+    @staticmethod
+    def glsl_array_suffix_rank(array_suffix):
+        """Count the top-level ``[...]`` groups of an array type suffix."""
+        rank = depth = 0
+        for character in array_suffix:
+            if character == "[":
+                rank += depth == 0
+                depth += 1
+            elif character == "]":
+                depth -= 1
+        return rank
+
     def glsl_shared_storage_binding(self, node, root_name, *, entry_owner="module"):
         raw_type = getattr(node, "var_type", getattr(node, "vtype", None))
         declared_type = self.local_variable_declared_type(node)
         element_type, array_suffix = split_array_type_suffix(str(declared_type or ""))
         if not array_suffix:
+            return None
+        # A workgroup pointer addresses one flat element sequence, so its
+        # subscripts add up as offsets. An array of arrays such as MLX's
+        # Winograd ``threadgroup T Ws[BO][R][R][BC]`` keeps GLSL's own
+        # arrays-of-arrays subscripts: adding them would alias distinct rows.
+        if (
+            isinstance(raw_type, ArrayType)
+            and isinstance(raw_type.element_type, ArrayType)
+        ) or self.glsl_array_suffix_rank(array_suffix) > 1:
             return None
 
         size_expression = getattr(raw_type, "size", None)
@@ -31499,7 +31520,18 @@ class GLSLCodeGen:
 
     def glsl_cooperative_matrix_multiply_accumulate_contracts(self, node):
         argument_count = len(node.arguments)
-        if argument_count not in {3, 4}:
+        # A plain product is a multiply-accumulate into a +0.0 accumulator:
+        # Metal's simdgroup_matrix operator* matches
+        # simdgroup_multiply_accumulate with a zero-filled matrix.
+        multiply_only = node.operation == "multiply"
+        if multiply_only and argument_count != 2:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                "OpenGL cooperative-matrix operation 'multiply' expects 2 "
+                f"arguments, got {argument_count}",
+                reason="invalid-argument-count",
+            )
+        if not multiply_only and argument_count not in {3, 4}:
             self.glsl_cooperative_matrix_operation_error(
                 node,
                 "OpenGL cooperative-matrix operation 'multiply_accumulate' "
@@ -31509,8 +31541,13 @@ class GLSLCodeGen:
 
         destination = node.arguments[0] if argument_count == 4 else None
         operand_offset = 1 if destination is not None else 0
-        left, right, accumulator = node.arguments[operand_offset:]
-        expressions = [left, right, accumulator]
+        if multiply_only:
+            left, right = node.arguments
+            accumulator = None
+            expressions = [left, right]
+        else:
+            left, right, accumulator = node.arguments[operand_offset:]
+            expressions = [left, right, accumulator]
         if destination is not None:
             expressions.insert(0, destination)
 
@@ -31528,7 +31565,11 @@ class GLSLCodeGen:
                 )
             contracts.append(contract)
 
-        if destination is None:
+        if multiply_only:
+            left_contract, right_contract = contracts
+            accumulator_contract = None
+            destination_contract = None
+        elif destination is None:
             left_contract, right_contract, accumulator_contract = contracts
             destination_contract = None
         else:
@@ -31540,7 +31581,7 @@ class GLSLCodeGen:
             ) = contracts
 
         result_contract = self.glsl_cooperative_matrix_result_contract(
-            node, [accumulator_contract]
+            node, [left_contract if multiply_only else accumulator_contract]
         )
         if result_contract is None:
             self.glsl_cooperative_matrix_operation_error(
@@ -31549,6 +31590,8 @@ class GLSLCodeGen:
                 "complete result contract",
                 reason="missing-result-contract",
             )
+        if multiply_only:
+            accumulator_contract = result_contract
 
         result_compatible = [accumulator_contract]
         if destination_contract is not None:
@@ -31660,11 +31703,20 @@ class GLSLCodeGen:
             operation["right_contract"],
             operation["accumulator_contract"],
         )
-        arguments = ", ".join(
-            self.generate_expression(operation[name])
-            for name in ("left", "right", "accumulator")
-        )
-        call = f"{helper_name}({arguments})"
+        operands = [
+            self.generate_expression(operation[name]) for name in ("left", "right")
+        ]
+        if operation["accumulator"] is None:
+            result_contract = operation["result_contract"]
+            component = result_contract["mapped_component_type"]
+            count = result_contract["elements_per_lane"]
+            zeros = ", ".join(f"{component}(0)" for _ in range(count))
+            operands.append(
+                f"{result_contract['type_name']}({component}[{count}]({zeros}))"
+            )
+        else:
+            operands.append(self.generate_expression(operation["accumulator"]))
+        call = f"{helper_name}({', '.join(operands)})"
         destination = operation["destination"]
         if destination is None:
             return call
@@ -31672,7 +31724,7 @@ class GLSLCodeGen:
 
     def generate_glsl_cooperative_matrix_operation(self, node):
         operation = node.operation
-        if operation == "multiply_accumulate":
+        if operation in {"multiply_accumulate", "multiply"}:
             return self.generate_glsl_cooperative_matrix_multiply_accumulate(node)
 
         lane_local_arities = {

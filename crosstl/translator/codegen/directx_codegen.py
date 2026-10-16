@@ -4961,7 +4961,7 @@ class HLSLCodeGen:
             if (
                 self.cooperative_matrix_software_lowering
                 and isinstance(node, CooperativeMatrixOpNode)
-                and node.operation == "multiply_accumulate"
+                and node.operation in {"multiply_accumulate", "multiply"}
             ):
                 records.append(("CooperativeMatrixMultiplyAccumulate", node))
                 continue
@@ -24351,7 +24351,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def generate_hlsl_cooperative_matrix_mma(self, expr):
         arguments = list(expr.arguments)
-        if len(arguments) not in {3, 4}:
+        # A plain product is a multiply-accumulate into a +0.0 accumulator:
+        # Metal's simdgroup_matrix operator* matches
+        # simdgroup_multiply_accumulate with a zero-filled matrix.
+        multiply_only = expr.operation == "multiply"
+        if multiply_only and len(arguments) != 2:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX matrix multiply requires two operands",
+                reason="invalid-operation-arity",
+            )
+        if not multiply_only and len(arguments) not in {3, 4}:
             raise self.directx_cooperative_matrix_operation_error(
                 expr,
                 "DirectX matrix multiply-accumulate requires three operands and "
@@ -24465,6 +24475,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         operands = ", ".join(
             self.generate_expression(argument) for argument in arguments[-3:]
         )
+        if multiply_only:
+            operands += ", float2(0.0f, 0.0f)"
         call = f"{helper}({operands}, uint({invocation}))"
         if destination is not None:
             return f"({self.generate_expression(destination)} = {call})"
@@ -24604,7 +24616,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def directx_cooperative_matrix_operation_lowering(self, expr):
         operation = expr.operation
         result_type = getattr(expr, "result_type", None)
-        if operation == "multiply_accumulate" and self.software_subgroup_width == 32:
+        if (
+            operation in {"multiply_accumulate", "multiply"}
+            and self.software_subgroup_width == 32
+        ):
             return self.generate_hlsl_cooperative_matrix_mma(expr)
 
         if operation not in self.DIRECTX_COOPERATIVE_MATRIX_LANE_LOCAL_OPERATIONS:

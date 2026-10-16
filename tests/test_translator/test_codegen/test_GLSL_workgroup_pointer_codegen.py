@@ -2280,3 +2280,71 @@ def test_workgroup_pointer_nested_block_shadows_preserve_outer_bounds(
         spirv_target="spirv1.3",
         validate_spirv=True,
     )
+
+
+def test_shared_arrays_of_arrays_keep_every_subscript(tmp_path):
+    # MLX's Winograd transforms stage tiles in threadgroup T Ws[BO][R][R][BC];
+    # adding the subscripts as flat offsets would alias distinct rows.
+    shader = """
+    shader SharedArraysOfArrays {
+        compute {
+            layout(local_size_x = 32, local_size_y = 4, local_size_z = 1) in;
+
+            void main(uvec3 lid @gl_LocalInvocationID) {
+                threadgroup float rows[4][32];
+                threadgroup float cube[2][4][32];
+                threadgroup float tiles[4][3][3][32];
+                rows[lid.y][lid.x] = float(lid.x);
+                cube[1][lid.y][lid.x] = rows[3u - lid.y][lid.x];
+                tiles[lid.y][1][2][lid.x] = cube[1][lid.y][lid.x];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "shared float main_rows[4][32];" in generated
+    assert "shared float main_tiles[4][3][3][32];" in generated
+    assert (
+        "main_rows[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = "
+        "float(gl_LocalInvocationID.x);"
+    ) in generated
+    assert (
+        "main_cube[1][gl_LocalInvocationID.y][gl_LocalInvocationID.x] = "
+        "main_rows[(3u - gl_LocalInvocationID.y)][gl_LocalInvocationID.x];"
+    ) in generated
+    assert (
+        "main_tiles[gl_LocalInvocationID.y][1][2][gl_LocalInvocationID.x] = "
+        "main_cube[1][gl_LocalInvocationID.y][gl_LocalInvocationID.x];"
+    ) in generated
+    # No subscript of these arrays is a sum of the source subscripts.
+    assert " + uint(" not in generated and " + int(" not in generated, generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "shared_arrays_of_arrays",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_pointer_to_a_shared_array_row_fails_closed():
+    # A row of an array of arrays has no flat workgroup-pointer backing.
+    shader = """
+    shader SharedRowPointer {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float rows[4][32];
+                threadgroup float* row = rows[1];
+                row[2] = 1.0;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as error:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert error.value.reason == "backing-unresolved"

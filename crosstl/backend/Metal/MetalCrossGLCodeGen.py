@@ -3452,6 +3452,10 @@ class MetalToCrossGLConverter:
         if globals_list:
             code += "    // Globals\n"
             for glob in globals_list:
+                if isinstance(glob, VariableNode):
+                    initializer = self.out_of_class_static_member_initializer(glob)
+                    if initializer is not None:
+                        glob = AssignmentNode(glob, initializer, "=")
                 if isinstance(glob, StaticAssertNode):
                     cond = self.generate_expression(glob.condition, False)
                     if glob.message is not None:
@@ -9088,6 +9092,76 @@ class MetalToCrossGLConverter:
             declaration += f" = {rendered_default}"
         return declaration
 
+    METAL_NUMERIC_LITERAL_RE = re.compile(
+        r"(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhHuUlL]*|0[xX][0-9a-fA-F]+[uUlL]*"
+    )
+
+    def out_of_class_static_member_initializer(self, declaration):
+        """In-class initializer of an out-of-class static member redeclaration.
+
+        C++17 makes ``constant constexpr const float S<6, 3, 8>::table[8][8];``
+        a redundant redeclaration of a ``static constexpr`` member whose value
+        is the in-class initializer. Only literal-valued initializers move to
+        program scope: one naming a sibling member would need its scope, so it
+        fails closed rather than leaving an uninitialized program constant,
+        which OpenGL would otherwise bind as a host-supplied uniform.
+        """
+        name = getattr(declaration, "name", None)
+        if (
+            not isinstance(name, str)
+            or "::" not in name
+            or getattr(declaration, "value", None) is not None
+            or getattr(declaration, "default_value", None) is not None
+        ):
+            return None
+        owner, member_name = (part.strip() for part in name.rsplit("::", 1))
+        struct_node = self.struct_declarations.get(owner)
+        if struct_node is None:
+            mapped_owner = self.map_struct_name(owner)
+            struct_node = next(
+                (
+                    node
+                    for raw_name, node in self.struct_declarations.items()
+                    if self.map_struct_name(raw_name) == mapped_owner
+                ),
+                None,
+            )
+        if struct_node is None:
+            return None
+        for member in getattr(struct_node, "members", []) or []:
+            if not isinstance(member, VariableNode) or member.name != member_name:
+                continue
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(member, "qualifiers", []) or []
+            }
+            if "static" not in qualifiers or "constexpr" not in qualifiers:
+                return None
+            initializer = getattr(member, "default_value", None)
+            if initializer is None or not self.is_literal_initializer(initializer):
+                raise MetalStaticConstantResolutionError(
+                    owner,
+                    member_name,
+                    "an out-of-class redeclaration needs a literal in-class "
+                    "initializer",
+                )
+            return initializer
+        return None
+
+    def is_literal_initializer(self, node):
+        """Whether ``node`` only combines numeric literals and brace lists."""
+        if isinstance(node, str):
+            return bool(self.METAL_NUMERIC_LITERAL_RE.fullmatch(node.strip()))
+        if isinstance(node, InitializerListNode):
+            return all(self.is_literal_initializer(item) for item in node.elements)
+        if isinstance(node, BinaryOpNode):
+            return node.op in {"+", "-", "*", "/"} and all(
+                self.is_literal_initializer(item) for item in (node.left, node.right)
+            )
+        if isinstance(node, UnaryOpNode):
+            return node.op in {"+", "-"} and self.is_literal_initializer(node.operand)
+        return False
+
     def metal_arithmetic_profiles_active(self):
         """Whether arithmetic rendering needs each operation's resolved type."""
         return self.floating_contraction_profile is not None or any(
@@ -11977,6 +12051,7 @@ class MetalToCrossGLConverter:
             )
             if cooperative_matrix_element is not None:
                 matrix, element_index = cooperative_matrix_element
+                self.register_cooperative_matrix_element_contract(matrix)
                 matrix_text = self.generate_expression(matrix, is_main)
                 index_text = self.generate_expression(element_index, is_main)
                 return f"cooperative_matrix_element({matrix_text}, {index_text})"
@@ -18256,6 +18331,71 @@ float {scalar}(float value) {{
         ):
             return None
         return thread_elements.object, expression.index
+
+    # Metal executes SIMD-group matrices on 32-lane SIMD-groups; each lane's
+    # thread_elements() is a vec<T, rows * columns / 32>.
+    METAL_COOPERATIVE_MATRIX_SIMD_WIDTH = 32
+
+    def register_cooperative_matrix_element_contract(self, matrix_expression):
+        """Complete the lane-fragment contract an indexed thread_elements() uses.
+
+        ``m.thread_elements()[i]`` reads one element of the same whole-lane
+        view that ``reinterpret_cast<thread vec<T, N>&>(m.thread_elements())``
+        transfers, so with a configured lane-coordinate mapping the matrix
+        type takes the same ``metal_thread_elements`` contract. Without a
+        mapping the type keeps its unspecified fragment contract.
+        """
+        if self.cooperative_matrix_fragment_mapping is None:
+            return
+        matrix_type = self.metal_source_overload_value_type(
+            self.expression_metal_type(matrix_expression)
+        )
+        if matrix_type is None:
+            return
+        matrix_type = self.substitute_template_value_text(matrix_type)
+        parts = self.metal_cooperative_matrix_type_parts(matrix_type)
+        if parts is None:
+            return
+        _element_type, rows_text, cols_text = parts
+        rows = self.concrete_cooperative_matrix_dimension(rows_text)
+        cols = self.concrete_cooperative_matrix_dimension(cols_text)
+        width = self.METAL_COOPERATIVE_MATRIX_SIMD_WIDTH
+        if rows is None or cols is None or (rows * cols) % width:
+            return
+        elements_per_lane = rows * cols // width
+        if (
+            get_cooperative_matrix_fragment_mapping(
+                self.cooperative_matrix_fragment_mapping,
+                rows,
+                cols,
+                width,
+                elements_per_lane,
+            )
+            is None
+        ):
+            return
+        contract_key = self.normalized_metal_type(matrix_type)
+        contract = (width, elements_per_lane)
+        previous = self.cooperative_matrix_fragment_type_contracts.get(contract_key)
+        if previous is not None and previous != contract:
+            return
+        complete_type = self.map_metal_cooperative_matrix_type(
+            matrix_type,
+            fragment_layout="metal_thread_elements",
+            subgroup_size=width,
+            elements_per_lane=elements_per_lane,
+            fragment_provenance="metal_thread_elements_reference_view",
+            fragment_mapping=self.cooperative_matrix_fragment_mapping,
+            fragment_mapping_provenance=(
+                self.cooperative_matrix_fragment_mapping_provenance
+            ),
+        )
+        if complete_type is None:
+            return
+        self.cooperative_matrix_fragment_type_contracts[contract_key] = contract
+        self.register_cooperative_matrix_fragment_type_contract(
+            matrix_type, complete_type
+        )
 
     def metal_cooperative_matrix_fragment_cast(self, expression):
         if not isinstance(expression, CastNode):
