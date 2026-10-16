@@ -827,6 +827,30 @@ every output word is compared exactly. Metal also runs the unchanged upstream
 kernels, which must produce the same words. This is a 264/17,832 increment; it
 does not run the upstream MLX test suite or redirect the MLX host runtime.
 
+``conv.current-tree.translation.json`` pins the 27 non-Winograd entries of
+``conv.metal`` and their 126 artifacts: the one- to three-dimensional
+``naive_unfold_nd`` and ``naive_unfold_transpose_nd`` kernels of the explicit
+GEMM convolution, ``depthwise_conv_2d`` and ``depthwise_conv_1d`` with its
+int64-index forms, for float32, float16 and bfloat16. ``MLXConvParams<N>``
+reflects as a record whose bytes match MLX's C struct on every target, and
+``depthwise_conv_2d``'s ``constant`` reference to it as a std140 uniform block
+on OpenGL and a ``ConstantBuffer`` on DirectX. That kernel's tile load indexes
+threads as ``simd_gid * 32 + simd_lid``, so OpenGL and DirectX use 32-lane
+software subgroups; its kernel size, strides and flip are function constants,
+and DirectX materializes six specializations. Mesa folds the depthwise
+accumulators' ``+0.0`` start away even from a ``precise`` addition once a 1x1
+kernel unrolls, so OpenGL and DirectX accumulate with the software
+``rne-flush`` binary32 addition. OpenGL needs index-range
+preconditions for the composed 64-bit offsets. Each target executes 114
+dispatches with ``conv.cpp``'s groups on grids that tile exactly, as OpenGL
+and DirectX cannot clip partial groups, covering padding, strides, dilation,
+flipped kernels, batches, row tiles and ragged edges. Inputs keep every
+product and sum exact, so each output word is compared exactly; Metal also
+runs the unchanged upstream kernels, which must produce the same words. The
+nine Winograd transforms, which use ``simdgroup_matrix::thread_elements()``,
+are not covered. This is a 27/17,832 increment; it does not run the upstream
+MLX test suite or redirect the MLX host runtime.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

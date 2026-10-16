@@ -904,6 +904,7 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "sequence",
         "backward",
         "ordering",
+        "convolution",
     ]
     assert job["runs-on"] == "${{ matrix.os }}"
     assert job["if"] == "github.event_name != 'schedule'"

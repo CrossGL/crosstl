@@ -53,9 +53,10 @@ The longest current-tree kernel families run in the `mlx-current-native-parity`
 job rather than the MLX Metal project porting job: ternary and `binary_two`
 (group `elementwise`), scaled dot-product attention and its two-pass first pass
 (`attention`), rope and gated delta (`sequence`), the gated delta backward
-(`backward`), and sort (`ordering`). The job has one matrix leg per runner and
-group. Each leg repeats the porting job's toolchain setup and pinned kernel
-checkout, runs only its group's bounded steps, and uploads its results as
+(`backward`), sort (`ordering`), and the unfold and depthwise convolutions
+(`convolution`). The job has one matrix leg per runner and group. Each leg
+repeats the porting job's toolchain setup and pinned kernel checkout, runs only
+its group's bounded steps, and uploads its results as
 `mlx-current-parity-<os>-<group>`. A workflow test checks that each group's
 step deadlines, plus 30 minutes for setup, fit within the leg's timeout.
 
@@ -1075,6 +1076,52 @@ model of `merge_partition` and the three multi-block stages reproduces the
 stable sort, and an unstable merge, NaN first and IEEE zero order are
 rejected. This covers 264/17,832 entries; it does not run the upstream MLX
 test suite or redirect the MLX host runtime.
+
+`contracts/conv.current-tree.translation.json` pins the 27 non-Winograd
+entries of `conv.metal` and their 126 artifacts: `naive_unfold_nd` and
+`naive_unfold_transpose_nd` for one to three spatial dimensions, which
+`conv.cpp` runs before the GEMM of its explicit convolution without and with
+groups, `depthwise_conv_2d` and `depthwise_conv_1d`, each for float32, float16
+and bfloat16, plus the int64-index `_large` forms of the 1-D kernel.
+`MLXConvParams<N>` mixes ints, fixed `int64_t` stride arrays and a trailing
+`bool`; translation reflects it as a 120-, 176- or 224-byte record on every
+target whose bytes match MLX's C struct, with Metal's one-byte `bool` and the
+four-byte std430 and structured-buffer `bool` at the same offset.
+`depthwise_conv_2d` takes it by `constant` reference, which OpenGL binds as a
+448-byte std140 uniform block and DirectX as a 432-byte `ConstantBuffer`; the
+gate packs both from their reflected layouts. Its tile load uses
+`simd_gid * 32 + simd_lid` as the linear thread index, so OpenGL and DirectX
+lower it with 32-lane software subgroups. The depthwise kernels accumulate into
+`float o = 0.`; once a 1x1 kernel unrolls, Mesa folds that +0.0 away even from
+a `precise` addition, so a negative-zero product would end as -0.0 where Metal
+gives +0.0. OpenGL and DirectX therefore accumulate both depthwise kernels with
+the software binary32 addition (`binary32_additive_profile = "rne-flush"`),
+which works on the operands' bits. The depthwise kernel size, strides
+and flip are function constants: Metal and OpenGL keep them, and DirectX
+materializes each of six specializations (3x3 at strides 1 and 2, flipped
+5x5 and 7x7, 1x1 and a flipped 3x5 at strides (1, 2)). OpenGL needs
+index-range preconditions that keep the composed 64-bit element offsets in
+signed int range. Required CI executes every entry on Metal, Mesa EGL and
+Direct3D 12 WARP, 114 dispatches per target, with `conv.cpp`'s groups:
+`(32, 8, 1)` for 32-channel unfolds, `(8, 8, 4)` for depthwise 2-D and
+`get_block_dims`' `(16, 16, 4)` for depthwise 1-D. Metal clips the last
+groups of `dispatch_threads`, which OpenGL and DirectX cannot, so every
+unfold and 1-D case tiles its grid exactly and partial groups are not
+exercised. The unfold cases cover padding, strides, kernel and input dilation,
+flipped kernels, batches and later row tiles; the depthwise cases cover ragged
+output edges, asymmetric padding and batches. The unfold kernels copy distinct
+values, and depthwise inputs are quarters and weights halves in `[-1, 1]`, so
+every product and sum is exact in the storage type and each output word is
+compared exactly with a reference built from the convolution's definition.
+Every dispatch pads its inputs with NaN, checks 16 output guards and checks
+that every input is unchanged. Metal also runs the unchanged upstream
+kernels, which must produce the same words. Simulations of the kernels' own
+index arithmetic and tile loads match the references, and injected flip,
+padding, stride, dilation, row-offset, layout, batch and channel defects are
+rejected. The nine Winograd transforms are not covered: they use
+`simdgroup_matrix::thread_elements()`, which translation does not lower yet.
+This covers 27/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
