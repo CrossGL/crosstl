@@ -2754,8 +2754,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "e0e4fef92d8c4b3dd42786f0ae5a4042a432afb5d80db6f121b3d00899c347a3",
-      "size_bytes": 1477025,
+      "sha256": "a96dabc394744a80859acfba2ab72a207325984bae0b429fabf431010d2cc579",
+      "size_bytes": 1477021,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2839,7 +2839,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 21093776,
+      "generated_size_bytes_total": 21039948,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_andbool_",
@@ -2847,7 +2847,7 @@
         },
         "maximum": {
           "entryPoint": "col_reduce_looped_large_5_32_32_reduce_mincomplex64",
-          "sizeBytes": 18512
+          "sizeBytes": 18090
         }
       }
     },
@@ -3121,7 +3121,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "c991c7a46b976e60c1cef45d82335a4bb52298fc7823493a05595f872e3160d0",
+      "sha256": "b8e512973227f2c815d685af4ed2ca17ce08e04df5a8587fb4f35090eace7310",
       "size_bytes": 1500973,
       "entry_identity_fields": [
         "entryPoint",
@@ -3295,7 +3295,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 45931388,
+      "generated_size_bytes_total": 45865668,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_minbool_",
@@ -3303,7 +3303,7 @@
         },
         "maximum": {
           "entryPoint": "col_reduce_2pass_large_5_32_32_reduce_mincomplex64",
-          "sizeBytes": 45445
+          "sizeBytes": 44924
         }
       }
     },
