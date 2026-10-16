@@ -807,6 +807,26 @@ initial-state gradients, which do not depend on thread order. This is a
 72/17,832 increment; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+``sort.current-tree.translation.json`` pins all 264 entries of ``sort.metal``
+and their 792 artifacts: 228 single-block sort and argsort kernels for
+contiguous and non-contiguous rows and the 36 ``sort_mbsort``,
+``partition_mbsort`` and ``merge_mbsort`` kernels, for 12 element types. MLX
+sorts with a stable merge sort under ``LessThan``, with NaN after every
+ordered value. Threadgroup declarations carry no runtime initialization, as
+Metal never constructs threadgroup storage on the device; this re-pins the 128
+complex64 entries of each 846d reduce contract that stage partials there.
+Value-only sorts pass ``nullptr`` for the index tile: DirectX
+binds it to an inert specialization that fails closed if read, and OpenGL
+folds it away. OpenGL needs host preconditions that keep every helper's tile
+view within ``[0, N_PER_BLOCK - 1]`` and the 64-bit element offsets of the
+non-contiguous kernels within signed int range. Each target executes 690
+dispatches with the shapes ``sort.cpp`` routes to each kernel, including a
+three-tile multi-block pipeline that checks the output of every sort,
+partition and merge stage. Values include ties, NaN and both zero signs, and
+every output word is compared exactly. Metal also runs the unchanged upstream
+kernels, which must produce the same words. This is a 264/17,832 increment; it
+does not run the upstream MLX test suite or redirect the MLX host runtime.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

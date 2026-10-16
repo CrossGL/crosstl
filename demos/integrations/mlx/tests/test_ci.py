@@ -898,7 +898,13 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
     assert job["strategy"]["fail-fast"] is False
     assert len(matrix["os"]) == len(RUNNER_OSES)
     assert set(matrix["os"]) == RUNNER_OSES
-    assert matrix["group"] == ["elementwise", "attention", "sequence", "backward"]
+    assert matrix["group"] == [
+        "elementwise",
+        "attention",
+        "sequence",
+        "backward",
+        "ordering",
+    ]
     assert job["runs-on"] == "${{ matrix.os }}"
     assert job["if"] == "github.event_name != 'schedule'"
     assert job["name"] == (

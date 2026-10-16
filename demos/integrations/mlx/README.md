@@ -52,10 +52,10 @@ Core and demo tests also remain part of the complete test suite.
 The longest current-tree kernel families run in the `mlx-current-native-parity`
 job rather than the MLX Metal project porting job: ternary and `binary_two`
 (group `elementwise`), scaled dot-product attention and its two-pass first pass
-(`attention`), rope and gated delta (`sequence`), and the gated delta backward
-(`backward`). The job has one matrix leg per runner and group. Each leg repeats
-the porting job's toolchain setup and pinned kernel checkout, runs only its
-group's bounded steps, and uploads its results as
+(`attention`), rope and gated delta (`sequence`), the gated delta backward
+(`backward`), and sort (`ordering`). The job has one matrix leg per runner and
+group. Each leg repeats the porting job's toolchain setup and pinned kernel
+checkout, runs only its group's bounded steps, and uploads its results as
 `mlx-current-parity-<os>-<group>`. A workflow test checks that each group's
 step deadlines, plus 30 minutes for setup, fit within the leg's timeout.
 
@@ -1032,6 +1032,49 @@ must match the translation bit for bit. A float64 simulation of the kernel's
 own pointer arithmetic matches the reference, and 18 injected defects are
 rejected. This covers 72/17,832 entries; it does not run the upstream MLX test
 suite or redirect the MLX host runtime.
+
+`contracts/sort.current-tree.translation.json` pins all 264 entries of
+`sort.metal` and their 792 artifacts: the 228 single-block kernels, contiguous
+(`c`) and non-contiguous (`nc`) sort and argsort for 12 element types with
+32 to 512 threads (256 for 8-byte types), such as
+`ncarg_block_sort_float16_uint32_bn256_tn4`, and the 36 multi-block kernels
+`sort_mbsort`, `partition_mbsort` and `merge_mbsort`. MLX sorts with a stable
+merge sort under `LessThan`, which puts NaN after every ordered value and
+compares complex values by real then imaginary part. Each thread sorts its
+four values in a register array passed by reference (`thread T (&vals)[N]`),
+and the merge helpers take `const threadgroup T*` views of the block's tile.
+Metal never runs the constructor of a threadgroup variable on the device, so
+the complex64 tiles start with unspecified values. Translation used to lower
+that default construction to stores by every thread over the whole tile, with
+no barrier before other threads' first writes; threadgroup declarations now
+carry no runtime initialization. This re-pins the 128 complex64 entries of each
+846d reduce contract that stage partials in threadgroup memory.
+Value-only sorts pass `nullptr` for the index tile: DirectX binds that view to
+an inert specialization and fails closed if the helper could read it, and
+OpenGL folds the statically null view away. OpenGL needs two kinds of host
+precondition: every tile view a helper receives stays in
+`[0, N_PER_BLOCK - 1]`, because the merge partitions are data-dependent binary
+searches the translator cannot bound, and the 64-bit element offsets of the
+non-contiguous and `sort_mbsort` kernels fit signed int range. Required CI
+executes every entry on Metal, Mesa EGL and Direct3D 12 WARP, 690 dispatches
+per target, with the shapes `sort.cpp` routes to each kernel. Contiguous block
+kernels sort a 1-D row whose segment strides are `INT32_MAX`, two contiguous
+rows of a full tile and three columns along axis 0; non-contiguous ones sort a
+strided 1-D view and a transposed `(2, 3, size)` array into a fresh output.
+Each multi-block type sorts the rows and the columns of a two-row array whose
+sorted axis spans three tiles: `sort_mbsort` sorts the tiles, then
+`partition_mbsort` and `merge_mbsort` merge them with `merge_tiles` 2 and 4,
+and every stage's output is checked before the next stage reads it. The values
+cover every level of the type, many ties, NaN, both zero signs, complex values
+with equal real parts and 64-bit values with equal low words, so stability and
+the NaN and signed-zero order are observable. Every output word is compared
+exactly, 16 guards per output must survive, every input must be unchanged, and
+storage the kernel must not read holds the smallest value. Metal also runs the
+unchanged upstream kernels, which must match the expected words exactly. A
+model of `merge_partition` and the three multi-block stages reproduces the
+stable sort, and an unstable merge, NaN first and IEEE zero order are
+rejected. This covers 264/17,832 entries; it does not run the upstream MLX
+test suite or redirect the MLX host runtime.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
