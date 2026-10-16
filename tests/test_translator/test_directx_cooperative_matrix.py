@@ -205,6 +205,32 @@ def test_software_matrix_plain_products_accumulate_into_positive_zero(tmp_path):
     _compile(generated, tmp_path)
 
 
+def test_software_matrix_decodes_bfloat16_element_sources(tmp_path):
+    # MLX's Winograd weight transform stores bfloat16 taps into the float
+    # elements of a fragment. DirectX carries bfloat16 as raw bits, so a plain
+    # assignment would convert the bit pattern as an integer (0x3F80 -> 16256).
+    helpers = "StructuredBuffer<bfloat16_t> taps @register(t2);"
+    body = f"""cooperative_matrix_element(left, 0) = taps[index];
+        cooperative_matrix_element(left, 1) =
+            invocation < 16u ? taps[index + 1u] : bfloat16_t(0);
+        {MATRIX} result = cooperative_matrix_multiply(left, right);
+        outputWords[index * 2u] = asuint(cooperative_matrix_element(result, 0));
+        outputWords[index * 2u + 1u] = asuint(cooperative_matrix_element(result, 1));"""
+    generated = _codegen().generate_stage(
+        parse(_source(body, helpers=helpers)), "compute"
+    )
+    statements = re.findall(r"^\s*(left\[[01]\] = .*);$", generated, re.M)
+    assert len(statements) == 4, statements
+    decoded = [item for item in statements if "taps" in item]
+    assert len(decoded) == 2, statements
+    assert all(
+        item.split(" = ", 1)[1].startswith("__crossgl_bfloat16_to_float(uint(")
+        for item in decoded
+    ), decoded
+    assert "float __crossgl_bfloat16_to_float(uint value)" in generated
+    _compile(generated, tmp_path, profile="cs_6_2", flags=("-enable-16bit-types",))
+
+
 @pytest.mark.parametrize("arguments", ["left", "left, right, accumulator"])
 def test_software_matrix_plain_product_requires_two_operands(arguments):
     body = f"{MATRIX} result = cooperative_matrix_multiply({arguments});"

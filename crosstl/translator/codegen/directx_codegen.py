@@ -22941,7 +22941,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return f"{lhs} = {rounded}"
 
+    def directx_cooperative_matrix_element_type(self, expr):
+        """Source element type of one lane-local fragment element."""
+
+        operands = getattr(expr, "arguments", None) or ()
+        if operands:
+            matrix_type = _directx_cooperative_matrix_contract_type(
+                self.directx_cooperative_matrix_expression_type(operands[0])
+            )
+            if isinstance(matrix_type, CooperativeMatrixType):
+                return matrix_type.element_type
+        return getattr(expr, "expression_type", None)
+
     def hlsl_assignment_target_type(self, target):
+        if (
+            isinstance(target, CooperativeMatrixOpNode)
+            and target.operation == "element"
+        ):
+            # A lane-local fragment element holds the fragment element type, so
+            # a bfloat16 source is decoded instead of storing its raw bits.
+            return self.directx_cooperative_matrix_element_type(target)
         inferred_type = self.expression_result_type(target)
         if not isinstance(target, ArrayAccessNode):
             return inferred_type
