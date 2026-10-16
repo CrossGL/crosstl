@@ -52,12 +52,12 @@ Core and demo tests also remain part of the complete test suite.
 The longest current-tree kernel families run in the `mlx-current-native-parity`
 job rather than the MLX Metal project porting job: ternary and `binary_two`
 (group `elementwise`), scaled dot-product attention and its two-pass first pass
-(`attention`), and rope, gated delta and its backward (`sequence`). The job has
-one matrix leg per runner and group. Each leg repeats the porting job's
-toolchain setup and pinned kernel checkout, runs only its group's bounded
-steps, and uploads its results as `mlx-current-parity-<os>-<group>`. A
-workflow test checks that each group's step deadlines, plus 30 minutes for
-setup, fit within the leg's timeout.
+(`attention`), rope and gated delta (`sequence`), and the gated delta backward
+(`backward`). The job has one matrix leg per runner and group. Each leg repeats
+the porting job's toolchain setup and pinned kernel checkout, runs only its
+group's bounded steps, and uploads its results as
+`mlx-current-parity-<os>-<group>`. A workflow test checks that each group's
+step deadlines, plus 30 minutes for setup, fit within the leg's timeout.
 
 Independent native regression batches, the portable host build, package
 translation and upstream test execution use explicit prerequisites, so an

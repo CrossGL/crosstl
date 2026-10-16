@@ -6483,7 +6483,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence]
+        group: [elementwise, attention, sequence, backward]
 
     steps:
       - name: Checkout CrossTL
@@ -6769,7 +6769,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_gated_delta.py
 
       - name: Prove current MLX gated delta backward native parity
-        if: matrix.group == 'sequence'
+        if: matrix.group == 'backward'
         shell: bash
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
@@ -6790,7 +6790,7 @@ jobs:
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX gated delta backward native parity" \
-            --timeout-seconds 3600 -- \
+            --timeout-seconds 7200 -- \
             python -m pytest -q -n auto \
               --basetemp=mlx-current-results/gated-delta-vjp \
               --junitxml=mlx-current-results/gated-delta-vjp.xml \

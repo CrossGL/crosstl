@@ -1414,7 +1414,7 @@ def test_ci_requires_native_gated_delta_vjp_parity():
     step = current_parity_step(
         workflow,
         "Prove current MLX gated delta backward native parity",
-        group="sequence",
+        group="backward",
     )
     for required in (
         f'{REQUIRE_ENV}: "1"',
