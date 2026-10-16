@@ -78,7 +78,9 @@ HEAD_DIMS = (
     (256, 256),
     (512, 512),
 )
-GQA_HEADS = ((64, 64, 8), (128, 128, 8), (128, 128, 12), (128, 128, 16))
+# (query/key head dim, value head dim, gqa factor G, query heads per SIMD
+# group HPT) of each sdpa_vector_2pass_1_gqa instantiation.
+GQA_HEADS = ((64, 64, 8, 8), (128, 128, 8, 4), (128, 128, 12, 4), (128, 128, 16, 2))
 AGGREGATION_DIMS = (64, 96, 128, 192, 256, 512)
 BLOCKED_ENTRIES = (
     "sdpa_blocked_scale_copy_bfloat16",
@@ -94,7 +96,7 @@ def _instantiated():
         for qk_dim, value_dim in HEAD_DIMS:
             entries.append(f"sdpa_vector_{type_name}_{qk_dim}_{value_dim}")
             entries.append(f"sdpa_vector_2pass_1_{type_name}_{qk_dim}_{value_dim}")
-        for qk_dim, value_dim, factor in GQA_HEADS:
+        for qk_dim, value_dim, factor, _ in GQA_HEADS:
             entries.append(
                 f"sdpa_vector_2pass_1_gqa_{factor}_{type_name}_{qk_dim}_{value_dim}"
             )
@@ -120,17 +122,7 @@ def _kind(entry):
     return "vector"
 
 
-# The grouped-query first pass does not translate to OpenGL or DirectX yet:
-# sdpa_vector_2pass_1_gqa bounds its key loop by per-SIMD-group token chunks,
-# so neither software-subgroup lowering can prove the loop uniform across the
-# workgroup. It translates back to Metal.
-PENDING_KINDS = {
-    "gqa": "key loop bounds s0 and s1 depend on the SIMD group",
-}
-ENTRIES = tuple(entry for entry in INSTANTIATED if _kind(entry) not in PENDING_KINDS)
-PENDING_ENTRIES = tuple(
-    entry for entry in INSTANTIATED if _kind(entry) in PENDING_KINDS
-)
+ENTRIES = INSTANTIATED
 
 
 def _dtype(entry):
@@ -147,6 +139,16 @@ def _dims(entry):
         value_dim = int(entry.rsplit("_", 1)[1])
         return value_dim, value_dim
     return tuple(int(item) for item in entry.split("_")[-2:])
+
+
+def _gqa_shape(entry):
+    """Return (gqa factor G, query heads per SIMD group HPT) of a GQA first pass."""
+    factor = int(re.match(r"sdpa_vector_2pass_1_gqa_(\d+)_", entry).group(1))
+    qk_dim = _dims(entry)[0]
+    (per_group,) = (
+        heads for dim, _, group, heads in GQA_HEADS if (dim, group) == (qk_dim, factor)
+    )
+    return factor, per_group
 
 
 # mlx/backend/metal/scaled_dot_product_attention.cpp specializes six function
@@ -231,8 +233,13 @@ VARIANTS = tuple(
     for constants in _combinations(entry)
 )
 PASS1_VARIANTS = tuple(item for item in VARIANTS if _kind(item[0]) == "pass1")
-# The first pass runs in its own CI step.
-SINGLE_PASS_VARIANTS = tuple(item for item in VARIANTS if _kind(item[0]) != "pass1")
+# sdpa_vector_2pass_1_gqa declares no function constants.
+GQA_VARIANTS = tuple(item for item in VARIANTS if _kind(item[0]) == "gqa")
+# Both first passes run in their own CI step.
+FIRST_PASS_VARIANTS = PASS1_VARIANTS + GQA_VARIANTS
+SINGLE_PASS_VARIANTS = tuple(
+    item for item in VARIANTS if _kind(item[0]) not in {"pass1", "gqa"}
+)
 SIMD_SIZE = 32
 # sdpa_vector and sdpa_vector_2pass_2 run 32 SIMD groups of 32 threads; the
 # blocked kernels dispatch one thread per element, so one-thread workgroups
@@ -262,11 +269,16 @@ def _workgroup_size(entry, constants):
     kind = _kind(entry)
     if kind == "pass1":
         return PASS1_WORKGROUP_SIZES[_pass1_group(constants)]
+    if kind == "gqa":
+        # sdpa_vector_2pass() requests (32, gqa_factor, 1) threads for its
+        # single query: G SIMD groups, each over HPT query heads and one of
+        # HPT key sub-chunks.
+        return (SIMD_SIZE, _gqa_shape(entry)[0], 1)
     return WORKGROUP_SIZES[kind]
 
 
 SOFTWARE_SUBGROUP_TARGETS = ("opengl", "directx")
-SOFTWARE_SUBGROUP_KINDS = ("vector", "pass2", "pass1")
+SOFTWARE_SUBGROUP_KINDS = ("vector", "pass2", "pass1", "gqa")
 # The first pass steps its key loop by the block count from the block index.
 # OpenGL and DirectX freeze every specialization constant, so the step is a
 # literal the loop proofs can use, and a host precondition bounds N so the
@@ -295,6 +307,21 @@ OPENGL_INDEX_RANGE_ASSERTIONS = {
         " + simd_lid * v_per_thread",
         "keys + i",
         "values + i",
+    ),
+    # The GQA first pass advances its key and value pointers by the unscaled
+    # 64-bit sequence strides, so each stride and each advanced pointer needs
+    # its own bound.
+    "gqa": (
+        "kv_batch_head_idx * k_head_stride + s0 * k_seq_stride"
+        " + simd_lid * qk_per_thread",
+        "kv_batch_head_idx * v_head_stride + s0 * v_seq_stride"
+        " + simd_lid * v_per_thread",
+        "kp + i",
+        "vp + i",
+        "k_seq_stride",
+        "v_seq_stride",
+        "kp + k_seq_stride",
+        "vp + v_seq_stride",
     ),
 }
 # name -> (batch, query heads, key/value heads, query length, key length,
@@ -337,6 +364,18 @@ PASS1_CASES = {
 }
 PASS1_MASKED_ROWS = {"decode": ((1, 0),), "prefill": ((3, 2),)}
 PASS1_GROUP_CASES = {"decode": ("decode", "cache"), "prefill": ("prefill", "rising")}
+# name -> (batch, key/value heads, key length, key/value layout, scale or None
+# for 1/sqrt(D), values, blocks): one query of G query heads per key/value
+# head, without masks or sinks, which MLX sends to sdpa_vector_2pass_1_gqa
+# from 8,192 keys. Each block count is sdpa_vector_2pass()'s default for its
+# shape on some device. 8,192 keys fill 128 blocks with whole sub-chunks;
+# 8,197 keys over 64 blocks and 8,320 over 256 leave short last sub-chunks
+# and empty ones, and the last three of the 256 blocks hold no keys.
+GQA_CASES = {
+    "decode": (1, 2, 8192, "contiguous", None, "random", 128),
+    "cache": (2, 1, 8197, "cache", 1.0, "random", 64),
+    "rising": (1, 1, 8320, "contiguous", None, "rising", 256),
+}
 # sdpa_full_self_attention_blocked runs these kernels only for 512-wide heads,
 # 256 query rows at a time.
 BLOCK_ROWS = 256
@@ -360,6 +399,7 @@ CASES = {
     "vector": VECTOR_CASES,
     "pass2": PASS2_CASES,
     "pass1": PASS1_CASES,
+    "gqa": GQA_CASES,
     "scale-copy": SCALE_COPY_CASES,
     "causal-mask": CAUSAL_MASK_CASES,
 }
@@ -711,6 +751,17 @@ def _vector_buffers(entry, constants, name):
     return buffers
 
 
+def _kv_buffer(data, tensor, dim):
+    """Lay out key or value heads as MLX binds them; unwritten slots are NaN."""
+    head_stride, seq_stride, size = data.kv_strides(dim)
+    buffer = [math.nan] * size
+    for kv, head in enumerate(tensor):
+        for key, row in enumerate(head):
+            base = kv * head_stride + key * seq_stride
+            buffer[base : base + dim] = row
+    return buffer, head_stride, seq_stride
+
+
 def _attention_inputs(data, constants):
     """Return the queries, keys, values, masks and sinks MLX binds."""
     dtype, qk_dim, value_dim = data.dtype, data.qk_dim, data.value_dim
@@ -725,17 +776,8 @@ def _attention_inputs(data, constants):
         ) * qk_dim
         queries[base : base + qk_dim] = data.q[row]
 
-    def kv_buffer(tensor, dim):
-        head_stride, seq_stride, size = data.kv_strides(dim)
-        buffer = [math.nan] * size
-        for kv, head in enumerate(tensor):
-            for key, row in enumerate(head):
-                base = kv * head_stride + key * seq_stride
-                buffer[base : base + dim] = row
-        return buffer, head_stride, seq_stride
-
-    keys, k_head_stride, k_seq_stride = kv_buffer(data.k, qk_dim)
-    values, v_head_stride, v_seq_stride = kv_buffer(data.v, value_dim)
+    keys, k_head_stride, k_seq_stride = _kv_buffer(data, data.k, qk_dim)
+    values, v_head_stride, v_seq_stride = _kv_buffer(data, data.v, value_dim)
     kv_stride, q_stride, head_stride, mask_size = data.mask_strides()
     bool_mask = [False] * mask_size
     float_mask = [0.0] * mask_size
@@ -906,34 +948,7 @@ class _Pass1Case(_VectorCase):
         self.rows = batch * heads * queries
         seed = zlib.crc32(f"pass1:{name}:{dtype}:{qk_dim}:{value_dim}".encode())
         draw = random.Random(seed).random
-
-        def uniform(count, low=-1.0, high=1.0):
-            width = high - low
-            return _quantize_many(dtype, [low + width * draw() for _ in range(count)])
-
-        def split(values, width):
-            return [
-                values[start : start + width] for start in range(0, len(values), width)
-            ]
-
-        kv_count = batch * kv_heads
-        if pattern == "rising":
-            base = [2.0 * draw() - 1.0 for _ in range(qk_dim)]
-            noisy = [
-                item + 0.05 * (2.0 * draw() - 1.0)
-                for _ in range(self.rows)
-                for item in base
-            ]
-            self.q = split(_quantize_many(dtype, noisy), qk_dim)
-            scaled = [
-                item * (0.25 + 2.0 * key / keys) for key in range(keys) for item in base
-            ]
-            rising = split(_quantize_many(dtype, scaled), qk_dim)
-            self.k = [rising] * kv_count
-        else:
-            self.q = split(uniform(self.rows * qk_dim), qk_dim)
-            self.k = [split(uniform(keys * qk_dim), qk_dim) for _ in range(kv_count)]
-        self.v = [split(uniform(keys * value_dim), value_dim) for _ in range(kv_count)]
+        uniform = self._draw_tensors(draw, pattern)
         self.sinks = uniform(heads, -2.0, 2.0)
         masked = set(PASS1_MASKED_ROWS.get(name, ()))
         choices = (0.0, 0.0, 0.0, -0.75, 0.5, -3.0, 1.25, -math.inf, -math.inf, -12.0)
@@ -959,10 +974,52 @@ class _Pass1Case(_VectorCase):
                 shared = (bools, floats)
             self.bool_mask.append(bools)
             self.float_mask.append(floats)
+        self._score()
+
+    def _draw_tensors(self, draw, pattern):
+        """Draw the queries, keys and values; return the bulk uniform drawer."""
+        dtype, qk_dim, value_dim, keys = (
+            self.dtype,
+            self.qk_dim,
+            self.value_dim,
+            self.keys,
+        )
+
+        def uniform(count, low=-1.0, high=1.0):
+            width = high - low
+            return _quantize_many(dtype, [low + width * draw() for _ in range(count)])
+
+        def split(values, width):
+            return [
+                values[start : start + width] for start in range(0, len(values), width)
+            ]
+
+        kv_count = self.batch * self.kv_heads
+        if pattern == "rising":
+            base = [2.0 * draw() - 1.0 for _ in range(qk_dim)]
+            noisy = [
+                item + 0.05 * (2.0 * draw() - 1.0)
+                for _ in range(self.rows)
+                for item in base
+            ]
+            self.q = split(_quantize_many(dtype, noisy), qk_dim)
+            scaled = [
+                item * (0.25 + 2.0 * key / keys) for key in range(keys) for item in base
+            ]
+            rising = split(_quantize_many(dtype, scaled), qk_dim)
+            self.k = [rising] * kv_count
+        else:
+            self.q = split(uniform(self.rows * qk_dim), qk_dim)
+            self.k = [split(uniform(keys * qk_dim), qk_dim) for _ in range(kv_count)]
+        self.v = [split(uniform(keys * value_dim), value_dim) for _ in range(kv_count)]
+        return uniform
+
+    def _score(self):
+        """Record each row's exact scores and the sums of their absolute products."""
         self.dots, self.abs_dots = [], []
         for row in range(self.rows):
             query = self.q[row]
-            head = self.k[self._kv_head(row // queries)]
+            head = self.k[self._kv_head(row // self.queries)]
             self.dots.append(
                 [self.scale * math.fsum(map(operator.mul, query, key)) for key in head]
             )
@@ -972,6 +1029,29 @@ class _Pass1Case(_VectorCase):
                     for key in head
                 ]
             )
+
+
+class _GqaCase(_Pass1Case):
+    """Logical tensors of one sdpa_vector_2pass_1_gqa case and their strides.
+
+    One query per query head; heads ``kv * G`` to ``kv * G + G - 1`` share
+    key/value head ``kv``.
+    """
+
+    def __init__(self, dtype, qk_dim, value_dim, factor, name):
+        batch, kv_heads, keys, kv_layout, scale, pattern, blocks = GQA_CASES[name]
+        self.name = name
+        self.dtype = dtype
+        self.qk_dim, self.value_dim = qk_dim, value_dim
+        self.batch, self.heads, self.kv_heads = batch, factor * kv_heads, kv_heads
+        self.queries, self.keys, self.blocks = 1, keys, blocks
+        self.kv_layout, self.mask_layout = kv_layout, None
+        self.scale = _float32(qk_dim**-0.5 if scale is None else scale)
+        self.gqa = factor
+        self.rows = batch * self.heads
+        seed = zlib.crc32(f"gqa:{name}:{dtype}:{qk_dim}:{value_dim}:{factor}".encode())
+        self._draw_tensors(random.Random(seed).random, pattern)
+        self._score()
 
 
 # One entry's two threadgroup shapes hold four cases.
@@ -1322,6 +1402,336 @@ def _pass1_mutations(entry, constants, name):
     if data.dtype == "float32" and data.scale != 1.0:
         mutations.append("binary16-score")
     return mutations
+
+
+# One entry's three cases.
+@functools.lru_cache(maxsize=3)
+def _gqa_case(dtype, qk_dim, value_dim, factor, name):
+    return _GqaCase(dtype, qk_dim, value_dim, factor, name)
+
+
+def _gqa_data(entry, name):
+    return _gqa_case(_dtype(entry), *_dims(entry), _gqa_shape(entry)[0], name)
+
+
+def _gqa_chunks(keys, blocks, per_group, block):
+    """Return the key ranges of one block's HPT sub-chunks, as the kernel splits.
+
+    A block takes ceil(N / blocks) keys and each sub-chunk ceil(chunk / HPT)
+    of them, so trailing sub-chunks of a short block may hold none.
+    """
+    chunk = -(-keys // blocks)
+    start = block * chunk
+    end = min(keys, start + chunk)
+    sub = -(-chunk // per_group)
+    return [
+        range(start + part * sub, min(end, start + part * sub + sub))
+        for part in range(per_group)
+    ]
+
+
+def _gqa_block(entry, data, row, block):
+    """Return each sub-chunk's keys, exact scores and score errors for a row."""
+    growth = (1 + OP_ERROR) * _gamma(data.qk_dim // SIMD_SIZE + 34)
+    _, per_group = _gqa_shape(entry)
+    return [
+        (
+            list(keys),
+            [data.dots[row][key] for key in keys],
+            [growth * data.abs_dots[row][key] for key in keys],
+        )
+        for keys in _gqa_chunks(data.keys, data.blocks, per_group, block)
+    ]
+
+
+def _gqa_max_reference(entry, name):
+    """Return each block's exact maximum and the largest score error in it."""
+    data = _gqa_data(entry, name)
+    expected, bounds = [], []
+    for row in range(data.rows):
+        for block in range(data.blocks):
+            parts = _gqa_block(entry, data, row, block)
+            scores = [score for _, items, _ in parts for score in items]
+            errors = [error for _, _, items in parts for error in items]
+            expected.append(max([-FLT_MAX, *scores]))
+            bounds.append(max(errors, default=0.0) * BOUND_SAFETY)
+    return expected, bounds
+
+
+def _gqa_partial_reference(entry, name, maxs):
+    """Return the expected sums and partial outputs relative to ``maxs``.
+
+    Each SIMD group runs the first pass's online softmax over one sub-chunk
+    of a block for HPT query heads. A key's weight passes through its own
+    exponential, the rescaling factor of every later key of its sub-chunk and
+    the factor that rescales the sub-chunk to the block's maximum, whose
+    arguments again sum to its distance from that maximum. The sub-chunk's sum
+    cancels between its normalized partial and its weight up to one division,
+    and the HPT sub-chunks are added once more.
+    """
+    data = _gqa_data(entry, name)
+    _, per_group = _gqa_shape(entry)
+    blocks, value_dim = data.blocks, data.value_dim
+    sums, sum_bounds, out, out_bounds = [], [], [], []
+    for row in range(data.rows):
+        kv = data._kv_head(row)
+        for block in range(blocks):
+            parts = _gqa_block(entry, data, row, block)
+            top = maxs[row * blocks + block]
+            count = sum(len(keys) for keys, _, _ in parts)
+            if not count:
+                # Every sub-chunk keeps its initial values, which combine to
+                # zero partials and a zero sum.
+                sums.append(0.0)
+                sum_bounds.append(0.0)
+                out += [0.0] * value_dim
+                out_bounds += [0.0] * value_dim
+                continue
+            largest_error = max(error for _, _, errors in parts for error in errors)
+            used, weights, sum_spread, out_spread = [], [], [], []
+            for keys, scores, errors in parts:
+                local = len(keys)
+                sum_growth = (1 + OP_ERROR) ** (2 * local + per_group + 5)
+                out_growth = (1 + OP_ERROR) ** (3 * local + per_group + 7) * (
+                    1 + DIVISION_ERROR
+                )
+                for position, (key, score, error) in enumerate(
+                    zip(keys, scores, errors)
+                ):
+                    weight = math.exp(score - top)
+                    distance = max(0.0, top - score)
+                    exponentials = OP_ERROR * (
+                        EXP_UNITS * (local - position + 1)
+                        + 4.0 * (distance + 2.0 * largest_error)
+                    )
+                    relative = math.expm1(error + exponentials)
+                    used.append(key)
+                    weights.append(weight)
+                    sum_spread.append(((1 + relative) * sum_growth - 1) * weight)
+                    out_spread.append(((1 + relative) * out_growth - 1) * weight)
+            slack = TINY * (4 * count + 64)
+            sums.append(math.fsum(weights))
+            sum_bounds.append((math.fsum(sum_spread) + slack) * BOUND_SAFETY)
+            for column in zip(*(data.v[kv][key] for key in used)):
+                out.append(math.fsum(map(operator.mul, weights, column)))
+                spread = math.fsum(map(operator.mul, out_spread, map(abs, column)))
+                out_bounds.append((spread + slack) * BOUND_SAFETY)
+    return {"sums": (sums, sum_bounds), "out": (out, out_bounds)}
+
+
+def _gqa_check(entry, name, outputs, maxs=None):
+    """Check the block maxima, then the sums and partials relative to them."""
+    used = {
+        "maxs": _check("float32", outputs["maxs"], *_gqa_max_reference(entry, name))
+    }
+    reference = _gqa_partial_reference(
+        entry, name, outputs["maxs"] if maxs is None else maxs
+    )
+    used["sums"] = _check("float32", outputs["sums"], *reference["sums"])
+    used["out"] = _check(_dtype(entry), outputs["out"], *reference["out"])
+    return used
+
+
+def _gqa_buffers(entry, name):
+    """Return the buffers and scalars sdpa_vector_2pass() binds for one case."""
+    data = _gqa_data(entry, name)
+    partials = data.rows * data.blocks
+    guard = _from_bits("float32", GUARD_BITS["float32"])
+    keys, k_head_stride, k_seq_stride = _kv_buffer(data, data.k, data.qk_dim)
+    values, v_head_stride, v_seq_stride = _kv_buffer(data, data.v, data.value_dim)
+    return {
+        "queries": (
+            [item for row in data.q for item in row] + [math.nan] * INPUT_GUARD_COUNT
+        ),
+        "keys": keys + [math.nan] * INPUT_GUARD_COUNT,
+        "values": values + [math.nan] * INPUT_GUARD_COUNT,
+        "out": (
+            [_from_bits(data.dtype, GUARD_BITS[data.dtype])]
+            * (partials * data.value_dim)
+        ),
+        "sums": [guard] * partials,
+        "maxs": [guard] * partials,
+        "N": data.keys,
+        "k_head_stride": k_head_stride,
+        "k_seq_stride": k_seq_stride,
+        "v_head_stride": v_head_stride,
+        "v_seq_stride": v_seq_stride,
+        "scale": data.scale,
+        "grid": (data.kv_heads, data.batch, data.blocks),
+    }
+
+
+def _gqa_simulate(entry, name, mutation=None):
+    """Run sdpa_vector_2pass_1_gqa's index arithmetic on the bound buffers.
+
+    Each SIMD group walks its sub-chunk for its HPT heads, stores normalized
+    partials, sums and maxima in its slots, and after the barrier combines its
+    own head's HPT slots. Scores and accumulators stay in float64 and results
+    round to their storage types; ``mutation`` injects one defect. Return the
+    outputs and each block's unrounded maximum.
+    """
+    data = _gqa_data(entry, name)
+    dtype, qk_dim, value_dim = data.dtype, data.qk_dim, data.value_dim
+    factor, per_group = _gqa_shape(entry)
+    groups = factor // per_group
+    buffers = _gqa_buffers(entry, name)
+    num_kv_heads, batches, blocks = buffers["grid"]
+    num_q_heads = num_kv_heads * factor
+    rows = batches * num_q_heads
+    scale = 1.0 if mutation == "scale" else buffers["scale"]
+    keys = buffers["N"] - 1 if mutation == "last-key" else buffers["N"]
+    chunk = keys // blocks if mutation == "chunk" else -(-keys // blocks)
+    sub = chunk // per_group if mutation == "sub-chunk" else -(-chunk // per_group)
+    k_head_stride = buffers["k_head_stride"]
+    if mutation == "head-stride":
+        k_head_stride = data.keys * qk_dim
+    k_seq_stride = buffers["k_seq_stride"]
+    v_head_stride, v_seq_stride = buffers["v_head_stride"], buffers["v_seq_stride"]
+    outputs = {member: list(buffers[member]) for member in ("out", "sums", "maxs")}
+    tops = [math.nan] * len(outputs["maxs"])
+    for kv_head in range(num_kv_heads):
+        for batch in range(batches):
+            base_head = batch * num_q_heads + kv_head * factor
+            kv_bh = batch * num_kv_heads + kv_head
+            for block in range(blocks):
+                start = block * chunk
+                end = min(keys, start + chunk)
+                slots = {}
+                for group in range(factor):
+                    part = group // groups
+                    first = (group % groups) * per_group
+                    s0 = start + part * sub
+                    s1 = min(end, s0 + sub)
+                    for head in range(first, first + per_group):
+                        if mutation == "gqa":
+                            q_bh = batch * num_q_heads + kv_head + num_kv_heads * head
+                        else:
+                            q_bh = base_head + head
+                        q = [
+                            scale * item
+                            for item in _slice(
+                                buffers["queries"], q_bh * qk_dim, qk_dim
+                            )
+                        ]
+                        top = 0.0 if mutation == "max-init" else -FLT_MAX
+                        total, accumulator = 0.0, [0.0] * value_dim
+                        for key in range(s0, s1):
+                            k_ptr = kv_bh * k_head_stride + key * k_seq_stride
+                            score = math.fsum(
+                                map(
+                                    operator.mul,
+                                    q,
+                                    _slice(buffers["keys"], k_ptr, qk_dim),
+                                )
+                            )
+                            if mutation == "binary16-score":
+                                score = struct.unpack("<e", struct.pack("<e", score))[0]
+                            new_top = max(top, score)
+                            rescale = math.exp(top - new_top)
+                            weight = math.exp(score - new_top)
+                            top = new_top
+                            total = total * rescale + weight
+                            v_ptr = kv_bh * v_head_stride + key * v_seq_stride
+                            accumulator = [
+                                item * rescale + weight * value
+                                for item, value in zip(
+                                    accumulator,
+                                    _slice(buffers["values"], v_ptr, value_dim),
+                                )
+                            ]
+                        if mutation == "slot":
+                            slot = part * factor + head
+                        else:
+                            slot = head * per_group + part
+                        inverse = 1.0 / total if total > 0 else 0.0
+                        slots[slot] = (
+                            top,
+                            total,
+                            [item * inverse for item in accumulator],
+                        )
+                for group in range(factor):
+                    states = [
+                        slots[group * per_group + part] for part in range(per_group)
+                    ]
+                    top = max([-FLT_MAX, *(state[0] for state in states)])
+                    weights = [
+                        state[1]
+                        * (1.0 if mutation == "rescale" else math.exp(state[0] - top))
+                        for state in states
+                    ]
+                    total = math.fsum(weights)
+                    accumulator = [
+                        math.fsum(
+                            w * state[2][index] for w, state in zip(weights, states)
+                        )
+                        for index in range(value_dim)
+                    ]
+                    if mutation == "normalize" and total:
+                        accumulator = [item / total for item in accumulator]
+                    o_offset = base_head + group
+                    index = o_offset * blocks + block
+                    written = (
+                        block * rows + o_offset if mutation == "out-layout" else index
+                    )
+                    outputs["sums"][index] = _float32(total)
+                    outputs["maxs"][index] = _float32(top)
+                    tops[index] = top
+                    outputs["out"][written * value_dim : (written + 1) * value_dim] = [
+                        _quantize(dtype, item) for item in accumulator
+                    ]
+    return outputs, tops
+
+
+def _gqa_weight(entry, data, row, key):
+    """Return a key's exact weight relative to its block's maximum."""
+    chunk = -(-data.keys // data.blocks)
+    parts = _gqa_block(entry, data, row, key // chunk)
+    scores = {
+        item: score for keys, values, _ in parts for item, score in zip(keys, values)
+    }
+    return math.exp(scores[key] - max(scores.values()))
+
+
+def _gqa_mutations(entry, name):
+    """Return the defects that change the GQA first pass's results on ``name``."""
+    data = _gqa_data(entry, name)
+    _, per_group = _gqa_shape(entry)
+    mutations = ["normalize", "slot", "rescale", "out-layout"]
+    if data.keys % data.blocks:
+        mutations.append("chunk")
+    if -(-data.keys // data.blocks) % per_group:
+        mutations.append("sub-chunk")
+    # Seeding the maximum with zero only shows where a block's maximum stays
+    # below zero or the block uses no key.
+    if any(top < -(2.0**-5) for top in _gqa_max_reference(entry, name)[0]):
+        mutations.append("max-init")
+    # Dropping a key only matters where it carries weight.
+    if any(
+        _gqa_weight(entry, data, row, data.keys - 1) > 2.0**-5
+        for row in range(data.rows)
+    ):
+        mutations.append("last-key")
+    if data.scale != 1.0:
+        mutations.append("scale")
+    if data.kv_heads > 1:
+        mutations.append("gqa")
+    if data.kv_layout != "contiguous" and data.batch * data.kv_heads > 1:
+        mutations.append("head-stride")
+    if data.dtype == "float32" and data.scale != 1.0:
+        mutations.append("binary16-score")
+    return mutations
+
+
+def _first_pass_buffers(entry, constants, name):
+    if _kind(entry) == "gqa":
+        return _gqa_buffers(entry, name)
+    return _pass1_buffers(entry, constants, name)
+
+
+def _first_pass_check(entry, constants, name, outputs, maxs=None):
+    if _kind(entry) == "gqa":
+        return _gqa_check(entry, name, outputs, maxs)
+    return _pass1_check(entry, constants, name, outputs, maxs)
 
 
 class _Pass2Case:
@@ -1916,6 +2326,27 @@ def _case_contract():
         "firstPassCaseSelection": {
             group: list(names) for group, names in PASS1_GROUP_CASES.items()
         },
+        "gqaFirstPass": {
+            name: {
+                "batch": batch,
+                "kvHeads": kv_heads,
+                "queryLength": 1,
+                "keyLength": keys,
+                "kvLayout": kv_layout,
+                "scale": scale,
+                "values": pattern,
+                "blocks": blocks,
+            }
+            for name, (
+                batch,
+                kv_heads,
+                keys,
+                kv_layout,
+                scale,
+                pattern,
+                blocks,
+            ) in GQA_CASES.items()
+        },
         "pass2": {
             name: {
                 "rows": rows,
@@ -1960,11 +2391,24 @@ def _expected_validation_contract():
             "pass1": {
                 group: list(size) for group, size in PASS1_WORKGROUP_SIZES.items()
             },
+            "gqa": {
+                str(factor): [SIMD_SIZE, factor, 1]
+                for factor in sorted({item[2] for item in GQA_HEADS})
+            },
         },
         "firstPassWorkgroupSelection": {
             "queryTransposedOrCausal": "prefill",
             "other": "decode",
         },
+        "gqaHeads": [
+            {
+                "qkDim": qk_dim,
+                "valueDim": value_dim,
+                "gqaFactor": factor,
+                "headsPerSimdGroup": per_group,
+            }
+            for qk_dim, value_dim, factor, per_group in GQA_HEADS
+        ],
         "simdSize": SIMD_SIZE,
         "softwareSubgroups": {
             target: list(SOFTWARE_SUBGROUP_KINDS)
@@ -2010,6 +2454,11 @@ def _expected_validation_contract():
             "scoreError": "gamma(D / 32 + 34) * scale * sum|q * k|",
             "accumulatorRoundings": {"numerator": "3n + 34", "denominator": "2n + 34"},
             "firstPassAccumulatorRoundings": {"partials": "3n + 4", "sums": "2n + 4"},
+            "gqaAccumulatorRoundings": {
+                "partials": "3n + HPT + 7 and one division",
+                "sums": "2n + HPT + 5",
+                "exponentials": "n - position + 1",
+            },
             "tiny": TINY,
             "boundSafety": BOUND_SAFETY,
         },
@@ -2043,6 +2492,10 @@ def _output_count(entry, name, constants=None):
         batch, heads, _, queries = PASS1_CASES[name][:4]
         # Partial outputs, sums and maxima for every row's blocks.
         return batch * heads * queries * constants["blocks"] * (_dims(entry)[1] + 2)
+    if kind == "gqa":
+        batch, kv_heads, _, _, _, _, blocks = GQA_CASES[name]
+        rows = batch * kv_heads * _gqa_shape(entry)[0]
+        return rows * blocks * (_dims(entry)[1] + 2)
     if kind == "pass2":
         data = _pass2_data(entry, name)
         return data.rows * data.value_dim
@@ -2073,7 +2526,6 @@ def _expected_scope():
         "instantiatedEntryCount": len(INSTANTIATED),
         "coveredEntryCount": len(ENTRIES),
         "runtimeCoveredEntryCount": len(ENTRIES),
-        "pendingEntryCount": len(PENDING_ENTRIES),
         "artifactCountByTarget": len(VARIANTS),
         "dispatchCountByTarget": _dispatch_count(),
         "checkedElementCountByEntry": {
@@ -2101,19 +2553,8 @@ def test_current_mlx_sdpa_contract_is_exact():
         "entryCount": 17832,
         "discoveryDiagnosticCount": 0,
     }
-    assert tuple(contract["entries"]) == ENTRIES
-    pending = contract["pendingEntries"]
-    assert tuple(pending) == PENDING_ENTRIES
-    for entry, record in pending.items():
-        assert record == {
-            "kind": _kind(entry),
-            "reason": PENDING_KINDS[_kind(entry)],
-            "translatesTo": ["metal"],
-            "diagnostics": {
-                "opengl": "project.translate.opengl-software-subgroup-invalid",
-                "directx": "project.translate.directx-software-subgroup-invalid",
-            },
-        }
+    assert tuple(contract["entries"]) == ENTRIES == INSTANTIATED
+    assert "pendingEntries" not in contract
     assert set(contract["artifacts"]) == set(TARGETS)
     for target in TARGETS:
         artifacts = contract["artifacts"][target]
@@ -2151,7 +2592,7 @@ def test_sdpa_entries_follow_mlx_instantiation():
         "sdpa_vector_float_96_64",
         "sdpa_vector_2pass_1_float_96_64",
     )
-    assert len(ENTRIES) == 70 and len(PENDING_ENTRIES) == 12
+    assert len(ENTRIES) == 82
     counts = {}
     for entry in ENTRIES:
         counts[_kind(entry)] = counts.get(_kind(entry), 0) + 1
@@ -2160,18 +2601,28 @@ def test_sdpa_entries_follow_mlx_instantiation():
         "causal-mask": 2,
         "vector": 24,
         "pass1": 24,
+        "gqa": 12,
         "pass2": 18,
     }
-    assert {_kind(entry) for entry in PENDING_ENTRIES} == set(PENDING_KINDS)
     assert {_dtype(entry) for entry in ENTRIES} == set(TYPE_NAMES.values())
     assert {_dtype(entry) for entry in BLOCKED_ENTRIES} == {"float16", "bfloat16"}
     assert _dims("sdpa_vector_bfloat16_t_192_128") == (192, 128)
     assert _dims("sdpa_vector_2pass_2_float16_t_96") == (96, 96)
     assert _dims("sdpa_vector_2pass_1_float16_t_192_128") == (192, 128)
     assert _dtype("sdpa_vector_2pass_1_gqa_12_float16_t_128_128") == "float16"
+    assert _dims("sdpa_vector_2pass_1_gqa_12_float16_t_128_128") == (128, 128)
+    assert _gqa_shape("sdpa_vector_2pass_1_gqa_8_bfloat16_t_64_64") == (8, 8)
+    assert _gqa_shape("sdpa_vector_2pass_1_gqa_8_float_128_128") == (8, 4)
+    assert _gqa_shape("sdpa_vector_2pass_1_gqa_16_float16_t_128_128") == (16, 2)
+    for qk_dim, value_dim, factor, per_group in GQA_HEADS:
+        # instantiate_sdpa_vector_gqa: HPT heads per SIMD group divide G, and
+        # sdpa_vector_2pass() routes only D == V heads to the GQA kernel.
+        assert factor % per_group == 0 and qk_dim == value_dim
     # Eight specializations per vector and first-pass kernel, one per other.
-    assert len(VARIANTS) == 24 * 8 + 24 * 8 + 4 + 18
-    assert len(PASS1_VARIANTS) + len(SINGLE_PASS_VARIANTS) == len(VARIANTS)
+    assert len(VARIANTS) == 24 * 8 + 24 * 8 + 4 + 18 + 12
+    assert len(GQA_VARIANTS) == 12
+    assert {key for _, key, _ in GQA_VARIANTS} == {"default"}
+    assert len(FIRST_PASS_VARIANTS) + len(SINGLE_PASS_VARIANTS) == len(VARIANTS)
     assert len({(entry, key) for entry, key, _ in VARIANTS}) == len(VARIANTS)
     keys = {key for entry, key, _ in VARIANTS if _kind(entry) == "vector"}
     assert len(keys) == 8
@@ -2243,7 +2694,52 @@ def test_sdpa_cases_follow_mlx_dispatch():
     for entry, _, constants in VARIANTS:
         expected = 2 if _kind(entry) == "pass1" else 3
         assert len(_variant_cases(entry, constants)) == expected, (entry, constants)
-    assert _dispatch_count() == 3 * len(SINGLE_PASS_VARIANTS) + 2 * len(PASS1_VARIANTS)
+    assert _dispatch_count() == 3 * len(SINGLE_PASS_VARIANTS) + 2 * len(
+        PASS1_VARIANTS
+    ) + 3 * len(GQA_VARIANTS)
+    for qk_dim, _, factor, per_group in GQA_HEADS:
+        entry = f"sdpa_vector_2pass_1_gqa_{factor}_float_{qk_dim}_{qk_dim}"
+        # sdpa_vector_2pass() requests (32, gqa_factor, 1) threads.
+        assert _workgroup_size(entry, {}) == (SIMD_SIZE, factor, 1)
+        for name, case in GQA_CASES.items():
+            batch, kv_heads, keys, kv_layout, _, _, blocks = case
+            # The GQA kernel takes one query of G query heads per key/value
+            # head, without masks or sinks, from 8,192 keys; every device
+            # routes that to the two-pass kernels.
+            assert keys >= 8192
+            for device in "gpsd":
+                assert _mlx_routes_two_pass(device, factor * kv_heads, kv_heads, keys)
+            # Each block count is MLX's default for this shape on some device.
+            assert blocks in {
+                _mlx_default_blocks(device, factor, keys) for device in "gpsd"
+            }, (entry, name)
+            if kv_layout == "transposed":
+                assert batch == 1 or kv_heads == 1
+            chunks = [
+                _gqa_chunks(keys, blocks, per_group, block) for block in range(blocks)
+            ]
+            # The sub-chunks partition the keys in order.
+            assert [key for parts in chunks for part in parts for key in part] == list(
+                range(keys)
+            )
+    # Whole sub-chunks, short and empty sub-chunks and empty blocks appear.
+    shapes = set()
+    for keys, blocks in ((case[2], case[6]) for case in GQA_CASES.values()):
+        for _, _, _, per_group in GQA_HEADS:
+            for block in range(blocks):
+                sizes = [
+                    len(part) for part in _gqa_chunks(keys, blocks, per_group, block)
+                ]
+                shapes.add("empty-block" if not any(sizes) else None)
+                shapes.add("empty-sub-chunk" if any(sizes) and 0 in sizes else None)
+                shapes.add("short" if len(set(sizes) - {0}) > 1 else None)
+                shapes.add("whole" if len(set(sizes)) == 1 and sizes[0] else None)
+    assert shapes - {None} == {"empty-block", "empty-sub-chunk", "short", "whole"}
+    assert (
+        _mlx_default_blocks("s", 8, 8192) == _mlx_default_blocks("d", 16, 8192) == 128
+    )
+    assert _mlx_default_blocks("g", 12, 8197) == 64
+    assert _mlx_default_blocks("s", 16, 8320) == 256
     for group, names in PASS1_GROUP_CASES.items():
         size = PASS1_WORKGROUP_SIZES[group]
         for name in names:
@@ -2545,6 +3041,96 @@ def test_sdpa_first_pass_bounds_stay_meaningful(entry):
             assert any(sum_bounds) and any(out_bounds), (entry, name)
 
 
+# Each GQA head shape in float32 and the smallest in each 16-bit type.
+GQA_REPRESENTATIVES = (
+    "sdpa_vector_2pass_1_gqa_8_float_64_64",
+    "sdpa_vector_2pass_1_gqa_8_float_128_128",
+    "sdpa_vector_2pass_1_gqa_12_float_128_128",
+    "sdpa_vector_2pass_1_gqa_16_float_128_128",
+    "sdpa_vector_2pass_1_gqa_8_float16_t_64_64",
+    "sdpa_vector_2pass_1_gqa_8_bfloat16_t_64_64",
+)
+
+
+@pytest.mark.parametrize("entry", GQA_REPRESENTATIVES)
+def test_sdpa_gqa_reference_matches_kernel_index_arithmetic(entry):
+    # The simulation runs the GQA first pass's sub-chunk split, head
+    # assignment, threadgroup slots and cross-group combination on the bound
+    # buffers in float64. Relative to its own maxima, its correctly rounded
+    # results use no part of the bound.
+    for name in GQA_CASES:
+        outputs, tops = _gqa_simulate(entry, name)
+        used = _gqa_check(entry, name, outputs, maxs=tops)
+        assert max(used.values()) < 2.0**-8, (entry, name, used)
+
+
+@pytest.mark.parametrize("entry", GQA_REPRESENTATIVES)
+def test_sdpa_gqa_checks_reject_defects(entry):
+    dtype = _dtype(entry)
+    rejected = set()
+    for name in GQA_CASES:
+        outputs, tops = _gqa_simulate(entry, name)
+        # An unwritten output of each kind fails.
+        for member, guard_type in (
+            ("out", dtype),
+            ("sums", "float32"),
+            ("maxs", "float32"),
+        ):
+            unwritten = {**outputs, member: list(outputs[member])}
+            unwritten[member][-1] = _from_bits(guard_type, GUARD_BITS[guard_type])
+            with pytest.raises(AssertionError):
+                _gqa_check(entry, name, unwritten, maxs=tops)
+        # Each defect once, on the first case it shows.
+        for mutation in _gqa_mutations(entry, name):
+            if mutation in rejected:
+                continue
+            wrong, wrong_tops = _gqa_simulate(entry, name, mutation)
+            with pytest.raises(AssertionError):
+                _gqa_check(entry, name, wrong, maxs=wrong_tops)
+            rejected.add(mutation)
+    expected = {
+        "normalize",
+        "slot",
+        "rescale",
+        "out-layout",
+        "chunk",
+        "sub-chunk",
+        "max-init",
+        "last-key",
+        "scale",
+        "gqa",
+        "head-stride",
+    }
+    if dtype == "float32":
+        expected.add("binary16-score")
+    assert rejected == expected
+
+
+@pytest.mark.parametrize("entry", GQA_REPRESENTATIVES)
+def test_sdpa_gqa_bounds_stay_meaningful(entry):
+    # As for the other first pass: score errors bound the maxima to 2^-12
+    # (2^-9 for unscaled dot products), and the sums and partials stay within
+    # the same fraction of the sum of their terms' magnitudes.
+    for name in GQA_CASES:
+        data = _gqa_data(entry, name)
+        maxima, max_bounds = _gqa_max_reference(entry, name)
+        limit = 2.0**-9 if name == "cache" else 2.0**-12
+        assert max(max_bounds) < limit, (entry, name, max(max_bounds))
+        reference = _gqa_partial_reference(entry, name, maxima)
+        sums, sum_bounds = reference["sums"]
+        assert max(b / s for s, b in zip(sums, sum_bounds) if s) < limit
+        _, out_bounds = reference["out"]
+        width = data.value_dim
+        for index, total in enumerate(sums):
+            bounds = out_bounds[index * width : (index + 1) * width]
+            assert max(bounds) <= limit * max(total, 1.0), (entry, name, index)
+        assert any(sum_bounds) and any(out_bounds), (entry, name)
+        # Blocks without keys report exact zeros.
+        empty = [index for index, total in enumerate(sums) if not total]
+        assert all(maxima[index] == -FLT_MAX for index in empty), (entry, name)
+        assert bool(empty) is (name == "rising"), (entry, name)
+
+
 @pytest.mark.parametrize("target", TARGETS)
 @pytest.mark.parametrize(
     "entry,key,constants", VARIANTS, ids=[f"{e}-{k}" for e, k, _ in VARIANTS]
@@ -2718,16 +3304,31 @@ BINDINGS = {
         "mask_head_stride": "int32",
         "sinks": "T",
     },
+    "gqa": {
+        "queries": "T",
+        "keys": "T",
+        "values": "T",
+        "out": "out",
+        "sums": "float32-out",
+        "maxs": "float32-out",
+        "N": "int32",
+        "k_head_stride": "uint64",
+        "k_seq_stride": "uint64",
+        "v_head_stride": "uint64",
+        "v_seq_stride": "uint64",
+        "scale": "float32",
+    },
 }
 OUTPUTS = {
     "vector": ("out",),
     "pass2": ("out",),
     "pass1": ("out", "sums", "maxs"),
+    "gqa": ("out", "sums", "maxs"),
     "scale-copy": ("q_block",),
     "causal-mask": ("scores",),
 }
 # sdpa_vector_2pass() binds nothing at buffer index 6.
-UNBOUND_INDICES = {"pass1": (6,)}
+UNBOUND_INDICES = {"pass1": (6,), "gqa": (6,)}
 
 
 def _upstream_indices(kind):
@@ -2983,8 +3584,10 @@ def _header(text, name):
 def _assert_lowering(text, target, entry, constants):
     kind = _kind(entry)
     assert "unsupported" not in text
-    # sdpa_vector calls fast::exp three times, the two-pass kernels twice.
-    calls = {"vector": 3, "pass2": 2, "pass1": 2}.get(kind, 0)
+    # sdpa_vector calls fast::exp three times, as does the GQA first pass, which
+    # rescales its sub-chunks once more; the other two-pass kernels call it
+    # twice.
+    calls = {"vector": 3, "pass2": 2, "pass1": 2, "gqa": 3}.get(kind, 0)
     if target == "metal":
         # Translated Metal keeps every fast::exp.
         assert text.count("metal::fast::exp(") == text.count("fast::") == calls
@@ -2993,8 +3596,8 @@ def _assert_lowering(text, target, entry, constants):
         assert "fast::" not in text
     if kind in SOFTWARE_SUBGROUP_KINDS:
         assert text.count("exp(") >= calls
-        # The first pass reduces scores with simd_sum alone.
-        reduces_maxima = kind != "pass1"
+        # The first passes reduce scores with simd_sum alone.
+        reduces_maxima = kind not in {"pass1", "gqa"}
         if target == "metal":
             assert "simd_sum(" in text
             assert ("simd_max(" in text) is reduces_maxima
@@ -3003,6 +3606,18 @@ def _assert_lowering(text, target, entry, constants):
         else:
             assert "__crossgl_software_subgroup_sum_float(" in text
             assert ("__crossgl_software_subgroup_max_float(" in text) is reduces_maxima
+    if kind == "gqa":
+        # Each SIMD group's key loop runs [s0, s1) of its own sub-chunk. The
+        # software subgroups run every group for the sub-chunk's full length
+        # and mask the steps past its keys, so each reduction is uniform.
+        converged = (
+            "crossgl_subgroup_step < sub)" in text
+            and "crossgl_subgroup_active = ((t >= s0) && (t < s1));" in text
+        )
+        assert converged is (target != "metal")
+        if target == "metal":
+            # Metal keeps the kernel's own loop and hardware SIMD groups.
+            assert "for (int t = s0; t < s1; t++)" in text
     if target in FROZEN_TARGETS.get(kind, ()):
         # Every constant becomes a literal; the header records each value.
         assert _header(text, "crosstl-frozen-specializations") == {
@@ -3296,20 +3911,22 @@ def _output_dtype(entry, member):
 
 @pytest.mark.parametrize(
     "entry,key,constants",
-    PASS1_VARIANTS,
-    ids=[f"{e}-{k}" for e, k, _ in PASS1_VARIANTS],
+    FIRST_PASS_VARIANTS,
+    ids=[f"{e}-{k}" for e, k, _ in FIRST_PASS_VARIANTS],
 )
 def test_current_mlx_sdpa_first_pass_native_parity(
     current_mlx, metal_reference, tmp_path, entry, key, constants
 ):
     root, target = current_mlx
+    kind = _kind(entry)
     with tempfile.TemporaryDirectory(prefix=".current-sdpa-", dir=root) as path:
         work = Path(path)
         try:
             translation, record, limits = _translate_variant(
                 root, work, target, entry, key, constants, metal_reference
             )
-            # MLX requests at most 256 threads, which both pipelines run.
+            # MLX requests at most 512 threads (the GQA first pass over 16
+            # query heads), which both pipelines run.
             assert limits is None or (
                 min(limits["translated"], limits["upstream"]) >= limits["requested"]
             ), limits
@@ -3320,7 +3937,7 @@ def test_current_mlx_sdpa_first_pass_native_parity(
             evidence = []
             try:
                 for name in _variant_cases(entry, constants):
-                    buffers = _pass1_buffers(entry, constants, name)
+                    buffers = _first_pass_buffers(entry, constants, name)
                     request, outputs, observed = _dispatch(
                         descriptor, package, target, entry, constants, buffers
                     )
@@ -3346,7 +3963,7 @@ def test_current_mlx_sdpa_first_pass_native_parity(
                             _output_dtype(entry, member),
                             {**value, "values": value["values"][:written]},
                         )
-                    used = _pass1_check(entry, constants, name, actual)
+                    used = _first_pass_check(entry, constants, name, actual)
                     observations = result.details["inputObservations"]
                     assert len(observations) == observed
                     assert all(item["unchanged"] for item in observations.values())
@@ -3357,7 +3974,7 @@ def test_current_mlx_sdpa_first_pass_native_parity(
                         )
                         upstream = {
                             "device": device,
-                            "boundFractionUsed": _pass1_check(
+                            "boundFractionUsed": _first_pass_check(
                                 entry, constants, name, upstream_outputs
                             ),
                             "bitIdenticalToTranslated": all(
@@ -3369,7 +3986,7 @@ def test_current_mlx_sdpa_first_pass_native_parity(
                                     _bits(_output_dtype(entry, member), item)
                                     for item in actual[member]
                                 ]
-                                for member in OUTPUTS["pass1"]
+                                for member in OUTPUTS[kind]
                             ),
                         }
                     evidence.append(
@@ -3399,11 +4016,11 @@ def test_current_mlx_sdpa_first_pass_native_parity(
                         "specialization": key,
                         "constants": constants,
                         "artifactSha256": record["sha256"],
-                        "frozenSpecializations": target in FROZEN_TARGETS["pass1"],
+                        "frozenSpecializations": target in FROZEN_TARGETS.get(kind, ()),
                         "pipelineLimits": limits,
                         "cases": evidence,
                         "indexRangeAssertions": (
-                            list(OPENGL_INDEX_RANGE_ASSERTIONS["pass1"])
+                            list(OPENGL_INDEX_RANGE_ASSERTIONS[kind])
                             if target == "opengl"
                             else []
                         ),

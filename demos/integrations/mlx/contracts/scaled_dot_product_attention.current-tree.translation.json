@@ -38,6 +38,10 @@
     "sdpa_vector_2pass_1_float_256_256",
     "sdpa_vector_float_512_512",
     "sdpa_vector_2pass_1_float_512_512",
+    "sdpa_vector_2pass_1_gqa_8_float_64_64",
+    "sdpa_vector_2pass_1_gqa_8_float_128_128",
+    "sdpa_vector_2pass_1_gqa_12_float_128_128",
+    "sdpa_vector_2pass_1_gqa_16_float_128_128",
     "sdpa_vector_2pass_2_float_64",
     "sdpa_vector_2pass_2_float_96",
     "sdpa_vector_2pass_2_float_128",
@@ -60,6 +64,10 @@
     "sdpa_vector_2pass_1_bfloat16_t_256_256",
     "sdpa_vector_bfloat16_t_512_512",
     "sdpa_vector_2pass_1_bfloat16_t_512_512",
+    "sdpa_vector_2pass_1_gqa_8_bfloat16_t_64_64",
+    "sdpa_vector_2pass_1_gqa_8_bfloat16_t_128_128",
+    "sdpa_vector_2pass_1_gqa_12_bfloat16_t_128_128",
+    "sdpa_vector_2pass_1_gqa_16_bfloat16_t_128_128",
     "sdpa_vector_2pass_2_bfloat16_t_64",
     "sdpa_vector_2pass_2_bfloat16_t_96",
     "sdpa_vector_2pass_2_bfloat16_t_128",
@@ -82,6 +90,10 @@
     "sdpa_vector_2pass_1_float16_t_256_256",
     "sdpa_vector_float16_t_512_512",
     "sdpa_vector_2pass_1_float16_t_512_512",
+    "sdpa_vector_2pass_1_gqa_8_float16_t_64_64",
+    "sdpa_vector_2pass_1_gqa_8_float16_t_128_128",
+    "sdpa_vector_2pass_1_gqa_12_float16_t_128_128",
+    "sdpa_vector_2pass_1_gqa_16_float16_t_128_128",
     "sdpa_vector_2pass_2_float16_t_64",
     "sdpa_vector_2pass_2_float16_t_96",
     "sdpa_vector_2pass_2_float16_t_128",
@@ -89,140 +101,6 @@
     "sdpa_vector_2pass_2_float16_t_256",
     "sdpa_vector_2pass_2_float16_t_512"
   ],
-  "pendingEntries": {
-    "sdpa_vector_2pass_1_gqa_8_float_64_64": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_8_float_128_128": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_12_float_128_128": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_16_float_128_128": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_8_bfloat16_t_64_64": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_8_bfloat16_t_128_128": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_12_bfloat16_t_128_128": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_16_bfloat16_t_128_128": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_8_float16_t_64_64": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_8_float16_t_128_128": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_12_float16_t_128_128": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    },
-    "sdpa_vector_2pass_1_gqa_16_float16_t_128_128": {
-      "kind": "gqa",
-      "reason": "key loop bounds s0 and s1 depend on the SIMD group",
-      "translatesTo": [
-        "metal"
-      ],
-      "diagnostics": {
-        "opengl": "project.translate.opengl-software-subgroup-invalid",
-        "directx": "project.translate.directx-software-subgroup-invalid"
-      }
-    }
-  },
   "artifacts": {
     "metal": {
       "sdpa_blocked_scale_copy_bfloat16": {
@@ -791,6 +669,30 @@
         "nomask_qt_c_sinks_32": {
           "sha256": "57c9807438981e69ea542f1ad8cd9013eaa1133a865c37c9a586660ef638dbe6",
           "sizeBytes": 9943
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_float_64_64": {
+        "default": {
+          "sha256": "56e348c3031cb68705d4eae3313abb4955db0b773e09292bd4b07c13945cee4b",
+          "sizeBytes": 4843
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_float_128_128": {
+        "default": {
+          "sha256": "85c7fa571ac21faf79536092bdc4c55a52a6a458a3ed85c5c805221b38cb72bc",
+          "sizeBytes": 4852
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_12_float_128_128": {
+        "default": {
+          "sha256": "675ea0f14e171f0352c3c8dc56b8e13261bdc42fdc4fbe685715022c03173e5b",
+          "sizeBytes": 4856
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_16_float_128_128": {
+        "default": {
+          "sha256": "344c62758bcfd89303b4417b6ca1db6c19003df8456da1a9a3a0cd0d3f6a7dc4",
+          "sizeBytes": 4856
         }
       },
       "sdpa_vector_2pass_2_float_64": {
@@ -1373,6 +1275,30 @@
           "sizeBytes": 10176
         }
       },
+      "sdpa_vector_2pass_1_gqa_8_bfloat16_t_64_64": {
+        "default": {
+          "sha256": "dc280ca9ae672dfb0184e75a48f93b0c06a40b703efeb2318205c32b3c3f35a5",
+          "sizeBytes": 4864
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_bfloat16_t_128_128": {
+        "default": {
+          "sha256": "5531ee953c0438ffabe720a89d2d74d18321cadd51edbf9a4e160478266de565",
+          "sizeBytes": 4873
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_12_bfloat16_t_128_128": {
+        "default": {
+          "sha256": "6c66239617292f75bc66d38a0f68b75d754933d829f5c21abe5ff7968cf6f137",
+          "sizeBytes": 4877
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_16_bfloat16_t_128_128": {
+        "default": {
+          "sha256": "8d619b7ea1542ef66ce7f2eb077b672afcff55466326b2a82148bfc38a23f29a",
+          "sizeBytes": 4877
+        }
+      },
       "sdpa_vector_2pass_2_bfloat16_t_64": {
         "default": {
           "sha256": "6516cd9397848c678c2fdffb46257bac95fb1f9aab641b131e974f39fb613587",
@@ -1951,6 +1877,30 @@
         "nomask_qt_c_sinks_32": {
           "sha256": "0922bde327b6576bb0d16a7ba8452fb22f7736012261d736f1100773d8bf6f86",
           "sizeBytes": 10074
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_float16_t_64_64": {
+        "default": {
+          "sha256": "545741a5442ed7bb73e50dc84ae028dc26a640c6f954bee9ed5c5a1f03c0ad29",
+          "sizeBytes": 4838
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_float16_t_128_128": {
+        "default": {
+          "sha256": "a10665fc3c7c6dea9c7dc09e062e71aaef840c9cae241e45e9e9255ec7247de0",
+          "sizeBytes": 4847
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_12_float16_t_128_128": {
+        "default": {
+          "sha256": "03c9244bfd7946a50c8a483bcd1dc377418f6408471cf1aff0e4fc54457c260e",
+          "sizeBytes": 4851
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_16_float16_t_128_128": {
+        "default": {
+          "sha256": "ed912396d961f653f8feedfc9ef6c6d1002a9c75a050df4dcbc0f2d967eeba41",
+          "sizeBytes": 4851
         }
       },
       "sdpa_vector_2pass_2_float16_t_64": {
@@ -2559,6 +2509,30 @@
           "sizeBytes": 13159
         }
       },
+      "sdpa_vector_2pass_1_gqa_8_float_64_64": {
+        "default": {
+          "sha256": "52c5dd16b67b13e807c8a198afde4434ecbbbe55a49db54f7cb1c335947aa6ce",
+          "sizeBytes": 9200
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_float_128_128": {
+        "default": {
+          "sha256": "4d74001ef38fc7e7f5b3b5c8426347159f25aa2d5c2eb8ff744208ff72176b0a",
+          "sizeBytes": 9249
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_12_float_128_128": {
+        "default": {
+          "sha256": "8f985d8d0d13c59f85f7d8999d9a3070ab1b2fb0e4f97a3d5c9f093357086182",
+          "sizeBytes": 9269
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_16_float_128_128": {
+        "default": {
+          "sha256": "52e254cc4f1f047f7572fe4fc63d0a6b01c150a61b6f3cf3094d448a12fe2f88",
+          "sizeBytes": 9269
+        }
+      },
       "sdpa_vector_2pass_2_float_64": {
         "default": {
           "sha256": "507ed1d2bee44ee047512ea22ef482f7c2f7eee9058c56496c9232b986403f50",
@@ -3139,6 +3113,30 @@
           "sizeBytes": 13699
         }
       },
+      "sdpa_vector_2pass_1_gqa_8_bfloat16_t_64_64": {
+        "default": {
+          "sha256": "d3375223ce718d05965c63b248f2fac99ff312faa6155ff5505fd9f43f3ca884",
+          "sizeBytes": 9621
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_bfloat16_t_128_128": {
+        "default": {
+          "sha256": "d11ef9ce6c5f01695d47615c6ae4bd211705171cb7fb1d3138f4deb8ab1367d4",
+          "sizeBytes": 9670
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_12_bfloat16_t_128_128": {
+        "default": {
+          "sha256": "c614b65b752834d65db24149adec54c8f83d6a3c99c3c97b456785946a33f106",
+          "sizeBytes": 9690
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_16_bfloat16_t_128_128": {
+        "default": {
+          "sha256": "238549a141c400f534627aa8d49b84698d8aa5bb4ecab6ed85e36b65cfe1b821",
+          "sizeBytes": 9690
+        }
+      },
       "sdpa_vector_2pass_2_bfloat16_t_64": {
         "default": {
           "sha256": "81cc04cbe8405f199164e4be5adab3b088b7149353edbdbf393d4de4a1e2a618",
@@ -3717,6 +3715,30 @@
         "nomask_qt_c_sinks_32": {
           "sha256": "973a41257fc1f871214fd51b8d905f20546f7920f1f5f2f3dcfa01d994eb73d6",
           "sizeBytes": 14657
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_float16_t_64_64": {
+        "default": {
+          "sha256": "651aa39d5bfce75a1bf5eac51bb67c47518eb282f7eba7094bd67ddd069d88d5",
+          "sizeBytes": 10614
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_float16_t_128_128": {
+        "default": {
+          "sha256": "9ed88483b18a77fa8c7bf18921869304cd34ab3dce9ce6c5a8fe284a91ecd3ec",
+          "sizeBytes": 10663
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_12_float16_t_128_128": {
+        "default": {
+          "sha256": "d3db36a0c229eea613d44145932eba07ff468fa6afe6e5f61a168f93a655052a",
+          "sizeBytes": 10683
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_16_float16_t_128_128": {
+        "default": {
+          "sha256": "cee8980770ffa0d2d24ad9a4bf0f7c793a701808841626edea68c45aab1eb9fe",
+          "sizeBytes": 10683
         }
       },
       "sdpa_vector_2pass_2_float16_t_64": {
@@ -4325,6 +4347,30 @@
           "sizeBytes": 13341
         }
       },
+      "sdpa_vector_2pass_1_gqa_8_float_64_64": {
+        "default": {
+          "sha256": "105e9675f26330c28feba22f71df522cc1fe7e008a7e8beb5abe540b74c6ebd6",
+          "sizeBytes": 9017
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_float_128_128": {
+        "default": {
+          "sha256": "dd8a3ee6c0d8c99d9e49d00e1a13b54f5819afc920d9f502de5d9b5e92e1b8b4",
+          "sizeBytes": 9106
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_12_float_128_128": {
+        "default": {
+          "sha256": "fcda0c809137be0ddade45f478c7a04e7cc920eef0386a1a760d6e96156f24be",
+          "sizeBytes": 9141
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_16_float_128_128": {
+        "default": {
+          "sha256": "d5f466dad820a6631c63c991ae1c3e7dfc8a837e74b5a13ec31516a32c3bf87e",
+          "sizeBytes": 9141
+        }
+      },
       "sdpa_vector_2pass_2_float_64": {
         "default": {
           "sha256": "e04d7bc07463ceea44faf059d76d4b0b2e3934ba04a7fe1e03e8360d62d4da27",
@@ -4903,6 +4949,30 @@
         "nomask_qt_c_sinks_32": {
           "sha256": "f6f0fc770e53d546bc29ef148b8df27251d3ee38cd866367fd7b9903c8f14988",
           "sizeBytes": 14413
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_bfloat16_t_64_64": {
+        "default": {
+          "sha256": "486e352db4a62e8353dd0a9a953066d36162e22d408d5e89a47944961149b797",
+          "sizeBytes": 9935
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_bfloat16_t_128_128": {
+        "default": {
+          "sha256": "e7e7205de92800004634fa249bf0e3433978f2db05287cd6038624452efcf769",
+          "sizeBytes": 10024
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_12_bfloat16_t_128_128": {
+        "default": {
+          "sha256": "1ea9f5043fc93f25683315547267cc2670e9933bb53613f8cc71e14d3ce9934a",
+          "sizeBytes": 10059
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_16_bfloat16_t_128_128": {
+        "default": {
+          "sha256": "2f267c5aa3a8b1b44d83be4aa51d522688c0214c851bfb6a2f954cf406ac22e9",
+          "sizeBytes": 10059
         }
       },
       "sdpa_vector_2pass_2_bfloat16_t_64": {
@@ -5485,6 +5555,30 @@
           "sizeBytes": 16665
         }
       },
+      "sdpa_vector_2pass_1_gqa_8_float16_t_64_64": {
+        "default": {
+          "sha256": "25609f22aba757a70b2d50e121060ddfc314f1fb000674f6948cc09fe225d649",
+          "sizeBytes": 12062
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_8_float16_t_128_128": {
+        "default": {
+          "sha256": "35cc3fbf44a5be41e883e8f2821cb5be667598fc06c5d033761e4be4ec91d50b",
+          "sizeBytes": 12151
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_12_float16_t_128_128": {
+        "default": {
+          "sha256": "1f420cb84c53e70110cf6dd4d55eeaae6e90a4e7aa4b229886f144d6d5449103",
+          "sizeBytes": 12186
+        }
+      },
+      "sdpa_vector_2pass_1_gqa_16_float16_t_128_128": {
+        "default": {
+          "sha256": "298cba13be0ddcd30b3741d1f8931e71f22bcc7868a05ac49951af136e227216",
+          "sizeBytes": 12186
+        }
+      },
       "sdpa_vector_2pass_2_float16_t_64": {
         "default": {
           "sha256": "ca3df92b0e54b517202feb46ee395c11e6a552ac1ac9973bc965a0836c92bb93",
@@ -5556,23 +5650,68 @@
           2,
           4
         ]
+      },
+      "gqa": {
+        "8": [
+          32,
+          8,
+          1
+        ],
+        "12": [
+          32,
+          12,
+          1
+        ],
+        "16": [
+          32,
+          16,
+          1
+        ]
       }
     },
     "firstPassWorkgroupSelection": {
       "queryTransposedOrCausal": "prefill",
       "other": "decode"
     },
+    "gqaHeads": [
+      {
+        "qkDim": 64,
+        "valueDim": 64,
+        "gqaFactor": 8,
+        "headsPerSimdGroup": 8
+      },
+      {
+        "qkDim": 128,
+        "valueDim": 128,
+        "gqaFactor": 8,
+        "headsPerSimdGroup": 4
+      },
+      {
+        "qkDim": 128,
+        "valueDim": 128,
+        "gqaFactor": 12,
+        "headsPerSimdGroup": 4
+      },
+      {
+        "qkDim": 128,
+        "valueDim": 128,
+        "gqaFactor": 16,
+        "headsPerSimdGroup": 2
+      }
+    ],
     "simdSize": 32,
     "softwareSubgroups": {
       "opengl": [
         "vector",
         "pass2",
-        "pass1"
+        "pass1",
+        "gqa"
       ],
       "directx": [
         "vector",
         "pass2",
-        "pass1"
+        "pass1",
+        "gqa"
       ]
     },
     "specializationConstants": {
@@ -5724,6 +5863,48 @@
           },
           {
             "expression": "values + i",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        ],
+        "gqa": [
+          {
+            "expression": "kv_batch_head_idx * k_head_stride + s0 * k_seq_stride + simd_lid * qk_per_thread",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "kv_batch_head_idx * v_head_stride + s0 * v_seq_stride + simd_lid * v_per_thread",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "kp + i",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "vp + i",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "k_seq_stride",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "v_seq_stride",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "kp + k_seq_stride",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "vp + v_seq_stride",
             "minimum": 0,
             "maximum": 2147483647
           }
@@ -5893,6 +6074,38 @@
           "rising"
         ]
       },
+      "gqaFirstPass": {
+        "decode": {
+          "batch": 1,
+          "kvHeads": 2,
+          "queryLength": 1,
+          "keyLength": 8192,
+          "kvLayout": "contiguous",
+          "scale": null,
+          "values": "random",
+          "blocks": 128
+        },
+        "cache": {
+          "batch": 2,
+          "kvHeads": 1,
+          "queryLength": 1,
+          "keyLength": 8197,
+          "kvLayout": "cache",
+          "scale": 1.0,
+          "values": "random",
+          "blocks": 64
+        },
+        "rising": {
+          "batch": 1,
+          "kvHeads": 1,
+          "queryLength": 1,
+          "keyLength": 8320,
+          "kvLayout": "contiguous",
+          "scale": null,
+          "values": "rising",
+          "blocks": 256
+        }
+      },
       "pass2": {
         "one-chunk": {
           "rows": 3,
@@ -5976,6 +6189,11 @@
         "partials": "3n + 4",
         "sums": "2n + 4"
       },
+      "gqaAccumulatorRoundings": {
+        "partials": "3n + HPT + 7 and one division",
+        "sums": "2n + HPT + 5",
+        "exponentials": "n - position + 1"
+      },
       "tiny": 1.1754943508222875e-38,
       "boundSafety": 1.0009765625
     },
@@ -6007,11 +6225,10 @@
   },
   "scope": {
     "instantiatedEntryCount": 82,
-    "coveredEntryCount": 70,
-    "runtimeCoveredEntryCount": 70,
-    "pendingEntryCount": 12,
-    "artifactCountByTarget": 406,
-    "dispatchCountByTarget": 1026,
+    "coveredEntryCount": 82,
+    "runtimeCoveredEntryCount": 82,
+    "artifactCountByTarget": 418,
+    "dispatchCountByTarget": 1062,
     "checkedElementCountByEntry": {
       "sdpa_blocked_scale_copy_bfloat16": 14336,
       "sdpa_blocked_scale_copy_float16": 14336,
@@ -6033,6 +6250,10 @@
       "sdpa_vector_2pass_1_float_256_256": 2559360,
       "sdpa_vector_float_512_512": 103424,
       "sdpa_vector_2pass_1_float_512_512": 5098880,
+      "sdpa_vector_2pass_1_gqa_8_float_64_64": 337920,
+      "sdpa_vector_2pass_1_gqa_8_float_128_128": 665600,
+      "sdpa_vector_2pass_1_gqa_12_float_128_128": 998400,
+      "sdpa_vector_2pass_1_gqa_16_float_128_128": 1331200,
       "sdpa_vector_2pass_2_float_64": 640,
       "sdpa_vector_2pass_2_float_96": 960,
       "sdpa_vector_2pass_2_float_128": 1280,
@@ -6055,6 +6276,10 @@
       "sdpa_vector_2pass_1_bfloat16_t_256_256": 2559360,
       "sdpa_vector_bfloat16_t_512_512": 103424,
       "sdpa_vector_2pass_1_bfloat16_t_512_512": 5098880,
+      "sdpa_vector_2pass_1_gqa_8_bfloat16_t_64_64": 337920,
+      "sdpa_vector_2pass_1_gqa_8_bfloat16_t_128_128": 665600,
+      "sdpa_vector_2pass_1_gqa_12_bfloat16_t_128_128": 998400,
+      "sdpa_vector_2pass_1_gqa_16_bfloat16_t_128_128": 1331200,
       "sdpa_vector_2pass_2_bfloat16_t_64": 640,
       "sdpa_vector_2pass_2_bfloat16_t_96": 960,
       "sdpa_vector_2pass_2_bfloat16_t_128": 1280,
@@ -6077,6 +6302,10 @@
       "sdpa_vector_2pass_1_float16_t_256_256": 2559360,
       "sdpa_vector_float16_t_512_512": 103424,
       "sdpa_vector_2pass_1_float16_t_512_512": 5098880,
+      "sdpa_vector_2pass_1_gqa_8_float16_t_64_64": 337920,
+      "sdpa_vector_2pass_1_gqa_8_float16_t_128_128": 665600,
+      "sdpa_vector_2pass_1_gqa_12_float16_t_128_128": 998400,
+      "sdpa_vector_2pass_1_gqa_16_float16_t_128_128": 1331200,
       "sdpa_vector_2pass_2_float16_t_64": 640,
       "sdpa_vector_2pass_2_float16_t_96": 960,
       "sdpa_vector_2pass_2_float16_t_128": 1280,
