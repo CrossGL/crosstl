@@ -183,15 +183,17 @@ OFFSET_GUARD = 1 << 20
 # precise exp2) and the angle error propagates through exp2. Metal's
 # fast::cos and fast::sin, which translated Metal keeps and OpenGL and DirectX
 # lower to their default cos and sin, may be TRIG_ABSOLUTE + TRIG_RELATIVE *
-# |theta| from the exact value: twice the worst error of Apple's fast functions
-# measured on the pinned upstream kernel's arguments, and many times that of
-# precise cos/sin.
+# |theta| from the exact value. That is at least twice the worst error measured
+# on the pinned upstream kernel's arguments for Apple's fast functions (4.0e-7
+# on [-pi, pi], growing by 2.7e-7 per radian), Mesa llvmpipe's cos/sin and
+# WARP's, whose sin of small negative angles is up to 2.4e-6 from the exact
+# value, about five units in the last place of 2 pi.
 # Results must then be a correct rounding to the storage type of a value within
 # the bound; elements rope does not rotate must keep their exact bits.
 OP_ERROR = 2.0**-23
 DIVISION_ERROR = 2.5 * 2.0**-23
 EXP2_UNITS = 4.0
-TRIG_ABSOLUTE = 2.0**-19
+TRIG_ABSOLUTE = 2.0**-17
 TRIG_RELATIVE = 2.0**-20
 TINY = 2.0**-149
 BOUND_SAFETY = 1.0 + 2.0**-10

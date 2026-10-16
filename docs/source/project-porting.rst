@@ -722,13 +722,13 @@ offsets, partial rotations, strided and transposed inputs and a 4,000-position
 context. Translated Metal keeps ``fast::cos`` and ``fast::sin`` and must match
 the unchanged upstream kernel bit for bit. OpenGL and DirectX lower them to
 their default functions, so results are checked against a per-element bound on
-the kernel's binary32 rounding that allows ``2^-19 + 2^-20 * abs(theta)`` per
-trigonometric value, about twice the measured error of Apple's fast
-functions; unrotated elements must keep their exact bits. Metal also runs the
-unchanged upstream kernel against the same bound. OpenGL relies on one host
-index-range precondition for the single kernels and six for the general
-kernels. This is an 18/17,832 increment; it does not run the upstream MLX test
-suite or redirect the MLX host runtime.
+the kernel's binary32 rounding that allows ``2^-17 + 2^-20 * abs(theta)`` per
+trigonometric value, at least twice the worst error measured for Apple's fast
+functions, Mesa llvmpipe and WARP; unrotated elements must keep their exact
+bits. Metal also runs the unchanged upstream kernel against the same bound.
+OpenGL relies on one host index-range precondition for the single kernels and
+six for the general kernels. This is an 18/17,832 increment; it does not run
+the upstream MLX test suite or redirect the MLX host runtime.
 
 ``scaled_dot_product_attention.current-tree.translation.json`` pins 70 of the
 82 ``scaled_dot_product_attention.metal`` entries and their 1,218 artifacts:

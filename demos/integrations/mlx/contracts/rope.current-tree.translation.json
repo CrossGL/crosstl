@@ -1843,7 +1843,7 @@
       "operationError": 1.1920928955078125e-07,
       "divisionError": 2.980232238769531e-07,
       "exp2Units": "max(4, 3 + 2|y|)",
-      "trigAbsolute": 1.9073486328125e-06,
+      "trigAbsolute": 7.62939453125e-06,
       "trigRelative": 9.5367431640625e-07,
       "tiny": 1.401298464324817e-45
     },

@@ -834,18 +834,19 @@ place per operation, 2.5 per division, and the larger of four and 3 + 2|y|
 units for `exp2`, carried through the angle. Translated Metal keeps
 `fast::cos` and `fast::sin` and must match the upstream kernel bit for bit;
 OpenGL and DirectX lower them to their default functions, so each may be
-`2^-19 + 2^-20 * abs(theta)` from the exact value, about twice the worst error
-of Apple's fast functions measured on these arguments. Results must be a
-correct rounding of a value inside that bound, and unrotated elements must
-keep their exact bits. Every dispatch pads each input with 16 NaNs, or offsets
-with positions far from any case, and checks 16 output guards and that every
-input is unchanged. Metal also runs the unchanged upstream kernel, with all
-three function constants, against the same bounds. The 64-bit index kernels
-run the same small cases, although MLX selects them only above `INT32_MAX`
-elements. OpenGL relies on host preconditions that the frequency, offset and
-composed element indices fit in signed 32-bit range: one for the single
-kernels and six for the general kernels. This covers 18/17,832 entries; it
-does not run the upstream MLX test suite or redirect the MLX host runtime.
+`2^-17 + 2^-20 * abs(theta)` from the exact value, at least twice the worst
+error measured on these arguments for Apple's fast functions, Mesa llvmpipe
+and WARP, whose `sin` of small negative angles is up to 2.4e-6 off. Results
+must be a correct rounding of a value inside that bound, and unrotated
+elements must keep their exact bits. Every dispatch pads each input with 16
+NaNs, or offsets with positions far from any case, and checks 16 output guards
+and that every input is unchanged. Metal also runs the unchanged upstream
+kernel, with all three function constants, against the same bounds. The 64-bit
+index kernels run the same small cases, although MLX selects them only above
+`INT32_MAX` elements. OpenGL relies on host preconditions that the frequency,
+offset and composed element indices fit in signed 32-bit range: one for the
+single kernels and six for the general kernels. This covers 18/17,832 entries;
+it does not run the upstream MLX test suite or redirect the MLX host runtime.
 
 `contracts/scaled_dot_product_attention.current-tree.translation.json` pins 70
 of the 82 `scaled_dot_product_attention.metal` entries and their 1,218
