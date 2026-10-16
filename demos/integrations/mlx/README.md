@@ -847,23 +847,28 @@ composed element indices fit in signed 32-bit range: one for the single
 kernels and six for the general kernels. This covers 18/17,832 entries; it
 does not run the upstream MLX test suite or redirect the MLX host runtime.
 
-`contracts/scaled_dot_product_attention.current-tree.translation.json` pins 46
-of the 82 `scaled_dot_product_attention.metal` entries and their 642
+`contracts/scaled_dot_product_attention.current-tree.translation.json` pins 70
+of the 82 `scaled_dot_product_attention.metal` entries and their 1,218
 artifacts: the four `sdpa_blocked` scale-copy and causal-mask kernels for
-float16 and bfloat16, and all 24 one-pass `sdpa_vector` and all 18
-`sdpa_vector_2pass_2` aggregation kernels for float32, bfloat16 and float16.
-`sdpa_vector()` specializes six boolean function constants, `has_mask` (20)
-through `has_sinks` (25). Each one-pass kernel is pinned in eight
-specializations that pair every mask mode (none, boolean, additive float or
-causal) with both query layouts and both sink settings, and every query layout
-with both sink settings: 214 specializations per target. DirectX materializes
-the constants; Metal and OpenGL keep function or specialization constants, so
-every specialization of an entry shares one artifact. The one-pass and
+float16 and bfloat16, and all 24 one-pass `sdpa_vector`, all 24
+`sdpa_vector_2pass_1` first-pass and all 18 `sdpa_vector_2pass_2` aggregation
+kernels for float32, bfloat16 and float16. `sdpa_vector()` specializes six
+boolean function constants, `has_mask` (20) through `has_sinks` (25), and
+`sdpa_vector_2pass()` adds the block count (26). Each one-pass kernel is
+pinned in eight specializations that pair every mask mode (none, boolean,
+additive float or causal) with both query layouts and both sink settings, and
+every query layout with both sink settings; each first-pass kernel takes the
+same eight, each with 32, 64 or 128 blocks, so every block count meets both
+query layouts, both sink settings and both threadgroup shapes: 406
+specializations per target. DirectX materializes the constants; Metal and
+OpenGL keep function or specialization constants, so every one-pass
+specialization of an entry shares one artifact. The one-pass and
 aggregation kernels run 32 SIMD groups of 32 threads, which OpenGL and DirectX
 lower to 32-lane software subgroups, predicating the masked key loop so that
 every invocation reaches the barriers. Required CI executes every
-specialization on Mesa EGL and Direct3D 12 WARP, 642 dispatches per target,
-and on Metal wherever the device fits MLX's threadgroup (below). The one-pass cases are a single-query decode over grouped-query heads,
+specialization on Mesa EGL and Direct3D 12 WARP, 1,026 dispatches per target
+(the first passes in their own step), and on Metal wherever the device fits
+MLX's threadgroup (below). The one-pass cases are a single-query decode over grouped-query heads,
 fewer keys than SIMD groups, a four-query prefill over transposed keys and
 values, three batches of one head over a longer key/value cache, and keys
 whose scores rise along the sequence, so every SIMD group rescales its
@@ -882,7 +887,7 @@ inside that
 bound, rows without keys must be exactly zero, and the blocked kernels, which
 round once, must be bit-exact, signed zeros included. Every dispatch pads the
 floating inputs with 16 NaNs and checks 16 output guards and that every input
-is unchanged. Metal also runs the unchanged upstream kernel, with all six
+is unchanged. Metal also runs the unchanged upstream kernel, with all its
 function constants, against the same bounds, and the translated kernel must
 reproduce it bit for bit. Before dispatching, the Metal gate reads both
 pipelines' `maxTotalThreadsPerThreadgroup`, as MLX's
@@ -893,13 +898,32 @@ specializations on an M2 Max (640 or 832 threads for both pipelines), MLX
 itself would throw, so the gate records both limits and skips that dispatch;
 OpenGL and DirectX still execute them. OpenGL relies on host
 preconditions that composed element indices and pointer offsets fit in signed
-32-bit range: two for scale copy, one for the causal mask and four for the
-one-pass kernels. The other 36 entries, the `sdpa_vector_2pass_1` and
+32-bit range: two for scale copy, one for the causal mask and four each for
+the one-pass and first-pass kernels.
+
+The first pass runs one SIMD group per query of every query head that shares
+a key/value head, and OpenGL and DirectX compile that threadgroup in: its
+translations group two query heads with one query (32 x 2 x 1 threads) or,
+for transposed queries and the causal mask, four (32 x 2 x 4). Its key loop
+starts at the block index and steps by the block count, so OpenGL and DirectX
+freeze all seven constants, making every first-pass specialization its own
+artifact, and a host precondition that `N` is at most 2^31 - 1024 bounds the
+loop's last step. Its cases hold 1,024 to 1,061 keys, where MLX takes the
+two-pass path on Max and Ultra devices: a two-batch decode over grouped-query
+heads with a fully masked row, a one-head decode over a longer cache with
+unscaled scores, a four-query prefill over transposed keys, values and masks,
+and rising keys. Each block's maximum must lie within the largest score error
+of the exact maximum; its sum and unnormalized partial outputs are checked
+against float64 references relative to the maximum it reports, which
+`sdpa_vector_2pass_2` rescales by, with the same per-operation bounds, and
+blocks without keys must keep exactly their initial values. On Metal the
+translated first pass must reproduce the unchanged upstream kernel's
+partials, sums and maxima bit for bit. The other 12 entries, the
 `sdpa_vector_2pass_1_gqa` first passes, translate back to Metal but not yet to
-OpenGL or DirectX, whose software-subgroup lowering cannot prove their key
-loops uniform; the contract records each one's exact diagnostic. This covers
-46/17,832 entries; it does not run the upstream MLX test suite or redirect the
-MLX host runtime.
+OpenGL or DirectX, whose software-subgroup lowering cannot prove their
+per-SIMD-group key loops uniform; the contract records each one's exact
+diagnostic. This covers 70/17,832 entries; it does not run the upstream MLX
+test suite or redirect the MLX host runtime.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized

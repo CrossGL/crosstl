@@ -730,32 +730,40 @@ index-range precondition for the single kernels and six for the general
 kernels. This is an 18/17,832 increment; it does not run the upstream MLX test
 suite or redirect the MLX host runtime.
 
-``scaled_dot_product_attention.current-tree.translation.json`` pins 46 of the
-82 ``scaled_dot_product_attention.metal`` entries and their 642 artifacts: the
-blocked scale-copy and causal-mask kernels, and every one-pass ``sdpa_vector``
-and ``sdpa_vector_2pass_2`` aggregation kernel. Each one-pass kernel is pinned
-in eight specializations of its six function constants that pair every mask
-mode with both query layouts and both sink settings. DirectX materializes the
-constants; Metal and OpenGL specialize them when the runtime creates the
-pipeline. OpenGL and DirectX lower the SIMD reductions to 32-lane software
-subgroups. OpenGL and DirectX execute 642 dispatches, and Metal every one whose
-threadgroup the device fits, covering grouped-query
-decode, multi-query prefill, transposed and cached keys and values, per-head,
-broadcast and transposed masks with fully masked rows, attention sinks, and
-first-pass partials over 32 to 128 blocks. Attention outputs are checked
+``scaled_dot_product_attention.current-tree.translation.json`` pins 70 of the
+82 ``scaled_dot_product_attention.metal`` entries and their 1,218 artifacts:
+the blocked scale-copy and causal-mask kernels, and every one-pass
+``sdpa_vector``, ``sdpa_vector_2pass_1`` first-pass and ``sdpa_vector_2pass_2``
+aggregation kernel. Each one-pass kernel is pinned in eight specializations of
+its six function constants that pair every mask mode with both query layouts
+and both sink settings; each first-pass kernel takes the same eight with 32,
+64 or 128 blocks, its seventh constant. DirectX materializes the constants;
+Metal and OpenGL specialize them when the runtime creates the pipeline,
+except that OpenGL freezes the first pass's, whose key loop steps by the
+block count from the block index. OpenGL and DirectX lower the SIMD
+reductions to 32-lane software subgroups. OpenGL and DirectX execute 1,026
+dispatches, and Metal every one whose threadgroup the device fits, covering
+grouped-query decode, multi-query prefill, transposed and cached keys and
+values, per-head, broadcast and transposed masks with fully masked rows,
+attention sinks, first passes over 1,024 to 1,061 keys, where MLX takes the
+two-pass path on Max and Ultra devices, and aggregation over 32 to 128
+blocks. Attention outputs are checked
 against a per-element bound on the kernel's binary32 rounding, with
 ``fast::exp`` kept on Metal and lowered to the default ``exp`` on OpenGL and
 DirectX; rows without keys must
-be exactly zero and the blocked kernels bit-exact. Metal also runs the
-unchanged upstream kernel against the same bounds, and the translation must
-reproduce it bit for bit. Where MLX's own pipeline cannot run the 1,024 threads
-it requests (``check_kernel_threadgroup_size`` would throw), the Metal gate
-records both pipelines' limits and skips that dispatch; elsewhere the
-translation must fit them too. OpenGL relies on seven host
-index-range preconditions. The 36 two-pass first-pass entries translate back to
-Metal but not yet to OpenGL or DirectX, and the contract records their exact
-diagnostics. This is a 46/17,832 increment; it does not run the upstream MLX
-test suite or redirect the MLX host runtime.
+be exactly zero and the blocked kernels bit-exact. First-pass maxima must lie
+within the largest score error of the exact maxima, and their sums and
+partial outputs are checked relative to the reported maxima. Metal also runs
+the unchanged upstream kernel against the same bounds, and the translation
+must reproduce it bit for bit. Where MLX's own pipeline cannot run the 1,024
+threads it requests (``check_kernel_threadgroup_size`` would throw), the Metal
+gate records both pipelines' limits and skips that dispatch; elsewhere the
+translation must fit them too. OpenGL relies on 11 host index-range
+preconditions, and the first pass on a host precondition bounding ``N``. The
+12 grouped-query first-pass entries translate back to Metal but not yet to
+OpenGL or DirectX, and the contract records their exact diagnostics. This is a
+70/17,832 increment; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
 
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size

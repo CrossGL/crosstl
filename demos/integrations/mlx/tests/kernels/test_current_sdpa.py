@@ -1,11 +1,13 @@
 """Translate and execute the pinned MLX scaled dot-product attention kernels."""
 
+import array
 import functools
 import hashlib
 import json
 import math
 import operator
 import os
+import random
 import re
 import shutil
 import struct
@@ -118,13 +120,11 @@ def _kind(entry):
     return "vector"
 
 
-# The first pass of the two-pass kernels does not translate to OpenGL or
-# DirectX yet: sdpa_vector_2pass_1 strides its key loop by function constant 26
-# from threadgroup_position_in_grid.z, and sdpa_vector_2pass_1_gqa bounds it by
-# per-SIMD-group token chunks, so neither software-subgroup lowering can prove
-# the loop uniform across the workgroup. Both translate back to Metal.
+# The grouped-query first pass does not translate to OpenGL or DirectX yet:
+# sdpa_vector_2pass_1_gqa bounds its key loop by per-SIMD-group token chunks,
+# so neither software-subgroup lowering can prove the loop uniform across the
+# workgroup. It translates back to Metal.
 PENDING_KINDS = {
-    "pass1": "key loop starts at block_idx and steps by function constant 26",
     "gqa": "key loop bounds s0 and s1 depend on the SIMD group",
 }
 ENTRIES = tuple(entry for entry in INSTANTIATED if _kind(entry) not in PENDING_KINDS)
@@ -150,7 +150,8 @@ def _dims(entry):
 
 
 # mlx/backend/metal/scaled_dot_product_attention.cpp specializes six function
-# constants for sdpa_vector; the other translated kernels have none.
+# constants for sdpa_vector and those six plus the block count, function
+# constant 26, for sdpa_vector_2pass_1; the other translated kernels have none.
 CONSTANT_IDS = {
     "has_mask": 20,
     "query_transposed": 21,
@@ -158,6 +159,7 @@ CONSTANT_IDS = {
     "bool_mask": 23,
     "float_mask": 24,
     "has_sinks": 25,
+    "blocks": 26,
 }
 # A pairwise-covering set of the specializations sdpa_vector() can select:
 # every mask mode (none, bool, float or causal) with both query layouts and
@@ -172,6 +174,12 @@ VECTOR_SPECIALIZATIONS = (
     ("causal", False, False),
     ("causal", True, True),
 )
+# sdpa_vector_2pass() picks 32 or 64 blocks on base and Pro devices, 64 or 128
+# on Ultra and 128 on Max devices for these shapes, and MLX_SDPA_BLOCKS
+# selects any multiple of 32. The first pass takes the same Boolean
+# specializations, each with one of these block counts, so every block count
+# meets both query layouts, both sink settings and both threadgroup shapes.
+PASS1_BLOCKS = (32, 64, 128, 32, 64, 128, 64, 32)
 
 
 def _vector_constants(mask, transposed, sinks):
@@ -186,27 +194,35 @@ def _vector_constants(mask, transposed, sinks):
 
 
 def _variant_key(constants):
-    """Name a specialization after sdpa_vector()'s pipeline hash suffix."""
+    """Name a specialization after MLX's pipeline hash suffix."""
     if not constants:
         return "default"
     if constants["has_mask"]:
         mask = "boolmask" if constants["bool_mask"] else "floatmask"
     else:
         mask = "nomask"
-    return "_".join(
-        (
-            mask,
-            "qt" if constants["query_transposed"] else "qnt",
-            "c" if constants["do_causal"] else "nc",
-            "sinks" if constants["has_sinks"] else "nosinks",
-        )
-    )
+    parts = [
+        mask,
+        "qt" if constants["query_transposed"] else "qnt",
+        "c" if constants["do_causal"] else "nc",
+        "sinks" if constants["has_sinks"] else "nosinks",
+    ]
+    if "blocks" in constants:
+        # sdpa_vector_2pass() appends the block count.
+        parts.append(str(constants["blocks"]))
+    return "_".join(parts)
 
 
 def _combinations(entry):
-    if _kind(entry) != "vector":
-        return ({},)
-    return tuple(_vector_constants(*item) for item in VECTOR_SPECIALIZATIONS)
+    kind = _kind(entry)
+    if kind == "vector":
+        return tuple(_vector_constants(*item) for item in VECTOR_SPECIALIZATIONS)
+    if kind == "pass1":
+        return tuple(
+            {**_vector_constants(*item), "blocks": blocks}
+            for item, blocks in zip(VECTOR_SPECIALIZATIONS, PASS1_BLOCKS)
+        )
+    return ({},)
 
 
 VARIANTS = tuple(
@@ -214,6 +230,9 @@ VARIANTS = tuple(
     for entry in ENTRIES
     for constants in _combinations(entry)
 )
+PASS1_VARIANTS = tuple(item for item in VARIANTS if _kind(item[0]) == "pass1")
+# The first pass runs in its own CI step.
+SINGLE_PASS_VARIANTS = tuple(item for item in VARIANTS if _kind(item[0]) != "pass1")
 SIMD_SIZE = 32
 # sdpa_vector and sdpa_vector_2pass_2 run 32 SIMD groups of 32 threads; the
 # blocked kernels dispatch one thread per element, so one-thread workgroups
@@ -224,8 +243,36 @@ WORKGROUP_SIZES = {
     "scale-copy": (1, 1, 1),
     "causal-mask": (1, 1, 1),
 }
+# sdpa_vector_2pass_1 runs one SIMD group per query of each query head that
+# shares a key/value head, (32, gqa_factor, query length) threads, which
+# OpenGL and DirectX compile in. These translations group two query heads
+# with one query (decoding) or four (prefill): MLX transposes queries and
+# applies the causal mask only to more than one query.
+PASS1_GQA_FACTOR = 2
+PASS1_WORKGROUP_SIZES = {"decode": (32, 2, 1), "prefill": (32, 2, 4)}
+
+
+def _pass1_group(constants):
+    if constants["query_transposed"] or constants["do_causal"]:
+        return "prefill"
+    return "decode"
+
+
+def _workgroup_size(entry, constants):
+    kind = _kind(entry)
+    if kind == "pass1":
+        return PASS1_WORKGROUP_SIZES[_pass1_group(constants)]
+    return WORKGROUP_SIZES[kind]
+
+
 SOFTWARE_SUBGROUP_TARGETS = ("opengl", "directx")
-SOFTWARE_SUBGROUP_KINDS = ("vector", "pass2")
+SOFTWARE_SUBGROUP_KINDS = ("vector", "pass2", "pass1")
+# The first pass steps its key loop by the block count from the block index.
+# OpenGL and DirectX freeze every specialization constant, so the step is a
+# literal the loop proofs can use, and a host precondition bounds N so the
+# loop's last step stays in int range.
+FROZEN_TARGETS = {"pass1": ("opengl", "directx")}
+PASS1_KEY_LIMIT = 2**31 - 1024
 # OpenGL indexes 32-bit storage arrays. These host preconditions bound the
 # composed element indices and pointer offsets to signed int range.
 SIGNED_MAX = 2**31 - 1
@@ -241,6 +288,14 @@ OPENGL_INDEX_RANGE_ASSERTIONS = {
         "values + j",
     ),
     "pass2": (),
+    "pass1": (
+        "kv_batch_head_idx * k_head_stride + block_idx * k_seq_stride"
+        " + simd_lid * qk_per_thread",
+        "kv_batch_head_idx * v_head_stride + block_idx * v_seq_stride"
+        " + simd_lid * v_per_thread",
+        "keys + i",
+        "values + i",
+    ),
 }
 # name -> (batch, query heads, key/value heads, query length, key length,
 # key/value layout, mask layout, scale or None for 1/sqrt(D), values). Every
@@ -269,6 +324,19 @@ PASS2_CASES = {
     "two-chunks": (2, 2, 64, "sparse"),
     "four-chunks": (1, 3, 128, "wide"),
 }
+# name -> the fields of VECTOR_CASES. MLX takes the two-pass kernels from 1024
+# keys on Max and Ultra devices and from 4096 keys with grouped queries on
+# every device. Each case groups two query heads per key/value head, as the
+# first pass's threadgroups do; "decode" and "cache" hold one query, the
+# "prefill" and "rising" cases four.
+PASS1_CASES = {
+    "decode": (2, 4, 2, 1, 1024, "contiguous", "full", None, "random"),
+    "cache": (1, 2, 1, 1, 1061, "cache", "broadcast", 1.0, "random"),
+    "prefill": (1, 4, 2, 4, 1030, "transposed", "transposed", 0.08, "random"),
+    "rising": (1, 2, 1, 4, 1024, "contiguous", "broadcast", None, "rising"),
+}
+PASS1_MASKED_ROWS = {"decode": ((1, 0),), "prefill": ((3, 2),)}
+PASS1_GROUP_CASES = {"decode": ("decode", "cache"), "prefill": ("prefill", "rising")}
 # sdpa_full_self_attention_blocked runs these kernels only for 512-wide heads,
 # 256 query rows at a time.
 BLOCK_ROWS = 256
@@ -291,6 +359,7 @@ CAUSAL_MASK_CASES = {
 CASES = {
     "vector": VECTOR_CASES,
     "pass2": PASS2_CASES,
+    "pass1": PASS1_CASES,
     "scale-copy": SCALE_COPY_CASES,
     "causal-mask": CAUSAL_MASK_CASES,
 }
@@ -333,6 +402,8 @@ def _variant_cases(entry, constants):
     query, so those specializations take the multi-query cases.
     """
     kind = _kind(entry)
+    if kind == "pass1":
+        return PASS1_GROUP_CASES[_pass1_group(constants)]
     if kind != "vector":
         return tuple(CASES[kind])
     if constants["query_transposed"] or constants["do_causal"]:
@@ -629,6 +700,19 @@ def _vector_buffers(entry, constants, name):
     far above every score.
     """
     data = _vector_data(entry, name)
+    buffers = _attention_inputs(data, constants)
+    buffers.update(
+        out=[_from_bits(data.dtype, GUARD_BITS[data.dtype])]
+        * (data.rows * data.value_dim),
+        gqa_factor=data.gqa,
+        num_q_heads=data.heads,
+        grid=(data.batch * data.heads, data.queries, 1),
+    )
+    return buffers
+
+
+def _attention_inputs(data, constants):
+    """Return the queries, keys, values, masks and sinks MLX binds."""
     dtype, qk_dim, value_dim = data.dtype, data.qk_dim, data.value_dim
     bh_count = data.batch * data.heads
     if constants["query_transposed"]:
@@ -672,8 +756,6 @@ def _vector_buffers(entry, constants, name):
         "queries": queries + [math.nan] * INPUT_GUARD_COUNT,
         "keys": keys + [math.nan] * INPUT_GUARD_COUNT,
         "values": values + [math.nan] * INPUT_GUARD_COUNT,
-        "out": [_from_bits(dtype, GUARD_BITS[dtype])] * (data.rows * value_dim),
-        "gqa_factor": data.gqa,
         "N": data.keys,
         "k_head_stride": k_head_stride,
         "k_seq_stride": k_seq_stride,
@@ -688,8 +770,6 @@ def _vector_buffers(entry, constants, name):
         "sinks": (
             [_quantize(dtype, item) for item in sinks] + [math.nan] * INPUT_GUARD_COUNT
         ),
-        "num_q_heads": data.heads,
-        "grid": (bh_count, data.queries, 1),
     }
 
 
@@ -781,6 +861,467 @@ def _vector_simulate(entry, constants, name, mutation=None):
                     value /= total
                 output[o_offset * value_dim + index] = _quantize(dtype, value)
     return output
+
+
+def _quantize_many(dtype, values):
+    """Round float64 values to ``dtype`` as _quantize does, in bulk."""
+    single = array.array("f", values)
+    if dtype == "float32":
+        return single.tolist()
+    if dtype == "float16":
+        count = len(single)
+        return list(struct.unpack(f"<{count}e", struct.pack(f"<{count}e", *single)))
+    assert all(math.isfinite(item) for item in single)
+    words = array.array("I", single.tobytes())
+    assert words.itemsize == 4
+    rounded = array.array(
+        "I",
+        [
+            (((word + 0x7FFF + ((word >> 16) & 1)) >> 16) & 0xFFFF) << 16
+            for word in words
+        ],
+    )
+    return array.array("f", rounded.tobytes()).tolist()
+
+
+class _Pass1Case(_VectorCase):
+    """Logical tensors of one sdpa_vector_2pass_1 case and their MLX strides.
+
+    Each case holds over a thousand keys, so values come from random.Random
+    and round to the storage type in bulk.
+    """
+
+    def __init__(self, dtype, qk_dim, value_dim, name):
+        case = PASS1_CASES[name]
+        batch, heads, kv_heads, queries, keys, kv_layout, mask_layout = case[:7]
+        scale, pattern = case[7:]
+        self.name = name
+        self.dtype = dtype
+        self.qk_dim, self.value_dim = qk_dim, value_dim
+        self.batch, self.heads, self.kv_heads = batch, heads, kv_heads
+        self.queries, self.keys = queries, keys
+        self.kv_layout, self.mask_layout = kv_layout, mask_layout
+        self.scale = _float32(qk_dim**-0.5 if scale is None else scale)
+        self.gqa = heads // kv_heads
+        self.rows = batch * heads * queries
+        seed = zlib.crc32(f"pass1:{name}:{dtype}:{qk_dim}:{value_dim}".encode())
+        draw = random.Random(seed).random
+
+        def uniform(count, low=-1.0, high=1.0):
+            width = high - low
+            return _quantize_many(dtype, [low + width * draw() for _ in range(count)])
+
+        def split(values, width):
+            return [
+                values[start : start + width] for start in range(0, len(values), width)
+            ]
+
+        kv_count = batch * kv_heads
+        if pattern == "rising":
+            base = [2.0 * draw() - 1.0 for _ in range(qk_dim)]
+            noisy = [
+                item + 0.05 * (2.0 * draw() - 1.0)
+                for _ in range(self.rows)
+                for item in base
+            ]
+            self.q = split(_quantize_many(dtype, noisy), qk_dim)
+            scaled = [
+                item * (0.25 + 2.0 * key / keys) for key in range(keys) for item in base
+            ]
+            rising = split(_quantize_many(dtype, scaled), qk_dim)
+            self.k = [rising] * kv_count
+        else:
+            self.q = split(uniform(self.rows * qk_dim), qk_dim)
+            self.k = [split(uniform(keys * qk_dim), qk_dim) for _ in range(kv_count)]
+        self.v = [split(uniform(keys * value_dim), value_dim) for _ in range(kv_count)]
+        self.sinks = uniform(heads, -2.0, 2.0)
+        masked = set(PASS1_MASKED_ROWS.get(name, ()))
+        choices = (0.0, 0.0, 0.0, -0.75, 0.5, -3.0, 1.25, -math.inf, -math.inf, -12.0)
+        self.bool_mask, self.float_mask = [], []
+        shared = None
+        for bh in range(batch * heads):
+            bools, floats = [], []
+            for query in range(queries):
+                if mask_layout == "broadcast" and shared is not None:
+                    bools.append(list(shared[0][query]))
+                    floats.append(list(shared[1][query]))
+                    continue
+                if (bh, query) in masked:
+                    bools.append([False] * keys)
+                    floats.append([-math.inf] * keys)
+                    continue
+                bools.append([draw() < 0.7 for _ in range(keys)])
+                # Every choice is exact in each storage type.
+                floats.append(
+                    [choices[int(draw() * len(choices))] for _ in range(keys)]
+                )
+            if mask_layout == "broadcast" and shared is None:
+                shared = (bools, floats)
+            self.bool_mask.append(bools)
+            self.float_mask.append(floats)
+        self.dots, self.abs_dots = [], []
+        for row in range(self.rows):
+            query = self.q[row]
+            head = self.k[self._kv_head(row // queries)]
+            self.dots.append(
+                [self.scale * math.fsum(map(operator.mul, query, key)) for key in head]
+            )
+            self.abs_dots.append(
+                [
+                    abs(self.scale) * math.fsum(map(abs, map(operator.mul, query, key)))
+                    for key in head
+                ]
+            )
+
+
+# One entry's two threadgroup shapes hold four cases.
+@functools.lru_cache(maxsize=4)
+def _pass1_case(dtype, qk_dim, value_dim, name):
+    return _Pass1Case(dtype, qk_dim, value_dim, name)
+
+
+def _pass1_data(entry, name):
+    return _pass1_case(_dtype(entry), *_dims(entry), name)
+
+
+def _pass1_block(constants, data, row, block):
+    """Return the keys one row's block uses, their exact scores and errors."""
+    bh, query = divmod(row, data.queries)
+    growth = (1 + OP_ERROR) * _gamma(data.qk_dim // SIMD_SIZE + 34)
+    used, scores, errors = [], [], []
+    for key in range(block, data.keys, constants["blocks"]):
+        if not _uses_key(constants, data, bh, query, key):
+            continue
+        score = data.dots[row][key]
+        error = growth * data.abs_dots[row][key]
+        if constants["float_mask"]:
+            score += data.float_mask[bh][query][key]
+            error += (1 + OP_ERROR) * OP_ERROR * abs(score)
+        used.append(key)
+        scores.append(score)
+        errors.append(error)
+    return used, scores, errors
+
+
+def _pass1_sink(constants, data, row, block):
+    """Return the sink that seeds a row's block, or None."""
+    if not constants["has_sinks"] or block:
+        return None
+    return data.sinks[(row // data.queries) % data.heads]
+
+
+def _pass1_max_reference(entry, constants, name):
+    """Return each block's exact maximum and the largest score error in it."""
+    data = _pass1_data(entry, name)
+    expected, bounds = [], []
+    for row in range(data.rows):
+        for block in range(constants["blocks"]):
+            _, scores, errors = _pass1_block(constants, data, row, block)
+            sink = _pass1_sink(constants, data, row, block)
+            expected.append(max([-FLT_MAX if sink is None else sink, *scores]))
+            bounds.append(max(errors, default=0.0) * BOUND_SAFETY)
+    return expected, bounds
+
+
+def _pass1_partial_reference(entry, constants, name, maxs):
+    """Return the expected sums and partial outputs relative to ``maxs``.
+
+    ``maxs`` holds the running maximum each block ends with, which the kernel
+    reports and sdpa_vector_2pass_2 rescales by. Each key's weight passes
+    through its own exponential and the rescaling factor of every later key
+    of its block, the sink's through every key's factor, and the accumulators
+    round at every key; nothing is summed across SIMD groups.
+    """
+    data = _pass1_data(entry, name)
+    blocks, value_dim = constants["blocks"], data.value_dim
+    sums, sum_bounds, out, out_bounds = [], [], [], []
+    for row in range(data.rows):
+        kv = data._kv_head(row // data.queries)
+        for block in range(blocks):
+            used, scores, errors = _pass1_block(constants, data, row, block)
+            sink = _pass1_sink(constants, data, row, block)
+            top = maxs[row * blocks + block]
+            count = len(used)
+            if not used:
+                # The accumulators keep their initial values.
+                sums.append(0.0 if sink is None else 1.0)
+                sum_bounds.append(0.0)
+                out += [0.0] * value_dim
+                out_bounds += [0.0] * value_dim
+                continue
+            largest_error = max(errors)
+            sum_growth = (1 + OP_ERROR) ** (2 * count + 4)
+            out_growth = (1 + OP_ERROR) ** (3 * count + 4)
+            weights, sum_spread, out_spread = [], [], []
+            for position, (score, error) in enumerate(zip(scores, errors)):
+                weight = math.exp(score - top)
+                distance = max(0.0, top - score)
+                exponentials = OP_ERROR * (
+                    EXP_UNITS * (count - position)
+                    + 4.0 * (distance + 2.0 * largest_error)
+                )
+                relative = math.expm1(error + exponentials)
+                weights.append(weight)
+                sum_spread.append(((1 + relative) * sum_growth - 1) * weight)
+                out_spread.append(((1 + relative) * out_growth - 1) * weight)
+            total = math.fsum(weights)
+            total_error = math.fsum(sum_spread)
+            if sink is not None:
+                weight = math.exp(sink - top)
+                distance = max(0.0, top - sink)
+                relative = math.expm1(
+                    OP_ERROR
+                    * (EXP_UNITS * count + 4.0 * (distance + 2.0 * largest_error))
+                )
+                total += weight
+                total_error += ((1 + relative) * sum_growth - 1) * weight
+            slack = TINY * (4 * count + 64)
+            sums.append(total)
+            sum_bounds.append((total_error + slack) * BOUND_SAFETY)
+            for column in zip(*(data.v[kv][key] for key in used)):
+                out.append(math.fsum(map(operator.mul, weights, column)))
+                spread = math.fsum(map(operator.mul, out_spread, map(abs, column)))
+                out_bounds.append((spread + slack) * BOUND_SAFETY)
+    return {"sums": (sums, sum_bounds), "out": (out, out_bounds)}
+
+
+def _pass1_check(entry, constants, name, outputs, maxs=None):
+    """Check the block maxima, then the sums and partials relative to them.
+
+    ``maxs`` overrides the maxima the sums and partials are relative to: the
+    float64 simulation keeps its unrounded. Return each output's fraction of
+    its bound used beyond the final rounding, as _check does.
+    """
+    used = {
+        "maxs": _check(
+            "float32", outputs["maxs"], *_pass1_max_reference(entry, constants, name)
+        )
+    }
+    reference = _pass1_partial_reference(
+        entry, constants, name, outputs["maxs"] if maxs is None else maxs
+    )
+    used["sums"] = _check("float32", outputs["sums"], *reference["sums"])
+    used["out"] = _check(_dtype(entry), outputs["out"], *reference["out"])
+    return used
+
+
+def _pass1_buffers(entry, constants, name):
+    """Return the buffers and scalars sdpa_vector_2pass() binds for one case."""
+    data = _pass1_data(entry, name)
+    blocks = constants["blocks"]
+    partials = data.rows * blocks
+    guard = _from_bits("float32", GUARD_BITS["float32"])
+    buffers = _attention_inputs(data, constants)
+    buffers.update(
+        out=[_from_bits(data.dtype, GUARD_BITS[data.dtype])]
+        * (partials * data.value_dim),
+        sums=[guard] * partials,
+        maxs=[guard] * partials,
+        grid=(data.kv_heads, data.batch, blocks),
+    )
+    return buffers
+
+
+def _slice(buffer, start, count):
+    """Read ``count`` elements from ``start``; reads outside are NaN."""
+    if 0 <= start and start + count <= len(buffer):
+        return buffer[start : start + count]
+    return [_read(buffer, start + index) for index in range(count)]
+
+
+def _pass1_simulate(entry, constants, name, mutation=None):
+    """Run sdpa_vector_2pass_1's index arithmetic on the bound buffers.
+
+    Scores and accumulators stay in float64 and results round to their
+    storage types; ``mutation`` injects one defect. Return the outputs and
+    each block's unrounded running maximum.
+    """
+    data = _pass1_data(entry, name)
+    dtype, qk_dim, value_dim = data.dtype, data.qk_dim, data.value_dim
+    buffers = _pass1_buffers(entry, constants, name)
+    blocks = constants["blocks"]
+    num_kv_heads, batches, grid_blocks = buffers["grid"]
+    _, gqa_factor, q_seq_len = _workgroup_size(entry, constants)
+    num_q_heads = num_kv_heads * gqa_factor
+    rows = batches * num_q_heads * q_seq_len
+    transposed = constants["query_transposed"] != (mutation == "transpose")
+    scale = 1.0 if mutation == "scale" else buffers["scale"]
+    keys = buffers["N"] - 1 if mutation == "last-key" else buffers["N"]
+    step = blocks // 2 if mutation == "block-stride" else blocks
+    k_head_stride = buffers["k_head_stride"]
+    k_seq_stride = buffers["k_seq_stride"]
+    if mutation == "head-stride":
+        k_head_stride = data.keys * qk_dim
+    if mutation == "kv-stride":
+        k_seq_stride = qk_dim
+    v_head_stride, v_seq_stride = buffers["v_head_stride"], buffers["v_seq_stride"]
+    mask_head_stride = 0 if mutation == "mask-head" else buffers["mask_head_stride"]
+    mask_kv_stride = buffers["mask_kv_seq_stride"]
+    mask_q_stride = buffers["mask_q_seq_stride"]
+    sink_block = grid_blocks - 1 if mutation == "sink-block" else 0
+    outputs = {member: list(buffers[member]) for member in ("out", "sums", "maxs")}
+    tops = [math.nan] * len(outputs["maxs"])
+    for kv_head in range(num_kv_heads):
+        for batch in range(batches):
+            for block in range(grid_blocks):
+                for head in range(gqa_factor):
+                    for query in range(q_seq_len):
+                        if mutation == "gqa":
+                            q_head = kv_head + num_kv_heads * head
+                        else:
+                            q_head = gqa_factor * kv_head + head
+                        q_bh = batch * num_q_heads + q_head
+                        o_offset = q_bh * q_seq_len + query
+                        q_offset = (
+                            num_q_heads * query + q_bh if transposed else o_offset
+                        )
+                        q = [
+                            scale * item
+                            for item in _slice(
+                                buffers["queries"], q_offset * qk_dim, qk_dim
+                            )
+                        ]
+                        kv_bh = batch * num_kv_heads + kv_head
+                        k_ptr = kv_bh * k_head_stride + block * k_seq_stride
+                        v_ptr = kv_bh * v_head_stride + block * v_seq_stride
+                        m_ptr = (
+                            q_bh * mask_head_stride
+                            + block * mask_kv_stride
+                            + query * mask_q_stride
+                        )
+                        top = 0.0 if mutation == "max-init" else -FLT_MAX
+                        total = 0.0
+                        if (
+                            constants["has_sinks"]
+                            and block == sink_block
+                            and mutation != "sinks"
+                        ):
+                            sink = q_bh if mutation == "sink-head" else q_head
+                            top, total = _read(buffers["sinks"], sink), 1.0
+                        accumulator = [0.0] * value_dim
+                        for key in range(block, keys, step):
+                            use = True
+                            if constants["do_causal"]:
+                                limit = buffers["N"] - q_seq_len + query
+                                use = (
+                                    key < limit
+                                    if mutation == "causal"
+                                    else key <= limit
+                                )
+                            elif constants["bool_mask"]:
+                                use = bool(_read(buffers["bmask"], m_ptr))
+                                use = use != (mutation == "mask-polarity")
+                            elif constants["float_mask"]:
+                                use = (
+                                    _read(buffers["fmask"], m_ptr) >= FINITE_MIN[dtype]
+                                )
+                            if use:
+                                score = math.fsum(
+                                    map(
+                                        operator.mul,
+                                        q,
+                                        _slice(buffers["keys"], k_ptr, qk_dim),
+                                    )
+                                )
+                                if mutation == "binary16-score":
+                                    score = struct.unpack(
+                                        "<e", struct.pack("<e", score)
+                                    )[0]
+                                if constants["float_mask"] and mutation != "mask-add":
+                                    score += _read(buffers["fmask"], m_ptr)
+                                new_top = max(top, score)
+                                factor = math.exp(top - new_top)
+                                weight = math.exp(score - new_top)
+                                top = new_top
+                                total = total * factor + weight
+                                accumulator = [
+                                    item * factor + weight * value
+                                    for item, value in zip(
+                                        accumulator,
+                                        _slice(buffers["values"], v_ptr, value_dim),
+                                    )
+                                ]
+                            k_ptr += step * k_seq_stride
+                            v_ptr += step * v_seq_stride
+                            m_ptr += step * mask_kv_stride
+                        if mutation == "normalize" and total:
+                            accumulator = [item / total for item in accumulator]
+                        index = o_offset * blocks + block
+                        written = block * rows + o_offset
+                        if mutation != "out-layout":
+                            written = index
+                        outputs["sums"][index] = _float32(total)
+                        outputs["maxs"][index] = _float32(top)
+                        tops[index] = top
+                        outputs["out"][
+                            written * value_dim : (written + 1) * value_dim
+                        ] = [_quantize(dtype, item) for item in accumulator]
+    return outputs, tops
+
+
+def _pass1_weight(constants, data, row, key):
+    """Return a used key's exact weight relative to its block's maximum."""
+    block = key % constants["blocks"]
+    used, scores, _ = _pass1_block(constants, data, row, block)
+    if key not in used:
+        return 0.0
+    sink = _pass1_sink(constants, data, row, block)
+    top = max([-FLT_MAX if sink is None else sink, *scores])
+    return math.exp(scores[used.index(key)] - top)
+
+
+def _pass1_mutations(entry, constants, name):
+    """Return the defects that change the first pass's results on ``name``."""
+    data = _pass1_data(entry, name)
+    blocks = constants["blocks"]
+    mutations = ["normalize", "block-stride", "out-layout"]
+    maxima = _pass1_max_reference(entry, constants, name)[0]
+    # Seeding the maximum with zero only shows where a block's maximum stays
+    # below zero or the block uses no key.
+    if any(top < -(2.0**-5) for top in maxima):
+        mutations.append("max-init")
+    # Dropping a key only matters where it carries weight.
+    if any(
+        _pass1_weight(constants, data, row, data.keys - 1) > 2.0**-5
+        for row in range(data.rows)
+    ):
+        mutations.append("last-key")
+    if data.scale != 1.0:
+        mutations.append("scale")
+    if data.kv_heads > 1:
+        mutations.append("gqa")
+    if data.queries > 1 and data.batch * data.heads > 1:
+        mutations.append("transpose")
+    if data.kv_layout != "contiguous" and data.batch * data.kv_heads > 1:
+        mutations.append("head-stride")
+    if data.kv_layout == "transposed":
+        mutations.append("kv-stride")
+    if constants["do_causal"] and any(
+        _pass1_weight(
+            constants, data, row, data.keys - data.queries + row % data.queries
+        )
+        > 2.0**-5
+        for row in range(data.rows)
+    ):
+        mutations.append("causal")
+    if constants["bool_mask"]:
+        mutations.append("mask-polarity")
+    if constants["has_mask"] and data.mask_strides()[2]:
+        mutations.append("mask-head")
+    if constants["float_mask"]:
+        mutations.append("mask-add")
+    if constants["has_sinks"]:
+        if any(
+            math.exp(_pass1_sink(constants, data, row, 0) - maxima[row * blocks])
+            > 2.0**-5
+            for row in range(data.rows)
+        ):
+            mutations += ["sinks", "sink-block"]
+        if data.batch > 1:
+            mutations.append("sink-head")
+    if data.dtype == "float32" and data.scale != 1.0:
+        mutations.append("binary16-score")
+    return mutations
 
 
 class _Pass2Case:
@@ -1279,6 +1820,9 @@ def _vector_weights(entry, constants, name):
 
 def _config(output, target, entry, constants):
     kind = _kind(entry)
+    project = ""
+    if target in FROZEN_TARGETS.get(kind, ()):
+        project += "freeze_specialization_constants = true\n"
     options = ""
     if constants:
         options += "\n[project.specialization_constants]\n"
@@ -1300,21 +1844,33 @@ expression = "{expression}"
 minimum = 0
 maximum = {SIGNED_MAX}
 """
-    size = ", ".join(str(item) for item in WORKGROUP_SIZES[kind])
+    metal = ""
+    if kind == "pass1":
+        # The precondition names the kernel's own N parameter.
+        metal += "preserve_resource_origins = true\n"
+        options += f"""
+[[project.metadata_preconditions]]
+source = "{SOURCE}"
+entryPoint = "{entry}"
+parameter = "N"
+minimum = 0
+maximum = {PASS1_KEY_LIMIT}
+"""
+    size = ", ".join(str(item) for item in _workgroup_size(entry, constants))
     return f"""[project]
 source_roots = ["mlx/backend/metal/kernels"]
 include = ["{SOURCE}"]
 include_dirs = ["."]
 targets = ["{target}"]
 output_dir = "{output}"
-[project.entry_points]
+{project}[project.entry_points]
 "{SOURCE}" = "{entry}"
 [project.entry_workgroup_size_rules."{SOURCE}"]
 "{entry}" = [{size}]
 [project.source_options.metal]
 max_template_specializations = 256
 max_template_materialization_work = 16384
-{options}"""
+{metal}{options}"""
 
 
 def _contract():
@@ -1322,38 +1878,44 @@ def _contract():
 
 
 def _case_contract():
-    vector = {
-        name: {
-            "batch": batch,
-            "heads": heads,
-            "kvHeads": kv_heads,
-            "queryLength": queries,
-            "keyLength": keys,
-            "kvLayout": kv_layout,
-            "maskLayout": mask_layout,
-            "scale": scale,
-            "values": pattern,
-            "maskedRows": [list(row) for row in MASKED_ROWS.get(name, ())],
+    def attention(cases, masked_rows):
+        return {
+            name: {
+                "batch": batch,
+                "heads": heads,
+                "kvHeads": kv_heads,
+                "queryLength": queries,
+                "keyLength": keys,
+                "kvLayout": kv_layout,
+                "maskLayout": mask_layout,
+                "scale": scale,
+                "values": pattern,
+                "maskedRows": [list(row) for row in masked_rows.get(name, ())],
+            }
+            for name, (
+                batch,
+                heads,
+                kv_heads,
+                queries,
+                keys,
+                kv_layout,
+                mask_layout,
+                scale,
+                pattern,
+            ) in cases.items()
         }
-        for name, (
-            batch,
-            heads,
-            kv_heads,
-            queries,
-            keys,
-            kv_layout,
-            mask_layout,
-            scale,
-            pattern,
-        ) in VECTOR_CASES.items()
-    }
+
     return {
-        "vector": vector,
+        "vector": attention(VECTOR_CASES, MASKED_ROWS),
         "vectorCaseSelection": {
             "queryTransposedOrCausal": ["batches", "prefill", "rising"],
             "other": ["decode", "short", "batches"],
         },
         "cacheSlack": CACHE_SLACK,
+        "firstPass": attention(PASS1_CASES, PASS1_MASKED_ROWS),
+        "firstPassCaseSelection": {
+            group: list(names) for group, names in PASS1_GROUP_CASES.items()
+        },
         "pass2": {
             name: {
                 "rows": rows,
@@ -1393,19 +1955,42 @@ def _case_contract():
 
 def _expected_validation_contract():
     return {
-        "workgroupSizes": {kind: list(size) for kind, size in WORKGROUP_SIZES.items()},
+        "workgroupSizes": {
+            **{kind: list(size) for kind, size in WORKGROUP_SIZES.items()},
+            "pass1": {
+                group: list(size) for group, size in PASS1_WORKGROUP_SIZES.items()
+            },
+        },
+        "firstPassWorkgroupSelection": {
+            "queryTransposedOrCausal": "prefill",
+            "other": "decode",
+        },
         "simdSize": SIMD_SIZE,
         "softwareSubgroups": {
             target: list(SOFTWARE_SUBGROUP_KINDS)
             for target in SOFTWARE_SUBGROUP_TARGETS
         },
         "specializationConstants": {
-            name: {"id": identifier, "values": [True, False]}
+            name: {
+                "id": identifier,
+                "values": (
+                    sorted(set(PASS1_BLOCKS)) if name == "blocks" else [True, False]
+                ),
+            }
             for name, identifier in CONSTANT_IDS.items()
         },
         "vectorSpecializations": [
             _variant_key(_vector_constants(*item)) for item in VECTOR_SPECIALIZATIONS
         ],
+        "firstPassSpecializations": [
+            key for entry, key, _ in PASS1_VARIANTS if entry == PASS1_VARIANTS[0][0]
+        ],
+        "frozenSpecializationTargets": {
+            kind: list(targets) for kind, targets in FROZEN_TARGETS.items()
+        },
+        "metadataPreconditions": {
+            "pass1": [{"parameter": "N", "minimum": 0, "maximum": PASS1_KEY_LIMIT}]
+        },
         "indexRangeAssertions": {
             "opengl": {
                 kind: [
@@ -1424,11 +2009,16 @@ def _expected_validation_contract():
             "expUnits": "max(4, 3 + 2|x|) + 2|x|",
             "scoreError": "gamma(D / 32 + 34) * scale * sum|q * k|",
             "accumulatorRoundings": {"numerator": "3n + 34", "denominator": "2n + 34"},
+            "firstPassAccumulatorRoundings": {"partials": "3n + 4", "sums": "2n + 4"},
             "tiny": TINY,
             "boundSafety": BOUND_SAFETY,
         },
         "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
         "results": "correct-rounding-of-a-value-within-the-error-bound",
+        "firstPassResults": (
+            "maxima-within-the-largest-score-error-sums-and-partials-relative-"
+            "to-the-reported-maxima"
+        ),
         "blockedResults": "bit-exact",
         "keylessRows": "exact-zero",
         "disabledBufferDecoys": {
@@ -1444,11 +2034,15 @@ def _expected_validation_contract():
     }
 
 
-def _output_count(entry, name):
+def _output_count(entry, name, constants=None):
     kind = _kind(entry)
     if kind == "vector":
         data = _vector_data(entry, name)
         return data.rows * data.value_dim
+    if kind == "pass1":
+        batch, heads, _, queries = PASS1_CASES[name][:4]
+        # Partial outputs, sums and maxima for every row's blocks.
+        return batch * heads * queries * constants["blocks"] * (_dims(entry)[1] + 2)
     if kind == "pass2":
         data = _pass2_data(entry, name)
         return data.rows * data.value_dim
@@ -1467,7 +2061,7 @@ def _dispatch_count():
 
 def _checked_elements(entry):
     return sum(
-        _output_count(entry, name)
+        _output_count(entry, name, constants)
         for item, _, constants in VARIANTS
         if item == entry
         for name in _variant_cases(entry, constants)
@@ -1533,13 +2127,15 @@ def test_current_mlx_sdpa_contract_is_exact():
                 assert len(record["sha256"]) == 64 and record["sizeBytes"] > 0
     # Metal keeps function constants and OpenGL specialization constants, so
     # every specialization of an entry shares one artifact; DirectX
-    # materializes each.
+    # materializes each, and OpenGL does too where it freezes them.
     for entry in ENTRIES:
-        for target in ("metal", "opengl"):
+        frozen = FROZEN_TARGETS.get(_kind(entry), ())
+        for target in TARGETS:
             records = contract["artifacts"][target][entry]
-            assert len({record["sha256"] for record in records.values()}) == 1
-        records = contract["artifacts"]["directx"][entry]
-        assert len({record["sha256"] for record in records.values()}) == len(records)
+            shared = target == "metal" or (target == "opengl" and target not in frozen)
+            assert len({record["sha256"] for record in records.values()}) == (
+                1 if shared else len(records)
+            ), (target, entry)
     assert contract["validationContract"] == _expected_validation_contract()
     assert contract["scope"] == _expected_scope()
 
@@ -1555,19 +2151,27 @@ def test_sdpa_entries_follow_mlx_instantiation():
         "sdpa_vector_float_96_64",
         "sdpa_vector_2pass_1_float_96_64",
     )
-    assert len(ENTRIES) == 46 and len(PENDING_ENTRIES) == 36
+    assert len(ENTRIES) == 70 and len(PENDING_ENTRIES) == 12
     counts = {}
     for entry in ENTRIES:
         counts[_kind(entry)] = counts.get(_kind(entry), 0) + 1
-    assert counts == {"scale-copy": 2, "causal-mask": 2, "vector": 24, "pass2": 18}
+    assert counts == {
+        "scale-copy": 2,
+        "causal-mask": 2,
+        "vector": 24,
+        "pass1": 24,
+        "pass2": 18,
+    }
     assert {_kind(entry) for entry in PENDING_ENTRIES} == set(PENDING_KINDS)
     assert {_dtype(entry) for entry in ENTRIES} == set(TYPE_NAMES.values())
     assert {_dtype(entry) for entry in BLOCKED_ENTRIES} == {"float16", "bfloat16"}
     assert _dims("sdpa_vector_bfloat16_t_192_128") == (192, 128)
     assert _dims("sdpa_vector_2pass_2_float16_t_96") == (96, 96)
+    assert _dims("sdpa_vector_2pass_1_float16_t_192_128") == (192, 128)
     assert _dtype("sdpa_vector_2pass_1_gqa_12_float16_t_128_128") == "float16"
-    # Eight specializations per vector kernel and one per other kernel.
-    assert len(VARIANTS) == 24 * 8 + 4 + 18
+    # Eight specializations per vector and first-pass kernel, one per other.
+    assert len(VARIANTS) == 24 * 8 + 24 * 8 + 4 + 18
+    assert len(PASS1_VARIANTS) + len(SINGLE_PASS_VARIANTS) == len(VARIANTS)
     assert len({(entry, key) for entry, key, _ in VARIANTS}) == len(VARIANTS)
     keys = {key for entry, key, _ in VARIANTS if _kind(entry) == "vector"}
     assert len(keys) == 8
@@ -1576,12 +2180,116 @@ def test_sdpa_entries_follow_mlx_instantiation():
         pairs |= {("mask", mask, "qt", transposed), ("mask", mask, "sinks", sinks)}
         pairs.add(("qt", transposed, "sinks", sinks))
     assert len(pairs) == 4 * 2 + 4 * 2 + 2 * 2
+    first = {key for entry, key, _ in PASS1_VARIANTS}
+    assert first == {
+        f"{_variant_key(_vector_constants(*item))}_{blocks}"
+        for item, blocks in zip(VECTOR_SPECIALIZATIONS, PASS1_BLOCKS)
+    }
+    # Every block count meets both query layouts, both sink settings and
+    # both threadgroup shapes.
+    covered = {}
+    for constants in _combinations(PASS1_VARIANTS[0][0]):
+        covered.setdefault(constants["blocks"], set()).update(
+            {
+                ("qt", constants["query_transposed"]),
+                ("sinks", constants["has_sinks"]),
+                ("group", _pass1_group(constants)),
+            }
+        )
+    assert covered == {
+        blocks: {
+            ("qt", True),
+            ("qt", False),
+            ("sinks", True),
+            ("sinks", False),
+            ("group", "decode"),
+            ("group", "prefill"),
+        }
+        for blocks in (32, 64, 128)
+    }
+
+
+def _mlx_default_blocks(device, simds, keys):
+    """Return sdpa_vector_2pass()'s block count without MLX_SDPA_BLOCKS.
+
+    ``device`` is the last letter of the GPU architecture name: "s" for
+    Ultra, "d" for Max and "g" or "p" otherwise.
+    """
+    if device == "s":
+        if keys > 1024 and simds > 4:
+            if keys <= 8192:
+                return 128
+            if keys <= 32768:
+                return 256
+            return 512 if keys <= 65536 else 1024
+        return 64
+    if device == "d":
+        if simds <= 2 and keys > 8192:
+            return 256
+        if simds >= 6 and keys >= 16384:
+            return 512 if keys < 65536 else 1024
+        return 128
+    return 64 if simds >= 4 else 32
+
+
+def _mlx_routes_two_pass(device, heads, kv_heads, keys):
+    """Return whether MLX's sdpa_vector path takes the two-pass kernels."""
+    return (device in {"d", "s"} and keys >= 1024) or (
+        kv_heads < heads and keys >= 4096
+    )
 
 
 def test_sdpa_cases_follow_mlx_dispatch():
     for entry, _, constants in VARIANTS:
-        assert len(_variant_cases(entry, constants)) == 3, (entry, constants)
-    assert _dispatch_count() == 3 * len(VARIANTS)
+        expected = 2 if _kind(entry) == "pass1" else 3
+        assert len(_variant_cases(entry, constants)) == expected, (entry, constants)
+    assert _dispatch_count() == 3 * len(SINGLE_PASS_VARIANTS) + 2 * len(PASS1_VARIANTS)
+    for group, names in PASS1_GROUP_CASES.items():
+        size = PASS1_WORKGROUP_SIZES[group]
+        for name in names:
+            batch, heads, kv_heads, queries, keys, kv_layout, mask_layout = PASS1_CASES[
+                name
+            ][:7]
+            # sdpa_vector_2pass() requests (32, gqa_factor, query length).
+            assert size == (SIMD_SIZE, heads // kv_heads, queries)
+            assert heads == PASS1_GQA_FACTOR * kv_heads and queries <= 8
+            assert _mlx_routes_two_pass("d", heads, kv_heads, keys)
+            assert _mlx_routes_two_pass("s", heads, kv_heads, keys)
+            if group == "prefill":
+                # Transposed queries need B == 1 or H == 1.
+                assert queries > 1 and batch == 1
+            else:
+                assert queries == 1
+            if kv_layout == "transposed":
+                assert batch == 1 or kv_heads == 1
+            if mask_layout == "transposed":
+                assert batch == 1 or heads == 1
+            for bh, query in PASS1_MASKED_ROWS.get(name, ()):
+                assert bh < batch * heads and query < queries
+                assert mask_layout != "broadcast"
+            for blocks in set(PASS1_BLOCKS):
+                # Every block holds keys; some hold one more.
+                assert keys >= 8 * blocks
+    # Key counts that fill every block equally and ones that do not appear.
+    assert {case[4] % max(PASS1_BLOCKS) == 0 for case in PASS1_CASES.values()} == {
+        True,
+        False,
+    }
+    defaults = {
+        _mlx_default_blocks(device, simds, keys)
+        for device in "gpsd"
+        for simds in (2, 8)
+        for keys in (1024, 1030, 4096)
+    }
+    # MLX picks each first-pass block count by default for some device and
+    # shape, and MLX_SDPA_BLOCKS rounds any request up to a multiple of 32.
+    assert set(PASS1_BLOCKS) <= defaults
+    assert all(blocks % SIMD_SIZE == 0 for blocks in PASS1_BLOCKS)
+    assert _mlx_default_blocks("d", 2, 1024) == 128
+    assert _mlx_default_blocks("s", 8, 1030) == 128
+    assert _mlx_default_blocks("s", 2, 1061) == 64
+    assert _mlx_default_blocks("g", 2, 4096) == 32
+    assert not _mlx_routes_two_pass("g", 4, 2, 1024)
     for name, case in VECTOR_CASES.items():
         batch, heads, kv_heads, queries, keys, kv_layout, mask_layout = case[:7]
         # sdpa_vector: at most eight queries, fewer than 1024 keys (the
@@ -1647,7 +2355,7 @@ def test_sdpa_reference_matches_kernel_index_arithmetic():
     # kernels' own index arithmetic, SIMD-group partitioning and online
     # softmax on the bound buffers in float64, rounding only the results.
     # Both use a negligible part of the bound.
-    for entry, _, constants in VARIANTS:
+    for entry, _, constants in SINGLE_PASS_VARIANTS:
         if not _representative(entry):
             continue
         for name in _variant_cases(entry, constants):
@@ -1662,7 +2370,7 @@ def test_sdpa_reference_matches_kernel_index_arithmetic():
 @pytest.mark.parametrize("dtype", ("float32", "float16", "bfloat16"))
 def test_sdpa_checks_reject_defects(dtype):
     rejected = set()
-    for entry, _, constants in VARIANTS:
+    for entry, _, constants in SINGLE_PASS_VARIANTS:
         if _dtype(entry) != dtype or not _representative(entry):
             continue
         for name in _variant_cases(entry, constants):
@@ -1721,7 +2429,7 @@ def test_sdpa_bounds_stay_meaningful():
     # below the change a dropped key, a wrong mask or a misplaced head causes;
     # unscaled 512-wide dot products widen it to 2^-9, still under one
     # bfloat16 unit at one half.
-    for entry, _, constants in VARIANTS:
+    for entry, _, constants in SINGLE_PASS_VARIANTS:
         if _kind(entry) not in {"vector", "pass2"}:
             continue
         for name in _variant_cases(entry, constants):
@@ -1729,6 +2437,112 @@ def test_sdpa_bounds_stay_meaningful():
             limit = 2.0**-9 if name == "short" else 2.0**-12
             assert max(bounds) < limit, (entry, name, max(bounds))
             assert any(bounds), (entry, name)
+
+
+# Each storage type at the smallest heads, and float32 with a narrower value
+# head: the first pass's index arithmetic does not depend on the head width.
+PASS1_REPRESENTATIVES = (
+    "sdpa_vector_2pass_1_float_64_64",
+    "sdpa_vector_2pass_1_float_96_64",
+    "sdpa_vector_2pass_1_float16_t_64_64",
+    "sdpa_vector_2pass_1_bfloat16_t_64_64",
+)
+
+
+@pytest.mark.parametrize("entry", PASS1_REPRESENTATIVES)
+def test_sdpa_first_pass_reference_matches_kernel_index_arithmetic(entry):
+    # The simulation runs the first pass's threadgroup and SIMD-group
+    # indexing, block-strided key loop and online softmax on the bound
+    # buffers in float64. Relative to its own maxima, its correctly rounded
+    # results use no part of the bound.
+    for constants in _combinations(entry):
+        for name in _variant_cases(entry, constants):
+            outputs, tops = _pass1_simulate(entry, constants, name)
+            used = _pass1_check(entry, constants, name, outputs, maxs=tops)
+            assert max(used.values()) < 2.0**-8, (entry, constants, name, used)
+
+
+@pytest.mark.parametrize("entry", PASS1_REPRESENTATIVES)
+def test_sdpa_first_pass_checks_reject_defects(entry):
+    dtype = _dtype(entry)
+    rejected = set()
+    for constants in _combinations(entry):
+        tried = set()
+        for name in _variant_cases(entry, constants):
+            outputs, tops = _pass1_simulate(entry, constants, name)
+            # An unwritten output of each kind fails.
+            for member, guard_type in (
+                ("out", dtype),
+                ("sums", "float32"),
+                ("maxs", "float32"),
+            ):
+                unwritten = {**outputs, member: list(outputs[member])}
+                unwritten[member][-1] = _from_bits(guard_type, GUARD_BITS[guard_type])
+                with pytest.raises(AssertionError):
+                    _pass1_check(entry, constants, name, unwritten, maxs=tops)
+            # Each defect once per specialization, on its first case it shows.
+            for mutation in _pass1_mutations(entry, constants, name):
+                if mutation in tried:
+                    continue
+                tried.add(mutation)
+                wrong, wrong_tops = _pass1_simulate(entry, constants, name, mutation)
+                with pytest.raises(AssertionError):
+                    _pass1_check(entry, constants, name, wrong, maxs=wrong_tops)
+                rejected.add(mutation)
+    expected = {
+        "normalize",
+        "block-stride",
+        "out-layout",
+        "max-init",
+        "last-key",
+        "scale",
+        "gqa",
+        "transpose",
+        "head-stride",
+        "kv-stride",
+        "causal",
+        "mask-polarity",
+        "mask-head",
+        "mask-add",
+        "sinks",
+        "sink-block",
+        "sink-head",
+    }
+    if dtype == "float32":
+        expected.add("binary16-score")
+    assert rejected == expected
+
+
+@pytest.mark.parametrize(
+    "entry",
+    PASS1_REPRESENTATIVES
+    + (
+        "sdpa_vector_2pass_1_float_192_128",
+        "sdpa_vector_2pass_1_float_512_512",
+    ),
+)
+def test_sdpa_first_pass_bounds_stay_meaningful(entry):
+    # Score errors bound the maxima to 2^-12 (2^-9 for unscaled 512-wide dot
+    # products), and the sums and partials stay within the same fraction of
+    # the sum of their terms' magnitudes: far below the change a dropped
+    # key, a wrong mask or a misplaced block causes.
+    for constants in _combinations(entry):
+        for name in _variant_cases(entry, constants):
+            data = _pass1_data(entry, name)
+            maxima, max_bounds = _pass1_max_reference(entry, constants, name)
+            limit = 2.0**-9 if name == "cache" else 2.0**-12
+            assert max(max_bounds) < limit, (entry, name, max(max_bounds))
+            reference = _pass1_partial_reference(entry, constants, name, maxima)
+            sums, sum_bounds = reference["sums"]
+            assert max(b / s for s, b in zip(sums, sum_bounds) if s) < limit
+            _, out_bounds = reference["out"]
+            width = data.value_dim
+            for index, total in enumerate(sums):
+                # Value magnitudes stay below one, so each partial's terms
+                # sum to at most the block's sum.
+                bounds = out_bounds[index * width : (index + 1) * width]
+                assert max(bounds) <= limit * max(total, 1.0), (entry, name, index)
+            assert any(sum_bounds) and any(out_bounds), (entry, name)
 
 
 @pytest.mark.parametrize("target", TARGETS)
@@ -1755,7 +2569,7 @@ def test_sdpa_configs_scope_target_options(tmp_path, target, entry, key, constan
         else []
     )
     text = path.read_text(encoding="utf-8")
-    size = ", ".join(str(item) for item in WORKGROUP_SIZES[kind])
+    size = ", ".join(str(item) for item in _workgroup_size(entry, constants))
     assert f'"{entry}" = [{size}]' in text
     for name, identifier in CONSTANT_IDS.items():
         line = f'"{identifier}" = '
@@ -1768,6 +2582,13 @@ def test_sdpa_configs_scope_target_options(tmp_path, target, entry, key, constan
     assert ("relative_wave_shuffle_out_of_range" in text) is (
         software and target == "directx"
     )
+    frozen = target in FROZEN_TARGETS.get(kind, ())
+    assert ("freeze_specialization_constants = true" in text) is frozen
+    assert ("preserve_resource_origins = true" in text) is (kind == "pass1")
+    assert ("[[project.metadata_preconditions]]" in text) is (kind == "pass1")
+    if kind == "pass1":
+        assert f"maximum = {PASS1_KEY_LIMIT}\n" in text
+        assert 'parameter = "N"' in text and f'entryPoint = "{entry}"' in text
 
 
 @pytest.fixture(scope="module")
@@ -1877,13 +2698,63 @@ BINDINGS = {
         "q_offset": "int32",
     },
     "causal-mask": {"scores": "out", "tile_rows": "int32", "columns": "int32"},
+    "pass1": {
+        "queries": "T",
+        "keys": "T",
+        "values": "T",
+        "out": "out",
+        "sums": "float32-out",
+        "maxs": "float32-out",
+        "N": "int32",
+        "k_head_stride": "uint64",
+        "k_seq_stride": "uint64",
+        "v_head_stride": "uint64",
+        "v_seq_stride": "uint64",
+        "scale": "float32",
+        "bmask": "bool",
+        "fmask": "T",
+        "mask_kv_seq_stride": "int32",
+        "mask_q_seq_stride": "int32",
+        "mask_head_stride": "int32",
+        "sinks": "T",
+    },
 }
 OUTPUTS = {
-    "vector": "out",
-    "pass2": "out",
-    "scale-copy": "q_block",
-    "causal-mask": "scores",
+    "vector": ("out",),
+    "pass2": ("out",),
+    "pass1": ("out", "sums", "maxs"),
+    "scale-copy": ("q_block",),
+    "causal-mask": ("scores",),
 }
+# sdpa_vector_2pass() binds nothing at buffer index 6.
+UNBOUND_INDICES = {"pass1": (6,)}
+
+
+def _upstream_indices(kind):
+    """Return each member's MLX buffer index."""
+    indices, index = {}, 0
+    for member in BINDINGS[kind]:
+        while index in UNBOUND_INDICES.get(kind, ()):
+            index += 1
+        indices[member] = index
+        index += 1
+    return indices
+
+
+def _function_constants(constants):
+    """Return MLX's function constant values as the raw-buffer runner takes them."""
+    return {
+        "boolConstants": [
+            {"index": CONSTANT_IDS[name], "value": value}
+            for name, value in constants.items()
+            if isinstance(value, bool)
+        ],
+        "intConstants": [
+            {"index": CONSTANT_IDS[name], "value": value}
+            for name, value in constants.items()
+            if not isinstance(value, bool)
+        ],
+    }
 
 
 def _metal_payload(dtype, values):
@@ -1905,6 +2776,9 @@ def _upstream_payload(dtype, payload, value):
         return _metal_payload(
             dtype, list(value) + [_from_bits(dtype, GUARD_BITS[dtype])] * GUARD_COUNT
         )
+    if payload == "float32-out":
+        guard = _from_bits("float32", GUARD_BITS["float32"])
+        return _metal_payload("float32", list(value) + [guard] * GUARD_COUNT)
     if payload == "float32":
         return struct.pack("<f", value)
     if payload == "float32[]":
@@ -1920,28 +2794,32 @@ def _upstream_payload(dtype, payload, value):
 
 
 def _upstream_metal(work, reference, entry, constants, name, buffers):
-    """Run the unchanged upstream kernel with MLX's buffer indices."""
+    """Run the unchanged upstream kernel with MLX's buffer indices.
+
+    Return the device record and each output's values.
+    """
     runner, library = reference
     kind, dtype = _kind(entry), _dtype(entry)
+    indices = _upstream_indices(kind)
     files = []
-    for index, (member, payload) in enumerate(BINDINGS[kind].items()):
+    for index in range(max(indices.values()) + 1):
         path = work / f"{name}-upstream-input-{index}.bin"
-        path.write_bytes(_upstream_payload(dtype, payload, buffers[member]))
+        member = next((item for item, at in indices.items() if at == index), None)
+        if member is None:
+            # MLX leaves this index unbound; the kernel never reads it.
+            path.write_bytes(b"\0" * 4)
+        else:
+            path.write_bytes(
+                _upstream_payload(dtype, BINDINGS[kind][member], buffers[member])
+            )
         files.append(str(path))
     request = {
         "buffers": files,
         "workgroupCount": list(buffers["grid"]),
-        "workgroupSize": list(WORKGROUP_SIZES[kind]),
+        "workgroupSize": list(_workgroup_size(entry, constants)),
         "simdWidth": SIMD_SIZE,
-        # sdpa_vector() always specializes all six constants.
-        "boolConstants": (
-            [
-                {"index": identifier, "value": constants[constant]}
-                for constant, identifier in CONSTANT_IDS.items()
-            ]
-            if constants
-            else []
-        ),
+        # MLX always specializes every constant a kernel declares.
+        **_function_constants(constants),
     }
     request_path = work / f"{name}-upstream-request.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
@@ -1949,16 +2827,21 @@ def _upstream_metal(work, reference, entry, constants, name, buffers):
     device = json.loads(
         _run([runner, library, entry, request_path, output], work, f"{name}-upstream")
     )
-    out_index = list(BINDINGS[kind]).index(OUTPUTS[kind])
+    written = {indices[member] for member in OUTPUTS[kind]}
     for index, path in enumerate(files):
-        if index != out_index:
+        if index not in written:
             assert (output / f"buffer-{index}.bin").read_bytes() == Path(
                 path
             ).read_bytes()
-    words = _metal_words(dtype, (output / f"buffer-{out_index}.bin").read_bytes())
-    count = len(buffers[OUTPUTS[kind]])
-    assert list(words[count:]) == [GUARD_BITS[dtype]] * GUARD_COUNT
-    return device, [_from_bits(dtype, word) for word in words[:count]]
+    results = {}
+    for member in OUTPUTS[kind]:
+        logical = "float32" if BINDINGS[kind][member] == "float32-out" else dtype
+        raw = (output / f"buffer-{indices[member]}.bin").read_bytes()
+        words = _metal_words(logical, raw)
+        count = len(buffers[member])
+        assert list(words[count:]) == [GUARD_BITS[logical]] * GUARD_COUNT
+        results[member] = [_from_bits(logical, word) for word in words[:count]]
+    return device, results
 
 
 def _pipeline_limits(work, reference, translated, entry, constants):
@@ -1977,16 +2860,9 @@ def _pipeline_limits(work, reference, translated, entry, constants):
             {
                 "buffers": [str(placeholder)],
                 "workgroupCount": [1, 1, 1],
-                "workgroupSize": list(WORKGROUP_SIZES[_kind(entry)]),
+                "workgroupSize": list(_workgroup_size(entry, constants)),
                 "simdWidth": SIMD_SIZE,
-                "boolConstants": (
-                    [
-                        {"index": identifier, "value": constants[constant]}
-                        for constant, identifier in CONSTANT_IDS.items()
-                    ]
-                    if constants
-                    else []
-                ),
+                **_function_constants(constants),
                 "pipelineOnly": True,
             }
         ),
@@ -2004,7 +2880,7 @@ def _pipeline_limits(work, reference, translated, entry, constants):
         assert record["simdWidth"] == SIMD_SIZE, record
         limits[label] = record["maxTotalThreadsPerThreadgroup"]
         limits["device"] = record["device"]
-    limits["requested"] = math.prod(WORKGROUP_SIZES[_kind(entry)])
+    limits["requested"] = math.prod(_workgroup_size(entry, constants))
     return limits
 
 
@@ -2016,10 +2892,15 @@ def _member(binding, entry):
     return member.removesuffix("Buffer").rstrip("_")
 
 
-def _dispatch(descriptor, package, target, entry, buffers):
+def _dispatch(descriptor, package, target, entry, constants, buffers):
+    """Build the native-loader request; return it, the outputs and input count.
+
+    Each output maps to its binding name, physical dtype, written element
+    count and the guard words that follow.
+    """
     kind, dtype = _kind(entry), _dtype(entry)
     plan = BINDINGS[kind]
-    values, observed, output = {}, [], None
+    values, observed, outputs = {}, [], {}
     for binding in descriptor["bindings"]:
         if binding.get("provenance", {}).get("kind") == "generated-execution-input":
             continue
@@ -2037,15 +2918,13 @@ def _dispatch(descriptor, package, target, entry, buffers):
                 )
             value = _runtime_value(dtype, element_type, data, encoding)
             if payload == "out":
-                count = len(data)
                 guards = _guard_values(dtype, element_type)
-                value["values"] = value["values"][:count] + guards
-                value["shape"] = [count + GUARD_COUNT]
-                output = (binding["name"], value["dtype"], count, guards)
-        elif payload in {"float32", "float32[]"}:
+        elif payload in {"float32", "float32[]", "float32-out"}:
             assert element_type == "float32" and encoding is None, binding
-            items = data if payload == "float32[]" else [data]
+            items = [data] if payload == "float32" else data
             value = _runtime_value("float32", element_type, items, None)
+            if payload == "float32-out":
+                guards = _guard_values("float32", element_type)
         elif payload == "bool":
             if target == "metal":
                 assert element_type == "bool", binding
@@ -2067,33 +2946,45 @@ def _dispatch(descriptor, package, target, entry, buffers):
             assert element_type == expected_type, (member, element_type)
             items = list(data) if payload.endswith("[]") else [data]
             value = {"dtype": element_type, "shape": [len(items)], "values": items}
-        values[binding["name"]] = value
-        if payload != "out":
+        if member in OUTPUTS[kind]:
+            count = len(data)
+            value["values"] = value["values"][:count] + guards
+            value["shape"] = [count + GUARD_COUNT]
+            outputs[member] = (binding["name"], value["dtype"], count, guards)
+        else:
             observed.append(binding["name"])
-    assert output is not None
-    assert len(observed) == len(plan) - 1, (sorted(observed), sorted(plan))
+        values[binding["name"]] = value
+    assert set(outputs) == set(OUTPUTS[kind]), (sorted(outputs), OUTPUTS[kind])
+    assert len(observed) == len(plan) - len(outputs), (sorted(observed), sorted(plan))
     request = build_native_loader_dispatch_request(
         descriptor,
         package,
         values,
-        {output[0]: dict(values[output[0]])},
+        {name: dict(values[name]) for name, *_ in outputs.values()},
         {
             "workgroupCount": list(buffers["grid"]),
-            "workgroupSize": list(WORKGROUP_SIZES[kind]),
+            "workgroupSize": list(_workgroup_size(entry, constants)),
         },
         expected_target=target,
         observe_inputs=observed,
     )
     assert request.execution_plan is not None
     assert request.execution_plan.diagnostics == ()
-    return request, output, len(observed)
+    return request, outputs, len(observed)
+
+
+def _header(text, name):
+    """Return the JSON record of a ``// <name>: {...}`` artifact header line."""
+    prefix = f"// {name}: "
+    (line,) = (line for line in text.splitlines() if line.startswith(prefix))
+    return json.loads(line.removeprefix(prefix))
 
 
 def _assert_lowering(text, target, entry, constants):
     kind = _kind(entry)
     assert "unsupported" not in text
-    # sdpa_vector calls fast::exp three times, sdpa_vector_2pass_2 twice.
-    calls = {"vector": 3, "pass2": 2}.get(kind, 0)
+    # sdpa_vector calls fast::exp three times, the two-pass kernels twice.
+    calls = {"vector": 3, "pass2": 2, "pass1": 2}.get(kind, 0)
     if target == "metal":
         # Translated Metal keeps every fast::exp.
         assert text.count("metal::fast::exp(") == text.count("fast::") == calls
@@ -2102,91 +2993,146 @@ def _assert_lowering(text, target, entry, constants):
         assert "fast::" not in text
     if kind in SOFTWARE_SUBGROUP_KINDS:
         assert text.count("exp(") >= calls
+        # The first pass reduces scores with simd_sum alone.
+        reduces_maxima = kind != "pass1"
         if target == "metal":
-            assert "simd_sum(" in text and "simd_max(" in text
+            assert "simd_sum(" in text
+            assert ("simd_max(" in text) is reduces_maxima
         elif target == "opengl":
             assert "#define CROSSTL_SOFTWARE_SUBGROUP_WIDTH 32u" in text
         else:
             assert "__crossgl_software_subgroup_sum_float(" in text
-            assert "__crossgl_software_subgroup_max_float(" in text
-    for name, value in constants.items():
-        identifier = CONSTANT_IDS[name]
-        if target == "metal":
-            assert f"constant bool {name} [[function_constant({identifier})]];" in text
-        elif target == "opengl":
-            # Specialized when the pipeline is created, as on Metal.
-            assert f"layout(constant_id = {identifier}) const bool {name} = " in text
-        else:
-            assert f"static const bool {name} = {str(value).lower()};" in text
+            assert ("__crossgl_software_subgroup_max_float(" in text) is reduces_maxima
+    if target in FROZEN_TARGETS.get(kind, ()):
+        # Every constant becomes a literal; the header records each value.
+        assert _header(text, "crosstl-frozen-specializations") == {
+            "constants": [
+                {
+                    "dtype": "bool" if isinstance(value, bool) else "int32",
+                    "frozen": True,
+                    "id": CONSTANT_IDS[name],
+                    "name": name,
+                    "value": value,
+                }
+                for name, value in constants.items()
+            ],
+            "schemaVersion": 1,
+        }
+        assert "function_constant(" not in text and "constant_id" not in text
+        qualifier = "static const" if target == "directx" else "const"
+        assert f"{qualifier} int blocks = {constants['blocks']};" in text
+    else:
+        for name, value in constants.items():
+            identifier = CONSTANT_IDS[name]
+            scalar = "bool" if isinstance(value, bool) else "int"
+            if target == "metal":
+                assert (
+                    f"constant {scalar} {name} [[function_constant({identifier})]];"
+                    in text
+                )
+            elif target == "opengl":
+                # Specialized when the pipeline is created, as on Metal.
+                assert (
+                    f"layout(constant_id = {identifier}) const {scalar} {name} = "
+                    in text
+                )
+            else:
+                assert f"static const {scalar} {name} = {str(value).lower()};" in text
     if not constants:
         assert "function_constant(" not in text and "constant_id" not in text
+    if kind == "pass1":
+        (requirement,) = _header(text, "crosstl-metadata-preconditions")["requirements"]
+        assert requirement["dtype"] == "int32"
+        assert (requirement["minimum"], requirement["maximum"]) == (
+            0,
+            PASS1_KEY_LIMIT,
+        )
+        assert requirement["sourceResource"]["entryPoint"] == entry
+        assert requirement["sourceResource"]["parameter"] == "N"
+
+
+def _translate_variant(root, work, target, entry, key, constants, metal_reference):
+    """Translate one specialization and check its pin, lowering and compiler.
+
+    Return the translation, its contract record and, on Metal, both
+    pipelines' threadgroup limits.
+    """
+    record = _contract()["artifacts"][target][entry][key]
+    config = work / "crosstl.toml"
+    config.write_text(
+        _config(f"{work.name}/out", target, entry, constants), encoding="utf-8"
+    )
+    translation = translate_project(
+        load_project_config(root, config),
+        format_output=False,
+        validate=True,
+        run_toolchains=False,
+    )
+    report = translation.to_json()
+    translation.write_json(work / "report.json")
+    validation = validate_project_report(work / "report.json")
+    assert validation["success"] is True, validation
+    assert report["diagnostics"] == []
+    assert report["summary"]["translatedCount"] == 1
+    assert report["summary"]["failedCount"] == 0
+    (artifact,) = report["artifacts"]
+    assert artifact["sourceHash"] == {"algorithm": "sha256", "value": SOURCE_SHA256}
+    assert artifact["generatedHash"] == {
+        "algorithm": "sha256",
+        "value": record["sha256"],
+    }
+    assert artifact["generatedSizeBytes"] == record["sizeBytes"]
+    (execution,) = artifact["execution"]["entryPoints"]
+    assert execution["workgroupSize"] == list(_workgroup_size(entry, constants))
+    generated = root / artifact["path"]
+    _assert_lowering(generated.read_text(encoding="utf-8"), target, entry, constants)
+    limits = None
+    if target == "metal":
+        translated_library = _metal_library(
+            generated, work / "translated.metallib", root
+        )
+        limits = _pipeline_limits(
+            work, metal_reference, translated_library, entry, constants
+        )
+        if limits["upstream"] >= limits["requested"]:
+            # MLX dispatches its own kernel on this device, so the
+            # translation must fit the same threadgroup.
+            assert limits["translated"] >= limits["requested"], limits
+    else:
+        _validate_generated_artifact(generated, work, target)
+    return translation, record, limits
+
+
+def _native_package(translation, work, target, entry, constants):
+    descriptor, package = _prepare_native_package(translation, work)
+    frozen = target in FROZEN_TARGETS.get(_kind(entry), ())
+    reflected = descriptor["specializationConstants"]
+    assert {item["id"]: item["value"] for item in reflected} == {
+        CONSTANT_IDS[name]: value for name, value in constants.items()
+    }
+    assert all(item.get("frozen", False) is frozen for item in reflected), reflected
+    return descriptor, package
 
 
 @pytest.mark.parametrize(
-    "entry,key,constants", VARIANTS, ids=[f"{e}-{k}" for e, k, _ in VARIANTS]
+    "entry,key,constants",
+    SINGLE_PASS_VARIANTS,
+    ids=[f"{e}-{k}" for e, k, _ in SINGLE_PASS_VARIANTS],
 )
 def test_current_mlx_sdpa_native_parity(
     current_mlx, metal_reference, tmp_path, entry, key, constants
 ):
     root, target = current_mlx
     kind, dtype = _kind(entry), _dtype(entry)
-    record = _contract()["artifacts"][target][entry][key]
     with tempfile.TemporaryDirectory(prefix=".current-sdpa-", dir=root) as path:
         work = Path(path)
         try:
-            config = work / "crosstl.toml"
-            config.write_text(
-                _config(f"{work.name}/out", target, entry, constants),
-                encoding="utf-8",
+            translation, record, limits = _translate_variant(
+                root, work, target, entry, key, constants, metal_reference
             )
-            translation = translate_project(
-                load_project_config(root, config),
-                format_output=False,
-                validate=True,
-                run_toolchains=False,
+            descriptor, package = _native_package(
+                translation, work, target, entry, constants
             )
-            report = translation.to_json()
-            translation.write_json(work / "report.json")
-            validation = validate_project_report(work / "report.json")
-            assert validation["success"] is True, validation
-            assert report["diagnostics"] == []
-            assert report["summary"]["translatedCount"] == 1
-            assert report["summary"]["failedCount"] == 0
-            (artifact,) = report["artifacts"]
-            assert artifact["sourceHash"] == {
-                "algorithm": "sha256",
-                "value": SOURCE_SHA256,
-            }
-            assert artifact["generatedHash"] == {
-                "algorithm": "sha256",
-                "value": record["sha256"],
-            }
-            assert artifact["generatedSizeBytes"] == record["sizeBytes"]
-            (execution,) = artifact["execution"]["entryPoints"]
-            assert execution["workgroupSize"] == list(WORKGROUP_SIZES[kind])
-            generated = root / artifact["path"]
-            _assert_lowering(
-                generated.read_text(encoding="utf-8"), target, entry, constants
-            )
-            limits = None
-            if target == "metal":
-                translated_library = _metal_library(
-                    generated, work / "translated.metallib", root
-                )
-                limits = _pipeline_limits(
-                    work, metal_reference, translated_library, entry, constants
-                )
-                if limits["upstream"] >= limits["requested"]:
-                    # MLX dispatches its own kernel on this device, so the
-                    # translation must fit the same threadgroup.
-                    assert limits["translated"] >= limits["requested"], limits
-            else:
-                _validate_generated_artifact(generated, work, target)
-            descriptor, package = _prepare_native_package(translation, work)
-            assert {
-                item["id"]: item["value"]
-                for item in descriptor["specializationConstants"]
-            } == {CONSTANT_IDS[name]: value for name, value in constants.items()}
             if limits is not None and limits["translated"] < limits["requested"]:
                 # Neither pipeline runs MLX's threadgroup on this device, where
                 # MLX's check_kernel_threadgroup_size throws for its own kernel.
@@ -2217,8 +3163,8 @@ def test_current_mlx_sdpa_native_parity(
                 for name in _variant_cases(entry, constants):
                     buffers = _buffers(entry, constants, name)
                     expected, bounds = _reference(entry, constants, name)
-                    request, output, observed = _dispatch(
-                        descriptor, package, target, entry, buffers
+                    request, outputs, observed = _dispatch(
+                        descriptor, package, target, entry, constants, buffers
                     )
                     availability = executor.is_available(request)
                     assert availability.available, availability.reason
@@ -2236,6 +3182,7 @@ def test_current_mlx_sdpa_native_parity(
                         encoding="utf-8",
                     )
                     assert result.status == "ok"
+                    (output,) = outputs.values()
                     binding, element_type, written, guards = output
                     value = result.outputs[binding]
                     assert value["dtype"] == element_type
@@ -2252,9 +3199,10 @@ def test_current_mlx_sdpa_native_parity(
                         # Only MLX's own pipeline is too small to dispatch.
                         upstream = {"dispatched": False, "pipelineLimits": limits}
                     elif target == "metal":
-                        device, upstream_values = _upstream_metal(
+                        device, upstream_outputs = _upstream_metal(
                             work, metal_reference, entry, constants, name, buffers
                         )
+                        (upstream_values,) = upstream_outputs.values()
                         upstream = {
                             "device": device,
                             "boundFractionUsed": _check(
@@ -2317,6 +3265,173 @@ def test_current_mlx_sdpa_native_parity(
             shutil.copytree(work, tmp_path / "evidence", dirs_exist_ok=True)
 
 
+def _compact_result(result):
+    """Return a dispatch record without buffer dumps: inputs hold millions of keys."""
+    details = dict(result.details)
+    details["inputObservations"] = {
+        name: {key: value for key, value in item.items() if key != "observedBytes"}
+        for name, item in details["inputObservations"].items()
+    }
+    return {
+        "status": result.status,
+        "outputs": {
+            name: {
+                "dtype": value["dtype"],
+                "elementCount": len(value["values"]),
+                "sha256": (
+                    hashlib.sha256(
+                        json.dumps(value["values"]).encode("utf-8")
+                    ).hexdigest()
+                ),
+            }
+            for name, value in result.outputs.items()
+        },
+        "details": details,
+    }
+
+
+def _output_dtype(entry, member):
+    return _dtype(entry) if BINDINGS[_kind(entry)][member] == "out" else "float32"
+
+
+@pytest.mark.parametrize(
+    "entry,key,constants",
+    PASS1_VARIANTS,
+    ids=[f"{e}-{k}" for e, k, _ in PASS1_VARIANTS],
+)
+def test_current_mlx_sdpa_first_pass_native_parity(
+    current_mlx, metal_reference, tmp_path, entry, key, constants
+):
+    root, target = current_mlx
+    with tempfile.TemporaryDirectory(prefix=".current-sdpa-", dir=root) as path:
+        work = Path(path)
+        try:
+            translation, record, limits = _translate_variant(
+                root, work, target, entry, key, constants, metal_reference
+            )
+            # MLX requests at most 256 threads, which both pipelines run.
+            assert limits is None or (
+                min(limits["translated"], limits["upstream"]) >= limits["requested"]
+            ), limits
+            descriptor, package = _native_package(
+                translation, work, target, entry, constants
+            )
+            executor = _executor(target)
+            evidence = []
+            try:
+                for name in _variant_cases(entry, constants):
+                    buffers = _pass1_buffers(entry, constants, name)
+                    request, outputs, observed = _dispatch(
+                        descriptor, package, target, entry, constants, buffers
+                    )
+                    availability = executor.is_available(request)
+                    assert availability.available, availability.reason
+                    result = executor.run(request)
+                    (work / f"{name}-result.json").write_text(
+                        json.dumps(_compact_result(result), indent=2, default=str),
+                        encoding="utf-8",
+                    )
+                    assert result.status == "ok"
+                    actual = {}
+                    for member, (
+                        binding,
+                        element_type,
+                        written,
+                        guards,
+                    ) in outputs.items():
+                        value = result.outputs[binding]
+                        assert value["dtype"] == element_type
+                        assert value["values"][written:] == guards
+                        actual[member] = _decode(
+                            _output_dtype(entry, member),
+                            {**value, "values": value["values"][:written]},
+                        )
+                    used = _pass1_check(entry, constants, name, actual)
+                    observations = result.details["inputObservations"]
+                    assert len(observations) == observed
+                    assert all(item["unchanged"] for item in observations.values())
+                    upstream = None
+                    if target == "metal":
+                        device, upstream_outputs = _upstream_metal(
+                            work, metal_reference, entry, constants, name, buffers
+                        )
+                        upstream = {
+                            "device": device,
+                            "boundFractionUsed": _pass1_check(
+                                entry, constants, name, upstream_outputs
+                            ),
+                            "bitIdenticalToTranslated": all(
+                                [
+                                    _bits(_output_dtype(entry, member), item)
+                                    for item in upstream_outputs[member]
+                                ]
+                                == [
+                                    _bits(_output_dtype(entry, member), item)
+                                    for item in actual[member]
+                                ]
+                                for member in OUTPUTS["pass1"]
+                            ),
+                        }
+                    evidence.append(
+                        {
+                            "case": name,
+                            "grid": list(buffers["grid"]),
+                            "workgroupSize": list(_workgroup_size(entry, constants)),
+                            "outputCounts": {
+                                member: output[2] for member, output in outputs.items()
+                            },
+                            "boundFractionUsed": used,
+                            "outputGuardCount": GUARD_COUNT,
+                            "upstream": upstream,
+                        }
+                    )
+            finally:
+                close = getattr(executor.runtime_adapter.runtime, "close", None)
+                if callable(close):
+                    close()
+            (work / "parity.json").write_text(
+                json.dumps(
+                    {
+                        "commit": MLX_COMMIT,
+                        "entry": entry,
+                        "target": target,
+                        "dtype": _dtype(entry),
+                        "specialization": key,
+                        "constants": constants,
+                        "artifactSha256": record["sha256"],
+                        "frozenSpecializations": target in FROZEN_TARGETS["pass1"],
+                        "pipelineLimits": limits,
+                        "cases": evidence,
+                        "indexRangeAssertions": (
+                            list(OPENGL_INDEX_RANGE_ASSERTIONS["pass1"])
+                            if target == "opengl"
+                            else []
+                        ),
+                        "upstreamMlxTestSuiteExecuted": False,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            if target == "metal":
+                # The round trip keeps fast::exp, so the translated kernel
+                # reproduces MLX's own partials, sums and maxima bit for bit.
+                assert [
+                    case["case"]
+                    for case in evidence
+                    if not case["upstream"]["bitIdenticalToTranslated"]
+                ] == []
+        finally:
+            # Keep the records; the upstream runner's buffer files repeat
+            # every input.
+            shutil.copytree(
+                work,
+                tmp_path / "evidence",
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("*.bin"),
+            )
+
+
 def test_ci_requires_native_sdpa_parity():
     from tests.ci_helpers import (
         assert_native_step_prerequisites,
@@ -2324,37 +3439,46 @@ def test_ci_requires_native_sdpa_parity():
     )
     from tools import ci_coverage
 
+    module = "demos/integrations/mlx/tests/kernels/test_current_sdpa.py"
+    first_pass = f"{module}::test_current_mlx_sdpa_first_pass_native_parity"
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
-        workflow,
-        "mlx-metal-porting",
+    names = (
         "Prove current MLX scaled dot-product attention native parity",
+        "Prove current MLX two-pass attention first pass native parity",
     )
-    assert_native_step_prerequisites(step, job="mlx-metal-porting")
-    for required in (
-        f'{REQUIRE_ENV}: "1"',
-        "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
-        "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
-        "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
-        "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
-        "pytest -q -n auto",
-        "--basetemp=mlx-current-results/sdpa",
-        "--junitxml=mlx-current-results/sdpa.xml",
-        "demos/integrations/mlx/tests/kernels/test_current_sdpa.py",
+    for name, results, selector in (
+        (names[0], "sdpa", f"--deselect {first_pass} \\\n              {module}\n"),
+        (names[1], "sdpa-first-pass", f"{first_pass}\n"),
     ):
-        assert required in step
-    assert "continue-on-error" not in step
-    assert_workflow_triggers(
-        workflow, "demos/integrations/mlx/tests/kernels/test_current_sdpa.py"
-    )
+        step = ci_coverage.workflow_job_step_section(
+            workflow, "mlx-metal-porting", name
+        )
+        assert_native_step_prerequisites(step, job="mlx-metal-porting")
+        for required in (
+            f'{REQUIRE_ENV}: "1"',
+            "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
+            "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
+            "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
+            "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
+            "pytest -q -n auto",
+            "--timeout-seconds 3600",
+            f"--basetemp=mlx-current-results/{results}",
+            f"--junitxml=mlx-current-results/{results}.xml",
+            selector,
+        ):
+            assert required in step, (name, required)
+        assert "continue-on-error" not in step
+        assert step.count("--deselect") == (name == names[0])
+    assert_workflow_triggers(workflow, module)
     upload = ci_coverage.workflow_job_step_section(
         workflow, "mlx-metal-porting", "Upload current MLX runtime diagnostics"
     )
     assert "if: always()" in upload
     assert "path: mlx-current-results" in upload
     assert workflow.index("Prove current MLX rope native parity") < (
-        workflow.index("Prove current MLX scaled dot-product attention native parity")
+        workflow.index(names[0])
     )
-    assert workflow.index(
-        "Prove current MLX scaled dot-product attention native parity"
-    ) < workflow.index("Upload current MLX runtime diagnostics")
+    assert workflow.index(names[0]) < workflow.index(names[1])
+    assert workflow.index(names[1]) < workflow.index(
+        "Upload current MLX runtime diagnostics"
+    )

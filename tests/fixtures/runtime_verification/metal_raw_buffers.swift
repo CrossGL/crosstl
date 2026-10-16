@@ -6,14 +6,20 @@ struct BoolConstant: Decodable {
     let value: Bool
 }
 
+struct IntConstant: Decodable {
+    let index: Int
+    let value: Int32
+}
+
 struct Request: Decodable {
     let buffers: [String]
     let allocationIds: [Int]?
     let workgroupCount: [Int]
     let workgroupSize: [Int]
     let simdWidth: Int
-    // Boolean function constants, as MLX sets them with MTLFunctionConstantValues.
+    // Function constants, as MLX sets them with MTLFunctionConstantValues.
     let boolConstants: [BoolConstant]?
+    let intConstants: [IntConstant]?
     // Report the pipeline's limits, as MLX's check_kernel_threadgroup_size
     // reads them, without dispatching.
     let pipelineOnly: Bool?
@@ -38,15 +44,21 @@ func run() throws {
     }
     let library = try device.makeLibrary(URL: URL(fileURLWithPath: args[1]))
     let function: MTLFunction
-    if let constants = request.boolConstants, !constants.isEmpty {
-        guard Set(constants.map { $0.index }).count == constants.count,
-              constants.allSatisfy({ $0.index >= 0 }) else {
+    let bools = request.boolConstants ?? []
+    let ints = request.intConstants ?? []
+    if !bools.isEmpty || !ints.isEmpty {
+        let indices = bools.map { $0.index } + ints.map { $0.index }
+        guard Set(indices).count == indices.count, indices.allSatisfy({ $0 >= 0 }) else {
             throw ExecutionError.unavailable("Invalid function constants")
         }
         let values = MTLFunctionConstantValues()
-        for constant in constants {
+        for constant in bools {
             var value = constant.value
             values.setConstantValue(&value, type: .bool, index: constant.index)
+        }
+        for constant in ints {
+            var value = constant.value
+            values.setConstantValue(&value, type: .int, index: constant.index)
         }
         function = try library.makeFunction(name: args[2], constantValues: values)
     } else {
