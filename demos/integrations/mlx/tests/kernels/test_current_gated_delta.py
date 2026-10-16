@@ -1392,16 +1392,16 @@ def test_current_mlx_gated_delta_fused_chunk_stays_pending(current_mlx, entry):
 
 def test_ci_requires_native_gated_delta_parity():
     from tests.ci_helpers import (
-        assert_native_step_prerequisites,
+        CURRENT_PARITY_JOB,
         assert_workflow_triggers,
+        current_parity_step,
     )
     from tools import ci_coverage
 
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
-        workflow, "mlx-metal-porting", "Prove current MLX gated delta native parity"
+    step = current_parity_step(
+        workflow, "Prove current MLX gated delta native parity", group="sequence"
     )
-    assert_native_step_prerequisites(step, job="mlx-metal-porting")
     for required in (
         f'{REQUIRE_ENV}: "1"',
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
@@ -1419,18 +1419,7 @@ def test_ci_requires_native_gated_delta_parity():
         workflow, "demos/integrations/mlx/tests/kernels/test_current_gated_delta.py"
     )
     install = ci_coverage.workflow_job_step_section(
-        workflow, "mlx-metal-porting", "Install CrossTL"
+        workflow, CURRENT_PARITY_JOB, "Install CrossTL"
     )
     # The reference and the checks run on numpy arrays.
     assert "numpy==" in install
-    upload = ci_coverage.workflow_job_step_section(
-        workflow, "mlx-metal-porting", "Upload current MLX runtime diagnostics"
-    )
-    assert "if: always()" in upload
-    assert "path: mlx-current-results" in upload
-    assert workflow.index(
-        "Prove current MLX two-pass attention first pass native parity"
-    ) < workflow.index("Prove current MLX gated delta native parity")
-    assert workflow.index("Prove current MLX gated delta native parity") < (
-        workflow.index("Upload current MLX runtime diagnostics")
-    )

@@ -607,7 +607,7 @@ def test_all_metal_downloads_use_the_bounded_readiness_check():
             for step in job["steps"]:
                 if helper in step.get("run", ""):
                     assert "continue-on-error" not in step
-    assert counts == {"translator-tests.yml": 1, "demo-project-testing.yml": 15}
+    assert counts == {"translator-tests.yml": 1, "demo-project-testing.yml": 16}
 
 
 @pytest.mark.parametrize("exit_code", (0, 7))

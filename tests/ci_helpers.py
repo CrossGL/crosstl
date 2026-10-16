@@ -10,6 +10,11 @@ from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The longest current-tree MLX kernel families run in their own job, one matrix
+# leg per runner and family group.
+CURRENT_PARITY_JOB = "mlx-current-native-parity"
+CURRENT_PARITY_UPLOAD = "Upload current MLX native parity evidence"
+
 
 def bounded_step_deadline(step, runner_os):
     """Count literal command deadlines, excluding explicit platform mismatches."""
@@ -27,15 +32,25 @@ def bounded_step_deadline(step, runner_os):
     )
 
 
-def assert_native_step_prerequisites(step, *, job, pinned=False):
+def assert_native_step_prerequisites(step, *, job, pinned=False, group=None):
     """Require exact native prerequisites without accepting optional execution."""
-    assert job in ("portable-host", "metal-host", "mlx-metal-porting")
+    assert job in (
+        "portable-host",
+        "metal-host",
+        "mlx-metal-porting",
+        CURRENT_PARITY_JOB,
+    )
+    # A parity step runs in exactly one family group of its matrix.
+    assert (group is not None) == (job == CURRENT_PARITY_JOB)
     definition = yaml.safe_load(step)
     if isinstance(definition, list):
         assert len(definition) == 1
         definition = definition[0]
     assert isinstance(definition, dict)
     assert "continue-on-error" not in definition
+    if job == CURRENT_PARITY_JOB:
+        assert definition.get("if") == f"matrix.group == '{group}'"
+        return
     if job != "portable-host":
         assert "if" not in definition
         return
@@ -90,3 +105,22 @@ def assert_workflow_triggers(workflow, *required):
         assert_paths_covered(
             ci_coverage.workflow_event_path_filters(workflow, event), *required
         )
+
+
+def current_parity_step(workflow, name, *, group):
+    """Return a current-tree parity step after checking its group and upload."""
+    job = ci_coverage.workflow_job_text(workflow, CURRENT_PARITY_JOB)
+    step = ci_coverage.workflow_step_section(job, name)
+    assert step, name
+    assert_native_step_prerequisites(step, job=CURRENT_PARITY_JOB, group=group)
+    matrix = yaml.safe_load(workflow)["jobs"][CURRENT_PARITY_JOB]["strategy"]
+    assert group in matrix["matrix"]["group"]
+    # A family that also ran in the porting job would spend its budget twice.
+    assert not ci_coverage.workflow_job_step_section(
+        workflow, "mlx-metal-porting", name
+    )
+    upload = ci_coverage.workflow_step_section(job, CURRENT_PARITY_UPLOAD)
+    assert "if: always()" in upload
+    assert "path: mlx-current-results" in upload
+    assert job.index(name) < job.index(CURRENT_PARITY_UPLOAD)
+    return step

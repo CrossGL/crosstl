@@ -867,7 +867,7 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     coverage = _load_ci_coverage_module()
     jobs = coverage.workflow_job_names(workflow)
-    assert len(jobs) == 37
+    assert len(jobs) == 38
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
@@ -881,6 +881,79 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
         ]
         assert expected not in groups
         groups.add(expected)
+
+
+def test_current_tree_native_parity_job_runs_each_family_group_once():
+    from tests.ci_helpers import (
+        CURRENT_PARITY_JOB,
+        CURRENT_PARITY_UPLOAD,
+        bounded_step_deadline,
+    )
+
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    jobs = yaml.safe_load(workflow)["jobs"]
+    job = jobs[CURRENT_PARITY_JOB]
+    porting = jobs["mlx-metal-porting"]
+    matrix = job["strategy"]["matrix"]
+    assert job["strategy"]["fail-fast"] is False
+    assert len(matrix["os"]) == len(RUNNER_OSES)
+    assert set(matrix["os"]) == RUNNER_OSES
+    assert matrix["group"] == ["elementwise", "attention", "sequence"]
+    assert job["runs-on"] == "${{ matrix.os }}"
+    assert job["if"] == "github.event_name != 'schedule'"
+    assert job["name"] == (
+        "MLX current-tree native parity (${{ matrix.os }}, ${{ matrix.group }})"
+    )
+    assert (
+        job["env"]["MLX_CURRENT_TREE_COMMIT"]
+        == porting["env"]["MLX_CURRENT_TREE_COMMIT"]
+    )
+    steps = job["steps"]
+    names = [step["name"] for step in steps]
+    assert len(names) == len(set(names))
+    # The setup steps match the porting job's, so a family sees the same
+    # compilers, runtimes and checkout wherever it runs.
+    setup = names[: names.index("Checkout current MLX kernel tree") + 1]
+    assert setup == [
+        "Checkout CrossTL",
+        "Setup Python",
+        "Install CrossTL",
+        "Install macOS Metal Toolchain",
+        "Install Linux SPIR-V tools",
+        "Install Linux runtime dependencies",
+        "Install Windows DirectX Shader Compiler",
+        "Install Windows Direct3D runtime dependencies",
+        "Install pinned Windows WARP runtime",
+        "Checkout current MLX kernel tree",
+    ]
+    porting_steps = {step["name"]: step for step in porting["steps"]}
+    for step in steps[: len(setup)]:
+        assert step == porting_steps[step["name"]], step["name"]
+    assert names[-1] == CURRENT_PARITY_UPLOAD
+    upload = steps[-1]
+    assert upload["if"] == "always()"
+    assert upload["with"]["name"] == (
+        "mlx-current-parity-${{ matrix.os }}-${{ matrix.group }}"
+    )
+    assert upload["with"]["path"] == "mlx-current-results"
+    families = steps[len(setup) : -1]
+    assert families
+    by_group = {group: [] for group in matrix["group"]}
+    for step in families:
+        assert step["name"].startswith("Prove current MLX ")
+        assert step["name"] not in porting_steps
+        group = re.fullmatch(r"matrix\.group == '([a-z]+)'", step["if"]).group(1)
+        by_group[group].append(step)
+        assert "continue-on-error" not in step
+        assert "python tools/run_bounded_command.py" in step["run"]
+    timeout = job["timeout-minutes"] * 60
+    assert timeout <= 360 * 60
+    for group, members in by_group.items():
+        assert members, group
+        for runner_os in ("Linux", "Windows", "macOS"):
+            deadline = sum(bounded_step_deadline(step, runner_os) for step in members)
+            # Setup and the upload take minutes; keep half an hour in reserve.
+            assert deadline + 1800 <= timeout, (group, runner_os)
 
 
 def test_affine_metal_numerics_reuse_the_complete_source_bundle():

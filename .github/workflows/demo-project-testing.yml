@@ -4817,166 +4817,6 @@ jobs:
               --junitxml=mlx-current-results/rms-norm.xml \
               demos/integrations/mlx/tests/kernels/test_current_rms_norm.py
 
-      - name: Prove current MLX ternary native parity
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_TERNARY: "1"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX ternary native parity" --timeout-seconds 3600 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/ternary \
-              --junitxml=mlx-current-results/ternary.xml \
-              demos/integrations/mlx/tests/kernels/test_current_ternary.py
-
-      - name: Prove current MLX binary_two native parity
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_TWO: "1"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary_two native parity" --timeout-seconds 5400 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-two \
-              --junitxml=mlx-current-results/binary-two.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_two.py
-
-      - name: Prove current MLX rope native parity
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_ROPE: "1"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX rope native parity" --timeout-seconds 3600 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/rope \
-              --junitxml=mlx-current-results/rope.xml \
-              demos/integrations/mlx/tests/kernels/test_current_rope.py
-
-      - name: Prove current MLX scaled dot-product attention native parity
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_SDPA: "1"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX scaled dot-product attention native parity" \
-            --timeout-seconds 3600 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/sdpa \
-              --junitxml=mlx-current-results/sdpa.xml \
-              --deselect demos/integrations/mlx/tests/kernels/test_current_sdpa.py::test_current_mlx_sdpa_first_pass_native_parity \
-              demos/integrations/mlx/tests/kernels/test_current_sdpa.py
-
-      - name: Prove current MLX two-pass attention first pass native parity
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_SDPA: "1"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX two-pass attention first pass native parity" \
-            --timeout-seconds 3600 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/sdpa-first-pass \
-              --junitxml=mlx-current-results/sdpa-first-pass.xml \
-              demos/integrations/mlx/tests/kernels/test_current_sdpa.py::test_current_mlx_sdpa_first_pass_native_parity
-
-      - name: Prove current MLX gated delta native parity
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_GATED_DELTA: "1"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX gated delta native parity" \
-            --timeout-seconds 3600 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/gated-delta \
-              --junitxml=mlx-current-results/gated-delta.xml \
-              demos/integrations/mlx/tests/kernels/test_current_gated_delta.py
-
       - name: Upload current MLX runtime diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -6622,6 +6462,319 @@ jobs:
             demo-results/normalization/layer_norm_vjp
           include-hidden-files: true
           if-no-files-found: ignore
+          retention-days: 14
+
+  # The longest current-tree kernel families run here, one matrix leg per
+  # runner and family group, so that each leg's bounded steps fit its own
+  # deadline instead of extending the MLX Metal project porting job.
+  mlx-current-native-parity:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-native-parity-${{ strategy.job-index }}
+      cancel-in-progress: false
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+
+    name: MLX current-tree native parity (${{ matrix.os }}, ${{ matrix.group }})
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 210
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        group: [elementwise, attention, sequence]
+
+    steps:
+      - name: Checkout CrossTL
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7" numpy==2.2.6
+
+      - name: Install macOS Metal Toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/ensure_metal_toolchain.py
+          xcrun --sdk macosx metal --version
+
+      - name: Install Linux SPIR-V tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-vulkan-drivers spirv-tools vulkan-tools
+          glslangValidator --version
+
+      - name: Install Linux runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist vulkan==1.3.275.1
+
+      - name: Install Windows DirectX Shader Compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $dxcUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "DXC download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
+          $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |
+            Where-Object { $_.FullName -match "\\bin\\x64\\dxc.exe$" } |
+            Select-Object -First 1
+          if ($null -eq $dxc) {
+            throw "dxc.exe not found in release archive."
+          }
+          $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Windows Direct3D runtime dependencies
+        if: runner.os == 'Windows'
+        run: python -m pip install -e ".[directx-runtime]" pytest-xdist
+
+      - name: Install pinned Windows WARP runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $warpVersion = "1.0.21"
+          $warpSha256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"
+          $archive = Join-Path $env:RUNNER_TEMP "microsoft.direct3d.warp.$warpVersion.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "microsoft.direct3d.warp.$warpVersion"
+          $warpUri = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/$warpVersion/microsoft.direct3d.warp.$warpVersion.nupkg"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $warpUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "WARP download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          $archiveSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveSha256 -ne $warpSha256) {
+            throw "WARP archive checksum mismatch: expected $warpSha256, got $archiveSha256."
+          }
+          Expand-Archive -Path $archive -DestinationPath $warpRoot -Force
+          $warp = Join-Path $warpRoot "build\native\bin\x64\d3d10warp.dll"
+          if (-not (Test-Path -Path $warp -PathType Leaf)) {
+            throw "d3d10warp.dll not found in WARP package."
+          }
+          $pythonWarp = Join-Path $env:pythonLocation "d3d10warp.dll"
+          Copy-Item -Path $warp -Destination $pythonWarp -Force
+          Write-Host "Installed WARP $((Get-Item $pythonWarp).VersionInfo.FileVersion) beside python.exe."
+          Write-Host "WARP DLL SHA256: $((Get-FileHash -Path $pythonWarp -Algorithm SHA256).Hash.ToLowerInvariant())"
+
+      - name: Checkout current MLX kernel tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf mlx-current-tree-upstream
+          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-tree-upstream
+          git -C mlx-current-tree-upstream config core.autocrlf false
+          git -C mlx-current-tree-upstream sparse-checkout init --cone
+          git -C mlx-current-tree-upstream sparse-checkout set mlx/backend/metal/kernels python/tests tests
+          git -C mlx-current-tree-upstream checkout --detach "$MLX_CURRENT_TREE_COMMIT"
+          test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = "$MLX_CURRENT_TREE_COMMIT"
+
+      - name: Prove current MLX ternary native parity
+        if: matrix.group == 'elementwise'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_TERNARY: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX ternary native parity" --timeout-seconds 3600 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/ternary \
+              --junitxml=mlx-current-results/ternary.xml \
+              demos/integrations/mlx/tests/kernels/test_current_ternary.py
+
+      - name: Prove current MLX binary_two native parity
+        if: matrix.group == 'elementwise'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_BINARY_TWO: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX binary_two native parity" --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/binary-two \
+              --junitxml=mlx-current-results/binary-two.xml \
+              demos/integrations/mlx/tests/kernels/test_current_binary_two.py
+
+      - name: Prove current MLX rope native parity
+        if: matrix.group == 'sequence'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_ROPE: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX rope native parity" --timeout-seconds 3600 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/rope \
+              --junitxml=mlx-current-results/rope.xml \
+              demos/integrations/mlx/tests/kernels/test_current_rope.py
+
+      - name: Prove current MLX scaled dot-product attention native parity
+        if: matrix.group == 'attention'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_SDPA: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX scaled dot-product attention native parity" \
+            --timeout-seconds 3600 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/sdpa \
+              --junitxml=mlx-current-results/sdpa.xml \
+              --deselect demos/integrations/mlx/tests/kernels/test_current_sdpa.py::test_current_mlx_sdpa_first_pass_native_parity \
+              demos/integrations/mlx/tests/kernels/test_current_sdpa.py
+
+      - name: Prove current MLX two-pass attention first pass native parity
+        if: matrix.group == 'attention'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_SDPA: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX two-pass attention first pass native parity" \
+            --timeout-seconds 3600 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/sdpa-first-pass \
+              --junitxml=mlx-current-results/sdpa-first-pass.xml \
+              demos/integrations/mlx/tests/kernels/test_current_sdpa.py::test_current_mlx_sdpa_first_pass_native_parity
+
+      - name: Prove current MLX gated delta native parity
+        if: matrix.group == 'sequence'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GATED_DELTA: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX gated delta native parity" \
+            --timeout-seconds 3600 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gated-delta \
+              --junitxml=mlx-current-results/gated-delta.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gated_delta.py
+
+      - name: Upload current MLX native parity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-current-parity-${{ matrix.os }}-${{ matrix.group }}
+          path: mlx-current-results
+          if-no-files-found: warn
           retention-days: 14
 
   mlx-unary-metal-sources:

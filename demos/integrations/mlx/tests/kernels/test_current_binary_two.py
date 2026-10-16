@@ -1311,17 +1311,12 @@ def test_current_mlx_binary_two_native_parity(
 
 
 def test_ci_requires_native_binary_two_parity():
-    from tests.ci_helpers import (
-        assert_native_step_prerequisites,
-        assert_workflow_triggers,
-    )
-    from tools import ci_coverage
+    from tests.ci_helpers import assert_workflow_triggers, current_parity_step
 
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
-        workflow, "mlx-metal-porting", "Prove current MLX binary_two native parity"
+    step = current_parity_step(
+        workflow, "Prove current MLX binary_two native parity", group="elementwise"
     )
-    assert_native_step_prerequisites(step, job="mlx-metal-porting")
     for required in (
         f'{REQUIRE_ENV}: "1"',
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
@@ -1337,12 +1332,4 @@ def test_ci_requires_native_binary_two_parity():
     assert "continue-on-error" not in step
     assert_workflow_triggers(
         workflow, "demos/integrations/mlx/tests/kernels/test_current_binary_two.py"
-    )
-    upload = ci_coverage.workflow_job_step_section(
-        workflow, "mlx-metal-porting", "Upload current MLX runtime diagnostics"
-    )
-    assert "if: always()" in upload
-    assert "path: mlx-current-results" in upload
-    assert workflow.index("Prove current MLX binary_two native parity") < (
-        workflow.index("Upload current MLX runtime diagnostics")
     )

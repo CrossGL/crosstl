@@ -4050,11 +4050,7 @@ def test_current_mlx_sdpa_first_pass_native_parity(
 
 
 def test_ci_requires_native_sdpa_parity():
-    from tests.ci_helpers import (
-        assert_native_step_prerequisites,
-        assert_workflow_triggers,
-    )
-    from tools import ci_coverage
+    from tests.ci_helpers import assert_workflow_triggers, current_parity_step
 
     module = "demos/integrations/mlx/tests/kernels/test_current_sdpa.py"
     first_pass = f"{module}::test_current_mlx_sdpa_first_pass_native_parity"
@@ -4067,10 +4063,7 @@ def test_ci_requires_native_sdpa_parity():
         (names[0], "sdpa", f"--deselect {first_pass} \\\n              {module}\n"),
         (names[1], "sdpa-first-pass", f"{first_pass}\n"),
     ):
-        step = ci_coverage.workflow_job_step_section(
-            workflow, "mlx-metal-porting", name
-        )
-        assert_native_step_prerequisites(step, job="mlx-metal-porting")
+        step = current_parity_step(workflow, name, group="attention")
         for required in (
             f'{REQUIRE_ENV}: "1"',
             "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
@@ -4087,15 +4080,3 @@ def test_ci_requires_native_sdpa_parity():
         assert "continue-on-error" not in step
         assert step.count("--deselect") == (name == names[0])
     assert_workflow_triggers(workflow, module)
-    upload = ci_coverage.workflow_job_step_section(
-        workflow, "mlx-metal-porting", "Upload current MLX runtime diagnostics"
-    )
-    assert "if: always()" in upload
-    assert "path: mlx-current-results" in upload
-    assert workflow.index("Prove current MLX rope native parity") < (
-        workflow.index(names[0])
-    )
-    assert workflow.index(names[0]) < workflow.index(names[1])
-    assert workflow.index(names[1]) < workflow.index(
-        "Upload current MLX runtime diagnostics"
-    )
