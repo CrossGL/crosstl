@@ -613,3 +613,72 @@ def test_ci_requires_additive_profiles_in_existing_native_job():
     assert step.count("tests/test_translator/test_metal_additive_profile.py") == 1
     assert "tests/test_translator/test_metal_additive_profile.py" in step
     assert "--timeout-seconds 240" in step
+
+
+# conv.metal's WinogradTransforms<6, 3, 8> pattern: an explicit specialization
+# whose static constants combine their siblings, next to a kernel that reads
+# function constants and accumulates floats.
+SPECIALIZED_CONSTANTS_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+#define CONST static constant constexpr const
+constant int taps [[function_constant(0)]];
+template <int M, int R>
+struct Tiles {};
+template <>
+struct Tiles<6, 3> {
+  CONST int OUT = 6;
+  CONST int FILTER = 3;
+  CONST int IN = OUT + FILTER - 1;
+};
+kernel void accumulate(const device float* values [[buffer(0)]],
+                       device float* results [[buffer(1)]],
+                       uint i [[thread_position_in_grid]]) {
+    float total = 0.0f;
+    for (int tap = 0; tap < taps; ++tap) {
+        total += values[i + tap];
+    }
+    results[i] = total;
+}
+"""
+
+
+@pytest.mark.parametrize("profile", (*PROFILES, "native-precise"))
+def test_profiled_struct_constants_keep_their_declared_type(tmp_path, profile):
+    generated = _translate(tmp_path, SPECIALIZED_CONSTANTS_SOURCE, profile=profile)
+    unprofiled = _translate(tmp_path, SPECIALIZED_CONSTANTS_SOURCE, profile=None)
+    constant = "static constant int IN = OUT + FILTER - 1;"
+    # Integer arithmetic between sibling constants takes no float profile.
+    assert generated.count(constant) == unprofiled.count(constant) == 1
+    assert "__crossgl_metal_add_assign(total, " in generated
+    assert "__crossgl_metal_add" not in unprofiled
+
+
+@pytest.mark.parametrize("target", ("opengl", "directx"))
+def test_specialization_reachability_ignores_arithmetic_profiles(tmp_path, target):
+    (tmp_path / "accumulate.metal").write_text(
+        SPECIALIZED_CONSTANTS_SOURCE, encoding="utf-8"
+    )
+    (tmp_path / "crosstl.toml").write_text(
+        f"""[project]
+targets = ["{target}"]
+workgroup_size = [32, 1, 1]
+[project.entry_points]
+"accumulate.metal" = "accumulate"
+[project.specialization_constants]
+"0" = 3
+[project.source_options.metal.target_options.{target}]
+binary32_additive_profile = "native-precise"
+""",
+        encoding="utf-8",
+    )
+    data = translate_project(
+        load_project_config(tmp_path), format_output=False
+    ).to_json()
+    assert data["summary"]["translatedCount"] == 1, data["diagnostics"]
+    (artifact,) = data["artifacts"]
+    assert artifact["provenance"]["binary32AdditiveProfile"] == "native-precise"
+    assert not [
+        item
+        for item in data["diagnostics"]
+        if item["code"] == "project.translate.specialization-reachability-unproven"
+    ]

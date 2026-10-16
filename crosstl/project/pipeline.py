@@ -26806,7 +26806,9 @@ def _entry_scoped_specialization_names(
                 or cgl_spec is None
             ):
                 return None
-            reverse_codegen = source_spec.create_reverse_codegen(source_options)
+            reverse_codegen = source_spec.create_reverse_codegen(
+                _reachability_source_options(source_options)
+            )
             if reverse_codegen is None:
                 return None
             intermediate = reverse_codegen.generate(source_ast)
@@ -26821,6 +26823,33 @@ def _entry_scoped_specialization_names(
         )
     except Exception:  # noqa: BLE001
         return None
+
+
+def _reachability_source_options(
+    source_options: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Drop arithmetic rendering profiles before the whole-unit reachability pass.
+
+    Profiles choose how floating-point operations are spelled; they never add
+    or remove references to specialization constants. The pass converts every
+    declaration of the unit, so a profile could otherwise fail closed on
+    arithmetic outside the entry point, such as an integer static member
+    constant of an unrelated struct, and hide the entry's constants.
+    """
+    return {
+        key: value
+        for key, value in source_options.items()
+        if not (
+            isinstance(key, str)
+            and (
+                (
+                    key.startswith(("binary32_", "binary16_"))
+                    and key.endswith("_profile")
+                )
+                or key == "floating_contraction_profile"
+            )
+        )
+    }
 
 
 def _entry_scoped_specialization_names_from_crossgl_ast(

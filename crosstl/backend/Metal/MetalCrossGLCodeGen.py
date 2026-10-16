@@ -3387,6 +3387,17 @@ class MetalToCrossGLConverter:
                         f"{struct_alignas}struct "
                         f"{self.map_struct_name(struct_node.name)} {{\n"
                     )
+                static_member_types = {
+                    member.name: self.metal_declaration_expression_type(member)
+                    for member in struct_node.members
+                    if isinstance(member, VariableNode)
+                    and getattr(member, "name", None)
+                    and getattr(member, "vtype", None)
+                    and {
+                        str(qualifier).lower()
+                        for qualifier in getattr(member, "qualifiers", []) or []
+                    }.intersection({"static", "constexpr"})
+                }
                 for member in struct_node.members:
                     if isinstance(member, StaticAssertNode):
                         cond = self.generate_expression(member.condition, False)
@@ -3403,6 +3414,7 @@ class MetalToCrossGLConverter:
                     decl = self.format_struct_member_decl(
                         member,
                         owner=self.map_struct_name(struct_node.name),
+                        static_member_types=static_member_types,
                     )
                     if isinstance(member, VariableNode) and getattr(
                         member, "name", None
@@ -9042,8 +9054,14 @@ class MetalToCrossGLConverter:
             parts.append(storage_format)
         return " ".join(part for part in parts if part)
 
-    def format_struct_member_decl(self, member, owner=None):
-        """Render a struct field while preserving compile-time member constants."""
+    def format_struct_member_decl(self, member, owner=None, static_member_types=None):
+        """Render a struct field while preserving compile-time member constants.
+
+        ``static_member_types`` types the struct's own static members while an
+        unresolved default such as ``OUT_TILE_SIZE + FILTER_SIZE - 1`` of an
+        explicit specialization renders, so arithmetic between them keeps its
+        declared type.
+        """
         declaration = self.format_decl(member, include_semantic=True)
         qualifiers = {
             str(qualifier).lower()
@@ -9058,10 +9076,24 @@ class MetalToCrossGLConverter:
             key = (owner, getattr(member, "name", None))
             if owner is not None and key in self.struct_static_constexpr_member_keys:
                 rendered_default = self.render_resolved_static_constant(key)
+            elif static_member_types and self.metal_arithmetic_profiles_active():
+                saved_types = self.current_variable_types
+                self.current_variable_types = {**static_member_types, **saved_types}
+                try:
+                    rendered_default = self.generate_expression(default_value, False)
+                finally:
+                    self.current_variable_types = saved_types
             else:
                 rendered_default = self.generate_expression(default_value, False)
             declaration += f" = {rendered_default}"
         return declaration
+
+    def metal_arithmetic_profiles_active(self):
+        """Whether arithmetic rendering needs each operation's resolved type."""
+        return self.floating_contraction_profile is not None or any(
+            self.metal_arithmetic_profile(operator)[0] is not None
+            for operator in ("+", "-", "*", "/")
+        )
 
     def format_parameter_decl(self, var, index, semantic_context=None):
         if getattr(var, "name", None):
