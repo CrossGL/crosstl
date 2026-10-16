@@ -1122,37 +1122,49 @@ rejected. The nine Winograd transforms have their own gate, described next.
 This covers 27/17,832 entries; it does not run the upstream MLX test suite or
 redirect the MLX host runtime.
 
-`contracts/winograd.current-tree.translation.json` pins the three
-`winograd_conv_2d_weight_transform` entries of `conv.metal` (float32, bfloat16
-and float16) and their nine artifacts. `winograd_conv_2D_gpu` runs them before
-its batched GEMM: each SIMD-group forms `G g G^T` for one output filter and
-channel with two `simdgroup_matrix<float, 8, 8>` products, the lanes holding
-the row pairs of Apple's 4x4-tile layout (`tile_4x4_row_pair`). Metal keeps
-the hardware matrices. OpenGL and DirectX lower each product with 32-lane
-software subgroups as the software multiply-accumulate with the
-`fma-rne-gradual` profile: every element is a chain of fused binary32
-multiply-adds from +0.0 in increasing k with ties to even and gradual
-underflow, which Apple's matrices match. `G` holds non-dyadic constants such
-as -2/9, which every compiler rounds once to binary32, so nearly every step
-rounds and the reference comes from an exact fused multiply-add oracle. The
-channel loop holds barriers, so OpenGL and DirectX carry a checked metadata
-precondition `C <= INT_MAX - 31`, and OpenGL index-range preconditions keep
-the composed offsets in signed int range. Required CI executes every entry on
-Metal, Mesa EGL and Direct3D 12 WARP with `conv.cpp`'s `(32, 4, 1)` groups
-over `(O / 4, 1, 1)`, for 64 filters of one channel block and 32 filters of
-three blocks, and compares all 8 x 8 x C x O output words exactly. All -0.0
-taps must give +0.0 words and a unit impulse the outer product of two `G`
-columns. Inputs are padded with NaN, 16 output guards are checked and every
-input must be unchanged; Metal also runs the unchanged upstream kernel, which
-must produce the same words. A replay of the kernel's index arithmetic matches
-the reference layout, and unfused products, a transposed filter, an
-untransposed right factor and neighbouring channels or filters are rejected.
-The six input and output transforms stay pending on OpenGL and DirectX, a
-record the gate checks: their channel loops run to `params.C` and `params.O`,
-which metadata preconditions cannot bound yet, and their matrix loops start
-at the SIMD-group index, which translation cannot yet prove uniform for the
-software subgroup barriers. This covers 3/17,832 entries; it does not run the
-upstream MLX test suite or redirect the MLX host runtime.
+`contracts/winograd.current-tree.translation.json` pins all nine Winograd
+entries of `conv.metal`, the weight, input and output transforms for float32,
+bfloat16 and float16, and their 27 artifacts. `winograd_conv_2D_gpu` computes
+a stride-one 3x3 convolution as F(6x6, 3x3) products: it moves each filter
+slice into the 8x8 Winograd domain as `G g G^T`, each overlapping 8x8 input
+tile as `B^T d B` and, after its batched GEMM, each tile back to a 6x6 output
+block as `A^T m A`. Each SIMD-group forms these with two
+`simdgroup_matrix<float, 8, 8>` products per channel, the lanes holding the
+row pairs of Apple's 4x4-tile layout (`tile_4x4_row_pair`). Metal keeps the
+hardware matrices. OpenGL and DirectX lower each product with 32-lane software
+subgroups as the software multiply-accumulate with the `fma-rne-gradual`
+profile: every element is a chain of fused binary32 multiply-adds from +0.0 in
+increasing k with ties to even and gradual underflow, which Apple's matrices
+match. `G` holds non-dyadic constants such as -2/9, which every compiler
+rounds once to binary32, and `B` constants such as 21/4, so many steps round
+and the reference comes from an exact fused multiply-add oracle. `A` holds
+powers of two, so the output transform's products are exact and it checks
+summation order and rounding rather than fusion. The channel loops hold
+barriers, so OpenGL and DirectX carry checked metadata preconditions: the
+weight transform's `C <= INT_MAX - 31` and the input and output transforms'
+`params.C` and `params.O` record members in the same range, read at their
+reflected offsets in the `MLXConvParams<2>` record, std140 block or constant
+buffer. The input and output transforms' matrix loops start at the SIMD-group
+index and step by the SIMD-group count with equal trip counts in every
+SIMD-group, which translation proves for the software subgroup barriers.
+OpenGL index-range preconditions keep the composed offsets in signed int
+range. Required CI executes every entry on Metal, Mesa EGL and Direct3D 12
+WARP with `conv.cpp`'s launch geometry: `(32, 4, 1)` groups over
+`(O / 4, 1, 1)` for the weight transform and `(32, 2, 2)` groups over
+`(tiles_w, tiles_h, N)` for the others, with `conv.cpp`'s padded input and
+`MLXConvParams<2>`. One case has one batch of whole 6x6 output tiles, 32
+channels and 64 filters; the other has two batches with partial output tiles
+in both directions, 96 channels and 32 filters. Every output word is compared
+exactly. All -0.0 inputs must give +0.0 words and a unit impulse the outer
+product of a column of the left factor and a row of the right one. Inputs are
+padded with NaN, 16 output guards are checked and every input must be
+unchanged; Metal also runs the unchanged upstream kernels, which must produce
+the same words. Replays of the kernels' index arithmetic, shared-tile loads
+and guarded stores match the reference layouts, and unfused products, reversed
+or reassociated products, transposed inputs, untransposed factors and
+neighbouring channels, filters or tiles are rejected. This covers 9/17,832
+entries; it does not run the upstream MLX test suite or redirect the MLX host
+runtime.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized

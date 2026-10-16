@@ -14104,6 +14104,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.require_hlsl_bfloat16_helper("from_float")
         return f"__crossgl_bfloat16_from_float(float({rendered}))"
 
+    def hlsl_groupshared_bfloat16_array_element(self, target):
+        """Whether ``target`` is one scalar of a bfloat16 groupshared array of
+        arrays, such as MLX Winograd's ``threadgroup T Os[M][M][BO]``.
+
+        One-dimensional groupshared arrays bind as workgroup pointers, whose
+        stores already narrow; arrays of arrays keep their subscripts and are
+        declared with the same ``uint16_t`` storage.
+        """
+
+        depth, root = 0, target
+        while isinstance(root, ArrayAccessNode):
+            root, depth = root.array, depth + 1
+        name = getattr(root, "name", None)
+        if depth < 2 or not isinstance(root, (IdentifierNode, VariableNode)):
+            return False
+        alias = self.current_identifier_aliases.get(name, name)
+        if alias not in self.hlsl_hoisted_groupshared_aliases_by_declaration.values():
+            return False
+        element_type, array_suffix = split_array_type_suffix(
+            str(self.global_variable_types.get(alias) or "")
+        )
+        return array_suffix.count("[") == depth and self.is_hlsl_bfloat16_type(
+            element_type
+        )
+
     def hlsl_bfloat16_storage_assignment_expression(
         self, target, rendered, target_type, *, source_type=None
     ):
@@ -14120,6 +14145,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return rendered
 
         binding = self.hlsl_resource_pointer_binding(storage_expression)
+        if binding is None and self.hlsl_groupshared_bfloat16_array_element(target):
+            # Register bfloat16 values and conversions are uint low-bit
+            # payloads; the uint16_t element takes the 16-bit payload.
+            storage_type = self.hlsl_bfloat16_storage_type(
+                target_type,
+                operation="groupshared assignment",
+                source_location=getattr(target, "source_location", None),
+            )
+            return f"{storage_type}({rendered})"
         if binding is None or binding.get("access") not in {"write", "read_write"}:
             return rendered
         source_element_type = binding.get("source_element_type")

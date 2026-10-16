@@ -48927,6 +48927,78 @@ def test_hlsl_metal_bfloat_workgroup_pointer_preserves_logical_pointee_alias(
     assert_directx_warnings_clean_if_available(generated, tmp_path)
 
 
+def test_hlsl_metal_bfloat_groupshared_arrays_of_arrays_store_16_bit_payloads(
+    tmp_path,
+):
+    # MLX's Winograd output transform stores static_cast<T>(float) into
+    # `threadgroup T Os[M][M][BO]`. Conversions and register bfloat16 values
+    # are uint payloads, so each store into the uint16_t storage must narrow
+    # or DXC rejects it under -WX.
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef bfloat bfloat16_t;
+
+    kernel void bfloat_tiles(
+        const device bfloat16_t* input [[buffer(0)]],
+        device bfloat16_t* output [[buffer(1)]],
+        uint lane [[thread_index_in_threadgroup]]) {
+      threadgroup bfloat16_t tile[2][4][32];
+      threadgroup float scales[2][32];
+      bfloat16_t registers[2][2];
+      bfloat16_t value = input[lane];
+      registers[0][1] = static_cast<bfloat16_t>(float(lane));
+      tile[0][0][lane] = static_cast<bfloat16_t>(float(lane) * 0.5f);
+      tile[0][1][lane] = value;
+      tile[0][2][lane] = input[lane + 32];
+      tile[0][3][lane] = lane < 16 ? input[lane] : bfloat16_t(0);
+      tile[1][0][lane] = registers[0][1];
+      tile[1][1][lane] += value;
+      scales[1][lane] = float(lane);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      output[lane] = tile[1][0][(lane + 1) % 32];
+      output[lane + 32] = static_cast<bfloat16_t>(
+          float(tile[0][1][lane]) + float(tile[1][1][lane]) + scales[1][lane]);
+    }
+    """
+    shader_path = tmp_path / "bfloat_tiles.metal"
+    shader_path.write_text(shader)
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "groupshared uint16_t bfloat_tiles_tile[2][4][32];" in generated
+    stores = dict(
+        re.findall(
+            r"^\s*bfloat_tiles_tile(\[\d\]\[\d\])\[lane\] = (.*);$", generated, re.M
+        )
+    )
+    assert set(stores) == {
+        f"[{outer}][{inner}]"
+        for outer, inner in ((0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1))
+    }, stores
+    for subscript, value in stores.items():
+        assert value.startswith("uint16_t("), (subscript, value)
+    assert stores["[0][0]"].startswith("uint16_t(__crossgl_bfloat16_from_float(")
+    assert stores["[0][1]"] == "uint16_t(value)"
+    assert stores["[1][1]"].startswith("uint16_t(__crossgl_bfloat16_from_float(")
+    # Thread-local bfloat16 arrays and float tiles keep their stores.
+    assert re.search(
+        r"^\s*registers\[0\]\[1\] = __crossgl_bfloat16_from_float\(", generated, re.M
+    ), generated
+    assert re.search(
+        r"^\s*bfloat_tiles_scales\[1\]\[lane\] = __crossgl_uint_to_float1\(lane\);$",
+        generated,
+        re.M,
+    ), generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
 def test_hlsl_workgroup_pointer_rejects_true_element_reinterpretation():
     shader = """
     shader WorkgroupPointerElementTypeMismatch {
