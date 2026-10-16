@@ -8,6 +8,7 @@ from ..ast import (
     IdentifierNode,
     IfNode,
     LiteralNode,
+    MemberAccessNode,
     UnaryOpNode,
     VariableNode,
 )
@@ -107,15 +108,34 @@ def loop_constant_bindings(function, constants, mutable_names, type_name):
     return result
 
 
+def metadata_bound_key(bound):
+    """The ``metadata_loop_bindings`` key a loop bound reads, if any.
+
+    A scalar parameter is keyed by its name; one field of a record parameter,
+    MLX's ``params.C``, by ``parameter.field``, which no identifier can spell.
+    """
+    if isinstance(bound, IdentifierNode):
+        return bound.name
+    if (
+        isinstance(bound, MemberAccessNode)
+        and isinstance(bound.object_expr, IdentifierNode)
+        and isinstance(bound.member, str)
+        and bound.member.isidentifier()
+    ):
+        return f"{bound.object_expr.name}.{bound.member}"
+    return None
+
+
 def metadata_loop_bindings(function, records, mutable_names, walk_ast):
     """Keep only immutable, unshadowed source-owned scalar parameter ranges."""
-    return {
-        name: record
-        for name, record in metadata_parameter_bindings(
-            function, records, mutable_names, walk_ast
-        )
-        if "element" not in record
-    }
+    result = {}
+    for name, record in metadata_parameter_bindings(
+        function, records, mutable_names, walk_ast
+    ):
+        if "element" in record:
+            continue
+        result[f"{name}.{record['member']}" if "member" in record else name] = record
+    return result
 
 
 def metadata_parameter_bindings(function, records, mutable_names, walk_ast):
@@ -267,9 +287,7 @@ def fixed_stride_loop_terminates(
     stop = checked_induction_value(bound, constants)
     stops = [stop]
     if stop is None:
-        record = (metadata_bounds or {}).get(
-            bound.name if isinstance(bound, IdentifierNode) else None
-        )
+        record = (metadata_bounds or {}).get(metadata_bound_key(bound))
         if record is None:
             return False
         convert = _UnsignedLiteralInt if record["dtype"].startswith("u") else int
@@ -315,6 +333,53 @@ def fixed_stride_loop_terminates(
         if not minimum <= final <= maximum:
             return False
     return True
+
+
+def subgroup_strided_trips(type_name, bound, step, operator, subgroup_count):
+    """The trip count shared by every subgroup of a subgroup-strided loop.
+
+    In ``for (i = subgroup_id; i < bound; i += step)`` subgroup ``s`` of
+    ``subgroup_count`` takes ``ceil((bound - s) / step)`` trips. That count
+    can still agree for every ``s``: MLX's Winograd transforms run
+    ``for (c = simd_group_id; c < 32; c += 4)`` in four SIMD-groups, eight
+    trips each. Only concrete nonnegative bounds and positive strides qualify;
+    the count must agree for every subgroup and every visited and terminating
+    counter value must fit the counter's type. Returns the common count, or
+    None when that is not proved.
+    """
+    if not isinstance(type_name, str) or not type_name.isidentifier():
+        return None
+    shape = source_integer_shape(
+        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
+    )
+    if shape is None or shape[2] != 1 or shape[1] > 32:
+        return None
+    if (
+        operator not in {"<", "<="}
+        or type(subgroup_count) is not int
+        or subgroup_count < 1
+        or not isinstance(bound, int)
+        or isinstance(bound, bool)
+        or not isinstance(step, int)
+        or isinstance(step, bool)
+    ):
+        return None
+    unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+    maximum = (1 << (shape[1] - (not unsigned))) - 1
+    if not (0 <= int(bound) <= maximum and 0 < int(step) <= maximum):
+        return None
+    inclusive = operator == "<="
+
+    def trips(start):
+        return max(0, -(-(int(bound) + inclusive - start) // int(step)))
+
+    # Trips never increase with the start, so the extreme subgroups decide.
+    count = trips(0)
+    if trips(subgroup_count - 1) != count:
+        return None
+    if subgroup_count - 1 + count * int(step) > maximum:
+        return None
+    return count
 
 
 def geometric_loop_terminates(type_name, start, bound, update, constants, operator):

@@ -1,11 +1,41 @@
 """Enforcement of source metadata obligations at the native dispatch boundary."""
 
+import struct
+
 from crosstl.translator.metadata_preconditions import (
     INTEGER_METADATA_BYTES,
     METADATA_PRECONDITION_PREFIX,
     binding_metadata_preconditions,
+    metadata_member_offset,
     parse_metadata_precondition_header,
 )
+
+
+def _record_member_value(requirement, layout, payload):
+    """Read one checked field from a record's uploaded little-endian bytes."""
+    offset = metadata_member_offset(layout, requirement)
+    width = INTEGER_METADATA_BYTES[requirement["dtype"]]
+    if offset + width > len(payload):
+        raise ValueError("Checked metadata member is missing from the uploaded record.")
+    return int.from_bytes(
+        payload[offset : offset + width],
+        "little",
+        signed=requirement["dtype"].startswith("int"),
+    )
+
+
+def _record_words(value):
+    """The bytes of a record upload given as its reflected uint32 words."""
+    words = value.values
+    if (
+        value.encoding is not None
+        or value.dtype != "uint32"
+        or not isinstance(words, (list, tuple))
+        or not words
+        or any(type(word) is not int or not 0 <= word < (1 << 32) for word in words)
+    ):
+        raise ValueError("Checked metadata records require uint32 word payloads.")
+    return struct.pack(f"<{len(words)}I", *words)
 
 
 def artifact_metadata_bindings(artifact_path, target, bindings):
@@ -110,10 +140,27 @@ def check_metadata_inputs(requirements, inputs, outputs, bindings):
     from .runtime_verification import _runtime_default_allocation_id
 
     default_ids = {item.name: _runtime_default_allocation_id(item) for item in bindings}
+    layouts = {
+        item.name: (getattr(item, "metadata", None) or {}).get("scalarLayout")
+        for item in bindings
+    }
     for name, records in requirements.items():
         value = inputs.get(name)
         if value is None:
             raise ValueError("Checked metadata requires an uploaded scalar input.")
+        members = [record for record in records if "member" in record]
+        if members:
+            if len(members) != len(records):
+                raise ValueError("Checked metadata mixes record and scalar selectors.")
+            payload = _record_words(value)
+            for requirement in members:
+                check_metadata_value(
+                    requirement,
+                    _record_member_value(requirement, layouts.get(name), payload),
+                    requirement["dtype"],
+                )
+            check_metadata_allocation(name, value, inputs, outputs, default_ids)
+            continue
         words = value.values
         if (
             value.encoding is not None
@@ -182,17 +229,29 @@ def check_native_metadata_snapshots(artifact_path, target, buffers):
             raise ValueError("Checked metadata cannot share a native allocation.")
         for requirement in records:
             width = INTEGER_METADATA_BYTES[requirement["dtype"]]
-            offset = requirement.get("element", 0) * width
-            if offset + width > len(snapshot.payload):
-                raise ValueError(
-                    "Checked metadata element is missing from the immutable upload snapshot."
+            if "member" in requirement:
+                if snapshot.dtype != "uint32":
+                    raise ValueError(
+                        "Checked metadata records require uint32 word snapshots."
+                    )
+                value = _record_member_value(
+                    requirement,
+                    native.binding.metadata.get("scalarLayout"),
+                    snapshot.payload,
                 )
-            value = int.from_bytes(
-                snapshot.payload[offset : offset + width],
-                "little",
-                signed=requirement["dtype"].startswith("int"),
-            )
-            check_metadata_value(requirement, value, snapshot.dtype)
+                check_metadata_value(requirement, value, requirement["dtype"])
+            else:
+                offset = requirement.get("element", 0) * width
+                if offset + width > len(snapshot.payload):
+                    raise ValueError(
+                        "Checked metadata element is missing from the immutable upload snapshot."
+                    )
+                value = int.from_bytes(
+                    snapshot.payload[offset : offset + width],
+                    "little",
+                    signed=requirement["dtype"].startswith("int"),
+                )
+                check_metadata_value(requirement, value, snapshot.dtype)
             receipts.append(
                 {
                     "binding": name,

@@ -347,8 +347,10 @@ from .loop_induction import (
     fixed_stride_loop_terminates,
     geometric_loop_terminates,
     loop_constant_bindings,
+    metadata_bound_key,
     metadata_loop_bindings,
     metadata_parameter_bindings,
+    subgroup_strided_trips,
     walk_control_scopes,
 )
 from .match_utils import (
@@ -6148,6 +6150,26 @@ class GLSLCodeGen:
                         nested_components = dict(components)
                         nested_components.pop(statement.init.name, None)
                         visit(statement.body, nested_names, nested_components)
+                    elif (
+                        entry
+                        and id(statement)
+                        not in self.glsl_software_subgroup_strided_for_plans
+                        and self.glsl_software_subgroup_trip_uniform_for(
+                            statement, names
+                        )
+                    ):
+                        # Every invocation runs the same trips, but the counter
+                        # differs between subgroups.
+                        self.glsl_software_subgroup_uniform_for_node_ids.add(
+                            id(statement)
+                        )
+                        nested_components = dict(components)
+                        nested_components.pop(statement.init.name, None)
+                        visit(
+                            statement.body,
+                            set(names) - {statement.init.name},
+                            nested_components,
+                        )
                     continue
                 if isinstance(
                     statement,
@@ -6499,6 +6521,12 @@ class GLSLCodeGen:
             if id(statement) in self.glsl_software_subgroup_zero_trip_for_node_ids:
                 return names
             is_uniform = self.glsl_software_subgroup_uniform_for(statement, names)
+            # Only the entry is analyzed here, so its subgroup index is known.
+            trip_uniform = (
+                not is_uniform
+                and id(statement) not in self.glsl_software_subgroup_strided_for_plans
+                and self.glsl_software_subgroup_trip_uniform_for(statement, names)
+            )
             contains_subgroup_work = bool(
                 self.glsl_software_subgroup_first_operation(statement)
             ) or any(
@@ -6506,13 +6534,15 @@ class GLSLCodeGen:
                 and self.glsl_software_subgroup_candidate_helper_call(child)
                 for child in self.walk_ast(getattr(statement, "body", None))
             )
-            if is_uniform and contains_subgroup_work:
+            if (is_uniform or trip_uniform) and contains_subgroup_work:
                 self.glsl_software_subgroup_uniform_for_node_ids.add(id(statement))
             initializer = getattr(statement, "init", None)
             loop_name = getattr(initializer, "name", None)
             nested_names = set(names)
             if is_uniform and loop_name:
                 nested_names.add(loop_name)
+            elif trip_uniform:
+                nested_names.discard(loop_name)
             self.glsl_software_subgroup_analyze_uniform_statements(
                 getattr(statement, "body", None),
                 nested_names,
@@ -6738,7 +6768,7 @@ class GLSLCodeGen:
         if (
             additive_update
             or geometric_update
-            or (isinstance(bound, IdentifierNode) and bound.name in metadata_bounds)
+            or metadata_bound_key(bound) in metadata_bounds
             or (
                 isinstance(update, UnaryOpNode)
                 and narrow_integer_shape(self.type_name_string(initializer.var_type))
@@ -6779,7 +6809,12 @@ class GLSLCodeGen:
             if additive_update or geometric_update
             else set()
         )
-        control_names = bound_names | stride_names | {loop_name}
+        return self.glsl_software_subgroup_loop_controls_preserved(
+            node, bound_names | stride_names | {loop_name}
+        )
+
+    def glsl_software_subgroup_loop_controls_preserved(self, node, control_names):
+        """Whether ``node``'s body leaves its counter, bound and stride alone."""
         for child, visible in walk_control_scopes(
             getattr(node, "body", None), control_names
         ):
@@ -6823,6 +6858,104 @@ class GLSLCodeGen:
                 if observed & visible:
                     return False
         return True
+
+    def glsl_software_subgroup_trip_uniform_for(self, node, uniform_names):
+        """Accept ``for (i = simd_gid; i < B; i += S)`` whose trips agree.
+
+        The counter starts at the entry's never-written subgroup index, so it
+        differs between subgroups and callers keep it out of the body's
+        uniform names. With a literal bound and stride that give every
+        subgroup the same trip count, as MLX's Winograd transforms'
+        ``for (c = simd_group_id; c < 32; c += 4)`` over four SIMD-groups, every
+        invocation reaches the body's collectives equally often.
+        """
+        initializer = getattr(node, "init", None)
+        if (
+            self.software_subgroup_width is None
+            or not self.glsl_software_subgroup_count
+            or not isinstance(initializer, VariableNode)
+            or not initializer.name
+            or any(
+                self.glsl_software_subgroup_uniform_returns._qualified(
+                    value, {"volatile"}
+                )
+                for value in (initializer, initializer.var_type)
+            )
+        ):
+            return False
+        start = getattr(initializer, "initial_value", None)
+        if not self.glsl_software_subgroup_subgroup_id_expression(
+            start
+        ) or not self.glsl_software_subgroup_expression_identifier_names(start) <= (
+            getattr(self, "glsl_software_subgroup_guard_names", set())
+        ):
+            return False
+        loop_name = initializer.name
+        condition = getattr(node, "condition", None)
+        if (
+            not isinstance(condition, BinaryOpNode)
+            or self.expression_name(condition.left) != loop_name
+            or loop_name in self.glsl_software_subgroup_expression_identifier_names(
+                condition.right
+            )
+        ):
+            return False
+        constants = {
+            name: value
+            for name, value in (
+                getattr(self, "glsl_software_subgroup_loop_constants", {})
+                .get(id(node), self.glsl_active_literal_int_constants())
+                .items()
+            )
+            if name in uniform_names and name != loop_name
+        }
+        update = getattr(node, "update", None)
+        stride_names = set()
+        if isinstance(update, UnaryOpNode):
+            if (
+                self.map_operator(
+                    getattr(update, "op", getattr(update, "operator", None))
+                )
+                != "++"
+                or self.expression_name(getattr(update, "operand", None)) != loop_name
+            ):
+                return False
+            step = 1
+        elif (
+            isinstance(update, AssignmentNode)
+            and self.map_operator(
+                getattr(update, "op", getattr(update, "operator", None))
+            )
+            == "+="
+            and self.glsl_software_subgroup_assignment_target_name(update) == loop_name
+        ):
+            value = getattr(update, "value", getattr(update, "right", None))
+            step = evaluate_literal_int_expression(value, constants)
+            stride_names = self.glsl_software_subgroup_expression_identifier_names(
+                value
+            )
+        else:
+            return False
+        trips = subgroup_strided_trips(
+            self.type_name_string(initializer.var_type),
+            evaluate_literal_int_expression(condition.right, constants),
+            step,
+            self.map_operator(
+                getattr(condition, "op", getattr(condition, "operator", None))
+            ),
+            self.glsl_software_subgroup_count,
+        )
+        return (
+            trips is not None
+            and self.glsl_software_subgroup_loop_controls_preserved(
+                node,
+                {loop_name}
+                | stride_names
+                | self.glsl_software_subgroup_expression_identifier_names(
+                    condition.right
+                ),
+            )
+        )
 
     def glsl_software_cooperative_matrix_uses_multiply_accumulate(
         self, ast, target_stage=None
@@ -7654,6 +7787,7 @@ class GLSLCodeGen:
         records = validate_codegen_metadata_preconditions(
             self.glsl_software_subgroup_stage_entries(ast, target_stage),
             self.metadata_preconditions,
+            getattr(ast, "structs", ()),
         )
         self.float_atomic_storage = FloatAtomicStorage(self, discover=True)
         code = self._generate_program(ast, target_stage)
@@ -11436,7 +11570,7 @@ class GLSLCodeGen:
         }
         if self.metadata_preconditions:
             records = validate_codegen_metadata_preconditions(
-                entries, self.metadata_preconditions
+                entries, self.metadata_preconditions, getattr(ast, "structs", ())
             )
             function = entries[0][1]
             self.glsl_metadata_entry_bounds[id(function)] = metadata_loop_bindings(

@@ -347,7 +347,9 @@ from .loop_induction import (
     fixed_stride_loop_terminates,
     geometric_loop_terminates,
     loop_constant_bindings,
+    metadata_bound_key,
     metadata_loop_bindings,
+    subgroup_strided_trips,
     walk_control_scopes,
 )
 from .match_utils import (
@@ -3158,6 +3160,7 @@ class HLSLCodeGen:
         records = validate_codegen_metadata_preconditions(
             self.hlsl_software_subgroup_stage_entries(ast, target_stage),
             self.metadata_preconditions,
+            getattr(ast, "structs", ()),
         )
         code = self.generate_hlsl_program_with_narrow_pointer_layouts(ast, target_stage)
         if records:
@@ -5292,10 +5295,7 @@ class HLSLCodeGen:
         checked_stride = (
             additive_update
             or geometric_update
-            or (
-                isinstance(bound, IdentifierNode)
-                and bound.name in (metadata_bounds or {})
-            )
+            or metadata_bound_key(bound) in (metadata_bounds or {})
             or (
                 isinstance(update, UnaryOpNode)
                 and narrow_integer_shape(self.type_name_string(initializer.var_type))
@@ -5319,7 +5319,19 @@ class HLSLCodeGen:
             if additive_update or geometric_update
             else set()
         )
-        control_names = bound_names | stride_names | {loop_name}
+        return self.hlsl_software_subgroup_loop_controls_preserved(
+            node, bound_names | stride_names | {loop_name}, call_mutations
+        )
+
+    def hlsl_software_subgroup_loop_controls_preserved(
+        self, node, control_names, call_mutations
+    ):
+        """Whether ``node``'s body leaves its counter, bound and stride alone.
+
+        The body may not exit the loop early, redeclare a control in its
+        outermost scope, write one, take its address or pass it to a
+        possibly mutating call.
+        """
         for child, visible in walk_control_scopes(
             getattr(node, "body", None), control_names
         ):
@@ -5361,6 +5373,101 @@ class HLSLCodeGen:
                 if target_name in visible:
                     return False
         return True
+
+    def hlsl_software_subgroup_trip_uniform_for(
+        self, node, uniform_names, call_mutations, constants
+    ):
+        """Accept ``for (i = simd_gid; i < B; i += S)`` whose trips agree.
+
+        Each subgroup starts at its own index, so the counter is not uniform
+        and the caller keeps it out of the body's uniform names. When the
+        literal bound and stride give every subgroup the same trip count, as
+        in MLX's Winograd ``for (c = simd_group_id; c < 32; c += 4)`` over four
+        SIMD-groups, every invocation still reaches the body's collectives
+        equally often and in the same order.
+        """
+        invocation_count = self.hlsl_software_subgroup_invocation_count
+        initializer = getattr(node, "init", None)
+        if (
+            self.software_subgroup_width is None
+            or not invocation_count
+            or not isinstance(initializer, VariableNode)
+            or not initializer.name
+            or self.hlsl_software_subgroup_uniform_returns._qualified(
+                initializer, {"volatile"}
+            )
+            or self.hlsl_software_subgroup_uniform_returns._qualified(
+                initializer.var_type, {"volatile"}
+            )
+            or not self.hlsl_software_subgroup_subgroup_id_expression(
+                getattr(initializer, "initial_value", None)
+            )
+        ):
+            return False
+        loop_name = initializer.name
+        condition = getattr(node, "condition", None)
+        if (
+            not isinstance(condition, BinaryOpNode)
+            or self.expression_name(condition.left) != loop_name
+            or loop_name in self.hlsl_software_subgroup_expression_identifier_names(
+                condition.right
+            )
+        ):
+            return False
+        operator = self.map_operator(
+            getattr(condition, "op", getattr(condition, "operator", None))
+        )
+        constants = {
+            name: value
+            for name, value in constants.items()
+            if name in uniform_names and name != loop_name
+        }
+        update = getattr(node, "update", None)
+        stride_names = set()
+        if isinstance(update, UnaryOpNode):
+            if (
+                self.map_operator(
+                    getattr(update, "op", getattr(update, "operator", None))
+                )
+                != "++"
+                or self.expression_name(getattr(update, "operand", None)) != loop_name
+            ):
+                return False
+            step = 1
+        elif (
+            isinstance(update, AssignmentNode)
+            and self.map_operator(
+                getattr(update, "op", getattr(update, "operator", None))
+            )
+            == "+="
+            and self.hlsl_software_subgroup_assignment_target_name(update) == loop_name
+        ):
+            value = getattr(update, "value", getattr(update, "right", None))
+            step = evaluate_literal_int_expression(value, constants)
+            stride_names = self.hlsl_software_subgroup_expression_identifier_names(
+                value
+            )
+        else:
+            return False
+        trips = subgroup_strided_trips(
+            self.type_name_string(initializer.var_type),
+            evaluate_literal_int_expression(condition.right, constants),
+            step,
+            operator,
+            -(-invocation_count // self.software_subgroup_width),
+        )
+        return (
+            trips is not None
+            and self.hlsl_software_subgroup_loop_controls_preserved(
+                node,
+                {loop_name}
+                | stride_names
+                | self.hlsl_software_subgroup_expression_identifier_names(
+                    condition.right
+                ),
+                call_mutations,
+            )
+        )
 
     def hlsl_software_subgroup_contains_work(self, root, dependent_calls):
         if self.hlsl_software_subgroup_operation_records(root):
@@ -6537,6 +6644,7 @@ class HLSLCodeGen:
                     continue
                 if isinstance(statement, ForNode):
                     strided_plan = None
+                    trip_uniform = False
                     if not self.hlsl_software_subgroup_uniform_for(
                         statement,
                         names,
@@ -6555,7 +6663,17 @@ class HLSLCodeGen:
                             if entry
                             else None
                         )
-                        if strided_plan is None:
+                        trip_uniform = (
+                            strided_plan is None
+                            and entry
+                            and self.hlsl_software_subgroup_trip_uniform_for(
+                                statement,
+                                names,
+                                call_mutations,
+                                loop_constants.get(id(statement), {}),
+                            )
+                        )
+                        if strided_plan is None and not trip_uniform:
                             raise self.hlsl_software_subgroup_error(
                                 "DirectX software subgroup barriers require a "
                                 "statically uniform for loop",
@@ -6566,6 +6684,7 @@ class HLSLCodeGen:
                                     statement, "source_location", source_location
                                 ),
                             )
+                    if strided_plan is not None:
                         # Every invocation runs the workgroup's rounds; the
                         # reduction's guard is predicated with the counter test.
                         self.hlsl_software_subgroup_strided_for_plans[id(statement)] = (
@@ -6579,9 +6698,10 @@ class HLSLCodeGen:
                     nested_names = set(names)
                     nested_components = dict(components)
                     if isinstance(initializer, VariableNode) and initializer.name:
-                        if strided_plan is None:
+                        if strided_plan is None and not trip_uniform:
                             nested_names.add(initializer.name)
                         else:
+                            # The counter differs between subgroups.
                             nested_names.discard(initializer.name)
                         nested_components.pop(initializer.name, None)
                     validate_statements(

@@ -286,7 +286,11 @@ def generate_native_loader_execution_abi(descriptor: Mapping[str, Any]) -> str:
             path="$.provenance.dispatchRegion",
         )
     if any(
-        {"metadataPrecondition", "metadataElementPreconditions"}
+        {
+            "metadataPrecondition",
+            "metadataElementPreconditions",
+            "metadataMemberPreconditions",
+        }
         & binding.get("provenance", {}).keys()
         for binding in normalized["bindings"]
     ):

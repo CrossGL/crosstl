@@ -27793,7 +27793,7 @@ def _generate_project_target_from_crossgl_ast(
                     metadata_source_matches or {},
                 )
         resolved_metadata = resolve_metadata_preconditions(
-            function, metadata_preconditions
+            function, metadata_preconditions, getattr(selected_ast, "structs", ())
         )
     configure_metadata = getattr(codegen, "set_metadata_preconditions", None)
     if callable(configure_metadata):
@@ -36558,6 +36558,15 @@ def _runtime_package_resource_identity_diagnostics(package_path, artifact, refle
                             ]
                         }
                         if "metadataElementPreconditions" in provenance
+                        else {}
+                    ),
+                    **(
+                        {
+                            "metadataMemberPreconditions": provenance[
+                                "metadataMemberPreconditions"
+                            ]
+                        }
+                        if "metadataMemberPreconditions" in provenance
                         else {}
                     ),
                 }

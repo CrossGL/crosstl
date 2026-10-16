@@ -14,7 +14,7 @@ from .artifact_contracts import (
     artifact_contract_headers,
     with_artifact_contract_header,
 )
-from .ast import NamedType, PointerType, ReferenceType
+from .ast import NamedType, PointerType, PrimitiveType, ReferenceType
 from .resource_identity import source_resource_attribute, source_resource_identity
 
 MAX_METADATA_PRECONDITIONS = 256
@@ -60,7 +60,8 @@ def _bounds(minimum: Any, maximum: Any) -> None:
 
 @dataclass(frozen=True)
 class MetadataRangePrecondition:
-    """A requirement attached to a scalar input or one immutable array element."""
+    """A requirement on a scalar input, one immutable array element, or one
+    integer field of an immutable constant record."""
 
     entry_point: str
     parameter: str
@@ -68,12 +69,14 @@ class MetadataRangePrecondition:
     maximum: int
     source: str = "*"
     element: int | None = None
+    member: str | None = None
 
     def __post_init__(self) -> None:
         _identifier(self.entry_point, "entry_point")
         _identifier(self.parameter, "parameter")
         _bounds(self.minimum, self.maximum)
         _element(self.element)
+        _member(self.member, self.element)
         if (
             not isinstance(self.source, str)
             or not 1 <= len(self.source) <= 4096
@@ -92,6 +95,7 @@ class MetadataRangePrecondition:
             "minimum": self.minimum,
             "maximum": self.maximum,
             **({"element": self.element} if self.element is not None else {}),
+            **({"member": self.member} if self.member is not None else {}),
         }
 
 
@@ -101,13 +105,35 @@ def _element(value: Any) -> None:
         raise ValueError("Metadata element requires a nonnegative bounded integer.")
 
 
-def _add_selector(selectors, identity, element):
+def _member(value: Any, element: Any) -> None:
+    """A member names one field of the record; it cannot also index an array."""
+    if value is None:
+        return
+    _identifier(value, "member")
+    if element is not None:
+        raise ValueError("Metadata precondition selects an element or a member.")
+
+
+def _selector(element, member):
+    """One requirement's position within its resource."""
+    if member is not None:
+        return ("member", member)
+    if element is not None:
+        return ("element", element)
+    return None
+
+
+def _add_selector(selectors, identity, selector):
+    """A resource takes one whole-scalar requirement, or distinct elements, or
+    distinct record members, never a mixture of these."""
     previous = selectors.setdefault(identity, set())
-    if element in previous or previous and (element is None or None in previous):
+    kinds = {None if item is None else item[0] for item in previous}
+    kind = None if selector is None else selector[0]
+    if selector in previous or previous and (kind is None or kinds != {kind}):
         raise ValueError(
             "Duplicate or ambiguous metadata source parameter requirements."
         )
-    previous.add(element)
+    previous.add(selector)
 
 
 def parse_metadata_preconditions(
@@ -135,6 +161,7 @@ def parse_metadata_preconditions(
                 "minimum",
                 "maximum",
                 "element",
+                "member",
             } or not {"entryPoint", "parameter", "minimum", "maximum"} <= set(record):
                 raise ValueError(f"{field_name} has unsupported or missing fields.")
             condition = MetadataRangePrecondition(
@@ -144,13 +171,16 @@ def parse_metadata_preconditions(
                 maximum=record["maximum"],
                 source=record.get("source", "*"),
                 element=record.get("element"),
+                member=record.get("member"),
             )
             if "element" in record and record["element"] is None:
                 raise ValueError("Explicit metadata element cannot be null.")
+            if "member" in record and record["member"] is None:
+                raise ValueError("Explicit metadata member cannot be null.")
         else:
             raise ValueError(f"{field_name} requires metadata precondition objects.")
         key = (condition.source, condition.entry_point, condition.parameter)
-        _add_selector(keys, key, condition.element)
+        _add_selector(keys, key, _selector(condition.element, condition.member))
         result.append(condition)
     return tuple(result)
 
@@ -164,7 +194,7 @@ def checked_metadata_preconditions(records: Any) -> list[dict[str, Any]]:
         raise ValueError("Resolved metadata preconditions require a bounded sequence.")
     result, indices, names, selectors, types = [], {}, {}, {}, {}
     for record in records:
-        if not isinstance(record, Mapping) or set(record) - {"element"} != {
+        if not isinstance(record, Mapping) or set(record) - {"element", "member"} != {
             "sourceResource",
             "dtype",
             "minimum",
@@ -175,6 +205,10 @@ def checked_metadata_preconditions(records: Any) -> list[dict[str, Any]]:
         _element(element)
         if "element" in record and element is None:
             raise ValueError("Explicit metadata element cannot be null.")
+        member = record.get("member")
+        if "member" in record and member is None:
+            raise ValueError("Explicit metadata member cannot be null.")
+        _member(member, element)
         source = record["sourceResource"]
         if (
             not isinstance(source, Mapping)
@@ -207,10 +241,12 @@ def checked_metadata_preconditions(records: Any) -> list[dict[str, Any]]:
             )
         indices[index] = name
         names[name] = index
-        if types.get(index, dtype) != dtype:
+        # Array elements share one element type; record fields have their own.
+        type_key = index if member is None else (index, member)
+        if types.get(type_key, dtype) != dtype:
             raise ValueError("Metadata elements require one source integer type.")
-        types[index] = dtype
-        _add_selector(selectors, index, element)
+        types[type_key] = dtype
+        _add_selector(selectors, index, _selector(element, member))
         result.append({**record, "sourceResource": dict(source)})
     return sorted(
         result,
@@ -219,6 +255,7 @@ def checked_metadata_preconditions(records: Any) -> list[dict[str, Any]]:
             item["sourceResource"]["entryPoint"],
             item["sourceResource"]["parameterIndex"],
             item.get("element", -1),
+            item.get("member", ""),
         ),
     )
 
@@ -281,9 +318,58 @@ def parse_metadata_precondition_header(source: str) -> list[dict[str, Any]]:
     return checked_metadata_preconditions(record["requirements"])
 
 
-def resolve_metadata_preconditions(function, requirements):
+def _record_field(reference, member, structs):
+    """The one declared integer field ``member`` of a constant record reference."""
+    if (
+        not isinstance(reference, ReferenceType)
+        or reference.address_space != "constant"
+        or reference.is_mutable
+    ):
+        raise MetadataPreconditionError(
+            "Metadata members require a constant record reference."
+        )
+    record = reference.referenced_type
+    declarations = [
+        struct
+        for struct in structs or ()
+        if isinstance(record, NamedType)
+        and not record.generic_args
+        and getattr(struct, "name", None) == record.name
+    ]
+    if len(declarations) != 1 or getattr(declarations[0], "generic_params", None):
+        raise MetadataPreconditionError(
+            "Metadata members require one declared non-generic record type."
+        )
+    fields = [
+        field
+        for field in getattr(declarations[0], "members", None) or ()
+        if getattr(field, "name", None) == member
+    ]
+    if len(fields) != 1:
+        raise MetadataPreconditionError(
+            f"Metadata member {member} is not one field of {record.name}."
+        )
+    field = fields[0]
+    field_type = getattr(field, "member_type", None) or getattr(field, "var_type", None)
+    # ``int C;`` parses as a primitive, ``int64 C;`` as a named scalar; arrays,
+    # vectors and nested records do not qualify.
+    if not (
+        isinstance(field_type, PrimitiveType)
+        and field_type.size_bits is None
+        or isinstance(field_type, NamedType)
+        and not field_type.generic_args
+    ):
+        raise MetadataPreconditionError(
+            "Metadata members require a supported integer scalar field."
+        )
+    return field, field_type
+
+
+def resolve_metadata_preconditions(function, requirements, structs=()):
     """Resolve original names against one selected entry's constant references.
 
+    ``structs`` holds the record declarations visible to the entry; a member
+    requirement must name one integer field of its record parameter's type.
     No optimizer fact is attached here. Consumers must enforce the resulting
     obligations before using them as proofs about uploaded metadata.
     """
@@ -304,7 +390,11 @@ def resolve_metadata_preconditions(function, requirements):
             )
         parameter, origin = matches[0]
         reference = parameter.param_type
-        if requirement.element is not None:
+        qualified = [parameter, reference]
+        if requirement.member is not None:
+            field, scalar = _record_field(reference, requirement.member, structs)
+            qualified.extend((reference.referenced_type, field))
+        elif requirement.element is not None:
             if (
                 isinstance(reference, NamedType)
                 and reference.name == "StructuredBuffer"
@@ -333,7 +423,7 @@ def resolve_metadata_preconditions(function, requirements):
             scalar = reference.referenced_type
         if any(
             "volatile" in (getattr(node, "qualifiers", ()) or ())
-            for node in (parameter, reference, scalar)
+            for node in (*qualified, scalar)
         ):
             raise MetadataPreconditionError(
                 "Volatile metadata cannot provide a checked upload contract."
@@ -355,6 +445,11 @@ def resolve_metadata_preconditions(function, requirements):
                     if requirement.element is not None
                     else {}
                 ),
+                **(
+                    {"member": requirement.member}
+                    if requirement.member is not None
+                    else {}
+                ),
             )
         )
     try:
@@ -363,7 +458,7 @@ def resolve_metadata_preconditions(function, requirements):
         raise MetadataPreconditionError(str(exc)) from exc
 
 
-def validate_codegen_metadata_preconditions(entries, records):
+def validate_codegen_metadata_preconditions(entries, records, structs=()):
     """Bind proof obligations to the actual selected compute entry and its types."""
     records = checked_metadata_preconditions(records)
     if not records:
@@ -381,15 +476,81 @@ def validate_codegen_metadata_preconditions(entries, records):
                 minimum=item["minimum"],
                 maximum=item["maximum"],
                 element=item.get("element"),
+                member=item.get("member"),
             )
             for item in records
         ],
+        structs,
     )
     if resolved != records:
         raise MetadataPreconditionError(
             "Metadata proof identity or type differs from the selected source."
         )
     return records
+
+
+RECORD_MEMBER_LAYOUTS = {"metal-buffer", "std140", "hlsl-constant-buffer"}
+
+
+def metadata_member_offset(layout, requirement):
+    """The byte offset of one checked field within a reflected constant record.
+
+    The layout must be the artifact's own reflection of a whole record that is
+    uploaded as little-endian words: a Metal record buffer, an OpenGL std140
+    block or a DirectX constant buffer. The field must be one unpacked integer
+    scalar of the required type, aligned to its width and inside the record.
+    """
+    if not isinstance(layout, Mapping) or not isinstance(requirement, Mapping):
+        raise ValueError("Metadata members require a reflected record layout.")
+    width = INTEGER_METADATA_BYTES.get(requirement.get("dtype"))
+    storage = layout.get("storageLayout")
+    if storage == "metal-buffer":
+        fields, size = layout.get("structMembers"), layout.get("elementSizeBytes")
+        whole_record = (
+            layout.get("elementType") == "record"
+            and "blockMembers" not in layout
+            and layout.get("elementStrideBytes") == size
+        )
+    else:
+        fields, size = layout.get("blockMembers"), layout.get("blockSizeBytes")
+        whole_record = (
+            storage in RECORD_MEMBER_LAYOUTS
+            and "structMembers" not in layout
+            and layout.get("runtimeSized") is False
+        )
+    if (
+        width is None
+        or not whole_record
+        or layout.get("memberOffsetBytes") != 0
+        or layout.get("payloadEncoding") != "uint32-le-words"
+        or "storageEncoding" in layout
+        or "memberName" in layout
+        or not isinstance(fields, list)
+        or type(size) is not int
+        or size <= 0
+    ):
+        raise ValueError("Metadata members require a reflected constant record.")
+    matches = [
+        field
+        for field in fields
+        if isinstance(field, Mapping) and field.get("name") == requirement.get("member")
+    ]
+    if len(matches) != 1:
+        raise ValueError("Metadata member is missing or ambiguous in the record.")
+    (field,) = matches
+    offset = field.get("offsetBytes")
+    if (
+        field.get("elementType") != requirement["dtype"]
+        or field.get("sizeBytes") != width
+        or field.get("vectorWidth", 1) != 1
+        or any(key in field for key in ("arrayLength", "arrayStrideBytes"))
+        or type(offset) is not int
+        or offset < 0
+        or offset % width
+        or offset + width > size
+    ):
+        raise ValueError("Metadata members require one reflected integer scalar field.")
+    return offset
 
 
 def apply_metadata_preconditions(resources, records):
@@ -407,6 +568,17 @@ def apply_metadata_preconditions(resources, records):
         resource = matches[0]
         layout = resource.get("scalarLayout", {})
         width = INTEGER_METADATA_BYTES[requirement["dtype"]]
+        if "member" in requirement:
+            if (
+                resource.get("access") != "read"
+                or resource.get("kind") != "constant-buffer"
+            ):
+                raise ValueError(
+                    "Metadata members require a reflected read-only constant record."
+                )
+            metadata_member_offset(layout, requirement)
+            pending.append((resource, requirement))
+            continue
         array = "element" in requirement
         if (
             resource.get("access") != "read"
@@ -439,9 +611,12 @@ def apply_metadata_preconditions(resources, records):
         pending.append((resource, requirement))
     for resource, _ in pending:
         resource["metadata"]["provenance"].pop("metadataElementPreconditions", None)
+        resource["metadata"]["provenance"].pop("metadataMemberPreconditions", None)
     for resource, requirement in pending:
         provenance = resource["metadata"]["provenance"]
-        if "element" in requirement:
+        if "member" in requirement:
+            provenance.setdefault("metadataMemberPreconditions", []).append(requirement)
+        elif "element" in requirement:
             provenance.setdefault("metadataElementPreconditions", []).append(
                 requirement
             )
@@ -456,21 +631,24 @@ def binding_metadata_preconditions(bindings):
         provenance = item.get("provenance", {})
         if "metadataPrecondition" in provenance:
             record = provenance["metadataPrecondition"]
-            if not isinstance(record, Mapping) or "element" in record:
+            if not isinstance(record, Mapping) or {"element", "member"} & set(record):
                 raise ValueError("Scalar metadata requires a scalar precondition.")
             records.append(record)
-        if "metadataElementPreconditions" in provenance:
-            elements = provenance["metadataElementPreconditions"]
+        for key, selector, label in (
+            ("metadataElementPreconditions", "element", "Array metadata"),
+            ("metadataMemberPreconditions", "member", "Record metadata"),
+        ):
+            if key not in provenance:
+                continue
+            selected = provenance[key]
             if (
-                not isinstance(elements, list)
-                or not elements
+                not isinstance(selected, list)
+                or not selected
                 or any(
-                    not isinstance(record, Mapping) or "element" not in record
-                    for record in elements
+                    not isinstance(record, Mapping) or selector not in record
+                    for record in selected
                 )
             ):
-                raise ValueError(
-                    "Array metadata requires explicit element preconditions."
-                )
-            records.extend(elements)
+                raise ValueError(f"{label} requires explicit {selector} preconditions.")
+            records.extend(selected)
     return checked_metadata_preconditions(records)
