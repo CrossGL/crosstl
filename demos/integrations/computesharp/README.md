@@ -19,7 +19,11 @@ see [Status](#status).
   including ComputeSharp's combinatorial attributes, rather than parsing names.
 - `source.py`: content hashes for every tracked upstream file, checked before
   and after the original test run.
-- `baseline.py`: compares original TRX results with the exported case inventory.
+- `coverage.json`: the reviewed classification of every upstream test method,
+  the target profiles and the optional device capabilities.
+- `coverage.lock.json` and `coverage_contract.py`: the frozen case inventory
+  derived from the contract and a discovery export (`freeze`/`check`).
+- `baseline.py`: accounts TRX results of any profile against the frozen contract.
 - `compare_discovery.py`: requires the adapted build to expose the same cases and
   byte-identical HLSL with identical descriptor metadata as the original build.
 - `tests/`: exporter and accounting tests using real MSTest discovery and execution
@@ -36,10 +40,64 @@ data rows (for example `[Data(0, 64)]` three times on
 the same display name, so repetitions are separate cases numbered by
 `occurrence` and accounted as a multiset of results per display name.
 
-The adapted macOS build of the pinned test assembly exports 303 test methods,
-3,792 expanded cases (1,832 WARP rows, 1,817 discrete-device rows and 143 rows
-without a device argument) and 172 generated HLSL descriptors. These counts are
-recorded for planning; the required portable classification is not frozen yet.
+The pinned test assembly exports 303 test methods, 3,792 expanded cases (1,832
+WARP rows, 1,817 discrete-device rows and 143 rows without a device argument) and
+172 generated HLSL descriptors. Each method records its source location from the
+assembly's portable PDB. The Windows original and the adapted build produce the
+same case identities.
+
+## Coverage Contract
+
+`coverage.json` classifies every method, with a reason, into one of three
+categories; `coverage.lock.json` freezes the result per method signature (source
+location, case count and a digest of the case identities):
+
+| Category | Methods | Cases |
+| --- | ---: | ---: |
+| required-gpu: portable compute and resource tests | 249 | 3,622 |
+| cpu-only: host-side tests without a device | 15 | 109 |
+| windows-specific: D3D12/DXGI/DXC interop and DXIL reflection | 39 | 61 |
+
+Profiles and expected outcomes:
+
+| Profile | Device | Pass | Capability-gated | Optional | Excluded |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `directx-warp` (original) | D3D12 WARP, software | 1,964 | 11 | 1,817 | 0 |
+| `metal-apple-gpu` | system Metal device, hardware | 3,713 | 18 | 0 | 61 |
+| `opengl-mesa-llvmpipe` | Mesa llvmpipe via EGL, software | 3,709 | 22 | 0 | 61 |
+
+Translated targets expose one device, and the test adapter maps both upstream
+`Device` values to it, so every upstream row runs on every target. Only Discrete
+rows of the original baseline are optional (hosted runners have no GPU).
+
+Capability gates follow upstream `Assert.Inconclusive` checks and are frozen per
+profile rather than discovered at run time:
+
+- `fp64`: double-precision shaders. WARP and OpenGL 4.x provide it; Metal has no
+  double type. Each fp64 test has an upstream counterpart that must pass when
+  the capability is absent.
+- `rw-texture-rgb32`: three-channel 32-bit read-write textures (`Float3`,
+  `Int3`, `UInt3`), which no profile supports. Every other read-write texture
+  element type is required on every profile.
+
+A gated case must report the upstream capability check; an inconclusive result
+caused by a missing device, a failure or an unexpected pass fails accounting.
+Windows-specific cases must not run on translated targets. Tests that call
+`ReflectionServices` (DXIL reflection) for incidental checks remain required:
+off Windows the adapter reports the generated HLSL and whether the executed
+artifact requires double precision. `ImagingTests` keep their GPU transfers;
+off Windows the image codec is the ImageSharp version pinned by the tests
+instead of WIC.
+
+The first complete original run on WARP matched the frozen `directx-warp`
+expectations exactly (1,964 passed, 11 capability-gated, 1,817 optional).
+Changing the contract requires a reviewed edit with an entry in its `history`
+and a regenerated lock:
+
+```sh
+python demos/integrations/computesharp/coverage_contract.py freeze --discovery /path/to/discovery
+python demos/integrations/computesharp/coverage_contract.py check --discovery /path/to/discovery
+```
 
 Shader exports include the source hash, thread-group dimensions, constant-buffer
 size, static-sampler requirement and resource descriptor ranges. They do not
@@ -53,10 +111,11 @@ a partial inventory.
 The `Project Demo Testing` workflow runs the pinned, unpatched core test project
 on Windows and verifies that every discovered case has a corresponding result.
 The original tests require WARP; they may report unavailable discrete hardware as
-inconclusive. Only those explicitly identified discrete-device rows may be
-skipped. WARP and CPU/platform rows must pass, and ignored, missing, extra or
-unknown results fail accounting. These original Windows results do not establish
-Metal or OpenGL parity.
+inconclusive. Results are accounted against the frozen contract: Discrete rows
+are optional, capability-gated rows must report their capability check, all
+other rows must pass, and ignored, missing, extra or unknown results fail
+accounting. These original Windows results do not establish Metal or OpenGL
+parity.
 
 With the .NET SDK from `upstream.json`, export a successfully built test assembly:
 
@@ -78,7 +137,7 @@ CROSSTL_REQUIRE_DOTNET=1 python -m pytest -q -n auto \
 ## Non-Windows Builds
 
 The upstream build cannot produce the test assembly on macOS or Linux without
-three small source changes, kept as reviewable patches:
+four small source changes, kept as reviewable patches:
 
 1. `0001-classify-projects-with-posix-paths.patch`: upstream classifies projects
    by comparing a relative path against `src\` and `tests\`. MSBuild produces `/`
@@ -96,6 +155,10 @@ three small source changes, kept as reviewable patches:
    bytecode helper added `using System;` to the same generated namespace. With no
    bytecode helper the generated code failed to compile. The patch imports
    `System` for the resource loader itself.
+4. `0004-match-include-path-case.patch`: the shared source-generation project
+   includes two files as `extensions\` and `helpers\` while the directories
+   are `Extensions` and `Helpers`. Case-sensitive Linux file systems cannot find
+   them; the patch uses the actual directory names.
 
 ```sh
 python demos/integrations/computesharp/prepare_upstream.py \
@@ -134,11 +197,11 @@ a dependency update remains separate work.
 
 ## Status
 
-- Done: inventory export, original-result accounting, the non-Windows patch
-  series and an adapted macOS build of the complete test assembly.
-- Pending: frozen portable classification, the live Metal and OpenGL host
-  adapter, CrossTL fixes found by executing the translated shaders, and CI
-  evidence of native execution.
+- Done: inventory export with source locations, the frozen coverage contract,
+  contract-based result accounting, a complete original WARP run matching it,
+  the non-Windows patch series and an adapted macOS build of the test assembly.
+- Pending: the live Metal and OpenGL host adapter, CrossTL fixes found by
+  executing the translated shaders, and CI evidence of native execution.
 
 ComputeSharp source is MIT-licensed. Upstream dependencies and image assets retain
 their own terms; preserve its `LICENSE` and `ThirdPartyNotices.txt`. The Windows

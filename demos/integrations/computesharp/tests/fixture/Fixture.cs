@@ -26,6 +26,16 @@ namespace DiscoveryFixture
             if (device == ComputeSharp.Tests.Extensions.Device.Discrete)
                 Assert.Inconclusive("Fixture optional hardware is absent");
         }
+
+        [DataTestMethod]
+        [DataRow(typeof(int))]
+        [DataRow(typeof(float))]
+        public void Gated(Type type)
+        {
+            // Mirrors an upstream capability check that reports an unavailable feature.
+            if (type == typeof(float))
+                Assert.Inconclusive();
+        }
     }
 
     [AttributeUsage(AttributeTargets.Method)]

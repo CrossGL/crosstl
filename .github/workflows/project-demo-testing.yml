@@ -97,6 +97,10 @@ jobs:
           $output = Join-Path $env:GITHUB_WORKSPACE "evidence/discovery"
           dotnet run --project $tool -c Release -- $assembly $output
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/discovery
       - name: Execute the complete original core test project
         working-directory: upstream-computesharp
         run: >-
@@ -166,6 +170,10 @@ jobs:
           python demos/integrations/computesharp/compare_discovery.py
           --reference original/discovery --candidate evidence/adapted-discovery
           --output evidence/discovery-parity.json
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/adapted-discovery
       - uses: actions/upload-artifact@v4
         if: always()
         with:

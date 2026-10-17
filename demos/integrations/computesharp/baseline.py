@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
@@ -39,6 +40,31 @@ def load_discovery(directory: Path) -> dict:
         or report.get("caseCount") != len(tests)
     ):
         raise ValueError("Missing or inconsistent test inventory")
+    methods = report.get("methods")
+    if not isinstance(methods, list) or report.get("testMethodCount") != len(methods):
+        raise ValueError("Missing or inconsistent test method inventory")
+    method_names = set()
+    for entry in methods:
+        source = entry.get("source") if isinstance(entry, dict) else None
+        if (
+            not isinstance(entry.get("method"), str)
+            or not isinstance(entry.get("signature"), str)
+            or not entry["signature"].startswith(entry["method"] + "(")
+            or not isinstance(source, dict)
+            or not isinstance(source.get("path"), str)
+            or not source["path"]
+            or Path(source["path"]).is_absolute()
+            or "\\" in source["path"]
+            or ".." in Path(source["path"]).parts
+            or type(source.get("line")) is not int
+            or source["line"] < 1
+        ):
+            raise ValueError("Invalid test method source location")
+        if entry["signature"] in method_names:
+            raise ValueError("Duplicate test method: " + entry["signature"])
+        method_names.add(entry["signature"])
+    if {case.get("signature") for case in tests} != method_names:
+        raise ValueError("Cases and test methods differ")
     if (
         not isinstance(shaders, list)
         or not shaders
@@ -93,8 +119,39 @@ def load_discovery(directory: Path) -> dict:
     return report
 
 
-def verify_baseline(directory: Path, trx_path: Path) -> dict:
+def _trx_message(result: ET.Element) -> tuple[str, str]:
+    message = result.find("t:Output/t:ErrorInfo/t:Message", TRX)
+    trace = result.find("t:Output/t:ErrorInfo/t:StackTrace", TRX)
+    return (
+        (message.text or "") if message is not None else "",
+        (trace.text or "") if trace is not None else "",
+    )
+
+
+def verify_results(
+    directory: Path,
+    trx_path: Path,
+    profile: str = "directx-warp",
+    contract_path: Path | None = None,
+) -> dict:
+    """Account every discovered case of one profile against MSTest TRX results.
+
+    The coverage contract decides the expected outcome of each case: ``pass``
+    cases must pass, capability-gated ``inconclusive`` cases must report the
+    upstream capability check (not a missing device), ``optional`` hardware rows
+    may pass or report a missing device, and ``excluded`` cases must not run.
+    """
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from coverage_contract import CONTRACT, classify, expected_outcome, load_contract
+
+    contract_path = contract_path or CONTRACT
+    contract = load_contract(contract_path)
+    if profile not in contract["profiles"]:
+        raise ValueError("Unknown coverage profile: " + profile)
+    settings = contract["profiles"][profile]
     discovery = load_discovery(directory)
+    records = {record["id"]: record for record in classify(contract, discovery)}
     expected = defaultdict(list)
     for case in discovery["tests"]:
         expected[(case["method"], case["displayName"])].append(case)
@@ -117,47 +174,86 @@ def verify_baseline(directory: Path, trx_path: Path) -> dict:
         key = (method, result.get("testName"))
         if key not in expected:
             raise ValueError("Unexpected executed case: " + str(key))
-        observed[key].append(result.get("outcome"))
-    skipped, required, warp = [], 0, 0
+        observed[key].append((result.get("outcome"), *_trx_message(result)))
+    counts = defaultdict(int)
+    optional_skipped, gated, passed_ids = [], [], []
     for key, cases in expected.items():
-        outcomes = observed.get(key, [])
+        outcomes = sorted(observed.get(key, []))
+        wanted = {expected_outcome(records[case["id"]], settings) for case in cases}
+        if len(wanted) != 1:
+            raise ValueError(
+                "Cases sharing a name have different expectations: " + str(key)
+            )
+        wanted = wanted.pop()
+        counts["expected-" + wanted] += len(cases)
+        if wanted == "excluded":
+            if outcomes:
+                raise ValueError("Excluded case was executed: " + str(key))
+            continue
         if len(outcomes) != len(cases):
             raise ValueError(
                 f"Case {key} expected {len(cases)} results but found {len(outcomes)}"
             )
-        devices = {device_of(case) for case in cases}
-        if len(devices) != 1:
-            raise ValueError("Cases sharing a name have different devices: " + str(key))
-        device = devices.pop()
-        for case, outcome in zip(cases, sorted(outcomes)):
-            if case["ignored"]:
-                raise ValueError(
-                    "Ignored case cannot satisfy the baseline: " + str(key)
+        for case, (outcome, message, trace) in zip(cases, outcomes):
+            inconclusive = outcome == "NotExecuted" and message.startswith(
+                "Assert.Inconclusive failed."
+            )
+            missing_device = inconclusive and "DeviceExtensions.Get" in trace
+            if outcome == "Passed" and wanted in {"pass", "optional"}:
+                passed_ids.append(case["id"])
+                counts["passed"] += 1
+                counts["warpPassed"] += device_of(case) == "Warp"
+                counts["requiredGpuPassed"] += (
+                    records[case["id"]]["category"] == "required-gpu"
                 )
-            if device == "Discrete" and outcome == "NotExecuted":
-                skipped.append(case["id"])
-            elif outcome != "Passed":
-                raise ValueError("Required baseline case did not pass: " + str(key))
-            elif device != "Discrete":
-                required += 1
-                warp += device == "Warp"
-    if required == 0 or warp == 0:
-        raise ValueError("No required WARP baseline cases executed")
+            elif wanted == "optional" and inconclusive:
+                optional_skipped.append(case["id"])
+            elif wanted == "inconclusive" and inconclusive and not missing_device:
+                gated.append(case["id"])
+            else:
+                raise ValueError(
+                    f"Case {key} expected {wanted} but reported {outcome}: {message.strip()[:200]}"
+                )
+    if counts["passed"] == 0:
+        raise ValueError("No cases passed")
+    if settings["deviceRows"]["Warp"] == "execute" and counts["warpPassed"] == 0:
+        raise ValueError("No WARP-row cases passed")
     return {
         "schemaVersion": 1,
-        "kind": "computesharp.original-baseline",
+        "kind": "computesharp.test-results",
+        "profile": profile,
+        "role": settings["role"],
+        "execution": settings["execution"],
         "assembly": discovery["assembly"],
         "caseCount": len(discovery["tests"]),
-        "requiredCasesPassed": required,
-        "warpCasesPassed": warp,
-        "optionalHardwareSkipped": sorted(skipped),
+        "expected": {
+            outcome: counts["expected-" + outcome]
+            for outcome in ("pass", "inconclusive", "optional", "excluded")
+        },
+        "requiredCasesPassed": counts["passed"],
+        "requiredGpuCasesPassed": counts["requiredGpuPassed"],
+        "warpCasesPassed": counts["warpPassed"],
+        "capabilityInconclusive": sorted(gated),
+        "optionalHardwareSkipped": sorted(optional_skipped),
+        "passedCasesSHA256": (
+            hashlib.sha256("\n".join(sorted(passed_ids)).encode("utf-8")).hexdigest()
+        ),
+        "contractSHA256": hashlib.sha256(contract_path.read_bytes()).hexdigest(),
         "discoverySHA256": (
             hashlib.sha256((directory / "discovery.json").read_bytes()).hexdigest()
         ),
         "trxSHA256": hashlib.sha256(trx_path.read_bytes()).hexdigest(),
-        "coverageFrozen": False,
+        "coverageFrozen": True,
         "nativeTargetExecutionQualified": False,
     }
+
+
+def verify_baseline(
+    directory: Path, trx_path: Path, contract_path: Path | None = None
+) -> dict:
+    """Account the original Windows WARP results."""
+
+    return verify_results(directory, trx_path, "directx-warp", contract_path)
 
 
 def main() -> int:
@@ -165,11 +261,13 @@ def main() -> int:
     parser.add_argument("--discovery", required=True, type=Path)
     parser.add_argument("--trx", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--profile", default="directx-warp")
+    parser.add_argument("--contract", type=Path)
     args = parser.parse_args()
     if args.output.exists():
         parser.error("Output already exists")
     try:
-        report = verify_baseline(args.discovery, args.trx)
+        report = verify_results(args.discovery, args.trx, args.profile, args.contract)
     except (OSError, ValueError, TypeError, KeyError, ET.ParseError) as error:
         parser.exit(1, str(error) + "\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)
