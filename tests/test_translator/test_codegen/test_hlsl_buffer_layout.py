@@ -2,6 +2,7 @@
 
 import pytest
 
+from crosstl.translator.ast import AttributeNode, IdentifierNode
 from crosstl.translator.codegen.hlsl_buffer_layout import (
     HLSL_CBUFFER_LAYOUT,
     HLSL_STRUCTURED_LAYOUT,
@@ -15,7 +16,6 @@ from crosstl.translator.codegen.hlsl_buffer_layout import (
     struct_type,
     vector_type,
 )
-from crosstl.translator.ast import AttributeNode, IdentifierNode
 
 UINT = scalar_type("uint")
 INT = scalar_type("int")
