@@ -3,6 +3,11 @@
 import ast as python_ast
 import re
 
+from crosstl.translator.codegen.hlsl_buffer_layout import (
+    BUFFER_LAYOUT_ATTRIBUTE,
+    HLSL_CBUFFER_LAYOUT,
+    HLSL_STRUCTURED_LAYOUT,
+)
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 
 from ..common_ast import (
@@ -2627,6 +2632,18 @@ class HLSLToCrossGLConverter:
             "RasterizerOrderedByteAddressBuffer",
         }
 
+    def is_structured_buffer_resource_type(self, type_name):
+        """Whether a resource stores elements with the structured-buffer layout."""
+        if type_name is None:
+            return False
+        return self.raw_type_base(type_name) in {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+            "RasterizerOrderedStructuredBuffer",
+        }
+
     def is_rw_typed_buffer_type(self, type_name):
         return self.raw_type_base(type_name) in {
             "RWBuffer",
@@ -4032,6 +4049,8 @@ class HLSLToCrossGLConverter:
         code += self.format_resource_qualifier_attributes(node, 1)
         code += self.format_binding_attributes(node, 1)
         code += self.format_matrix_layout_attributes(node, 1)
+        if self.is_structured_buffer_resource_type(getattr(node, "vtype", None)):
+            code += f"    @ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_STRUCTURED_LAYOUT})\n"
         storage_prefix = self.format_global_storage_qualifier_prefix(node)
         precise_prefix = self.format_precise_qualifier_prefix(node)
         array_suffix = self.format_array_suffixes(node)
@@ -4166,6 +4185,7 @@ class HLSLToCrossGLConverter:
                     attributes = [AttributeNode("tbuffer")] + attributes
                 code += self.format_attributes(attributes, 1)
                 code += self.format_binding_attributes(node, 1)
+                code += f"    @ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_CBUFFER_LAYOUT})\n"
                 code += f"    cbuffer {cbuffer_name} {{\n"
                 for member in node.members:
                     code += self.format_matrix_layout_attributes(member, 2)
@@ -4948,8 +4968,6 @@ class HLSLToCrossGLConverter:
         one_based = re.fullmatch(r"(?:_[1-4][1-4])+", member)
         if not zero_based and not one_based:
             return None
-        if self.raw_value_shape(expr.object) != "matrix":
-            return None
         if zero_based:
             elements = [
                 (int(row), int(col)) for row, col in re.findall(r"_m(\d)(\d)", member)
@@ -4960,6 +4978,11 @@ class HLSLToCrossGLConverter:
                 for row, col in re.findall(r"_(\d)(\d)", member)
             ]
         if len(elements) > 4:
+            return None
+        vector_swizzle = self.generate_vector_matrix_swizzle(expr, elements, is_main)
+        if vector_swizzle is not None:
+            return vector_swizzle
+        if self.raw_value_shape(expr.object) != "matrix":
             return None
         obj = self.generate_expression(expr.object, is_main)
         obj = self.maybe_parenthesize(expr.object, obj)
@@ -4976,6 +4999,28 @@ class HLSLToCrossGLConverter:
             f"{scalar.group(0) if scalar else 'float'}{len(accesses)}"
         )
         return f"{vector_type}({', '.join(accesses)})"
+
+    def generate_vector_matrix_swizzle(self, expr, elements, is_main=False):
+        """``_mRC`` on a ``1xN`` or ``Nx1`` matrix, which CrossGL holds as a vector."""
+        raw_type = self.canonical_composite_type(
+            str(self.expression_value_raw_type(expr.object) or "")
+        )
+        shape = re.fullmatch(r"[a-z_0-9]*?([1-4])x([1-4])", raw_type)
+        if shape is None:
+            return None
+        rows, columns = int(shape.group(1)), int(shape.group(2))
+        if 1 not in (rows, columns) or rows == columns:
+            return None
+        indices = []
+        for row, column in elements:
+            if row >= rows or column >= columns:
+                return None
+            indices.append(column if rows == 1 else row)
+        obj = self.generate_expression(expr.object, is_main)
+        obj = self.maybe_parenthesize(expr.object, obj)
+        if isinstance(expr.object, (UnaryOpNode, CastNode)):
+            obj = f"({obj})"
+        return f"{obj}.{''.join('xyzw'[index] for index in indices)}"
 
     def generate_mul_expression(self, args, rendered_args):
         """Lower HLSL ``mul``.
@@ -5421,7 +5466,26 @@ class HLSLToCrossGLConverter:
         )
 
     def map_type(self, hlsl_type):
-        """Map an HLSL type name to the closest CrossGL type name."""
+        """Map an HLSL type name to the closest CrossGL type name.
+
+        CrossGL ``matRxC`` has ``R`` rows and ``C`` columns. With row-major
+        packing CrossGL holds the transpose of every HLSL matrix (HLSL rows
+        become columns, see :meth:`generate_mul_expression`), so a non-square
+        HLSL ``floatRxC`` becomes ``matCxR`` and ``intRxC`` becomes ``intCxR``.
+        """
+        mapped = self.map_type_preserving_matrix_shape(hlsl_type)
+        if self.matrix_packing != "row_major" or not isinstance(mapped, str):
+            return mapped
+        transposed = re.fullmatch(
+            r"((?:f16|d)?mat|int|uint|bool)([2-4])x([2-4])", mapped
+        )
+        if transposed is None or transposed.group(2) == transposed.group(3):
+            return mapped
+        prefix = transposed.group(1)
+        return f"{prefix}{transposed.group(3)}x{transposed.group(2)}"
+
+    def map_type_preserving_matrix_shape(self, hlsl_type):
+        """Map an HLSL type name to CrossGL keeping matrix rows and columns."""
         if not hlsl_type:
             return hlsl_type
         type_name = self.canonical_composite_type(str(hlsl_type))

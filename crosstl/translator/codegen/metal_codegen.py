@@ -26,6 +26,7 @@ from ..ast import (
     ForInNode,
     ForNode,
     FunctionCallNode,
+    FunctionNode,
     IdentifierNode,
     IfNode,
     LoopNode,
@@ -142,6 +143,12 @@ from .glsl_buffer_layout import (
     glsl_buffer_compound_binary_operator,
     matrix_column_offsets,
     vector_component_offsets,
+)
+from .hlsl_buffer_layout import (
+    HLSL_CBUFFER_LAYOUT,
+    HLSL_STRUCTURED_LAYOUT,
+    HlslLayoutError,
+    buffer_layout_from_attributes,
 )
 from .image_access_contracts import (
     collect_function_image_access_requirements,
@@ -314,6 +321,12 @@ from .match_utils import (
     generate_switch_match,
     infer_match_expression_result_type,
     is_switch_lowerable_match,
+)
+from .metal_hlsl_buffer_layout import MetalHlslBufferLayouts
+from .metal_hlsl_matrix import (
+    hlsl_emulated_matrix_shape,
+    hlsl_emulated_matrix_type_name,
+    metal_hlsl_matrix_prelude,
 )
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -908,6 +921,13 @@ class MetalCodeGen:
         self.cbuffer_parameter_names = {}
         self.cbuffer_member_references = {}
         self.ambiguous_cbuffer_members = set()
+        self.metal_hlsl_cbuffer_plans = {}
+        self.metal_hlsl_struct_plans = {}
+        self.metal_hlsl_structured_buffers = {}
+        self.metal_hlsl_cbuffer_array_members = {}
+        self.metal_runtime_initialized_constants = set()
+        self.metal_emulated_matrix_shapes = set()
+        self.metal_prelude_insertion_index = 0
         self.hlsl_program_constant_global_ids = set()
         self.cbuffers_by_name = {}
         self.user_function_names = set()
@@ -2102,6 +2122,7 @@ class MetalCodeGen:
         self.unsupported_glsl_buffer_block_variable_types = {}
         self.current_unsupported_glsl_buffer_block_parameters = set()
         self.current_unsupported_glsl_buffer_block_local_variables = set()
+        self.metal_emulated_matrix_shapes = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
         self.current_metal_mesh_output_config = None
@@ -2145,6 +2166,11 @@ class MetalCodeGen:
             layout = self.metal_union_layout_contract(node)
             if layout is not None:
                 self.metal_union_layouts[node.name] = layout
+        self.collect_metal_hlsl_buffer_layouts(ast)
+        if self.metal_hlsl_cbuffer_plans:
+            self.cbuffer_member_references = self.collect_cbuffer_member_references(
+                self.cbuffer_variables
+            )
         self.metal_generated_struct_names = set()
         self.metal_vertex_entry_input_struct_names = (
             self.collect_metal_stage_entry_parameter_struct_names(
@@ -2260,6 +2286,9 @@ class MetalCodeGen:
             ).extend(nodes)
         self.metal_lowered_program_scope_groupshared_global_ids.update(
             thread_private_ids
+        )
+        self.metal_runtime_initialized_constants = (
+            self.collect_metal_runtime_initialized_constants(global_vars)
         )
         self.metal_spirv_interface_variables = [
             node for node in global_vars if self.is_spirv_stage_interface_layout(node)
@@ -2485,6 +2514,7 @@ class MetalCodeGen:
         if self.uses_metal_raytracing_namespace(ast, global_vars, all_functions):
             code += "using namespace metal::raytracing;\n"
         code += "\n"
+        self.metal_prelude_insertion_index = len(code)
         if self.requires_metal_system_thread_scope:
             code += self.generate_metal_system_thread_scope_support()
         if self.has_geometry_stage(ast, target_stage):
@@ -2981,6 +3011,27 @@ class MetalCodeGen:
                 )
             else:
                 mapped_type = self.map_type(vtype)
+                if (
+                    var_name in self.metal_runtime_initialized_constants
+                    and not array_suffix
+                ):
+                    qualifier = self.global_variable_qualifier(node)
+                    self.record_metal_program_scope_value_global(
+                        var_name, vtype, qualifier, node
+                    )
+                    init_expr = self.generate_expression_with_expected(
+                        getattr(node, "initial_value", None),
+                        getattr(node, "var_type", vtype),
+                    )
+                    # Metal program-scope constants need constant expressions;
+                    # a source constant computed by a function call becomes an
+                    # accessor that each use calls.
+                    code += (
+                        f"inline {mapped_type} {var_name}() {{\n"
+                        f"    return {init_expr};\n"
+                        "}\n"
+                    )
+                    continue
                 declaration = format_c_style_array_declaration(mapped_type, var_name)
                 if array_suffix:
                     declaration = f"{declaration}{array_suffix}"
@@ -3115,6 +3166,13 @@ class MetalCodeGen:
         code += self.generate_metal_inverse_helpers()
         code += self.generate_metal_integer_dot_helper()
         code += functions_code
+        if self.metal_emulated_matrix_shapes:
+            index = self.metal_prelude_insertion_index
+            code = (
+                code[:index]
+                + metal_hlsl_matrix_prelude(self.metal_emulated_matrix_shapes)
+                + code[index:]
+            )
         return code
 
     def collect_metal_atomic_fence_calls(self, ast):
@@ -3848,6 +3906,10 @@ class MetalCodeGen:
             )
 
         for node in cbuffers:
+            layout_plan = self.metal_hlsl_cbuffer_plans.get(id(node))
+            if layout_plan is not None:
+                code += self.metal_hlsl_layout_struct_code(layout_plan)
+                continue
             if isinstance(node, StructNode):
                 code += f"struct {node.name} {{\n"
                 members = getattr(node, "members", [])
@@ -3980,6 +4042,18 @@ class MetalCodeGen:
             return {"name": node.name, "dependencies": set(), "code": code}
 
         is_union = node.name in self.metal_union_layouts
+        layout_plan = self.metal_hlsl_struct_plans.get(node.name)
+        if layout_plan is not None and not is_union:
+            dependencies = {
+                member.nested_struct
+                for member in layout_plan.members
+                if member.nested_struct and member.nested_struct != node.name
+            }
+            return {
+                "name": node.name,
+                "dependencies": dependencies,
+                "code": self.metal_hlsl_layout_struct_code(layout_plan),
+            }
         if not is_union:
             self.validate_struct_member_semantic_types(node)
         declaration_kind = "union" if is_union else "struct"
@@ -7460,15 +7534,228 @@ class MetalCodeGen:
     def collect_cbuffer_member_references(self, cbuffers):
         references = {}
         ambiguous_members = collect_duplicate_cbuffer_member_names(cbuffers)
+        layout_plans = getattr(self, "metal_hlsl_cbuffer_plans", {}) or {}
         for cbuffer in cbuffers:
             parameter_name = self.cbuffer_parameter_name(cbuffer)
+            plan = layout_plans.get(id(cbuffer))
             for member in getattr(cbuffer, "members", []) or []:
                 member_name = getattr(member, "name", None)
                 if not member_name or member_name in ambiguous_members:
                     continue
-                references[member_name] = f"{parameter_name}.{member_name}"
+                reference = f"{parameter_name}.{member_name}"
+                layout_member = plan.member(member_name) if plan is not None else None
+                if (
+                    layout_member is not None
+                    and layout_member.read_conversion
+                    and layout_member.array_count is None
+                ):
+                    reference = f"{layout_member.read_conversion}({reference})"
+                references[member_name] = reference
         self.ambiguous_cbuffer_members = ambiguous_members
         return references
+
+    def metal_hlsl_layout_type_resolver(self, raw_type):
+        """Resolve a CrossGL member type for the HLSL buffer layout planner."""
+        name = str(raw_type).strip()
+        struct = self.structs_by_name.get(name)
+        if struct is not None:
+            static_members = self.metal_static_struct_members.get(name, set())
+            members = [
+                (member.name, self.struct_member_raw_type(member))
+                for member in getattr(struct, "members", []) or []
+                if getattr(member, "name", None)
+                and not isinstance(member, FunctionNode)
+                and member.name not in static_members
+            ]
+            return ("struct", name, members)
+        return self.map_type(name)
+
+    def collect_metal_hlsl_buffer_layouts(self, ast):
+        """Plan Metal storage that reproduces the HLSL buffer layouts of a program.
+
+        Constant buffers marked ``@ buffer_layout(hlsl_cbuffer)`` and the element
+        types of structured buffers marked ``@ buffer_layout(hlsl_structured)``
+        get Metal declarations with the exact HLSL member offsets.
+        """
+        self.metal_hlsl_cbuffer_plans = {}
+        self.metal_hlsl_struct_plans = {}
+        self.metal_hlsl_structured_buffers = {}
+        self.metal_hlsl_cbuffer_array_members = {}
+        planner = MetalHlslBufferLayouts(self.metal_hlsl_layout_type_resolver)
+        for cbuffer in self.cbuffer_variables or []:
+            layout = buffer_layout_from_attributes(getattr(cbuffer, "attributes", None))
+            if layout != HLSL_CBUFFER_LAYOUT:
+                continue
+            members = [
+                (member.name, self.struct_member_raw_type(member))
+                for member in getattr(cbuffer, "members", []) or []
+                if getattr(member, "name", None)
+            ]
+            try:
+                plan = planner.plan_cbuffer(cbuffer.name, members)
+            except HlslLayoutError as exc:
+                raise ValueError(
+                    f"Cannot reproduce the HLSL layout of cbuffer '{cbuffer.name}' "
+                    f"in Metal: {exc}"
+                ) from exc
+            self.metal_hlsl_cbuffer_plans[id(cbuffer)] = plan
+            for member in plan.members:
+                if member.array_count is not None and (
+                    member.element_suffix or member.read_conversion
+                ):
+                    self.metal_hlsl_cbuffer_array_members[member.name] = member
+        for node in getattr(ast, "global_variables", []) or []:
+            layout = buffer_layout_from_attributes(getattr(node, "attributes", None))
+            if layout != HLSL_STRUCTURED_LAYOUT:
+                continue
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            type_name = str(self.resource_base_type(vtype))
+            if "<" not in type_name or not type_name.endswith(">"):
+                continue
+            element_type = type_name.split("<", 1)[1][:-1].strip()
+            try:
+                storage = planner.plan_structured_element(element_type)
+            except HlslLayoutError as exc:
+                raise ValueError(
+                    f"Cannot reproduce the HLSL layout of structured buffer "
+                    f"'{node.name}' in Metal: {exc}"
+                ) from exc
+            self.metal_hlsl_structured_buffers[node.name] = storage
+        self.metal_hlsl_struct_plans = dict(planner.struct_plans)
+
+    def metal_hlsl_layout_struct_code(self, plan):
+        member_names = {member.name for member in plan.members}
+
+        def padding_name(index):
+            candidate = f"_pad{index}"
+            while candidate in member_names:
+                candidate = f"_{candidate}"
+            return candidate
+
+        lines = plan.declaration_lines(padding_name)
+        body = "".join(f"    {line}\n" for line in lines)
+        return f"struct {plan.name} {{\n{body}}};\n"
+
+    def metal_hlsl_layout_member(self, expr):
+        """The planned storage of a struct member access, if its struct has one."""
+        plans = getattr(self, "metal_hlsl_struct_plans", None)
+        if not plans or not isinstance(expr, MemberAccessNode):
+            return None
+        object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+        object_type = self.expression_result_type(object_expr)
+        if object_type is None:
+            return None
+        struct_name = self.type_name_string(self.member_lookup_type_name(object_type))
+        plan = plans.get(struct_name)
+        if plan is None:
+            return None
+        return plan.member(str(getattr(expr, "member", "")))
+
+    def metal_hlsl_structured_buffer_storage(self, array_expr):
+        storages = getattr(self, "metal_hlsl_structured_buffers", None)
+        if not storages:
+            return None
+        name = self.expression_name(array_expr)
+        if not isinstance(name, str) or name not in storages:
+            return None
+        local_type = self.local_variable_types.get(name)
+        if local_type is not None and not self.is_structured_buffer_type(
+            self.type_name_string(local_type)
+        ):
+            return None
+        return storages[name]
+
+    def metal_hlsl_layout_element_access(self, expr):
+        """``(access, read_conversion)`` for an element read with HLSL storage."""
+        array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+        index_expr = getattr(expr, "index", getattr(expr, "index_expr", None))
+        name = self.expression_name(array_expr)
+        cbuffer_arrays = getattr(self, "metal_hlsl_cbuffer_array_members", {}) or {}
+        if (
+            isinstance(array_expr, IdentifierNode)
+            and isinstance(name, str)
+            and name in cbuffer_arrays
+            and name not in self.local_variable_types
+            and name in self.cbuffer_member_references
+        ):
+            member = cbuffer_arrays[name]
+            base = self.cbuffer_member_references[name]
+            index = self.generate_expression(index_expr)
+            return f"{base}[{index}]{member.element_suffix}", member.read_conversion
+        storage = self.metal_hlsl_structured_buffer_storage(array_expr)
+        if storage is not None and storage[1]:
+            array = self.generate_expression(array_expr)
+            index = self.generate_expression(index_expr)
+            return f"{array}[{index}]", storage[1]
+        if isinstance(array_expr, MemberAccessNode):
+            member = self.metal_hlsl_layout_member(array_expr)
+            if (
+                member is not None
+                and member.array_count is not None
+                and (member.element_suffix or member.read_conversion)
+            ):
+                array = self.generate_expression(array_expr)
+                index = self.generate_expression(index_expr)
+                return (
+                    f"{array}[{index}]{member.element_suffix}",
+                    member.read_conversion,
+                )
+        return None
+
+    def metal_hlsl_layout_member_object_code(self, expr):
+        object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+        obj = self.generate_expression_with_expected(object_expr, None)
+        if isinstance(
+            object_expr, (BinaryOpNode, TernaryOpNode, UnaryOpNode)
+        ) and not self.metal_expression_is_parenthesized(obj):
+            obj = f"({obj})"
+        return obj
+
+    def metal_hlsl_layout_store_target(self, target):
+        """``(lhs, write_conversion)`` for a store into HLSL layout storage."""
+        if isinstance(target, MemberAccessNode):
+            member = self.metal_hlsl_layout_member(target)
+            if (
+                member is not None
+                and member.array_count is None
+                and (member.read_conversion or member.write_conversion)
+            ):
+                obj = self.metal_hlsl_layout_member_object_code(target)
+                return f"{obj}.{target.member}", member.write_conversion
+            object_expr = getattr(
+                target, "object", getattr(target, "object_expr", None)
+            )
+            inner = self.metal_hlsl_layout_member(object_expr)
+            if (
+                inner is not None
+                and inner.array_count is None
+                and inner.read_conversion
+            ):
+                obj = self.metal_hlsl_layout_member_object_code(object_expr)
+                return f"{obj}.{object_expr.member}.{target.member}", None
+            return None
+        if isinstance(target, ArrayAccessNode):
+            array_expr = getattr(target, "array", getattr(target, "array_expr", None))
+            index_expr = getattr(target, "index", getattr(target, "index_expr", None))
+            storage = self.metal_hlsl_structured_buffer_storage(array_expr)
+            if storage is not None and storage[1]:
+                array = self.generate_expression(array_expr)
+                index = self.generate_expression(index_expr)
+                return f"{array}[{index}]", storage[2]
+            if isinstance(array_expr, MemberAccessNode):
+                member = self.metal_hlsl_layout_member(array_expr)
+                if (
+                    member is not None
+                    and member.array_count is not None
+                    and member.read_conversion
+                ):
+                    array = self.generate_expression(array_expr)
+                    index = self.generate_expression(index_expr)
+                    return (
+                        f"{array}[{index}]{member.element_suffix}",
+                        member.write_conversion,
+                    )
+        return None
 
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as Metal source."""
@@ -7762,6 +8049,9 @@ class MetalCodeGen:
         while True:
             if isinstance(node, MemberAccessNode):
                 member = str(node.member)
+                layout_member = self.metal_hlsl_layout_member(node)
+                if layout_member is not None and layout_member.converted:
+                    return False
                 object_type = self.map_type(self.expression_result_type(node.object))
                 if (
                     member
@@ -8593,6 +8883,63 @@ class MetalCodeGen:
                 lowered_by_function.setdefault(id(func), []).append(node)
 
         return lowered_by_function
+
+    def collect_metal_runtime_initialized_constants(self, global_vars):
+        """Program constants whose initializers Metal cannot evaluate statically.
+
+        A Metal program-scope ``constant`` needs a constant expression; calls to
+        functions (``cos``, ``asfloat``...) would require a global constructor,
+        which Metal rejects when the library is linked. Such a constant, and
+        any constant initialized from one, becomes an accessor function.
+        """
+        names = set()
+        for node in global_vars or []:
+            if not isinstance(node, VariableNode):
+                continue
+            name = self.metal_variable_name(node)
+            initial_value = getattr(node, "initial_value", None)
+            if not name or initial_value is None:
+                continue
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }
+            if not qualifiers & {"const", "constant"}:
+                continue
+            if qualifiers & {"uniform", "extern", "device", "threadgroup"}:
+                continue
+            if self.is_program_scope_groupshared_global(node):
+                continue
+            vtype = self.type_name_string(getattr(node, "vtype", None))
+            if (
+                not vtype
+                or "[" in vtype
+                or self.is_array_type_node(getattr(node, "vtype", None))
+            ):
+                continue
+            if (
+                self.is_texture_or_image_resource_type(vtype)
+                or self.is_sampler_type(vtype)
+                or self.is_structured_buffer_type(vtype)
+            ):
+                continue
+            if self.metal_initializer_requires_evaluation(initial_value, names):
+                names.add(name)
+        return names
+
+    def metal_initializer_requires_evaluation(self, expr, runtime_constants):
+        for node in self.iter_ast_nodes(expr):
+            if isinstance(node, FunctionCallNode):
+                callee = self.function_call_name(node)
+                if isinstance(callee, str) and (
+                    self.is_builtin_value_constructor_type(callee)
+                    or callee in self.structs_by_name
+                ):
+                    continue
+                return True
+            if isinstance(node, IdentifierNode) and node.name in runtime_constants:
+                return True
+        return False
 
     def is_metal_thread_private_global(self, node):
         """A mutable ``static`` program-scope value: one copy per thread."""
@@ -9828,6 +10175,147 @@ class MetalCodeGen:
             return None
         return int(mapped_type[-1])
 
+    def metal_emulated_matrix_binary_result_type(self, operator, left_type, right_type):
+        """Result type of an operator with an emulated integer or bool matrix."""
+        left_shape = (
+            hlsl_emulated_matrix_shape(self.type_name_string(left_type))
+            if left_type is not None
+            else None
+        )
+        right_shape = (
+            hlsl_emulated_matrix_shape(self.type_name_string(right_type))
+            if right_type is not None
+            else None
+        )
+        if left_shape is None and right_shape is None:
+            return None
+        shape = left_shape or right_shape
+        scalar, rows, columns = shape
+        if operator in {"<", ">", "<=", ">=", "==", "!="}:
+            return f"bool{rows}x{columns}"
+        if operator == "*":
+            if left_shape is not None and right_shape is not None:
+                return f"{scalar}{left_shape[1]}x{right_shape[2]}"
+            other_type = right_type if left_shape is not None else left_type
+            if other_type is not None and self.vector_value_width(other_type):
+                # matrix * vector gives a column; vector * matrix a row.
+                width = rows if left_shape is not None else columns
+                return f"{scalar}{width}"
+        return self.type_name_string(left_type if left_shape else right_type)
+
+    def metal_expression_emulated_matrix_shape(self, expr):
+        expr_type = self.expression_result_type(expr)
+        if expr_type is None:
+            return None
+        return hlsl_emulated_matrix_shape(self.type_name_string(expr_type))
+
+    def metal_value_component_count(self, expr):
+        """Scalar components of a value: 1 for scalars, N for vectors."""
+        expr_type = self.expression_result_type(expr)
+        if expr_type is None:
+            return None
+        width = self.vector_value_width(expr_type)
+        if width is not None:
+            return width
+        if self.vector_component_type(expr_type) is not None:
+            return 1
+        return None
+
+    def generate_metal_matrix_constructor_override(self, type_name, args):
+        """Constructors that involve emulated HLSL integer and bool matrices."""
+        type_name = self.type_name_string(type_name)
+        args = list(args or [])
+        shape = hlsl_emulated_matrix_shape(type_name)
+        if shape is None:
+            if len(args) != 1 or not self.metal_expression_emulated_matrix_shape(
+                args[0]
+            ):
+                return None
+            metal_type = self.map_type(type_name)
+            if not self.is_matrix_value_type(metal_type):
+                raise ValueError(
+                    f"Cannot convert an HLSL integer or bool matrix to '{metal_type}'"
+                )
+            component = self.vector_component_type(metal_type)
+            value = self.generate_expression_with_expected(args[0], None)
+            return f"crosstl_hlsl_matrix_native<{component}>({value})"
+
+        # Like a Metal matrix constructor, the arguments fill whole columns.
+        scalar, rows, columns = shape
+        mapped_type = self.map_type(type_name)
+        column_type = f"{scalar}{rows}"
+        rendered = [self.generate_expression_with_expected(arg, None) for arg in args]
+        if len(args) == 1:
+            if self.metal_expression_emulated_matrix_shape(
+                args[0]
+            ) or self.is_matrix_value_type(self.expression_result_type(args[0])):
+                return f"crosstl_hlsl_matrix_cast<{scalar}>({rendered[0]})"
+            return (
+                f"crosstl_hlsl_matrix_splat<{scalar}, {columns}, {rows}>"
+                f"({rendered[0]})"
+            )
+        counts = [self.metal_value_component_count(arg) for arg in args]
+        if len(args) == rows * columns and all(count in (1, None) for count in counts):
+            column_values = [
+                f"{column_type}({', '.join(rendered[column * rows:(column + 1) * rows])})"
+                for column in range(columns)
+            ]
+        elif len(args) == columns and all(count == rows for count in counts):
+            column_values = [f"{column_type}({value})" for value in rendered]
+        else:
+            raise ValueError(
+                f"Unsupported constructor arguments for HLSL matrix '{type_name}'"
+            )
+        return f"{mapped_type}{{{{{', '.join(column_values)}}}}}"
+
+    def generate_metal_hlsl_logical_intrinsic(self, func_name, args):
+        """HLSL ``and``/``or``: element-wise logic without short-circuiting names."""
+        if func_name not in {"and", "or"} or len(args or []) != 2:
+            return None
+        if func_name in self.user_function_names:
+            return None
+        left, right = (
+            self.generate_expression_with_expected(arg, None) for arg in args
+        )
+        if any(self.metal_expression_emulated_matrix_shape(arg) for arg in args):
+            return f"crosstl_hlsl_{func_name}({left}, {right})"
+        operator = "&&" if func_name == "and" else "||"
+        left_type = self.expression_result_type(args[0])
+        width = self.vector_value_width(left_type) if left_type is not None else None
+        if width is not None:
+            left = f"bool{width}({left})"
+            right = f"bool{width}({right})"
+        else:
+            left = f"bool({left})"
+            right = f"bool({right})"
+        return f"({left} {operator} {right})"
+
+    def generate_metal_value_constructor_arguments(self, metal_type, args):
+        """Render constructor arguments, converting vectors to the target components.
+
+        Source languages compose vectors from vectors of any component type
+        (``float3(int2, 1)``); a Metal composite constructor only accepts vector
+        arguments with the target component type.
+        """
+        rendered = [self.generate_expression_with_expected(arg, None) for arg in args]
+        if len(args) < 2 or self.is_matrix_value_type(metal_type):
+            return rendered
+        target_width = self.vector_value_width(metal_type)
+        target_component = self.vector_component_type(metal_type)
+        if target_width is None or target_component is None:
+            return rendered
+        for index, arg in enumerate(args):
+            arg_type = self.expression_result_type(arg)
+            if arg_type is None:
+                continue
+            width = self.vector_value_width(arg_type)
+            if width is None or width < 2:
+                continue
+            component = self.vector_component_type(arg_type)
+            if component is not None and component != target_component:
+                rendered[index] = f"{target_component}{width}({rendered[index]})"
+        return rendered
+
     def metal_matrix_binary_result_type(self, operator, left_type, right_type):
         """Result type of an arithmetic operation with a matrix operand.
 
@@ -9917,6 +10405,11 @@ class MetalCodeGen:
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
             operator = self.map_operator(getattr(expr, "op", ""))
+            emulated_result = self.metal_emulated_matrix_binary_result_type(
+                operator, left_type, right_type
+            )
+            if emulated_result is not None:
+                return emulated_result
             if operator in {"<", ">", "<=", ">=", "==", "!=", "&&", "||"}:
                 for candidate_type in (left_type, right_type):
                     mapped_type = self.map_type(candidate_type)
@@ -10004,6 +10497,13 @@ class MetalCodeGen:
             pointee_type = self.pointer_pointee_type_name(array_type)
             if pointee_type is not None:
                 return pointee_type
+            emulated_matrix = (
+                hlsl_emulated_matrix_shape(array_type_name) if array_type_name else None
+            )
+            if emulated_matrix is not None:
+                # Like Metal matrices, indexing selects a column.
+                scalar, rows, _columns = emulated_matrix
+                return f"{scalar}{rows}"
             mapped_array_type = (
                 self.map_type(array_type) if array_type is not None else None
             )
@@ -10086,6 +10586,17 @@ class MetalCodeGen:
                 func_name
             ):
                 return "RayDesc"
+            if isinstance(func_name, str) and hlsl_emulated_matrix_shape(func_name):
+                return func_name
+            if func_name in {"and", "or"} and len(args) == 2:
+                for arg in args:
+                    shape = self.metal_expression_emulated_matrix_shape(arg)
+                    if shape is not None:
+                        return f"bool{shape[1]}x{shape[2]}"
+            if func_name == "select" and len(args) == 3:
+                for arg in args[:2]:
+                    if self.metal_expression_emulated_matrix_shape(arg) is not None:
+                        return self.expression_result_type(arg)
             if func_name in self.METAL_WAVE_INTRINSIC_ARITIES:
                 return self.metal_wave_result_type(func_name, args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
@@ -10607,6 +11118,12 @@ class MetalCodeGen:
         if address_space_assignment is not None:
             return address_space_assignment
 
+        layout_store = self.metal_hlsl_layout_store_target(target)
+        if layout_store is not None:
+            lhs, write_conversion = layout_store
+            if write_conversion and op == "=":
+                rhs = f"{write_conversion}({rhs})"
+            return f"{lhs} {op} {rhs}"
         lhs = self.generate_expression(target)
         if op == "=" and self.pointer_assignment_needs_address(target, value):
             rhs = f"&{rhs}"
@@ -11155,6 +11672,11 @@ class MetalCodeGen:
                 and name in self.cbuffer_member_references
             ):
                 return self.cbuffer_member_references[name]
+            if (
+                name not in self.local_variable_types
+                and name in self.metal_runtime_initialized_constants
+            ):
+                return f"{name}()"
             return self.metal_local_identifier_name(name)
         elif isinstance(expr, bool):
             return "true" if expr else "false"
@@ -11294,6 +11816,10 @@ class MetalCodeGen:
             block_load = self.generate_glsl_buffer_block_array_load(expr)
             if block_load is not None:
                 return block_load
+            layout_element = self.metal_hlsl_layout_element_access(expr)
+            if layout_element is not None:
+                access, conversion = layout_element
+                return f"{conversion}({access})" if conversion else access
             array = self.generate_expression(expr.array)
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
@@ -11312,6 +11838,11 @@ class MetalCodeGen:
             if constructor is not None:
                 return constructor
             constructor_type = getattr(expr, "constructor_type", None)
+            matrix_constructor = self.generate_metal_matrix_constructor_override(
+                constructor_type, getattr(expr, "arguments", [])
+            )
+            if matrix_constructor is not None:
+                return matrix_constructor
             if self.is_builtin_value_constructor_type(constructor_type):
                 metal_type = self.map_type(constructor_type)
                 matrix_resize = self.generate_metal_matrix_resize_constructor(
@@ -11320,8 +11851,9 @@ class MetalCodeGen:
                 if matrix_resize is not None:
                     return matrix_resize
                 args = ", ".join(
-                    self.generate_expression_with_expected(arg, None)
-                    for arg in getattr(expr, "arguments", [])
+                    self.generate_metal_value_constructor_arguments(
+                        metal_type, getattr(expr, "arguments", [])
+                    )
                 )
                 return f"{metal_type}({args})"
             return str(expr)
@@ -11374,6 +11906,20 @@ class MetalCodeGen:
             static_generic_call = generate_static_generic_numeric_call(self, func_name)
             if static_generic_call is not None:
                 return static_generic_call
+
+            if isinstance(func_name, str) and not self.metal_function_name_is_shadowed(
+                func_name
+            ):
+                matrix_constructor = self.generate_metal_matrix_constructor_override(
+                    func_name, expr.args
+                )
+                if matrix_constructor is not None:
+                    return matrix_constructor
+                logical_intrinsic = self.generate_metal_hlsl_logical_intrinsic(
+                    func_name, expr.args
+                )
+                if logical_intrinsic is not None:
+                    return logical_intrinsic
 
             if func_name == "RayDesc" and self.requires_metal_builtin_ray_desc(
                 func_name
@@ -11851,8 +12397,9 @@ class MetalCodeGen:
                 if matrix_resize is not None:
                     return matrix_resize
                 args = ", ".join(
-                    self.generate_expression_with_expected(arg, None)
-                    for arg in expr.args
+                    self.generate_metal_value_constructor_arguments(
+                        metal_type, expr.args
+                    )
                 )
                 return f"{metal_type}({args})"
             readonly_raw_buffer_call = self.readonly_raw_buffer_call_diagnostic(
@@ -11951,6 +12498,13 @@ class MetalCodeGen:
                 obj = f"({obj})"
             if self.member_access_uses_pointer_operator(expr):
                 return f"{obj}->{expr.member}"
+            layout_member = self.metal_hlsl_layout_member(expr)
+            if (
+                layout_member is not None
+                and layout_member.read_conversion
+                and layout_member.array_count is None
+            ):
+                return f"{layout_member.read_conversion}({obj}.{expr.member})"
             return f"{obj}.{expr.member}"
         elif isinstance(expr, PointerAccessNode):
             pointer = self.generate_expression_with_expected(expr.pointer_expr, None)
@@ -12002,6 +12556,11 @@ class MetalCodeGen:
                 and name in self.cbuffer_member_references
             ):
                 return self.cbuffer_member_references[name]
+            if (
+                name not in self.local_variable_types
+                and name in self.metal_runtime_initialized_constants
+            ):
+                return f"{name}()"
             return name
         else:
             return str(expr)
@@ -15241,6 +15800,9 @@ class MetalCodeGen:
         self, vtype, name, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
+        layout_storage = self.metal_hlsl_structured_buffers.get(name)
+        if layout_storage is not None:
+            element_type = layout_storage[0]
         address_space = self.structured_buffer_address_space(vtype, node)
         memory_qualifiers = self.resource_memory_qualifier_prefix(node, vtype)
         pointer_type = f"{memory_qualifiers}{address_space} {element_type}*"
@@ -26683,6 +27245,11 @@ class MetalCodeGen:
         if self.requires_metal_builtin_ray_desc(vtype_str):
             self.required_metal_ray_desc_runtime = True
             return "CglRayDesc"
+
+        emulated_matrix = hlsl_emulated_matrix_shape(vtype_str)
+        if emulated_matrix is not None:
+            self.metal_emulated_matrix_shapes.add(emulated_matrix)
+            return hlsl_emulated_matrix_type_name(emulated_matrix)
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)

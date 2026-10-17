@@ -392,3 +392,183 @@ def test_metal_structured_buffer_compare_exchange_returns_original(tmp_path):
         "&values[ThreadIds.x], ThreadIds.x, ThreadIds.x * 2);"
     ) in metal
     compile_metal_if_available(metal, tmp_path)
+
+
+def test_metal_composite_constructors_convert_vector_arguments(tmp_path):
+    metal = generate_metal("""
+        RWStructuredBuffer<float3> o : register(u0);
+
+        [numthreads(1, 1, 1)]
+        void Execute(uint3 t : SV_DispatchThreadID)
+        {
+            int2 p = int2(t.xy);
+            o[0] = float3(p, 1) + float3(t) + float3(t.x, p);
+        }
+        """)
+
+    assert "float3(float2(p), 1)" in metal
+    assert "float3(t.x, float2(p))" in metal
+    assert "float3(t)" in metal
+    compile_metal_if_available(metal, tmp_path)
+
+
+def link_metal_if_available(source: str, tmp_path) -> None:
+    """Build a linked library: global constructors only fail at link time."""
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return
+    probe = subprocess.run(
+        [xcrun, "-sdk", "macosx", "-f", "metal"], capture_output=True, text=True
+    )
+    if probe.returncode != 0:
+        return
+    path = tmp_path / "shader.metal"
+    path.write_text(source)
+    completed = subprocess.run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            str(path),
+            "-o",
+            str(tmp_path / "shader.metallib"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_metal_constants_computed_by_calls_become_accessors(tmp_path):
+    metal = generate_metal("""
+        static const float Angle = cos(2.3945918);
+        static const float Combined = sin(42) + Angle;
+        static const float Plain = 123.4567;
+        static const float3 Axis = float3(0, 1, 0);
+        RWStructuredBuffer<float> results : register(u0);
+
+        float Helper()
+        {
+            return Combined * 2;
+        }
+
+        [numthreads(1, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            results[0] = Angle + Plain + Axis.y + Helper();
+        }
+        """)
+
+    assert "inline float Angle() {\n    return cos(2.3945918);\n}" in metal
+    assert (
+        "return sin(42.0) + Angle();" in metal or "return sin(42) + Angle();" in metal
+    )
+    assert "constant float Plain = 123.4567;" in metal
+    assert "constant float3 Axis = float3(0, 1, 0);" in metal
+    assert "Combined() * 2" in metal
+    assert "results[0] = Angle() + Plain + Axis.y + Helper();" in metal
+    link_metal_if_available(metal, tmp_path)
+
+
+NON_SQUARE_HLSL = """
+    RWStructuredBuffer<float> results : register(u0);
+
+    [numthreads(1, 1, 1)]
+    void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+    {
+        float2x3 m = float2x3(1, 2, 3, 4, 5, 6);
+        float1x3 row = float1x3(7, 8, 9);
+        float3 v = mul(float2(1, 2), m);
+        results[0] = v.x + m._m12 + row._m02;
+    }
+"""
+
+
+def test_row_major_packing_transposes_non_square_matrix_types():
+    row_major = generate_crossgl(NON_SQUARE_HLSL, matrix_packing="row_major")
+    default = generate_crossgl(NON_SQUARE_HLSL)
+
+    # CrossGL matRxC has R rows; row-major packing holds the HLSL transpose.
+    assert "mat3x2 m = mat3x2(1, 2, 3, 4, 5, 6);" in row_major
+    assert "(m * vec2(1, 2))" in row_major
+    assert "m[1][2]" in row_major
+    assert "mat2x3 m = mat2x3(1, 2, 3, 4, 5, 6);" in default
+    # 1xN matrices are vectors, so their elements are components.
+    assert "row.z" in row_major
+    assert "_m02" not in row_major
+
+
+def test_metal_row_major_non_square_matrices_hold_hlsl_rows_as_columns(tmp_path):
+    metal = generate_metal(NON_SQUARE_HLSL, matrix_packing="row_major")
+
+    assert "float2x3 m = float2x3(1, 2, 3, 4, 5, 6);" in metal
+    assert "float3 v = m * float2(1, 2);" in metal
+    assert "m[1][2]" in metal
+    link_metal_if_available(metal, tmp_path)
+
+
+INTEGER_MATRIX_HLSL = """
+    RWStructuredBuffer<int> results : register(u0);
+    static const int2x2 Identity = int2x2(1, 0, 0, 1);
+
+    [numthreads(1, 1, 1)]
+    void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+    {
+        int2x3 c = int2x3(results[0], results[1], results[2], results[3], results[4], results[5]);
+        int2x3 g = int2x3(1, 2, 3, 4, 5, 6);
+        int2x3 shifted = (int2x3)((uint2x3)c >> 2);
+        int2x3 mixed = (int2x3)((uint2x3)c >> g);
+        uint2x2 d = uint2x2(1, 2, 3, 4);
+        d = d >> 1;
+        bool2x3 mask = bool2x3(true, false, true, false, true, false);
+        bool2x3 both = and(mask, mask);
+        bool4 lanes = or(bool4(true, false, true, false), bool4(false, false, true, true));
+        uint2x4 a = uint2x4(1, 2, 3, 4, 5, 6, 7, 8);
+        bool2x4 pick = bool2x4(true, true, false, true, false, false, false, true);
+        uint2x4 chosen = select(pick, a, a * 2);
+        float2x4 f = float2x4(1, 3.14, 4, 5, 6.28, 1.11, 2.22, 3.33);
+        int2x4 truncated = (int2x4)f;
+        int3 product = mul(int2(1, 2), g);
+        results[0] = shifted._m12 + mixed._m01 + (int)d._m10 + Identity._m11;
+        results[1] = (both._m02 ? 1 : 0) + (lanes.y ? 1 : 0) + (int)chosen._m13;
+        results[2] = truncated._m11 + product.z;
+    }
+"""
+
+
+def test_metal_emulates_integer_and_bool_matrices(tmp_path):
+    metal = generate_metal(INTEGER_MATRIX_HLSL, matrix_packing="row_major")
+
+    assert "typedef crosstl_hlsl_matrix<int, 2, 3> crosstl_int2x3;" in metal
+    assert "crosstl_int2x3 g = crosstl_int2x3{{int3(1, 2, 3), int3(4, 5, 6)}};" in metal
+    assert "inline crosstl_int2x2 Identity() {" in metal
+    assert (
+        "crosstl_hlsl_matrix_cast<int>(crosstl_hlsl_matrix_cast<uint>(c) >> 2)" in metal
+    )
+    assert (
+        "crosstl_hlsl_matrix_cast<int>(crosstl_hlsl_matrix_cast<uint>(c) >> g)" in metal
+    )
+    assert "crosstl_hlsl_and(mask, mask)" in metal
+    assert "(bool4(bool4(true, false, true, false)) || bool4(" in metal
+    assert "select(a * 2, a, pick)" in metal
+    assert "crosstl_int2x4 truncated = crosstl_hlsl_matrix_cast<int>(f);" in metal
+    assert "int3 product = g * int2(1, 2);" in metal
+    assert "shifted[1][2]" in metal
+    link_metal_if_available(metal, tmp_path)
+
+
+def test_metal_rejects_integer_matrix_constructors_it_cannot_split():
+    with pytest.raises(ValueError, match="constructor arguments"):
+        generate_metal(
+            """
+            RWStructuredBuffer<int> results : register(u0);
+            [numthreads(1, 1, 1)]
+            void Execute(uint3 id : SV_DispatchThreadID)
+            {
+                int2x2 m = int2x2(int3(1, 2, 3), 4);
+                results[0] = m._m11;
+            }
+            """,
+            matrix_packing="row_major",
+        )
