@@ -26,6 +26,38 @@ static void cs_copy_text(char *destination, size_t capacity, NSString *text) {
     snprintf(destination, capacity, "%s", utf8 != NULL ? utf8 : "");
 }
 
+/*
+ * Shader compile options and a description of the floating-point model they
+ * select. Direct3D shaders keep IEEE NaN/Inf semantics and evaluation order,
+ * while transcendental intrinsics (sin, cos, exp, log, pow...) run at the
+ * reduced precision Direct3D permits and GPU drivers implement in hardware.
+ * Metal's safe math mode keeps the former; its fast floating-point functions
+ * provide the latter. Precise functions are correctly rounded and therefore
+ * differ from Direct3D hardware results wherever a shader amplifies the
+ * last bits of a transcendental (for example sin-based hash functions).
+ * Before macOS 15 the only way to keep IEEE semantics is to disable fast
+ * math entirely, which also selects precise functions.
+ */
+static MTLCompileOptions *cs_compile_options(NSString **description) {
+    MTLCompileOptions *options = [MTLCompileOptions new];
+    if (@available(macOS 15.0, *)) {
+        options.mathMode = MTLMathModeSafe;
+        options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsFast;
+        if (description != NULL) {
+            *description = @"math mode safe, fast floating-point functions";
+        }
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        options.fastMathEnabled = NO;
+#pragma clang diagnostic pop
+        if (description != NULL) {
+            *description = @"fast math disabled, precise floating-point functions";
+        }
+    }
+    return options;
+}
+
 @interface CSMetalDevice : NSObject {
 @public
     id<MTLDevice> device;
@@ -220,10 +252,12 @@ int cs_device_create(void **out_device, cs_device_info *info, char *error, int32
                 [families addObject:[NSString stringWithUTF8String:known[i].name]];
             }
         }
-        NSString *driver = [NSString stringWithFormat:@"macOS %@; families %@; read-write texture tier %lu; gpu cores %u",
+        NSString *math = nil;
+        (void)cs_compile_options(&math);
+        NSString *driver = [NSString stringWithFormat:@"macOS %@; families %@; read-write texture tier %lu; gpu cores %u; shaders %@",
                             [[NSProcessInfo processInfo] operatingSystemVersionString],
                             [families componentsJoinedByString:@","],
-                            (unsigned long)device.readWriteTextureSupport, cores];
+                            (unsigned long)device.readWriteTextureSupport, cores, math];
         cs_copy_text(info->driver, sizeof(info->driver), driver);
         *out_device = (__bridge_retained void *)wrapper;
         return 0;
@@ -489,17 +523,7 @@ int cs_pipeline_create(void *device, const char *source, const char *entry_point
         if (log != NULL && log_capacity > 0) {
             log[0] = '\0';
         }
-        MTLCompileOptions *options = [MTLCompileOptions new];
-        /* Direct3D shaders keep IEEE NaN/Inf semantics; Metal defaults to fast math. */
-        if (@available(macOS 15.0, *)) {
-            options.mathMode = MTLMathModeSafe;
-            options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsPrecise;
-        } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-            options.fastMathEnabled = NO;
-#pragma clang diagnostic pop
-        }
+        MTLCompileOptions *options = cs_compile_options(NULL);
         NSError *compile_error = nil;
         NSString *text = [NSString stringWithUTF8String:source];
         id<MTLLibrary> library = [dev->device newLibraryWithSource:text options:options error:&compile_error];

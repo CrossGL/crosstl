@@ -112,13 +112,21 @@ def validate_metal(record: dict[str, Any], output_dir: Path, metal: str) -> None
     """Compile and link one artifact into a Metal library.
 
     Linking matters: the runtime compiles source into a library, and errors
-    such as program-scope global constructors only surface at link time.
+    such as program-scope global constructors only surface at link time. The
+    math flags match the runtime compile options (see csbackend_metal.m).
     """
     artifact = output_dir / record["artifact"]
     with tempfile.TemporaryDirectory() as scratch:
         library = Path(scratch) / "shader.metallib"
         completed = subprocess.run(
-            [metal, str(artifact), "-o", str(library)],
+            [
+                metal,
+                "-fmetal-math-mode=safe",
+                "-fmetal-math-fp32-functions=fast",
+                str(artifact),
+                "-o",
+                str(library),
+            ],
             capture_output=True,
             text=True,
         )
