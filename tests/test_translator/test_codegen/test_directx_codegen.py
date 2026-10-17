@@ -4498,13 +4498,151 @@ def test_hlsl_codegen_makes_wide_integer_to_float_conversions_explicit(
         parse_code(tokenize_code(shader))
     )
 
-    assert "return (left - (right * float(int64_t((left / right)))));" in generated
-    assert "return float(value);" in generated
-    assert "return (left < float(right));" in generated
-    assert "return (value * float2(factors));" in generated
+    # Native float(int64_t/uint64_t) is not single-rounded on every D3D
+    # device (WARP turns 2^63 + 2^39 + 1 into 2^63), so every 64-bit lane
+    # goes through the exact helpers.
+    assert (
+        "return (left - (right * __crossgl_int64_to_float1(int64_t((left / right)))));"
+        in generated
+    )
+    assert "return __crossgl_int64_to_float1(value);" in generated
+    assert "return (left < __crossgl_uint64_to_float1(right));" in generated
+    assert "return (value * __crossgl_int64_to_float2(factors));" in generated
+    assert "float2 __crossgl_int64_to_float2(int64_t2 value) {" in generated
     assert "right * int64_t((left / right))" not in generated
+    assert "float(value)" not in generated
+    assert "float(right)" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+def _hlsl_round_integer_to_binary32(value):
+    """Return the nearest-even binary32 bits of an exact integer."""
+    sign, magnitude = (0x80000000, -value) if value < 0 else (0, value)
+    if magnitude == 0:
+        return sign
+    exponent = magnitude.bit_length() - 1
+    if exponent <= 23:
+        significand = magnitude << (23 - exponent)
+    else:
+        shift = exponent - 23
+        significand, remainder = magnitude >> shift, magnitude & ((1 << shift) - 1)
+        midpoint = 1 << (shift - 1)
+        if remainder > midpoint or (remainder == midpoint and significand & 1):
+            significand += 1
+        if significand == 1 << 24:
+            significand, exponent = significand >> 1, exponent + 1
+    return sign | (exponent + 127) << 23 | (significand & 0x7FFFFF)
+
+
+def _hlsl_uint_to_float_helper_bits(value):
+    """Model the emitted __crossgl_uint_to_float1 helper bit by bit."""
+    if value == 0:
+        return 0
+    exponent = value.bit_length() - 1
+    if exponent <= 23:
+        significand = value << (23 - exponent)
+    else:
+        shift = exponent - 23
+        significand = value >> shift
+        remainder, midpoint = value & ((1 << shift) - 1), 1 << (shift - 1)
+        if remainder > midpoint or (remainder == midpoint and significand & 1):
+            significand += 1
+        if significand == 0x1000000:
+            significand, exponent = significand >> 1, exponent + 1
+    return ((exponent + 127) << 23) | (significand & 0x7FFFFF)
+
+
+def _hlsl_uint64_to_float_helper_bits(value):
+    """Model the emitted __crossgl_uint64_to_float1 helper bit by bit."""
+    high = value >> 32
+    if high == 0:
+        return _hlsl_uint_to_float_helper_bits(value)
+    shift = high.bit_length()
+    sticky = 1 if value & ((1 << shift) - 1) else 0
+    kept = ((value >> shift) & 0xFFFFFFFF) | sticky
+    return _hlsl_uint_to_float_helper_bits(kept) + (shift << 23)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        0,
+        1,
+        2**24 + 1,
+        2**32 - 1,
+        2**32,
+        2**32 + 2**8 + 1,
+        2**53 + 1,
+        2**63,
+        2**63 + 2**39,
+        2**63 + 2**39 + 1,
+        2**63 + 2**40 + 2**39,
+        2**64 - 2**39,
+        2**64 - 2**39 - 1,
+        2**64 - 1,
+        0x0123456789ABCDEF,
+        0xFEDCBA9876543210,
+    ],
+)
+def test_hlsl_uint64_to_float_helper_rounds_once(value):
+    assert _hlsl_uint64_to_float_helper_bits(value) == _hlsl_round_integer_to_binary32(
+        value
+    )
+    if value < 2**24:
+        # Small integers are exact; the reference must agree with the host.
+        assert (
+            _hlsl_round_integer_to_binary32(value)
+            == struct.unpack("<I", struct.pack("<f", float(value)))[0]
+        )
+
+
+def test_hlsl_uint64_to_float_helper_text_matches_the_rounding_model():
+    shader = """
+    shader WideIntegerFloatHelper {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                RWStructuredBuffer<float> output @ binding(0),
+                StructuredBuffer<uint64_t> input @ binding(1)
+            ) {
+                output[0] = float(input[0]);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        parse_code(tokenize_code(shader))
+    )
+
+    # These lines are what _hlsl_uint64_to_float_helper_bits models.
+    for line in (
+        "float __crossgl_uint64_to_float1(uint64_t value) {",
+        "    uint high = uint(value >> 32u);",
+        "    if (high == 0u) { return __crossgl_uint_to_float1(uint(value)); }",
+        "    uint shift = uint(firstbithigh(high)) + 1u;",
+        "    uint64_t discarded = value & ((uint64_t(1) << shift) - uint64_t(1));",
+        "    uint kept = uint(value >> shift) | (discarded != uint64_t(0) ? 1u : 0u);",
+        "    return asfloat(asuint(__crossgl_uint_to_float1(kept)) + (shift << 23u));",
+    ):
+        assert line in generated.splitlines(), line
+    assert "__crossgl_uint64_to_float1(input.Load(0))" in generated or (
+        "__crossgl_uint64_to_float1(input[0])" in generated
+    )
+    assert "__crossgl_int64_to_float1" not in generated
+
+
+def test_hlsl_uint64_to_float_helper_rounds_every_tie_once():
+    """Ties and their neighbours at every binary32 rounding position."""
+    for exponent in range(32, 64):
+        for low in range(max(0, exponent - 40), exponent):
+            for delta in (-1, 0, 1):
+                value = (1 << exponent) + (1 << low) + delta
+                assert _hlsl_uint64_to_float_helper_bits(
+                    value
+                ) == _hlsl_round_integer_to_binary32(value), hex(value)
 
 
 def test_hlsl_codegen_rejects_wide_integer_float_vector_lane_mismatch():

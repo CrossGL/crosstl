@@ -1569,6 +1569,11 @@ class HLSLCodeGen:
         "uint",
         "int",
     )
+    # Exact binary32 conversion helpers for 64-bit integer lanes.
+    HLSL_WIDE_INTEGER_FLOAT_HELPER_STEMS = {
+        "uint64_t": "__crossgl_uint64_to_float",
+        "int64_t": "__crossgl_int64_to_float",
+    }
     HLSL_PATCH_CONTROL_POINT_LIMIT = 32
     METAL_ONLY_SYSTEM_INCLUDES = frozenset(
         {
@@ -2305,6 +2310,8 @@ class HLSLCodeGen:
         self.hlsl_half_helper_names = {}
         self.required_hlsl_unsigned_float_helpers = set()
         self.hlsl_unsigned_float_helper_names = {}
+        self.required_hlsl_wide_integer_float_helpers = set()
+        self.hlsl_wide_integer_float_helper_names = {}
         self.required_hlsl_half_selection_helpers = set()
         self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
@@ -3629,6 +3636,8 @@ class HLSLCodeGen:
         self.hlsl_half_helper_names = {}
         self.required_hlsl_unsigned_float_helpers = set()
         self.hlsl_unsigned_float_helper_names = {}
+        self.required_hlsl_wide_integer_float_helpers = set()
+        self.hlsl_wide_integer_float_helper_names = {}
         self.required_hlsl_half_selection_helpers = set()
         self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
@@ -8197,6 +8206,56 @@ uint {helper_name}(uint groupIndex) {{
                 name += "_"
             self.hlsl_unsigned_float_helper_names[width] = name
             used_names.add(name)
+        self.hlsl_wide_integer_float_helper_names = {}
+        for base_type, stem in self.HLSL_WIDE_INTEGER_FLOAT_HELPER_STEMS.items():
+            for width in range(1, 5):
+                name = f"{stem}{width}"
+                while name in used_names:
+                    name += "_"
+                self.hlsl_wide_integer_float_helper_names[(base_type, width)] = name
+                used_names.add(name)
+
+    def generate_hlsl_wide_integer_float_helpers(self, scalar):
+        """Emit exact int64_t/uint64_t-to-binary32 helpers built on ``scalar``.
+
+        ``scalar`` is the exact uint-to-float helper; the 64-bit helpers keep
+        32 leading bits, fold the discarded bits into a sticky low bit below
+        the binary32 rounding position, round once and rescale the exponent.
+        """
+        required = self.required_hlsl_wide_integer_float_helpers
+        if not required:
+            return ""
+        names = self.hlsl_wide_integer_float_helper_names
+        unsigned = names[("uint64_t", 1)]
+        code = f"""float {unsigned}(uint64_t value) {{
+    uint high = uint(value >> 32u);
+    if (high == 0u) {{ return {scalar}(uint(value)); }}
+    // Round once: a sticky bit stands in for every discarded low bit.
+    uint shift = uint(firstbithigh(high)) + 1u;
+    uint64_t discarded = value & ((uint64_t(1) << shift) - uint64_t(1));
+    uint kept = uint(value >> shift) | (discarded != uint64_t(0) ? 1u : 0u);
+    return asfloat(asuint({scalar}(kept)) + (shift << 23u));
+}}
+"""
+        if any(base_type == "int64_t" for base_type, _width in required):
+            signed = names[("int64_t", 1)]
+            code += f"""float {signed}(int64_t value) {{
+    uint64_t magnitude = value < int64_t(0) ? uint64_t(0) - uint64_t(value) : uint64_t(value);
+    float rounded = {unsigned}(magnitude);
+    return value < int64_t(0) ? -rounded : rounded;
+}}
+"""
+        for base_type, width in sorted(required):
+            if width == 1:
+                continue
+            name = names[(base_type, width)]
+            lane_helper = names[(base_type, 1)]
+            lanes = ", ".join(f"{lane_helper}(value.{lane})" for lane in "xyzw"[:width])
+            code += (
+                f"float{width} {name}({base_type}{width} value) {{\n"
+                f"    return float{width}({lanes});\n}}\n"
+            )
+        return code
 
     def generate_hlsl_unsigned_float_helpers(self):
         if not self.required_hlsl_unsigned_float_helpers:
@@ -8232,13 +8291,59 @@ uint {helper_name}(uint groupIndex) {{
                 f"float{width} {name}(uint{width} value) {{\n"
                 f"    return float{width}({lanes});\n}}\n"
             )
+        code += self.generate_hlsl_wide_integer_float_helpers(scalar)
         return code + "\n"
+
+    def hlsl_wide_integer_float_conversion_expression(
+        self, rendered, expected, source, *, source_location=None
+    ):
+        """Convert int64_t/uint64_t lanes to binary32 with one rounding.
+
+        A native float(uint64_t) is not round-to-nearest-even on every D3D
+        device: WARP rounds through an intermediate format, turning
+        2^63 + 2^39 + 1 into 2^63 instead of 2^63 + 2^40.
+        """
+        for intrinsic in ("asfloat", "asuint", "firstbithigh"):
+            if intrinsic in self.global_variable_types or (
+                intrinsic in self.function_return_types
+                and intrinsic not in self.hlsl_function_name_aliases
+            ):
+                raise DirectXContextualConversionError(
+                    "DirectX cannot preserve 64-bit-integer-to-float rounding: "
+                    f"'{intrinsic}' is shadowed",
+                    source_type=source["mapped_type"],
+                    target_type=expected["mapped_type"],
+                    reason="wide-integer-float-intrinsic-shadowed",
+                    source_location=source_location,
+                )
+        width = source["width"]
+        key = (source["base_type"], width)
+        self.required_hlsl_wide_integer_float_helpers.update(
+            {key, (source["base_type"], 1), ("uint64_t", 1)}
+        )
+        self.required_hlsl_unsigned_float_helpers.add(1)
+        if not self.hlsl_wide_integer_float_helper_names:
+            self.prepare_hlsl_unsigned_float_helper_names([])
+        converted = f"{self.hlsl_wide_integer_float_helper_names[key]}({rendered})"
+        if width != expected["width"]:
+            return self.hlsl_scalar_splat_cast(expected["mapped_type"], converted)
+        return converted
 
     def hlsl_unsigned_float_conversion_expression(
         self, rendered, expected_type, source_type, *, source_location=None
     ):
         expected = self.hlsl_floating_arithmetic_type_info(expected_type)
         source = self.hlsl_integer_arithmetic_type_info(source_type)
+        if (
+            expected is not None
+            and expected["base_type"] == "float"
+            and source is not None
+            and source["base_type"] in self.HLSL_WIDE_INTEGER_FLOAT_HELPER_STEMS
+            and source["width"] in {1, expected["width"]}
+        ):
+            return self.hlsl_wide_integer_float_conversion_expression(
+                rendered, expected, source, source_location=source_location
+            )
         if (
             expected is None
             or expected["base_type"] != "float"
@@ -14738,7 +14843,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="wide-integer-floating-lane-shape-mismatch",
                 source_location=source_location,
             )
-        return f"{expected_info['mapped_type']}({rendered})"
+        return self.hlsl_wide_integer_float_conversion_expression(
+            rendered,
+            expected_info,
+            source_info,
+            source_location=source_location,
+        )
 
     def hlsl_narrowing_cast_expression(
         self, rendered, expected_type, source_type, *, source_location=None

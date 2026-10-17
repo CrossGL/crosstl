@@ -2338,8 +2338,12 @@ The current harness verifies:
   resources are unchanged. The 14 complex64-to-float16 entries now round the
   real part through the same binary16 helper as float32-to-float16 copies,
   because WARP's native `float16_t(...)` turned 65520.0 and 2^31 into 65504
-  instead of infinity (5,734,656 source bytes in total; all 14 compile with
-  warnings fatal). Compiler
+  instead of infinity (all 14 compile with warnings fatal). The 80 int64 and
+  uint64 to float16, float32 and complex64 entries now convert through exact
+  64-bit helpers that keep 32 leading bits plus a sticky bit and round once,
+  because WARP's native `float(uint64_t)` rounds twice and turned
+  2^63 + 2^39 + 1 into 2^63 (5,852,576 source bytes in total; all 80 compile
+  with warnings fatal). Compiler
   equivalence does not establish current-pin numerical execution or full
   upstream-suite parity;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 4,122
@@ -5560,7 +5564,7 @@ These compiler-only shards do not require a Windows runner. Direct3D 12
 execution and readback checks remain on Windows; compiling DXIL on Linux is
 not a substitute for those runtime tests.
 
-The current HLSL references total 16,242,567 bytes. Complete comparisons cover
+The current HLSL references total 16,593,273 bytes. Complete comparisons cover
 all 4,122 predecessor and generated bodies, all 21,248 reflected resources,
 and strict compilation of both sets. Adding legal empty-record padding leaves
 4,053 DXIL modules byte-identical. The remaining 69 artifacts incorporate
@@ -5572,8 +5576,15 @@ retain identical DXIL and 15 retain additional precision constraints. All
 remain unchanged; these compiler checks do not qualify Windows execution.
 Bindings, dispatch contracts, source pins and specialization counts remain
 unchanged. The contract preserves earlier review provenance and records this
-follow-up separately. These checks do not establish numerical execution of the
-complete binary family.
+follow-up separately. A later follow-up changes 69 more sources. The 54
+binary16, binary32 and bfloat16 Remainder entries now select the exact
+remainder helpers the OpenGL translation already uses: HLSL fmod returns NaN
+for an infinite divisor, and for binary16 it keeps -0 where Metal's fmod,
+computed as x - trunc(x / y) * y in binary32, gives +0. The 15 complex64
+Remainder entries round their 64-bit integer quotient lanes to binary32 once,
+because WARP's native conversion rounds twice. All 69 compile with warnings
+fatal. These checks do not establish numerical execution of the complete
+binary family.
 
 The complete historical reduction gate covers all 2,396 host-named entries
 from `reduce.metal` at commit

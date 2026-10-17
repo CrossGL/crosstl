@@ -44,12 +44,12 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "3bdf5d7c406bad823695d3524efa773f9218bd0bad1e780ac5c072fb993a123a"
+    "02bc4076db1abd8d68cb6dec457d1b197319c4b0bc47ffa7a891cb17da9e6f3b"
 )
-BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1472709
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 16242567
+BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1473335
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 16593273
 BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 2784)
-BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_ArcTan2float16", 14581)
+BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_Remainderfloat16", 21017)
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
     ("a_idx", 0, 2147483647),
@@ -350,11 +350,23 @@ def test_current_mlx_binary_directx_ci_shards_are_complete_and_disjoint() -> Non
 
 
 def _project_config(workload: BinaryMetalWorkload) -> str:
-    profile = (
-        'binary32_atan2_profile = "flush-subnormals"'
+    profiles = (
+        ['binary32_atan2_profile = "flush-subnormals"']
         if workload.operator_type == "ArcTan2"
-        else ""
+        else []
     )
+    # HLSL fmod is not Metal's: WARP returns NaN for an infinite divisor and
+    # the IEEE remainder keeps -0 where Metal's binary16 fmod, computed as
+    # x - trunc(x / y) * y in binary32, gives +0. Select the same exact
+    # remainder helpers that the OpenGL translation uses.
+    if workload.operator_type == "Remainder" and workload.input_type == "half":
+        profiles.append('binary16_remainder_profile = "binary32-quotient"')
+    if workload.operator_type == "Remainder" and workload.input_type in {
+        "float",
+        "bfloat16_t",
+    }:
+        profiles.append('binary32_remainder_profile = "flush-arithmetic-subnormals"')
+    profile = "\n        ".join(profiles)
     assertions = "\n\n".join(textwrap.dedent(f"""
             [[project.index_range_assertions]]
             source = "{MLX_BINARY_SOURCE}"
@@ -514,6 +526,24 @@ def test_binary_atan2_artifact_refresh_preserves_corpus_scope():
                 "precisionConstrainedDxilChangedEntryCount": 15,
                 "unchangedSourceAndInterfaceContracts": True,
                 "numericalReferencesUnchanged": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+            {
+                "reason": (
+                    "Keep Metal remainder semantics and single-rounded 64-bit integer "
+                    "conversions in HLSL."
+                ),
+                "previousContractSha256": (
+                    "3bdf5d7c406bad823695d3524efa773f9218bd0bad1e780ac5c072fb993a123a"
+                ),
+                "changedEntryCount": 69,
+                "unaffectedEntryCount": 4053,
+                "reviewedBodyCount": 69,
+                "nativeCompiledChangedEntryCount": 69,
+                "remainderProfileChangedEntryCount": 54,
+                "wideIntegerConversionChangedEntryCount": 15,
+                "unchangedSourceAndInterfaceContracts": True,
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
             },

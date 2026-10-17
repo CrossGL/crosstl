@@ -2308,8 +2308,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.directx-translation.json",
       "schema_version": 2,
-      "sha256": "3bdf5d7c406bad823695d3524efa773f9218bd0bad1e780ac5c072fb993a123a",
-      "size_bytes": 1472709,
+      "sha256": "02bc4076db1abd8d68cb6dec457d1b197319c4b0bc47ffa7a891cb17da9e6f3b",
+      "size_bytes": 1473335,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2438,15 +2438,15 @@
       "dispatch_metadata_shape_count": 9
     },
     "artifacts": {
-      "generated_size_bytes_total": 16242567,
+      "generated_size_bytes_total": 16593273,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addint32",
           "sizeBytes": 2784
         },
         "maximum": {
-          "entryPoint": "gn4large_ArcTan2float16",
-          "sizeBytes": 14581
+          "entryPoint": "gn4large_Remainderfloat16",
+          "sizeBytes": 21017
         }
       }
     },
@@ -3624,7 +3624,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.directx-translation.json",
       "schema_version": 2,
-      "sha256": "53881d814c6fea09640c4190f440fe19ab257b1adf09d0dc0b2f3a4280a5c62c",
+      "sha256": "5cca4b13412af0802c8ebace0ff003d6babff105fb07e0131eff88b6ec5e7c8a",
       "size_bytes": 876806,
       "entry_identity_fields": [
         "entryPoint",
@@ -3778,15 +3778,15 @@
       "dispatch_metadata_shape_count": 8
     },
     "artifacts": {
-      "generated_size_bytes_total": 5734656,
+      "generated_size_bytes_total": 5852576,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "s_copybool_bool_",
           "sizeBytes": 1513
         },
         "maximum": {
-          "entryPoint": "gn2_copyuint8float16",
-          "sizeBytes": 5076
+          "entryPoint": "gn2_copyint64float16",
+          "sizeBytes": 5833
         }
       }
     },
