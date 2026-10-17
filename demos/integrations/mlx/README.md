@@ -2328,10 +2328,14 @@ The current harness verifies:
   masking in bfloat-to-bool helpers. The review retains the historical source
   pin and all launch contracts. A later conversion review updates the 80
   unsigned 32-bit and 8-bit to float16, float32 and complex64 entries, which now
-  call one correctly rounded unsigned-to-float helper (5,719,550 source bytes in
-  total). Removing the helper and restoring `float(...)` reconstructs every
-  accepted source; all 80 old and new sources compile with warnings fatal, and
-  materializations and reflected resources are unchanged. Compiler
+  call one correctly rounded unsigned-to-float helper. Removing the helper and
+  restoring `float(...)` reconstructs every accepted source; all 80 old and
+  new sources compile with warnings fatal, and materializations and reflected
+  resources are unchanged. The 14 complex64-to-float16 entries now round the
+  real part through the same binary16 helper as float32-to-float16 copies,
+  because WARP's native `float16_t(...)` turned 65520.0 and 2^31 into 65504
+  instead of infinity (5,734,656 source bytes in total; all 14 compile with
+  warnings fatal). Compiler
   equivalence does not establish current-pin numerical execution or full
   upstream-suite parity;
 - selected-entry Metal-to-CrossGL-to-Metal translation of all 4,122

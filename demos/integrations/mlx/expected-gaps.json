@@ -3624,7 +3624,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.directx-translation.json",
       "schema_version": 2,
-      "sha256": "6d4a6a3dece6a29f2e860b88869becb181fc6149a18b02dad1e05787cc6ef516",
+      "sha256": "53881d814c6fea09640c4190f440fe19ab257b1adf09d0dc0b2f3a4280a5c62c",
       "size_bytes": 876806,
       "entry_identity_fields": [
         "entryPoint",
@@ -3778,7 +3778,7 @@
       "dispatch_metadata_shape_count": 8
     },
     "artifacts": {
-      "generated_size_bytes_total": 5719550,
+      "generated_size_bytes_total": 5734656,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "s_copybool_bool_",

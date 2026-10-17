@@ -3844,7 +3844,9 @@ def test_hlsl_registered_complex_representation_projects_real_for_all_scalars(
 
     assert "return __crossgl_bfloat16_from_float(float((value).real));" in generated
     assert "return ((value).real != 0.0);" in generated
-    assert "return float16_t((value).real);" in generated
+    # Native float16_t() is not nearest-even on WARP (65520.0 -> 65504).
+    assert "return __crossgl_round_half1((value).real);" in generated
+    assert "float16_t((value).real)" not in generated
     assert "return float((value).real);" in generated
     assert "return int((value).real);" in generated
     assert "return int16_t((value).real);" in generated

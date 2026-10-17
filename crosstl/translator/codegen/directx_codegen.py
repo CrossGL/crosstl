@@ -16711,7 +16711,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="source-single-evaluation-unsupported",
                 source_location=source_location,
             )
-        return mapped_destination, converted_fields[0].name
+        (converted_field,) = converted_fields
+        return mapped_destination, converted_field.name, converted_field.type_name
 
     def hlsl_registered_structure_scalar_conversion_expression(
         self,
@@ -16729,12 +16730,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if conversion is None:
             return None
 
-        mapped_destination, source_field = conversion
+        mapped_destination, source_field, source_field_type = conversion
         source_component = f"({rendered}).{source_field}"
         if self.is_hlsl_bfloat16_type(destination_type):
             return self.hlsl_float_to_bfloat16_expression(source_component)
         if mapped_destination == "bool":
             return f"({source_component} != 0.0)"
+        if mapped_destination == "float16_t":
+            # A native float16_t() conversion is not round-to-nearest-even on
+            # every D3D device: WARP turns 65520.0f into 65504 instead of inf.
+            return self.hlsl_half_conversion_expression(
+                source_component,
+                1,
+                (source_field_type,),
+                source_location=source_location,
+            )
         return f"{mapped_destination}({source_component})"
 
     def hlsl_registered_structure_scalar_constructor_call(
