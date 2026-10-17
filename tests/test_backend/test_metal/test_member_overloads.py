@@ -412,11 +412,11 @@ def test_preprocessor_resolves_line_wrapped_qualified_aliases_per_function(
     assert "FloatBlock__mma(block, left, right)" not in half_body
     assert "HalfBlock__mma(block, left, right)" not in float_body
     assert (
-        "void HalfBlock__mma(thread HalfBlock& self, "
+        "void HalfBlock__mma(thread HalfBlock& self [[maybe_unused]], "
         "const threadgroup half* left, const threadgroup half* right)" in output
     )
     assert (
-        "void FloatBlock__mma(thread FloatBlock& self, "
+        "void FloatBlock__mma(thread FloatBlock& self [[maybe_unused]], "
         "const threadgroup float* left, const threadgroup float* right)" in output
     )
 
@@ -524,7 +524,7 @@ def test_preprocessor_materializes_struct_constructor_before_member_lowering():
     assert f"{concrete_name}(int source_stride)" in concrete_body
     assert "BlockLoader(int source_stride)" not in concrete_body
     assert (
-        f"void {concrete_name}__load_safe(thread const {concrete_name}& self, "
+        f"void {concrete_name}__load_safe(thread const {concrete_name}& self [[maybe_unused]], "
         "int limit)" in output
     )
     assert f"{concrete_name}__load_safe(loader_w, limit)" in output
@@ -640,8 +640,14 @@ def test_preprocessor_receiver_helper_identity_ignores_parameter_names():
     const_helper = "Box__pick__metal_receiver_const_thread_unqualified"
     assert f"{mutable_helper}(mutable_box, 1)" in output
     assert f"{const_helper}(const_box, 2)" in output
-    assert f"int {mutable_helper}(thread Box& self, int mutable_value)" in output
-    assert f"int {const_helper}(thread const Box& self, int readonly_value)" in output
+    assert (
+        f"int {mutable_helper}(thread Box& self [[maybe_unused]], int mutable_value)"
+        in output
+    )
+    assert (
+        f"int {const_helper}(thread const Box& self [[maybe_unused]], int readonly_value)"
+        in output
+    )
 
 
 def test_preprocessor_mutable_nested_member_retains_parent_volatile_state():
@@ -765,8 +771,8 @@ def test_codegen_retains_selected_pointer_return_mutability():
 
     crossgl = _crossgl_artifact(source)
 
-    assert f"RWStructuredBuffer<float> {MUTABLE_ELEMS}(" in crossgl
-    assert f"StructuredBuffer<float> {CONST_ELEMS}(" in crossgl
+    assert f"thread float* {MUTABLE_ELEMS}(" in crossgl
+    assert f"const thread float* {CONST_ELEMS}(" in crossgl
 
 
 def test_receiver_cv_selection_reaches_validated_target_artifacts(tmp_path):

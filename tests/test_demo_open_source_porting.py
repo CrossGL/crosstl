@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import ast
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -187,7 +190,6 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
 
     assert "os: [ubuntu-latest, macOS-latest, windows-latest]" in workflow
     assert "glslang-tools spirv-tools" in workflow
-    assert "brew install glslang spirv-tools" in workflow
     assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in workflow
     assert "--run-toolchains" in workflow
     assert "--require-toolchain-runs" in workflow
@@ -220,6 +222,29 @@ def _workflow_step_block(workflow: str, step_name: str) -> str:
     start = workflow.index(marker)
     next_step = workflow.find("\n      - name:", start + len(marker))
     return workflow[start:] if next_step == -1 else workflow[start:next_step]
+
+
+@pytest.mark.parametrize(
+    "step_name",
+    ["Run open-source porting demo tests", "Verify checked-in demo artifacts"],
+)
+def test_demo_portable_checks_run_once_on_linux(step_name):
+    workflow = DEMO_WORKFLOW_PATH.read_text(encoding="utf-8")
+    block = _workflow_step_block(workflow, step_name)
+    assert "if: runner.os == 'Linux'" in block
+    assert "continue-on-error" not in block
+
+
+def test_demo_portable_checks_keep_all_cases_and_bounded_workers():
+    workflow = DEMO_WORKFLOW_PATH.read_text(encoding="utf-8")
+    tests = _workflow_step_block(workflow, "Run open-source porting demo tests")
+    artifacts = _workflow_step_block(workflow, "Verify checked-in demo artifacts")
+    assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in workflow
+    assert "pytest pytest-xdist" in _workflow_step_block(workflow, "Install CrossTL")
+    assert "python -m pytest -q -n auto" in tests
+    assert "find demos/open-source-porting/cases" in artifacts
+    assert "--target" not in artifacts
+    assert "brew install" not in workflow
 
 
 def _cases_for_target(runner, target: str) -> set[str]:
@@ -422,16 +447,29 @@ def test_open_source_demo_runner_requires_toolchain_runs_per_selected_target(tmp
         runner.subprocess.run = original_run
 
 
-def test_open_source_demo_runner_verifies_fast_reference_subset():
+@pytest.mark.parametrize(
+    "case,target",
+    [
+        ("directx-graphics-samples-hello-triangle", "cgl"),
+        ("directx-shader-compiler-neg1", "directx"),
+        ("openframeworks-noise-shader", "directx"),
+        ("raylib-lighting-shader-pair", "directx"),
+        ("raylib-lighting-shader-pair", "metal"),
+        ("vulkan-samples-dynamic-line-grid", "directx"),
+        ("apple-modern-rendering-mesh-viewdir", "directx"),
+        ("apple-modern-rendering-mesh-viewdir", "opengl"),
+    ],
+)
+def test_open_source_demo_runner_verifies_fast_reference_subset(case, target):
     result = subprocess.run(
         [
             sys.executable,
             "demos/open-source-porting/run_demo.py",
             "--check",
             "--case",
-            "directx-graphics-samples-hello-triangle",
+            case,
             "--target",
-            "cgl",
+            target,
         ],
         cwd=str(ROOT),
         capture_output=True,
@@ -440,7 +478,128 @@ def test_open_source_demo_runner_verifies_fast_reference_subset():
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "directx-graphics-samples-hello-triangle: verified cgl" in result.stdout
+    assert f"{case}: verified {target}" in result.stdout
+
+
+def test_raylib_lighting_reference_preserves_source_grouping_and_spans():
+    case = CASE_ROOT / "raylib-lighting-shader-pair"
+    original = (case / "lighting.fs").read_text(encoding="utf-8")
+    generated = (case / "crosstl-out/metal/lighting.fs.metal").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "finalColor = (texelColor*((tint + vec4(specular, 1.0))*vec4(lightDot, 1.0)));"
+        in original
+    )
+    assert (
+        "finalColor = texelColor * ((tint + float4(specular, 1.0)) * float4(lightDot, 1.0));"
+        in generated
+    )
+    remap = json.loads(
+        (case / "crosstl-out/metal/lighting.fs.source-remap.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert remap["mappings"]
+    for mapping in remap["mappings"]:
+        for key, text in (("original", original), ("generated", generated)):
+            span = mapping[key]
+            lines = text.splitlines(keepends=True)
+            start = sum(len(line) for line in lines[: span["line"] - 1])
+            end = sum(len(line) for line in lines[: span["endLine"] - 1])
+            assert span["column"] == span["endColumn"] == 1
+            assert span["offset"] == start
+            assert span["endOffset"] == end
+            assert span["length"] == end - start
+
+
+@pytest.mark.parametrize("targets", [["directx"], []])
+def test_open_source_demo_update_preserves_unselected_targets(tmp_path, targets):
+    runner = _load_demo_runner()
+    original = CASE_ROOT / "directx-shader-compiler-neg1"
+    case_dir = tmp_path / original.name
+    shutil.copytree(original, case_dir)
+    output = case_dir / runner.OUTPUT_DIR_NAME
+    selected = targets or runner._case_targets(case_dir)
+    for target in runner._case_targets(case_dir):
+        (output / target / "stale.txt").write_bytes(b"previous output\n")
+    before = {
+        path.relative_to(output): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+
+    runner._run_case(
+        case_dir,
+        targets=targets,
+        update=True,
+        run_toolchains=False,
+        require_toolchain_runs=False,
+        reports_dir=None,
+    )
+
+    runner._compare_artifacts(original, case_dir, selected)
+    after = {
+        path.relative_to(output): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    assert not (output / runner.REPORT_NAME).exists()
+    assert {
+        path: data for path, data in after.items() if path.parts[0] not in selected
+    } == {path: data for path, data in before.items() if path.parts[0] not in selected}
+
+
+@pytest.mark.parametrize(
+    "failure", ["translation", "validation", "missing-artifacts", "empty-artifacts"]
+)
+def test_open_source_demo_failed_update_preserves_references(
+    tmp_path, monkeypatch, failure
+):
+    runner = _load_demo_runner()
+    original = CASE_ROOT / "directx-shader-compiler-neg1"
+    case_dir = tmp_path / original.name
+    shutil.copytree(original, case_dir)
+    before = {
+        path.relative_to(case_dir): path.read_bytes()
+        for path in case_dir.rglob("*")
+        if path.is_file()
+    }
+
+    def translate(*, work_dir, targets):
+        assert work_dir != case_dir
+        output = work_dir / runner.OUTPUT_DIR_NAME
+        output.mkdir()
+        artifact = output / "directx" / "neg1.hlsl"
+        artifact.parent.mkdir()
+        artifact.write_text("unvalidated output\n", encoding="utf-8")
+        if failure == "empty-artifacts":
+            (output / "opengl" / "empty").mkdir(parents=True)
+        if failure == "translation":
+            raise SystemExit("translation failed")
+        return output / runner.REPORT_NAME
+
+    def validate(*args, **kwargs):
+        if failure == "validation":
+            raise SystemExit("validation failed")
+
+    monkeypatch.setattr(runner, "_translate_case", translate)
+    monkeypatch.setattr(runner, "_validate_report", validate)
+    with pytest.raises(SystemExit, match="failed|no artifacts for opengl"):
+        runner._run_case(
+            case_dir,
+            targets=["directx", "opengl"],
+            update=True,
+            run_toolchains=False,
+            require_toolchain_runs=False,
+            reports_dir=None,
+        )
+    after = {
+        path.relative_to(case_dir): path.read_bytes()
+        for path in case_dir.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 def test_open_source_demo_runner_ignores_trailing_text_artifact_whitespace(tmp_path):
@@ -451,6 +610,56 @@ def test_open_source_demo_runner_ignores_trailing_text_artifact_whitespace(tmp_p
     actual.write_text("OpFunctionCall %8 %20 \r\nOpReturn\t\r\n", encoding="utf-8")
 
     assert runner._comparison_bytes(expected) == runner._comparison_bytes(actual)
+
+
+@pytest.mark.parametrize("line_preserving", [False, True])
+def test_demo_reference_normalization_rebuilds_generated_byte_spans(
+    tmp_path, line_preserving
+):
+    runner = _load_demo_runner()
+    source = tmp_path / "source.cgl"
+    generated = tmp_path / "crosstl-out/cgl/source.cgl"
+    generated.parent.mkdir(parents=True)
+    source.write_bytes(b"// \xc3\xa9\nvoid source() {}\n")
+    content = (
+        source.read_bytes() if line_preserving else b"// translated\nvoid target() {}\n"
+    )
+    generated.write_bytes(content.replace(b"\n", b"\r\n") + b"\r\n \t")
+    original_span = runner._file_span(source, "source.cgl").to_json()
+    sidecar = generated.with_name("source.source-remap.json")
+    runner._write_source_remap_sidecar(
+        sidecar,
+        {
+            "schemaVersion": 1,
+            "generatedFile": "crosstl-out/cgl/source.cgl",
+            "mappings": [
+                {
+                    "original": original_span,
+                    "generated": (
+                        runner._file_span(
+                            generated, "crosstl-out/cgl/source.cgl"
+                        ).to_json()
+                    ),
+                }
+            ],
+        },
+    )
+
+    runner._normalize_artifacts(tmp_path / "crosstl-out", ["cgl"])
+
+    assert generated.read_bytes() == content
+    mappings = json.loads(sidecar.read_text())["mappings"]
+    assert len(mappings) == (2 if line_preserving else 1)
+    assert mappings[-1]["generated"]["endOffset"] == len(content)
+    assert mappings[-1]["generated"]["endLine"] == 3
+    assert mappings[-1]["generated"]["endColumn"] == 1
+    assert mappings[-1]["original"]["endOffset"] == len(source.read_bytes())
+    for mapping in mappings:
+        span = mapping["generated"]
+        assert span["length"] == span["endOffset"] - span["offset"]
+    unchanged = sidecar.read_bytes()
+    runner._normalize_artifacts(tmp_path / "crosstl-out", ["cgl"])
+    assert sidecar.read_bytes() == unchanged
 
 
 def test_demo_ci_metadata_matches_checked_in_pytest_cases():

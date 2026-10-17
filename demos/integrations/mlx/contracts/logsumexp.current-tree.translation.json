@@ -1,0 +1,424 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-logsumexp-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/logsumexp.metal",
+    "sourceSha256": "f9bec5e1e5a23d20bedf9ff8d29a8c03bbb5144bc5d751bbfe906d32ee894817",
+    "header": "mlx/backend/metal/kernels/logsumexp.h",
+    "headerSha256": "233f9a7072bed21f2b71f522c41aa5e86208e3bcfd18fafc87cf28a7d7f13154"
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "block_logsumexp_float32",
+    "looped_logsumexp_float32",
+    "block_logsumexp_float16",
+    "looped_logsumexp_float16",
+    "block_logsumexp_bfloat16",
+    "looped_logsumexp_bfloat16"
+  ],
+  "artifacts": {
+    "metal": {
+      "block_logsumexp_float32": {
+        "32": {
+          "sha256": "d6e19ddba8c4e2e77809774bd6cedfd6ea064717d5276808c06728dd72883400",
+          "sizeBytes": 2286
+        },
+        "288": {
+          "sha256": "d6e19ddba8c4e2e77809774bd6cedfd6ea064717d5276808c06728dd72883400",
+          "sizeBytes": 2286
+        },
+        "1024": {
+          "sha256": "d6e19ddba8c4e2e77809774bd6cedfd6ea064717d5276808c06728dd72883400",
+          "sizeBytes": 2286
+        }
+      },
+      "looped_logsumexp_float32": {
+        "1024": {
+          "sha256": "453bfb58d92359288ef1ee0bda27cec54ecc7e5aa69bea5f63d92f13e0907b8d",
+          "sizeBytes": 2391
+        }
+      },
+      "block_logsumexp_float16": {
+        "32": {
+          "sha256": "cfcd84f7446d5e6f675a86156562f91f91997c7d6e68ccabf0e280c2d6a5d91d",
+          "sizeBytes": 2282
+        },
+        "288": {
+          "sha256": "cfcd84f7446d5e6f675a86156562f91f91997c7d6e68ccabf0e280c2d6a5d91d",
+          "sizeBytes": 2282
+        },
+        "1024": {
+          "sha256": "cfcd84f7446d5e6f675a86156562f91f91997c7d6e68ccabf0e280c2d6a5d91d",
+          "sizeBytes": 2282
+        }
+      },
+      "looped_logsumexp_float16": {
+        "1024": {
+          "sha256": "a3798dd9f0aa5fcf15fea0948decf2c209093230e63922da4b046fe4c70385ab",
+          "sizeBytes": 2387
+        }
+      },
+      "block_logsumexp_bfloat16": {
+        "32": {
+          "sha256": "a2c909fbcf03a997ff9e783bd4a95a7bb2babc55167a3f2eae88dd9be3348b23",
+          "sizeBytes": 2291
+        },
+        "288": {
+          "sha256": "a2c909fbcf03a997ff9e783bd4a95a7bb2babc55167a3f2eae88dd9be3348b23",
+          "sizeBytes": 2291
+        },
+        "1024": {
+          "sha256": "a2c909fbcf03a997ff9e783bd4a95a7bb2babc55167a3f2eae88dd9be3348b23",
+          "sizeBytes": 2291
+        }
+      },
+      "looped_logsumexp_bfloat16": {
+        "1024": {
+          "sha256": "47861555a5f51025eee39e8cc06b2906d58e9c267c63c170ebfd2bdca33bfd54",
+          "sizeBytes": 2396
+        }
+      }
+    },
+    "opengl": {
+      "block_logsumexp_float32": {
+        "32": {
+          "sha256": "2aeeafbf86fe61d3ddc8b9d4a6e23945ea8a34724f0689cd8a4149f0f1a8c7fc",
+          "sizeBytes": 4846
+        },
+        "288": {
+          "sha256": "ee66c5309d14a0d53963add201a22703f27ba124877e6b0fbc65c2fb7e2e2d77",
+          "sizeBytes": 6490
+        },
+        "1024": {
+          "sha256": "6aea298b7baafeea50a59186bad90485fdc580a25fe5ce51422fe54277387845",
+          "sizeBytes": 6492
+        }
+      },
+      "looped_logsumexp_float32": {
+        "1024": {
+          "sha256": "ee648e23576bd7ebd2efc7e21aa1c06d4a2271126d5c0c3299581facc25ee449",
+          "sizeBytes": 5588
+        }
+      },
+      "block_logsumexp_float16": {
+        "32": {
+          "sha256": "633728ca6cf7eaa78a629d50c1221185c3447682e6fa65e04e6d067fde951b6d",
+          "sizeBytes": 6217
+        },
+        "288": {
+          "sha256": "7c8a35694a1754d6e061c60915e4ba8c83826103175e83a3c6d2460a115fd89e",
+          "sizeBytes": 7861
+        },
+        "1024": {
+          "sha256": "f73061c60366fe4f4cec5494770ee2e2b80e406de18c5fb8609a4e4980d88ebf",
+          "sizeBytes": 7863
+        }
+      },
+      "looped_logsumexp_float16": {
+        "1024": {
+          "sha256": "75321d9db7c7a63c4b87f2ef0d496557a9db0931fa87e7d3c1fcf3dbadd324e4",
+          "sizeBytes": 6959
+        }
+      },
+      "block_logsumexp_bfloat16": {
+        "32": {
+          "sha256": "0cf113b7538d9ed133299936b77dadb8c04407ffec4f71dbe1c18ebf159e4d41",
+          "sizeBytes": 5214
+        },
+        "288": {
+          "sha256": "99eeb233610315c239ed15c478401d6c622c45cb4fef79085efe66a0181b7cdd",
+          "sizeBytes": 6858
+        },
+        "1024": {
+          "sha256": "69a7da632366f60d570717e7a1b695fcc56854a1d84ca4716971f23b7b647502",
+          "sizeBytes": 6860
+        }
+      },
+      "looped_logsumexp_bfloat16": {
+        "1024": {
+          "sha256": "3210fe9cfab1db1e6dfa11321eb534445061cae672bbb88d8734ff2e8c0e956e",
+          "sizeBytes": 5952
+        }
+      }
+    },
+    "directx": {
+      "block_logsumexp_float32": {
+        "32": {
+          "sha256": "030274a062cb1ab217483bc736dc7efe1964be2655f39b6c9b262f0fc3b6a4cf",
+          "sizeBytes": 6345
+        },
+        "288": {
+          "sha256": "36a83a2ff3f73404f075b419a5e9dc5e81bbc618fa8c8c946067c3db4f58ede7",
+          "sizeBytes": 6347
+        },
+        "1024": {
+          "sha256": "433a13a7912601bb23b3ec11764c033251eea6311d8339205a38a8112fd85bce",
+          "sizeBytes": 6349
+        }
+      },
+      "looped_logsumexp_float32": {
+        "1024": {
+          "sha256": "0d73119a4e3608e15c246fbff644d783d2342402cfa0b671e2559429a3889a4d",
+          "sizeBytes": 5748
+        }
+      },
+      "block_logsumexp_float16": {
+        "32": {
+          "sha256": "04af4b61667c6871bd09222dbcf9c50769ca56eb22c4145b3b81fb2571926bd4",
+          "sizeBytes": 9063
+        },
+        "288": {
+          "sha256": "b9325f4e916406488f190a870b8fb984a7409be4dc3c4553e987297097b3f92f",
+          "sizeBytes": 9065
+        },
+        "1024": {
+          "sha256": "6acdff25dc488016b432d0c20584d3f314d1d4859a827353180ae530a8f1f076",
+          "sizeBytes": 9067
+        }
+      },
+      "looped_logsumexp_float16": {
+        "1024": {
+          "sha256": "876060c3f60f85572879a1c307aed97f44f4bcfd717860d31dbb0a1b15d89a97",
+          "sizeBytes": 8466
+        }
+      },
+      "block_logsumexp_bfloat16": {
+        "32": {
+          "sha256": "592987ff20e73dc71a02b2d667f793a447a4e18b36447637798240c55d168653",
+          "sizeBytes": 7099
+        },
+        "288": {
+          "sha256": "598fda8435832eaf195231e740433ca2f8db191d293aa844894aba800e871a09",
+          "sizeBytes": 7101
+        },
+        "1024": {
+          "sha256": "5b0825084fc8655af5cc3be7c6eb3c410e7390b6f683aa7345017ed9c8622e61",
+          "sizeBytes": 7103
+        }
+      },
+      "looped_logsumexp_bfloat16": {
+        "1024": {
+          "sha256": "c21669b771171e44d4ecec785ab3e8c1ae1c80e26f11c07ec5c744331bd79cb0",
+          "sizeBytes": 6499
+        }
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSizes": {
+      "block": [
+        32,
+        288,
+        1024
+      ],
+      "looped": [
+        1024
+      ]
+    },
+    "looped": {
+      "axisSizeAbove": 4096,
+      "workgroupSize": 1024
+    },
+    "subgroups": {
+      "metal": "native-simdgroup-32",
+      "opengl": "software-subgroup-32",
+      "directx": "software-subgroup-32"
+    },
+    "indexRangeAssertions": {
+      "opengl": {
+        "block": [
+          {
+            "expression": "gid * uint64(axis_size) + lid * 4",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "in_ + i",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        ],
+        "looped": [
+          {
+            "expression": "gid * uint64(axis_size)",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "in_ + offset + i",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        ]
+      },
+      "metal": {},
+      "directx": {}
+    },
+    "cases": {
+      "one": {
+        "rows": 3,
+        "axisSize": 1,
+        "values": "uniform",
+        "kernel": "block",
+        "workgroupSize": 32
+      },
+      "tail": {
+        "rows": 5,
+        "axisSize": 7,
+        "values": "uniform",
+        "kernel": "block",
+        "workgroupSize": 32
+      },
+      "rows": {
+        "rows": 64,
+        "axisSize": 32,
+        "values": "uniform",
+        "kernel": "block",
+        "workgroupSize": 32
+      },
+      "full": {
+        "rows": 4,
+        "axisSize": 128,
+        "values": "uniform",
+        "kernel": "block",
+        "workgroupSize": 32
+      },
+      "masked": {
+        "rows": 3,
+        "axisSize": 100,
+        "values": "masked",
+        "kernel": "block",
+        "workgroupSize": 32
+      },
+      "large": {
+        "rows": 3,
+        "axisSize": 77,
+        "values": "large",
+        "kernel": "block",
+        "workgroupSize": 32
+      },
+      "infinite": {
+        "rows": 2,
+        "axisSize": 40,
+        "values": "infinite",
+        "kernel": "block",
+        "workgroupSize": 32
+      },
+      "simd-groups": {
+        "rows": 2,
+        "axisSize": 1152,
+        "values": "uniform",
+        "kernel": "block",
+        "workgroupSize": 288
+      },
+      "simd-tail": {
+        "rows": 3,
+        "axisSize": 1025,
+        "values": "uniform",
+        "kernel": "block",
+        "workgroupSize": 288
+      },
+      "group": {
+        "rows": 2,
+        "axisSize": 4096,
+        "values": "uniform",
+        "kernel": "block",
+        "workgroupSize": 1024
+      },
+      "group-tail": {
+        "rows": 2,
+        "axisSize": 3969,
+        "values": "large",
+        "kernel": "block",
+        "workgroupSize": 1024
+      },
+      "two-passes": {
+        "rows": 2,
+        "axisSize": 4097,
+        "values": "uniform",
+        "kernel": "looped",
+        "workgroupSize": 1024
+      },
+      "passes": {
+        "rows": 1,
+        "axisSize": 20000,
+        "values": "uniform",
+        "kernel": "looped",
+        "workgroupSize": 1024
+      },
+      "rising": {
+        "rows": 1,
+        "axisSize": 12288,
+        "values": "rising",
+        "kernel": "looped",
+        "workgroupSize": 1024
+      },
+      "looped-large": {
+        "rows": 2,
+        "axisSize": 5000,
+        "values": "large",
+        "kernel": "looped",
+        "workgroupSize": 1024
+      },
+      "looped-masked": {
+        "rows": 1,
+        "axisSize": 4500,
+        "values": "masked",
+        "kernel": "looped",
+        "workgroupSize": 1024
+      },
+      "looped-infinite": {
+        "rows": 2,
+        "axisSize": 4200,
+        "values": "infinite",
+        "kernel": "looped",
+        "workgroupSize": 1024
+      }
+    },
+    "float32Tolerance": {
+      "absolute": 5e-05,
+      "relative": 4.76837158203125e-07
+    },
+    "narrowResults": "correct-rounding-of-a-float32-tolerance-value",
+    "inputGuardCount": 16,
+    "outputGuardCount": 16,
+    "observedInputCount": 2,
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ]
+  },
+  "scope": {
+    "coveredEntryCount": 6,
+    "runtimeCoveredEntryCount": 6,
+    "artifactCountByTarget": 12,
+    "checkedRowCountByEntry": {
+      "block_logsumexp_float32": 93,
+      "looped_logsumexp_float32": 9,
+      "block_logsumexp_float16": 93,
+      "looped_logsumexp_float16": 9,
+      "block_logsumexp_bfloat16": 93,
+      "looped_logsumexp_bfloat16": 9
+    },
+    "completeCorpusEntryCount": 17832,
+    "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
+    "allMaskedRowsCovered": false,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

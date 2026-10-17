@@ -5,66 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 3,
-        "endOffset": 32,
+        "endLine": 9,
+        "endOffset": 169,
         "file": "crosstl-out/opengl/SplatGroupSharedScalar.glsl",
-        "length": 14,
-        "line": 2,
-        "offset": 18
+        "length": 169,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 469,
+        "endLine": 16,
+        "endOffset": 540,
         "file": "SplatGroupSharedScalar.hlsl",
-        "length": 19,
-        "line": 10,
-        "offset": 450
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 7,
-        "endOffset": 143,
-        "file": "crosstl-out/opengl/SplatGroupSharedScalar.glsl",
-        "length": 13,
-        "line": 6,
-        "offset": 130
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 517,
-        "file": "SplatGroupSharedScalar.hlsl",
-        "length": 11,
-        "line": 13,
-        "offset": 506
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 167,
-        "file": "crosstl-out/opengl/SplatGroupSharedScalar.glsl",
-        "length": 24,
-        "line": 7,
-        "offset": 143
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 538,
-        "file": "SplatGroupSharedScalar.hlsl",
-        "length": 21,
-        "line": 14,
-        "offset": 517
+        "length": 540,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

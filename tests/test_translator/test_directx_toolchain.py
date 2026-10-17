@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from crosstl.project.directx_toolchain import (
@@ -141,3 +143,52 @@ def test_non_native_types_keep_default_compiler_and_target_requirements():
         "directx-11",
         "directx-12",
     )
+
+
+@pytest.mark.parametrize(
+    "source,profile,native16",
+    [
+        ("[numthreads(1, 1, 1)] void CSMain() {}", "cs_6_2", False),
+        (NATIVE_16_BIT_SOURCE, "cs_6_2", True),
+        (EXACT_WAVE_SIZE_SOURCE, "cs_6_6", False),
+        (NATIVE_16_BIT_SOURCE + EXACT_WAVE_SIZE_SOURCE, "cs_6_6", True),
+        ("// [WaveSize(32)]\nfloat value;", "cs_6_2", False),
+    ],
+)
+def test_native_test_validator_uses_source_compiler_contract(
+    tmp_path, monkeypatch, source, profile, native16
+):
+    from tests import runtime_helpers
+
+    shader = tmp_path / "shader.hlsl"
+    shader.write_text(source, encoding="utf-8")
+    formatted = []
+    commands = []
+
+    def format_path(path):
+        formatted.append(path)
+        return "formatted:" + str(path)
+
+    def bridge(command, source_path):
+        assert source_path == shader
+        commands.append(command)
+        return ["compiler-bridge"]
+
+    def run(command, directory, name, *, timeout):
+        assert command == ["compiler-bridge"] and timeout == 300
+        (directory / "kernel.dxil").write_bytes(b"compiled")
+        (directory / f"{name}.json").write_text(
+            json.dumps(dict(stdout="", stderr="")), encoding="utf-8"
+        )
+
+    monkeypatch.setattr(runtime_helpers, "dxc_file_path", format_path)
+    monkeypatch.setattr(runtime_helpers, "dxc_long_path_command", bridge)
+    monkeypatch.setattr(runtime_helpers, "run", run)
+    runtime_helpers._validate_generated_artifact(shader, tmp_path, "directx")
+    assert formatted == [shader, tmp_path / "kernel.dxil"]
+    (command,) = commands
+    assert command[command.index("-T") + 1] == profile
+    assert ("-enable-16bit-types" in command) == native16
+    assert "-WX" in command and command[command.index("-E") + 1] == "CSMain"
+    assert "formatted:" + str(shader) in command
+    assert command[-1] == "formatted:" + str(tmp_path / "kernel.dxil")

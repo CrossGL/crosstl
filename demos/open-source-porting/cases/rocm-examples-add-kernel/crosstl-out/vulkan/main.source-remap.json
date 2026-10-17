@@ -4,11 +4,11 @@
     {
       "generated": {
         "column": 1,
-        "endColumn": 14,
-        "endLine": 80,
-        "endOffset": 2082,
+        "endColumn": 1,
+        "endLine": 81,
+        "endOffset": 2083,
         "file": "crosstl-out/vulkan/main.spvasm",
-        "length": 2082,
+        "length": 2083,
         "line": 1,
         "offset": 0
       },

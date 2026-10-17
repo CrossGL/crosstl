@@ -5,44 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 7,
-        "endOffset": 111,
+        "endLine": 14,
+        "endOffset": 288,
         "file": "crosstl-out/metal/shader.frag.metal",
-        "length": 39,
-        "line": 6,
-        "offset": 72
+        "length": 288,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 6,
-        "endOffset": 91,
+        "endLine": 10,
+        "endOffset": 138,
         "file": "shader.frag",
-        "length": 38,
-        "line": 5,
-        "offset": 53
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 265,
-        "file": "crosstl-out/metal/shader.frag.metal",
-        "length": 45,
-        "line": 11,
-        "offset": 220
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 136,
-        "file": "shader.frag",
-        "length": 31,
-        "line": 8,
-        "offset": 105
+        "length": 138,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

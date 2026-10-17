@@ -1,7 +1,10 @@
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "sync_pr_issue_links.py"
@@ -1025,6 +1028,82 @@ def test_dry_run_does_not_touch_client_but_reports_body_update():
     assert summary["body_updated"] == 1
     assert client.assigned == []
     assert client.updated_bodies == []
+
+
+@pytest.mark.parametrize("padding_size", [0, 2 * 1024 * 1024])
+def test_github_client_reads_json_file_with_raw_media_type(monkeypatch, padding_size):
+    module = load_sync_module()
+    client = module.GitHubClient("CrossGL/crosstl", "test-token")
+    expected = {"backlog": [], "padding": "x" * padding_size}
+    calls = []
+
+    def fake_urlopen(req, timeout):
+        calls.append(req)
+        assert req.get_method() == "GET"
+        assert req.full_url == (
+            "https://api.github.com/repos/contributor/fork/contents/"
+            "support/large%20matrix.json?ref=refs%2Fheads%2Freview"
+        )
+        assert req.get_header("Accept") == "application/vnd.github.raw+json"
+        assert req.get_header("Authorization") == "Bearer test-token"
+        assert req.get_header("X-github-api-version") == module.API_VERSION
+        assert timeout == 30
+        response = io.BytesIO(json.dumps(expected).encode("utf-8"))
+        response.headers = {}
+        return response
+
+    monkeypatch.setattr(module.request, "urlopen", fake_urlopen)
+    assert (
+        client.read_json_file(
+            "contributor/fork", "support/large matrix.json", "refs/heads/review"
+        )
+        == expected
+    )
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("body", [b"[]", b"null", b'"text"', b"not JSON"])
+def test_github_client_rejects_invalid_repository_json(monkeypatch, body):
+    module = load_sync_module()
+    client = module.GitHubClient("CrossGL/crosstl", "test-token")
+
+    def fake_urlopen(req, timeout):
+        response = io.BytesIO(body)
+        response.headers = {}
+        return response
+
+    monkeypatch.setattr(module.request, "urlopen", fake_urlopen)
+    with pytest.raises(ValueError):
+        client.read_json_file("CrossGL/crosstl", "matrix.json", "commit")
+
+
+def test_github_client_preserves_contents_api_errors(monkeypatch):
+    module = load_sync_module()
+    client = module.GitHubClient("CrossGL/crosstl", "test-token")
+
+    def fake_urlopen(req, timeout):
+        raise module.error.HTTPError(
+            req.full_url, 404, "Not Found", {}, io.BytesIO(b"missing")
+        )
+
+    monkeypatch.setattr(module.request, "urlopen", fake_urlopen)
+    with pytest.raises(module.GitHubApiError) as caught:
+        client.read_json_file("CrossGL/crosstl", "matrix.json", "commit")
+    assert caught.value.status == 404
+
+
+def test_github_client_keeps_default_json_media_type(monkeypatch):
+    module = load_sync_module()
+    client = module.GitHubClient("CrossGL/crosstl", "test-token")
+
+    def fake_urlopen(req, timeout):
+        assert req.get_header("Accept") == "application/vnd.github+json"
+        response = io.BytesIO(b'{"number": 10}')
+        response.headers = {}
+        return response
+
+    monkeypatch.setattr(module.request, "urlopen", fake_urlopen)
+    assert client.get_issue(10) == {"number": 10}
 
 
 def test_github_client_lists_pull_files_across_pages():

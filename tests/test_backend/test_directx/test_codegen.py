@@ -509,6 +509,146 @@ def parse_crossgl(code: str):
     return parser.parse()
 
 
+@pytest.mark.parametrize(
+    "operator",
+    ["+", "-", "*", "/", "%", "&", "|", "^", "<", "<=", ">", ">=", "==", "!="],
+)
+@pytest.mark.parametrize("reverse", [False, True])
+def test_wide_integer_source_rank_is_explicit(operator, reverse):
+    left, right = ("b", "a") if reverse else ("a", "b")
+    output = generate_crossgl(
+        f"int64_t value(int64_t a, uint b) {{ return {left} {operator} {right}; }}"
+    )
+    assert f"uint64({left}) {operator} uint64({right})" in output
+    parse_crossgl(output)
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    [
+        ("(a / b) / c", "(uint64(a) / uint64(b)) / uint64(c)"),
+        ("(flag ? a : b) / c", "(flag ? uint64(a) : uint64(b)) / uint64(c)"),
+        ("(a >> b) / c", "(a >> b) / c"),
+        ("(a / c) / b", "uint64((a / c)) / uint64(b)"),
+        ("a / uint(2)", "uint64(a) / uint64(uint(2))"),
+        ("a / 3u", "uint64(a) / uint64(3u)"),
+        ("a / (3u + int(b))", "uint64(a) / uint64((3u + int(b)))"),
+    ],
+)
+def test_wide_integer_nested_source_rank(expression, expected):
+    output = generate_crossgl(
+        f"int64_t value(int64_t a, uint b, int64_t c, bool flag) {{ return {expression}; }}"
+    )
+    assert expected in output
+    parse_crossgl(output)
+
+
+def test_wide_integer_alias_members_calls_and_scopes():
+    output = generate_crossgl("""
+        typedef int64_t Wide;
+        typedef Wide Number;
+        struct Values { Number wide; uint narrow; };
+        Number select_value(Number a) { return a; }
+        uint select_value(uint a) { return a; }
+        Number calculate(Values values, uint b) {
+            Number a = values.wide;
+            if (b > 0) { int64_t b = a; a /= b; }
+            for (int64_t b = 1; b < 2; b++) { a /= b; }
+            return select_value(a) / select_value(b);
+        }
+    """)
+    assert "uint64(select_value(a)) / uint64(select_value(b))" in output
+    assert output.count("a /= b;") == 2
+    parse_crossgl(output)
+
+
+@pytest.mark.parametrize(
+    "left,right,common,scalar",
+    [
+        ("uint2", "int64_t", "u64vec2", "uint64"),
+        ("int64_t2", "uint", "u64vec2", "uint64"),
+        ("int2", "int64_t", "i64vec2", None),
+        ("vector<int64_t, 2>", "uint", "u64vec2", "uint64"),
+    ],
+)
+def test_wide_integer_vector_source_rank(left, right, common, scalar):
+    output = generate_crossgl(f"{left} value({left} a, {right} b) {{ return a / b; }}")
+    if scalar:
+        assert f"{scalar}(b)" in output
+    if common != left:
+        assert f"{common}(a)" in output
+    parse_crossgl(output)
+
+
+def test_wide_integer_compound_vector_index_evaluated_once():
+    output = generate_crossgl("""
+        uint2 __crossgl_hlsl_integer_compound(uint2 value) { return value; }
+        uint2 value(uint2 data[2], int64_t divisor) {
+            uint index = 0;
+            uint2 result = (data[index++] /= divisor);
+            return result;
+        }
+    """)
+    assert output.count("index++") == 1
+    assert "__crossgl_hlsl_integer_compound_(data[index++], divisor)" in output
+    assert "target = uvec2(u64vec2(target) / uint64(value));" in output
+    parse_crossgl(output)
+
+
+def test_wide_integer_compound_rejects_unproven_copy_in_alias():
+    with pytest.raises(DirectxCrossGLCodeGen.HLSLIntegerConversionError) as failure:
+        generate_crossgl("""
+            int64_t mutate(inout uint2 target) { target = uint2(2, 3); return 2; }
+            uint2 value(uint2 target) { target /= mutate(target); return target; }
+        """)
+    assert failure.value.reason == "compound-copy-in-alias"
+
+
+def test_wide_integer_helpers_reset_between_modules():
+    converter = DirectxCrossGLCodeGen.HLSLToCrossGLConverter()
+    source = "uint2 value(uint2 a, int64_t b) { a /= b; return a; }"
+    ast = HLSLParser(HLSLLexer(source).tokenize()).parse()
+    assert "__crossgl_hlsl_integer_compound" in converter.generate(ast)
+    ast = HLSLParser(HLSLLexer("int value(int a) { return a; }").tokenize()).parse()
+    assert "__crossgl_hlsl_integer_compound" not in converter.generate(ast)
+
+
+def test_wide_integer_unresolved_overload_result_is_diagnostic():
+    with pytest.raises(DirectxCrossGLCodeGen.HLSLIntegerConversionError) as failure:
+        generate_crossgl("""
+            int64_t choose(float a) { return int64_t(a); }
+            uint64_t choose(double a) { return uint64_t(a); }
+            int64_t value(uint a, uint b) { return choose(a) / b; }
+        """)
+    assert failure.value.reason == "ambiguous-function-result"
+
+
+def test_wide_integer_switch_cases_share_a_lexical_scope():
+    output = generate_crossgl("""
+        int64_t value(int selector, int64_t a, uint b, int64_t v) {
+            switch (selector) {
+                case 0: uint v; v = b; break;
+                case 1: v = b; return a / v;
+                default: return 0;
+            }
+            return a / v;
+        }
+    """)
+    assert "return uint64(a) / uint64(v);" in output
+    assert "return a / v;" in output
+    parse_crossgl(output)
+
+
+def test_wide_integer_long_sum_keeps_source_conversion_order():
+    expression = " + ".join(["a"] * 20 + ["b"] + ["a"] * 20)
+    output = generate_crossgl(
+        f"int64_t value(int64_t a, uint b) {{ return {expression}; }}"
+    )
+    assert "uint64(" + " + ".join(["a"] * 20) + ") + uint64(b)" in output
+    assert output.count("uint64(a)") == 20
+    parse_crossgl(output)
+
+
 def test_codegen_pointer_parameter_reparse_from_compiler_fixture():
     # Reduced from CrossGL-Compiler StorageBufferPointerHelperParamShader.cgl.
     hlsl = textwrap.dedent("""
@@ -2031,14 +2171,20 @@ def test_codegen_template_style_64_bit_integer_vectors_preserve_width():
 
     output = generate_crossgl(hlsl)
 
-    assert "uint64_t4 MakeOffsets(int64_t2 delta)" in output
-    assert "uint64_t4 offsets = uint64_t4(1, 2, 3, 4);" in output
-    assert "vec4" not in output
+    assert "u64vec4 MakeOffsets(i64vec2 delta)" in output
+    assert (
+        "u64vec4 offsets = u64vec4(uint64(1), uint64(2), uint64(3), uint64(4));"
+        in output
+    )
+    assert " vec4 " not in output
     assert "ivec2" not in output
 
     hlsl_roundtrip = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
     assert "uint64_t4 MakeOffsets(int64_t2 delta)" in hlsl_roundtrip
-    assert "uint64_t4 offsets = uint64_t4(1, 2, 3, 4);" in hlsl_roundtrip
+    assert (
+        "uint64_t4 offsets = uint64_t4(uint64_t(1), uint64_t(2), uint64_t(3), uint64_t(4));"
+        in hlsl_roundtrip
+    )
 
 
 def test_codegen_fixed_width_vector_alias_constructors_from_hlsl_docs_reparse():
@@ -2061,7 +2207,7 @@ def test_codegen_fixed_width_vector_alias_constructors_from_hlsl_docs_reparse():
     assert "f16vec4 MakeHalf(float16 value @ TexCoord0) @ gl_FragData[0]" in output
     assert "f16vec4 halfColor = f16vec4(value, value, value, value);" in output
     assert "ivec4 signedLanes = ivec4(1, 2, 3, 4);" in output
-    assert "uvec2 unsignedPair = uvec2(1, 2);" in output
+    assert "uvec2 unsignedPair = uvec2(1u, 2u);" in output
     assert (
         "return halfColor + f16vec4("
         "signedLanes.x, signedLanes.y, unsignedPair.x, unsignedPair.y);" in output
@@ -3484,14 +3630,14 @@ def test_codegen_byte_address_vector_method_mapping():
     assert "RWByteAddressBuffer rawOutput;" in output
     assert "@ register(t3)" in output
     assert "@ register(u4)" in output
-    assert "uint scalar = buffer_load(rawInput, offset + 48);" in output
+    assert "uint scalar = buffer_load(rawInput, offset + 48u);" in output
     assert "uvec2 pair = buffer_load2(rawInput, offset);" in output
-    assert "uvec3 triple = buffer_load3(rawOutput, offset + 16);" in output
-    assert "uvec4 quad = buffer_load4(rawOutput, offset + 32);" in output
-    assert "buffer_store(rawOutput, offset + 48, scalar);" in output
+    assert "uvec3 triple = buffer_load3(rawOutput, offset + 16u);" in output
+    assert "uvec4 quad = buffer_load4(rawOutput, offset + 32u);" in output
+    assert "buffer_store(rawOutput, offset + 48u, scalar);" in output
     assert "buffer_store2(rawOutput, offset, pair);" in output
-    assert "buffer_store3(rawOutput, offset + 16, triple);" in output
-    assert "buffer_store4(rawOutput, offset + 32, quad);" in output
+    assert "buffer_store3(rawOutput, offset + 16u, triple);" in output
+    assert "buffer_store4(rawOutput, offset + 32u, quad);" in output
     assert ".Load<uint>(" not in output
     assert ".Store<uint>(" not in output
     assert ".Load2(" not in output
@@ -3500,14 +3646,14 @@ def test_codegen_byte_address_vector_method_mapping():
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
     assert "ByteAddressBuffer rawInput : register(t3);" in regenerated_hlsl
     assert "RWByteAddressBuffer rawOutput : register(u4);" in regenerated_hlsl
-    assert "uint scalar = rawInput.Load((offset + 48));" in regenerated_hlsl
+    assert "uint scalar = rawInput.Load((offset + 48u));" in regenerated_hlsl
     assert "uint2 pair = rawInput.Load2(offset);" in regenerated_hlsl
-    assert "uint3 triple = rawOutput.Load3((offset + 16));" in regenerated_hlsl
-    assert "uint4 quad = rawOutput.Load4((offset + 32));" in regenerated_hlsl
-    assert "rawOutput.Store((offset + 48), scalar);" in regenerated_hlsl
+    assert "uint3 triple = rawOutput.Load3((offset + 16u));" in regenerated_hlsl
+    assert "uint4 quad = rawOutput.Load4((offset + 32u));" in regenerated_hlsl
+    assert "rawOutput.Store((offset + 48u), scalar);" in regenerated_hlsl
     assert "rawOutput.Store2(offset, pair);" in regenerated_hlsl
-    assert "rawOutput.Store3((offset + 16), triple);" in regenerated_hlsl
-    assert "rawOutput.Store4((offset + 32), quad);" in regenerated_hlsl
+    assert "rawOutput.Store3((offset + 16u), triple);" in regenerated_hlsl
+    assert "rawOutput.Store4((offset + 32u), quad);" in regenerated_hlsl
     assert "buffer_load2(" not in regenerated_hlsl
     assert "buffer_store4(" not in regenerated_hlsl
 
@@ -3528,8 +3674,8 @@ def test_codegen_rwbyteaddressbuffer_interlocked_add_from_microsoft_docs():
 
     assert "RWByteAddressBuffer rawBytes;" in crossgl
     assert "@ register(u1)" in crossgl
-    assert "atomicAdd(rawBytes, offset, 1);" in crossgl
-    assert "original = atomicAdd(rawBytes, offset + 4, 2);" in crossgl
+    assert "atomicAdd(rawBytes, offset, 1u);" in crossgl
+    assert "original = atomicAdd(rawBytes, offset + 4u, 2u);" in crossgl
     assert ".InterlockedAdd(" not in crossgl
     parse_crossgl(crossgl)
 
@@ -3550,8 +3696,8 @@ def test_codegen_rwbyteaddressbuffer_interlocked_family_from_microsoft_docs():
 
     assert "RWByteAddressBuffer rawBytes;" in crossgl
     assert "@ register(u1)" in crossgl
-    assert "original = atomicMax(rawBytes, offset, 5);" in crossgl
-    assert "original = atomicCompareExchange(rawBytes, offset + 4, 3, 7);" in crossgl
+    assert "original = atomicMax(rawBytes, offset, 5u);" in crossgl
+    assert "original = atomicCompareExchange(rawBytes, offset + 4u, 3u, 7u);" in crossgl
     assert ".InterlockedMax(" not in crossgl
     assert ".InterlockedCompareExchange(" not in crossgl
     parse_crossgl(crossgl)
@@ -3585,8 +3731,8 @@ def test_codegen_byte_address_status_loads_do_not_become_texture_fetches():
         "unsupported DirectX tiled-resource status for Load4: " "dropped status output"
     ) in crossgl
     assert "buffer_load(rawInput, offset)" in crossgl
-    assert "buffer_load2(rawInput, offset + 8)" in crossgl
-    assert "buffer_load4(rawOutput, offset + 16)" in crossgl
+    assert "buffer_load2(rawInput, offset + 8u)" in crossgl
+    assert "buffer_load4(rawOutput, offset + 16u)" in crossgl
     assert "texelFetch(rawInput" not in crossgl
     assert "texelFetch(rawOutput" not in crossgl
 
@@ -3594,9 +3740,9 @@ def test_codegen_byte_address_status_loads_do_not_become_texture_fetches():
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parsed)
 
     assert "uint scalar = rawInput.Load(offset);" in regenerated_hlsl
-    assert "uint2 pair = rawInput.Load2((offset + 8));" in regenerated_hlsl
-    assert "uint4 quad = rawOutput.Load4((offset + 16));" in regenerated_hlsl
-    assert "rawOutput.Store((offset + 4), scalar);" in regenerated_hlsl
+    assert "uint2 pair = rawInput.Load2((offset + 8u));" in regenerated_hlsl
+    assert "uint4 quad = rawOutput.Load4((offset + 16u));" in regenerated_hlsl
+    assert "rawOutput.Store((offset + 4u), scalar);" in regenerated_hlsl
     assert "bool mapped = true;" in regenerated_hlsl
     assert "texelFetch(" not in regenerated_hlsl
     assert "CheckAccessFullyMapped(" not in regenerated_hlsl
@@ -3618,7 +3764,7 @@ def test_codegen_wave_ops_passthrough():
         "WaveActiveAllEqual(value)",
         "WaveActiveBallot(predicate)",
         "WaveActiveCountBits(predicate)",
-        "WaveReadLaneAt(value, 0)",
+        "WaveReadLaneAt(value, 0u)",
         "WaveReadLaneFirst(value)",
         "WavePrefixSum(value)",
         "WavePrefixProduct(value)",
@@ -3633,7 +3779,7 @@ def test_codegen_wave_ops_passthrough():
         "QuadReadAcrossX(value)",
         "QuadReadAcrossY(value)",
         "QuadReadAcrossDiagonal(value)",
-        "QuadReadLaneAt(value, 2)",
+        "QuadReadLaneAt(value, 2u)",
         "QuadAny(predicate)",
         "QuadAll(predicate)",
     ]:
@@ -3740,7 +3886,7 @@ def test_codegen_rw_texture_indexing_uses_image_operations():
     assert "uint v = imageLoad(counters, uvec2(tid.x, 0));" in output
     assert (
         "imageStore(counters, uvec2(tid.x, 0), "
-        "imageLoad(counters, uvec2(tid.x, 0)) + 1);"
+        "imageLoad(counters, uvec2(tid.x, 0)) + 1u);"
     ) in output
     assert "vec4 d = imageLoad(images[0], tid.xy);" in output
     assert "imageStore(images[1], tid.xy, d);" in output
@@ -3822,7 +3968,7 @@ def test_codegen_preserves_globallycoherent_uav_parameter_from_hlsl_specs():
         "void CoherentStore(@ globallycoherent "
         "RWStructuredBuffer<Payload> data, uint index)" in output
     )
-    assert "data[index].value = 1;" in output
+    assert "data[index].value = 1u;" in output
 
 
 def test_codegen_preserves_reordercoherent_uav_from_dxc_dxil_69():
@@ -6891,12 +7037,12 @@ def test_codegen_byte_address_interlocked_compare_store_roundtrip():
 
     assert "RWByteAddressBuffer rawBytes;" in crossgl
     assert "@ register(u4)" in crossgl
-    assert "rawBytes.InterlockedCompareStore(offset, compare, 7);" in crossgl
+    assert "rawBytes.InterlockedCompareStore(offset, compare, 7u);" in crossgl
     assert "atomicCompareExchange(rawBytes" not in crossgl
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "RWByteAddressBuffer rawBytes : register(u4);" in regenerated_hlsl
-    assert "rawBytes.InterlockedCompareStore(offset, compare, 7);" in regenerated_hlsl
+    assert "rawBytes.InterlockedCompareStore(offset, compare, 7u);" in regenerated_hlsl
     assert "InterlockedCompareExchange(rawBytes" not in regenerated_hlsl
 
 

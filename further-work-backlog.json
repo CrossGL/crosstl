@@ -32,7 +32,7 @@
     },
     {
       "title": "Fix MLX frontier Vulkan SPIR-V validation failures (#1362 / #1317)",
-      "body": "MLX reduced-frontier and full-corpus scouts translate cleanly but stay validation-blocked: integrations/mlx/expected-gaps.json sets frontier_status to passing-artifacts-validation-blocked and lists issue #1317 under blocked_by/validation_blocked_by; integrations/mlx/run_mlx_porting.py defines FRONTIER_VALIDATION_TRACKED_ISSUES and emits vulkanValidationStatus=blocked-by-tracked-issues, skipping required Vulkan toolchain runs. spirv-val rejects artifacts such as mlx/backend/metal/kernels/arange.metal (OpStore Pointer type does not match Object type). Fix the SPIR-V lowering in the translator (not the harness). Acceptance: frontier DirectX/Vulkan sources pass spirv-as/spirv-val under --require-vulkan-toolchain; remove the tracked-issue bypass.",
+      "body": "MLX reduced-frontier and full-corpus scouts translate cleanly but stay validation-blocked: integrations/mlx/expected-gaps.json sets frontier_status to passing-artifacts-validation-blocked and lists issue #1317 under blocked_by/validation_blocked_by; integrations/mlx/run_porting.py defines FRONTIER_VALIDATION_TRACKED_ISSUES and emits vulkanValidationStatus=blocked-by-tracked-issues, skipping required Vulkan toolchain runs. spirv-val rejects artifacts such as mlx/backend/metal/kernels/arange.metal (OpStore Pointer type does not match Object type). Fix the SPIR-V lowering in the translator (not the harness). Acceptance: frontier DirectX/Vulkan sources pass spirv-as/spirv-val under --require-vulkan-toolchain; remove the tracked-issue bypass.",
       "area": "spirv_vulkan", "source": "deferred_github_issue:#1362", "priority": "high", "related": ["#1362", "#1317", "#1378"]
     },
     {
@@ -52,7 +52,7 @@
     },
     {
       "title": "Finalize per-platform MLX native toolchain gating and land PR #1364 (#1312)",
-      "body": "PR #1364 (closes #1312) requires MLX project-porting CI to validate native toolchains, but currently requires DirectX/DXC on all platforms, so translate-directx-vulkan-frontier fails on macOS. Per #1312, gate DXC->Windows, OpenGL/glslangValidator->Linux (+macOS if installed), Vulkan/SPIR-V->Linux; keep artifact generation everywhere. The branch also conflicts with #1378's mlx-project-porting.yml changes now on main and must be re-merged. Acceptance: the three MLX Metal project porting jobs pass; independent require-<target>-toolchain flags; reports/logs upload on all platforms.",
+      "body": "PR #1364 (closes #1312) requires MLX project-porting CI to validate native toolchains, but currently requires DirectX/DXC on all platforms, so translate-directx-vulkan-frontier fails on macOS. Per #1312, gate DXC->Windows, OpenGL/glslangValidator->Linux (+macOS if installed), Vulkan/SPIR-V->Linux; keep artifact generation everywhere. The branch also conflicts with #1378's demo-project-testing.yml changes now on main and must be re-merged. Acceptance: the three MLX Metal project porting jobs pass; independent require-<target>-toolchain flags; reports/logs upload on all platforms.",
       "area": "pr_followup", "source": "pr_followup:#1364", "priority": "medium", "related": ["#1364", "#1312", "#1378"]
     },
     {

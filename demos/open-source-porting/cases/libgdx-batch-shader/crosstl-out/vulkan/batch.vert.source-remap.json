@@ -5,44 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 458,
+        "endLine": 105,
+        "endOffset": 2835,
         "file": "crosstl-out/vulkan/batch.vert.spvasm",
-        "length": 33,
-        "line": 16,
-        "offset": 425
+        "length": 2835,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 260,
+        "endLine": 15,
+        "endOffset": 262,
         "file": "batch.vert",
-        "length": 42,
-        "line": 13,
-        "offset": 218
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 23,
-        "endOffset": 660,
-        "file": "crosstl-out/vulkan/batch.vert.spvasm",
-        "length": 25,
-        "line": 22,
-        "offset": 635
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 260,
-        "file": "batch.vert",
-        "length": 42,
-        "line": 13,
-        "offset": 218
+        "length": 262,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

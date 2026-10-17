@@ -5,88 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 18,
-        "endOffset": 444,
+        "endLine": 98,
+        "endOffset": 2724,
         "file": "crosstl-out/vulkan/alpha_stitch.spvasm",
-        "length": 25,
-        "line": 17,
-        "offset": 419
+        "length": 2724,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 364,
+        "endLine": 21,
+        "endOffset": 760,
         "file": "alpha_stitch.glsl",
-        "length": 47,
-        "line": 11,
-        "offset": 317
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 500,
-        "file": "crosstl-out/vulkan/alpha_stitch.spvasm",
-        "length": 25,
-        "line": 19,
-        "offset": 475
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 13,
-        "endOffset": 413,
-        "file": "alpha_stitch.glsl",
-        "length": 49,
-        "line": 12,
-        "offset": 364
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 22,
-        "endOffset": 556,
-        "file": "crosstl-out/vulkan/alpha_stitch.spvasm",
-        "length": 25,
-        "line": 21,
-        "offset": 531
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 491,
-        "file": "alpha_stitch.glsl",
-        "length": 78,
-        "line": 13,
-        "offset": 413
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 37,
-        "endOffset": 960,
-        "file": "crosstl-out/vulkan/alpha_stitch.spvasm",
-        "length": 41,
-        "line": 36,
-        "offset": 919
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 491,
-        "file": "alpha_stitch.glsl",
-        "length": 78,
-        "line": 13,
-        "offset": 413
+        "length": 760,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

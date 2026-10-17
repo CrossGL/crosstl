@@ -2871,6 +2871,7 @@ class SlangCodeGen:
                 continue
             if (
                 self.is_resource_format_attribute(attr)
+                or str(getattr(attr, "name", "")).lower() == "maybe_unused"
                 or self.is_resource_binding_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
                 or self.slang_interpolation_qualifier(attr.name)

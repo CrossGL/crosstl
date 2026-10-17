@@ -5,44 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 7,
-        "endOffset": 116,
+        "endLine": 18,
+        "endOffset": 349,
         "file": "crosstl-out/directx/flat-color.vert.hlsl",
-        "length": 37,
-        "line": 6,
-        "offset": 79
+        "length": 349,
+        "line": 1,
+        "offset": 0
       },
       "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 232,
-        "file": "flat-color.vert",
-        "length": 31,
-        "line": 14,
-        "offset": 201
-      }
-    },
-    {
-      "generated": {
         "column": 1,
         "endColumn": 1,
         "endLine": 16,
-        "endOffset": 328,
-        "file": "crosstl-out/directx/flat-color.vert.hlsl",
-        "length": 51,
-        "line": 15,
-        "offset": 277
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 232,
+        "endOffset": 234,
         "file": "flat-color.vert",
-        "length": 31,
-        "line": 14,
-        "offset": 201
+        "length": 234,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

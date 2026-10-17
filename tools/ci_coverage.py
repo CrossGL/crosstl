@@ -2282,11 +2282,64 @@ def pull_request_target_policy_presence(report: dict[str, Any]) -> dict[str, boo
     return presence
 
 
+def active_workflow_migrations(
+    baseline: dict[str, Any], current: dict[str, Any], migrations: dict[str, str]
+) -> dict[str, str]:
+    if not isinstance(migrations, dict):
+        raise CiCoverageError("Workflow migrations must be a JSON object")
+    for source, target in migrations.items():
+        if not all(
+            isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", name)
+            for name in (source, target)
+        ):
+            raise CiCoverageError("Workflow migrations must map workflow filenames")
+        if source == target or target in migrations:
+            raise CiCoverageError("Workflow migrations cannot contain chains or cycles")
+
+    baseline_jobs = baseline["workflows"]["runtime"]["job_timeouts"]
+    current_jobs = current["workflows"]["runtime"]["job_timeouts"]
+    active = {}
+    destinations = set()
+    for source, target in sorted(migrations.items()):
+        if source not in baseline_jobs:
+            continue
+        if source in current_jobs or target not in current_jobs:
+            raise CiCoverageError(
+                f"Workflow migration requires {source} to be absent and {target} present"
+            )
+        for job in baseline_jobs[source]:
+            destination = (target, job)
+            if destination in destinations or job in baseline_jobs.get(target, {}):
+                raise CiCoverageError(
+                    f"Workflow migration combines distinct jobs into {target}:{job}"
+                )
+            destinations.add(destination)
+        active[source] = target
+    return active
+
+
+def migrated_workflow_policies(
+    policies: dict[str, bool], migrations: dict[str, str]
+) -> dict[str, bool]:
+    migrated = {}
+    for key, required in policies.items():
+        workflow, separator, suffix = key.partition(":")
+        destination = migrations.get(workflow, workflow) + separator + suffix
+        # A consolidated workflow inherits every positive baseline obligation.
+        migrated[destination] = migrated.get(destination, False) or required
+    return migrated
+
+
 def build_ci_coverage_comparison(
-    baseline: dict[str, Any], current: dict[str, Any]
+    baseline: dict[str, Any],
+    current: dict[str, Any],
+    workflow_migrations: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     shrinks = []
     growth = []
+    migrations = active_workflow_migrations(
+        baseline, current, {} if workflow_migrations is None else workflow_migrations
+    )
 
     def add_set_change(
         scope: str,
@@ -2340,7 +2393,9 @@ def build_ci_coverage_comparison(
     add_bool_map_change(
         "workflows",
         "job_timeouts",
-        workflow_timeout_presence(baseline_runtime),
+        migrated_workflow_policies(
+            workflow_timeout_presence(baseline_runtime), migrations
+        ),
         workflow_timeout_presence(current_runtime),
     )
 
@@ -2349,19 +2404,25 @@ def build_ci_coverage_comparison(
     add_bool_map_change(
         "workflows",
         "explicit_permissions",
-        baseline_permissions["explicit_permissions"],
+        migrated_workflow_policies(
+            baseline_permissions["explicit_permissions"], migrations
+        ),
         current_permissions["explicit_permissions"],
     )
     add_bool_map_change(
         "workflows",
         "required_write_permissions",
-        workflow_required_write_presence(baseline_permissions),
+        migrated_workflow_policies(
+            workflow_required_write_presence(baseline_permissions), migrations
+        ),
         workflow_required_write_presence(current_permissions),
     )
     add_bool_map_change(
         "workflows",
         "write_permission_policy",
-        workflow_write_policy_presence(baseline_permissions),
+        migrated_workflow_policies(
+            workflow_write_policy_presence(baseline_permissions), migrations
+        ),
         workflow_write_policy_presence(current_permissions),
     )
 
@@ -2370,7 +2431,9 @@ def build_ci_coverage_comparison(
     add_bool_map_change(
         "workflows",
         "action_ref_policy",
-        workflow_action_policy_presence(baseline_actions),
+        migrated_workflow_policies(
+            workflow_action_policy_presence(baseline_actions), migrations
+        ),
         workflow_action_policy_presence(current_actions),
     )
 
@@ -2749,6 +2812,7 @@ def build_ci_coverage_comparison(
         },
         "shrinks": shrinks,
         "growth": growth,
+        "workflow_migrations": migrations,
     }
 
 
@@ -3548,6 +3612,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     compare_parser.add_argument("--output", type=Path, help="Optional JSON output path")
     compare_parser.add_argument(
+        "--workflow-migrations",
+        type=Path,
+        help="Explicit old-to-new workflow filename map; job identities are unchanged",
+    )
+    compare_parser.add_argument(
         "--fail-on-shrink",
         action="store_true",
         help="Exit non-zero when coverage was removed compared with the baseline",
@@ -3574,6 +3643,15 @@ def main(argv: list[str] | None = None) -> int:
             comparison = build_ci_coverage_comparison(
                 load_report(baseline_path),
                 current_report,
+                (
+                    load_report(
+                        args.workflow_migrations
+                        if args.workflow_migrations.is_absolute()
+                        else ROOT / args.workflow_migrations
+                    )
+                    if args.workflow_migrations
+                    else None
+                ),
             )
             if args.output is not None:
                 output = (

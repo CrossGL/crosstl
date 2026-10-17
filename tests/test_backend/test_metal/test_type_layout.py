@@ -143,6 +143,11 @@ def test_metal_type_size_strips_only_layout_neutral_qualifiers(type_text, expect
         ("half3", (8, 8)),
         ("float3[2]", (32, 16)),
         ("array<packed_float3, 2>", (24, 4)),
+        ("array<float, 0>", (4, 4)),
+        ("metal::array<half3, 2 - 2>", (8, 8)),
+        ("array<packed_float3, 0>", (12, 4)),
+        ("array<array<float3, 0>, 2>", (32, 16)),
+        ("array<array<float3, 2>, 0>", (32, 16)),
     ],
 )
 def test_metal_type_layout_reports_object_alignment(type_text, expected):
@@ -180,7 +185,7 @@ def test_metal_type_layout_reports_object_alignment(type_text, expected):
         "float[]",
         "float[N]",
         "float[0]",
-        "array<float, 0>",
+        "array<float, -1>",
         "array<float, 4 / 0>",
         "array<float>",
         "array<float, 2, 3>",

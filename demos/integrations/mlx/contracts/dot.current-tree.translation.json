@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-dot-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/dot.metal",
+    "sourceSha256": "97bcad13d09c3d5fed87482a0bb9719d6eeff9b21d364967cd6aec5b695b3462",
+    "header": "mlx/backend/metal/kernels/dot.h",
+    "headerSha256": "24ca982ca5558e43100be7d6dc08722b512b06461c8460d14134eb78f52431ba"
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "dot_product_float32_it32_tg512_sg16",
+    "dot_product_float16_it32_tg512_sg16",
+    "dot_product_bfloat16_it32_tg512_sg16"
+  ],
+  "artifacts": {
+    "directx": {
+      "dot_product_float32_it32_tg512_sg16": {
+        "sha256": "5fe72113dadd6d86b5edfdf5663eb0499dbdf9bd07cef9c4d9606a0270a64a27",
+        "sizeBytes": 6069
+      },
+      "dot_product_float16_it32_tg512_sg16": {
+        "sha256": "d4bff50f7e496532323ab735feae55f0b6518d7932c0584dfc264c5c798186fa",
+        "sizeBytes": 7713
+      },
+      "dot_product_bfloat16_it32_tg512_sg16": {
+        "sha256": "3f23c98c5f4f165a35d88c69553fe86be3bae520c31fd46f7c18244c663fdd7d",
+        "sizeBytes": 6589
+      }
+    },
+    "opengl": {
+      "dot_product_float32_it32_tg512_sg16": {
+        "sha256": "2b378330ecee1f440abdb7705e1eff91b7ce370fea4c14ea2d0f6ae4c7d6d130",
+        "sizeBytes": 6385
+      },
+      "dot_product_float16_it32_tg512_sg16": {
+        "sha256": "347a8e1e8a7bcd56f6c07a15b27dccb6d871fe9dd001ed0a5650612bb331bf05",
+        "sizeBytes": 6103
+      },
+      "dot_product_bfloat16_it32_tg512_sg16": {
+        "sha256": "5f83ef934170c3c4cb7d6ee0cb03dd01209322f98b013ae9d57227eddb0ca987",
+        "sizeBytes": 6107
+      }
+    },
+    "metal": {
+      "dot_product_float32_it32_tg512_sg16": {
+        "sha256": "1008434054b323e8845546b6c4133793f9341a15786ee08dfcc745d493fc1c90",
+        "sizeBytes": 2887
+      },
+      "dot_product_float16_it32_tg512_sg16": {
+        "sha256": "6da81ab9f2874a2c9b1c28576897ed41de06651489544ce597aa232820df1969",
+        "sizeBytes": 2883
+      },
+      "dot_product_bfloat16_it32_tg512_sg16": {
+        "sha256": "65da915de500a238a5c775bb64717c1762748139e4a86fc1c73c0f232dd1fe1e",
+        "sizeBytes": 2892
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSize": [
+      512,
+      1,
+      1
+    ],
+    "groupElementCount": 16384,
+    "subgroups": {
+      "metal": "native-simdgroup-32",
+      "opengl": "software-subgroup-32",
+      "directx": "software-subgroup-32"
+    },
+    "cases": {
+      "one": {
+        "elementCount": 1,
+        "kind": "exact",
+        "groups": 1
+      },
+      "three": {
+        "elementCount": 3,
+        "kind": "exact",
+        "groups": 1
+      },
+      "vector": {
+        "elementCount": 8,
+        "kind": "exact",
+        "groups": 1
+      },
+      "vector-tail": {
+        "elementCount": 13,
+        "kind": "exact",
+        "groups": 1
+      },
+      "row-tail": {
+        "elementCount": 129,
+        "kind": "exact",
+        "groups": 1
+      },
+      "simd-block": {
+        "elementCount": 1024,
+        "kind": "exact",
+        "groups": 1
+      },
+      "simd-tail": {
+        "elementCount": 1027,
+        "kind": "exact",
+        "groups": 1
+      },
+      "group-minus-one": {
+        "elementCount": 16383,
+        "kind": "exact",
+        "groups": 1
+      },
+      "group": {
+        "elementCount": 16384,
+        "kind": "exact",
+        "groups": 1
+      },
+      "groups": {
+        "elementCount": 16385,
+        "kind": "exact",
+        "groups": 2
+      },
+      "many-groups": {
+        "elementCount": 40000,
+        "kind": "exact",
+        "groups": 3
+      },
+      "rounding": {
+        "elementCount": 20000,
+        "kind": "rounding",
+        "groups": 2
+      },
+      "infinite": {
+        "elementCount": 100,
+        "kind": "infinite",
+        "groups": 1
+      }
+    },
+    "exactValues": {
+      "numeratorLimit": 32,
+      "denominator": 8
+    },
+    "roundingBound": {
+      "units": 128,
+      "unitRoundoff": 5.960464477539063e-08
+    },
+    "inputGuardCount": 16,
+    "outputGuardCount": 16,
+    "observedInputCount": 3,
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ]
+  },
+  "scope": {
+    "coveredEntryCount": 3,
+    "runtimeCoveredEntryCount": 3,
+    "partialCountByEntry": {
+      "dot_product_float32_it32_tg512_sg16": 17,
+      "dot_product_float16_it32_tg512_sg16": 17,
+      "dot_product_bfloat16_it32_tg512_sg16": 17
+    },
+    "completeCorpusEntryCount": 17832,
+    "partialAllReduceCovered": false,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

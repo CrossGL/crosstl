@@ -5,22 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 5,
-        "endOffset": 122,
+        "endLine": 6,
+        "endOffset": 124,
         "file": "crosstl-out/directx/lib.hlsl",
-        "length": 49,
-        "line": 4,
-        "offset": 73
+        "length": 124,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 178,
+        "endLine": 10,
+        "endOffset": 180,
         "file": "lib.rs",
-        "length": 53,
-        "line": 8,
-        "offset": 125
+        "length": 180,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

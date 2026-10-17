@@ -718,7 +718,7 @@ def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_attribute()
     assert "unsupported HLSL GLSL buffer block ParticlesBlock" not in hlsl
     assert "uint n = particles.Load(0);" in hlsl
     assert "float v = asfloat(particles.Load(4));" in hlsl
-    assert "particles.Store(4, asuint((v + float(n))));" in hlsl
+    assert "particles.Store(4, asuint((v + __crossgl_uint_to_float1(n))));" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "device uchar* particles [[buffer(0)]]" in metal
@@ -1869,7 +1869,7 @@ def test_codegen_mixed_ssbo_nested_struct_arrays_lower_as_leaf_offsets():
     assert "float readNestedArray(RWByteAddressBuffer localBlock, uint i)" in hlsl
     assert (
         "return (asfloat(localBlock.Load3((112 + i * 48 + 16))).x + "
-        "float(localBlock.Load(48)));" in hlsl
+        "__crossgl_uint_to_float1(localBlock.Load(48)));" in hlsl
     )
     assert "uint i = nestedArrayBlock.Load(96);" in hlsl
     assert "float3 normal = asfloat(nestedArrayBlock.Load3(64));" in hlsl
@@ -14824,11 +14824,11 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float scalarCast = float(imageAtomicAdd_uimage2D(counters, int2(0, 0), 1u));"
+        "float scalarCast = __crossgl_uint_to_float1(imageAtomicAdd_uimage2D(counters, int2(0, 0), 1u));"
         in hlsl
     )
     assert (
-        "target[int2(0, 0)] = float(imageAtomicAdd_uimage2D(counters, int2(1, 1), 2u));"
+        "target[int2(0, 0)] = __crossgl_uint_to_float1(imageAtomicAdd_uimage2D(counters, int2(1, 1), 2u));"
         in hlsl
     )
 
@@ -14945,9 +14945,11 @@ def test_codegen_allows_explicit_image_load_result_casts():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "float floatCast = float(counters[int2(0, 0)]);" in hlsl
+    assert "float floatCast = __crossgl_uint_to_float1(counters[int2(0, 0)]);" in hlsl
     assert "uint uintCast = uint(values[int2(1, 1)]);" in hlsl
-    assert "target[int2(0, 0)] = float(counters[int2(2, 2)]);" in hlsl
+    assert (
+        "target[int2(0, 0)] = __crossgl_uint_to_float1(counters[int2(2, 2)]);" in hlsl
+    )
 
     assert "float floatCast = float(counters.read(uint2(int2(0))).x);" in metal
     assert "uint uintCast = uint(values.read(uint2(int2(1))).x);" in metal
@@ -17440,6 +17442,7 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
     void main() {
         uint readonlyOld = atomicAdd(readAtomicBlock.value, 1u);
         float floatOld = atomicAdd(floatAtomicBlock.value, 1.0);
+        float minimumOld = atomicMin(floatAtomicBlock.value, 1.0);
         uint vectorOld = atomicAdd(vectorAtomicBlock.value, 1u);
         float matrixOld = atomicAdd(matrixAtomicBlock.value, 1.0);
     }
@@ -17484,8 +17487,13 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
         "atomicAdd cannot write readonly device buffer */ 0u;" in metal
     )
     assert (
-        "float floatOld = /* unsupported Metal GLSL buffer block atomic: "
-        "atomicAdd currently supports only int or uint buffer members */ 0;" in metal
+        "float floatOld = atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_float*>(floatAtomicBlock + 0), "
+        "1.0, memory_order_relaxed);" in metal
+    )
+    assert (
+        "float minimumOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicMin does not support float buffer members */ 0;" in metal
     )
     assert (
         "uint vectorOld = /* unsupported Metal GLSL buffer block atomic: "
@@ -17495,7 +17503,8 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
         "float matrixOld = /* unsupported Metal GLSL buffer block atomic: "
         "atomicAdd requires a scalar int or uint buffer member */ 0;" in metal
     )
-    assert "atomic_fetch_" not in metal
+    assert metal.count("atomic_fetch_add_explicit(") == 1
+    assert "atomic_fetch_min_explicit(" not in metal
     assert "__crossgl_buffer_atomic" not in metal
 
 
@@ -17532,7 +17541,9 @@ def test_codegen_mixed_ssbo_invalid_glsl_atomic_operand_types_raise(
     with pytest.raises(
         ValueError,
         match=(
-            "OpenGL buffer block atomic 'atomicAdd' requires a scalar int or "
+            "Cannot preserve OpenGL float atomic storage: unresolved-storage-allocation"
+            if expected_type == "float"
+            else "OpenGL buffer block atomic 'atomicAdd' requires a scalar int or "
             f"uint buffer block member for block.value: got {expected_type}"
         ),
     ):

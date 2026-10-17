@@ -3,6 +3,10 @@
 import ast as python_ast
 import re
 
+from crosstl.translator.arithmetic_conversions import (
+    ArithmeticScalarKind,
+    source_integer_shape,
+)
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 
 from ..common_ast import (
@@ -32,6 +36,17 @@ class HLSLSelectOverloadError(ValueError):
         self.reason = "select-overload-ownership-unresolved"
 
 
+class HLSLIntegerConversionError(ValueError):
+    """Reject an integer conversion whose source evaluation cannot be retained."""
+
+    project_diagnostic_code = "project.translate.hlsl-integer-conversion-unsupported"
+    missing_capabilities = ("hlsl.integer-arithmetic-conversion",)
+
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(f"Cannot preserve HLSL integer arithmetic: {reason}")
+
+
 class HLSLToCrossGLConverter:
     """Serialize DirectX backend AST nodes back into CrossGL source."""
 
@@ -39,6 +54,10 @@ class HLSLToCrossGLConverter:
 
     def __init__(self):
         self.source_function_names = set()
+        self.source_functions = {}
+        self.source_type_aliases = {}
+        self.integer_compound_helpers = {}
+        self.integer_helper_reserved_names = set()
         self.structured_buffer_types = {
             "Buffer",
             "ConstantBuffer",
@@ -766,8 +785,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleGrad"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     5,
                     6,
                 }
@@ -786,8 +804,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleBias"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     4,
                     5,
                 }
@@ -806,8 +823,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleCmp"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     4,
                     5,
                 }
@@ -833,8 +849,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleCmpGrad"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     6,
                     7,
                 }
@@ -853,8 +868,7 @@ class HLSLToCrossGLConverter:
             elif (
                 member == "SampleCmpBias"
                 and cube_family_resource
-                and arg_count
-                in {
+                and arg_count in {
                     4,
                     5,
                     6,
@@ -910,8 +924,7 @@ class HLSLToCrossGLConverter:
                     dropped_parameters.append("status output")
             usage = (
                 "comparison"
-                if member
-                in {
+                if member in {
                     "SampleCmp",
                     "SampleCmpLevel",
                     "SampleCmpGrad",
@@ -2029,6 +2042,8 @@ class HLSLToCrossGLConverter:
 
         base = str(type_name).strip()
         scalar_prefixes = (
+            "uint64_t",
+            "int64_t",
             "min16float",
             "min10float",
             "min16uint",
@@ -2111,6 +2126,8 @@ class HLSLToCrossGLConverter:
         return f"{vector_prefix}{component_count}"
 
     def literal_raw_type(self, expr):
+        if isinstance(expr, IntegerLiteral):
+            return expr.source_type
         if isinstance(expr, bool):
             return "bool"
         if isinstance(expr, float):
@@ -2247,7 +2264,7 @@ class HLSLToCrossGLConverter:
         base = self.canonical_composite_type(str(type_name or "").strip())
         match = re.fullmatch(
             r"(min16float|min10float|min16uint|min16int|min12int|float16_t|"
-            r"uint16_t|int16_t|double|float|half|fixed|uint|int|bool)[2-4]",
+            r"uint16_t|int16_t|uint64_t|int64_t|double|float|half|fixed|uint|int|bool)[2-4]",
             base,
         )
         if match:
@@ -2273,9 +2290,34 @@ class HLSLToCrossGLConverter:
     def function_call_value_raw_type(self, expr):
         if not isinstance(expr.name, MemberAccessNode):
             if isinstance(expr.name, str):
-                type_name = self.canonical_composite_type(expr.name)
+                type_name = self.resolve_integer_alias(expr.name)
+                if source_integer_shape(type_name) is not None:
+                    return type_name
                 if self.map_type(type_name) != self.sanitize_type_name(type_name):
                     return type_name
+                candidates = self.source_functions.get(expr.name, [])
+                candidates = [f for f in candidates if len(f.params) == len(expr.args)]
+                argument_types = [
+                    self.resolve_integer_alias(self.expression_value_raw_type(arg))
+                    for arg in expr.args
+                ]
+                exact = [
+                    f
+                    for f in candidates
+                    if [self.resolve_integer_alias(p.vtype) for p in f.params]
+                    == argument_types
+                ]
+                returns = {
+                    self.resolve_integer_alias(f.return_type)
+                    for f in exact or candidates
+                }
+                if len(returns) == 1:
+                    return returns.pop()
+                if len(returns) > 1 and any(
+                    (shape := source_integer_shape(t)) is not None and shape[1] == 64
+                    for t in returns
+                ):
+                    raise HLSLIntegerConversionError("ambiguous-function-result")
             return None
 
         member = self.templated_method_base(expr.name.member)
@@ -2294,12 +2336,48 @@ class HLSLToCrossGLConverter:
         return None
 
     def expression_value_raw_type(self, expr):
+        if isinstance(expr, BinaryOpNode):
+            # Keep long left-associated sums iterative, as in their renderer.
+            nodes = []
+            current = expr
+            while isinstance(current, BinaryOpNode):
+                nodes.append(current)
+                current = current.left
+            result = self.expression_value_raw_type(current)
+            for node in reversed(nodes):
+                result = self.integer_expression_raw_type(
+                    result,
+                    self.expression_value_raw_type(node.right),
+                    self.binary_operator_text(node.op),
+                )
+            return result
+        if isinstance(expr, TernaryOpNode):
+            return self.integer_expression_raw_type(
+                self.expression_value_raw_type(expr.true_expr),
+                self.expression_value_raw_type(expr.false_expr),
+                "?:",
+            )
+        if isinstance(expr, AssignmentNode):
+            return self.expression_value_raw_type(expr.left)
+        if isinstance(expr, UnaryOpNode):
+            return (
+                "bool"
+                if self.binary_operator_text(expr.op) == "!"
+                else self.expression_value_raw_type(expr.operand)
+            )
         if isinstance(expr, MemberAccessNode):
             object_type = self.expression_value_raw_type(expr.object)
             member_type = self.member_access_raw_type(object_type, expr.member)
             return member_type if member_type is not None else object_type
         if isinstance(expr, ArrayAccessNode):
             array_type = self.expression_value_raw_type(expr.array)
+            depth = 1
+            base = expr.array
+            while isinstance(base, ArrayAccessNode):
+                depth += 1
+                base = base.array
+            if depth <= self.expression_resource_array_dims(expr):
+                return array_type
             value_type = self.indexed_value_raw_type(array_type)
             return value_type if value_type is not None else array_type
         if isinstance(expr, FunctionCallNode):
@@ -2312,6 +2390,172 @@ class HLSLToCrossGLConverter:
         if literal_type is not None:
             return literal_type
         return self.expression_raw_type(expr)
+
+    def resolve_integer_alias(self, type_name):
+        name = self.canonical_composite_type(str(type_name or ""))
+        seen = set()
+        while name in self.source_type_aliases and name not in seen:
+            seen.add(name)
+            name = self.canonical_composite_type(self.source_type_aliases[name])
+        return name
+
+    def integer_expression_raw_type(self, left_type, right_type, operator):
+        if operator not in {
+            "+",
+            "-",
+            "*",
+            "/",
+            "%",
+            "&",
+            "|",
+            "^",
+            "<<",
+            ">>",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "==",
+            "!=",
+            "?:",
+        }:
+            return None
+        left = source_integer_shape(self.resolve_integer_alias(left_type))
+        right = source_integer_shape(self.resolve_integer_alias(right_type))
+        if left is None or right is None:
+            return None
+        widths = [s[2] for s in (left, right) if s[2] > 1]
+        lanes = min(widths) if widths else 1
+        if operator in {"<", "<=", ">", ">=", "==", "!="}:
+            base = "bool"
+        elif operator in {"<<", ">>"}:
+            base = self.integer_scalar_raw_type(left[0], max(32, left[1]))
+        else:
+            # Preserve the native DXC conversion contract, including its unsigned
+            # preference across widths, before entering the C-family IR.
+            kind = (
+                ArithmeticScalarKind.UNSIGNED_INTEGER
+                if any(
+                    s[0] == ArithmeticScalarKind.UNSIGNED_INTEGER for s in (left, right)
+                )
+                else ArithmeticScalarKind.SIGNED_INTEGER
+            )
+            base = self.integer_scalar_raw_type(kind, max(32, left[1], right[1]))
+        return base + (str(lanes) if lanes > 1 else "")
+
+    def integer_scalar_raw_type(self, kind, bits):
+        prefix = "uint" if kind == ArithmeticScalarKind.UNSIGNED_INTEGER else "int"
+        return prefix + ("64_t" if bits == 64 else "")
+
+    def wide_integer_common_type(self, left_type, right_type, operator):
+        shapes = [
+            source_integer_shape(self.resolve_integer_alias(t))
+            for t in (left_type, right_type)
+        ]
+        if any(s is None for s in shapes) or not any(s[1] == 64 for s in shapes):
+            return None
+        if operator in {"<<", ">>"}:
+            return None
+        operation = "+" if operator in {"<", "<=", ">", ">=", "==", "!="} else operator
+        return self.integer_expression_raw_type(left_type, right_type, operation)
+
+    def convert_integer_operand(self, rendered, source_type, common_type):
+        source_shape = source_integer_shape(self.resolve_integer_alias(source_type))
+        common_shape = source_integer_shape(common_type)
+        if source_shape[2] == 1 and common_shape[2] > 1:
+            common_type = self.integer_scalar_raw_type(*common_shape[:2])
+            common_shape = source_integer_shape(common_type)
+        if source_shape == common_shape:
+            return rendered
+        return f"{self.map_type(common_type)}({rendered})"
+
+    def wide_integer_binary_expression(self, expr, is_main=False):
+        operator = self.binary_operator_text(expr.op)
+        left_type = self.expression_value_raw_type(expr.left)
+        right_type = self.expression_value_raw_type(expr.right)
+        common = self.wide_integer_common_type(left_type, right_type, operator)
+        if common is None:
+            return None
+        left = self.maybe_parenthesize(
+            expr.left, self.generate_expression(expr.left, is_main)
+        )
+        right = self.maybe_parenthesize(
+            expr.right, self.generate_expression(expr.right, is_main)
+        )
+        left = self.convert_integer_operand(left, left_type, common)
+        right = self.convert_integer_operand(right, right_type, common)
+        return f"{left} {operator} {right}"
+
+    def integer_expression_has_effects(self, expr):
+        pending = [expr]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, AssignmentNode):
+                return True
+            if isinstance(node, UnaryOpNode) and self.binary_operator_text(node.op) in {
+                "++",
+                "--",
+            }:
+                return True
+            if isinstance(node, FunctionCallNode):
+                if (
+                    not isinstance(node.name, str)
+                    or source_integer_shape(self.resolve_integer_alias(node.name))
+                    is None
+                ):
+                    return True
+            pending.extend(self.iter_ast_children(node))
+        return False
+
+    def wide_integer_compound_expression(self, expr, is_main=False):
+        operator = self.binary_operator_text(expr.operator)
+        if operator not in {"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="}:
+            return None
+        left_type = self.expression_value_raw_type(expr.left)
+        right_type = self.expression_value_raw_type(expr.right)
+        common = self.wide_integer_common_type(left_type, right_type, operator[:-1])
+        if common is None:
+            return None
+        left = self.generate_expression(expr.left, is_main)
+        right = self.generate_expression(expr.right, is_main)
+        shape = source_integer_shape(self.resolve_integer_alias(left_type))
+        # A scalar destination can retain native compound assignment after the
+        # RHS conversion. A vector destination needs computation before narrowing.
+        common_shape = source_integer_shape(common)
+        if (shape[2] == 1 and common_shape[2] == 1) or shape == common_shape:
+            right = self.convert_integer_operand(right, right_type, common)
+            return f"{left} {operator} {right}"
+        if self.integer_expression_has_effects(expr.right):
+            raise HLSLIntegerConversionError("compound-copy-in-alias")
+        target = self.map_type(self.resolve_integer_alias(left_type))
+        value = self.map_type(self.resolve_integer_alias(right_type))
+        left_operand = self.convert_integer_operand("target", left_type, common)
+        right_operand = self.convert_integer_operand("value", right_type, common)
+        key = (target, value, operator[:-1], left_operand, right_operand)
+        name = self.integer_compound_helpers.get(key)
+        if name is None:
+            name = "__crossgl_hlsl_integer_compound"
+            while (
+                name in self.integer_helper_reserved_names
+                or name in self.integer_compound_helpers.values()
+            ):
+                name += "_"
+            self.integer_compound_helpers[key] = name
+        return f"{name}({left}, {right})"
+
+    def generate_integer_compound_helpers(self):
+        return "".join(
+            f"    {target} {name}(inout {target} target, {value} value) {{\n"
+            f"        target = {target}({left} {operator} {right});\n"
+            "        return target;\n    }\n"
+            for (
+                target,
+                value,
+                operator,
+                left,
+                right,
+            ), name in self.integer_compound_helpers.items()
+        )
 
     def bitcast_intrinsic_expression(self, func_name, original_args, rendered_args):
         if len(original_args) != 1 or func_name not in {"asfloat", "asint", "asuint"}:
@@ -3099,6 +3343,22 @@ class HLSLToCrossGLConverter:
 
     def generate(self, ast):
         self.source_function_names = {function.name for function in ast.functions}
+        self.source_functions = {}
+        for function in ast.functions:
+            self.source_functions.setdefault(function.name, []).append(function)
+        self.source_type_aliases = {
+            alias.name: getattr(alias, "alias_type", None) or alias.original_type
+            for alias in getattr(ast, "typedefs", []) or []
+        }
+        self.integer_compound_helpers = {}
+        self.integer_helper_reserved_names = set()
+        pending = [ast]
+        while pending:
+            node = pending.pop()
+            name = getattr(node, "name", None)
+            if isinstance(name, str):
+                self.integer_helper_reserved_names.add(name)
+            pending.extend(self.iter_ast_children(node))
         self.struct_member_types = self.collect_struct_member_types(ast.structs)
         self.struct_member_array_dims = self.collect_struct_member_array_dims(
             ast.structs
@@ -3230,6 +3490,7 @@ class HLSLToCrossGLConverter:
             else:
                 code += self.generate_function(func)
 
+        code += self.generate_integer_compound_helpers()
         code += "}\n"
         return code
 
@@ -3552,8 +3813,7 @@ class HLSLToCrossGLConverter:
             or self.is_buffer_resource_type(type_name)
             or self.is_crossgl_resource_type(mapped_base_type)
             or base_type.startswith(("Texture", "FeedbackTexture"))
-            or base_type
-            in {
+            or base_type in {
                 "Sampler",
                 "SamplerState",
                 "SamplerComparisonState",
@@ -3797,7 +4057,12 @@ class HLSLToCrossGLConverter:
             suffix += 1
         return candidate
 
-    def generate_function_body(self, body, indent=0, is_main=False):
+    def generate_function_body(self, body, indent=0, is_main=False, *, new_scope=True):
+        previous_types = self.current_variable_types
+        previous_dims = self.current_resource_array_dims
+        if new_scope:
+            self.current_variable_types = dict(previous_types)
+            self.current_resource_array_dims = dict(previous_dims)
         code = ""
         for stmt in body:
             if isinstance(stmt, FunctionCallNode):
@@ -3831,7 +4096,7 @@ class HLSLToCrossGLConverter:
                 code += self.generate_assignment(stmt, is_main) + ";\n"
 
             elif isinstance(stmt, BinaryOpNode):
-                code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
+                code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, UnaryOpNode):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, ReturnNode):
@@ -3857,6 +4122,8 @@ class HLSLToCrossGLConverter:
                 code += f"{stmt};\n"
             else:
                 code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+        self.current_variable_types = previous_types
+        self.current_resource_array_dims = previous_dims
         return code
 
     def generate_function_call_statement(self, stmt, indent=0, is_main=False):
@@ -4341,13 +4608,26 @@ class HLSLToCrossGLConverter:
         if len(parts) < 16:
             return None
 
-        rendered_parts = []
-        for part in reversed(parts):
+        parts.reverse()
+        result = self.generate_expression(parts[0], is_main)
+        result = self.maybe_parenthesize(parts[0], result)
+        result_type = self.expression_value_raw_type(parts[0])
+        for part in parts[1:]:
             rendered = self.generate_expression(part, is_main)
-            rendered_parts.append(self.maybe_parenthesize(part, rendered))
-        return f" {op} ".join(rendered_parts)
+            rendered = self.maybe_parenthesize(part, rendered)
+            part_type = self.expression_value_raw_type(part)
+            common = self.wide_integer_common_type(result_type, part_type, op)
+            if common is not None:
+                result = self.convert_integer_operand(result, result_type, common)
+                rendered = self.convert_integer_operand(rendered, part_type, common)
+            result = f"{result} {op} {rendered}"
+            result_type = self.integer_expression_raw_type(result_type, part_type, op)
+        return result
 
     def generate_for_loop(self, node, indent, is_main):
+        previous_types = dict(self.current_variable_types)
+        previous_dims = dict(self.current_resource_array_dims)
+
         def render_initializer(initializer, include_type=True):
             if isinstance(initializer, VariableNode):
                 array_suffix = self.format_array_suffixes(initializer, is_main)
@@ -4407,6 +4687,8 @@ class HLSLToCrossGLConverter:
         code = f"for ({init}; {condition}; {update}) {{\n"
         code += self.generate_function_body(node.body, indent + 1, is_main)
         code += "    " * indent + "}\n"
+        self.current_variable_types = previous_types
+        self.current_resource_array_dims = previous_dims
         return code
 
     def generate_while_loop(self, node, indent, is_main):
@@ -4462,6 +4744,9 @@ class HLSLToCrossGLConverter:
             )
             if storage_store is not None:
                 return storage_store
+        converted = self.wide_integer_compound_expression(node, is_main)
+        if converted is not None:
+            return converted
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
         op = node.operator
@@ -4477,6 +4762,9 @@ class HLSLToCrossGLConverter:
             flat_expression = self.generate_flat_long_binary_expression(expr, is_main)
             if flat_expression is not None:
                 return flat_expression
+            converted = self.wide_integer_binary_expression(expr, is_main)
+            if converted is not None:
+                return converted
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             left = self.maybe_parenthesize(expr.left, left)
@@ -4484,6 +4772,9 @@ class HLSLToCrossGLConverter:
             return f"{left} {expr.op} {right}"
 
         elif isinstance(expr, AssignmentNode):
+            converted = self.wide_integer_compound_expression(expr, is_main)
+            if converted is not None:
+                return converted
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             op = expr.operator
@@ -4629,6 +4920,13 @@ class HLSLToCrossGLConverter:
                 return f"(1.0 / {value})"
             func_name = self.function_map.get(func_name, func_name)
             func_name = self.interlocked_map.get(func_name, func_name)
+            integer_shape = source_integer_shape(self.resolve_integer_alias(func_name))
+            if (
+                integer_shape is not None
+                and integer_shape[1] == 64
+                and func_name not in self.source_function_names
+            ):
+                func_name = self.map_type(self.resolve_integer_alias(func_name))
             func_name = self.render_function_identifier(func_name)
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
@@ -4675,7 +4973,16 @@ class HLSLToCrossGLConverter:
             return f"texture({texture}, {sampler}, {coords})"
 
         elif isinstance(expr, TernaryOpNode):
-            return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
+            condition = self.generate_expression(expr.condition, is_main)
+            left = self.generate_expression(expr.true_expr, is_main)
+            right = self.generate_expression(expr.false_expr, is_main)
+            left_type = self.expression_value_raw_type(expr.true_expr)
+            right_type = self.expression_value_raw_type(expr.false_expr)
+            common = self.wide_integer_common_type(left_type, right_type, "?:")
+            if common is not None:
+                left = self.convert_integer_operand(left, left_type, common)
+                right = self.convert_integer_operand(right, right_type, common)
+            return f"{condition} ? {left} : {right}"
 
         elif isinstance(expr, VectorConstructorNode):
             args = ", ".join(
@@ -4692,6 +4999,10 @@ class HLSLToCrossGLConverter:
         elif isinstance(expr, float):
             return self.format_float(expr)
         elif isinstance(expr, int):
+            if isinstance(expr, IntegerLiteral):
+                if "l" in expr.suffix:
+                    return f"{self.map_type(expr.source_type)}({int(expr)})"
+                return f"{int(expr)}u" if "u" in expr.suffix else str(int(expr))
             return str(expr)
         else:
             return str(expr)
@@ -4715,6 +5026,10 @@ class HLSLToCrossGLConverter:
         if not hlsl_type:
             return hlsl_type
         type_name = self.canonical_composite_type(str(hlsl_type))
+        wide_vector = re.fullmatch(r"(u?int)64_t([234])", type_name)
+        if wide_vector is not None:
+            prefix = "u64vec" if wide_vector.group(1) == "uint" else "i64vec"
+            return prefix + wide_vector.group(2)
         matrix_alias_type = self.map_hlsl_matrix_alias_type(type_name)
         if matrix_alias_type:
             return matrix_alias_type
@@ -5008,7 +5323,7 @@ class HLSLToCrossGLConverter:
         if components == 1:
             return self.map_type(scalar)
         if scalar in {"int64_t", "uint64_t"}:
-            return f"{scalar}{components}"
+            return self.map_type(f"{scalar}{components}")
         prefixes = {
             "float": "vec",
             "half": "f16vec",
@@ -5227,6 +5542,10 @@ class HLSLToCrossGLConverter:
         return f"@ {mapped}"
 
     def generate_switch_statement(self, node, indent=1, is_main=False):
+        previous_types = self.current_variable_types
+        previous_dims = self.current_resource_array_dims
+        self.current_variable_types = dict(previous_types)
+        self.current_resource_array_dims = dict(previous_dims)
         expression = getattr(node, "expression", None) or getattr(
             node, "condition", None
         )
@@ -5241,7 +5560,9 @@ class HLSLToCrossGLConverter:
                 + f"case {self.generate_expression(case.value, is_main)}:\n"
             )
             case_body = getattr(case, "body", None) or getattr(case, "statements", [])
-            code += self.generate_function_body(case_body, indent + 2, is_main)
+            code += self.generate_function_body(
+                case_body, indent + 2, is_main, new_scope=False
+            )
 
         default_body = (
             getattr(node, "default_body", None)
@@ -5250,12 +5571,19 @@ class HLSLToCrossGLConverter:
         )
         if default_body:
             code += "    " * (indent + 1) + "default:\n"
-            code += self.generate_function_body(default_body, indent + 2, is_main)
+            code += self.generate_function_body(
+                default_body, indent + 2, is_main, new_scope=False
+            )
 
         code += "    " * indent + "}\n"
+        self.current_variable_types = previous_types
+        self.current_resource_array_dims = previous_dims
         return code
 
     def visit_BinaryOpNode(self, node):
+        converted = self.wide_integer_binary_expression(node)
+        if converted is not None:
+            return converted
         if hasattr(node.left, "visit"):
             left = node.visit_child(self, node.left)
         else:

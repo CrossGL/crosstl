@@ -171,7 +171,7 @@ TOKENS = tuple(
         ("RBRACKET", r"\]"),
         # Punctuation
         ("SEMICOLON", r";"),
-        ("STRING", r'"[^"]*"'),
+        ("STRING", r'"(?:\\.|[^"\\])*"'),
         ("CHAR_LITERAL", r"'(?:[^'\\]|\\.)'"),
         ("COMMA", r","),
         ("SCOPE", r"::"),

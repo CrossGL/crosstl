@@ -2437,8 +2437,7 @@ class CudaToCrossGLConverter:
                 )
                 comment = f"// CUDA stream {action}: {stream}"
                 if (
-                    name
-                    in {
+                    name in {
                         "cudaStreamCreateWithFlags",
                         "cudaStreamCreateWithPriority",
                     }
@@ -3403,8 +3402,7 @@ class CudaToCrossGLConverter:
                     f"exec: {args[0]}, node: {args[1]}, params: {args[2]}"
                 )
                 if (
-                    name
-                    in {
+                    name in {
                         "cuGraphExecMemcpyNodeSetParams",
                         "cuGraphExecMemsetNodeSetParams",
                     }
@@ -5025,8 +5023,7 @@ class CudaToCrossGLConverter:
             function_name = function_name[2:]
 
         if (
-            function_name
-            in {
+            function_name in {
                 "__float2half",
                 "__float2half_rn",
                 "__float2half_rd",
@@ -5288,8 +5285,13 @@ class CudaToCrossGLConverter:
         if function_name == "__saturatef" and len(args) == 1:
             return f"clamp({args[0]}, 0.0f, 1.0f)"
         if (
-            function_name
-            in {"__fdividef", "__fdiv_rd", "__fdiv_rn", "__fdiv_ru", "__fdiv_rz"}
+            function_name in {
+                "__fdividef",
+                "__fdiv_rd",
+                "__fdiv_rn",
+                "__fdiv_ru",
+                "__fdiv_rz",
+            }
             and len(args) == 2
         ):
             return f"({args[0]} / {args[1]})"
@@ -5314,8 +5316,7 @@ class CudaToCrossGLConverter:
         ):
             return f"(1.0f / {args[0]})"
         if (
-            function_name
-            in {
+            function_name in {
                 "__fmaf_rd",
                 "__fmaf_rn",
                 "__fmaf_ru",

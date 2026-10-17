@@ -428,7 +428,18 @@ def render_constructor_arguments(generator, constructor_name, expr, fields):
         )
 
     rendered_args = []
+    render_argument = getattr(generator, "generate_struct_constructor_argument", None)
     for index, (field_name, field_type) in enumerate(fields):
+        argument = (
+            positional_args[index]
+            if index < len(positional_args)
+            else named_args.get(field_name)
+        )
+        if callable(render_argument):
+            rendered = render_argument(argument, field_type)
+            if rendered is not None:
+                rendered_args.append(rendered)
+                continue
         if index < len(positional_args):
             rendered_args.append(
                 generator.generate_expression_with_expected(
@@ -529,6 +540,9 @@ def expression_result_type(generator, expr):
 
 def format_struct_constructor_expression(generator, type_name, rendered_args):
     args = ", ".join(rendered_args)
+    formatter = getattr(generator, "format_struct_constructor_expression", None)
+    if formatter is not None:
+        return formatter(type_name, rendered_args)
     if getattr(generator, "struct_constructor_uses_braces", False):
         return f"{type_name}{{{args}}}"
     return f"{type_name}({args})"

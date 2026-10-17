@@ -5,22 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 302,
+        "endLine": 54,
+        "endOffset": 1381,
         "file": "crosstl-out/vulkan/rectangle.frag.spvasm",
-        "length": 32,
-        "line": 11,
-        "offset": 270
+        "length": 1381,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 22,
-        "endOffset": 805,
+        "endLine": 29,
+        "endOffset": 900,
         "file": "rectangle.frag.glsl",
-        "length": 42,
-        "line": 21,
-        "offset": 763
+        "length": 900,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

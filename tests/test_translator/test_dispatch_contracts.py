@@ -314,8 +314,9 @@ def test_loads_normalization_contract_with_sha256_identity_and_provenance(tmp_pa
         "value": manifest.content_identity.digest,
     }
     assert (
-        manifest.content_identity.digest
-        == hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        manifest.content_identity.digest == hashlib.sha256(
+            canonical.encode("utf-8")
+        ).hexdigest()
     )
     assert manifest.provenance["revision"] == (
         "4367c73b60541ddd5a266ce4644fd93d20223b6e"

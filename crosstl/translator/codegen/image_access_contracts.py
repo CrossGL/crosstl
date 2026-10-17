@@ -2524,8 +2524,7 @@ def image_multisample_sample_argument_index(
     Returns the sample-index argument position when the call has one.
     """
     if (
-        func_name
-        not in {
+        func_name not in {
             "imageLoad",
             "imageStore",
             "imageAtomicCompSwap",

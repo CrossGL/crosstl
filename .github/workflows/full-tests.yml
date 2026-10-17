@@ -15,10 +15,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Hosted runners have taken 33 to 59 minutes for the whole suite.
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -39,7 +44,7 @@ jobs:
       - name: Run complete test suite
         run: |
           mkdir -p support/generated
-          python -m pytest tests --durations=25 -n auto --junitxml support/generated/full-tests-pytest.xml
+          python -m pytest tests demos/integrations --durations=25 -n auto --junitxml support/generated/full-tests-pytest.xml
 
       - name: Write complete test failure summary
         if: always()

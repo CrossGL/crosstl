@@ -1,6 +1,46 @@
 [build-system]
-requires = [
-    "setuptools==75.3.2",
-    "wheel==0.45.1",
+requires = ["flit_core==4.1.0"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "crosstl"
+version = "3.4.0"
+description = "CrossGL shader and compute translator"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{name = "CrossGL team", email = "nripesh@crossgl.net"}]
+dependencies = ["gast", "tomli; python_version<'3.11'"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Compilers",
 ]
-build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://crossgl.net/"
+Documentation = "https://crossgl.github.io/crossgl-docs/"
+Source = "https://github.com/CrossGL/crosstl"
+Issues = "https://github.com/CrossGL/crosstl/issues"
+Changelog = "https://github.com/CrossGL/crosstl/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+directx-runtime = ["compushady>=0.17.5,<0.18; platform_system=='Windows'"]
+
+[project.scripts]
+crosstl = "crosstl._crosstl:main"
+
+[tool.flit.sdist]
+include = ["CHANGELOG.md", "CITATION.cff", ".zenodo.json", "examples/", "support/", "docs/"]
+exclude = ["docs/_build/", "docs/doxygen/build/", "examples/output/", "support/generated/", "**/__pycache__/", "**/*.py[cod]"]

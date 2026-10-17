@@ -275,9 +275,13 @@ class _TypeParser:
         if base_name == "array":
             element = self._parse_type("cv", allow_arrays=True)
             self._expect(",")
-            extent = self._parse_positive_integer_expression()
+            extent = self._parse_integer_expression(1)
+            if extent < 0:
+                raise _ParseError("negative array extent")
             self._expect(">")
-            return self._array_layout(element, extent)
+            # Metal standard arrays retain one element's storage at logical size
+            # zero; C-style arrays still require a strictly positive extent.
+            return self._array_layout(element, max(1, extent))
 
         raise _ParseError("unsupported generic type")
 

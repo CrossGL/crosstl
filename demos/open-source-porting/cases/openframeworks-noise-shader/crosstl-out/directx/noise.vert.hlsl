@@ -39,7 +39,7 @@ float noise(float2 coord, float d) {
 VertexOutput VSMain(VertexInput input) {
     VertexOutput output;
     float4 pos = mul(modelViewProjectionMatrix, input.position);
-    float noiseAmntX = noise(float2((-timeValX + (pos.x / 1000.0)), 100.0), 20.0);
+    float noiseAmntX = noise(float2((asfloat(asuint(timeValX) ^ 0x80000000u) + (pos.x / 1000.0)), 100.0), 20.0);
     float noiseAmntY = noise(float2((timeValY + (pos.y / 1000.0)), (pos.x / 2000.0)), 20.0);
     float noiseB = noise(float2((timeValY * 0.25), (pos.y / 2000.0)), 20.0);
     float2 d = (float2(pos.x, pos.y) - mouse);

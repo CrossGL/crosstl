@@ -1,0 +1,461 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-arange-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/arange.metal",
+    "sourceSha256": "ca29a59005b5ad54dccc369542e32804229490a41eb30d568adcd913d1ee68d1",
+    "header": "mlx/backend/metal/kernels/arange.h",
+    "headerSha256": "f0dfe5df2e06e9028a4a9beebdb6b7fa639df43dcddc6291ad1c25ef44a1e61c"
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "arangeuint8",
+    "arangeuint16",
+    "arangeuint32",
+    "arangeuint64",
+    "arangeint8",
+    "arangeint16",
+    "arangeint32",
+    "arangeint64",
+    "arangefloat16",
+    "arangefloat32",
+    "arangebfloat16"
+  ],
+  "artifacts": {
+    "directx": {
+      "arangeuint8": {
+        "sha256": "66c4e97b2cb9b354967022b5ad6f0351026c3403e30ff2f2f301796c4d2ea809",
+        "sizeBytes": 1394
+      },
+      "arangeuint16": {
+        "sha256": "b1b2afc6b8689974f4e6741c377812108ba6ffd45ba2d913b1ea78c234c2f9d8",
+        "sizeBytes": 1419
+      },
+      "arangeuint32": {
+        "sha256": "3a4bde3b1f962a6a2285fb530c36c11a752cd480b6ac494ccc487c4cb2c19bec",
+        "sizeBytes": 1385
+      },
+      "arangeuint64": {
+        "sha256": "1cde9a183e03fb1e2afaffe60596181a794b21268b3748b8b52e0c41cebb1461",
+        "sizeBytes": 1407
+      },
+      "arangeint8": {
+        "sha256": "1a7b66827223e0edeefe68db512ef8209a2de10ea26c802b389b1e76dbbc1a67",
+        "sizeBytes": 1396
+      },
+      "arangeint16": {
+        "sha256": "d9c9dc6e8430bcabc18763a3a9e66c9aba23f39f35a1cd991359014541d407fb",
+        "sizeBytes": 1409
+      },
+      "arangeint32": {
+        "sha256": "0a4112c1ca4fd3b97986a19fc4cacd4280be25978133a4ebe42f1b8cec3b4c15",
+        "sizeBytes": 1376
+      },
+      "arangeint64": {
+        "sha256": "e9729191d48cd76b1baef0f9fac87873b9893f23fbb2519a02ff63d6951824a0",
+        "sizeBytes": 1397
+      },
+      "arangefloat16": {
+        "sha256": "96d8d404def1a344c12a32502c4f8db919bf8d58c5c6473a2124fe247febfef0",
+        "sizeBytes": 5157
+      },
+      "arangefloat32": {
+        "sha256": "9b7f36c7d8623a710c8e12bd3903005fd23750720ac14c07c88e4f2abde346e6",
+        "sizeBytes": 12025
+      },
+      "arangebfloat16": {
+        "sha256": "d5b8a5c5d8321ec2cec5f92a55b122369154988405666a158eaa8f283d3aa99f",
+        "sizeBytes": 12453
+      }
+    },
+    "opengl": {
+      "arangeuint8": {
+        "sha256": "93cf2a46e22003b4e3a0071709dcdaed486e52c87cc1db7f9a0afc234d53197b",
+        "sizeBytes": 1411
+      },
+      "arangeuint16": {
+        "sha256": "e883fbe61edaf175b16ac09a31c6287f0782bc786130ddf08343f7f6f88eae12",
+        "sizeBytes": 1414
+      },
+      "arangeuint32": {
+        "sha256": "08b4e2d7c94cae3873d8037239522b8801dfd3daccc4a95f34eab7032c7d77e5",
+        "sizeBytes": 1390
+      },
+      "arangeuint64": {
+        "sha256": "8dbc5afa36cf982333749ba7b2965b7ce0f34caaf67d9a241cd7f86400c9cdc2",
+        "sizeBytes": 1457
+      },
+      "arangeint8": {
+        "sha256": "d6249a6bed83faf6f570625cf92b1b82212fe102da6600c3a77e67a054b4b8ce",
+        "sizeBytes": 1423
+      },
+      "arangeint16": {
+        "sha256": "20ede555727f5b60091a9a84b27300051485b44f0b3b7f94dd99dd2d3f7a577f",
+        "sizeBytes": 1426
+      },
+      "arangeint32": {
+        "sha256": "c902ecd467cb4e6d67bb60afe4b4a90976609c6d6d1c465f8e5fc1cf151654b7",
+        "sizeBytes": 1402
+      },
+      "arangeint64": {
+        "sha256": "df9086ddf8228cdd28317ded365d73ac68c599fcb508a61db41dca01a60cb1a6",
+        "sizeBytes": 1451
+      },
+      "arangefloat16": {
+        "sha256": "59823795be9ebed297eef9cb3ca9374d50dec5eb82fc6332996007619d2ddf42",
+        "sizeBytes": 2801
+      },
+      "arangefloat32": {
+        "sha256": "71fed60f43d13ab2ade4e2cbb3fd8a45b6ec41b2a6174f772690afd3debb1b43",
+        "sizeBytes": 11222
+      },
+      "arangebfloat16": {
+        "sha256": "11501dd0a487ed93bf52650abbaf1eac37fbc11917118e3a0e39b6e9c498c770",
+        "sizeBytes": 12289
+      }
+    },
+    "metal": {
+      "arangeuint8": {
+        "sha256": "f679a6e1fc0be3a1845fa6aa116d467d96092baa1406727b61c32148ccb97fb0",
+        "sizeBytes": 329
+      },
+      "arangeuint16": {
+        "sha256": "e5bcbcbc7ce32283ee5939f8ef692b9e37269852feef14249b1c7d66ec3e9f6a",
+        "sizeBytes": 333
+      },
+      "arangeuint32": {
+        "sha256": "b13adb00cfbe16599e96173c8356e130d5dafa303ada4dd36d50f1da947ebb08",
+        "sizeBytes": 327
+      },
+      "arangeuint64": {
+        "sha256": "951a5db92147038b4eae62b137ae40ce4aba3222c4bd2f284647e04ef9bc4960",
+        "sizeBytes": 339
+      },
+      "arangeint8": {
+        "sha256": "2beccd005d42cf96c836539e7f736b8440db2a055dfc9e248c5bbd26a11fcd0b",
+        "sizeBytes": 325
+      },
+      "arangeint16": {
+        "sha256": "9aa14b2be456f4d1e83aa4291a74bccb334cdfe1cd0b9bfab924a381703bce9d",
+        "sizeBytes": 329
+      },
+      "arangeint32": {
+        "sha256": "ff23d9dbb673e8c21ab4261b11516671d46e672ef4dc20802b3941683330de4e",
+        "sizeBytes": 323
+      },
+      "arangeint64": {
+        "sha256": "cf01044beeab6e825d5ad97d37c82526cfdd1235ec741b1106e22c05564a18c7",
+        "sizeBytes": 335
+      },
+      "arangefloat16": {
+        "sha256": "8d6864fb7697af71628c71ff394aa1d2b4ac205babc9e0ac13a775a7509c3a32",
+        "sizeBytes": 328
+      },
+      "arangefloat32": {
+        "sha256": "6339753a246278225748c3f044bbb31a0e12d850941bcfb1d97bcdc2e569297e",
+        "sizeBytes": 331
+      },
+      "arangebfloat16": {
+        "sha256": "faf9f4cb57e3a6cf9b50e39aa175f1b7cdaf795a02c7ec25703b779fb1839dc0",
+        "sizeBytes": 343
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSize": [
+      1,
+      1,
+      1
+    ],
+    "floatingContractionProfile": {
+      "metal": null,
+      "opengl": "rne-flush",
+      "directx": "rne-flush"
+    },
+    "cases": {
+      "uint8": {
+        "wrap": {
+          "start": 250,
+          "step": 3,
+          "count": 300
+        },
+        "down": {
+          "start": 7,
+          "step": 255,
+          "count": 300
+        },
+        "unit": {
+          "start": 0,
+          "step": 1,
+          "count": 4099
+        }
+      },
+      "uint16": {
+        "wrap": {
+          "start": 65530,
+          "step": 7,
+          "count": 300
+        },
+        "down": {
+          "start": 11,
+          "step": 65533,
+          "count": 300
+        },
+        "unit": {
+          "start": 0,
+          "step": 1,
+          "count": 4099
+        }
+      },
+      "uint32": {
+        "wrap": {
+          "start": 4294967040,
+          "step": 65537,
+          "count": 4099
+        },
+        "down": {
+          "start": 1000,
+          "step": 4294967289,
+          "count": 300
+        },
+        "unit": {
+          "start": 0,
+          "step": 1,
+          "count": 300
+        }
+      },
+      "uint64": {
+        "wide": {
+          "start": 1099511627787,
+          "step": 8589934599,
+          "count": 4099
+        },
+        "wrap": {
+          "start": 18446744073709551611,
+          "step": 3,
+          "count": 300
+        },
+        "down": {
+          "start": 9223372036854775808,
+          "step": 18446744069414584319,
+          "count": 300
+        }
+      },
+      "int8": {
+        "wrap": {
+          "start": 120,
+          "step": 3,
+          "count": 300
+        },
+        "down": {
+          "start": -100,
+          "step": -7,
+          "count": 300
+        },
+        "unit": {
+          "start": 0,
+          "step": 1,
+          "count": 4099
+        }
+      },
+      "int16": {
+        "wrap": {
+          "start": 32760,
+          "step": 7,
+          "count": 300
+        },
+        "down": {
+          "start": -32700,
+          "step": -301,
+          "count": 300
+        },
+        "unit": {
+          "start": -2048,
+          "step": 1,
+          "count": 4099
+        }
+      },
+      "int32": {
+        "wrap": {
+          "start": 2147483348,
+          "step": 65537,
+          "count": 4099
+        },
+        "down": {
+          "start": -2147483643,
+          "step": -7,
+          "count": 300
+        },
+        "unit": {
+          "start": -2048,
+          "step": 1,
+          "count": 300
+        }
+      },
+      "int64": {
+        "wide": {
+          "start": -4611686018427387904,
+          "step": 1125899906842627,
+          "count": 4099
+        },
+        "down": {
+          "start": 4611686018427387904,
+          "step": -8589934599,
+          "count": 4099
+        },
+        "unit": {
+          "start": -1099511627776,
+          "step": 1,
+          "count": 300
+        }
+      },
+      "float16": {
+        "contracted": {
+          "start": 11878,
+          "step": 13517,
+          "count": 4096
+        },
+        "subnormal": {
+          "start": 1,
+          "step": 3,
+          "count": 4096
+        },
+        "overflow": {
+          "start": 31727,
+          "step": 14336,
+          "count": 2048
+        },
+        "index": {
+          "start": 0,
+          "step": 15360,
+          "count": 65535
+        }
+      },
+      "float32": {
+        "contracted": {
+          "start": 1036831949,
+          "step": 1050253722,
+          "count": 4096
+        },
+        "descending": {
+          "start": 1148854272,
+          "step": 3160438263,
+          "count": 4096
+        },
+        "overflow": {
+          "start": 2137108966,
+          "step": 2040140556,
+          "count": 4096
+        },
+        "flush": {
+          "start": 1,
+          "step": 3,
+          "count": 64
+        },
+        "underflow": {
+          "start": 2155872256,
+          "step": 12582912,
+          "count": 64
+        }
+      },
+      "bfloat16": {
+        "contracted": {
+          "start": 15821,
+          "step": 16026,
+          "count": 4096
+        },
+        "flush": {
+          "start": 1,
+          "step": 3,
+          "count": 4096
+        },
+        "descending": {
+          "start": 17536,
+          "step": 48589,
+          "count": 4096
+        },
+        "index": {
+          "start": 0,
+          "step": 16256,
+          "count": 65535
+        }
+      }
+    },
+    "floatingValueEncoding": "logical bit patterns",
+    "outputGuardCount": 16,
+    "observedInputCount": 2,
+    "elementTypes": {
+      "metal": {
+        "uint8": "uint8",
+        "uint16": "uint16",
+        "uint32": "uint32",
+        "uint64": "uint64",
+        "int8": "int8",
+        "int16": "int16",
+        "int32": "int32",
+        "int64": "int64",
+        "float16": "float16",
+        "float32": "float32",
+        "bfloat16": "bfloat16"
+      },
+      "opengl": {
+        "uint8": "uint32",
+        "uint16": "uint32",
+        "uint32": "uint32",
+        "uint64": "uint64",
+        "int8": "int32",
+        "int16": "int32",
+        "int32": "int32",
+        "int64": "int64",
+        "float16": "float32",
+        "float32": "float32",
+        "bfloat16": "float32"
+      },
+      "directx": {
+        "uint8": "uint32",
+        "uint16": "uint16",
+        "uint32": "uint32",
+        "uint64": "uint64",
+        "int8": "int32",
+        "int16": "int16",
+        "int32": "int32",
+        "int64": "int64",
+        "float16": "uint16",
+        "float32": "float32",
+        "bfloat16": "uint16"
+      }
+    },
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ]
+  },
+  "scope": {
+    "coveredEntryCount": 11,
+    "runtimeCoveredEntryCount": 11,
+    "caseCount": 37,
+    "valueCountByTarget": {
+      "metal": 207405,
+      "opengl": 207405,
+      "directx": 207405
+    },
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

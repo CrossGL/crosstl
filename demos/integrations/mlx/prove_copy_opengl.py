@@ -340,16 +340,14 @@ def _translated_artifact(
         and artifact.get("sourceBackend") == "metal"
         and artifact.get("target") == "opengl"
         and artifact.get("status") == "translated"
-        and artifact.get("sourceHash")
-        == {
+        and artifact.get("sourceHash") == {
             "algorithm": "sha256",
             "value": PINNED_FILE_SHA256[MLX_COPY_SOURCE],
         },
         "copy specialization artifact provenance does not match pinned copy.metal",
     )
     _require(
-        artifact.get("entryPoint")
-        == {
+        artifact.get("entryPoint") == {
             "source": MLX_COPY_ENTRY_POINT,
             "target": "main",
             "stage": "compute",

@@ -3,11 +3,157 @@ import textwrap
 import pytest
 
 import crosstl.translator
+from crosstl._crosstl import translate
 from crosstl.project import translate_project
 from crosstl.translator.codegen.directx_codegen import (
     DirectXBFloat16UnsupportedError,
     HLSLCodeGen,
 )
+
+
+@pytest.mark.parametrize("dtype", ("bfloat16", "Narrow"))
+@pytest.mark.parametrize("context", ("constructor", "return", "argument"))
+@pytest.mark.parametrize("reverse", (False, True))
+def test_directx_mixed_bfloat_selection_decodes_before_selection(
+    dtype, context, reverse
+):
+    selection = "take ? fallback : value" if reverse else "take ? value : fallback"
+    expression = {
+        "constructor": f"float({dtype}({selection}))",
+        "return": selection,
+        "argument": f"consume({selection})",
+    }[context]
+    shader = f"""shader Selection {{
+        typedef bfloat16 Narrow;
+        float consume(float value) {{ return value; }}
+        float choose({dtype} value, float fallback, bool take) {{
+            return {expression};
+        }}
+    }}"""
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    decoded = "__crossgl_bfloat16_to_float(uint(value))"
+    wanted = (
+        f"(take ? fallback : {decoded})"
+        if reverse
+        else f"(take ? {decoded} : fallback)"
+    )
+    assert wanted in generated
+    assert selection not in generated
+    if context == "constructor":
+        assert f"__crossgl_bfloat16_from_float(float({wanted}))" in generated
+
+
+@pytest.mark.parametrize("dtype", ("bfloat16", "Narrow"))
+def test_directx_bfloat_selection_keeps_payload_until_outer_conversion(dtype):
+    shader = f"""shader Selection {{
+        typedef bfloat16 Narrow;
+        float choose({dtype} left, {dtype} right, bool take) {{
+            return take ? left : right;
+        }}
+    }}"""
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert (
+        "return __crossgl_bfloat16_to_float(uint((take ? left : right)));" in generated
+    )
+    assert "__crossgl_bfloat16_to_float(uint(left))" not in generated
+    assert "__crossgl_bfloat16_to_float(uint(right))" not in generated
+
+
+def test_directx_nested_bfloat_selection_keeps_single_evaluation():
+    shader = """shader Selection {
+        bfloat16 produce(inout uint calls) { calls++; return bfloat16(2.0); }
+        float choose(bool outer, bool inner, inout uint calls) {
+            return bfloat16(outer ? (inner ? produce(calls) : 123.0) : 17.0);
+        }
+    }"""
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert generated.count("produce(calls)") == 1
+    assert (
+        "inner ? __crossgl_bfloat16_to_float(uint(produce(calls))) : 123.0" in generated
+    )
+
+
+@pytest.mark.parametrize(
+    "declarations",
+    (
+        "using Narrow = bfloat;",
+        "typedef bfloat Narrow;",
+    ),
+)
+@pytest.mark.parametrize("helper", (False, True))
+def test_directx_bfloat_aliases_preserve_logical_conversion(
+    tmp_path, declarations, helper
+):
+    generated = []
+    for dtype, aliases in (("bfloat", ""), ("Narrow", declarations)):
+        source = tmp_path / f"{dtype}.metal"
+        helper_source = (
+            f"{dtype} identity({dtype} value) {{ return value; }}" if helper else ""
+        )
+        expression = "identity(value)" if helper else "value"
+        source.write_text(
+            f"""#include <metal_stdlib>
+using namespace metal;
+{aliases}
+{helper_source}
+kernel void convert(const device uint* values [[buffer(0)]],
+                    device uint* results [[buffer(1)]],
+                    uint i [[thread_position_in_grid]]) {{
+    {dtype} value = {dtype}(as_type<bfloat>(ushort(values[i])));
+    results[i] = as_type<uint>(float({expression}));
+}}
+""",
+            encoding="utf-8",
+        )
+        generated.append(translate(str(source), backend="directx", format_output=False))
+    assert (
+        "__crossgl_bfloat16_from_uint16(uint16_t(uint16_t(values.Load(i))))"
+        in generated[0]
+    )
+    assert f"asuint(__crossgl_bfloat16_to_float(uint({expression})))" in generated[0]
+    assert generated[1] == generated[0]
+
+
+def test_directx_canonical_bfloat_alias_chain_retains_helper_conversions():
+    generated = []
+    for dtype, aliases in (
+        ("bfloat16", ""),
+        ("Narrow", "typedef bfloat16 Base; typedef Base Narrow;"),
+    ):
+        shader = f"""
+shader Conversions {{
+    {aliases}
+    {dtype} narrow(float value) {{ return {dtype}(value); }}
+    {dtype} identity({dtype} value) {{ return value; }}
+    float widen({dtype} value) {{ return float(identity(value)); }}
+    float arithmetic({dtype} left, {dtype} right) {{ return float(left + right); }}
+}}
+"""
+        generated.append(HLSLCodeGen().generate(crosstl.translator.parse(shader)))
+    assert "return __crossgl_bfloat16_from_float(float(value));" in generated[0]
+    assert "return __crossgl_bfloat16_to_float(uint(identity(value)));" in generated[0]
+    assert generated[1] == generated[0]
+
+
+@pytest.mark.parametrize(
+    "dtype,aliases,expected",
+    (
+        ("Narrow", {"Narrow": "bfloat16"}, True),
+        ("const Narrow", {"Narrow": "volatile bfloat16"}, True),
+        ("Narrow", {"Narrow": "Base", "Base": "bfloat16"}, True),
+        ("Narrow", {"Narrow": "uint"}, False),
+        ("Narrow", {"Narrow": "Narrow"}, False),
+        ("Narrow", {"Narrow": "Base", "Base": "Narrow"}, False),
+        ("Narrow", {"Narrow": "bfloat16[2]"}, False),
+        ("Narrow", {"Narrow": "bfloat16*"}, False),
+    ),
+)
+def test_directx_bfloat_alias_classification_is_logical_and_cycle_safe(
+    dtype, aliases, expected
+):
+    generator = HLSLCodeGen()
+    generator.hlsl_type_aliases = aliases
+    assert generator.is_hlsl_bfloat16_type(dtype) is expected
 
 
 def test_directx_bfloat16_builtin_decodes_and_preserves_return_contract():
@@ -181,17 +327,26 @@ def test_directx_half_and_bfloat_entry_resources_do_not_share_source_type(tmp_pa
     assert payload["summary"]["translatedCount"] == 1
     artifact = payload["artifacts"][0]
     generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
-    assert "StructuredBuffer<float16_t> in_ : register(t0);" in generated
-    assert "RWStructuredBuffer<float16_t> out_ : register(u1);" in generated
+    assert "StructuredBuffer<uint16_t> in_ : register(t0);" in generated
+    assert "RWStructuredBuffer<uint16_t> out_ : register(u1);" in generated
     assert "StructuredBuffer<uint16_t> copy_bfloat_in : register(t1);" in generated
     assert "RWStructuredBuffer<uint16_t> copy_bfloat_out : register(u2);" in generated
-    assert "void copy_impl_half(StructuredBuffer<float16_t> in_" in generated
+    assert "void copy_impl_half(StructuredBuffer<uint16_t> in_" in generated
     assert "void copy_impl_bfloat16_t(StructuredBuffer<uint16_t> in_" in generated
     assert "copy_impl_half(in_, int64_t(0), out_, int64_t(0));" in generated
     assert (
         "copy_impl_bfloat16_t(copy_bfloat_in, int64_t(0), "
         "copy_bfloat_out, int64_t(0));"
     ) in generated
+    from crosstl.translator.resource_storage import (
+        BINARY16_STORAGE,
+        parse_resource_storage_header,
+    )
+
+    assert parse_resource_storage_header(generated) == {
+        "in_": BINARY16_STORAGE,
+        "out_": BINARY16_STORAGE,
+    }
 
 
 def test_mlx_gemv_materialized_helper_preserves_bfloat_storage_boundary(tmp_path):
@@ -540,3 +695,92 @@ def test_directx_bfloat_storage_narrows_canonical_buffer_store_values():
     assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
     assert " = uint16_t(value);" in generated
     assert " = value;" not in generated
+
+
+def test_directx_bfloat_fixed_array_returns_keep_payload_bits(tmp_path):
+    # Reduced from MLX 9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8,
+    # mlx/backend/metal/kernels/binary_ops.h (DivMod). A uint2 return used
+    # to coerce each bfloat16 payload numerically (uint(bf16_to_float(x))),
+    # so WARP stored 3 instead of the bfloat16 bits of 3.0.
+    (tmp_path / "divmod.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+            typedef bfloat bfloat16_t;
+
+            struct DivMod {
+              template <typename T>
+              metal::array<T, 2> operator()(T x, T y) {
+                return {x / y, x};
+              }
+            };
+
+            template <typename T>
+            struct Widen {
+              metal::array<T, 3> operator()(float x) {
+                return {static_cast<T>(x), static_cast<T>(2.0f)};
+              }
+            };
+
+            template <typename T>
+            [[kernel]] void divmod(
+                device const T* a [[buffer(0)]],
+                device const T* b [[buffer(1)]],
+                device T* c [[buffer(2)]],
+                device T* d [[buffer(3)]],
+                uint index [[thread_position_in_grid]]) {
+              auto out = DivMod{}(a[index], b[index]);
+              auto wide = Widen<T>{}(1.5f);
+              c[index] = out[0];
+              d[index] = out[1] + wide[2];
+            }
+
+            instantiate_kernel("divmod_bfloat", divmod, bfloat16_t)
+            instantiate_kernel("divmod_float", divmod, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        tmp_path,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    generated = (tmp_path / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    # bfloat16 arrays use the struct lowering whose fields keep the logical
+    # bfloat16 type, so payloads are copied bit-for-bit.
+    assert "struct CrossGLFixedArray_uint_2 {" in generated
+    assert (
+        "CrossGLFixedArray_uint_2 DivMod__operator_call__bfloat16_t("
+        "inout DivMod self, uint x, uint y) {" in generated
+    )
+    assert (
+        ".value1 = x;" in generated
+    ), "a bfloat16 lane must be copied, not numerically converted"
+    assert ".value0 = __crossgl_bfloat16_from_float(float((" in generated
+    assert "c[index] = uint16_t(out_.value0);" in generated
+    assert "uint2 DivMod__operator_call__bfloat16_t" not in generated
+    assert "uint(__crossgl_bfloat16_to_float(" not in generated
+    # Float lanes that initialize a bfloat16 array are rounded exactly once,
+    # and value-initialized lanes are bfloat16 zero payloads.
+    assert "struct CrossGLFixedArray_uint_3 {" in generated
+    assert ".value0 = __crossgl_bfloat16_from_float(float(x));" in generated
+    assert ".value1 = __crossgl_bfloat16_from_float(float(2.0));" in generated
+    assert ".value2 = uint(0);" in generated
+    # Arithmetic on a returned lane decodes the payload first.
+    assert (
+        "__crossgl_bfloat16_to_float(uint(out_.value1)) + "
+        "__crossgl_bfloat16_to_float(uint(wide.value2))" in generated
+    )
+
+    # Non-bfloat16 scalar arrays keep the compact vector lowering.
+    assert (
+        "float2 DivMod__operator_call__float(inout DivMod self, float x, float y)"
+        in generated
+    )

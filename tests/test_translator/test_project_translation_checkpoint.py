@@ -396,6 +396,116 @@ def test_translate_project_checkpoint_resumes_only_verified_pending_jobs(
     assert completed["finalReport"] == resumed
 
 
+def test_translation_without_checkpoint_does_not_fingerprint_installation(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    _write_project(repo)
+
+    def unexpected_identity():
+        pytest.fail("Translation without a checkpoint read the installed sources")
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "project_translation_implementation_identity",
+        unexpected_identity,
+    )
+    report = project_api.translate_project(
+        repo, targets=["cgl"], output_dir="out", format_output=False
+    )
+    assert report.to_json()["summary"]["failedCount"] == 0
+
+
+@pytest.mark.parametrize("change", ("implementation", "legacy", "relocated"))
+def test_same_version_resume_checks_implementation_before_reusing_artifacts(
+    tmp_path, monkeypatch, change
+):
+    from .test_checkpoint_implementation_identity import _package
+
+    package = _package(tmp_path / "installation", monkeypatch)
+    monkeypatch.setattr(project_pipeline, "_package_version", lambda: "3.4.0")
+    repo = tmp_path / "repo"
+    _write_project(repo)
+    path = repo / "progress.json"
+    original_translate = project_pipeline.translate
+
+    def interrupt_second(source, *args, **kwargs):
+        if Path(source).name == "second.cgl":
+            raise KeyboardInterrupt("interrupted")
+        return original_translate(source, *args, **kwargs)
+
+    monkeypatch.setattr(project_pipeline, "translate", interrupt_second)
+    with pytest.raises(KeyboardInterrupt):
+        project_api.translate_project(
+            repo,
+            targets=["cgl"],
+            output_dir="out",
+            format_output=False,
+            checkpoint_path=path,
+        )
+    interrupted = load_project_translation_checkpoint(path)
+    assert interrupted["projectIdentity"]["packageVersion"] == "3.4.0"
+    assert interrupted["plan"]["completedCount"] == 1
+    if change == "legacy":
+        identity = dict(interrupted["projectIdentity"])
+        identity.pop("implementation", None)
+        recorder = ProjectTranslationCheckpointRecorder(
+            path,
+            identity,
+            interrupted["plan"]["jobs"],
+            completed=interrupted["plan"]["completed"],
+        )
+        recorder.write_interrupted(interrupted["plan"]["active"], KeyboardInterrupt())
+    elif change == "implementation":
+        source = package / "translator/codegen/GLSL_codegen.py"
+        source.write_bytes(source.read_bytes().replace(b"first", b"other"))
+    else:
+        relocated = tmp_path / "relocated" / "crosstl"
+        shutil.copytree(package, relocated)
+        monkeypatch.setattr(
+            checkpoint_module,
+            "__file__",
+            str(relocated / "project/translation_checkpoint.py"),
+        )
+    checkpoint_bytes = path.read_bytes()
+    completed_path = repo / interrupted["plan"]["completed"][0]["artifacts"][0]["path"]
+    completed_bytes = completed_path.read_bytes()
+    calls = []
+
+    def resumed_translation(source, *args, **kwargs):
+        calls.append(Path(source).name)
+        return original_translate(source, *args, **kwargs)
+
+    monkeypatch.setattr(project_pipeline, "translate", resumed_translation)
+    if change == "relocated":
+        report = project_api.translate_project(
+            repo,
+            targets=["cgl"],
+            output_dir="out",
+            format_output=False,
+            checkpoint_path=path,
+            resume=True,
+        )
+        assert report.to_json()["summary"]["failedCount"] == 0
+        assert calls == ["second.cgl"]
+    else:
+        with pytest.raises(ProjectTranslationCheckpointError) as caught:
+            project_api.translate_project(
+                repo,
+                targets=["cgl"],
+                output_dir="out",
+                format_output=False,
+                checkpoint_path=path,
+                resume=True,
+            )
+        assert caught.value.reason == "implementation-mismatch"
+        assert "without --resume" in caught.value.message
+        assert "new checkpoint" in caught.value.message
+        assert path.read_bytes() == checkpoint_bytes
+        assert calls == []
+    assert completed_path.read_bytes() == completed_bytes
+
+
 def test_translate_project_checkpoint_resumes_pending_entry_artifact(
     tmp_path,
     monkeypatch,
