@@ -34,6 +34,7 @@ SHADER_FIELDS = (
     "staticSamplerRequired",
     "resourceDescriptorRanges",
 )
+METHOD_FIELDS = ("method", "signature", "source")
 
 
 def _index(items: list, key: str, fields: tuple) -> dict:
@@ -48,6 +49,7 @@ def compare(reference_dir: Path, candidate_dir: Path) -> dict:
         if reference[name] != candidate[name]:
             problems.append(f"{name}: {reference[name]} != {candidate[name]}")
     for label, key, fields in (
+        ("methods", "signature", METHOD_FIELDS),
         ("tests", "id", CASE_FIELDS),
         ("shaders", "type", SHADER_FIELDS),
     ):

@@ -5,6 +5,6 @@
   "testProject": "tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj",
   "sdkVersion": "10.0.400",
   "targets": ["metal", "opengl"],
-  "coverageFrozen": false,
+  "coverageFrozen": true,
   "nativeExecutionQualified": false
 }

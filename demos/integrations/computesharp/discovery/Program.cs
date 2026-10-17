@@ -1,6 +1,9 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
@@ -40,8 +43,10 @@ internal static class Program
                 return dependency is null ? null : AssemblyLoadContext.Default.LoadFromAssemblyPath(dependency);
             };
             Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
+            using SourceLocator locator = new(assemblyPath);
             Type[] types = assembly.GetTypes().OrderBy(TypeName, StringComparer.Ordinal).ToArray();
             List<object> cases = [];
+            List<object> methods = [];
             HashSet<string> identities = [];
             Dictionary<string, int> occurrences = [];
             int methodCount = 0;
@@ -56,6 +61,8 @@ internal static class Program
                     methodCount++;
                     string methodName = TypeName(type) + "." + method.Name;
                     string signature = methodName + "(" + string.Join(",", method.GetParameters().Select(p => TypeName(p.ParameterType))) + ")";
+                    (string path, int line) = locator.Locate(method);
+                    methods.Add(new { method = methodName, signature, source = new { path, line } });
                     bool ignored = HasAttribute(type, TestNamespace + "IgnoreAttribute") || HasAttribute(method, TestNamespace + "IgnoreAttribute");
                     object[] sources = attributes.Where(a => DataInterface(a.GetType()) is not null).ToArray();
                     if (sources.Length == 0)
@@ -140,6 +147,7 @@ internal static class Program
                 shaderCount = shaders.Count,
                 coverageFrozen = false,
                 nativeExecutionQualified = false,
+                methods,
                 tests = cases,
                 shaders
             };
@@ -198,5 +206,68 @@ internal static class Program
         if (value is Array array && array.Rank == 1)
             return new() { ["kind"] = "array", ["type"] = TypeName(array.GetType()), ["items"] = new JsonArray(array.Cast<object?>().Select(v => (JsonNode)Argument(v)).ToArray()) };
         throw new InvalidOperationException("Unsupported test argument type: " + TypeName(value.GetType()));
+    }
+}
+
+/// <summary>Resolves test methods to repository-relative source locations through the portable PDB.</summary>
+internal sealed class SourceLocator : IDisposable
+{
+    private static readonly System.Text.RegularExpressions.Regex MappedRoot = new(@"^/_\d*/", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private readonly PEReader peReader;
+    private readonly MetadataReaderProvider provider;
+    private readonly MetadataReader pdb;
+
+    public SourceLocator(string assemblyPath)
+    {
+        peReader = new PEReader(File.OpenRead(assemblyPath));
+        DebugDirectoryEntry embedded = peReader.ReadDebugDirectory().FirstOrDefault(e => e.Type == DebugDirectoryEntryType.EmbeddedPortablePdb);
+        if (embedded.DataSize != 0)
+        {
+            provider = peReader.ReadEmbeddedPortablePdbDebugDirectoryData(embedded);
+        }
+        else
+        {
+            string pdbPath = Path.ChangeExtension(assemblyPath, ".pdb");
+            if (!File.Exists(pdbPath))
+                throw new InvalidOperationException("No portable PDB for source locations: " + assemblyPath);
+            provider = MetadataReaderProvider.FromPortablePdbStream(File.OpenRead(pdbPath));
+        }
+        pdb = provider.GetMetadataReader();
+    }
+
+    public (string Path, int Line) Locate(MethodInfo method)
+    {
+        MethodBase body = method;
+        if (method.GetCustomAttribute<System.Runtime.CompilerServices.AsyncStateMachineAttribute>() is { } async)
+            body = async.StateMachineType.GetMethod("MoveNext", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!;
+        MethodDefinitionHandle handle = MetadataTokens.MethodDefinitionHandle(body.MetadataToken);
+        MethodDebugInformation information = pdb.GetMethodDebugInformation(handle.ToDebugInformationHandle());
+        foreach (SequencePoint point in information.GetSequencePoints())
+        {
+            if (point.IsHidden)
+                continue;
+            string document = pdb.GetString(pdb.GetDocument(point.Document).Name).Replace('\\', '/');
+            return (Relative(document), point.StartLine);
+        }
+        throw new InvalidOperationException("No source location for test method: " + method.DeclaringType?.FullName + "." + method.Name);
+    }
+
+    private static string Relative(string document)
+    {
+        System.Text.RegularExpressions.Match mapped = MappedRoot.Match(document);
+        if (mapped.Success)
+            return document[mapped.Length..];
+        for (DirectoryInfo? directory = new FileInfo(document).Directory; directory is not null; directory = directory.Parent)
+        {
+            if (Path.Exists(Path.Combine(directory.FullName, ".git")))
+                return Path.GetRelativePath(directory.FullName, document).Replace('\\', '/');
+        }
+        throw new InvalidOperationException("Source document is outside a repository: " + document);
+    }
+
+    public void Dispose()
+    {
+        provider.Dispose();
+        peReader.Dispose();
     }
 }
