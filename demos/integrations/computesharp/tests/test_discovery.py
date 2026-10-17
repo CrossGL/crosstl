@@ -217,6 +217,16 @@ def test_translated_profile_rejects_baseline_only_outcomes(baseline_fixture):
         BASELINE.verify_results(*baseline_fixture, "translated", FIXTURE_CONTRACT)
 
 
+def test_translated_profile_reports_every_mismatch(baseline_fixture):
+    with pytest.raises(BASELINE.AccountingError) as raised:
+        BASELINE.verify_results(*baseline_fixture, "translated", FIXTURE_CONTRACT)
+    errors = raised.value.errors
+    assert len(errors) >= 3
+    assert any(error.startswith("Excluded case was executed") for error in errors)
+    assert any("Discrete" in error for error in errors)
+    assert str(len(errors)) in str(raised.value)
+
+
 def _mutated_trx(original, tmp_path, mutation):
     tree = ET.parse(original)
     namespace = BASELINE.TRX
