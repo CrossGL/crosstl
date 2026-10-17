@@ -1275,6 +1275,146 @@ def test_codegen_mul_intrinsic_imports_to_multiply_expression():
     parse_crossgl(crossgl)
 
 
+MIXED_REGISTER_CLASS_HLSL = textwrap.dedent("""
+    cbuffer _ : register(b0)
+    {
+        uint count;
+        float scale;
+    }
+
+    StructuredBuffer<float> source : register(t0);
+    Texture2D<float4> image : register(t1);
+    RWStructuredBuffer<float> destination : register(u0);
+    RWTexture2D<float4> target : register(u1);
+
+    [NumThreads(64, 1, 1)]
+    void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+    {
+        if (ThreadIds.x < count)
+        {
+            destination[ThreadIds.x] = source[ThreadIds.x] * scale + image[uint2(ThreadIds.x, 0)].x;
+            target[uint2(ThreadIds.x, 0)] = float4(1, 2, 3, 4);
+        }
+    }
+""").strip()
+
+
+def test_codegen_hlsl_register_classes_share_metal_argument_tables():
+    # Reduced from ComputeSharp generated compute shaders, which number each
+    # register class from zero (b0, t0, u0) in the same kernel.
+    codegen = MetalCodeGen()
+    metal = codegen.generate(parse_crossgl(generate_crossgl(MIXED_REGISTER_CLASS_HLSL)))
+
+    assert "constant _& _ [[buffer(0)]]" in metal
+    assert "const device float* source [[buffer(1)]]" in metal
+    assert "device float* destination [[buffer(2)]]" in metal
+    assert "texture2d<float> image [[texture(1)]]" in metal
+    assert "texture2d<float, access::read_write> target [[texture(2)]]" in metal
+    records = {
+        record["register"]: (record["name"], record["namespace"], record["binding"])
+        for record in codegen.resource_binding_records()
+    }
+    assert records == {
+        "b0": ("_", "buffer", 0),
+        "t0": ("source", "buffer", 1),
+        "u0": ("destination", "buffer", 2),
+        "t1": ("image", "texture", 1),
+        "u1": ("target", "texture", 2),
+    }
+
+
+def test_codegen_hlsl_register_mapping_does_not_depend_on_declaration_order():
+    reordered = textwrap.dedent("""
+        RWStructuredBuffer<float> destination : register(u0);
+        StructuredBuffer<float> source : register(t0);
+        cbuffer _ : register(b0) { uint count; }
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            if (ThreadIds.x < count) { destination[ThreadIds.x] = source[ThreadIds.x]; }
+        }
+    """).strip()
+    codegen = MetalCodeGen()
+    codegen.generate(parse_crossgl(generate_crossgl(reordered)))
+
+    assert {
+        record["register"]: record["binding"]
+        for record in codegen.resource_binding_records()
+    } == {"b0": 0, "t0": 1, "u0": 2}
+
+
+def test_codegen_hlsl_same_class_register_overlap_is_rejected_for_metal():
+    overlapping = textwrap.dedent("""
+        StructuredBuffer<float> first : register(t0);
+        StructuredBuffer<float> second : register(t0);
+        RWStructuredBuffer<float> destination : register(u0);
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            destination[ThreadIds.x] = first[ThreadIds.x] + second[ThreadIds.x];
+        }
+    """).strip()
+
+    with pytest.raises(
+        ValueError, match="Conflicting Metal source resource binding for 'second'"
+    ):
+        MetalCodeGen().generate(parse_crossgl(generate_crossgl(overlapping)))
+
+
+def test_metal_explicit_slots_keep_exact_meaning_next_to_hlsl_registers():
+    code = """
+    shader ExplicitAndRegisterSlots {
+        RWStructuredBuffer<float> exact @buffer(0);
+        RWStructuredBuffer<float> registered @register(u0);
+
+        compute {
+            void main(uvec3 id @ gl_GlobalInvocationID) {
+                exact[id.x] = registered[id.x];
+            }
+        }
+    }
+    """
+    codegen = MetalCodeGen()
+    metal = codegen.generate(parse_crossgl(code))
+
+    assert "device float* exact [[buffer(0)]]" in metal
+    assert "device float* registered [[buffer(1)]]" in metal
+    records = {record["name"]: record for record in codegen.resource_binding_records()}
+    assert records["exact"]["binding"] == 0
+    assert records["exact"]["register"] is None
+    assert records["registered"]["binding"] == 1
+    assert records["registered"]["register"] == "u0"
+
+
+def test_codegen_hlsl_function_prototypes_are_not_emitted_as_definitions():
+    crossgl = generate_crossgl(textwrap.dedent("""
+        RWStructuredBuffer<float> values : register(u0);
+
+        float Twice(float value);
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            values[ThreadIds.x] = Twice(values[ThreadIds.x]);
+        }
+
+        float Twice(float value)
+        {
+            return value * 2.0;
+        }
+    """).strip())
+
+    assert crossgl.count("float Twice(float value)") == 1
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "return value * 2.0;" in metal
+    definitions = [
+        line for line in metal.splitlines() if line.startswith("float Twice(")
+    ]
+    assert len([line for line in definitions if line.rstrip().endswith("{")]) == 1
+
+
 def test_codegen_hlsl_program_scope_constants_lower_to_metal_cbuffer():
     # Reduced from MonoGame SpriteEffect.fx constants included through Macros.fxh.
     crossgl = generate_crossgl("""

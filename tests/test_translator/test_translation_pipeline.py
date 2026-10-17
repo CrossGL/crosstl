@@ -344,6 +344,57 @@ def test_root_package_exposes_documented_registry_helpers():
     assert "cgl" in crosstl.supported_sources()
 
 
+def test_translate_with_metadata_reports_target_resource_bindings(tmp_path):
+    source_path = tmp_path / "bindings.hlsl"
+    source_path.write_text(
+        textwrap.dedent("""
+            cbuffer Constants : register(b0) { uint count; float scale; }
+            StructuredBuffer<float> source : register(t0);
+            RWStructuredBuffer<float> destination : register(u0);
+
+            [numthreads(64, 1, 1)]
+            void Execute(uint3 id : SV_DispatchThreadID) {
+                if (id.x < count) { destination[id.x] = source[id.x] * scale; }
+            }
+            """),
+        encoding="utf-8",
+    )
+    saved = tmp_path / "bindings.metal"
+
+    assert set(crosstl.__all__) >= {"translate_with_metadata", "TranslationResult"}
+    result = crosstl.translate_with_metadata(
+        str(source_path), backend="metal", save_shader=str(saved)
+    )
+
+    assert isinstance(result, crosstl.TranslationResult)
+    assert result.backend == "metal"
+    assert result.code == crosstl.translate(str(source_path), backend="metal")
+    assert saved.read_text(encoding="utf-8") == result.code
+    by_register = {record["register"]: record for record in result.resource_bindings}
+    assert {
+        key: (value["namespace"], value["binding"])
+        for key, value in by_register.items()
+    } == {
+        "b0": ("buffer", 0),
+        "t0": ("buffer", 1),
+        "u0": ("buffer", 2),
+    }
+    assert by_register["b0"]["kind"] == "constant-buffer"
+    assert by_register["t0"]["name"] == "source"
+    assert by_register["u0"]["name"] == "destination"
+    for record in result.resource_bindings:
+        slot = f"[[buffer({record['binding']})]]"
+        assert slot in result.code
+
+    # Targets without a binding report return the code with an empty table.
+    assert (
+        crosstl.translate_with_metadata(
+            str(source_path), backend="cgl"
+        ).resource_bindings
+        == ()
+    )
+
+
 def test_registered_native_sources_have_reverse_codegen_factories():
     register_default_sources()
 

@@ -3207,8 +3207,16 @@ class HLSLToCrossGLConverter:
             "ray_any_hit": "ray_any_hit",
             "ray_callable": "ray_callable",
         }
-        functions_by_name = {func.name: func for func in ast.functions}
+        functions_by_name = {
+            func.name: func
+            for func in ast.functions
+            if not getattr(func, "is_prototype", False)
+        }
         for func in ast.functions:
+            if getattr(func, "is_prototype", False):
+                # CrossGL functions are visible throughout the module; targets that
+                # need declarations before use emit their own prototypes.
+                continue
             stage_name = stage_map.get(func.qualifier)
             if stage_name:
                 code += f"    // {stage_name} Shader\n"
