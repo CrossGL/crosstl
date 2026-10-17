@@ -769,24 +769,36 @@ the steps past its keys, keeping every software-subgroup reduction uniform.
 This is an 82/17,832 increment; it does not run the upstream MLX test suite or
 redirect the MLX host runtime.
 
-``gated_delta_update.current-tree.translation.json`` pins the 72 sequential
-``gated_delta_seq`` entries of ``gated_delta_update.metal`` and their 432
-artifacts, and records the 18 ``gated_delta_fused_chunk`` entries as pending
-because their ``simdgroup_float8x8`` tiles do not translate yet; required CI
-confirms that each still fails to translate on every target. Each entry is
-pinned with function constant 200, ``save_state``, off for inference and on
-for the backward's save pass; DirectX materializes the constant, while Metal
-and OpenGL specialize it when the runtime creates the pipeline. OpenGL and
-DirectX lower the two 32-lane reductions to software subgroups. Each target
-executes 288 dispatches with MLX's grid: a one-token decode and an
+``gated_delta_update.current-tree.translation.json`` pins all 90 entries of
+``gated_delta_update.metal``, the 72 sequential ``gated_delta_seq`` entries
+and the 18 eight-step ``gated_delta_fused_chunk`` entries, and their 486
+artifacts. Each sequential entry is pinned with function constant 200,
+``save_state``, off for inference and on for the backward's save pass; DirectX
+materializes the constant, while Metal and OpenGL specialize it when the
+runtime creates the pipeline. The fused kernel runs only for inference and
+never reads the constant. OpenGL and DirectX lower the sequential kernel's two
+32-lane reductions to software subgroups. Each target executes 342 dispatches
+with MLX's grids. The sequential kernel runs a one-token decode and an
 eight-token, two-batch prefill for inference, and a one-token decode and
 2 * Ckpt + 1 steps, three checkpoint slots, for the save pass. Outputs, final
 states and checkpoints are checked against a float64 recurrence with a
 per-element bound on the kernel's binary32 rounding that carries each state
-row's error through ``g (I - beta k k^T)``. Metal also runs the unchanged
-upstream kernel, and the translation must reproduce it bit for bit. No backend
-needs an index-range precondition. This is a 72/17,832 increment; it does not
-run the upstream MLX test suite or redirect the MLX host runtime.
+row's error through ``g (I - beta k k^T)``. The fused kernel holds its 8 x 8
+tiles in ``simdgroup_float8x8`` values, moves them with ``simdgroup_load``,
+``simdgroup_store`` and ``thread_elements()`` at MLX's ``(fm, fn)`` lane
+coordinates, registered as the ``tile_4x4_row_pair`` fragment mapping, and
+multiplies them with ``simdgroup_multiply`` and
+``simdgroup_multiply_accumulate``. OpenGL and DirectX lower the tiles to
+32-lane software subgroups and prove the chunk loop uniform from a host
+precondition ``0 <= T <= 2^31 - 9``. Each fused entry runs a one-step tail
+(T = 9), a five-step tail over two batches (T = 13) and three chunks
+(T = 24) with keys that share a direction, so the WY inverse departs far from
+the identity; its bound adds any summation order of every tile product and the
+specified error of ``fast::exp`` and ``fast::log``. Metal also runs the
+unchanged upstream kernels, and the translation must reproduce them bit for
+bit. No backend needs an index-range precondition. This is a 90/17,832
+increment; it does not run the upstream MLX test suite or redirect the MLX
+host runtime.
 
 ``gated_delta_update_vjp.current-tree.translation.json`` pins all 72
 ``gated_delta_vjp_seq`` entries of ``gated_delta_update_vjp.metal`` and their

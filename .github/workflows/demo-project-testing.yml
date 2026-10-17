@@ -6768,7 +6768,7 @@ jobs:
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX gated delta native parity" \
-            --timeout-seconds 3600 -- \
+            --timeout-seconds 7200 -- \
             python -m pytest -q -n auto \
               --basetemp=mlx-current-results/gated-delta \
               --junitxml=mlx-current-results/gated-delta.xml \

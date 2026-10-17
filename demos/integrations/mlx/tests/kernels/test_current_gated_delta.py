@@ -78,24 +78,34 @@ INSTANTIATED = tuple(
     )
 )
 # The fused chunk kernel holds its tiles in simdgroup_float8x8 values and
-# addresses their fragments through thread_elements(); the Metal frontend does
-# not yet resolve that typedef as a cooperative matrix, so no target
-# translates it.
-PENDING_REASON = (
-    "simdgroup_float8x8 tiles accessed through thread_elements() do not "
-    "translate yet"
+# addresses their fragments through thread_elements(): the registered
+# tile_4x4_row_pair coordinates, which MLX spells out as fm and fn. OpenGL and
+# DirectX lower the tiles to 32-lane software subgroups, each lane holding its
+# own two fragment elements.
+SEQ_ENTRIES = tuple(entry for entry in INSTANTIATED if entry.startswith("seq_"))
+FUSED_ENTRIES = tuple(
+    entry for entry in INSTANTIATED if entry.startswith("gated_delta_fused_chunk_")
 )
-PENDING_DIAGNOSTIC = "project.translate.metal-struct-method"
-ENTRIES = tuple(entry for entry in INSTANTIATED if entry.startswith("seq_"))
-PENDING_ENTRIES = tuple(entry for entry in INSTANTIATED if not entry.startswith("seq_"))
+ENTRIES = INSTANTIATED
+FRAGMENT_MAPPING = "tile_4x4_row_pair"
+FRAGMENT_MAPPING_PROVENANCE = "mlx_gated_delta_lane_coordinates"
+# for (; t + C <= T; t += C) must not overflow t + C, so OpenGL and DirectX
+# take T from a host precondition when proving the chunk loop uniform.
+T_MAXIMUM = 2**31 - 1 - CHUNK
 SAVE_STATE_ID = 200
 # gated_delta_update.cpp clears save_state (function constant 200) for
-# inference and sets it for the backward's sequential save pass.
+# inference and sets it for the backward's sequential save pass. The fused
+# chunk kernel runs only for inference and never reads the constant.
 SPECIALIZATIONS = {"inference": False, "save": True}
+FUSED_SPECIALIZATIONS = {"inference": False}
 VARIANTS = tuple(
     (entry, key, {"save_state": value})
-    for entry in ENTRIES
+    for entry in SEQ_ENTRIES
     for key, value in SPECIALIZATIONS.items()
+) + tuple(
+    (entry, key, {"save_state": value})
+    for entry in FUSED_ENTRIES
+    for key, value in FUSED_SPECIALIZATIONS.items()
 )
 SIMD_SIZE = 32
 # gated_delta_update.cpp dispatches a (32, Dv, B * Hv) grid of (32, 4, 1)
@@ -121,6 +131,29 @@ SPECIALIZATION_CASES = {
     "inference": ("decode", "prefill"),
     "save": ("decode", "checkpoints"),
 }
+# gated_delta_chunk_size() picks the eight-step fused kernel for T > 8 on
+# devices without NAX and dispatches a (32, Dv / 8, B * Hv) grid of
+# (32, 4, 1) groups: each SIMD group holds an eight-column block of every
+# state row of one head. The shortest case is the shortest fused sequence,
+# one chunk and a one-step tail; the tail case leaves a five-step tail in
+# each of two batches; the chunk case carries the state through three chunks.
+FUSED_CASES = {
+    "shortest": (1, 9),
+    "tail": (2, 13),
+    "chunks": (1, 24),
+}
+FUSED_SPECIALIZATION_CASES = {"inference": tuple(FUSED_CASES)}
+FUSED_COLUMNS_PER_GROUP = 8
+# Fused error model. Every 8 x 8 matrix product may sum in any order, so a sum
+# of n products errs by at most gamma(n) of the sum of absolute products;
+# fast::exp and fast::log follow the accuracy Metal's fast math and GLSL
+# specify: exp within 3 + 2 |x| ulp and log within 2^-21 absolute on
+# [0.5, 2]. Rounding committed in a chunk is tracked element by element; the
+# state error it leaves is carried as a row 2-norm through the chunk's
+# product of g (I - beta k k^T), as in the sequential kernel.
+EXP_ULPS = (3.0, 2.0)
+ULP_FRACTION = 2.0**-23
+LOG_ABSOLUTE_ERROR = 2.0**-21
 INPUT_GUARD_COUNT = 16
 OUTPUT_GUARD_BITS = GUARD_BITS
 # Error model. The kernel computes in binary32: one rounding (u = 2^-24) per
@@ -151,14 +184,20 @@ def _np():
 
 
 def _parse(entry):
+    """Return (dtype, Dk, Dv, Hk, Hv, Ckpt or C) of a sequential or fused entry."""
     match = re.fullmatch(
-        r"seq_gated_delta_(float|bfloat16_t|float16_t)_(\d+)_(\d+)_(\d+)_(\d+)_(\d+)",
+        r"(?:seq_gated_delta|gated_delta_fused_chunk)_"
+        r"(float|bfloat16_t|float16_t)_(\d+)_(\d+)_(\d+)_(\d+)_(\d+)",
         entry,
     )
     assert match, entry
     type_name, *numbers = match.groups()
-    dk, dv, hk, hv, ckpt = (int(item) for item in numbers)
-    return STORAGE_TYPES[type_name], dk, dv, hk, hv, ckpt
+    dk, dv, hk, hv, last = (int(item) for item in numbers)
+    return STORAGE_TYPES[type_name], dk, dv, hk, hv, last
+
+
+def _fused(entry):
+    return entry.startswith("gated_delta_fused_chunk_")
 
 
 def _dtype(entry):
@@ -166,10 +205,14 @@ def _dtype(entry):
 
 
 def _geometry(entry, name):
-    batch, steps = CASES[name]
+    batch, steps = (FUSED_CASES if _fused(entry) else CASES)[name]
     if steps is None:
         steps = 2 * _parse(entry)[5] + 1
     return batch, steps
+
+
+def _cases(entry, key):
+    return (FUSED_SPECIALIZATION_CASES if _fused(entry) else SPECIALIZATION_CASES)[key]
 
 
 def _slots(entry, name):
@@ -229,11 +272,18 @@ def _inputs(entry, name):
         raw = 2.0 * uniform(tag, shape) - 1.0
         return raw / np.linalg.norm(raw, axis=-1, keepdims=True)
 
+    keys = unit("k", (batch, steps, hk, dk))
+    if _fused(entry):
+        # A head's keys share a direction, so k_i . k_j is near 1/2 and the
+        # chunk's WY inverse (I + beta K K^T)^-1 departs far from I.
+        mixed = keys + unit("k-direction", (batch, 1, hk, dk))
+        keys = mixed / np.linalg.norm(mixed, axis=-1, keepdims=True)
+
     return {
         # q, k: [B, T, Hk, Dk]; v: [B, T, Hv, Dv]; g, beta: [B, T, Hv];
         # state_in: [B, Hv, Dv, Dk] in float.
         "q": _quantize(np, dtype, unit("q", (batch, steps, hk, dk))),
-        "k": _quantize(np, dtype, unit("k", (batch, steps, hk, dk))),
+        "k": _quantize(np, dtype, keys),
         "v": _quantize(np, dtype, 2.0 * uniform("v", (batch, steps, hv, dv)) - 1.0),
         "g": _quantize(np, dtype, 0.5 + 0.5 * uniform("g", (batch, steps, hv))),
         "beta": _quantize(np, dtype, uniform("beta", (batch, steps, hv))),
@@ -254,6 +304,9 @@ def _reference(entry, name, save):
     rounding, so |e'| <= g |I - beta k k^T| |e| + |rho| row by row, where rho
     collects the rounding of s1, of both reductions, of d and of the update.
     """
+    if _fused(entry):
+        assert not save, entry
+        return _fused_reference(entry, name)
     np = _np()
     dtype, dk, dv, hk, hv, ckpt = _parse(entry)
     data = _inputs(entry, name)
@@ -415,6 +468,447 @@ def _simulate(entry, name, save, mutation=None):
     return result
 
 
+# --- Fused chunk kernel -------------------------------------------------------
+
+
+def _exp_error(np, x, x_error):
+    """Bound |fast::exp(x_hat) - exp(x)| for any |x_hat - x| <= x_error."""
+    reach = np.abs(x) + x_error
+    return np.exp(x) * np.expm1(x_error) + (
+        EXP_ULPS[0] + EXP_ULPS[1] * reach
+    ) * ULP_FRACTION * np.exp(x + x_error)
+
+
+def _scale_error(x, x_error, scale, scale_error):
+    """Bound fl(x_hat * s_hat) - x * s from magnitudes |x| and |s|."""
+    return (
+        x_error * (scale + scale_error)
+        + x * scale_error
+        + UNIT_ROUNDOFF * (x + x_error) * (scale + scale_error)
+        + FTZ
+    )
+
+
+def _sum_error(result, *errors):
+    """Bound fl(x_hat +- y_hat) - (x +- y) when |x +- y| <= ``result``."""
+    carried = sum(errors)
+    return carried + UNIT_ROUNDOFF * (result + carried) + FTZ
+
+
+def _product_error(np, left, left_error, right, right_error, acc=None, acc_error=None):
+    """Bound a matrix product (plus an accumulator) summed in any order.
+
+    ``left`` and ``right`` bound the magnitudes of exact operands; with n
+    products and an accumulator the sum of n + 1 terms errs by at most
+    gamma(n + 1) of its absolute terms, and every operation may flush.
+    """
+    terms = left.shape[-1]
+    if left_error is None:
+        left_error = np.zeros_like(left)
+    if right_error is None:
+        right_error = np.zeros_like(right)
+    error = left_error @ right + left @ right_error + left_error @ right_error
+    reach = (left + left_error) @ (right + right_error)
+    extra = 0
+    if acc is not None:
+        extra = 1
+        error = error + acc_error
+        reach = reach + acc + acc_error
+    return error + _gamma(terms + extra) * reach + (2 * terms + extra) * FTZ
+
+
+def _swap(np, values):
+    return np.swapaxes(values, -1, -2)
+
+
+def _fused_chunk(np, keys, queries, values, decays, betas, valid, state, reach):
+    """Run one chunk of PROCESS_CHUNK_SG exactly and bound its rounding.
+
+    keys and queries [N, C, Dk], values [N, C, Dv], decays and betas [N, C]
+    hold the chunk's rows, zero past ``valid``. ``state`` [N, Dv, Dk] is the
+    exact state and ``reach`` [N, Dv] bounds each row of the computed state's
+    error, so |s_hat| <= |s| + reach element by element. Returns the exact
+    chunk outputs [N, C, Dv] and new state [N, Dv, Dk] the WY form computes,
+    and bounds on the rounding the kernel commits from the computed state.
+    """
+    unit = UNIT_ROUNDOFF
+    chunk, dk = keys.shape[-2:]
+    rows = np.arange(chunk)
+    live = rows < valid
+    lower = rows[:, None] >= rows[None, :]
+    strict = rows[:, None] > rows[None, :]
+    # gamma: the inclusive prefix sums of fast::log(g), zero past the tail.
+    # Every use reads the same stored sums, so the log errors of the rows a
+    # difference gamma_m - gamma_n shares cancel; only the scan's own
+    # rounding differs between its ends.
+    logs = np.where(live, np.log(np.where(live, decays, 1.0)), 0.0)
+    log_error = np.where(live, LOG_ABSOLUTE_ERROR, 0.0) * np.ones_like(logs)
+    prefix = np.cumsum(logs, axis=-1)
+    log_reach = np.cumsum(log_error, axis=-1)
+    scan_error = (
+        _gamma(rows) * np.cumsum(np.abs(logs) + log_error, axis=-1) + rows * FTZ
+    )
+
+    def difference(high, low):
+        value = prefix[..., high] - prefix[..., low]
+        error = (
+            np.abs(log_reach[..., high] - log_reach[..., low])
+            + scan_error[..., high]
+            + scan_error[..., low]
+        )
+        return value, error + unit * (np.abs(value) + error) + FTZ
+
+    def factor(argument, argument_error):
+        return np.exp(argument), _exp_error(np, argument, argument_error)
+
+    row_decay, row_decay_error = factor(prefix, log_reach + scan_error)
+    pair, pair_error = factor(*difference(rows[:, None], rows[None, :]))
+    column_decay, column_decay_error = factor(*difference(np.full(chunk, -1), rows))
+    chunk_decay, chunk_decay_error = factor(
+        prefix[..., -1], log_reach[..., -1] + scan_error[..., -1]
+    )
+    # T^-1 = (I + strict_lower(beta K K^T))^-1 through the Neumann product.
+    keys_t = _swap(np, keys)
+    kkt = keys @ keys_t
+    kkt_error = _gamma(dk) * (np.abs(keys) @ np.abs(keys_t)) + 2 * dk * FTZ
+    beta_rows = np.abs(betas)[..., :, None]
+    power = np.where(strict, betas[..., :, None] * kkt, 0.0)
+    power_error = np.where(
+        strict, _scale_error(np.abs(kkt), kkt_error, beta_rows, 0.0), 0.0
+    )
+    inverse = np.eye(chunk) - power
+    inverse_error = power_error.copy()
+    step = 1
+    while (1 << step) < chunk:
+        squared = power @ power
+        power_error = _product_error(
+            np, np.abs(power), power_error, np.abs(power), power_error
+        )
+        power = squared
+        product = inverse + inverse @ power
+        inverse_error = _product_error(
+            np,
+            np.abs(inverse),
+            inverse_error,
+            np.abs(power),
+            power_error,
+            np.abs(inverse),
+            inverse_error,
+        )
+        inverse = product
+        step += 1
+    # Magnitudes of state-dependent values at the computed state: the exact
+    # value plus the linear map's absolute value applied to the error.
+    state_t = _swap(np, state)
+    state_reach = np.abs(state_t) + reach[..., None, :]
+
+    def shifted(weights):
+        return np.abs(weights).sum(axis=-1)[..., :, None] * reach[..., None, :]
+
+    # W S^T with W = diag(e^gamma) T^-1 diag(beta) K.
+    scaled_keys = betas[..., None] * keys
+    scaled_keys_error = unit * np.abs(scaled_keys) + FTZ
+    weights = inverse @ scaled_keys
+    weights_error = _product_error(
+        np, np.abs(inverse), inverse_error, np.abs(scaled_keys), scaled_keys_error
+    )
+    decayed_weights = row_decay[..., None] * weights
+    decayed_weights_error = _scale_error(
+        np.abs(weights),
+        weights_error,
+        row_decay[..., None],
+        row_decay_error[..., None],
+    )
+    projected = decayed_weights @ state_t
+    projected_error = _product_error(
+        np, np.abs(decayed_weights), decayed_weights_error, state_reach, None
+    )
+    # U = (Gamma o T^-1) diag(beta) V and delta = U - W S^T.
+    gated = np.where(lower, inverse * pair, 0.0)
+    gated_error = np.where(
+        lower, _scale_error(np.abs(inverse), inverse_error, pair, pair_error), 0.0
+    )
+    scaled_values = betas[..., None] * values
+    scaled_values_error = unit * np.abs(scaled_values) + FTZ
+    targets = gated @ scaled_values
+    targets_error = _product_error(
+        np, np.abs(gated), gated_error, np.abs(scaled_values), scaled_values_error
+    )
+    delta = targets - projected
+    delta_reach = np.abs(delta) + shifted(decayed_weights)
+    delta_error = _sum_error(delta_reach, targets_error, projected_error)
+    # y = (Gamma o Q K^T) delta + diag(e^gamma) Q S^T.
+    qkt = queries @ keys_t
+    qkt_error = _gamma(dk) * (np.abs(queries) @ np.abs(keys_t)) + 2 * dk * FTZ
+    decayed_queries = row_decay[..., None] * queries
+    decayed_queries_error = _scale_error(
+        np.abs(queries), 0.0, row_decay[..., None], row_decay_error[..., None]
+    )
+    history = decayed_queries @ state_t
+    history_error = _product_error(
+        np, np.abs(decayed_queries), decayed_queries_error, state_reach, None
+    )
+    history_reach = np.abs(history) + shifted(decayed_queries)
+    attention = np.where(lower, qkt * pair, 0.0)
+    attention_error = np.where(
+        lower, _scale_error(np.abs(qkt), qkt_error, pair, pair_error), 0.0
+    )
+    outputs = attention @ delta + history
+    outputs_error = _product_error(
+        np,
+        np.abs(attention),
+        attention_error,
+        delta_reach,
+        delta_error,
+        history_reach,
+        history_error,
+    )
+    # S^T' = e^gamma_C S^T + (K^T diag(e^(gamma_C - gamma))) delta.
+    keys_decayed = keys_t * column_decay[..., None, :]
+    keys_decayed_error = _scale_error(
+        np.abs(keys_t),
+        0.0,
+        column_decay[..., None, :],
+        column_decay_error[..., None, :],
+    )
+    update = keys_decayed @ delta
+    update_error = _product_error(
+        np, np.abs(keys_decayed), keys_decayed_error, delta_reach, delta_error
+    )
+    carried = chunk_decay[..., None, None] * state_t
+    carried_error = _scale_error(
+        state_reach,
+        0.0,
+        chunk_decay[..., None, None],
+        chunk_decay_error[..., None, None],
+    )
+    new_state = carried + update
+    new_reach = np.abs(new_state) + (
+        chunk_decay[..., None, None] * reach[..., None, :]
+        + np.abs(keys_decayed) @ shifted(decayed_weights)
+    )
+    new_state_error = _sum_error(new_reach, carried_error, update_error)
+    return outputs, outputs_error, _swap(np, new_state), _swap(np, new_state_error)
+
+
+def _rows(np, entry, data):
+    """Return per-head rows [B * Hv, T, D] of the logical inputs."""
+    _, dk, dv, hk, hv, _ = _parse(entry)
+    heads = np.arange(hv) // (hv // hk)
+    batch, steps = data["g"].shape[:2]
+
+    def heads_first(values):
+        return np.moveaxis(values, 2, 1).reshape(batch * hv, steps, -1)
+
+    return {
+        "k": heads_first(data["k"][:, :, heads]),
+        "q": heads_first(data["q"][:, :, heads]),
+        "v": heads_first(data["v"]),
+        "g": heads_first(data["g"][..., None])[..., 0],
+        "beta": heads_first(data["beta"][..., None])[..., 0],
+        "state": data["state_in"].reshape(batch * hv, dv, dk).copy(),
+    }
+
+
+def _chunk_rows(np, values, start, valid, chunk, fill=0.0):
+    rows = np.full(values.shape[:1] + (chunk,) + values.shape[2:], fill)
+    rows[:, :valid] = values[:, start : start + valid]
+    return rows
+
+
+def _fused_reference(entry, name):
+    """Return exact outputs and per-element bounds for the fused chunk kernel.
+
+    Exact results come from the recurrence step by step. Within a chunk the
+    kernel's WY form rounds element by element (``_fused_chunk``); the state
+    error it carries is a row 2-norm, which each step's g (I - beta k k^T)
+    cannot grow while beta |k|^2 <= 2, so an output row sees the carried error
+    through |q| and every step before it.
+    """
+    np = _np()
+    dtype, dk, dv, hk, hv, chunk = _parse(entry)
+    data = _inputs(entry, name)
+    batch, steps = _geometry(entry, name)
+    rows = _rows(np, entry, data)
+    heads = batch * hv
+    state = rows["state"]
+    error = np.zeros((heads, dv))
+    outputs = np.empty((heads, steps, dv))
+    output_bounds = np.empty((heads, steps, dv))
+    for start in range(0, steps, chunk):
+        valid = min(chunk, steps - start)
+        _, rho_y, _, rho_s = _fused_chunk(
+            np,
+            _chunk_rows(np, rows["k"], start, valid, chunk),
+            _chunk_rows(np, rows["q"], start, valid, chunk),
+            _chunk_rows(np, rows["v"], start, valid, chunk),
+            _chunk_rows(np, rows["g"], start, valid, chunk, fill=1.0),
+            _chunk_rows(np, rows["beta"], start, valid, chunk),
+            valid,
+            state,
+            error,
+        )
+        carried = error
+        for offset in range(valid):
+            t = start + offset
+            keys, queries = rows["k"][:, t], rows["q"][:, t]
+            decay, beta = rows["g"][:, t], rows["beta"][:, t]
+            decayed = state * decay[:, None, None]
+            kv = np.einsum("nvk,nk->nv", decayed, keys)
+            state = (
+                decayed
+                + ((rows["v"][:, t] - kv) * beta[:, None])[..., None] * keys[:, None, :]
+            )
+            outputs[:, t] = np.einsum("nvk,nk->nv", state, queries)
+            contraction = np.maximum(
+                1.0, np.abs(1.0 - beta * np.linalg.norm(keys, axis=-1) ** 2)
+            )
+            carried = carried * (decay * contraction)[:, None]
+            output_bounds[:, t] = (
+                rho_y[:, offset] + np.linalg.norm(queries, axis=-1)[:, None] * carried
+            )
+        error = carried + np.linalg.norm(rho_s, axis=-1)
+
+    def logical(values):
+        return np.moveaxis(values.reshape(batch, hv, steps, dv), 1, 2)
+
+    return {
+        "data": data,
+        "y": logical(outputs),
+        "yBound": logical(output_bounds) * BOUND_SAFETY + TINY,
+        "state": state.reshape(batch, hv, dv, dk),
+        "stateBound": np.broadcast_to(
+            (error * BOUND_SAFETY + TINY).reshape(batch, hv, dv)[..., None],
+            (batch, hv, dv, dk),
+        ),
+    }
+
+
+def _fused_simulate(entry, name, mutation=None):
+    """Run gated_delta_fused_chunk's own index arithmetic on the flat buffers.
+
+    Every SIMD group's tiles are evaluated whole and exactly in float64: the
+    lanes' (fm, fn) and (fm, fn + 1) pairs cover each 8 x 8 tile once, LOAD_M
+    reads SRC[fm * LD + fn] and LOAD_MT reads SRC[fn * LD + fm]. y takes the
+    kernel's final conversion to the storage type. ``mutation`` injects one
+    defect.
+    """
+    np = _np()
+    dtype, dk, dv, hk, hv, chunk = _parse(entry)
+    data = _inputs(entry, name)
+    batch, steps = _geometry(entry, name)
+    # Reads past a buffer see the dispatch's NaN guards.
+    flat = {
+        key: np.concatenate([value.reshape(-1), np.full(4 * chunk * hv * dv, np.nan)])
+        for key, value in data.items()
+    }
+    n = np.arange(batch * hv)
+    b_idx, hv_idx = n // hv, n % hv
+    hk_idx = hv_idx // (hv // hk)
+    if mutation == "key-head":
+        hk_idx = hv_idx % hk
+    t_stride = 1 if mutation == "batch-stride" else steps
+    gate_idx = hk_idx if mutation == "gate-head" else hv_idx
+    g_ptr = b_idx * t_stride * hv
+    qk_ptr = b_idx * t_stride * hk * dk + hk_idx * dk
+    v_ptr = b_idx * steps * hv * dv + hv_idx * dv
+    y_ptr = b_idx * steps * hv * dv + hv_idx * dv
+    rows = np.arange(chunk)
+    # i_state + kk, loaded transposed: S_tile[kk / 8][r][c] = state[dv + c][kk + r].
+    state_rows = (n[:, None, None] * dv + np.arange(dv)[None, :, None]) * dk
+    state = flat["state_in"][state_rows + np.arange(dk)[None, None, :]]
+    if mutation == "zero-state":
+        state = np.zeros_like(state)
+    if mutation == "untransposed-state":
+        blocks = state.reshape(-1, dv // 8, 8, dk // 8, 8)
+        state = np.swapaxes(blocks, 2, 4).reshape(state.shape)
+    y = np.full(batch * steps * hv * dv, np.nan)
+    t = 0
+    while t < steps:
+        valid = min(chunk, steps - t)
+        live = rows < valid
+        if mutation == "unmasked-tail":
+            live = np.ones_like(live)
+        step_rows = (t + rows)[None, :, None]
+        key_rows = step_rows if mutation != "stale-keys" else rows[None, :, None]
+        width_k = np.arange(dk)[None, None, :]
+        width_v = np.arange(dv)[None, None, :]
+        mask = live[None, :, None]
+        keys = np.where(
+            mask, flat["k"][qk_ptr[:, None, None] + key_rows * hk * dk + width_k], 0.0
+        )
+        queries = np.where(
+            mask, flat["q"][qk_ptr[:, None, None] + step_rows * hk * dk + width_k], 0.0
+        )
+        values = np.where(
+            mask, flat["v"][v_ptr[:, None, None] + step_rows * hv * dv + width_v], 0.0
+        )
+        scalar = g_ptr[:, None] + (t + rows)[None, :] * hv
+        decays = np.where(live, flat["g"][scalar + gate_idx[:, None]], 1.0)
+        betas = np.where(live, flat["beta"][scalar + hv_idx[:, None]], 0.0)
+        if mutation == "missing-beta":
+            betas = np.where(live, 1.0, 0.0)
+        outputs, new_state = _fused_exact(
+            np, keys, queries, values, decays, betas, live, state, mutation
+        )
+        y_index = (
+            y_ptr[:, None, None] + (t + rows[:valid])[None, :, None] * hv * dv + width_v
+        )
+        y[y_index.reshape(-1)] = outputs[:, :valid].reshape(-1)
+        state = new_state
+        t += chunk
+    state_out = np.full(batch * hv * dv * dk, np.nan)
+    state_out[(state_rows + np.arange(dk)[None, None, :]).reshape(-1)] = state.reshape(
+        -1
+    )
+    rounded = _round(np, dtype, y)
+    if mutation == "truncate-output" and dtype != "float32":
+        rounded = _truncate(np, dtype, y)
+    return {
+        "y": rounded.reshape(batch, steps, hv, dv),
+        "state": _round(np, "float32", state_out).reshape(batch, hv, dv, dk),
+    }
+
+
+def _fused_exact(np, keys, queries, values, decays, betas, live, state, mutation=None):
+    """PROCESS_CHUNK_SG in exact arithmetic on whole tiles, with defects."""
+    chunk = keys.shape[-2]
+    rows = np.arange(chunk)
+    lower = rows[:, None] >= rows[None, :]
+    strict = rows[:, None] > rows[None, :]
+    logs = np.where(live, np.log(decays), 0.0)
+    prefix = np.cumsum(logs, axis=-1)
+    row_decay = np.exp(prefix)
+    pair = np.exp(prefix[..., :, None] - prefix[..., None, :])
+    column_decay = np.exp(prefix[..., -1:] - prefix)
+    chunk_decay = np.exp(prefix[..., -1])
+    keys_t = _swap(np, keys)
+    kkt = keys @ keys_t
+    inverse_mask = lower if mutation == "inclusive-inverse-mask" else strict
+    power = np.where(inverse_mask, betas[..., :, None] * kkt, 0.0)
+    inverse = np.eye(chunk) - power
+    step = 1
+    while (1 << step) < chunk and not (mutation == "one-inverse-step" and step > 1):
+        power = power @ power
+        inverse = inverse + inverse @ power
+        step += 1
+    state_t = _swap(np, state)
+    weights = row_decay[..., None] * (inverse @ (betas[..., None] * keys))
+    projected = weights @ state_t
+    gated = (
+        inverse
+        if mutation == "ungated-inverse"
+        else np.where(lower, inverse * pair, 0.0)
+    )
+    delta = gated @ (betas[..., None] * values) - projected
+    output_mask = strict if mutation == "strict-output-mask" else lower
+    attention = np.where(output_mask, (queries @ keys_t) * pair, 0.0)
+    outputs = attention @ delta + (row_decay[..., None] * queries) @ state_t
+    decay = 1.0 if mutation == "chunk-decay" else chunk_decay[..., None, None]
+    new_state = decay * state_t + (keys_t * column_decay[..., None, :]) @ delta
+    return outputs, _swap(np, new_state)
+
+
 def _truncate(np, dtype, values):
     """Convert to ``dtype`` by truncating the significand toward zero."""
     single = np.asarray(values, dtype=np.float64).astype(np.float32)
@@ -484,6 +978,7 @@ def _check_outputs(entry, reference, outputs):
 
 
 def _config(output, target, entry, constants):
+    fused = _fused(entry)
     options = "\n[project.specialization_constants]\n"
     options += f'"{SAVE_STATE_ID}" = {str(constants["save_state"]).lower()}\n'
     if target in SOFTWARE_SUBGROUP_TARGETS:
@@ -491,8 +986,27 @@ def _config(output, target, entry, constants):
 [project.source_options.metal.target_options.{target}]
 software_subgroup_width = {SIMD_SIZE}
 """
+        if fused:
+            options += "cooperative_matrix_software_lowering = true\n"
     if target == "directx":
         options += 'relative_wave_shuffle_out_of_range = "self"\n'
+    matrices = ""
+    if fused:
+        # The fused kernel's tiles move between buffers and lanes through
+        # MLX's own (fm, fn) lane coordinates.
+        matrices = f"""preserve_resource_origins = true
+cooperative_matrix_fragment_mapping = "{FRAGMENT_MAPPING}"
+cooperative_matrix_fragment_mapping_provenance = "{FRAGMENT_MAPPING_PROVENANCE}"
+"""
+    if fused and target in SOFTWARE_SUBGROUP_TARGETS:
+        options += f"""
+[[project.metadata_preconditions]]
+source = "{SOURCE}"
+entryPoint = "{entry}"
+parameter = "T"
+minimum = 0
+maximum = {T_MAXIMUM}
+"""
     size = ", ".join(str(item) for item in WORKGROUP_SIZE)
     return f"""[project]
 source_roots = ["mlx/backend/metal/kernels"]
@@ -507,7 +1021,7 @@ output_dir = "{output}"
 [project.source_options.metal]
 max_template_specializations = 256
 max_template_materialization_work = 16384
-{options}"""
+{matrices}{options}"""
 
 
 def _contract():
@@ -524,6 +1038,45 @@ def _case_contract():
             ],
         }
         for name, (batch, steps) in CASES.items()
+    }
+
+
+def _fused_validation_contract():
+    return {
+        "chunk": CHUNK,
+        "grid": "[32, Dv / 8, B * Hv]",
+        "workgroupSize": list(WORKGROUP_SIZE),
+        "columnsPerSimdGroup": FUSED_COLUMNS_PER_GROUP,
+        "matrixFragments": {
+            "mapping": FRAGMENT_MAPPING,
+            "provenance": FRAGMENT_MAPPING_PROVENANCE,
+            "softwareLoweringTargets": list(SOFTWARE_SUBGROUP_TARGETS),
+        },
+        "metadataPreconditions": {
+            target: (
+                [{"parameter": "T", "minimum": 0, "maximum": T_MAXIMUM}]
+                if target in SOFTWARE_SUBGROUP_TARGETS
+                else []
+            )
+            for target in TARGETS
+        },
+        "specializationConstants": {
+            "save_state": {"id": SAVE_STATE_ID, "values": dict(FUSED_SPECIALIZATIONS)}
+        },
+        "cases": {
+            name: {"batch": batch, "steps": steps, "specializations": ["inference"]}
+            for name, (batch, steps) in FUSED_CASES.items()
+        },
+        "errorModel": {
+            "unitRoundoff": UNIT_ROUNDOFF,
+            "flushAllowancePerOperation": FTZ,
+            "productSums": "any-order-gamma(n)-per-element",
+            "expUlps": "3 + 2|x|",
+            "logAbsoluteError": LOG_ABSOLUTE_ERROR,
+            "stateError": "row-2-norm-through-each-step's-g-(I-beta-k-kT)",
+            "boundSafety": BOUND_SAFETY,
+            "tiny": TINY,
+        },
     }
 
 
@@ -553,6 +1106,7 @@ def _expected_validation_contract():
             "boundSafety": BOUND_SAFETY,
             "tiny": TINY,
         },
+        "fusedChunk": _fused_validation_contract(),
         "results": "correct-rounding-of-a-value-within-the-error-bound",
         "inputGuardCount": INPUT_GUARD_COUNT,
         "outputGuardCount": GUARD_COUNT,
@@ -563,18 +1117,19 @@ def _expected_validation_contract():
 
 
 def _dispatch_count():
-    return sum(len(SPECIALIZATION_CASES[key]) for _, key, _ in VARIANTS)
+    return sum(len(_cases(entry, key)) for entry, key, _ in VARIANTS)
 
 
 def _checked_elements(entry):
     """Count the y, final-state and checkpoint elements checked for ``entry``."""
     _, dk, dv, _, hv, _ = _parse(entry)
     total = 0
-    for key, names in SPECIALIZATION_CASES.items():
-        for name in names:
+    specializations = FUSED_SPECIALIZATIONS if _fused(entry) else SPECIALIZATIONS
+    for key, save in specializations.items():
+        for name in _cases(entry, key):
             batch, steps = _geometry(entry, name)
             total += batch * steps * hv * dv + batch * hv * dv * dk
-            if SPECIALIZATIONS[key]:
+            if save:
                 total += batch * hv * _slots(entry, name) * dv * dk
     return total
 
@@ -584,7 +1139,8 @@ def _expected_scope():
         "instantiatedEntryCount": len(INSTANTIATED),
         "coveredEntryCount": len(ENTRIES),
         "runtimeCoveredEntryCount": len(ENTRIES),
-        "pendingEntryCount": len(PENDING_ENTRIES),
+        "sequentialEntryCount": len(SEQ_ENTRIES),
+        "fusedChunkEntryCount": len(FUSED_ENTRIES),
         "artifactCountByTarget": len(VARIANTS),
         "dispatchCountByTarget": _dispatch_count(),
         "checkedElementCountByEntry": {
@@ -614,28 +1170,21 @@ def test_current_mlx_gated_delta_contract_is_exact():
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES
-    pending = contract["pendingEntries"]
-    assert tuple(pending) == PENDING_ENTRIES
-    for record in pending.values():
-        assert record == {
-            "kind": "fused-chunk",
-            "reason": PENDING_REASON,
-            "translatesTo": [],
-            "diagnostics": {target: PENDING_DIAGNOSTIC for target in TARGETS},
-        }
+    assert "pendingEntries" not in contract
     assert set(contract["artifacts"]) == set(TARGETS)
     for target in TARGETS:
         artifacts = contract["artifacts"][target]
         assert tuple(artifacts) == ENTRIES
-        for records in artifacts.values():
-            assert tuple(records) == tuple(SPECIALIZATIONS)
+        for entry, records in artifacts.items():
+            expected = FUSED_SPECIALIZATIONS if _fused(entry) else SPECIALIZATIONS
+            assert tuple(records) == tuple(expected)
             for record in records.values():
                 assert set(record) == {"sha256", "sizeBytes"}
                 assert len(record["sha256"]) == 64 and record["sizeBytes"] > 0
     # Metal keeps the function constant and OpenGL a specialization constant,
-    # so both specializations of an entry share one artifact; DirectX
-    # materializes each.
-    for entry in ENTRIES:
+    # so both specializations of a sequential entry share one artifact;
+    # DirectX materializes each.
+    for entry in SEQ_ENTRIES:
         for target in ("metal", "opengl"):
             records = contract["artifacts"][target][entry]
             assert len({record["sha256"] for record in records.values()}) == 1
@@ -649,7 +1198,8 @@ def test_gated_delta_entries_follow_mlx_instantiation():
     readme = (ROOT / "demos/integrations/mlx/README.md").read_text(encoding="utf-8")
     assert "gated_delta_update.current-tree.translation.json" in readme
     assert len(INSTANTIATED) == len(set(INSTANTIATED)) == 90
-    assert len(ENTRIES) == 72 and len(PENDING_ENTRIES) == 18
+    assert len(SEQ_ENTRIES) == 72 and len(FUSED_ENTRIES) == 18
+    assert ENTRIES == INSTANTIATED
     assert INSTANTIATED[:5] == (
         "seq_gated_delta_float_128_128_24_24_1",
         "seq_gated_delta_float_128_128_24_24_4",
@@ -658,17 +1208,21 @@ def test_gated_delta_entries_follow_mlx_instantiation():
         "gated_delta_fused_chunk_float_128_128_24_24_8",
     )
     assert INSTANTIATED[-1] == "gated_delta_fused_chunk_float16_t_128_128_16_64_8"
-    assert {_dtype(entry) for entry in ENTRIES} == set(STORAGE_TYPES.values())
+    for entries in (SEQ_ENTRIES, FUSED_ENTRIES):
+        assert {_dtype(entry) for entry in entries} == set(STORAGE_TYPES.values())
+    assert {_parse(entry)[5] for entry in FUSED_ENTRIES} == {CHUNK}
     for dk, dv, hk, hv in SHAPES:
         # supported_gated_delta_shape(): Dk = Dv = 128 and Hv a multiple of Hk.
         assert dk == dv == 128 and hv % hk == 0
-    assert len(VARIANTS) == 2 * len(ENTRIES)
+        # Four SIMD groups of eight columns tile Dv in the fused kernel.
+        assert dv % (WORKGROUP_SIZE[1] * FUSED_COLUMNS_PER_GROUP) == 0
+    assert len(VARIANTS) == 2 * len(SEQ_ENTRIES) + len(FUSED_ENTRIES)
     assert len({(entry, key) for entry, key, _ in VARIANTS}) == len(VARIANTS)
 
 
 def test_gated_delta_cases_follow_mlx_dispatch():
-    assert _dispatch_count() == 4 * len(ENTRIES)
-    for entry in ENTRIES:
+    assert _dispatch_count() == 4 * len(SEQ_ENTRIES) + 3 * len(FUSED_ENTRIES)
+    for entry in SEQ_ENTRIES:
         ckpt = _parse(entry)[5]
         assert _geometry(entry, "decode") == (1, 1)
         # gated_delta_chunk_size() takes the sequential kernel up to T = 8.
@@ -679,6 +1233,15 @@ def test_gated_delta_cases_follow_mlx_dispatch():
         assert _slots(entry, "decode") == 1
         assert _slots(entry, "checkpoints") == 3
     assert set(CHECKPOINTS) == {1, 4, 8, 16}
+    for entry in FUSED_ENTRIES:
+        chunk = _parse(entry)[5]
+        shapes = [_geometry(entry, name) for name in FUSED_CASES]
+        # The fused kernel runs only for T > 8: each case has a full chunk.
+        assert all(steps > chunk for _, steps in shapes)
+        # A one-step tail, a five-step tail over two batches, three chunks.
+        assert [steps % chunk for _, steps in shapes] == [1, 5, 0]
+        assert max(batch for batch, _ in shapes) == 2
+        assert max(steps // chunk for _, steps in shapes) == 3
 
 
 REPRESENTATIVES = (
@@ -794,9 +1357,14 @@ def test_gated_delta_bounds_stay_meaningful(entry):
                 assert float(np.max(reference["cacheBound"])) < 2.0**-12 * (state_scale)
 
 
+SCOPED_VARIANTS = VARIANTS[:8] + VARIANTS[-2:]
+
+
 @pytest.mark.parametrize("target", TARGETS)
 @pytest.mark.parametrize(
-    "entry,key,constants", VARIANTS[:8], ids=[f"{e}-{k}" for e, k, _ in VARIANTS[:8]]
+    "entry,key,constants",
+    SCOPED_VARIANTS,
+    ids=[f"{e}-{k}" for e, k, _ in SCOPED_VARIANTS],
 )
 def test_gated_delta_configs_scope_target_options(
     tmp_path, target, entry, key, constants
@@ -810,10 +1378,133 @@ def test_gated_delta_configs_scope_target_options(
     assert f'"{entry}" = [32, 4, 1]' in text
     assert f'"{SAVE_STATE_ID}" = {str(SPECIALIZATIONS[key]).lower()}' in text
     software = target in SOFTWARE_SUBGROUP_TARGETS
+    fused = _fused(entry)
     assert ("software_subgroup_width = 32" in text) is software
     assert ('relative_wave_shuffle_out_of_range = "self"' in text) is (
         target == "directx"
     )
+    # Only the fused kernel holds matrices, and only software subgroups need
+    # its lowering and the chunk loop's bound on T.
+    assert (f'cooperative_matrix_fragment_mapping = "{FRAGMENT_MAPPING}"' in text) is (
+        fused
+    )
+    assert ("cooperative_matrix_software_lowering = true" in text) is (
+        fused and software
+    )
+    preconditions = [
+        (item.entry_point, item.parameter, item.minimum, item.maximum)
+        for item in config.metadata_preconditions
+    ]
+    assert preconditions == ([(entry, "T", 0, T_MAXIMUM)] if fused and software else [])
+
+
+FUSED_REPRESENTATIVES = (
+    "gated_delta_fused_chunk_float_128_128_24_24_8",
+    "gated_delta_fused_chunk_float_128_128_16_64_8",
+    "gated_delta_fused_chunk_bfloat16_t_128_128_16_48_8",
+    "gated_delta_fused_chunk_float16_t_128_128_16_32_8",
+    "gated_delta_fused_chunk_float16_t_128_128_32_32_8",
+)
+
+
+@pytest.mark.parametrize("entry", FUSED_REPRESENTATIVES)
+def test_gated_delta_fused_reference_matches_kernel_index_arithmetic(entry):
+    # The reference steps the recurrence on the logical tensors; the
+    # simulation runs the fused kernel's WY form with its own pointers, masks
+    # and tile transposes on the flat buffers. Both are exact, so the
+    # simulation, with the kernel's final conversion of y, uses a negligible
+    # part of the bound.
+    for name in FUSED_CASES:
+        reference = _reference(entry, name, False)
+        simulated = _fused_simulate(entry, name)
+        used = _check_outputs(entry, reference, simulated)
+        assert max(used.values()) < 2.0**-10, (name, used)
+
+
+def _fused_mutations(entry, name):
+    """Return the defects that change ``entry``'s results on case ``name``."""
+    _, _, _, hk, hv, chunk = _parse(entry)
+    batch, steps = _geometry(entry, name)
+    mutations = [
+        "missing-beta",
+        "inclusive-inverse-mask",
+        "one-inverse-step",
+        "ungated-inverse",
+        "strict-output-mask",
+        "chunk-decay",
+        "untransposed-state",
+        "zero-state",
+        "stale-keys",
+    ]
+    if hv != hk:
+        mutations += ["key-head", "gate-head"]
+    if batch > 1:
+        mutations.append("batch-stride")
+    if steps % chunk:
+        mutations.append("unmasked-tail")
+    if _dtype(entry) != "float32":
+        mutations.append("truncate-output")
+    return mutations
+
+
+@pytest.mark.parametrize("entry", FUSED_REPRESENTATIVES)
+def test_gated_delta_fused_checks_reject_defects(entry):
+    np = _np()
+    rejected = set()
+    for name in FUSED_CASES:
+        reference = _reference(entry, name, False)
+        exact = _fused_simulate(entry, name)
+        for output in exact:
+            unwritten = {item: value.copy() for item, value in exact.items()}
+            unwritten[output].reshape(-1)[7] = np.nan
+            with pytest.raises(AssertionError):
+                _check_outputs(entry, reference, unwritten)
+        for mutation in _fused_mutations(entry, name):
+            wrong = _fused_simulate(entry, name, mutation)
+            with pytest.raises(AssertionError):
+                _check_outputs(entry, reference, wrong)
+            rejected.add(mutation)
+    expected = {
+        "missing-beta",
+        "inclusive-inverse-mask",
+        "one-inverse-step",
+        "ungated-inverse",
+        "strict-output-mask",
+        "chunk-decay",
+        "untransposed-state",
+        "zero-state",
+        "stale-keys",
+        "batch-stride",
+        "unmasked-tail",
+    }
+    _, _, _, hk, hv, _ = _parse(entry)
+    if hv != hk:
+        expected |= {"key-head", "gate-head"}
+    if _dtype(entry) != "float32":
+        expected.add("truncate-output")
+    assert rejected == expected
+
+
+@pytest.mark.parametrize("entry", FUSED_REPRESENTATIVES)
+def test_gated_delta_fused_bounds_stay_meaningful(entry):
+    # The bound allows fast::exp and fast::log their specified error and every
+    # tile product any summation order, yet stays under 2^-7 of each output's
+    # root mean square. The keys of a head share a direction, so the WY
+    # inverse departs far from the identity and every Neumann factor counts.
+    np = _np()
+    for name in FUSED_CASES:
+        reference = _reference(entry, name, False)
+        data = reference["data"]
+        norms = np.linalg.norm(data["k"], axis=-1) ** 2
+        assert np.all(data["beta"][..., None] * norms[:, :, None, :] <= 2.0)
+        assert np.all((data["g"] >= 0.5) & (data["g"] <= 1.0))
+        for output, bound in (("y", "yBound"), ("state", "stateBound")):
+            scale = float(np.sqrt(np.mean(reference[output] ** 2)))
+            assert float(np.max(reference[bound])) < 2.0**-7 * scale, (name, output)
+        keys = _rows(np, entry, data)["k"][:, :CHUNK]
+        products = keys @ np.swapaxes(keys, -1, -2)
+        off_diagonal = products[:, ~np.eye(CHUNK, dtype=bool)]
+        assert float(np.median(off_diagonal)) > 0.25, name
 
 
 @pytest.fixture(scope="module")
@@ -985,12 +1676,19 @@ OUTPUT_MEMBERS = ("y", "state_out", "state_cache")
 def _output_sizes(entry, name, save):
     _, dk, dv, _, hv, _ = _parse(entry)
     batch, steps = _geometry(entry, name)
-    return {
-        "y": batch * steps * hv * dv,
-        "state_out": batch * hv * dv * dk,
+    sizes = {"y": batch * steps * hv * dv, "state_out": batch * hv * dv * dk}
+    if not _fused(entry):
         # Without save_state nothing may be stored in the cache.
-        "state_cache": batch * hv * _slots(entry, name) * dv * dk if save else 0,
-    }
+        sizes["state_cache"] = batch * hv * _slots(entry, name) * dv * dk if save else 0
+    return sizes
+
+
+def _workgroup_count(entry, name):
+    """MLX's grid in (32, 4, 1) groups: (32, Dv, B * Hv) or (32, Dv / 8, B * Hv)."""
+    _, _, dv, _, hv, _ = _parse(entry)
+    batch, _ = _geometry(entry, name)
+    rows = dv // FUSED_COLUMNS_PER_GROUP if _fused(entry) else dv
+    return [1, rows // WORKGROUP_SIZE[1], batch * hv]
 
 
 def _dispatch(descriptor, package, target, entry, name, save, data):
@@ -1042,13 +1740,15 @@ def _dispatch(descriptor, package, target, entry, name, save, data):
     assert {"y", "state_out"} <= set(outputs), outputs
     if save:
         assert "state_cache" in outputs, outputs
+    if _fused(entry):
+        assert set(outputs) == {"y", "state_out"}, outputs
     request = build_native_loader_dispatch_request(
         descriptor,
         package,
         values,
         {binding: dict(values[binding]) for binding, _, _ in outputs.values()},
         {
-            "workgroupCount": [1, dv // WORKGROUP_SIZE[1], batch * hv],
+            "workgroupCount": _workgroup_count(entry, name),
             "workgroupSize": list(WORKGROUP_SIZE),
         },
         expected_target=target,
@@ -1133,7 +1833,7 @@ def _upstream_metal(np, work, reference, entry, name, save, data):
         files.append(str(path))
     request = {
         "buffers": files,
-        "workgroupCount": [1, dv // WORKGROUP_SIZE[1], batch * hv],
+        "workgroupCount": _workgroup_count(entry, name),
         "workgroupSize": list(WORKGROUP_SIZE),
         "simdWidth": SIMD_SIZE,
         "boolConstants": [{"index": SAVE_STATE_ID, "value": save}],
@@ -1167,8 +1867,48 @@ def _upstream_metal(np, work, reference, entry, name, save, data):
     return device, words
 
 
-def _assert_lowering(text, target, constants):
+def _assert_fused_lowering(text, target):
+    matrix = f"crossgl_cooperative_matrix_fragment_float_8x8_32x2_{FRAGMENT_MAPPING}"
+    if target == "metal":
+        # The fused kernel never reads save_state, so no constant survives.
+        assert "function_constant" not in text
+        for spelling in (
+            "simdgroup_matrix<float, 8, 8>",
+            "make_filled_simdgroup_matrix<float, 8, 8>(",
+            "simdgroup_multiply_accumulate(",
+            "simdgroup_load(",
+            "simdgroup_store(",
+            ".thread_elements()[",
+            "simd_prefix_inclusive_sum(",
+            "fast::exp(",
+            "fast::log(",
+        ):
+            assert spelling in text, spelling
+    elif target == "opengl":
+        assert "simdgroup" not in text and "gl_Subgroup" not in text
+        assert "subgroupInclusiveAdd" not in text and "constant_id" not in text
+        for helper in (
+            "crossglSoftwareSubgroupPrefixInclusiveSumFloat(",
+            f"{matrix}_fill(",
+            f"{matrix}_fragment_offset(",
+            f"{matrix}_multiply_accumulate(",
+        ):
+            assert helper in text, helper
+    else:
+        assert "Wave" not in text and "save_state" not in text
+        for helper in (
+            "__crossgl_software_subgroup_PrefixInclusiveSum_float(",
+            "__crossgl_software_matrix_mma(",
+            "__crossgl_software_matrix_fragment_offset(",
+        ):
+            assert helper in text, helper
+
+
+def _assert_lowering(text, target, entry, constants):
     assert "unsupported" not in text
+    if _fused(entry):
+        _assert_fused_lowering(text, target)
+        return
     save = constants["save_state"]
     if target == "metal":
         assert (
@@ -1240,7 +1980,9 @@ def test_current_mlx_gated_delta_native_parity(
             (execution,) = artifact["execution"]["entryPoints"]
             assert execution["workgroupSize"] == list(WORKGROUP_SIZE)
             generated = root / artifact["path"]
-            _assert_lowering(generated.read_text(encoding="utf-8"), target, constants)
+            _assert_lowering(
+                generated.read_text(encoding="utf-8"), target, entry, constants
+            )
             if target == "metal":
                 _metal_library(generated, work / "translated.metallib", root)
             else:
@@ -1249,11 +1991,11 @@ def test_current_mlx_gated_delta_native_parity(
             assert {
                 item["id"]: item["value"]
                 for item in descriptor["specializationConstants"]
-            } == {SAVE_STATE_ID: save}
+            } == ({} if _fused(entry) else {SAVE_STATE_ID: save})
             executor = _executor(target)
             evidence = []
             try:
-                for name in SPECIALIZATION_CASES[key]:
+                for name in _cases(entry, key):
                     reference = _reference(entry, name, save)
                     request, outputs, observed = _dispatch(
                         descriptor,
@@ -1357,39 +2099,6 @@ def test_current_mlx_gated_delta_native_parity(
             )
 
 
-@pytest.mark.parametrize("entry", PENDING_ENTRIES)
-def test_current_mlx_gated_delta_fused_chunk_stays_pending(current_mlx, entry):
-    # The contract records why the fused chunk entries are not covered; the
-    # record must stay true, so a translator that starts accepting them fails
-    # here until the entries join the gate.
-    root, target = current_mlx
-    record = _contract()["pendingEntries"][entry]
-    with tempfile.TemporaryDirectory(prefix=".current-gdu-", dir=root) as path:
-        work = Path(path)
-        config = work / "crosstl.toml"
-        config.write_text(
-            _config(f"{work.name}/out", target, entry, {"save_state": False}),
-            encoding="utf-8",
-        )
-        report = translate_project(
-            load_project_config(root, config),
-            format_output=False,
-            validate=True,
-            run_toolchains=False,
-        ).to_json()
-    assert report["summary"]["translatedCount"] == 0
-    assert report["summary"]["failedCount"] == 1
-    codes = {item["code"] for item in report["diagnostics"]}
-    assert record["diagnostics"][target] in codes, codes
-    (diagnostic,) = (
-        item
-        for item in report["diagnostics"]
-        if item["code"] == record["diagnostics"][target]
-    )
-    assert "thread_elements" in diagnostic["message"]
-    assert "simdgroup_float8x8" in diagnostic["message"]
-
-
 def test_ci_requires_native_gated_delta_parity():
     from tests.ci_helpers import (
         CURRENT_PARITY_JOB,
@@ -1402,12 +2111,15 @@ def test_ci_requires_native_gated_delta_parity():
     step = current_parity_step(
         workflow, "Prove current MLX gated delta native parity", group="sequence"
     )
+    # The 144 sequential dispatch sets alone took 3076 s on WARP; the fused
+    # chunk entries need the rest of the sequence group's budget.
     for required in (
         f'{REQUIRE_ENV}: "1"',
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
         "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
         "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
         "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
+        "--timeout-seconds 7200",
         "pytest -q -n auto",
         "--basetemp=mlx-current-results/gated-delta",
         "--junitxml=mlx-current-results/gated-delta.xml",
