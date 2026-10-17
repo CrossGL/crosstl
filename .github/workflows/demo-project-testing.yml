@@ -6491,7 +6491,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11]
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1]
 
     steps:
       - name: Checkout CrossTL
@@ -7544,6 +7544,66 @@ jobs:
               --basetemp=mlx-current-results/binary-11 \
               --junitxml=mlx-current-results/binary-11.xml \
               demos/integrations/mlx/tests/kernels/test_current_binary_family.py
+
+      - name: Prove current MLX unary family native parity (shard 0 of 2)
+        if: matrix.group == 'unary-0'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_FAMILY: "1"
+          CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_INDEX: "0"
+          CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_COUNT: "2"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX unary family native parity (shard 0 of 2)" \
+            --timeout-seconds 9000 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/unary-0 \
+              --junitxml=mlx-current-results/unary-0.xml \
+              demos/integrations/mlx/tests/kernels/test_current_unary_family.py
+
+      - name: Prove current MLX unary family native parity (shard 1 of 2)
+        if: matrix.group == 'unary-1'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_UNARY_FAMILY: "1"
+          CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_INDEX: "1"
+          CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_COUNT: "2"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX unary family native parity (shard 1 of 2)" \
+            --timeout-seconds 9000 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/unary-1 \
+              --junitxml=mlx-current-results/unary-1.xml \
+              demos/integrations/mlx/tests/kernels/test_current_unary_family.py
 
       - name: Upload current MLX native parity evidence
         if: always()

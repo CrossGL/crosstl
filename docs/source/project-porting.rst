@@ -1011,6 +1011,26 @@ translation must match byte for byte. Rounding and subnormal behaviour stays
 with the per-operator gates. This is a 4,122/17,832 increment; it does not run
 the upstream MLX test suite or redirect the MLX host runtime.
 
+``unary.current-tree.translation.json`` pins all 877 entries of
+``unary.metal``: every layout for all 37 operators over the dtypes each
+instantiates, complex64 and the FP8 conversions. ``Sigmoid``, the FP8
+decoding and the complex operators built on ``hypot`` changed at the corpus
+commit, so their 75 entries, with the five ``uint32`` ``Sign`` kernels that
+carry the complex overload, reproduce artifacts this contract pins; every
+other entry reproduces the Metal, OpenGL and DirectX artifact its
+complete-family translation contract pins. Each target executes 1,754
+dispatches. Inputs come from per-operator domains whose results are exactly
+defined: integer and rounding operators take every boundary value C++
+defines, FP8 conversions cover all 256 codes with their bit algorithm, and
+transcendental operators take only signed zeros, infinities, NaN, poles,
+domain errors and the overflow, underflow and saturation thresholds. Complex
+operands follow ``complex.h`` and ``cexpf.h`` with exact intermediates.
+Guards and inputs must be unchanged, and Metal also runs the unchanged
+upstream kernels, which the translation must match byte for byte. Accuracy
+away from those points stays with the per-operator gates. This is an
+877/17,832 increment; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,

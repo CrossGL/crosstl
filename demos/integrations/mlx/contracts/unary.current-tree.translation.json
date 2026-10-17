@@ -1,0 +1,2030 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-unary-family-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/unary.metal",
+    "sourceSha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
+    "headers": {
+      "mlx/backend/metal/kernels/unary.h": "fb952a2c30a6d0cd01f6c61e852cc15e426b286475de8ff139bb65b8d9001c8c",
+      "mlx/backend/metal/kernels/unary_ops.h": "af710925f066b029f67289a0bbe4edd0ba6c5e7f51c9df609abb111216fa963f",
+      "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",
+      "mlx/backend/metal/kernels/fp8.h": "9a9d77a6295f66b4ada4311c3b855b6ecb7a2b38f28623109e3c61d2e17e81ae",
+      "mlx/backend/metal/kernels/erf.h": "31d88004390bbe08636c5f64a3cb3180ebc8d79a89267347de9f6c33aba0e9f9",
+      "mlx/backend/metal/kernels/expm1f.h": "dbdf551f45723639da54d72e327008bde6ef01a2f1ed561bb065e251ab6c9f1a",
+      "mlx/backend/metal/kernels/cexpf.h": "88b6e15a52a5800d98d9bc6da840ca5cf70bf572fda136409580c1f17b1e0aab",
+      "mlx/backend/metal/kernels/complex.h": "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1"
+    }
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "v_Absbool_bool_",
+    "v2_Absbool_bool_",
+    "gn1_Absbool_bool_",
+    "gn4large_Absbool_bool_",
+    "vn_Absbool_bool_",
+    "v_Absuint8uint8",
+    "v2_Absuint8uint8",
+    "gn1_Absuint8uint8",
+    "gn4large_Absuint8uint8",
+    "vn_Absuint8uint8",
+    "v_Absuint16uint16",
+    "v2_Absuint16uint16",
+    "gn1_Absuint16uint16",
+    "gn4large_Absuint16uint16",
+    "vn_Absuint16uint16",
+    "v_Absuint32uint32",
+    "v2_Absuint32uint32",
+    "gn1_Absuint32uint32",
+    "gn4large_Absuint32uint32",
+    "vn_Absuint32uint32",
+    "v_Absuint64uint64",
+    "v2_Absuint64uint64",
+    "gn1_Absuint64uint64",
+    "gn4large_Absuint64uint64",
+    "v_Absint8int8",
+    "v2_Absint8int8",
+    "gn1_Absint8int8",
+    "gn4large_Absint8int8",
+    "vn_Absint8int8",
+    "v_Absint16int16",
+    "v2_Absint16int16",
+    "gn1_Absint16int16",
+    "gn4large_Absint16int16",
+    "vn_Absint16int16",
+    "v_Absint32int32",
+    "v2_Absint32int32",
+    "gn1_Absint32int32",
+    "gn4large_Absint32int32",
+    "vn_Absint32int32",
+    "v_Absint64int64",
+    "v2_Absint64int64",
+    "gn1_Absint64int64",
+    "gn4large_Absint64int64",
+    "v_Absfloat16float16",
+    "v2_Absfloat16float16",
+    "gn1_Absfloat16float16",
+    "gn4large_Absfloat16float16",
+    "vn_Absfloat16float16",
+    "v_Absfloat32float32",
+    "v2_Absfloat32float32",
+    "gn1_Absfloat32float32",
+    "gn4large_Absfloat32float32",
+    "vn_Absfloat32float32",
+    "v_Absbfloat16bfloat16",
+    "v2_Absbfloat16bfloat16",
+    "gn1_Absbfloat16bfloat16",
+    "gn4large_Absbfloat16bfloat16",
+    "vn_Absbfloat16bfloat16",
+    "v_ArcCosfloat16float16",
+    "v2_ArcCosfloat16float16",
+    "gn1_ArcCosfloat16float16",
+    "gn4large_ArcCosfloat16float16",
+    "vn_ArcCosfloat16float16",
+    "v_ArcCosfloat32float32",
+    "v2_ArcCosfloat32float32",
+    "gn1_ArcCosfloat32float32",
+    "gn4large_ArcCosfloat32float32",
+    "vn_ArcCosfloat32float32",
+    "v_ArcCosbfloat16bfloat16",
+    "v2_ArcCosbfloat16bfloat16",
+    "gn1_ArcCosbfloat16bfloat16",
+    "gn4large_ArcCosbfloat16bfloat16",
+    "vn_ArcCosbfloat16bfloat16",
+    "v_ArcCoshfloat16float16",
+    "v2_ArcCoshfloat16float16",
+    "gn1_ArcCoshfloat16float16",
+    "gn4large_ArcCoshfloat16float16",
+    "vn_ArcCoshfloat16float16",
+    "v_ArcCoshfloat32float32",
+    "v2_ArcCoshfloat32float32",
+    "gn1_ArcCoshfloat32float32",
+    "gn4large_ArcCoshfloat32float32",
+    "vn_ArcCoshfloat32float32",
+    "v_ArcCoshbfloat16bfloat16",
+    "v2_ArcCoshbfloat16bfloat16",
+    "gn1_ArcCoshbfloat16bfloat16",
+    "gn4large_ArcCoshbfloat16bfloat16",
+    "vn_ArcCoshbfloat16bfloat16",
+    "v_ArcSinfloat16float16",
+    "v2_ArcSinfloat16float16",
+    "gn1_ArcSinfloat16float16",
+    "gn4large_ArcSinfloat16float16",
+    "vn_ArcSinfloat16float16",
+    "v_ArcSinfloat32float32",
+    "v2_ArcSinfloat32float32",
+    "gn1_ArcSinfloat32float32",
+    "gn4large_ArcSinfloat32float32",
+    "vn_ArcSinfloat32float32",
+    "v_ArcSinbfloat16bfloat16",
+    "v2_ArcSinbfloat16bfloat16",
+    "gn1_ArcSinbfloat16bfloat16",
+    "gn4large_ArcSinbfloat16bfloat16",
+    "vn_ArcSinbfloat16bfloat16",
+    "v_ArcSinhfloat16float16",
+    "v2_ArcSinhfloat16float16",
+    "gn1_ArcSinhfloat16float16",
+    "gn4large_ArcSinhfloat16float16",
+    "vn_ArcSinhfloat16float16",
+    "v_ArcSinhfloat32float32",
+    "v2_ArcSinhfloat32float32",
+    "gn1_ArcSinhfloat32float32",
+    "gn4large_ArcSinhfloat32float32",
+    "vn_ArcSinhfloat32float32",
+    "v_ArcSinhbfloat16bfloat16",
+    "v2_ArcSinhbfloat16bfloat16",
+    "gn1_ArcSinhbfloat16bfloat16",
+    "gn4large_ArcSinhbfloat16bfloat16",
+    "vn_ArcSinhbfloat16bfloat16",
+    "v_ArcTanfloat16float16",
+    "v2_ArcTanfloat16float16",
+    "gn1_ArcTanfloat16float16",
+    "gn4large_ArcTanfloat16float16",
+    "vn_ArcTanfloat16float16",
+    "v_ArcTanfloat32float32",
+    "v2_ArcTanfloat32float32",
+    "gn1_ArcTanfloat32float32",
+    "gn4large_ArcTanfloat32float32",
+    "vn_ArcTanfloat32float32",
+    "v_ArcTanbfloat16bfloat16",
+    "v2_ArcTanbfloat16bfloat16",
+    "gn1_ArcTanbfloat16bfloat16",
+    "gn4large_ArcTanbfloat16bfloat16",
+    "vn_ArcTanbfloat16bfloat16",
+    "v_ArcTanhfloat16float16",
+    "v2_ArcTanhfloat16float16",
+    "gn1_ArcTanhfloat16float16",
+    "gn4large_ArcTanhfloat16float16",
+    "vn_ArcTanhfloat16float16",
+    "v_ArcTanhfloat32float32",
+    "v2_ArcTanhfloat32float32",
+    "gn1_ArcTanhfloat32float32",
+    "gn4large_ArcTanhfloat32float32",
+    "vn_ArcTanhfloat32float32",
+    "v_ArcTanhbfloat16bfloat16",
+    "v2_ArcTanhbfloat16bfloat16",
+    "gn1_ArcTanhbfloat16bfloat16",
+    "gn4large_ArcTanhbfloat16bfloat16",
+    "vn_ArcTanhbfloat16bfloat16",
+    "v_Ceilbool_bool_",
+    "v2_Ceilbool_bool_",
+    "gn1_Ceilbool_bool_",
+    "gn4large_Ceilbool_bool_",
+    "vn_Ceilbool_bool_",
+    "v_Ceiluint8uint8",
+    "v2_Ceiluint8uint8",
+    "gn1_Ceiluint8uint8",
+    "gn4large_Ceiluint8uint8",
+    "vn_Ceiluint8uint8",
+    "v_Ceiluint16uint16",
+    "v2_Ceiluint16uint16",
+    "gn1_Ceiluint16uint16",
+    "gn4large_Ceiluint16uint16",
+    "vn_Ceiluint16uint16",
+    "v_Ceiluint32uint32",
+    "v2_Ceiluint32uint32",
+    "gn1_Ceiluint32uint32",
+    "gn4large_Ceiluint32uint32",
+    "vn_Ceiluint32uint32",
+    "v_Ceiluint64uint64",
+    "v2_Ceiluint64uint64",
+    "gn1_Ceiluint64uint64",
+    "gn4large_Ceiluint64uint64",
+    "v_Ceilint8int8",
+    "v2_Ceilint8int8",
+    "gn1_Ceilint8int8",
+    "gn4large_Ceilint8int8",
+    "vn_Ceilint8int8",
+    "v_Ceilint16int16",
+    "v2_Ceilint16int16",
+    "gn1_Ceilint16int16",
+    "gn4large_Ceilint16int16",
+    "vn_Ceilint16int16",
+    "v_Ceilint32int32",
+    "v2_Ceilint32int32",
+    "gn1_Ceilint32int32",
+    "gn4large_Ceilint32int32",
+    "vn_Ceilint32int32",
+    "v_Ceilint64int64",
+    "v2_Ceilint64int64",
+    "gn1_Ceilint64int64",
+    "gn4large_Ceilint64int64",
+    "v_Ceilfloat16float16",
+    "v2_Ceilfloat16float16",
+    "gn1_Ceilfloat16float16",
+    "gn4large_Ceilfloat16float16",
+    "vn_Ceilfloat16float16",
+    "v_Ceilfloat32float32",
+    "v2_Ceilfloat32float32",
+    "gn1_Ceilfloat32float32",
+    "gn4large_Ceilfloat32float32",
+    "vn_Ceilfloat32float32",
+    "v_Ceilbfloat16bfloat16",
+    "v2_Ceilbfloat16bfloat16",
+    "gn1_Ceilbfloat16bfloat16",
+    "gn4large_Ceilbfloat16bfloat16",
+    "vn_Ceilbfloat16bfloat16",
+    "v_Cosfloat16float16",
+    "v2_Cosfloat16float16",
+    "gn1_Cosfloat16float16",
+    "gn4large_Cosfloat16float16",
+    "vn_Cosfloat16float16",
+    "v_Cosfloat32float32",
+    "v2_Cosfloat32float32",
+    "gn1_Cosfloat32float32",
+    "gn4large_Cosfloat32float32",
+    "vn_Cosfloat32float32",
+    "v_Cosbfloat16bfloat16",
+    "v2_Cosbfloat16bfloat16",
+    "gn1_Cosbfloat16bfloat16",
+    "gn4large_Cosbfloat16bfloat16",
+    "vn_Cosbfloat16bfloat16",
+    "v_Coshfloat16float16",
+    "v2_Coshfloat16float16",
+    "gn1_Coshfloat16float16",
+    "gn4large_Coshfloat16float16",
+    "vn_Coshfloat16float16",
+    "v_Coshfloat32float32",
+    "v2_Coshfloat32float32",
+    "gn1_Coshfloat32float32",
+    "gn4large_Coshfloat32float32",
+    "vn_Coshfloat32float32",
+    "v_Coshbfloat16bfloat16",
+    "v2_Coshbfloat16bfloat16",
+    "gn1_Coshbfloat16bfloat16",
+    "gn4large_Coshbfloat16bfloat16",
+    "vn_Coshbfloat16bfloat16",
+    "v_Expfloat16float16",
+    "v2_Expfloat16float16",
+    "gn1_Expfloat16float16",
+    "gn4large_Expfloat16float16",
+    "vn_Expfloat16float16",
+    "v_Expfloat32float32",
+    "v2_Expfloat32float32",
+    "gn1_Expfloat32float32",
+    "gn4large_Expfloat32float32",
+    "vn_Expfloat32float32",
+    "v_Expbfloat16bfloat16",
+    "v2_Expbfloat16bfloat16",
+    "gn1_Expbfloat16bfloat16",
+    "gn4large_Expbfloat16bfloat16",
+    "vn_Expbfloat16bfloat16",
+    "v_Expm1float16float16",
+    "v2_Expm1float16float16",
+    "gn1_Expm1float16float16",
+    "gn4large_Expm1float16float16",
+    "vn_Expm1float16float16",
+    "v_Expm1float32float32",
+    "v2_Expm1float32float32",
+    "gn1_Expm1float32float32",
+    "gn4large_Expm1float32float32",
+    "vn_Expm1float32float32",
+    "v_Expm1bfloat16bfloat16",
+    "v2_Expm1bfloat16bfloat16",
+    "gn1_Expm1bfloat16bfloat16",
+    "gn4large_Expm1bfloat16bfloat16",
+    "vn_Expm1bfloat16bfloat16",
+    "v_Floorbool_bool_",
+    "v2_Floorbool_bool_",
+    "gn1_Floorbool_bool_",
+    "gn4large_Floorbool_bool_",
+    "vn_Floorbool_bool_",
+    "v_Flooruint8uint8",
+    "v2_Flooruint8uint8",
+    "gn1_Flooruint8uint8",
+    "gn4large_Flooruint8uint8",
+    "vn_Flooruint8uint8",
+    "v_Flooruint16uint16",
+    "v2_Flooruint16uint16",
+    "gn1_Flooruint16uint16",
+    "gn4large_Flooruint16uint16",
+    "vn_Flooruint16uint16",
+    "v_Flooruint32uint32",
+    "v2_Flooruint32uint32",
+    "gn1_Flooruint32uint32",
+    "gn4large_Flooruint32uint32",
+    "vn_Flooruint32uint32",
+    "v_Flooruint64uint64",
+    "v2_Flooruint64uint64",
+    "gn1_Flooruint64uint64",
+    "gn4large_Flooruint64uint64",
+    "v_Floorint8int8",
+    "v2_Floorint8int8",
+    "gn1_Floorint8int8",
+    "gn4large_Floorint8int8",
+    "vn_Floorint8int8",
+    "v_Floorint16int16",
+    "v2_Floorint16int16",
+    "gn1_Floorint16int16",
+    "gn4large_Floorint16int16",
+    "vn_Floorint16int16",
+    "v_Floorint32int32",
+    "v2_Floorint32int32",
+    "gn1_Floorint32int32",
+    "gn4large_Floorint32int32",
+    "vn_Floorint32int32",
+    "v_Floorint64int64",
+    "v2_Floorint64int64",
+    "gn1_Floorint64int64",
+    "gn4large_Floorint64int64",
+    "v_Floorfloat16float16",
+    "v2_Floorfloat16float16",
+    "gn1_Floorfloat16float16",
+    "gn4large_Floorfloat16float16",
+    "vn_Floorfloat16float16",
+    "v_Floorfloat32float32",
+    "v2_Floorfloat32float32",
+    "gn1_Floorfloat32float32",
+    "gn4large_Floorfloat32float32",
+    "vn_Floorfloat32float32",
+    "v_Floorbfloat16bfloat16",
+    "v2_Floorbfloat16bfloat16",
+    "gn1_Floorbfloat16bfloat16",
+    "gn4large_Floorbfloat16bfloat16",
+    "vn_Floorbfloat16bfloat16",
+    "v_Logfloat16float16",
+    "v2_Logfloat16float16",
+    "gn1_Logfloat16float16",
+    "gn4large_Logfloat16float16",
+    "vn_Logfloat16float16",
+    "v_Logfloat32float32",
+    "v2_Logfloat32float32",
+    "gn1_Logfloat32float32",
+    "gn4large_Logfloat32float32",
+    "vn_Logfloat32float32",
+    "v_Logbfloat16bfloat16",
+    "v2_Logbfloat16bfloat16",
+    "gn1_Logbfloat16bfloat16",
+    "gn4large_Logbfloat16bfloat16",
+    "vn_Logbfloat16bfloat16",
+    "v_Log2float16float16",
+    "v2_Log2float16float16",
+    "gn1_Log2float16float16",
+    "gn4large_Log2float16float16",
+    "vn_Log2float16float16",
+    "v_Log2float32float32",
+    "v2_Log2float32float32",
+    "gn1_Log2float32float32",
+    "gn4large_Log2float32float32",
+    "vn_Log2float32float32",
+    "v_Log2bfloat16bfloat16",
+    "v2_Log2bfloat16bfloat16",
+    "gn1_Log2bfloat16bfloat16",
+    "gn4large_Log2bfloat16bfloat16",
+    "vn_Log2bfloat16bfloat16",
+    "v_Log10float16float16",
+    "v2_Log10float16float16",
+    "gn1_Log10float16float16",
+    "gn4large_Log10float16float16",
+    "vn_Log10float16float16",
+    "v_Log10float32float32",
+    "v2_Log10float32float32",
+    "gn1_Log10float32float32",
+    "gn4large_Log10float32float32",
+    "vn_Log10float32float32",
+    "v_Log10bfloat16bfloat16",
+    "v2_Log10bfloat16bfloat16",
+    "gn1_Log10bfloat16bfloat16",
+    "gn4large_Log10bfloat16bfloat16",
+    "vn_Log10bfloat16bfloat16",
+    "v_Log1pfloat16float16",
+    "v2_Log1pfloat16float16",
+    "gn1_Log1pfloat16float16",
+    "gn4large_Log1pfloat16float16",
+    "vn_Log1pfloat16float16",
+    "v_Log1pfloat32float32",
+    "v2_Log1pfloat32float32",
+    "gn1_Log1pfloat32float32",
+    "gn4large_Log1pfloat32float32",
+    "vn_Log1pfloat32float32",
+    "v_Log1pbfloat16bfloat16",
+    "v2_Log1pbfloat16bfloat16",
+    "gn1_Log1pbfloat16bfloat16",
+    "gn4large_Log1pbfloat16bfloat16",
+    "vn_Log1pbfloat16bfloat16",
+    "v_Negativebool_bool_",
+    "v2_Negativebool_bool_",
+    "gn1_Negativebool_bool_",
+    "gn4large_Negativebool_bool_",
+    "vn_Negativebool_bool_",
+    "v_Negativeuint8uint8",
+    "v2_Negativeuint8uint8",
+    "gn1_Negativeuint8uint8",
+    "gn4large_Negativeuint8uint8",
+    "vn_Negativeuint8uint8",
+    "v_Negativeuint16uint16",
+    "v2_Negativeuint16uint16",
+    "gn1_Negativeuint16uint16",
+    "gn4large_Negativeuint16uint16",
+    "vn_Negativeuint16uint16",
+    "v_Negativeuint32uint32",
+    "v2_Negativeuint32uint32",
+    "gn1_Negativeuint32uint32",
+    "gn4large_Negativeuint32uint32",
+    "vn_Negativeuint32uint32",
+    "v_Negativeuint64uint64",
+    "v2_Negativeuint64uint64",
+    "gn1_Negativeuint64uint64",
+    "gn4large_Negativeuint64uint64",
+    "v_Negativeint8int8",
+    "v2_Negativeint8int8",
+    "gn1_Negativeint8int8",
+    "gn4large_Negativeint8int8",
+    "vn_Negativeint8int8",
+    "v_Negativeint16int16",
+    "v2_Negativeint16int16",
+    "gn1_Negativeint16int16",
+    "gn4large_Negativeint16int16",
+    "vn_Negativeint16int16",
+    "v_Negativeint32int32",
+    "v2_Negativeint32int32",
+    "gn1_Negativeint32int32",
+    "gn4large_Negativeint32int32",
+    "vn_Negativeint32int32",
+    "v_Negativeint64int64",
+    "v2_Negativeint64int64",
+    "gn1_Negativeint64int64",
+    "gn4large_Negativeint64int64",
+    "v_Negativefloat16float16",
+    "v2_Negativefloat16float16",
+    "gn1_Negativefloat16float16",
+    "gn4large_Negativefloat16float16",
+    "vn_Negativefloat16float16",
+    "v_Negativefloat32float32",
+    "v2_Negativefloat32float32",
+    "gn1_Negativefloat32float32",
+    "gn4large_Negativefloat32float32",
+    "vn_Negativefloat32float32",
+    "v_Negativebfloat16bfloat16",
+    "v2_Negativebfloat16bfloat16",
+    "gn1_Negativebfloat16bfloat16",
+    "gn4large_Negativebfloat16bfloat16",
+    "vn_Negativebfloat16bfloat16",
+    "v_Sigmoidfloat16float16",
+    "v2_Sigmoidfloat16float16",
+    "gn1_Sigmoidfloat16float16",
+    "gn4large_Sigmoidfloat16float16",
+    "vn_Sigmoidfloat16float16",
+    "v_Sigmoidfloat32float32",
+    "v2_Sigmoidfloat32float32",
+    "gn1_Sigmoidfloat32float32",
+    "gn4large_Sigmoidfloat32float32",
+    "vn_Sigmoidfloat32float32",
+    "v_Sigmoidbfloat16bfloat16",
+    "v2_Sigmoidbfloat16bfloat16",
+    "gn1_Sigmoidbfloat16bfloat16",
+    "gn4large_Sigmoidbfloat16bfloat16",
+    "vn_Sigmoidbfloat16bfloat16",
+    "v_Erffloat16float16",
+    "v2_Erffloat16float16",
+    "gn1_Erffloat16float16",
+    "gn4large_Erffloat16float16",
+    "vn_Erffloat16float16",
+    "v_Erffloat32float32",
+    "v2_Erffloat32float32",
+    "gn1_Erffloat32float32",
+    "gn4large_Erffloat32float32",
+    "vn_Erffloat32float32",
+    "v_Erfbfloat16bfloat16",
+    "v2_Erfbfloat16bfloat16",
+    "gn1_Erfbfloat16bfloat16",
+    "gn4large_Erfbfloat16bfloat16",
+    "vn_Erfbfloat16bfloat16",
+    "v_ErfInvfloat16float16",
+    "v2_ErfInvfloat16float16",
+    "gn1_ErfInvfloat16float16",
+    "gn4large_ErfInvfloat16float16",
+    "vn_ErfInvfloat16float16",
+    "v_ErfInvfloat32float32",
+    "v2_ErfInvfloat32float32",
+    "gn1_ErfInvfloat32float32",
+    "gn4large_ErfInvfloat32float32",
+    "vn_ErfInvfloat32float32",
+    "v_ErfInvbfloat16bfloat16",
+    "v2_ErfInvbfloat16bfloat16",
+    "gn1_ErfInvbfloat16bfloat16",
+    "gn4large_ErfInvbfloat16bfloat16",
+    "vn_ErfInvbfloat16bfloat16",
+    "v_Signbool_bool_",
+    "v2_Signbool_bool_",
+    "gn1_Signbool_bool_",
+    "gn4large_Signbool_bool_",
+    "vn_Signbool_bool_",
+    "v_Signuint8uint8",
+    "v2_Signuint8uint8",
+    "gn1_Signuint8uint8",
+    "gn4large_Signuint8uint8",
+    "vn_Signuint8uint8",
+    "v_Signuint16uint16",
+    "v2_Signuint16uint16",
+    "gn1_Signuint16uint16",
+    "gn4large_Signuint16uint16",
+    "vn_Signuint16uint16",
+    "v_Signuint32uint32",
+    "v2_Signuint32uint32",
+    "gn1_Signuint32uint32",
+    "gn4large_Signuint32uint32",
+    "vn_Signuint32uint32",
+    "v_Signuint64uint64",
+    "v2_Signuint64uint64",
+    "gn1_Signuint64uint64",
+    "gn4large_Signuint64uint64",
+    "v_Signint8int8",
+    "v2_Signint8int8",
+    "gn1_Signint8int8",
+    "gn4large_Signint8int8",
+    "vn_Signint8int8",
+    "v_Signint16int16",
+    "v2_Signint16int16",
+    "gn1_Signint16int16",
+    "gn4large_Signint16int16",
+    "vn_Signint16int16",
+    "v_Signint32int32",
+    "v2_Signint32int32",
+    "gn1_Signint32int32",
+    "gn4large_Signint32int32",
+    "vn_Signint32int32",
+    "v_Signint64int64",
+    "v2_Signint64int64",
+    "gn1_Signint64int64",
+    "gn4large_Signint64int64",
+    "v_Signfloat16float16",
+    "v2_Signfloat16float16",
+    "gn1_Signfloat16float16",
+    "gn4large_Signfloat16float16",
+    "vn_Signfloat16float16",
+    "v_Signfloat32float32",
+    "v2_Signfloat32float32",
+    "gn1_Signfloat32float32",
+    "gn4large_Signfloat32float32",
+    "vn_Signfloat32float32",
+    "v_Signbfloat16bfloat16",
+    "v2_Signbfloat16bfloat16",
+    "gn1_Signbfloat16bfloat16",
+    "gn4large_Signbfloat16bfloat16",
+    "vn_Signbfloat16bfloat16",
+    "v_Sinfloat16float16",
+    "v2_Sinfloat16float16",
+    "gn1_Sinfloat16float16",
+    "gn4large_Sinfloat16float16",
+    "vn_Sinfloat16float16",
+    "v_Sinfloat32float32",
+    "v2_Sinfloat32float32",
+    "gn1_Sinfloat32float32",
+    "gn4large_Sinfloat32float32",
+    "vn_Sinfloat32float32",
+    "v_Sinbfloat16bfloat16",
+    "v2_Sinbfloat16bfloat16",
+    "gn1_Sinbfloat16bfloat16",
+    "gn4large_Sinbfloat16bfloat16",
+    "vn_Sinbfloat16bfloat16",
+    "v_Sinhfloat16float16",
+    "v2_Sinhfloat16float16",
+    "gn1_Sinhfloat16float16",
+    "gn4large_Sinhfloat16float16",
+    "vn_Sinhfloat16float16",
+    "v_Sinhfloat32float32",
+    "v2_Sinhfloat32float32",
+    "gn1_Sinhfloat32float32",
+    "gn4large_Sinhfloat32float32",
+    "vn_Sinhfloat32float32",
+    "v_Sinhbfloat16bfloat16",
+    "v2_Sinhbfloat16bfloat16",
+    "gn1_Sinhbfloat16bfloat16",
+    "gn4large_Sinhbfloat16bfloat16",
+    "vn_Sinhbfloat16bfloat16",
+    "v_Squarebool_bool_",
+    "v2_Squarebool_bool_",
+    "gn1_Squarebool_bool_",
+    "gn4large_Squarebool_bool_",
+    "vn_Squarebool_bool_",
+    "v_Squareuint8uint8",
+    "v2_Squareuint8uint8",
+    "gn1_Squareuint8uint8",
+    "gn4large_Squareuint8uint8",
+    "vn_Squareuint8uint8",
+    "v_Squareuint16uint16",
+    "v2_Squareuint16uint16",
+    "gn1_Squareuint16uint16",
+    "gn4large_Squareuint16uint16",
+    "vn_Squareuint16uint16",
+    "v_Squareuint32uint32",
+    "v2_Squareuint32uint32",
+    "gn1_Squareuint32uint32",
+    "gn4large_Squareuint32uint32",
+    "vn_Squareuint32uint32",
+    "v_Squareuint64uint64",
+    "v2_Squareuint64uint64",
+    "gn1_Squareuint64uint64",
+    "gn4large_Squareuint64uint64",
+    "v_Squareint8int8",
+    "v2_Squareint8int8",
+    "gn1_Squareint8int8",
+    "gn4large_Squareint8int8",
+    "vn_Squareint8int8",
+    "v_Squareint16int16",
+    "v2_Squareint16int16",
+    "gn1_Squareint16int16",
+    "gn4large_Squareint16int16",
+    "vn_Squareint16int16",
+    "v_Squareint32int32",
+    "v2_Squareint32int32",
+    "gn1_Squareint32int32",
+    "gn4large_Squareint32int32",
+    "vn_Squareint32int32",
+    "v_Squareint64int64",
+    "v2_Squareint64int64",
+    "gn1_Squareint64int64",
+    "gn4large_Squareint64int64",
+    "v_Squarefloat16float16",
+    "v2_Squarefloat16float16",
+    "gn1_Squarefloat16float16",
+    "gn4large_Squarefloat16float16",
+    "vn_Squarefloat16float16",
+    "v_Squarefloat32float32",
+    "v2_Squarefloat32float32",
+    "gn1_Squarefloat32float32",
+    "gn4large_Squarefloat32float32",
+    "vn_Squarefloat32float32",
+    "v_Squarebfloat16bfloat16",
+    "v2_Squarebfloat16bfloat16",
+    "gn1_Squarebfloat16bfloat16",
+    "gn4large_Squarebfloat16bfloat16",
+    "vn_Squarebfloat16bfloat16",
+    "v_Sqrtfloat16float16",
+    "v2_Sqrtfloat16float16",
+    "gn1_Sqrtfloat16float16",
+    "gn4large_Sqrtfloat16float16",
+    "vn_Sqrtfloat16float16",
+    "v_Sqrtfloat32float32",
+    "v2_Sqrtfloat32float32",
+    "gn1_Sqrtfloat32float32",
+    "gn4large_Sqrtfloat32float32",
+    "vn_Sqrtfloat32float32",
+    "v_Sqrtbfloat16bfloat16",
+    "v2_Sqrtbfloat16bfloat16",
+    "gn1_Sqrtbfloat16bfloat16",
+    "gn4large_Sqrtbfloat16bfloat16",
+    "vn_Sqrtbfloat16bfloat16",
+    "v_Rsqrtfloat16float16",
+    "v2_Rsqrtfloat16float16",
+    "gn1_Rsqrtfloat16float16",
+    "gn4large_Rsqrtfloat16float16",
+    "vn_Rsqrtfloat16float16",
+    "v_Rsqrtfloat32float32",
+    "v2_Rsqrtfloat32float32",
+    "gn1_Rsqrtfloat32float32",
+    "gn4large_Rsqrtfloat32float32",
+    "vn_Rsqrtfloat32float32",
+    "v_Rsqrtbfloat16bfloat16",
+    "v2_Rsqrtbfloat16bfloat16",
+    "gn1_Rsqrtbfloat16bfloat16",
+    "gn4large_Rsqrtbfloat16bfloat16",
+    "vn_Rsqrtbfloat16bfloat16",
+    "v_Tanfloat16float16",
+    "v2_Tanfloat16float16",
+    "gn1_Tanfloat16float16",
+    "gn4large_Tanfloat16float16",
+    "vn_Tanfloat16float16",
+    "v_Tanfloat32float32",
+    "v2_Tanfloat32float32",
+    "gn1_Tanfloat32float32",
+    "gn4large_Tanfloat32float32",
+    "vn_Tanfloat32float32",
+    "v_Tanbfloat16bfloat16",
+    "v2_Tanbfloat16bfloat16",
+    "gn1_Tanbfloat16bfloat16",
+    "gn4large_Tanbfloat16bfloat16",
+    "vn_Tanbfloat16bfloat16",
+    "v_Tanhfloat16float16",
+    "v2_Tanhfloat16float16",
+    "gn1_Tanhfloat16float16",
+    "gn4large_Tanhfloat16float16",
+    "vn_Tanhfloat16float16",
+    "v_Tanhfloat32float32",
+    "v2_Tanhfloat32float32",
+    "gn1_Tanhfloat32float32",
+    "gn4large_Tanhfloat32float32",
+    "vn_Tanhfloat32float32",
+    "v_Tanhbfloat16bfloat16",
+    "v2_Tanhbfloat16bfloat16",
+    "gn1_Tanhbfloat16bfloat16",
+    "gn4large_Tanhbfloat16bfloat16",
+    "vn_Tanhbfloat16bfloat16",
+    "v_Roundfloat16float16",
+    "v2_Roundfloat16float16",
+    "gn1_Roundfloat16float16",
+    "gn4large_Roundfloat16float16",
+    "vn_Roundfloat16float16",
+    "v_Roundfloat32float32",
+    "v2_Roundfloat32float32",
+    "gn1_Roundfloat32float32",
+    "gn4large_Roundfloat32float32",
+    "vn_Roundfloat32float32",
+    "v_Roundbfloat16bfloat16",
+    "v2_Roundbfloat16bfloat16",
+    "gn1_Roundbfloat16bfloat16",
+    "gn4large_Roundbfloat16bfloat16",
+    "vn_Roundbfloat16bfloat16",
+    "v_BitwiseInvertuint8uint8",
+    "v2_BitwiseInvertuint8uint8",
+    "gn1_BitwiseInvertuint8uint8",
+    "gn4large_BitwiseInvertuint8uint8",
+    "vn_BitwiseInvertuint8uint8",
+    "v_BitwiseInvertuint16uint16",
+    "v2_BitwiseInvertuint16uint16",
+    "gn1_BitwiseInvertuint16uint16",
+    "gn4large_BitwiseInvertuint16uint16",
+    "vn_BitwiseInvertuint16uint16",
+    "v_BitwiseInvertuint32uint32",
+    "v2_BitwiseInvertuint32uint32",
+    "gn1_BitwiseInvertuint32uint32",
+    "gn4large_BitwiseInvertuint32uint32",
+    "vn_BitwiseInvertuint32uint32",
+    "v_BitwiseInvertuint64uint64",
+    "v2_BitwiseInvertuint64uint64",
+    "gn1_BitwiseInvertuint64uint64",
+    "gn4large_BitwiseInvertuint64uint64",
+    "v_BitwiseInvertint8int8",
+    "v2_BitwiseInvertint8int8",
+    "gn1_BitwiseInvertint8int8",
+    "gn4large_BitwiseInvertint8int8",
+    "vn_BitwiseInvertint8int8",
+    "v_BitwiseInvertint16int16",
+    "v2_BitwiseInvertint16int16",
+    "gn1_BitwiseInvertint16int16",
+    "gn4large_BitwiseInvertint16int16",
+    "vn_BitwiseInvertint16int16",
+    "v_BitwiseInvertint32int32",
+    "v2_BitwiseInvertint32int32",
+    "gn1_BitwiseInvertint32int32",
+    "gn4large_BitwiseInvertint32int32",
+    "vn_BitwiseInvertint32int32",
+    "v_BitwiseInvertint64int64",
+    "v2_BitwiseInvertint64int64",
+    "gn1_BitwiseInvertint64int64",
+    "gn4large_BitwiseInvertint64int64",
+    "v_Abscomplex64complex64",
+    "v2_Abscomplex64complex64",
+    "gn1_Abscomplex64complex64",
+    "gn4large_Abscomplex64complex64",
+    "v_ArcCoscomplex64complex64",
+    "v2_ArcCoscomplex64complex64",
+    "gn1_ArcCoscomplex64complex64",
+    "gn4large_ArcCoscomplex64complex64",
+    "v_ArcSincomplex64complex64",
+    "v2_ArcSincomplex64complex64",
+    "gn1_ArcSincomplex64complex64",
+    "gn4large_ArcSincomplex64complex64",
+    "v_ArcTancomplex64complex64",
+    "v2_ArcTancomplex64complex64",
+    "gn1_ArcTancomplex64complex64",
+    "gn4large_ArcTancomplex64complex64",
+    "v_Conjugatecomplex64complex64",
+    "v2_Conjugatecomplex64complex64",
+    "gn1_Conjugatecomplex64complex64",
+    "gn4large_Conjugatecomplex64complex64",
+    "v_Coscomplex64complex64",
+    "v2_Coscomplex64complex64",
+    "gn1_Coscomplex64complex64",
+    "gn4large_Coscomplex64complex64",
+    "v_Coshcomplex64complex64",
+    "v2_Coshcomplex64complex64",
+    "gn1_Coshcomplex64complex64",
+    "gn4large_Coshcomplex64complex64",
+    "v_Expcomplex64complex64",
+    "v2_Expcomplex64complex64",
+    "gn1_Expcomplex64complex64",
+    "gn4large_Expcomplex64complex64",
+    "v_Logcomplex64complex64",
+    "v2_Logcomplex64complex64",
+    "gn1_Logcomplex64complex64",
+    "gn4large_Logcomplex64complex64",
+    "v_Log1pcomplex64complex64",
+    "v2_Log1pcomplex64complex64",
+    "gn1_Log1pcomplex64complex64",
+    "gn4large_Log1pcomplex64complex64",
+    "v_Log2complex64complex64",
+    "v2_Log2complex64complex64",
+    "gn1_Log2complex64complex64",
+    "gn4large_Log2complex64complex64",
+    "v_Log10complex64complex64",
+    "v2_Log10complex64complex64",
+    "gn1_Log10complex64complex64",
+    "gn4large_Log10complex64complex64",
+    "v_Negativecomplex64complex64",
+    "v2_Negativecomplex64complex64",
+    "gn1_Negativecomplex64complex64",
+    "gn4large_Negativecomplex64complex64",
+    "v_Signcomplex64complex64",
+    "v2_Signcomplex64complex64",
+    "gn1_Signcomplex64complex64",
+    "gn4large_Signcomplex64complex64",
+    "v_Sincomplex64complex64",
+    "v2_Sincomplex64complex64",
+    "gn1_Sincomplex64complex64",
+    "gn4large_Sincomplex64complex64",
+    "v_Sinhcomplex64complex64",
+    "v2_Sinhcomplex64complex64",
+    "gn1_Sinhcomplex64complex64",
+    "gn4large_Sinhcomplex64complex64",
+    "v_Squarecomplex64complex64",
+    "v2_Squarecomplex64complex64",
+    "gn1_Squarecomplex64complex64",
+    "gn4large_Squarecomplex64complex64",
+    "v_Sqrtcomplex64complex64",
+    "v2_Sqrtcomplex64complex64",
+    "gn1_Sqrtcomplex64complex64",
+    "gn4large_Sqrtcomplex64complex64",
+    "v_Rsqrtcomplex64complex64",
+    "v2_Rsqrtcomplex64complex64",
+    "gn1_Rsqrtcomplex64complex64",
+    "gn4large_Rsqrtcomplex64complex64",
+    "v_Tancomplex64complex64",
+    "v2_Tancomplex64complex64",
+    "gn1_Tancomplex64complex64",
+    "gn4large_Tancomplex64complex64",
+    "v_Tanhcomplex64complex64",
+    "v2_Tanhcomplex64complex64",
+    "gn1_Tanhcomplex64complex64",
+    "gn4large_Tanhcomplex64complex64",
+    "v_Roundcomplex64complex64",
+    "v2_Roundcomplex64complex64",
+    "gn1_Roundcomplex64complex64",
+    "gn4large_Roundcomplex64complex64",
+    "v_Realcomplex64float32",
+    "v2_Realcomplex64float32",
+    "gn1_Realcomplex64float32",
+    "gn4large_Realcomplex64float32",
+    "v_Imagcomplex64float32",
+    "v2_Imagcomplex64float32",
+    "gn1_Imagcomplex64float32",
+    "gn4large_Imagcomplex64float32",
+    "v_LogicalNotbool_bool_",
+    "v2_LogicalNotbool_bool_",
+    "gn1_LogicalNotbool_bool_",
+    "gn4large_LogicalNotbool_bool_",
+    "vn_LogicalNotbool_bool_",
+    "v_ToFP8float16uint8",
+    "v2_ToFP8float16uint8",
+    "gn1_ToFP8float16uint8",
+    "gn4large_ToFP8float16uint8",
+    "vn_ToFP8float16uint8",
+    "v_ToFP8bfloat16uint8",
+    "v2_ToFP8bfloat16uint8",
+    "gn1_ToFP8bfloat16uint8",
+    "gn4large_ToFP8bfloat16uint8",
+    "vn_ToFP8bfloat16uint8",
+    "v_ToFP8float32uint8",
+    "v2_ToFP8float32uint8",
+    "gn1_ToFP8float32uint8",
+    "gn4large_ToFP8float32uint8",
+    "vn_ToFP8float32uint8",
+    "v_FromFP8uint8float16",
+    "v2_FromFP8uint8float16",
+    "gn1_FromFP8uint8float16",
+    "gn4large_FromFP8uint8float16",
+    "vn_FromFP8uint8float16",
+    "v_FromFP8uint8bfloat16",
+    "v2_FromFP8uint8bfloat16",
+    "gn1_FromFP8uint8bfloat16",
+    "gn4large_FromFP8uint8bfloat16",
+    "vn_FromFP8uint8bfloat16",
+    "v_FromFP8uint8float32",
+    "v2_FromFP8uint8float32",
+    "gn1_FromFP8uint8float32",
+    "gn4large_FromFP8uint8float32",
+    "vn_FromFP8uint8float32"
+  ],
+  "artifactContracts": {
+    "metal": {
+      "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
+      "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+      "sourceSha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
+      "changedHeaders": {
+        "mlx/backend/metal/kernels/unary_ops.h": "0a5492b65ae39ecb6d8b04e64ea5007e0a4ff60d8d9428559bfbfd03387ece2a",
+        "mlx/backend/metal/kernels/utils.h": "5e1568e9edde9d05dbf86f68fa0d6c6240f2c32b973c7c6a76166b9c0d91543d",
+        "mlx/backend/metal/kernels/fp8.h": "7c25dcdf0dc49af5fda0bc379e495b196347c6eaceb6bafcb4e5848c4ec851b7"
+      }
+    },
+    "opengl": {
+      "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
+      "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+      "sourceSha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
+      "changedHeaders": {
+        "mlx/backend/metal/kernels/unary_ops.h": "0a5492b65ae39ecb6d8b04e64ea5007e0a4ff60d8d9428559bfbfd03387ece2a",
+        "mlx/backend/metal/kernels/utils.h": "5e1568e9edde9d05dbf86f68fa0d6c6240f2c32b973c7c6a76166b9c0d91543d",
+        "mlx/backend/metal/kernels/fp8.h": "7c25dcdf0dc49af5fda0bc379e495b196347c6eaceb6bafcb4e5848c4ec851b7"
+      }
+    },
+    "directx": {
+      "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
+      "commit": "846d176227a0ac13d2667e58d2bb68b322109ab0",
+      "sourceSha256": "51af04126d68e1f5baee5f467268408650d24a68db66e8c044f7f0be3f15368b",
+      "changedHeaders": {
+        "mlx/backend/metal/kernels/unary_ops.h": "0a5492b65ae39ecb6d8b04e64ea5007e0a4ff60d8d9428559bfbfd03387ece2a",
+        "mlx/backend/metal/kernels/utils.h": "5e1568e9edde9d05dbf86f68fa0d6c6240f2c32b973c7c6a76166b9c0d91543d",
+        "mlx/backend/metal/kernels/fp8.h": "7c25dcdf0dc49af5fda0bc379e495b196347c6eaceb6bafcb4e5848c4ec851b7"
+      }
+    }
+  },
+  "currentArtifacts": {
+    "metal": {
+      "v_Sigmoidfloat16float16": {
+        "sha256": "4ce47ded34df956dd8831ecb2de8880cec43d54673d417a3d0532ac6f1070a46",
+        "sizeBytes": 3721
+      },
+      "v2_Sigmoidfloat16float16": {
+        "sha256": "574105ffea51a63dd1d4cae790778d08de955667bf085d371484e5c5728c4b69",
+        "sizeBytes": 3821
+      },
+      "gn1_Sigmoidfloat16float16": {
+        "sha256": "601ae6e506bf1b1d8911f3f0bcc367db4bc4814adabdff946419d652eec2adb7",
+        "sizeBytes": 4237
+      },
+      "gn4large_Sigmoidfloat16float16": {
+        "sha256": "8a5b0d14dc5d5995df0504b8b88b87b52e0f9df01e411651e3863b9f4453368d",
+        "sizeBytes": 4286
+      },
+      "vn_Sigmoidfloat16float16": {
+        "sha256": "b17c9d3ef7e840610eb7eff06b3ebfa9b025d8b3da68aab0a1da119823ec04f0",
+        "sizeBytes": 3722
+      },
+      "v_Sigmoidfloat32float32": {
+        "sha256": "c32d428977234509169c2474f3034668f36da4568c72fe2a3fb0636fcbc1a7be",
+        "sizeBytes": 3734
+      },
+      "v2_Sigmoidfloat32float32": {
+        "sha256": "f80ea1653765cd1d8e2804a7c366672fe4cc50242c0a6b88add9176155dfa0f6",
+        "sizeBytes": 3834
+      },
+      "gn1_Sigmoidfloat32float32": {
+        "sha256": "f1f87e0a8c4959c37fff7027d743e8ebd272fe407c9b710299e0a0fb17c562e8",
+        "sizeBytes": 4248
+      },
+      "gn4large_Sigmoidfloat32float32": {
+        "sha256": "86bf3d980fc6335d680e72cc044afd63bbfb4437f3bf6e1938d0ac52d894d065",
+        "sizeBytes": 4297
+      },
+      "vn_Sigmoidfloat32float32": {
+        "sha256": "7d9675efad7f8877917e6354488b3c8b0a7621ddb9efea066a617e5360e17ef5",
+        "sizeBytes": 3735
+      },
+      "v_Sigmoidbfloat16bfloat16": {
+        "sha256": "f622552a8003e9bc0c55a710171c26ca256e41b1e846c545a238ab868ce5dc53",
+        "sizeBytes": 3856
+      },
+      "v2_Sigmoidbfloat16bfloat16": {
+        "sha256": "7c12cb384574695eb6143d98acf1a1c7255465f54829b1ee3f084683d6259cd9",
+        "sizeBytes": 3956
+      },
+      "gn1_Sigmoidbfloat16bfloat16": {
+        "sha256": "0a2065a17c0677811b7a5da593b31724cde5df5bc6b37216a8615d2ca78ee370",
+        "sizeBytes": 4364
+      },
+      "gn4large_Sigmoidbfloat16bfloat16": {
+        "sha256": "00b691fab0cd1cde3492f482f80ee9c0d703047a459f77b8fd46c3133e887492",
+        "sizeBytes": 4413
+      },
+      "vn_Sigmoidbfloat16bfloat16": {
+        "sha256": "58ad76732259af916dedc4a446eb986e895e1257cd6a6a9c9ab8906040d6bf8c",
+        "sizeBytes": 3857
+      },
+      "v_Signuint32uint32": {
+        "sha256": "8cfdda3bbb04bc93662331651fa242a8d640aad55a92809bce9b25e32db14218",
+        "sizeBytes": 4440
+      },
+      "v2_Signuint32uint32": {
+        "sha256": "57242a0c9939887379b8c81fc3f80c53727855fcc7a4d62ffdc2e58bc7d06d5a",
+        "sizeBytes": 4540
+      },
+      "gn1_Signuint32uint32": {
+        "sha256": "c7420cc65b2eed971064c2822f7cd36763be96c89aba43fa391d0d07999cc7e7",
+        "sizeBytes": 4947
+      },
+      "gn4large_Signuint32uint32": {
+        "sha256": "75f31328c716f159d31655197495b95f4f25505a4adc482cff073ac85a6680a2",
+        "sizeBytes": 4996
+      },
+      "vn_Signuint32uint32": {
+        "sha256": "734475977c7f03e2145930a58f3f8d289b8a9e15afd1f2537d0f0e8be56395df",
+        "sizeBytes": 4441
+      },
+      "v_Abscomplex64complex64": {
+        "sha256": "d11a75f50b871fcb20a8d7897c071d84e195a348945589d74bbbdee4ae3415d4",
+        "sizeBytes": 3790
+      },
+      "v2_Abscomplex64complex64": {
+        "sha256": "feb467bd9fc9d8075670692c27ac12d0cbbb14ad88892e084f7068d3df792c0a",
+        "sizeBytes": 3890
+      },
+      "gn1_Abscomplex64complex64": {
+        "sha256": "b26b512c0799b823843fef87f08ecab073ccb43b78d6c80231d2647983cddda6",
+        "sizeBytes": 4304
+      },
+      "gn4large_Abscomplex64complex64": {
+        "sha256": "6a40f9632072110a7111afb4ea85b87079cd69a27c30884f231dd62ead2c85cd",
+        "sizeBytes": 4353
+      },
+      "v_ArcCoscomplex64complex64": {
+        "sha256": "bdb429a5c9278723f2f4b5b7e90b3db0ba3e922b5303e056464dcec0521e6d32",
+        "sizeBytes": 13884
+      },
+      "v2_ArcCoscomplex64complex64": {
+        "sha256": "62f56ec3fca8fac538d28c6f6ef19d7b9165eb7d344096e7b3327204280d7955",
+        "sizeBytes": 13984
+      },
+      "gn1_ArcCoscomplex64complex64": {
+        "sha256": "4996ec03a658edff857cacde013544170c3f16f51295413cadcb411cbb56fe99",
+        "sizeBytes": 14400
+      },
+      "gn4large_ArcCoscomplex64complex64": {
+        "sha256": "e703a25bf1363624b47ba26d27c631f61482491105ffff2359731b495edd9610",
+        "sizeBytes": 14449
+      },
+      "v_ArcSincomplex64complex64": {
+        "sha256": "ca106166de79983182c58ecad726a8d351d6b2beb15a60b14ea6040bdfe60aa9",
+        "sizeBytes": 13884
+      },
+      "v2_ArcSincomplex64complex64": {
+        "sha256": "9d933243ae947b465a445c1bbe2df929f9503d16edc9c74d8a0deaf080bef9c2",
+        "sizeBytes": 13984
+      },
+      "gn1_ArcSincomplex64complex64": {
+        "sha256": "07648d71e7c9fb4ac02df4d14d2e3f558d20fc3d3c5af470c2373a918f126397",
+        "sizeBytes": 14400
+      },
+      "gn4large_ArcSincomplex64complex64": {
+        "sha256": "2a4732c370795fec588694d07f55d8ad2365552508effbee53cf31438214a5a4",
+        "sizeBytes": 14449
+      },
+      "v_ArcTancomplex64complex64": {
+        "sha256": "9b1071e96158b7b5becedb4a98ae6b648d81af41b07a1063f636cb74825b17f7",
+        "sizeBytes": 13878
+      },
+      "v2_ArcTancomplex64complex64": {
+        "sha256": "0b2cdfa02c096b2432a14474a6b2b84d62031296ad0ae8608fbcaa6089eb9464",
+        "sizeBytes": 13978
+      },
+      "gn1_ArcTancomplex64complex64": {
+        "sha256": "7dbca21528768974b5317f84b1b197647c86a7576d269a066a7f8ac4d51917dd",
+        "sizeBytes": 14394
+      },
+      "gn4large_ArcTancomplex64complex64": {
+        "sha256": "335c7a1cae61fe70d9a01924c6cee4b0015e825168b45e66d914eddad6e0ea85",
+        "sizeBytes": 14443
+      },
+      "v_Logcomplex64complex64": {
+        "sha256": "346d58a4cb445d3fe76b83f80532c9772ebb31ae6422896cd935b878b59809ba",
+        "sizeBytes": 11628
+      },
+      "v2_Logcomplex64complex64": {
+        "sha256": "92016cb30c9161d675686007fc23a19053c337607c8d1bc61596ab20672b3613",
+        "sizeBytes": 11728
+      },
+      "gn1_Logcomplex64complex64": {
+        "sha256": "0ea3a8e84843083cf08e049e643c9c6daa230100c7b6f8efae8083bd4ff09689",
+        "sizeBytes": 12160
+      },
+      "gn4large_Logcomplex64complex64": {
+        "sha256": "281cd33f08f7e2a110c73cd6c76bd81620a0505fe2e499a33fd8ce99af02cb6a",
+        "sizeBytes": 12209
+      },
+      "v_Log2complex64complex64": {
+        "sha256": "e812a2d904cb77eeab6675d40aac2d82305a900318e8fe743b2efa1cab070ee0",
+        "sizeBytes": 12092
+      },
+      "v2_Log2complex64complex64": {
+        "sha256": "a61a6f45e3c64f727210654a65720f372cb23a0a612666e19aa915afea7191c5",
+        "sizeBytes": 12192
+      },
+      "gn1_Log2complex64complex64": {
+        "sha256": "0c39210c54f68764b8e530a30ba9625bb7bd69c02521bad700b91b8494f531d4",
+        "sizeBytes": 12623
+      },
+      "gn4large_Log2complex64complex64": {
+        "sha256": "05cd102e02f5bb8cbf0c3cb2e52bb4f95ace883e7cba63f73b1ffb83c504814e",
+        "sizeBytes": 12672
+      },
+      "v_Log10complex64complex64": {
+        "sha256": "a72d4f1f926d7b8b91b39cc444d8fd5d93ddee64e5381d7e25d21c9a309d53c2",
+        "sizeBytes": 12103
+      },
+      "v2_Log10complex64complex64": {
+        "sha256": "a9f88e999aefc062fc7dcf6e64ea2f72b0c86ca46a65d00b60ec7da8ea290fb5",
+        "sizeBytes": 12203
+      },
+      "gn1_Log10complex64complex64": {
+        "sha256": "ff0eaef257fe29b5e3e3399b4674d7124545884025eaa3db1e442b194b4720d5",
+        "sizeBytes": 12633
+      },
+      "gn4large_Log10complex64complex64": {
+        "sha256": "3e22dc44db0f59ebf2b5fa5723e8e56f2b2b2e836cfa1b109b51d55632e63650",
+        "sizeBytes": 12682
+      },
+      "v_Signcomplex64complex64": {
+        "sha256": "5e6b8f0b2fcd45d1e02f9ba5de17101c385f47cc7ae466901d58662289801f53",
+        "sizeBytes": 4478
+      },
+      "v2_Signcomplex64complex64": {
+        "sha256": "e7f819d22ecd2659c4970ba5b5b88ef5b8599891e19dccd57a1b84b0a229da7c",
+        "sizeBytes": 4578
+      },
+      "gn1_Signcomplex64complex64": {
+        "sha256": "ccb489bbe087c53afb58afc88ecc8a72b6d431042b054cf429281da9faa98c82",
+        "sizeBytes": 4991
+      },
+      "gn4large_Signcomplex64complex64": {
+        "sha256": "deeffcbd3cbfadf4fcb9cecddab9013fd833e1e711694657d4d659b3475f4f27",
+        "sizeBytes": 5040
+      },
+      "v_Sqrtcomplex64complex64": {
+        "sha256": "0150d671bf0edbf51063d6e591fad3b5bce6a957389fd5f00e6bdcaaf07e4c06",
+        "sizeBytes": 4487
+      },
+      "v2_Sqrtcomplex64complex64": {
+        "sha256": "2c1568064413eee55079637c493dbfeb1678e6bcc1c5b5a6baf18ae8163e8ffc",
+        "sizeBytes": 4587
+      },
+      "gn1_Sqrtcomplex64complex64": {
+        "sha256": "a84b715e73347c5617fb7136e0e53023f3fcc917c8ad6e76ad496cdfe86774ed",
+        "sizeBytes": 5018
+      },
+      "gn4large_Sqrtcomplex64complex64": {
+        "sha256": "f60738c9c0923b9cb8f8eeab162a2f6902b15c1039deb0ec76bdc761e60be1d5",
+        "sizeBytes": 5067
+      },
+      "v_Rsqrtcomplex64complex64": {
+        "sha256": "7f71cd7901122de6f4ba2ec79bd567f5633de5df6e2f5de3613822a3661a958b",
+        "sizeBytes": 5245
+      },
+      "v2_Rsqrtcomplex64complex64": {
+        "sha256": "c0f6f7c67bdecab9e41abda837a87abfa90e31c9eb484c7ae4f9609a121d4101",
+        "sizeBytes": 5345
+      },
+      "gn1_Rsqrtcomplex64complex64": {
+        "sha256": "7081eaf4ed6ff5246fed44ed35f9604ceafe5e9af2295990a99276476032c146",
+        "sizeBytes": 5775
+      },
+      "gn4large_Rsqrtcomplex64complex64": {
+        "sha256": "97bb2f1eb86a7a50136cf0b5892f0df36ce20dc2de9ac81f089c4be3024cd84c",
+        "sizeBytes": 5824
+      },
+      "v_FromFP8uint8float16": {
+        "sha256": "6493d23342c549465d679540d4603346e84e3d2f043b30535659ad126604cad0",
+        "sizeBytes": 1728
+      },
+      "v2_FromFP8uint8float16": {
+        "sha256": "791f9f6d580e5d1e4b95f3bf63dd9b05d4b35cc8a6590ece9cefe017754da539",
+        "sizeBytes": 1828
+      },
+      "gn1_FromFP8uint8float16": {
+        "sha256": "045050d726334439d997e7ded086649197cf90443ae92db7c46e4640e21f6e34",
+        "sizeBytes": 2237
+      },
+      "gn4large_FromFP8uint8float16": {
+        "sha256": "c3b4200098131f2df3f7b90bee0536f7cd59857749f27806ef7f6b7fcf4914f4",
+        "sizeBytes": 2286
+      },
+      "vn_FromFP8uint8float16": {
+        "sha256": "73fa4400a4ad4aad52fb304fd12673e2d06980bc72652109b21d897c51c138d4",
+        "sizeBytes": 1729
+      },
+      "v_FromFP8uint8bfloat16": {
+        "sha256": "b51021f496451732fb9fb5486e70feca999c68c0df0d3576527b178422b3bdd1",
+        "sizeBytes": 1735
+      },
+      "v2_FromFP8uint8bfloat16": {
+        "sha256": "fc4547b555105c995acfc71086806b27ef4efcbcb7394dbad8d946012a0471ca",
+        "sizeBytes": 1835
+      },
+      "gn1_FromFP8uint8bfloat16": {
+        "sha256": "7b08192700e940a54092ba2839fb58e4af13a10b7f6d9f8c48183eb261fe664a",
+        "sizeBytes": 2242
+      },
+      "gn4large_FromFP8uint8bfloat16": {
+        "sha256": "e731577c3a8466ec6f3abc3cb56f9dae1dea005e183ad4352b96bd9b3e5185b6",
+        "sizeBytes": 2291
+      },
+      "vn_FromFP8uint8bfloat16": {
+        "sha256": "dd14ea8e31b35db897698d5493ad87fe4b9698502bb3c6398b585f9eb8f1b9f6",
+        "sizeBytes": 1736
+      },
+      "v_FromFP8uint8float32": {
+        "sha256": "6eb5c55f5f1facbf5198d4c4e958fef25475f6da2cc3e63019419b13455f44a9",
+        "sizeBytes": 1731
+      },
+      "v2_FromFP8uint8float32": {
+        "sha256": "c87a463e557b09bf2bc26209d7184310949a94963452dc426c0c9ad691fea690",
+        "sizeBytes": 1831
+      },
+      "gn1_FromFP8uint8float32": {
+        "sha256": "a1484e78a117943af8606289e780adbb15ba96746e5e6f65e92b94d35a58b4f8",
+        "sizeBytes": 2239
+      },
+      "gn4large_FromFP8uint8float32": {
+        "sha256": "55aea443b3343f0a5826ee975bf7ebd845eb7e0adaca517a7adeb86290a6fbb1",
+        "sizeBytes": 2288
+      },
+      "vn_FromFP8uint8float32": {
+        "sha256": "008d9644c1617db74e4dbc9ecdc41dbec482ec881302e5f0fba5031ad571d5b5",
+        "sizeBytes": 1732
+      }
+    },
+    "opengl": {
+      "v_Sigmoidfloat16float16": {
+        "sha256": "c3ba3fd551416d2c584a571114aa4b1e86bc0d8f93171068d724aaa1b4992f0d",
+        "sizeBytes": 8618
+      },
+      "v2_Sigmoidfloat16float16": {
+        "sha256": "a663d2173be4d7b73ebeb1cce827a29dfcd7e4585dc78c68f0ed9cba950c5970",
+        "sizeBytes": 9132
+      },
+      "gn1_Sigmoidfloat16float16": {
+        "sha256": "eac6fc413af91136b392f64ba5c6a1c76b8ef1b209c231e3cab7201c45b05d36",
+        "sizeBytes": 9909
+      },
+      "gn4large_Sigmoidfloat16float16": {
+        "sha256": "d248e3c8d9e64994083d1119c40e71a8134fd4e91ae30da1e39d5b501e3ece98",
+        "sizeBytes": 9971
+      },
+      "vn_Sigmoidfloat16float16": {
+        "sha256": "e7ced45b0ccc83e899623c55e9c8ee3607303f06527dfdde1de925119822d59c",
+        "sizeBytes": 8905
+      },
+      "v_Sigmoidfloat32float32": {
+        "sha256": "412ae31c4037153e5662d5ec3b2f217b2207486d61bd2c8e9ddb7e60d11c39aa",
+        "sizeBytes": 7272
+      },
+      "v2_Sigmoidfloat32float32": {
+        "sha256": "0b6d3fa7f19d491120897bef9e6293f7aad16757ea3eb14e541323bc5986fd1d",
+        "sizeBytes": 7788
+      },
+      "gn1_Sigmoidfloat32float32": {
+        "sha256": "ebc4a1c2f79b3db34a1b43c7b10f36c80aeb72f3dddc6a5fe19ed7881627b8ea",
+        "sizeBytes": 8563
+      },
+      "gn4large_Sigmoidfloat32float32": {
+        "sha256": "ae400b97875dd123032711bf55060381084618a585010927d077139a9c3057f5",
+        "sizeBytes": 8625
+      },
+      "vn_Sigmoidfloat32float32": {
+        "sha256": "2f0e437a14a1390bd1b3918e458b121780924473b4548dfa434ee035803aec17",
+        "sizeBytes": 7561
+      },
+      "v_Sigmoidbfloat16bfloat16": {
+        "sha256": "8ff15579807092ae21070685fda92808ada0cda79529da7c11c8a98091dbcfc8",
+        "sizeBytes": 7766
+      },
+      "v2_Sigmoidbfloat16bfloat16": {
+        "sha256": "e0f1ab8d32d417f980ee46e36737ba2ecfef6d08048d0d640718a20e01aa8261",
+        "sizeBytes": 8292
+      },
+      "gn1_Sigmoidbfloat16bfloat16": {
+        "sha256": "dede16a4bc0750c7886603a6a95a76f1b753294a95970ed0db9b9affe63f77a8",
+        "sizeBytes": 9055
+      },
+      "gn4large_Sigmoidbfloat16bfloat16": {
+        "sha256": "6e9b9a64b26a6de15944ced0b3fd46ff89c8d6b8b9554fb99e6ea93da14fce25",
+        "sizeBytes": 9117
+      },
+      "vn_Sigmoidbfloat16bfloat16": {
+        "sha256": "dd088f90fbcc7d5f2a07d797d2abd9e8803cec057435ee450ae7250af247f188",
+        "sizeBytes": 8065
+      },
+      "v_Signuint32uint32": {
+        "sha256": "6cc0ac507da025f4a79211cfc59029afe32f3bfae7189659b4c027878b3b4381",
+        "sizeBytes": 7878
+      },
+      "v2_Signuint32uint32": {
+        "sha256": "4fa673a20c3b48902229bce9e90f0dce596cd100981e6eab42a73d4aa6779df3",
+        "sizeBytes": 8404
+      },
+      "gn1_Signuint32uint32": {
+        "sha256": "9610217de185850643dbd23810b343f308650e9396c543b9d1b27c4b4c795bbb",
+        "sizeBytes": 9174
+      },
+      "gn4large_Signuint32uint32": {
+        "sha256": "e4b61770d323797c2a798849b04314ca8ae35ccec3405cfc1f0b725af5abd291",
+        "sizeBytes": 9236
+      },
+      "vn_Signuint32uint32": {
+        "sha256": "204580e9964045c22972a38dd8a06697eef6a41b33780ab5b3369599ec2d496c",
+        "sizeBytes": 8177
+      },
+      "v_Abscomplex64complex64": {
+        "sha256": "062201fec452ce59c3ca7be7f14daf0340a2467c9f4b2d21a2326b11555834eb",
+        "sizeBytes": 7118
+      },
+      "v2_Abscomplex64complex64": {
+        "sha256": "76d188218ebc79c07be50d4d2ea22cb838983f1e1e63771befe905fdddf52307",
+        "sizeBytes": 7386
+      },
+      "gn1_Abscomplex64complex64": {
+        "sha256": "0939fd84b841dee7f44e405312f130262dc27a31a42ece3c19c5203bfc70d0f6",
+        "sizeBytes": 8409
+      },
+      "gn4large_Abscomplex64complex64": {
+        "sha256": "23efd1f56841f36b49cd92b69364839464a17bcc23e90428efbc317662737d08",
+        "sizeBytes": 8471
+      },
+      "v_ArcCoscomplex64complex64": {
+        "sha256": "9249a73ec5d2155231001828b1bd1b7fe01686ce9f9f06758a5a023b56cc9c4e",
+        "sizeBytes": 18671
+      },
+      "v2_ArcCoscomplex64complex64": {
+        "sha256": "3d7a7a3495578aaa6460083af78d0aa7f3843b282242a9e32026c24bcd75807c",
+        "sizeBytes": 18939
+      },
+      "gn1_ArcCoscomplex64complex64": {
+        "sha256": "107bda24761e62232de58409927fbc91191e503ee4384171ce5c1cf9f6b695df",
+        "sizeBytes": 19959
+      },
+      "gn4large_ArcCoscomplex64complex64": {
+        "sha256": "41146d637d6c647b704916ad977e1e3c4a2d1d6db608447fcb991c7b477524a7",
+        "sizeBytes": 20021
+      },
+      "v_ArcSincomplex64complex64": {
+        "sha256": "915abef374873c5118cb3881a6a313ecf67f5387b8503c37785119459576724d",
+        "sizeBytes": 18671
+      },
+      "v2_ArcSincomplex64complex64": {
+        "sha256": "d2c53d68685a9012fe8b41e108f90b4fd282353bff6216033785c5f76d1a29ff",
+        "sizeBytes": 18939
+      },
+      "gn1_ArcSincomplex64complex64": {
+        "sha256": "640d4fb2f240174827e9656fe506af1b9b8d79cb0b98b90edc7f89ba3709f44d",
+        "sizeBytes": 19959
+      },
+      "gn4large_ArcSincomplex64complex64": {
+        "sha256": "e2d577e17a839d02d2ecce0acdad7541cd0379cf5f18abc76fd5b1ef8221a3ca",
+        "sizeBytes": 20021
+      },
+      "v_ArcTancomplex64complex64": {
+        "sha256": "ccefba607c595f531065185a803ff9ee1c91db79a51bbc4ea8c6910e08c780a7",
+        "sizeBytes": 18778
+      },
+      "v2_ArcTancomplex64complex64": {
+        "sha256": "4a5023eb0e98ac898fb0a0afc1b4a2a4b6574358df9aa777c7811235adf9395a",
+        "sizeBytes": 19046
+      },
+      "gn1_ArcTancomplex64complex64": {
+        "sha256": "db83ef1f046bc76dca99eba6579ed313a5a999ef86ff72e8c6484b975b6b4634",
+        "sizeBytes": 20066
+      },
+      "gn4large_ArcTancomplex64complex64": {
+        "sha256": "441738a290cc4035fbe1c50f2bd2d05c5050705ae0428eacb7ba4c1fbc39011b",
+        "sizeBytes": 20128
+      },
+      "v_Logcomplex64complex64": {
+        "sha256": "0c72fa9c2cdb5a9317fd928e2f5d7e37c89c6a234106693ca38bc0aba7f7f64f",
+        "sizeBytes": 15979
+      },
+      "v2_Logcomplex64complex64": {
+        "sha256": "284241fa851efc5bf388425962c3706891dd861b9b6b4b7ee875101630b0baf9",
+        "sizeBytes": 16247
+      },
+      "gn1_Logcomplex64complex64": {
+        "sha256": "62e4bedd111c0dfbf3c69957c41df67f73c3bbc8728fb44565c6f17170b95d91",
+        "sizeBytes": 17270
+      },
+      "gn4large_Logcomplex64complex64": {
+        "sha256": "54463a1d68c6d8129a5151acba81f1ffb2eb5b077f7c74bc8e952a8182a5857c",
+        "sizeBytes": 17332
+      },
+      "v_Log2complex64complex64": {
+        "sha256": "1b3e455e417e137c3ef784c87f96297ebe6a5bdb9da621777955bda0096dfad2",
+        "sizeBytes": 16523
+      },
+      "v2_Log2complex64complex64": {
+        "sha256": "4b71d0947ff987cecc248f875a102fcafde852da4abaffd67e26f21cd86b03c1",
+        "sizeBytes": 16791
+      },
+      "gn1_Log2complex64complex64": {
+        "sha256": "c08cb71218d6de7b017eedab00d5f7394e24f33e7bff6e5e39f005042e4a9b5d",
+        "sizeBytes": 17813
+      },
+      "gn4large_Log2complex64complex64": {
+        "sha256": "e3f125b825f63a14ac14a8c444a3fa60b7a1b6dffa6dba3f8474f655ed4a8d59",
+        "sizeBytes": 17875
+      },
+      "v_Log10complex64complex64": {
+        "sha256": "5dd5100e17c24ed6dca33a7b8ad725dc750c1efb7a8d9e1ebad4c93fe5ce94dc",
+        "sizeBytes": 16531
+      },
+      "v2_Log10complex64complex64": {
+        "sha256": "3e25a8528e3557f31640baf3c0bdb762aadec2953b4207fe3a558d30557a397a",
+        "sizeBytes": 16799
+      },
+      "gn1_Log10complex64complex64": {
+        "sha256": "f6ca149e1dfb76d1a9285a5c77d2051e036d28627caf7f38c7786a6ae15712b8",
+        "sizeBytes": 17820
+      },
+      "gn4large_Log10complex64complex64": {
+        "sha256": "27559a13738c9ea393be5117fd4a59a991e4e79c0bf276ca3011c8bc1988753b",
+        "sizeBytes": 17882
+      },
+      "v_Signcomplex64complex64": {
+        "sha256": "1d98cec54b33639ec201e820b8de6a1a5e999f1ade1a0d7dbb11216472f4f8b3",
+        "sizeBytes": 7944
+      },
+      "v2_Signcomplex64complex64": {
+        "sha256": "7b68b9a910845c508406ec6a30ea5dc8ed5b28c56fc27db5dee9d264f0efc98a",
+        "sizeBytes": 8212
+      },
+      "gn1_Signcomplex64complex64": {
+        "sha256": "9e33cf251a4a5bb055295a7a7964aa6b63616bcbdd5343b4a37bc539e61fba13",
+        "sizeBytes": 9234
+      },
+      "gn4large_Signcomplex64complex64": {
+        "sha256": "6f4e68340983c8b064b2b98276663eb724d62da0a7c3e907d2c6740fac82c239",
+        "sizeBytes": 9296
+      },
+      "v_Sqrtcomplex64complex64": {
+        "sha256": "24640a405c126f7e3409b05b7625233f52b8f424360918857464ccc9cd113bf0",
+        "sizeBytes": 7929
+      },
+      "v2_Sqrtcomplex64complex64": {
+        "sha256": "b27ecccb1ff5d57a9877b0313d1e065c1ea5fded5b5d491ed3eca1682c5dfc91",
+        "sizeBytes": 8197
+      },
+      "gn1_Sqrtcomplex64complex64": {
+        "sha256": "41b6dbaa8989ea11a07fa4e88da72c04f7a0f9f652a361bc1e0c511976a5f5e3",
+        "sizeBytes": 9219
+      },
+      "gn4large_Sqrtcomplex64complex64": {
+        "sha256": "0f00527369443e8e50831bd14acee9daec3584dd08f9d2cbbd9fc47c838ad6db",
+        "sizeBytes": 9281
+      },
+      "v_Rsqrtcomplex64complex64": {
+        "sha256": "7fadaf9df972e0324197ea5a8993c44d61e2060fe78faa515ceebab17b99234c",
+        "sizeBytes": 8805
+      },
+      "v2_Rsqrtcomplex64complex64": {
+        "sha256": "2084f7906e1a3ba82d172387632d24ea50c38c642f72187837e94e24d36c758e",
+        "sizeBytes": 9073
+      },
+      "gn1_Rsqrtcomplex64complex64": {
+        "sha256": "95ecd859246cf3d99ab5e8b841a2b37ffb80ed52a391afa0c3205acd61941ea4",
+        "sizeBytes": 10094
+      },
+      "gn4large_Rsqrtcomplex64complex64": {
+        "sha256": "d8803b67c4b5a1d202faac4e27896f005bfdfcd55ed644c5d888cbcbfb0fa90a",
+        "sizeBytes": 10156
+      },
+      "v_FromFP8uint8float16": {
+        "sha256": "6ca2f8591b3299b31361e4dd463db9fdc029786eb6b420f08672ee1392536a72",
+        "sizeBytes": 6236
+      },
+      "v2_FromFP8uint8float16": {
+        "sha256": "8a306e3af9afa488a68ac03b0080434329c6c34d7895691d6504b1361cfaf71d",
+        "sizeBytes": 6792
+      },
+      "gn1_FromFP8uint8float16": {
+        "sha256": "ce67cd0f48d63cd50ff4bf6d49b3a41dee6bb4ced2a98a2d346e94d8345f147c",
+        "sizeBytes": 7529
+      },
+      "gn4large_FromFP8uint8float16": {
+        "sha256": "43ef3e9b268a9702ce1980dee6f9d886c93e44a96ce53832b74ab0b9ccd627b3",
+        "sizeBytes": 7591
+      },
+      "vn_FromFP8uint8float16": {
+        "sha256": "3097faf2c7475b80f3bc0ef6d0c5d9976e323d7b3bdd584fc383c3cc30d8dcdd",
+        "sizeBytes": 6565
+      },
+      "v_FromFP8uint8bfloat16": {
+        "sha256": "ca18f2966eabe751bf851614981327dc3cfc277918ac4e6125692f987bb7c7e2",
+        "sizeBytes": 6550
+      },
+      "v2_FromFP8uint8bfloat16": {
+        "sha256": "6b153a9b0df4f3f8e2ba30302d6fa8f410ca3516c9445826f0924e7bed10661c",
+        "sizeBytes": 7108
+      },
+      "gn1_FromFP8uint8bfloat16": {
+        "sha256": "87ec4e9692a0c9a8140dd0e329ca087d276957d7e572dd05a1895fe834542265",
+        "sizeBytes": 7842
+      },
+      "gn4large_FromFP8uint8bfloat16": {
+        "sha256": "cc4f04497476504bbf402f8406bdd613e5a11d7efa1c7e50cb6251f1912227a6",
+        "sizeBytes": 7904
+      },
+      "vn_FromFP8uint8bfloat16": {
+        "sha256": "16511f4e9a7a904778a427aef581e258405795ee260aaee23a079530e390dae8",
+        "sizeBytes": 6881
+      },
+      "v_FromFP8uint8float32": {
+        "sha256": "be1151b5d7aa73e1e0612c988d1b889a6b86206512c26d2a25ddb88e092bcf37",
+        "sizeBytes": 6215
+      },
+      "v2_FromFP8uint8float32": {
+        "sha256": "fbf296ec8e31bfa80caa547fc761e2dda1ec1f585bbbc5c52a556cfd15de758b",
+        "sizeBytes": 6750
+      },
+      "gn1_FromFP8uint8float32": {
+        "sha256": "731f0b3c4e1c10db852555b10e677c4ee1f7fff79330c9e18dcb843bb5fc5cbe",
+        "sizeBytes": 7508
+      },
+      "gn4large_FromFP8uint8float32": {
+        "sha256": "743e6e5c1d92058a8260c76a9f18d424d714b1c3742c0076d0a93c5c0193e80d",
+        "sizeBytes": 7570
+      },
+      "vn_FromFP8uint8float32": {
+        "sha256": "6ae2af3311ab61dcc5a52e7146d3f7ca0b1b1ee00d75ceed3e3d64cc0d995b83",
+        "sizeBytes": 6523
+      }
+    },
+    "directx": {
+      "v_Sigmoidfloat16float16": {
+        "sha256": "1abcd548bc0a0a9c52ea4f02842f8f8dfcc9db01c343cf1b1b497352f93de6f7",
+        "sizeBytes": 8344
+      },
+      "v2_Sigmoidfloat16float16": {
+        "sha256": "d857efba1401ef9281a7b766d7047fbcd465e930a4b25fc2f6fc1d0c7d3776b7",
+        "sizeBytes": 9001
+      },
+      "gn1_Sigmoidfloat16float16": {
+        "sha256": "23a3c8592ee32c444757b9e09e3fadeb173c5d9eaa191814951e38df0664e824",
+        "sizeBytes": 9469
+      },
+      "gn4large_Sigmoidfloat16float16": {
+        "sha256": "0869ad1b77b4c722a77d8b3c785d1c748e04986cac9488fe8f74647c8b433889",
+        "sizeBytes": 9579
+      },
+      "vn_Sigmoidfloat16float16": {
+        "sha256": "d58333a5de7e8f7de73dcd89805190e9a527ad25cd2d0f13d204170be400b67c",
+        "sizeBytes": 8699
+      },
+      "v_Sigmoidfloat32float32": {
+        "sha256": "3006068d012da1865fb538f63f1a054657b62fca66c299ebe230e2124a44e50b",
+        "sizeBytes": 6912
+      },
+      "v2_Sigmoidfloat32float32": {
+        "sha256": "7435a74d2cbb81d421098a2fa9844c93893df21d906a712151bd2ff695be0ad4",
+        "sizeBytes": 7563
+      },
+      "gn1_Sigmoidfloat32float32": {
+        "sha256": "26e967fa3d1dd283fad37ff0af1e48dde0282f2227a102b6dc337c1c4bcb6b7a",
+        "sizeBytes": 8037
+      },
+      "gn4large_Sigmoidfloat32float32": {
+        "sha256": "98b31ecb6a731bba491a97d7337e922ff8a2711230acde5534149379ea945ee6",
+        "sizeBytes": 8159
+      },
+      "vn_Sigmoidfloat32float32": {
+        "sha256": "c0e21be93de574058036ff20ae4feb71502e93406a21e2c8dbd08bc121aed39b",
+        "sizeBytes": 7237
+      },
+      "v_Sigmoidbfloat16bfloat16": {
+        "sha256": "632b940931cbf762fa6ec60bf04aa29c7980b99e3aad691ae8b3ae02c0a8aebc",
+        "sizeBytes": 8948
+      },
+      "v2_Sigmoidbfloat16bfloat16": {
+        "sha256": "f86e68f0c38b6b03b740675980042a6a45fb07825be02d5f79062faaf74895e5",
+        "sizeBytes": 9616
+      },
+      "gn1_Sigmoidbfloat16bfloat16": {
+        "sha256": "a4ac62b1c8bd9febc1332e034665f03f52d7b3a1f11a231bcb753f1e22200edb",
+        "sizeBytes": 10069
+      },
+      "gn4large_Sigmoidbfloat16bfloat16": {
+        "sha256": "5a272b68415bba657d0520d012473b1c50c2ba8bf542f37a6019524c29b1f646",
+        "sizeBytes": 10191
+      },
+      "vn_Sigmoidbfloat16bfloat16": {
+        "sha256": "40de4c735462ec490343aada230d38af66b048cf53cec77b40ee3dc4d2d5d7a1",
+        "sizeBytes": 9290
+      },
+      "v_Signuint32uint32": {
+        "sha256": "462762ebbf8c78a123a7aa881472454501024c6e295520dbf5b313335ecf43c4",
+        "sizeBytes": 7242
+      },
+      "v2_Signuint32uint32": {
+        "sha256": "92b9f1889b653f6a9613ca4ee1841ba9a076938c6b24592606cc4d1fcfdaf200",
+        "sizeBytes": 7893
+      },
+      "gn1_Signuint32uint32": {
+        "sha256": "b64d92db61459bbbada5d0e4fdbb1c73da434decd239055b274a6eb880d66220",
+        "sizeBytes": 8377
+      },
+      "gn4large_Signuint32uint32": {
+        "sha256": "bc732db7892838b2af29456cef110ef401949180b5d0895a8acd3fcfb2e73f27",
+        "sizeBytes": 8499
+      },
+      "vn_Signuint32uint32": {
+        "sha256": "9bfa4b462dfcfca2d35d57b0300b75137444867beaac5bf7d167ab3fb98c421f",
+        "sizeBytes": 7567
+      },
+      "v_Abscomplex64complex64": {
+        "sha256": "a614675f48e77b11052899a990508871518624bc07127d5dd451ac6788b68c4c",
+        "sizeBytes": 6488
+      },
+      "v2_Abscomplex64complex64": {
+        "sha256": "9a0f1beb3b42996825dda393d5f795c066ee34bdc789182259c3a3e159533ae2",
+        "sizeBytes": 6826
+      },
+      "gn1_Abscomplex64complex64": {
+        "sha256": "7420c70d623b2b7325f87532c9c751fafc2b2395c57ca514f87f87e4efe95f4b",
+        "sizeBytes": 7613
+      },
+      "gn4large_Abscomplex64complex64": {
+        "sha256": "cdd22671c0f5e02cbdef361c9e6615dc9d6beb317f03cafe4cea35912381a9af",
+        "sizeBytes": 7735
+      },
+      "v_ArcCoscomplex64complex64": {
+        "sha256": "05307f879d5aa5788314c6dace70a9937de515e7c084812c4f39d1f992765aa7",
+        "sizeBytes": 17976
+      },
+      "v2_ArcCoscomplex64complex64": {
+        "sha256": "78382211fb6b511383b1401be9593b020537985d67a3e8caba73e9b272f1cca5",
+        "sizeBytes": 18314
+      },
+      "gn1_ArcCoscomplex64complex64": {
+        "sha256": "90a6174da4d3903b8398508a30566e9a7fec357c964ef1087e4a7f97565eecf8",
+        "sizeBytes": 19095
+      },
+      "gn4large_ArcCoscomplex64complex64": {
+        "sha256": "80ec32160c6f206b3d6c13ff37cab0146222db4ca211fdf5763c3effb686f3ab",
+        "sizeBytes": 19217
+      },
+      "v_ArcSincomplex64complex64": {
+        "sha256": "623d394faf24f98e3facc2e3e31973ccff4ee188cd8298ebc8ce845e8f7d28ca",
+        "sizeBytes": 17976
+      },
+      "v2_ArcSincomplex64complex64": {
+        "sha256": "2d67ba01f9ee306a583a2cd69bc92025cb634d0046ee6c9e333220d45ab2db9e",
+        "sizeBytes": 18314
+      },
+      "gn1_ArcSincomplex64complex64": {
+        "sha256": "77ce3bb2a1e1b9442e2378e56e1eb148770ea783eb7e4635686e5dbfcf5488a5",
+        "sizeBytes": 19095
+      },
+      "gn4large_ArcSincomplex64complex64": {
+        "sha256": "b4d3070dc7b70918304e8aadb0f4d37946cb170d8a5729872a28d928f8440016",
+        "sizeBytes": 19217
+      },
+      "v_ArcTancomplex64complex64": {
+        "sha256": "a0ba3ce941aeeea70bbe46bfc5af591d68f705dad8259b7d7fa83754f51c6582",
+        "sizeBytes": 18107
+      },
+      "v2_ArcTancomplex64complex64": {
+        "sha256": "178fe87d497198fe16d54a1b3c7a8497bec1b80fa354fbadd6b114b6137b1cb2",
+        "sizeBytes": 18445
+      },
+      "gn1_ArcTancomplex64complex64": {
+        "sha256": "3d5493627ce18994f40d6b08890b2a54d63cc3619267b48e1e125e320ecbb373",
+        "sizeBytes": 19226
+      },
+      "gn4large_ArcTancomplex64complex64": {
+        "sha256": "6299f846a2d7d7a5afd283b2315081aae04fd54179c89a7bc7beabaea46b5517",
+        "sizeBytes": 19348
+      },
+      "v_Logcomplex64complex64": {
+        "sha256": "6ba5fc895657396e567ecc508f3daaaab0bb6fe926fa582cdaac343bc5736325",
+        "sizeBytes": 15202
+      },
+      "v2_Logcomplex64complex64": {
+        "sha256": "1767a6377ced74d72c202555fbc899ac37f845c3f463fcdcad19656d78468402",
+        "sizeBytes": 15540
+      },
+      "gn1_Logcomplex64complex64": {
+        "sha256": "ace251d69959bfe7107587677338bd7b6f8f82ff572bf918266fc116e35e2b72",
+        "sizeBytes": 16327
+      },
+      "gn4large_Logcomplex64complex64": {
+        "sha256": "c28157dba330e4e2d46c7476d7ee138d97a0648e81919c8084c65578708f786f",
+        "sizeBytes": 16449
+      },
+      "v_Log2complex64complex64": {
+        "sha256": "b35459af8993b42049cfbae0e6b2fd24c43882283fa42b11ef4727d2699b5b9a",
+        "sizeBytes": 15756
+      },
+      "v2_Log2complex64complex64": {
+        "sha256": "efcd66392204a611555af9eb05bdbe0bc9e139c13e7e48d1b96b199a41bf9025",
+        "sizeBytes": 16094
+      },
+      "gn1_Log2complex64complex64": {
+        "sha256": "6804ad6bedf06e87132d02281b0fa5f5682e4b1b6f80c075ec5165afe5ddce5e",
+        "sizeBytes": 16879
+      },
+      "gn4large_Log2complex64complex64": {
+        "sha256": "ed51087959040b6b7e7df259a9279369baf90ed7ca1e53db06b8cd8a89687ca7",
+        "sizeBytes": 17001
+      },
+      "v_Log10complex64complex64": {
+        "sha256": "6b0e99c22fd6b774ded68c8383e8a46674e6608fb3a68fb1b7f84876eac8a15f",
+        "sizeBytes": 15765
+      },
+      "v2_Log10complex64complex64": {
+        "sha256": "ce5aeec366ee2ffb92f904ba911043f406e506ae9594a493e94c78554f04976f",
+        "sizeBytes": 16103
+      },
+      "gn1_Log10complex64complex64": {
+        "sha256": "06acff738574b0c377c33039fb9cacd316f4147c6ef21e668cbe42ea65f1e24e",
+        "sizeBytes": 16886
+      },
+      "gn4large_Log10complex64complex64": {
+        "sha256": "2d97fd8bec13b0bd248fbb5e209b7ffab0a3818a38bd2e361b7d9922b38e47ef",
+        "sizeBytes": 17008
+      },
+      "v_Signcomplex64complex64": {
+        "sha256": "982e73dbbdce9ae29e4e3e1fa49a9796e8145a8f33af355f1083acb76d0477da",
+        "sizeBytes": 7314
+      },
+      "v2_Signcomplex64complex64": {
+        "sha256": "6ef795af521e0ed380af52b2621a60115f70a8293241f8d9a67f6638441bb496",
+        "sizeBytes": 7652
+      },
+      "gn1_Signcomplex64complex64": {
+        "sha256": "49875346b1226d3a02a7f2f4c1974c9e49ff578431a70a5502f4314abe979500",
+        "sizeBytes": 8437
+      },
+      "gn4large_Signcomplex64complex64": {
+        "sha256": "274e9bd9bbd410bedfe44f7324505afe0e9de94d8c4c5f511588ba3002244012",
+        "sizeBytes": 8559
+      },
+      "v_Sqrtcomplex64complex64": {
+        "sha256": "3ef00cf2303fca5b9f7f3e751114c2099277ec53a9db452016abd0150c77c62c",
+        "sizeBytes": 7285
+      },
+      "v2_Sqrtcomplex64complex64": {
+        "sha256": "62b369a0d6f2c4a225db010f19535e1c39239acc4a1b37741b9be0f5ec38fdcd",
+        "sizeBytes": 7623
+      },
+      "gn1_Sqrtcomplex64complex64": {
+        "sha256": "29862d8780cde9054dae52dd2e2ac37a09c890b21cbc751b85b0d98093230dcb",
+        "sizeBytes": 8408
+      },
+      "gn4large_Sqrtcomplex64complex64": {
+        "sha256": "96e923b28c2a3b013a073f3b9ec40004a2699f99979e5e37c8d91850ed7a422a",
+        "sizeBytes": 8530
+      },
+      "v_Rsqrtcomplex64complex64": {
+        "sha256": "0b8756b9a15d1c756a14e6089e411fab180f533c82234024d3a967b8086ca284",
+        "sizeBytes": 8205
+      },
+      "v2_Rsqrtcomplex64complex64": {
+        "sha256": "61abf293006be9ff81861ba8538eff11de588c38437333f0ab0e044d91b4cbcb",
+        "sizeBytes": 8543
+      },
+      "gn1_Rsqrtcomplex64complex64": {
+        "sha256": "fd702aacdd7e8dd77adf7267c013c09b136023573fb71d36d57d674afd2cdc79",
+        "sizeBytes": 9326
+      },
+      "gn4large_Rsqrtcomplex64complex64": {
+        "sha256": "c0fc35af1aed881c976600ad762b773a72f4b5a495df12b6651ee982672f099d",
+        "sizeBytes": 9448
+      },
+      "v_FromFP8uint8float16": {
+        "sha256": "9648c2e9398f42f17e32164c9deb858a3cef2011ef4932c7ae8d5bdf99f1a0b5",
+        "sizeBytes": 6912
+      },
+      "v2_FromFP8uint8float16": {
+        "sha256": "b9553472ddf42fd9b4ab3570fb8aa7076d70e415bdd1c0bf96225cd5bba8f371",
+        "sizeBytes": 7596
+      },
+      "gn1_FromFP8uint8float16": {
+        "sha256": "0443eaac3e1bd943302ddc1205c6dd334fe5f86cd1a355baa0806727eb82d5dd",
+        "sizeBytes": 8041
+      },
+      "gn4large_FromFP8uint8float16": {
+        "sha256": "3eb571a424249ad825da77bbd685cb14287761695617e4eb8e24e3135d6e981c",
+        "sizeBytes": 8157
+      },
+      "vn_FromFP8uint8float16": {
+        "sha256": "aaeb0ac9edb5434f9e482dd2be3818b5923882784c4c60c4f2c0f09bd8fbd515",
+        "sizeBytes": 7282
+      },
+      "v_FromFP8uint8bfloat16": {
+        "sha256": "86bce54a307d3266d279c170b1c40b0028eabc3b3f2cf7e758571d8ae69174fb",
+        "sizeBytes": 7291
+      },
+      "v2_FromFP8uint8bfloat16": {
+        "sha256": "9a1f0e778d654ea7b41f15a57727d275bc3275b44d0d0a49f93621683b574690",
+        "sizeBytes": 7991
+      },
+      "gn1_FromFP8uint8bfloat16": {
+        "sha256": "8327ad3ab48806dd4897c3f1ded770ff98d955c9ab81c7f5602b3827da158d5d",
+        "sizeBytes": 8418
+      },
+      "gn4large_FromFP8uint8bfloat16": {
+        "sha256": "7f60ce8878ee18e39d79413fe49a0a2aeffe0d602b82f932d381f88495c929c4",
+        "sizeBytes": 8540
+      },
+      "vn_FromFP8uint8bfloat16": {
+        "sha256": "d34b0e680d42931962a0ea3af3396fbac01f64a7f00dc00020dcc19d186f19e5",
+        "sizeBytes": 7665
+      },
+      "v_FromFP8uint8float32": {
+        "sha256": "7cf4adc193e44986d98e40d5374fe22d792d1fd1a4ef4bb7a81a5dba4bacedaa",
+        "sizeBytes": 6737
+      },
+      "v2_FromFP8uint8float32": {
+        "sha256": "517a72bbdf750c60a09f4101907c236a43dc72a896c3dac3491d5062d3696743",
+        "sizeBytes": 7394
+      },
+      "gn1_FromFP8uint8float32": {
+        "sha256": "daced483bb65c317a2e80b0ef6ac93ec0538d0df948569787056c3af0b1fd09c",
+        "sizeBytes": 7866
+      },
+      "gn4large_FromFP8uint8float32": {
+        "sha256": "b98cd2132ea4b85b9084841036ce43b980c1e54650e2ff07d0340e8d24c16cb8",
+        "sizeBytes": 7988
+      },
+      "vn_FromFP8uint8float32": {
+        "sha256": "82b01f97313ad5c42e0ca52b654b335548c0040caad2ca9bdf0526476d9891d8",
+        "sizeBytes": 7068
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSize": [
+      1,
+      1,
+      1
+    ],
+    "indexRangeAssertions": {
+      "metal": [],
+      "opengl": [
+        {
+          "expression": "offset + i",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "out_idx++",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "idx",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      ],
+      "directx": [
+        {
+          "expression": "offset + i",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "out_idx++",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "idx",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      ]
+    },
+    "cases": {
+      "unary_v": {
+        "tail": {
+          "size": 37
+        },
+        "exact": {
+          "size": 64
+        }
+      },
+      "unary_v2": {
+        "tail": {
+          "grid": [
+            3,
+            2
+          ]
+        },
+        "wide": {
+          "grid": [
+            4,
+            3
+          ]
+        }
+      },
+      "unary_g": {
+        "transpose": {
+          "shape": [
+            3,
+            5
+          ],
+          "strides": [
+            1,
+            3
+          ]
+        },
+        "nd5-broadcast": {
+          "shape": [
+            2,
+            2,
+            1,
+            3,
+            3
+          ],
+          "strides": [
+            0,
+            9,
+            0,
+            3,
+            1
+          ]
+        }
+      }
+    },
+    "outputGuardCount": 16,
+    "inputDecoyCount": 4,
+    "elementTypes": {
+      "metal": {
+        "bool_": "bool",
+        "uint8": "uint8",
+        "uint16": "uint16",
+        "uint32": "uint32",
+        "uint64": "uint64",
+        "int8": "int8",
+        "int16": "int16",
+        "int32": "int32",
+        "int64": "int64",
+        "float16": "float16",
+        "float32": "float32",
+        "bfloat16": "bfloat16",
+        "complex64": "float32"
+      },
+      "opengl": {
+        "bool_": "uint32",
+        "uint8": "uint32",
+        "uint16": "uint32",
+        "uint32": "uint32",
+        "uint64": "uint64",
+        "int8": "int32",
+        "int16": "int32",
+        "int32": "int32",
+        "int64": "int64",
+        "float16": "float32",
+        "float32": "float32",
+        "bfloat16": "float32",
+        "complex64": "float32"
+      },
+      "directx": {
+        "bool_": "uint32",
+        "uint8": "uint32",
+        "uint16": "uint16",
+        "uint32": "uint32",
+        "uint64": "uint64",
+        "int8": "int32",
+        "int16": "int16",
+        "int32": "int32",
+        "int64": "int64",
+        "float16": "uint16",
+        "float32": "float32",
+        "bfloat16": "uint16",
+        "complex64": "float32"
+      }
+    },
+    "inputDomains": {
+      "families": 183,
+      "valueCount": 4428,
+      "sha256": "4b7a14da04cd9dcc0ddb976b953f7268ae8ed70666b924c644f5c1c15aeeb351",
+      "policy": "every value is defined and exactly modelled; each case reads the domain where the previous case of its family stopped, so a family's cases cover its whole domain"
+    },
+    "operatorModel": {
+      "integers": "C++ semantics after integral promotion: two's complement wrap; Abs, Negative and Square inputs that overflow int or the signed type are excluded",
+      "bool": "promoted to int, converted back to bool",
+      "rounding": "ceil, floor and rint exact with the sign of zero kept",
+      "transcendental": "only at signed zeros, infinities, NaN, poles, domain errors and overflow, underflow or saturation thresholds valid in every evaluation width",
+      "complex64": "unary_ops.h, complex.h, cexpf.h and utils.h formulas with exact binary32 intermediates",
+      "fp8": "fp8.h E4M3 bit algorithm: saturating round-to-nearest-even encoding, binary16-based decoding of all 256 codes"
+    },
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ],
+    "ciShardCount": 2
+  },
+  "scope": {
+    "coveredEntryCount": 877,
+    "runtimeCoveredEntryCount": 877,
+    "currentArtifactEntryCount": 75,
+    "dispatchCountByTarget": {
+      "metal": 1754,
+      "opengl": 1754,
+      "directx": 1754
+    },
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

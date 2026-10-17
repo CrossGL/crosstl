@@ -1417,6 +1417,45 @@ accuracy behaviour stays with the per-operator gates. This covers
 4,122/17,832 entries; it does not run the upstream MLX test suite or
 redirect the MLX host runtime.
 
+`contracts/unary.current-tree.translation.json` pins all 877 entries of
+`unary.metal`: the scalar, vector and two-dimensional kernels, with and
+without work per thread, and the strided kernels with one and four elements
+per thread, for all 37 operators over every dtype each one instantiates,
+complex64 and the FP8 conversions. `unary.metal` and `unary.h` are
+byte-identical at the corpus commit. `unary_ops.h` now computes `Sigmoid`
+with the precise exponential and complex `Abs` and `Sign` with the `hypot`
+that `utils.h` added, which complex `Log`, `Log2`, `Log10`, `Sqrt`, `Rsqrt`,
+`ArcCos`, `ArcSin` and `ArcTan` reach as well, and `fp8.h` rewrote the E4M3
+decoding. The 75 entries those changes reach, including the five `uint32`
+`Sign` kernels whose artifacts also carry the complex overload, reproduce the
+current artifacts this contract pins; every other entry must reproduce, byte
+for byte, the Metal, OpenGL and DirectX artifact its complete-family
+translation contract pins there, under the same configuration, including
+OpenGL's and DirectX's three index-range preconditions. Required CI executes
+every entry on Metal, Mesa EGL and Direct3D 12 WARP in two legs, 1,754
+dispatches and 90,945 checked elements per target, guards included: flat
+kernels with a tail inside the last thread's elements and with an exact size,
+two-dimensional grids with a short last tile, and a transposed and a
+broadcast five-dimensional layout whose innermost extents end inside a
+four-wide tile. Inputs come from 183 operator and dtype families, 4,428
+values whose results are exactly defined, and each case reads its family's
+domain where the previous case stopped: integer and rounding operators take
+every boundary value C++ defines, with overflowing `Abs`, `Negative` and
+`Square` inputs kept out, FP8 conversions follow `fp8.h`'s bit algorithm over
+all 256 codes, and transcendental operators take only the points where
+IEEE-754, C99 or the MLX helper fixes the result: signed zeros, infinities,
+NaN, poles, domain errors and the overflow, underflow and saturation
+thresholds valid in every evaluation width. Complex operands follow
+`unary_ops.h`, `complex.h`, `cexpf.h` and `utils.h` with exact float32
+intermediates. An independent model gives every output element and a NaN
+result accepts any NaN. Outputs start at values that differ from their
+results, 16 trailing guards must keep their values, four decoys follow every
+input and every input must be unchanged. Metal also runs the unchanged
+upstream kernels, which must produce the same bytes. Accuracy away from those
+points stays with the per-operator unary gates. This covers 877/17,832
+entries; it does not run the upstream MLX test suite or redirect the MLX host
+runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
