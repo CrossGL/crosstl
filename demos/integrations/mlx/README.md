@@ -2140,12 +2140,18 @@ The current harness verifies:
   at the same legacy reference revision to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
   `main` artifact across the same five shapes, 37 operators, 20 type pairs,
-  1,243 materializations, and 3,363 reflected resources, totaling 5,221,624
+  1,243 materializations, and 3,363 reflected resources, totaling 5,256,586
   generated GLSL bytes. The references incorporate reviewed scalar/vector
   conversions and numeric helpers; every complete shader body and host
   interface is compared before accepting an identity change. The
   references now include all 134 remaining unary math and FP8 changes; the
-  other 743 sources are unchanged. Every current artifact compiles and passes
+  other 743 sources are unchanged. A later refresh re-pins 113 artifacts:
+  Metal's `precise::` `sinh`, `tanh`, `asinh` and `atanh` of float16 and
+  float32 now lower through helpers that give the result the operand's sign
+  and pass NaN through, `fma` through a `precise` result and `cexpf.h`'s
+  `x - x` through a `precise` difference, since Mesa otherwise loses the sign
+  of zero, turns `tanh(NaN)` into -1, splits `fma` and folds `x - x` to zero.
+  Every current artifact compiles and passes
   SPIR-V validation. These math corrections are not predecessor-equivalence
   claims, and whole-family numerical parity remains unproven. Translation
   requires three explicit host/runtime
@@ -5008,7 +5014,12 @@ Every source entry, shape, template, operator, exact ``T``/``U`` pair, semantic
 family, SHA-256, byte count, template-default provenance, materialization count,
 and host resource contract is pinned by
 [`contracts/unary.metal-roundtrip.json`](contracts/unary.metal-roundtrip.json)
-and linked by hash from ``expected-gaps.json``. Native macOS CI invokes
+and linked by hash from ``expected-gaps.json``. Forty float16 references
+are re-pinned because their `precise::` `tan`, `sinh`, `cosh`, `tanh`,
+`asinh`, `atanh`, `log2` and `log10` calls now keep the `metal::precise::`
+namespace: under `-fno-fast-math` the plain binary32 overloads match it, but
+the binary16 overloads are native half implementations (`tan(-0.0h)` is +0).
+Native macOS CI invokes
 ``xcrun -sdk macosx metal -Werror -c`` for every entry and requires 877
 non-empty AIR outputs with no warning exemption. This closes selected-entry
 translation, reflection, and native compiler coverage for every discovered unary

@@ -3899,6 +3899,7 @@ jobs:
           CROSTL_REQUIRE_FLOAT_NEGATION: "1"
           CROSTL_REQUIRE_INTEGER_FLOAT_ROUND_TRIP: "1"
           CROSTL_REQUIRE_METAL_FAST_MATH: "1"
+          CROSTL_REQUIRE_METAL_PRECISE_NAMESPACE: "1"
           CROSTL_REQUIRE_UNARY_GROUPING: "1"
           CROSTL_REQUIRE_BINARY_GROUPING: "1"
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -3920,6 +3921,7 @@ jobs:
               tests/test_translator/test_float_negation.py \
               tests/test_translator/test_integer_float_round_trip.py \
               tests/test_translator/test_metal_fast_math_namespace.py \
+              tests/test_translator/test_metal_precise_math_namespace.py \
               tests/test_translator/test_unary_grouping.py \
               tests/test_translator/test_binary_grouping.py
 

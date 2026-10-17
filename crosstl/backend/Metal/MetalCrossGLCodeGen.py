@@ -14,7 +14,10 @@ from ...translator.cooperative_matrix import (
 from ...translator.division_math import binary32_division_support
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
 from ...translator.integer_literals import integer_literal_parts
-from ...translator.math_namespaces import metal_fast_math_operation
+from ...translator.math_namespaces import (
+    metal_fast_math_operation,
+    metal_precise_math_operation,
+)
 from ...translator.precise_exp import binary32_exp_support
 from ...translator.precise_log2 import binary32_log2_support
 from ...translator.precise_power import binary32_power_support
@@ -12020,6 +12023,8 @@ class MetalToCrossGLConverter:
                 # CrossGL keeps the namespace for the Metal backend; its parser
                 # hands every other backend the plain builtin.
                 function_name = f"fast::{function_name}"
+            elif metal_precise_math_operation(materialized_name) == function_name:
+                function_name = f"precise::{function_name}"
             return f"{function_name}({args})"
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_expression(expr, is_main)

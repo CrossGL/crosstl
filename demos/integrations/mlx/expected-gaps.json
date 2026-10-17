@@ -1143,7 +1143,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "32520fa44f5e99e321c088c94771b04279944e1ab7cd98d1a718acd071d17874",
+      "sha256": "74660b6f293a3a78bf766fba044f2164c4c780e68dac5389f63e61a733a5ff9c",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1287,7 +1287,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 2205718,
+      "generated_size_bytes_total": 2206358,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absfloat16float16",
@@ -1353,8 +1353,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "5175a6bf94bda0826c287f638895f3cd8e9dccd2fd5c69e5785bac3910bb6bd7",
-      "size_bytes": 317686,
+      "sha256": "c81ca4955c5c8963c9004af0e24365cfc357601ccd5e8397f917b8f57e596ce4",
+      "size_bytes": 317687,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1484,7 +1484,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 5221624,
+      "generated_size_bytes_total": 5256586,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint32int32",

@@ -346,8 +346,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "110a7baec6043cc7b92d899a8d959a2adf79f3685474cf154c61f490c71fffda",
-      "sizeBytes": 1114
+      "sha256": "88c90245fb8c7a8ae26f515e0b6a6ea4518708449e24623fb212e95cca7dc82c",
+      "sizeBytes": 1130
     },
     {
       "entryPoint": "v_ArcSinhfloat32float32",
@@ -409,8 +409,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "9fb333cebbfddc086448d9afb0b2bfbc20138f5ad86ff71ca9acc4a75d702e0f",
-      "sizeBytes": 1114
+      "sha256": "40ca9030240d6252891ae33e28a7a68c21d686f31e47a2f80614a7a4e79cda48",
+      "sizeBytes": 1130
     },
     {
       "entryPoint": "v_ArcTanhfloat32float32",
@@ -670,8 +670,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "25146bab8dfd9f2d4d9f0313a810aef6c33933221c26284df5e5715fa6c9006a",
-      "sizeBytes": 1086
+      "sha256": "29705c7c8a6c96f40efa7f7bf79b92e2b15522cfbf3ce6f1a04e48cb01227b67",
+      "sizeBytes": 1102
     },
     {
       "entryPoint": "v_Coshfloat32float32",
@@ -967,8 +967,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "0e75805c22c60b63728e5c8bd19b89fbf27cc08a5210165848253a8e50c047ae",
-      "sizeBytes": 1096
+      "sha256": "dec427306b485c39e5054601c4b593e644df647bcc525d01401920b30ce649d0",
+      "sizeBytes": 1112
     },
     {
       "entryPoint": "v_Log10float32float32",
@@ -1039,8 +1039,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "07a9c0172bd7c921297dd98d6b4fcc1baed11c75085150fe6dbe748d2fdf20bc",
-      "sizeBytes": 1086
+      "sha256": "08a5ee8464731a37ebba2299684ee92da5849abea45213ed59bafb99b1a0b446",
+      "sizeBytes": 1102
     },
     {
       "entryPoint": "v_Log2float32float32",
@@ -1498,8 +1498,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "a63ecfda42f28d48d014f417305036494a18a25492f67634f194dad20497e222",
-      "sizeBytes": 1086
+      "sha256": "f0eeac1d94883ecff70eae5c34e60e707c8df8964b3d088d3fac3734c106d676",
+      "sizeBytes": 1102
     },
     {
       "entryPoint": "v_Sinhfloat32float32",
@@ -1687,8 +1687,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "e87f62a2e2c492b15bc7f1d648997ec4c2424635e183e53a70fe5b59946584b0",
-      "sizeBytes": 1076
+      "sha256": "97fd942fd2f97c5a4955626c94865da9c20a140d1ba8672d6e7f7a55a13e6459",
+      "sizeBytes": 1092
     },
     {
       "entryPoint": "v_Tanfloat32float32",
@@ -1723,8 +1723,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "f94ad0b9555f2e2e1c84c55a907c16439294cdf92d160a7cccd41349fd603054",
-      "sizeBytes": 1086
+      "sha256": "bb86d3d384665e294224b9674eb7202c04ed56b33eeda41173081f07445d718b",
+      "sizeBytes": 1102
     },
     {
       "entryPoint": "v_Tanhfloat32float32",

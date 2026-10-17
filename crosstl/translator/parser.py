@@ -76,7 +76,7 @@ from .ast import (
     create_legacy_shader_node,
 )
 from .integer_literals import integer_literal_parts
-from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_fast_math_operation
+from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespace
 from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
 from .validation import validate_shader_cbuffers
@@ -5018,13 +5018,15 @@ class Parser:
                         left = RayTracingOpNode(left.name, arguments)
                     elif left.name in MESH_INTRINSICS:
                         left = MeshOpNode(left.name, arguments)
-                    elif metal_fast_math_operation(left.name) is not None:
+                    elif metal_math_namespace(left.name) is not None:
                         # Other backends see the plain builtin they always
-                        # saw; only Metal reads the namespace annotation.
+                        # saw; backends that honor the namespace read it from
+                        # the annotation.
+                        namespace, operation = metal_math_namespace(left.name)
                         left = FunctionCallNode(
-                            IdentifierNode(metal_fast_math_operation(left.name)),
+                            IdentifierNode(operation),
                             arguments,
-                            annotations={METAL_MATH_NAMESPACE_ANNOTATION: "fast"},
+                            annotations={METAL_MATH_NAMESPACE_ANNOTATION: namespace},
                         )
                     else:
                         left = FunctionCallNode(left, arguments)

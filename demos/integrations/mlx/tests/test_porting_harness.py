@@ -11887,7 +11887,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "32520fa44f5e99e321c088c94771b04279944e1ab7cd98d1a718acd071d17874",
+        "sha256": "74660b6f293a3a78bf766fba044f2164c4c780e68dac5389f63e61a733a5ff9c",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12089,8 +12089,8 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
         "schema_version": 2,
-        "sha256": "5175a6bf94bda0826c287f638895f3cd8e9dccd2fd5c69e5785bac3910bb6bd7",
-        "size_bytes": 317686,
+        "sha256": "c81ca4955c5c8963c9004af0e24365cfc357601ccd5e8397f917b8f57e596ce4",
+        "size_bytes": 317687,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12197,7 +12197,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 5221624,
+        "generated_size_bytes_total": 5256586,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3566},
             "maximum": {
@@ -12248,7 +12248,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "all 877 discovered `unary.metal` entries at the same legacy reference revision to OpenGL"
     ) in readme
     assert f"`{CURRENT_MLX_COMMIT}`" in readme
-    assert "5,221,624 generated GLSL bytes" in readme
+    assert "5,256,586 generated GLSL bytes" in readme
     assert "three explicit host/runtime index-range preconditions" in readme
     assert "requires 877 non-empty SPIR-V 1.3 modules" in readme
     guide = " ".join(
@@ -12257,7 +12257,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         .split()
     )
     assert "all 877 historical unary entries to standalone OpenGL" in guide
-    assert "5,221,624 generated GLSL bytes" in guide
+    assert "5,256,586 generated GLSL bytes" in guide
     assert "five disjoint Linux shards" in guide
 
 

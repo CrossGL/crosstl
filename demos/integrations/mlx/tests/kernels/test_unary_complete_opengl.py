@@ -40,13 +40,13 @@ UNARY_OPENGL_CONTRACT_PATH = (
     / "unary.opengl-translation.json"
 )
 UNARY_OPENGL_CONTRACT_SHA256 = (
-    "5175a6bf94bda0826c287f638895f3cd8e9dccd2fd5c69e5785bac3910bb6bd7"
+    "c81ca4955c5c8963c9004af0e24365cfc357601ccd5e8397f917b8f57e596ce4"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "32520fa44f5e99e321c088c94771b04279944e1ab7cd98d1a718acd071d17874"
+    "74660b6f293a3a78bf766fba044f2164c4c780e68dac5389f63e61a733a5ff9c"
 )
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
@@ -244,7 +244,7 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
             "gn4large": 915,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5221624,
+        "generatedSizeBytesTotal": 5256586,
         "generatedSizeRange": {
             "minimum": {
                 "entryPoint": "v_Absint32int32",
@@ -288,7 +288,7 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 5221624
+    assert sum(entry["sizeBytes"] for entry in entries) == 5256586
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         3566,
         "v_Absint32int32",

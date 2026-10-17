@@ -79,6 +79,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION
 from ..metadata_preconditions import (
     MAX_METADATA_PRECONDITIONS,
     checked_metadata_preconditions,
@@ -33212,11 +33213,49 @@ float {name}(int64_t value) {{
             )
         return "\n".join(helpers) + "\n"
 
+    def generate_glsl_ieee_math_helper(self, name, operation, value_type, width):
+        if operation == "fma":
+            # A precise result makes fma() one operation (GLSL 4.60, 8.3):
+            # Mesa otherwise splits it and folds (a * b + c) - c into a * b.
+            return (
+                f"{value_type} {name}({value_type} left, {value_type} right, "
+                f"{value_type} addend) {{\n"
+                f"    precise {value_type} result = fma(left, right, addend);\n"
+                "    return result;\n}\n"
+            )
+        if operation == "difference":
+            return (
+                f"{value_type} {name}({value_type} left, {value_type} right) {{\n"
+                f"    precise {value_type} result = left - right;\n"
+                "    return result;\n}\n"
+            )
+        builtin = operation.removeprefix("precise-")
+        unsigned = "uint" if width == 1 else f"uvec{width}"
+        nan = (
+            "isnan(value) ? value : result"
+            if width == 1
+            else "mix(result, value, isnan(value))"
+        )
+        return (
+            f"{value_type} {name}({value_type} value) {{\n"
+            f"    {unsigned} magnitude = floatBitsToUint({builtin}(value)) & 0x7fffffffu;\n"
+            f"    {value_type} result = uintBitsToFloat("
+            "magnitude | (floatBitsToUint(value) & 0x80000000u));\n"
+            f"    return {nan};\n}}\n"
+        )
+
     def generate_glsl_metal_math_helpers(self):
         helpers = []
         for name, operation, value_type, condition_type, width in sorted(
             self.required_glsl_metal_math_helpers
         ):
+            if operation in {"fma", "difference"} or operation.startswith("precise-"):
+                helpers.append(
+                    self.generate_glsl_ieee_math_helper(
+                        name, operation, value_type, width
+                    )
+                )
+                continue
             parameters = f"{value_type} left, {value_type} right"
             if operation == "select":
                 parameters += f", {condition_type} condition"
@@ -38326,6 +38365,12 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 if remainder is not None:
                     return remainder
+            if op == "-":
+                difference = self.generate_glsl_identical_difference(expr, left, right)
+                if difference is not None:
+                    return self.glsl_apply_narrow_float_contract(
+                        difference, self.glsl_source_expression_type(expr), expr
+                    )
             return self.glsl_apply_narrow_float_contract(
                 f"({left} {op} {right})", self.glsl_source_expression_type(expr), expr
             )
@@ -38576,6 +38621,12 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if metal_math_call is not None:
                 return metal_math_call
+
+            ieee_math_call = self.generate_glsl_ieee_math_call(
+                original_func_name, expr.args, call_node=expr
+            )
+            if ieee_math_call is not None:
+                return ieee_math_call
 
             trailing_zero_call = self.generate_glsl_trailing_zero_call(
                 original_func_name,
@@ -39787,6 +39838,106 @@ complex64_t crossgl_complex64_mod_assign(
             (helper_name, func_name, value["mapped"], condition_type, value["width"])
         )
         return f"{helper_name}({', '.join(rendered)})"
+
+    # GLSL's sinh, tanh, asinh and atanh are defined through exp and log, and
+    # Mesa evaluates them that way: the sign of zero is lost and tanh clamps a
+    # NaN operand to -1.  Metal's precise:: implementations keep both.  Each
+    # is odd, so the result takes the operand's sign bit, and NaN passes through.
+    GLSL_PRECISE_ODD_FUNCTIONS = frozenset({"asinh", "atanh", "sinh", "tanh"})
+
+    def glsl_ieee_helper_name(self, operation, value_type):
+        identity = ("ieee-math", operation, value_type)
+        helper_name = self.glsl_module_generated_identifier_names.get(identity)
+        if helper_name is None:
+            used_names = self.glsl_module_used_identifier_names | getattr(
+                self, "glsl_numeric_helper_reserved_names", set()
+            )
+            stem = operation.replace("-", "_")
+            helper_name = self.glsl_unique_identifier(
+                f"crossgl_{stem}_{value_type}", used_names
+            )
+            self.glsl_module_used_identifier_names.add(helper_name)
+            self.glsl_module_generated_identifier_names[identity] = helper_name
+        return helper_name
+
+    def glsl_ieee_value_info(self, args):
+        """Return the shared binary32/64 float type of ``args``, else None."""
+        infos = [
+            self.glsl_value_type_info(self.glsl_source_expression_type(arg))
+            for arg in args
+        ]
+        if not infos or any(info is None for info in infos):
+            return None
+        widest = max(infos, key=lambda info: info["width"])
+        if any(
+            info["family"] != "float"
+            or info["bits"] != widest["bits"]
+            or info["bits"] not in {32, 64}
+            or info["width"] not in {1, widest["width"]}
+            for info in infos
+        ):
+            return None
+        if widest["width"] not in {1, 2, 3, 4}:
+            return None
+        return widest
+
+    def generate_glsl_ieee_math_call(self, func_name, args, *, call_node=None):
+        """Lower calls whose GLSL builtin loses IEEE semantics on Mesa."""
+        if func_name in self.function_return_types or func_name in (
+            self.local_variable_types
+        ):
+            return None
+        if func_name == "fma":
+            operation = "fma"
+            if len(args) != 3:
+                return None
+        elif func_name in self.GLSL_PRECISE_ODD_FUNCTIONS:
+            get_annotation = getattr(call_node, "get_annotation", None)
+            if not callable(get_annotation) or (
+                get_annotation(METAL_MATH_NAMESPACE_ANNOTATION) != "precise"
+            ):
+                return None
+            if len(args) != 1:
+                return None
+            operation = f"precise-{func_name}"
+        else:
+            return None
+        info = self.glsl_ieee_value_info(args)
+        if info is None or (operation != "fma" and info["bits"] != 32):
+            return None
+        value_type = info["mapped"]
+        rendered = [
+            self.generate_expression_with_expected(arg, value_type) for arg in args
+        ]
+        helper_name = self.glsl_ieee_helper_name(operation, value_type)
+        self.required_glsl_metal_math_helpers.add(
+            (helper_name, operation, value_type, "", info["width"])
+        )
+        # Like the builtin it replaces, a helper computes in the physical float
+        # type, so a unary call's logical half or bfloat16 result is rounded.
+        return self.glsl_apply_narrow_float_contract(
+            f"{helper_name}({', '.join(rendered)})",
+            self.glsl_componentwise_unary_result_type(func_name, args),
+            call_node,
+        )
+
+    def generate_glsl_identical_difference(self, expr, left, right):
+        """Keep ``x - x`` exact: Mesa folds it to 0, which hides inf and NaN."""
+        if not (
+            isinstance(expr.left, IdentifierNode)
+            and isinstance(expr.right, IdentifierNode)
+            and expr.left.name == expr.right.name
+            and left == right
+        ):
+            return None
+        info = self.glsl_ieee_value_info([expr.left])
+        if info is None:
+            return None
+        helper_name = self.glsl_ieee_helper_name("difference", info["mapped"])
+        self.required_glsl_metal_math_helpers.add(
+            (helper_name, "difference", info["mapped"], "", info["width"])
+        )
+        return f"{helper_name}({left}, {right})"
 
     def glsl_floating_remainder_helper(self, value_type):
         existing = self.glsl_floating_remainder_helper_names.get(value_type)

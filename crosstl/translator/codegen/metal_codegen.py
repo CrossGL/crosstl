@@ -51,7 +51,11 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
-from ..math_namespaces import METAL_FAST_MATH_FUNCTIONS, METAL_MATH_NAMESPACE_ANNOTATION
+from ..math_namespaces import (
+    METAL_FAST_MATH_FUNCTIONS,
+    METAL_MATH_NAMESPACE_ANNOTATION,
+    METAL_PRECISE_MATH_FUNCTIONS,
+)
 from ..resource_identity import resource_identity_marker
 from ..source_licenses import source_license_comments
 from ..structure_conversions import (
@@ -11266,6 +11270,8 @@ class MetalCodeGen:
                     args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 if self.metal_fast_math_call(expr, func_name):
                     return f"metal::fast::{func_name}({args})"
+                if self.metal_precise_math_call(expr, func_name):
+                    return f"metal::precise::{func_name}({args})"
                 call_name = (
                     f"metal::{func_name}"
                     if self.metal_function_name_is_shadowed(func_name)
@@ -11600,6 +11606,8 @@ class MetalCodeGen:
                 if wave_lane_args is not None:
                     args.extend(wave_lane_args)
             args = ", ".join(args)
+            if callee == func_name and self.metal_precise_math_call(expr, func_name):
+                return f"metal::precise::{func_name}({args})"
             return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
@@ -11726,6 +11734,36 @@ class MetalCodeGen:
             if argument_type is None:
                 return False
             if self.map_type(argument_type) not in self.METAL_FAST_MATH_ARGUMENT_TYPES:
+                return False
+        return True
+
+    # Under -fno-fast-math the plain binary32 overloads of these functions
+    # match metal::precise:: bit for bit, but the binary16 overloads are native
+    # half implementations (``tan(-0.0h)`` is +0), so half operands need the
+    # namespace back.  metal::precise:: declares binary32 overloads only: a
+    # half scalar converts to float implicitly, a half vector does not, so
+    # half vectors keep the plain overload instead of an ill-formed call.
+    METAL_PRECISE_MATH_ARGUMENT_TYPES = frozenset({"half"})
+
+    def metal_precise_math_call(self, expr, func_name):
+        """Return whether a builtin call keeps its source ``metal::precise::`` name."""
+        if func_name not in METAL_PRECISE_MATH_FUNCTIONS:
+            return False
+        get_annotation = getattr(expr, "get_annotation", None)
+        if not callable(get_annotation):
+            return False
+        if get_annotation(METAL_MATH_NAMESPACE_ANNOTATION) != "precise":
+            return False
+        if self.metal_function_name_is_shadowed(func_name) or not expr.args:
+            return False
+        for argument in expr.args:
+            argument_type = self.expression_result_type(argument)
+            if argument_type is None:
+                return False
+            if (
+                self.map_type(argument_type)
+                not in self.METAL_PRECISE_MATH_ARGUMENT_TYPES
+            ):
                 return False
         return True
 
