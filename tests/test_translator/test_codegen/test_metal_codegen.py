@@ -32258,6 +32258,46 @@ def test_metal_sampler_1d_sampling_options_emit_target_diagnostics():
     assert "textureOffset(" not in generated_code
 
 
+def test_metal_1d_base_lod_sampling_depends_on_program_stages():
+    graphics_shader = """
+    shader OneDBaseLevel {
+        sampler1D lineMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return textureLod(lineMap, linearSampler, 0.5, 0);
+            }
+        }
+    }
+    """
+    compute_shader = """
+    shader OneDBaseLevelCompute {
+        sampler1D lineMap;
+        sampler linearSampler;
+        image1D output;
+
+        compute {
+            void main() {
+                imageStore(output, 0, textureLod(lineMap, linearSampler, 0.5, 0));
+            }
+        }
+    }
+    """
+
+    # Fragment sampling derives its own LOD, which can select the minification
+    # filter, so an explicit base level has no exact Metal 1D equivalent.
+    graphics_code = MetalCodeGen().generate(crosstl.translator.parse(graphics_shader))
+    assert (
+        "/* unsupported Metal texture sampling: textureLod on texture1d<float> "
+        "supports only implicit sampling */ float4(0.0)" in graphics_code
+    )
+
+    compute_code = MetalCodeGen().generate(crosstl.translator.parse(compute_shader))
+    assert "lineMap.sample(linearSampler, 0.5)" in compute_code
+    assert "unsupported Metal texture sampling" not in compute_code
+
+
 def test_metal_image_1d_and_1d_array_storage_operations():
     shader = """
     shader OneDStorageImages {
