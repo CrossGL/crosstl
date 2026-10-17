@@ -974,6 +974,25 @@ upstream kernels, which the translation must reproduce exactly. This is a
 528/17,832 increment; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+``copy.current-tree.translation.json`` pins all 2,496 entries of
+``copy.metal``: every layout over all 169 pairings of MLX's 13 dtypes and the
+same-type general copies with destination strides and dynamic offsets. The
+copy sources are byte-identical at the corpus commit and the shared headers
+only gained declarations the copy kernels do not use, so each entry must
+reproduce the Metal, OpenGL and DirectX artifact its complete-family
+translation contract pins there. Each target executes 4,992 dispatches over
+tails, short last tiles, strided, transposed, permuted and broadcast layouts
+of up to five dimensions, padded destinations and dynamic offsets. Read
+elements start at each source type's boundary values, and a model of
+``cast_to<U>(T)`` gives every expected element: same-type copies are
+bit-exact, floating conversions round to nearest even and overflow to
+infinity, floats truncate into integers, integers wrap, and a NaN only has
+to stay a NaN when the types differ. Casts C++ leaves undefined are kept out
+of the inputs. Padding, trailing guards and inputs must be unchanged, and
+Metal also runs the unchanged upstream kernels, which the translation must
+match byte for byte. This is a 2,496/17,832 increment; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,

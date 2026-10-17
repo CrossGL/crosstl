@@ -6489,7 +6489,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked]
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5]
 
     steps:
       - name: Checkout CrossTL
@@ -7002,6 +7002,186 @@ jobs:
               --junitxml=mlx-current-results/gemv-t-masked.xml \
               -k test_current_mlx_gemv_t_masked_native_parity \
               demos/integrations/mlx/tests/kernels/test_current_gemv_masked.py
+
+      - name: Prove current MLX copy family native parity (shard 0 of 6)
+        if: matrix.group == 'copy-0'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "0"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX copy family native parity (shard 0 of 6)" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/copy-0 \
+              --junitxml=mlx-current-results/copy-0.xml \
+              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
+
+      - name: Prove current MLX copy family native parity (shard 1 of 6)
+        if: matrix.group == 'copy-1'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "1"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX copy family native parity (shard 1 of 6)" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/copy-1 \
+              --junitxml=mlx-current-results/copy-1.xml \
+              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
+
+      - name: Prove current MLX copy family native parity (shard 2 of 6)
+        if: matrix.group == 'copy-2'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "2"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX copy family native parity (shard 2 of 6)" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/copy-2 \
+              --junitxml=mlx-current-results/copy-2.xml \
+              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
+
+      - name: Prove current MLX copy family native parity (shard 3 of 6)
+        if: matrix.group == 'copy-3'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "3"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX copy family native parity (shard 3 of 6)" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/copy-3 \
+              --junitxml=mlx-current-results/copy-3.xml \
+              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
+
+      - name: Prove current MLX copy family native parity (shard 4 of 6)
+        if: matrix.group == 'copy-4'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "4"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX copy family native parity (shard 4 of 6)" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/copy-4 \
+              --junitxml=mlx-current-results/copy-4.xml \
+              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
+
+      - name: Prove current MLX copy family native parity (shard 5 of 6)
+        if: matrix.group == 'copy-5'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "5"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX copy family native parity (shard 5 of 6)" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/copy-5 \
+              --junitxml=mlx-current-results/copy-5.xml \
+              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
 
       - name: Upload current MLX native parity evidence
         if: always()

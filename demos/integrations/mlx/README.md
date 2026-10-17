@@ -1348,6 +1348,41 @@ Metal also runs the unchanged upstream kernels, and the translation must
 reproduce their words exactly. This covers 528/17,832 entries; it does not
 run the upstream MLX test suite or redirect the MLX host runtime.
 
+`contracts/copy.current-tree.translation.json` pins all 2,496 entries of
+`copy.metal`: the scalar, vector, two-dimensional and general strided copies,
+with and without work per thread, over all 169 pairings of MLX's 13 dtypes,
+and the same-type general copies with destination strides and dynamic
+offsets. `copy.metal` and `copy.h` are byte-identical at the corpus commit,
+and `utils.h` and `defines.h` only gained declarations the copy kernels do
+not use, so each entry must reproduce, byte for byte, the Metal, OpenGL and
+DirectX artifact its complete-family translation contract pins there, under
+the same configuration, including OpenGL's twelve index-range preconditions.
+Required CI executes every entry on Metal, Mesa EGL and Direct3D 12 WARP in
+six legs, 4,992 dispatches and 233,220 checked elements per target: flat
+copies with a tail inside the last thread's elements and with an exact size,
+two-dimensional grids with a short last tile, strided, transposed, permuted
+and broadcast layouts of up to five dimensions whose innermost extent ends
+inside a thread's tile, destination strides that leave padding the kernel
+must not touch, and dynamic source and destination offsets. Each read
+element takes the next value of a domain that starts with the source type's
+boundary values: integer extremes and wrap points, values around every
+narrower range, float32 rounding ties and the overflow thresholds of float16
+and bfloat16, signed zeros, infinities, quiet and signaling NaNs, subnormals
+and the largest finite values. A model of `cast_to<U>(T)` gives every
+expected element: same-type copies are bit-exact, conversions to a floating
+type round the exact source value to nearest even and overflow to infinity,
+floats truncate toward zero into integers, integers wrap, float32, bfloat16
+and complex64 test their bits for `bool`, complex sources convert their real
+part, and a NaN only has to stay a NaN when the types differ. Casts that C++
+leaves undefined, from non-finite or out-of-range floats to integers and from
+integers to an overflowing float16, are kept out of the inputs (427 of 3,458
+boundary casts). Outputs start at values that differ from their results,
+padding and 16 trailing guards must keep their values, four decoys follow
+every source and every input must be unchanged. Metal also runs the
+unchanged upstream kernels, which must produce the same bytes. This covers
+2,496/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
