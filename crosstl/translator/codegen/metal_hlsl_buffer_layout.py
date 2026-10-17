@@ -1,0 +1,333 @@
+"""Metal declarations that reproduce HLSL constant and structured buffer layouts.
+
+Metal aligns vectors to their full size, stores ``bool`` in one byte and pads
+arrays of scalars to the scalar size, so a struct copied from HLSL does not
+match the bytes the host writes. For every constant buffer and struct that an
+HLSL buffer reaches, this planner emits a Metal struct whose members sit at the
+exact HLSL offsets:
+
+* explicit ``char`` padding moves a member to its HLSL offset;
+* vectors use ``packed_*`` storage, which has scalar alignment;
+* ``bool`` uses four-byte ``uint`` storage; reads convert back to ``bool``;
+* constant-buffer arrays of scalars or vectors use four-component storage so
+  each element occupies one 16-byte register; element reads select the
+  original components.
+
+A layout that Metal cannot express raises :class:`HlslLayoutError` instead of
+silently reading other bytes.
+"""
+
+import re
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
+from .hlsl_buffer_layout import (
+    HLSL_CBUFFER_LAYOUT,
+    HLSL_STRUCTURED_LAYOUT,
+    HlslLayoutError,
+    align_to,
+    array_type,
+    cbuffer_array_stride,
+    matrix_type,
+    scalar_type,
+    struct_placements,
+    struct_type,
+    vector_type,
+)
+
+METAL_SCALAR_STORAGE = {
+    "bool": ("uint", 4),
+    "int": ("int", 4),
+    "uint": ("uint", 4),
+    "float": ("float", 4),
+    "double": ("double", 8),
+    "long": ("long", 8),
+    "ulong": ("ulong", 8),
+}
+
+METAL_ELEMENT_SUFFIXES = {1: ".x", 2: ".xy", 3: ".xyz", 4: ""}
+
+
+@dataclass
+class MetalLayoutMember:
+    """One member of a Metal struct that reproduces an HLSL layout."""
+
+    name: str
+    offset: int
+    storage_type: str
+    array_count: Optional[int] = None
+    size: int = 0
+    alignment: int = 1
+    # Conversion applied when the member (or, for arrays, an element) is read.
+    read_conversion: Optional[str] = None
+    # Conversion applied to a logical value before it is stored.
+    write_conversion: Optional[str] = None
+    # Components selected after indexing an array whose elements were widened.
+    element_suffix: str = ""
+    nested_struct: Optional[str] = None
+
+    @property
+    def converted(self):
+        return bool(
+            self.read_conversion
+            or self.write_conversion
+            or self.element_suffix
+            or self.storage_type.startswith("packed_")
+        )
+
+
+@dataclass
+class MetalLayoutPlan:
+    """A Metal struct definition that matches one HLSL layout."""
+
+    name: str
+    layout: str
+    members: List[MetalLayoutMember] = field(default_factory=list)
+    padding: Dict[str, int] = field(default_factory=dict)
+    size: int = 0
+    alignment: int = 1
+
+    def member(self, name):
+        for member in self.members:
+            if member.name == name:
+                return member
+        return None
+
+    def declaration_lines(self, padding_name):
+        lines = []
+        for index, member in enumerate(self.members):
+            padding = self.padding.get(member.name, 0)
+            if padding:
+                lines.append(f"char {padding_name(index)}[{padding}];")
+            suffix = f"[{member.array_count}]" if member.array_count is not None else ""
+            lines.append(f"{member.storage_type} {member.name}{suffix};")
+        return lines
+
+
+class MetalHlslBufferLayouts:
+    """Plan Metal storage for the HLSL buffers of one program."""
+
+    def __init__(self, type_resolver):
+        # ``type_resolver(type_name)`` returns ``("struct", name, members)`` for a
+        # struct, where members are ``(member_name, raw_type)`` pairs, or the
+        # Metal spelling of a value type.
+        self.type_resolver = type_resolver
+        self.struct_plans: Dict[str, MetalLayoutPlan] = {}
+        self.struct_layouts: Dict[str, str] = {}
+
+    # Type descriptions -------------------------------------------------
+    def layout_type(self, raw_type, stack=()):
+        raw_type = str(raw_type).strip()
+        array_match = re.fullmatch(r"(.+?)\s*\[\s*(\d+)\s*\]", raw_type)
+        if array_match is not None:
+            element = self.layout_type(array_match.group(1), stack)
+            if element.kind == "array":
+                raise HlslLayoutError(
+                    "multidimensional arrays in HLSL buffers are not supported"
+                )
+            return array_type(element, int(array_match.group(2)))
+        if raw_type.endswith("[]"):
+            raise HlslLayoutError("unsized arrays in HLSL buffers are not supported")
+
+        resolved = self.type_resolver(raw_type)
+        if isinstance(resolved, tuple) and resolved and resolved[0] == "struct":
+            _kind, name, members = resolved
+            if name in stack:
+                raise HlslLayoutError(f"recursive struct '{name}' in an HLSL buffer")
+            return struct_type(
+                name,
+                [
+                    (member_name, self.layout_type(member_type, (*stack, name)))
+                    for member_name, member_type in members
+                ],
+            )
+
+        metal_type = str(resolved)
+        scalar_match = re.fullmatch(
+            r"(bool|int|uint|float|double|long|ulong)([234])?", metal_type
+        )
+        if scalar_match is not None:
+            scalar, width = scalar_match.groups()
+            if width is None:
+                return scalar_type(scalar)
+            return vector_type(scalar, int(width))
+        matrix_match = re.fullmatch(r"(float|double)([234])x([234])", metal_type)
+        if matrix_match is not None:
+            scalar, columns, rows = matrix_match.groups()
+            if columns != rows:
+                raise HlslLayoutError(
+                    f"non-square matrix '{metal_type}' in an HLSL buffer is not supported"
+                )
+            return matrix_type(scalar, int(columns), int(rows))
+        raise HlslLayoutError(f"type '{raw_type}' has no HLSL buffer layout")
+
+    # Struct plans -------------------------------------------------------
+    def require_struct(self, layout_type, layout):
+        """Plan the struct ``layout_type`` for ``layout`` (and nested structs)."""
+        name = layout_type.struct_name
+        existing = self.struct_layouts.get(name)
+        if existing is not None and existing != layout:
+            existing_plan = self.struct_plans[name]
+            candidate = self.plan_members(name, layout_type, layout)
+            if [
+                (m.name, m.offset, m.storage_type, m.array_count, m.element_suffix)
+                for m in existing_plan.members
+            ] != [
+                (m.name, m.offset, m.storage_type, m.array_count, m.element_suffix)
+                for m in candidate.members
+            ]:
+                raise HlslLayoutError(
+                    f"struct '{name}' is used in HLSL constant and structured "
+                    "buffers with different layouts"
+                )
+            return existing_plan
+        if existing is not None:
+            return self.struct_plans[name]
+        self.struct_layouts[name] = layout
+        plan = self.plan_members(name, layout_type, layout)
+        self.struct_plans[name] = plan
+        return plan
+
+    def plan_members(self, name, layout_type, layout):
+        placements, _hlsl_size = struct_placements(layout_type, layout)
+        plan = MetalLayoutPlan(name=name, layout=layout)
+        cursor = 0
+        max_alignment = 1
+        for placement in placements:
+            member = self.member_storage(placement, layout)
+            if member.offset % member.alignment:
+                raise HlslLayoutError(
+                    f"member '{placement.name}' of '{name}' at HLSL offset "
+                    f"{member.offset} cannot use Metal storage '{member.storage_type}'"
+                )
+            if member.offset < cursor:
+                raise HlslLayoutError(
+                    f"member '{placement.name}' of '{name}' at HLSL offset "
+                    f"{member.offset} overlaps the Metal storage of the previous member"
+                )
+            if member.offset > cursor:
+                plan.padding[member.name] = member.offset - cursor
+            plan.members.append(member)
+            cursor = member.offset + member.size
+            max_alignment = max(max_alignment, member.alignment)
+        plan.alignment = max_alignment
+        plan.size = align_to(cursor, max_alignment)
+        return plan
+
+    def member_storage(self, placement, layout):
+        layout_type = placement.layout_type
+        offset = placement.offset
+        if layout_type.kind == "array":
+            return self.array_member_storage(placement, layout)
+        storage_type, size, alignment, read, write, nested = self.value_storage(
+            layout_type, layout
+        )
+        return MetalLayoutMember(
+            name=placement.name,
+            offset=offset,
+            storage_type=storage_type,
+            size=size,
+            alignment=alignment,
+            read_conversion=read,
+            write_conversion=write,
+            nested_struct=nested,
+        )
+
+    def value_storage(self, layout_type, layout):
+        """``(type, size, alignment, read, write, nested_struct)`` for one value."""
+        kind = layout_type.kind
+        if kind == "scalar":
+            storage, size = METAL_SCALAR_STORAGE[layout_type.scalar]
+            read = "bool" if layout_type.scalar == "bool" else None
+            return storage, size, size, read, None, None
+        if kind == "vector":
+            storage, size = METAL_SCALAR_STORAGE[layout_type.scalar]
+            width = layout_type.components
+            read = write = None
+            if layout_type.scalar == "bool":
+                read = f"bool{width}"
+                write = f"uint{width}"
+            return f"packed_{storage}{width}", size * width, size, read, write, None
+        if kind == "matrix":
+            if layout != HLSL_CBUFFER_LAYOUT or layout_type.registers not in (3, 4):
+                raise HlslLayoutError(
+                    "only 3x3 and 4x4 matrices in HLSL constant buffers have a "
+                    "Metal layout"
+                )
+            storage, size = METAL_SCALAR_STORAGE[layout_type.scalar]
+            n = layout_type.registers
+            return f"{storage}{n}x{n}", 16 * n, 16, None, None, None
+        if kind == "struct":
+            plan = self.require_struct(layout_type, layout)
+            return plan.name, plan.size, plan.alignment, None, None, plan.name
+        raise HlslLayoutError(f"unsupported HLSL buffer value kind '{kind}'")
+
+    def array_member_storage(self, placement, layout):
+        layout_type = placement.layout_type
+        element = layout_type.element
+        count = layout_type.count
+        if layout == HLSL_CBUFFER_LAYOUT and element.kind in ("scalar", "vector"):
+            storage, size = METAL_SCALAR_STORAGE[element.scalar]
+            if size != 4:
+                raise HlslLayoutError(
+                    "64-bit scalar arrays in HLSL constant buffers are not supported"
+                )
+            width = element.components if element.kind == "vector" else 1
+            read = None
+            if element.scalar == "bool":
+                read = "bool" if width == 1 else f"bool{width}"
+            return MetalLayoutMember(
+                name=placement.name,
+                offset=placement.offset,
+                storage_type=f"{storage}4",
+                array_count=count,
+                size=16 * count,
+                alignment=16,
+                read_conversion=read,
+                element_suffix=METAL_ELEMENT_SUFFIXES[width],
+            )
+        storage_type, size, alignment, read, write, nested = self.value_storage(
+            element, layout
+        )
+        if layout == HLSL_CBUFFER_LAYOUT:
+            stride = cbuffer_array_stride(layout_type)
+            if size != stride:
+                raise HlslLayoutError(
+                    f"array '{placement.name}' has a {stride}-byte HLSL element "
+                    f"stride but Metal element storage of {size} bytes"
+                )
+        return MetalLayoutMember(
+            name=placement.name,
+            offset=placement.offset,
+            storage_type=storage_type,
+            array_count=count,
+            size=size * count,
+            alignment=alignment,
+            read_conversion=read,
+            write_conversion=write,
+            nested_struct=nested,
+        )
+
+    def plan_cbuffer(self, name, members):
+        """Plan a constant buffer declared with HLSL packing."""
+        layout_type = struct_type(
+            name,
+            [
+                (member_name, self.layout_type(member_type, (name,)))
+                for member_name, member_type in members
+            ],
+        )
+        return self.plan_members(name, layout_type, HLSL_CBUFFER_LAYOUT)
+
+    def plan_structured_element(self, raw_type):
+        """Storage of one structured-buffer element.
+
+        Returns ``(storage_type, read_conversion, write_conversion)``.
+        """
+        layout_type = self.layout_type(raw_type)
+        if layout_type.kind == "array":
+            raise HlslLayoutError("structured buffers of arrays are not supported")
+        storage_type, _size, _alignment, read, write, _nested = self.value_storage(
+            layout_type, HLSL_STRUCTURED_LAYOUT
+        )
+        return storage_type, read, write
