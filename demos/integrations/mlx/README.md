@@ -3560,8 +3560,8 @@ and
 
 Entry-scoped translation materializes only the selected GEMV and
 `elem_to_loc_uint`, with no unsupported record or project diagnostic. The
-9,099-byte HLSL has SHA-256
-`e26c5e45a11d9ea861468bbf641bcfe8905d8c023b3de9439c03e9f3095065b7`,
+9,395-byte HLSL has SHA-256
+`a78e20a5906b0112db43aa7b6a587f412c944f7e16a4fbda8e4dd3ca2a64df75`,
 retains `[numthreads(32, 2, 1)]` and `[WaveSize(32)]`, and passes official DXC
 1.9.2602.24 under `cs_6_6`, `-enable-16bit-types`, and warnings as errors.
 `GEMVTKernel::run` repeats the entry's `[[buffer(n)]]` attributes on ordinary
@@ -3579,6 +3579,15 @@ addition, preventing unsigned-delta wrap, and an out-of-range shuffle returns
 the calling invocation's value. The artifact contains no `WaveReadLaneAt`,
 `WaveGetLaneIndex`, or physical-wave atomic allocator. `[WaveSize(32)]` remains
 a source/reflection contract, not a dependency on physical lane topology.
+The kernel's main loop starts each iteration with a `threadgroup_barrier` under
+`if (out_col < out_vec_size)`; both targets now run that loop, and so its
+barrier, in every invocation and keep the column clamp, loads, accumulation and
+leftover pass under the guard, so a partial last column block cannot strand a
+barrier. The earlier 9,099-byte HLSL
+(`e26c5e45a11d9ea861468bbf641bcfe8905d8c023b3de9439c03e9f3095065b7`) and
+7,752-byte GLSL
+(`7a82ff4b75a71aaebd4a5b5a3f62882d82aca2b24a1ed27b9ec6bece9a87e8ea`) kept the
+barrier inside the guard and differ only there.
 
 The replaced 8,410-byte physical-wave artifact is retained as rejected
 diagnostic evidence under SHA-256
@@ -3595,8 +3604,8 @@ target asserts four expressions in `[0, 2^31 - 1]`: the selected matrix index
 `tid.z * buffer_load(vector_batch_stride, 0)` and
 `tid.z * buffer_load(matrix_batch_stride, 0)` (the lowered spelling of
 `vector_batch_stride[0]` and `matrix_batch_stride[0]`). The batch offsets reach
-the helper as `int` logical offsets. Its 7,752-byte GLSL has SHA-256
-`7a82ff4b75a71aaebd4a5b5a3f62882d82aca2b24a1ed27b9ec6bece9a87e8ea`
+the helper as `int` logical offsets. Its 8,038-byte GLSL has SHA-256
+`5631a0011d909fa5fae3d720dea11738031a18acaeba9b68472fe35925146274`
 and partitions the 64-thread workgroup into two logical 32-lane subgroups with
 a 64-float shared shuffle scratch array.
 

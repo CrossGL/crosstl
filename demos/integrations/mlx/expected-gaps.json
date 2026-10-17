@@ -4898,8 +4898,8 @@
     "artifacts": {
       "directx": {
         "target_entry_point": "CSMain",
-        "sha256": "e26c5e45a11d9ea861468bbf641bcfe8905d8c023b3de9439c03e9f3095065b7",
-        "size_bytes": 9099,
+        "sha256": "a78e20a5906b0112db43aa7b6a587f412c944f7e16a4fbda8e4dd3ca2a64df75",
+        "size_bytes": 9395,
         "subgroup_id_lowering": "flattened-logical-software-subgroups",
         "relative_shuffle_out_of_range": "calling-invocation-value",
         "software_subgroup_width": 32,
@@ -4923,8 +4923,8 @@
       },
       "opengl": {
         "target_entry_point": "main",
-        "sha256": "7a82ff4b75a71aaebd4a5b5a3f62882d82aca2b24a1ed27b9ec6bece9a87e8ea",
-        "size_bytes": 7752,
+        "sha256": "5631a0011d909fa5fae3d720dea11738031a18acaeba9b68472fe35925146274",
+        "size_bytes": 8038,
         "workgroup_size": [
           32,
           2,

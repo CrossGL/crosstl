@@ -58,12 +58,12 @@ MLX_GEMV_VARIANT_ID = (
 )
 MLX_GEMV_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "e26c5e45a11d9ea861468bbf641bcfe8905d8c023b3de9439c03e9f3095065b7",
-        "sizeBytes": 9099,
+        "sha256": "a78e20a5906b0112db43aa7b6a587f412c944f7e16a4fbda8e4dd3ca2a64df75",
+        "sizeBytes": 9395,
     },
     "opengl": {
-        "sha256": "7a82ff4b75a71aaebd4a5b5a3f62882d82aca2b24a1ed27b9ec6bece9a87e8ea",
-        "sizeBytes": 7752,
+        "sha256": "5631a0011d909fa5fae3d720dea11738031a18acaeba9b68472fe35925146274",
+        "sizeBytes": 8038,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_GEMV_DIRECTX_NATIVE_LOADER"
