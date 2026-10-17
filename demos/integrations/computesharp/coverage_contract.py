@@ -35,6 +35,11 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _contract_bytes(path: Path) -> bytes:
+    # Git may check the contract out with CRLF line endings (Windows runners).
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
 def load_contract(path: Path = CONTRACT) -> dict:
     contract = json.loads(path.read_text(encoding="utf-8"))
     if (
@@ -259,7 +264,7 @@ def compare_locks(expected: dict, actual: dict) -> list[str]:
 def check(
     discovery_dir: Path, lock_path: Path = LOCK, contract_path: Path = CONTRACT
 ) -> dict:
-    contract_bytes = contract_path.read_bytes()
+    contract_bytes = _contract_bytes(contract_path)
     actual = build_lock(
         load_contract(contract_path), load_discovery(discovery_dir), contract_bytes
     )
@@ -280,7 +285,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.command == "freeze":
-            contract_bytes = CONTRACT.read_bytes()
+            contract_bytes = _contract_bytes(CONTRACT)
             lock = build_lock(
                 load_contract(), load_discovery(args.discovery), contract_bytes
             )
