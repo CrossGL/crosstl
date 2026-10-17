@@ -2440,16 +2440,27 @@ def _written_roots(root, walk_ast):
 
 
 _ZERO_SCALARS = re.compile(
-    r"(?:half|float|double|float(?:16|32|64)_t|u?int(?:8|16|32|64)?(?:_t)?)"
+    r"(?:bool|half|float|double|float(?:16|32|64)_t|u?int(?:8|16|32|64)?(?:_t)?)"
 )
+# CrossGL's own spellings of half and bfloat16 scalars, as MLX's masked
+# GEMV's ``T out_scale{1};`` reaches the code generators. They start from
+# ``T(0)``: the code generators may store them in another representation.
+_ZERO_CONVERTED_SCALARS = frozenset(
+    {"float16", "float32", "float64", "bfloat", "bfloat16", "bfloat16_t"}
+)
+_CONSTANT_QUALIFIERS = frozenset({"const", "constexpr"})
 
 
 def _predicated_segment(segment, later, active, walk_ast):
     """Run ``segment`` under ``if (active)``, keeping names ``later`` reads.
 
-    Like ``_guarded_segment``, but a mutable scalar declared with a value
-    becomes a zero-initialized declaration before the guard and an
-    assignment inside it, so invocations that left read a defined zero.
+    Like ``_guarded_segment``, but a scalar declared with a value becomes a
+    zero-initialized (``false`` for ``bool``) declaration before the guard
+    and an assignment inside it, so invocations that left read a defined
+    zero. A constant scalar, as MLX's masked GEMV's ``const int
+    mat_mask_step = mat_mask_strides[0];``, loses its ``const``: it is
+    assigned once, under the guard, and the code generators never treat a
+    value read from memory as a compile-time constant.
     """
     if not segment:
         return []
@@ -2461,9 +2472,12 @@ def _predicated_segment(segment, later, active, walk_ast):
         if not isinstance(statement, VariableNode) or statement.name not in named:
             guarded.append(statement)
             continue
+        constant = bool(_qualifiers(statement) & _CONSTANT_QUALIFIERS) or (
+            not statement.is_mutable
+        )
         if (
-            "const" in _qualifiers(statement)
-            or not statement.is_mutable
+            constant
+            and statement.initial_value is None
             or statement.attributes
             or isinstance(statement.var_type, (PointerType, ReferenceType))
             or any(
@@ -2475,17 +2489,37 @@ def _predicated_segment(segment, later, active, walk_ast):
         if statement.initial_value is None:
             hoisted.append(statement)
             continue
-        if not isinstance(
-            statement.var_type, (PrimitiveType, NamedType)
-        ) or not _ZERO_SCALARS.fullmatch(_type_name(statement.var_type) or ""):
+        type_name = _type_name(statement.var_type) or ""
+        if not isinstance(statement.var_type, (PrimitiveType, NamedType)) or not (
+            _ZERO_SCALARS.fullmatch(type_name) or type_name in _ZERO_CONVERTED_SCALARS
+        ):
             return None
         location = getattr(statement, "source_location", None)
+        declared_type = deepcopy(statement.var_type)
+        if getattr(declared_type, "qualifiers", None):
+            declared_type.qualifiers = [
+                item
+                for item in declared_type.qualifiers
+                if item not in _CONSTANT_QUALIFIERS
+            ]
+        if type_name in _ZERO_CONVERTED_SCALARS:
+            zero = FunctionCallNode(
+                IdentifierNode(type_name), [LiteralNode(0, PrimitiveType("int"))]
+            )
+        else:
+            zero = LiteralNode(
+                False if type_name == "bool" else 0, deepcopy(declared_type)
+            )
         hoisted.append(
             VariableNode(
                 statement.name,
-                deepcopy(statement.var_type),
-                LiteralNode(0, deepcopy(statement.var_type)),
-                qualifiers=list(statement.qualifiers or []),
+                declared_type,
+                zero,
+                qualifiers=[
+                    item
+                    for item in statement.qualifiers or []
+                    if item not in _CONSTANT_QUALIFIERS
+                ],
                 source_location=location,
             )
         )
@@ -2500,6 +2534,158 @@ def _predicated_segment(segment, later, active, walk_ast):
     if guarded:
         hoisted.append(IfNode(IdentifierNode(active), BlockNode(guarded)))
     return hoisted
+
+
+def _exit_branch(statement, context):
+    """The statements before the ``return`` of ``if (c) { ...; return; }``.
+
+    Only a branch without ``else`` whose last statement is a bare return
+    qualifies, and the statements before it may neither leave, break, or
+    continue nor synchronize. Returns ``None`` for any other statement.
+    """
+    if (
+        not isinstance(statement, IfNode)
+        or statement.else_branch is not None
+        or getattr(statement, "else_if_conditions", None)
+    ):
+        return None
+    body = _statements(statement.then_branch)
+    if not body or not isinstance(body[-1], ReturnNode) or body[-1].value is not None:
+        return None
+    walk_ast = context["walk_ast"]
+    prefix = body[:-1]
+    if any(_escapes(item, walk_ast) for item in prefix) or (
+        prefix and context["effects"](BlockNode(prefix)) & {"collective", "barrier"}
+    ):
+        return None
+    return prefix
+
+
+def _predicated_exit(statement, active, context):
+    """Lower a later ``if (c) { S; return; }`` for still-active invocations.
+
+    ``c`` is evaluated where ``active`` holds, as in the source; ``S`` runs
+    where both hold, and those invocations then clear ``active`` so every
+    later statement without a collective or barrier skips them.
+    """
+    prefix = _exit_branch(statement, context)
+    condition = statement.condition
+    location = getattr(statement, "source_location", None)
+    taken = context["fresh"]("__crossgl_subgroup_exit")
+    result = []
+    if isinstance(condition, LiteralNode) and condition.value in {True, 1}:
+        result.append(
+            VariableNode(
+                taken,
+                PrimitiveType("bool"),
+                IdentifierNode(active),
+                source_location=location,
+            )
+        )
+    elif _inactive_safe(
+        condition, context["constants"], context["map_operator"], context["private"]
+    ):
+        result.append(
+            VariableNode(
+                taken,
+                PrimitiveType("bool"),
+                BinaryOpNode(IdentifierNode(active), "&&", condition),
+                source_location=location,
+            )
+        )
+    else:
+        result += [
+            VariableNode(
+                taken,
+                PrimitiveType("bool"),
+                LiteralNode(False, PrimitiveType("bool")),
+                source_location=location,
+            ),
+            IfNode(
+                IdentifierNode(active),
+                BlockNode(
+                    [
+                        ExpressionStatementNode(
+                            AssignmentNode(IdentifierNode(taken), condition, "="),
+                            source_location=location,
+                        )
+                    ]
+                ),
+            ),
+        ]
+    if prefix:
+        result.append(IfNode(IdentifierNode(taken), BlockNode(prefix)))
+    result.append(
+        ExpressionStatementNode(
+            AssignmentNode(
+                IdentifierNode(active),
+                BinaryOpNode(
+                    IdentifierNode(active),
+                    "&&",
+                    UnaryOpNode("!", IdentifierNode(taken)),
+                ),
+                "=",
+            ),
+            source_location=location,
+        )
+    )
+    return result
+
+
+def _uniform_declaration_read_after_sync(statements, index, context):
+    """Whether ``statements[index]`` is a ``uniform_value`` scalar to keep.
+
+    Only a constant scalar whose attributes all mark it uniform and whose
+    initializer is inactive-safe qualifies, and only when a later statement
+    that synchronizes (or leaves) reads it: a predicated copy would then
+    reach code every invocation runs. The attribute is not trusted; the code
+    generators still prove every loop bound it feeds uniform.
+    """
+    statement = statements[index]
+    if (
+        not isinstance(statement, VariableNode)
+        or statement.initial_value is None
+        or not statement.attributes
+        or any(attribute.name != "uniform_value" for attribute in statement.attributes)
+        or not (
+            _qualifiers(statement) & _CONSTANT_QUALIFIERS or not statement.is_mutable
+        )
+        or isinstance(statement.var_type, (PointerType, ReferenceType))
+        or _qualifiers(statement) & _SHARED_QUALIFIERS
+        or not _inactive_safe(
+            statement.initial_value, context["constants"], context["map_operator"]
+        )
+    ):
+        return False
+    walk_ast = context["walk_ast"]
+
+    def read(root):
+        return {
+            node.name for node in walk_ast(root) if isinstance(node, IdentifierNode)
+        }
+
+    for first in range(index + 1, len(statements)):
+        later = statements[first]
+        if (
+            context["effects"](later) & {"collective", "barrier"}
+            or _escapes(later, walk_ast)
+            or _exit_branch(later, context) is not None
+        ):
+            break
+    else:
+        return False
+    # MLX's ``n_iter = in_size / loop_stride`` also keeps ``in_size`` and
+    # ``loop_stride``: later uniform declarations needed in turn.
+    needed = read(BlockNode(statements[first:]))
+    for later in reversed(statements[index + 1 : first]):
+        if (
+            isinstance(later, VariableNode)
+            and later.name in needed
+            and later.attributes
+            and later.initial_value is not None
+        ):
+            needed |= read(later.initial_value)
+    return statement.name in needed
 
 
 def _early_exit_statements(statements, active, context):
@@ -2534,9 +2720,45 @@ def _early_exit_statements(statements, active, context):
         return True
 
     for index, statement in enumerate(statements):
+        if _exit_branch(statement, context) is not None:
+            # A later ``if (c) { ...; return; }``: the invocations taking it
+            # run its statements and leave, which clears their ``active``.
+            if not flush(statements[index:]):
+                return None
+            result.extend(_predicated_exit(statement, active, context))
+            continue
         if _escapes(statement, walk_ast):
-            return None
+            if not isinstance(statement, IfNode) or (
+                statement.else_branch is not None
+                or getattr(statement, "else_if_conditions", None)
+                or not isinstance(statement.condition, LiteralNode)
+            ):
+                return None
+            if statement.condition.value in {False, 0}:
+                continue  # never runs, so neither do its exits
+            if statement.condition.value not in {True, 1}:
+                return None
+            # MLX's ``if (has_output_mask) { ...; if (!mask_out) { ...;
+            # return; } }`` once its template constant is folded.
+            if not flush(statements[index:]):
+                return None
+            block = _predicated_if(statement, active, context)
+            if block is None:
+                return None
+            result.append(block)
+            continue
         kinds = effects(statement) & {"collective", "barrier"}
+        if _uniform_declaration_read_after_sync(statements, index, context):
+            # MLX's ``const uniform<int> n_iter = in_size / loop_stride;``
+            # bounds GEMV-T's barrier loop, which every invocation runs, so
+            # every invocation computes it. It reads no memory and cannot
+            # trap; predicating it would make the bound appear to diverge.
+            if not flush(statements[index:]):
+                return None
+            result.append(statement)
+            if _literal_divisor(statement.initial_value, {}) is not None:
+                constants[statement.name] = statement.initial_value
+            continue
         if (
             isinstance(statement, VariableNode)
             and statement.initial_value is not None
@@ -2703,28 +2925,36 @@ def _early_exit_context(
 
 
 def _early_exit_plan(function, context):
+    """Where ``function``'s exits start and whether the first is ``if (c) return;``.
+
+    Returns ``(index, simple)`` for the first top-level statement holding a
+    return, or ``None``. A ``simple`` exit, ``if (c) return;`` whose ``c``
+    reads no memory, becomes ``bool active = !(c);``. Otherwise, as for MLX's
+    masked GEMV-T whose only exit sits in ``if (has_output_mask) { ... }``,
+    ``bool active = true;`` precedes that statement and
+    ``_early_exit_statements`` lowers it like any later exit.
+    """
     statements = _statements(function.body)
     for index, statement in enumerate(statements):
         if any(isinstance(node, ReturnNode) for node in context["walk_ast"](statement)):
             break
     else:
         return None
-    if (
-        not isinstance(statement, IfNode)
-        or statement.else_branch is not None
-        or getattr(statement, "else_if_conditions", None)
-        or len(_statements(statement.then_branch)) != 1
-        or not isinstance(_statements(statement.then_branch)[0], ReturnNode)
-        or _statements(statement.then_branch)[0].value is not None
-        or not _inactive_safe(
+    simple = (
+        isinstance(statement, IfNode)
+        and statement.else_branch is None
+        and not getattr(statement, "else_if_conditions", None)
+        and len(_statements(statement.then_branch)) == 1
+        and isinstance(_statements(statement.then_branch)[0], ReturnNode)
+        and _statements(statement.then_branch)[0].value is None
+        and _inactive_safe(
             statement.condition, context["constants"], context["map_operator"]
         )
-    ):
-        return None
-    rest = statements[index + 1 :]
+    )
+    rest = statements[index + 1 if simple else index :]
     if not context["effects"](BlockNode(rest)) & {"collective", "barrier"}:
         return None
-    return index
+    return index, simple
 
 
 def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
@@ -2775,16 +3005,17 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
             context = _early_exit_context(
                 function, effects, walk_ast, map_operator, functions, kinds
             )
-            index = _early_exit_plan(function, context)
-            if index is None:
+            plan = _early_exit_plan(function, context)
+            if plan is None:
                 continue
+            index, simple = plan
             statements = _statements(function.body)
             context["constants"].update(_const_literals(statements[:index]))
             rest = _early_exit_statements(
-                statements[index + 1 :], "__crossgl_subgroup_active", context
+                statements[index + int(simple) :], "__crossgl_subgroup_active", context
             )
             if rest is not None:
-                plans.append((function, index))
+                plans.append((function, index, simple))
     if not plans:
         return ast
     reserved = {
@@ -2801,7 +3032,7 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
     memo = {}
     result = deepcopy(ast, memo)
     copied_effects = _effect_checker(list(walk_ast(result)), walk_ast)
-    for original, index in plans:
+    for original, index, simple in plans:
         function = memo[id(original)]
         statements = _statements(function.body)
         exit_branch = statements[index]
@@ -2810,7 +3041,9 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
             function, copied_effects, walk_ast, map_operator, functions, kinds, fresh
         )
         context["constants"].update(_const_literals(statements[:index]))
-        rest = _early_exit_statements(statements[index + 1 :], active, context)
+        rest = _early_exit_statements(
+            statements[index + int(simple) :], active, context
+        )
         if rest is None:  # pragma: no cover - the copy has the planned shape
             continue
         location = getattr(exit_branch, "source_location", None)
@@ -2819,7 +3052,11 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
             VariableNode(
                 active,
                 PrimitiveType("bool"),
-                UnaryOpNode("!", exit_branch.condition),
+                (
+                    UnaryOpNode("!", exit_branch.condition)
+                    if simple
+                    else LiteralNode(True, PrimitiveType("bool"))
+                ),
                 source_location=location,
             ),
             *rest,
@@ -2832,20 +3069,19 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
 
 
 def has_subgroup_early_exits(ast, walk_ast):
-    """Whether a void function has a top-level ``if (...) return;``.
+    """Whether a void function returns from inside a top-level statement.
 
-    Code generators keep a copy of such programs to retry them with
-    ``converge_subgroup_early_exits`` when the source's exits are unproven.
+    MLX's GEMV has a top-level ``if (...) return;``; its masked variants
+    also return from ``if (has_output_mask) { ... }``. Code generators keep a
+    copy of such programs to retry them with ``converge_subgroup_early_exits``
+    when the source's exits are unproven.
     """
     for node in walk_ast(ast):
         if not isinstance(node, FunctionNode) or _type_name(node.return_type) != "void":
             continue
         for statement in _statements(node.body):
-            if (
-                isinstance(statement, IfNode)
-                and statement.else_branch is None
-                and len(_statements(statement.then_branch)) == 1
-                and isinstance(_statements(statement.then_branch)[0], ReturnNode)
+            if isinstance(statement, IfNode) and any(
+                isinstance(child, ReturnNode) for child in walk_ast(statement)
             ):
                 return True
     return False

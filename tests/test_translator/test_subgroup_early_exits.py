@@ -74,6 +74,92 @@ def test_early_exit_keeps_uniform_programs_unchanged(target):
     assert not ACTIVE.search(generated)
 
 
+EXIT_FLAG = re.compile(r"\b_*crossgl_subgroup_exit\b")
+LATER_EXIT = "if (invocation % 4u == 1u) { results[invocation] = value; return; }"
+
+
+def _helper(generated):
+    helper = generated[generated.index("void rows(uint invocation, uint limit) {") :]
+    return helper[: helper.index("\n}\n")]
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_later_exits_store_then_leave_the_active_set(tmp_path, target):
+    """``if (c) { S; return; }`` after a collective runs ``S`` and clears active.
+
+    The invocations taking the exit evaluate ``c`` and run ``S`` where they
+    are still active, as in the source; every later statement without a
+    collective then skips them. A relative shuffle that reads a lane which
+    left is undefined in the source, so the value that lane still holds
+    refines it.
+    """
+    generated = _codegen(target).generate_stage(
+        parse(_source(f"{EXIT} {REDUCE} {LATER_EXIT} {REDUCE} {STORE}")), "compute"
+    )
+    helper = _helper(generated)
+    assert "return;" not in helper
+    active = ACTIVE.search(helper).group(0)
+    taken = EXIT_FLAG.search(helper).group(0)
+    assert f"bool {taken} = ({active} && ((invocation % 4u) == 1u));" in helper
+    assert re.search(rf"\bif \({taken}\) {{\s+results\[invocation\] = value;", helper)
+    assert re.search(rf"\b{active} = \({active} && \(?!{taken}\)?\);", helper)
+    # Both reductions run in every invocation; the final store waits.
+    first, second = (match.start() for match in re.finditer("offset >>=", helper))
+    assert first < helper.index(f"bool {taken}") < second
+    assert second < helper.rindex(f"if ({active})")
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_exits_in_literal_branches_follow_their_condition(tmp_path, target):
+    """``if (true)`` exits like its body; ``if (false)`` never runs.
+
+    MLX's masked GEMV returns from inside ``if (has_output_mask) { ... }``
+    once its template constant is folded. The mask it reads from memory is
+    read only where ``active`` holds and is zero in invocations that left.
+    """
+    body = (
+        f"{EXIT} if (false) {{ if (value > 2.0) {{ return; }} }} "
+        "if (true) { float scale = inputs[invocation]; "
+        "if (scale == 0.0) { results[invocation] = 0.0; return; } "
+        f"value *= scale; }} {REDUCE} {STORE}"
+    )
+    generated = _codegen(target).generate_stage(parse(_source(body)), "compute")
+    helper = _helper(generated)
+    assert "return;" not in helper and "2.0" not in helper
+    active = ACTIVE.search(helper).group(0)
+    taken = EXIT_FLAG.search(helper).group(0)
+    assert re.search(
+        rf"float scale = 0;\s+if \({active}\) {{\s+scale = inputs\[invocation\];",
+        helper,
+    )
+    assert f"bool {taken} = ({active} && (scale == 0.0));" in helper
+    assert re.search(rf"if \({active}\) {{\s+value \*= scale;", helper)
+    assert helper.index("value *= scale") < helper.index("offset >>=")
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "const float scale = inputs[invocation];",
+        "bool keep = inputs[invocation] > 0.0;",
+    ],
+)
+def test_predicated_constants_and_flags_start_from_zero(tmp_path, target, declaration):
+    """A constant or ``bool`` read from memory becomes a zeroed variable."""
+    name = declaration.split("=")[0].split()[-1]
+    use = f"value *= {name};" if "scale" in name else f"if (!{name}) {{ value = 0.0; }}"
+    body = f"{EXIT} {declaration} {REDUCE} {use} {STORE}"
+    generated = _codegen(target).generate_stage(parse(_source(body)), "compute")
+    helper = _helper(generated)
+    zero = "false" if name == "keep" else "0"
+    kind = "bool" if name == "keep" else "float"
+    assert re.search(rf"(?<!const ){kind} {name} = {zero};", helper), helper
+    _compile(generated, target, tmp_path)
+
+
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 @pytest.mark.parametrize(
     "body",
@@ -87,8 +173,26 @@ def test_early_exit_keeps_uniform_programs_unchanged(target):
             f"{EXIT} for (uint offset = 0u; offset < uint(inputs[0]); ++offset) "
             f"{{ value += WaveShuffleDown(value, 1u); }} {STORE}"
         ),
-        # A second exit after the first collective.
-        f"{EXIT} {REDUCE} if (invocation % 4u == 1u) {{ return; }} {REDUCE} {STORE}",
+        # A later exit whose statements before the return synchronize.
+        (
+            f"{EXIT} {REDUCE} if (invocation % 4u == 1u) "
+            f"{{ value += WaveShuffleDown(value, 1u); return; }} {REDUCE} {STORE}"
+        ),
+        # A later exit inside a branch on a value that varies.
+        (
+            f"{EXIT} {REDUCE} if (invocation % 2u == 0u) "
+            f"{{ if (value > 0.0) {{ return; }} }} {REDUCE} {STORE}"
+        ),
+        # A later exit with an alternative.
+        (
+            f"{EXIT} {REDUCE} if (invocation % 4u == 1u) {{ return; }} "
+            f"else {{ value += 1.0; }} {REDUCE} {STORE}"
+        ),
+        # A later exit that returns from inside a loop.
+        (
+            f"{EXIT} {REDUCE} for (uint step = 0u; step < 2u; ++step) "
+            f"{{ if (invocation % 4u == step) {{ return; }} }} {REDUCE} {STORE}"
+        ),
         # A loop counter the body writes.
         (
             f"{EXIT} for (uint offset = 2u; offset >= 1u; offset >>= 1u) "
