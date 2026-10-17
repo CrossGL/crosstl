@@ -2797,6 +2797,46 @@ def test_metal_relative_shuffle_intrinsics_round_trip_to_simd_shuffle():
     assert "WaveShuffle" not in generated_code
 
 
+def test_metal_bfloat_lane_moves_preserve_bits_through_ushort():
+    # Metal's SIMD-group shuffles reject bfloat operands; MLX's bf16 overloads
+    # move the ushort representation instead, which keeps NaN payloads intact.
+    shader = """
+    shader MetalBfloatShuffle {
+        compute {
+            void main(uint lane @gl_SubgroupInvocationID) {
+                bfloat16 value = bfloat16(float(lane));
+                bfloat16 filled = WaveShuffleAndFillUp(value, -bfloat16(1.0), 1u);
+                bfloat16 read = WaveReadLaneAt(filled, 31u);
+                bfloat16 shuffled = WaveReadLaneAt(read, lane);
+                bfloat16 down = WaveShuffleDown(shuffled, 2u);
+                bfloat16 first = WaveReadLaneFirst(down);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "as_type<bfloat>(simd_shuffle_and_fill_up(as_type<ushort>(value), "
+        "as_type<ushort>(" in generated_code
+    )
+    assert "as_type<bfloat>(simd_broadcast(as_type<ushort>(filled), ushort(31u)))" in (
+        generated_code
+    )
+    assert "as_type<bfloat>(simd_shuffle(as_type<ushort>(read), ushort(lane)))" in (
+        generated_code
+    )
+    assert "as_type<bfloat>(simd_shuffle_down(as_type<ushort>(shuffled)" in (
+        generated_code
+    )
+    assert "as_type<bfloat>(simd_broadcast_first(as_type<ushort>(down)))" in (
+        generated_code
+    )
+    assert "unsupported Metal wave intrinsic" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_relative_shuffle_result_type_supports_nested_bitcast():
     shader = """
     shader MetalRelativeShuffleBitcast {

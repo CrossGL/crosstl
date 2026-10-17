@@ -163,10 +163,7 @@ def test_scan_rejects_unproven_barrier_participation(
 
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 @pytest.mark.parametrize("operation,operator,inclusive", OPERATIONS)
-@pytest.mark.parametrize(
-    "kind",
-    ["bool", "double", "float2", "int64_t", "half", "float16_t", "uint16_t", "int8_t"],
-)
+@pytest.mark.parametrize("kind", ["bool", "double", "float2", "int64_t"])
 def test_scan_rejects_unsupported_source_widths(
     target, operation, operator, inclusive, kind
 ):
@@ -179,6 +176,27 @@ def test_scan_rejects_unsupported_source_widths(
             ),
             "compute",
         )
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("operation,operator,inclusive", OPERATIONS)
+@pytest.mark.parametrize("kind", ["half", "float16_t", "uint16_t", "int8_t"])
+def test_scan_lowers_narrow_source_widths(
+    tmp_path, target, operation, operator, inclusive, kind
+):
+    # Narrow integers scan modulo 2^32 and are rewrapped; binary16 rounds
+    # every partial. See test_software_subgroup_narrow_scans.py for semantics.
+    generated = _codegen(target).generate_stage(
+        parse(
+            _canonical(
+                f"{kind} input = {kind}(1); {kind} value = {operation}(input); "
+                "results[invocation] = uint(value);"
+            )
+        ),
+        "compute",
+    )
+    assert operation not in generated
+    _compile(generated, target, tmp_path)
 
 
 def _source(kind, size):

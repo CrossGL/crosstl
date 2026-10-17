@@ -2252,20 +2252,35 @@ class MetalPreprocessor(HLSLPreprocessor):
                 self._metal_unqualified_remove_cv_t_available(working)
             )
             excluded_spans = self._find_template_declaration_spans(working)
-            (
-                instantiations,
-                selected_partial_specializations,
-            ) = self._find_explicit_template_struct_instantiations(
+            self._explicit_struct_reference_sink = []
+            try:
+                (
+                    instantiations,
+                    selected_partial_specializations,
+                ) = self._find_explicit_template_struct_instantiations(
+                    working,
+                    templates_by_name,
+                    excluded_spans,
+                    explicit_specialization_keys,
+                    partial_specializations,
+                    allow_partial_object_specializations=(
+                        allow_partial_object_specializations
+                    ),
+                    allow_unqualified_remove_cv_t=allow_unqualified_remove_cv_t,
+                )
+                explicit_references = self._explicit_struct_reference_sink
+            finally:
+                self._explicit_struct_reference_sink = None
+            concretized = self._concretize_method_explicit_struct_specializations(
                 working,
                 templates_by_name,
-                excluded_spans,
-                explicit_specialization_keys,
-                partial_specializations,
-                allow_partial_object_specializations=(
-                    allow_partial_object_specializations
-                ),
-                allow_unqualified_remove_cv_t=allow_unqualified_remove_cv_t,
+                explicit_references,
+                materialized_names,
             )
+            if concretized is not None:
+                # Spans changed; rediscover instantiations against the new text.
+                working = concretized
+                continue
             if not instantiations:
                 return working
 
@@ -24008,6 +24023,16 @@ class MetalPreprocessor(HLSLPreprocessor):
                     partial_match_arguments,
                 )
                 if key in explicit_specialization_keys:
+                    sink = getattr(self, "_explicit_struct_reference_sink", None)
+                    if sink is not None:
+                        sink.append(
+                            (
+                                ident,
+                                list(template_arguments),
+                                key,
+                                (self._scoped_identifier_start(code, i), angle_end + 1),
+                            )
+                        )
                     i = angle_end + 1
                     continue
                 matching_partials: List[Tuple[_MetalTemplateStruct, Dict[str, str]]] = (
@@ -24763,6 +24788,138 @@ class MetalPreprocessor(HLSLPreprocessor):
         if target not in self._METAL_SCALAR_VECTOR_TYPES:
             return None
         return target
+
+    def _explicit_struct_specialization_definitions(
+        self,
+        code: str,
+        primary_templates_by_name: Dict[str, _MetalTemplateStruct],
+    ) -> Dict[Tuple[str, Tuple[str, ...]], Tuple[Tuple[int, int], str, bool]]:
+        """Return full explicit struct specialization definitions by key.
+
+        Keys match ``_find_explicit_struct_specialization_keys``. Each value
+        holds the ``template <> struct Name<...>`` header span, its class key
+        and whether the body declares member functions.
+        """
+        definitions: Dict[
+            Tuple[str, Tuple[str, ...]], Tuple[Tuple[int, int], str, bool]
+        ] = {}
+        type_aliases = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=self._find_template_declaration_spans(code),
+        )
+        masked = self._mask_comments_and_literals(code)
+        for match in re.finditer(
+            r"\btemplate\s*<\s*>\s*(?P<keyword>struct|class)\s+"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_:]*)\s*<",
+            masked,
+        ):
+            angle_start = match.end() - 1
+            angle_end = self._find_matching_angle(code, angle_start)
+            if angle_end is None:
+                continue
+            body_start = angle_end + 1
+            while body_start < len(code) and code[body_start].isspace():
+                body_start += 1
+            if body_start >= len(code) or code[body_start] != "{":
+                continue
+            body_end = self._find_matching_delimiter(code, body_start, "{", "}")
+            if body_end is None:
+                continue
+            name = match.group("name").split("::")[-1]
+            arguments = self._split_top_level_commas(code[angle_start + 1 : angle_end])
+            primary_template = primary_templates_by_name.get(name)
+            if primary_template is not None:
+                arguments = (
+                    self._template_arguments_with_resolved_defaults(
+                        primary_template,
+                        arguments,
+                    )
+                    or arguments
+                )
+            canonical_arguments = [
+                self._resolve_type_aliases_at(argument, type_aliases, match.start())
+                for argument in arguments
+            ]
+            key = self._struct_specialization_comparison_key(name, canonical_arguments)
+            probe = f"struct __crossgl_explicit_probe {code[body_start:body_end + 1]};"
+            structs = self._find_concrete_struct_definitions(probe)
+            has_methods = bool(
+                structs
+                and (
+                    structs[0].methods
+                    or structs[0].template_methods
+                    or structs[0].has_operator_call
+                )
+            )
+            definitions[key] = (
+                (match.start(), angle_end + 1),
+                match.group("keyword"),
+                has_methods,
+            )
+        return definitions
+
+    def _concretize_method_explicit_struct_specializations(
+        self,
+        code: str,
+        primary_templates_by_name: Dict[str, _MetalTemplateStruct],
+        references: List[
+            Tuple[str, List[str], Tuple[str, Tuple[str, ...]], Tuple[int, int]]
+        ],
+        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str],
+    ) -> Optional[str]:
+        """Give referenced method-bearing explicit specializations concrete names.
+
+        Member calls lower through a concrete receiver struct, but a full
+        explicit specialization such as ``template <> struct CumProd<bool>``
+        keeps its template header, so ``CumProd<bool> op; op.simd_scan(x)`` has
+        no receiver to resolve. Renaming the definition in place keeps its
+        declaration order and body. Data-only specializations (``Limits<bool>``)
+        keep their existing static-member path unchanged.
+        """
+        if not references:
+            return None
+        definitions = self._explicit_struct_specialization_definitions(
+            code, primary_templates_by_name
+        )
+        reserved = set(IDENTIFIER_RE.findall(self._mask_comments_and_literals(code)))
+        renamed: Dict[
+            Tuple[str, Tuple[str, ...]], Tuple[str, Tuple[str, Tuple[str, ...]]]
+        ] = {}
+        replacements: List[Tuple[int, int, str]] = []
+        for name, arguments, key, span in references:
+            definition = definitions.get(key)
+            if definition is None or not definition[2]:
+                continue
+            if key not in renamed:
+                specialization_key = self._template_specialization_key(name, arguments)
+                concrete = self._template_specialization_identifier(
+                    name, list(specialization_key[1])
+                )
+                while concrete in reserved:
+                    concrete += "_"
+                reserved.add(concrete)
+                renamed[key] = (concrete, specialization_key)
+                header_span, keyword, _has_methods = definition
+                replacements.append(
+                    (header_span[0], header_span[1], f"{keyword} {concrete}")
+                )
+            replacements.append((span[0], span[1], renamed[key][0]))
+        if not renamed:
+            return None
+        for concrete, specialization_key in renamed.values():
+            materialized_names[specialization_key] = concrete
+            self._materialized_struct_specializations[concrete] = (
+                specialization_key[0],
+                tuple(specialization_key[1]),
+            )
+            primary = primary_templates_by_name.get(specialization_key[0])
+            if primary is not None:
+                self._materialized_struct_primary_templates[concrete] = primary
+                self._materialized_struct_specialization_namespaces[concrete] = (
+                    primary.namespace
+                )
+        return self._apply_text_replacements(code, replacements)
 
     def _find_explicit_struct_specialization_keys(
         self,

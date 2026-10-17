@@ -171,6 +171,82 @@ def test_narrowed_wide_integer_identity_retains_its_value(tmp_path, target):
     _compile(generated, target, tmp_path)
 
 
+# Staged zero inputs only run in disabled subgroups, and both targets define
+# integer +, - and * as wrapping, so these wrappers add no trap or effect.
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize(
+    "helpers",
+    (
+        "float wrapped(float value) { int local = asint(value) + 2147483647; return WavePrefixSum(float(local)); }",
+        "float wrapped(float value) { int local = -asint(value); return WavePrefixSum(float(local)); }",
+        # MLX's two-word 64-bit scan: a bit-preserving uvec2 shuffle per step.
+        """int64 shuffle(int64 data, int64 fill, uint delta) {
+            return as_type<int64>(WaveShuffleAndFillUp(as_type<uvec2>(data), as_type<uvec2>(fill), delta));
+        }
+        uint64 shuffle(uint64 data, uint64 fill, uint delta) {
+            return as_type<uint64>(WaveShuffleAndFillUp(as_type<uvec2>(data), as_type<uvec2>(fill), delta));
+        }
+        int64 scan(int64 value) {
+            for (int step = 1; step <= 16; step *= 2) {
+                value = value + shuffle(value, (int64)(0), uint(step));
+            }
+            return value;
+        }
+        float wrapped(float value) { return float(scan(int64(asint(value)))); }""",
+        # Compound updates read the whole current value.
+        """bool scan(bool value) {
+            for (int step = 1; step <= 16; step *= 2) {
+                bool other = WaveShuffleAndFillUp(uint(value), 1u, uint(step)) != 0u;
+                value &= other;
+            }
+            return value;
+        }
+        float wrapped(float value) { bool all = scan(value > 0.0); return all ? 1.0 : 0.0; }""",
+        # MLX's CumProd spells its identity static_cast<U>(1.0f): an exactly
+        # integral literal converted to the integer type it fits.
+        """uint64 shuffle(uint64 data, uint64 fill, uint delta) {
+            return as_type<uint64>(WaveShuffleAndFillUp(as_type<uvec2>(data), as_type<uvec2>(fill), delta));
+        }
+        uint64 scan(uint64 value) {
+            for (int step = 1; step <= 16; step *= 2) {
+                value = value * shuffle(value, (uint64)(1.0f), uint(step));
+            }
+            return value;
+        }
+        float wrapped(float value) { return float(scan(uint64(asuint(value))) + (uint64)(-0.0)); }""",
+        # Binary16 extrema and mixed-precision arms take the usual conversion.
+        """float16 combine(float16 a, float16 b) {
+            if (isnan(a) || isnan(b)) { return float16(asfloat(2143289344u)); }
+            return a >= b ? a : b;
+        }
+        float16 widened(float16 a, float16 b) {
+            float16 high = max(a, b);
+            return high == float16(0.0) ? high : high + exp(float(min(a, b) - high));
+        }
+        float wrapped(float value) {
+            float16 half_value = float16(value);
+            float16 other = WaveShuffleAndFillUp(half_value, -float16(asfloat(2139095040u)), 1u);
+            return float(widened(combine(half_value, other), other));
+        }""",
+    ),
+)
+def test_wrapping_integer_and_narrow_float_wrappers_converge(tmp_path, target, helpers):
+    ast = parse(_source(helpers=helpers))
+    generator = _codegen(target)
+    entries = (
+        generator.hlsl_software_subgroup_stage_entries(ast)
+        if target == "directx"
+        else generator.glsl_software_subgroup_stage_entries(ast)
+    )
+    lowered = converge_subgroup_conditional_calls(
+        ast, entries, generator.walk_ast, generator.map_operator
+    )
+    assert lowered is not ast
+    generated = generator.generate_stage(ast, "compute")
+    assert "subgroup_enabled" in generated
+    _compile(generated, target, tmp_path)
+
+
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize(
     "helpers",
@@ -210,14 +286,19 @@ def test_pure_wrappers_still_require_uniform_barrier_participation(target, helpe
         "int narrowed(float value) { return value; } float wrapped(float value) { return WavePrefixSum(float(narrowed(value))); }",
         "int inner(int value) { return value; } float wrapped(float value) { return WavePrefixSum(float(inner(value))); }",
         "int ignored(int value, int other) { return other; } float wrapped(float value) { return WavePrefixSum(float(ignored(value, 1))); }",
-        "float wrapped(float value) { int local = asint(value) + 2147483647; return WavePrefixSum(float(local)); }",
         "float wrapped(float value) { int local = 1 / asint(value); return WavePrefixSum(float(local)); }",
-        "float wrapped(float value) { int local = -asint(value); return WavePrefixSum(float(local)); }",
+        "float wrapped(float value) { int local = 2147483647 + 1; return WavePrefixSum(value + float(local)); }",
+        "float wrapped(float value) { int64 local = as_type<int64>(asuint(value)); return WavePrefixSum(float(local)); }",
         "float wrapped(float value) { float local = value; while (local > 0.0) { local = WavePrefixSum(local); } return local; }",
         "float wrapped(float value) { float local = value; if (value > 0.0) { local = WavePrefixSum(local); } return local; }",
         "float wrapped(float value) { return WavePrefixSum(float(1 << asint(value))); }",
         "float wrapped(float value) { int local = int(9223372036854775807l); return WavePrefixSum(value + float(local)); }",
         "float wrapped(float value) { int local = int(-9223372036854775807l - 1l); return WavePrefixSum(value + float(local)); }",
+        # Only exactly integral, finite literals that fit convert exactly.
+        "float wrapped(float value) { int local = int(1.5); return WavePrefixSum(value + float(local)); }",
+        "float wrapped(float value) { uint local = uint(-1.0); return WavePrefixSum(value + float(local)); }",
+        "float wrapped(float value) { int local = int(4294967296.0); return WavePrefixSum(value + float(local)); }",
+        "float wrapped(float value) { int local = int(INFINITY); return WavePrefixSum(value + float(local)); }",
     ),
 )
 def test_effectful_or_unresolved_wrappers_stay_guarded(target, helpers):

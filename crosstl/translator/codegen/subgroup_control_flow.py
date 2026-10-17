@@ -1,5 +1,7 @@
 """Converge proven subgroup control flow before software barrier analysis."""
 
+import math
+import re
 from copy import deepcopy
 
 from ..arithmetic_conversions import ArithmeticScalarKind, source_integer_shape
@@ -328,20 +330,53 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         }
     )
     summaries = {}
-    scalar_types = _SCALARS | {
-        "char",
-        "uchar",
-        "short",
-        "ushort",
-        "int8",
-        "uint8",
-        "int16",
-        "uint16",
-        "int8_t",
-        "uint8_t",
-        "int16_t",
-        "uint16_t",
+    # CrossGL spells binary16 as ``float16``. Wide integers wrap on both
+    # software-subgroup targets, so staged zero inputs cannot trap.
+    floats = _FLOATS | {"float16"}
+    scalar_types = (
+        _SCALARS
+        | floats
+        | {
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int8",
+            "uint8",
+            "int16",
+            "uint16",
+            "int8_t",
+            "uint8_t",
+            "int16_t",
+            "uint16_t",
+            "int64",
+            "uint64",
+            "int64_t",
+            "uint64_t",
+        }
+    )
+    # Bit-preserving reinterpretations used by MLX's two-word shuffle helpers.
+    bitcast_widths = {
+        "int64": 64,
+        "uint64": 64,
+        "int64_t": 64,
+        "uint64_t": 64,
+        "uvec2": 64,
+        "uint2": 64,
     }
+
+    def bitcast_target(node):
+        operation = _operation(node)
+        if (
+            not isinstance(node, FunctionCallNode)
+            or not isinstance(operation, str)
+            or node.generic_args
+            or len(node.arguments) != 1
+        ):
+            return None
+        match = re.fullmatch(r"as_type\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>", operation)
+        return match.group(1) if match else None
+
     value_structs = {
         node.name: {
             member.name: _type_name(member.member_type) for member in node.members
@@ -374,17 +409,37 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
 
     def pure_float_call(node, types):
         operation = _operation(node)
+        argument_types = (
+            {value_type(argument, types) for argument in node.arguments}
+            if isinstance(node, FunctionCallNode)
+            else set()
+        )
         return (
             isinstance(node, FunctionCallNode)
             and operation in pure_float_arities
             and operation not in functions
             and not node.generic_args
             and len(node.arguments) == pure_float_arities[operation]
-            and all(
-                value_type(argument, types) in {"float", "float32_t"}
-                for argument in node.arguments
+            and (
+                argument_types <= {"float", "float32_t"}
+                # binary16 calls stay binary16 only when every operand is.
+                or len(argument_types) == 1
+                and argument_types <= {"float16", "half"}
             )
         )
+
+    def common_type(left, right):
+        if left == right:
+            return left
+        if left in floats or right in floats:
+            return "float"
+        if {left, right} & {"uint64", "uint64_t"}:
+            return "uint64"
+        if {left, right} & {"int64", "int64_t"}:
+            return "int64"
+        if left in {"uint", "uint32_t"} or right in {"uint", "uint32_t"}:
+            return "uint"
+        return "int"
 
     def value_type(node, types):
         if isinstance(node, IdentifierNode):
@@ -418,24 +473,22 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             }:
                 return "bool"
             left, right = value_type(node.left, types), value_type(node.right, types)
-            return (
-                left
-                if left == right
-                else (
-                    "float"
-                    if left in _FLOATS or right in _FLOATS
-                    else (
-                        "uint"
-                        if left in {"uint", "uint32_t"} or right in {"uint", "uint32_t"}
-                        else "int"
-                    )
-                )
-            )
+            return common_type(left, right)
         if isinstance(node, TernaryOpNode):
             left, right = value_type(node.true_expr, types), value_type(
                 node.false_expr, types
             )
-            return left if left == right else None
+            if left == right:
+                return left
+            # Mixed arithmetic arms take the usual arithmetic conversion.
+            return (
+                common_type(left, right)
+                if {left, right} <= scalar_types - {"bool"}
+                else None
+            )
+        bitcast = bitcast_target(node)
+        if bitcast is not None:
+            return bitcast
         operation = _operation(node)
         if operation in functions:
             function = resolve_function(node, types)
@@ -443,7 +496,8 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         if operation in value_types:
             return operation
         if pure_float_call(node, types):
-            return "float"
+            argument = value_type(node.arguments[0], types)
+            return argument if argument in {"float16", "half"} else "float"
         if operation in {"isnan", "isinf"} | _VOTES:
             return "bool"
         if operation in {"asfloat", "asint", "asuint"}:
@@ -474,13 +528,67 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         maximum = (1 << (shape[1] - (not unsigned))) - 1
         return value if minimum <= value <= maximum else None
 
+    def exact_integer_constant(node):
+        """Exact unbounded value of a literal integer expression, else None."""
+        if isinstance(node, LiteralNode):
+            return node.value if type(node.value) is int else None
+        if isinstance(node, UnaryOpNode) and map_operator(node.operator) in {"+", "-"}:
+            value = exact_integer_constant(node.operand)
+            if value is None:
+                return None
+            return -value if map_operator(node.operator) == "-" else value
+        if isinstance(node, BinaryOpNode) and map_operator(node.operator) in {
+            "+",
+            "-",
+            "*",
+        }:
+            left = exact_integer_constant(node.left)
+            right = exact_integer_constant(node.right)
+            if left is None or right is None:
+                return None
+            operator = map_operator(node.operator)
+            if operator == "+":
+                return left + right
+            return left - right if operator == "-" else left * right
+        return None
+
+    def integer_fits(type_name, value):
+        shape = source_integer_shape(type_name) if type_name else None
+        if shape is None or shape[2] != 1:
+            return False
+        unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+        minimum = 0 if unsigned else -(1 << (shape[1] - 1))
+        maximum = (1 << (shape[1] - (not unsigned))) - 1
+        return minimum <= value <= maximum
+
+    def integral_float_literal(node):
+        """Exact integer value of a finite integral floating literal, else None."""
+        negative = False
+        while isinstance(node, UnaryOpNode) and map_operator(node.operator) in {
+            "+",
+            "-",
+        }:
+            negative ^= map_operator(node.operator) == "-"
+            node = node.operand
+        if not isinstance(node, LiteralNode) or type(node.value) is not float:
+            return None
+        if not math.isfinite(node.value) or not node.value.is_integer():
+            return None
+        return -int(node.value) if negative else int(node.value)
+
     def converts_safely(target, value, types):
         source = value_type(value, types)
         if target in value_structs:
             return source == target
         constant = integer_constant(value)
+        if constant is None:
+            constant = exact_integer_constant(value)
+        if constant is None and target in scalar_types - floats - {"bool"}:
+            # MLX spells integer identities as static_cast<U>(1.0f); converting
+            # an exactly integral literal that fits the target is exact.
+            constant = integral_float_literal(value)
         if constant is not None and target in scalar_types:
-            if target in _FLOATS | {"bool"}:
+            if target in floats | {"bool"}:
                 return True
             shape = source_integer_shape(target)
             unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
@@ -492,7 +600,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         return (
             source in scalar_types
             and target in scalar_types
-            and (target in _FLOATS | {"bool"} or source not in _FLOATS)
+            and (target in floats | {"bool"} or source not in floats)
         )
 
     def resolve_function(call, types):
@@ -517,6 +625,19 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     )
                     for parameter, argument in zip(function.parameters, call.arguments)
                 )
+            ]
+        if len(candidates) > 1:
+            # Same-arity scalar overloads (MLX's 64-bit and bool shuffles) are
+            # only distinguishable by exact parameter matches.
+            def exact_matches(function):
+                return sum(
+                    value_type(argument, types) == _type_name(parameter.param_type)
+                    for parameter, argument in zip(function.parameters, call.arguments)
+                )
+
+            best = max(exact_matches(function) for function in candidates)
+            candidates = [
+                function for function in candidates if exact_matches(function) == best
             ]
         return candidates[0] if len(candidates) == 1 else None
 
@@ -594,6 +715,18 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             return frozenset().union(*(proof[0] for proof in proofs)), any(
                 proof[1] for proof in proofs
             )
+        bitcast = bitcast_target(node)
+        if bitcast is not None:
+            source = value_type(node.arguments[0], types)
+            if (
+                source is None
+                or bitcast_widths.get(bitcast) is None
+                or bitcast_widths.get(bitcast) != bitcast_widths.get(source)
+            ):
+                return None
+            return expression_inputs(
+                node.arguments[0], parameters, types, visiting, initialized
+            )
         children = None
         if isinstance(node, UnaryOpNode):
             operator = map_operator(node.operator)
@@ -602,16 +735,18 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 operator in {"!", "+"}
                 or operator == "-"
                 and (
-                    operand_type in _FLOATS
+                    operand_type in scalar_types - {"bool"}
                     or checked_induction_value(node, {}) is not None
                 )
                 or operator == "~"
-                and operand_type in scalar_types - _FLOATS
+                and operand_type in scalar_types - floats
             ):
                 children = [node.operand]
         elif isinstance(node, BinaryOpNode):
             operator = map_operator(node.operator)
             operands = {value_type(node.left, types), value_type(node.right, types)}
+            # Integer +, - and * wrap on both targets; division can trap or
+            # depend on zero-filled staged inputs, so it stays floating-only.
             if (
                 operator in {
                     "==",
@@ -628,9 +763,14 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 }
                 or operator in {"+", "-", "*"}
                 and operands <= scalar_types
-                and operands & _FLOATS
+                and "bool" not in operands
+                and (
+                    operands & floats
+                    or (constant := exact_integer_constant(node)) is None
+                    or integer_fits(value_type(node, types), constant)
+                )
                 or operator == "/"
-                and operands <= _FLOATS
+                and operands <= floats
             ):
                 children = [node.left, node.right]
         elif isinstance(node, TernaryOpNode):
@@ -675,6 +815,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             and not node.generic_args
             and value_type(node.arguments[0], types)
             in {"float", "float32_t", "int", "int32_t", "uint", "uint32_t"}
+            | (floats if operation in {"isnan", "isinf"} else set())
         ):
             return expression_inputs(
                 node.arguments[0], parameters, types, visiting, initialized
@@ -743,7 +884,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             if isinstance(statement, (VariableNode, AssignmentNode, ReturnNode)):
                 if isinstance(statement, VariableNode):
                     allowed_qualifiers = {"const", "thread"}
-                    if _type_name(statement.var_type) in _FLOATS:
+                    if _type_name(statement.var_type) in floats:
                         allowed_qualifiers.add("precise")
                     if (
                         statement.name in types
@@ -772,15 +913,25 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                     if isinstance(destination, MemberAccessNode):
                         member = destination.member
                         destination = destination.object_expr
+                    operator = map_operator(statement.operator)
+                    compound = (
+                        operator[:-1]
+                        if member is None
+                        and operator in {"+=", "-=", "*=", "&=", "|=", "^="}
+                        else None
+                    )
                     if (
                         not isinstance(destination, IdentifierNode)
                         or destination.name not in parameters
                         or destination.name in controls
-                        or map_operator(statement.operator) != "="
+                        or (operator != "=" and compound is None)
                     ):
                         return None
                     name = destination.name
                     target, value = types[name], statement.value
+                    if compound is not None:
+                        # `x op= v` reads the current whole value of `x`.
+                        value = BinaryOpNode(IdentifierNode(name), compound, value)
                     if member is not None:
                         target = value_structs.get(target, {}).get(member)
                         if target is None:

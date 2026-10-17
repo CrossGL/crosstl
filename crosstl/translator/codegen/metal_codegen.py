@@ -12159,6 +12159,10 @@ class MetalCodeGen:
                 operation, arguments, unsupported_reason
             )
 
+        bfloat_lane_move = self.metal_wave_bfloat_lane_move(operation, arguments)
+        if bfloat_lane_move is not None:
+            return bfloat_lane_move
+
         type_diagnostic = self.metal_wave_type_diagnostic(operation, arguments)
         if type_diagnostic is not None:
             return type_diagnostic
@@ -12315,6 +12319,109 @@ class MetalCodeGen:
             else mapped
         )
         return f"{call_name}({args})"
+
+    METAL_WAVE_BFLOAT_LANE_MOVES = {
+        "WaveReadLaneAt",
+        "WaveReadLaneFirst",
+        "WaveShuffleDown",
+        "WaveShuffleUp",
+        "WaveShuffleXor",
+        "WaveShuffleAndFillUp",
+        "QuadReadAcrossX",
+        "QuadReadAcrossY",
+        "QuadReadAcrossDiagonal",
+        "QuadReadLaneAt",
+    }
+
+    def metal_wave_bfloat_lane_move(self, operation, arguments):
+        """Move bfloat lanes as their exact bits, as MLX's bf16 overloads do.
+
+        Metal's SIMD-group shuffles do not accept ``bfloat`` operands; moving the
+        ``ushort`` representation is lossless and keeps NaN payloads intact.
+        """
+        if operation not in self.METAL_WAVE_BFLOAT_LANE_MOVES or not arguments:
+            return None
+        mapped_type, component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(arguments[0])
+        )
+        if mapped_type is None or array_suffix:
+            return None
+        if self.is_scalar_value_type(mapped_type):
+            component_type = mapped_type
+        if component_type != "bfloat" or self.metal_wave_mapped_type_is_matrix(
+            mapped_type
+        ):
+            return None
+        count = self.value_component_count(mapped_type) or 1
+        bits_type = "ushort" if count == 1 else f"ushort{count}"
+
+        def bits(argument):
+            return f"as_type<{bits_type}>({self.generate_expression(argument)})"
+
+        if operation == "WaveShuffleAndFillUp":
+            fill_type, _fill_component, _fill_suffix = (
+                self.metal_wave_argument_mapped_type(arguments[1])
+            )
+            if fill_type is not None and fill_type != mapped_type:
+                return self.metal_wave_diagnostic_expression(
+                    operation,
+                    arguments,
+                    "value and fill arguments must have matching types, got "
+                    f"{mapped_type} and {fill_type}",
+                )
+            for argument, role in zip(arguments[2:], ("delta", "modulo")):
+                diagnostic = self.metal_wave_validate_lane_argument(
+                    operation, argument, role
+                )
+                if diagnostic is not None:
+                    return diagnostic
+            delta = self.generate_expression(arguments[2])
+            modulo = (
+                f", ushort({self.generate_expression(arguments[3])})"
+                if len(arguments) == 4
+                else ""
+            )
+            inner = (
+                f"simd_shuffle_and_fill_up({bits(arguments[0])}, "
+                f"{bits(arguments[1])}, ushort({delta}){modulo})"
+            )
+        elif operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            diagnostic = self.metal_wave_validate_lane_argument(
+                operation, arguments[1], "lane index"
+            )
+            if diagnostic is None and operation == "QuadReadLaneAt":
+                diagnostic = self.metal_wave_validate_quad_lane_range(
+                    operation, arguments[1]
+                )
+            if diagnostic is not None:
+                return diagnostic
+            lane = self.generate_expression(arguments[1])
+            if operation == "QuadReadLaneAt":
+                intrinsic = "quad_broadcast"
+            else:
+                intrinsic = (
+                    "simd_broadcast"
+                    if self.literal_int_value(arguments[1]) is not None
+                    else "simd_shuffle"
+                )
+            inner = f"{intrinsic}({bits(arguments[0])}, ushort({lane}))"
+        elif operation.startswith("QuadReadAcross"):
+            mask = {"X": 1, "Y": 2, "Diagonal": 3}[operation[len("QuadReadAcross") :]]
+            inner = f"quad_shuffle_xor({bits(arguments[0])}, ushort({mask}))"
+        elif operation == "WaveReadLaneFirst":
+            inner = f"simd_broadcast_first({bits(arguments[0])})"
+        else:
+            diagnostic = self.metal_wave_validate_lane_argument(
+                operation, arguments[1], "delta"
+            )
+            if diagnostic is not None:
+                return diagnostic
+            intrinsic = self.METAL_WAVE_DIRECT_MAPPINGS[operation]
+            inner = (
+                f"{intrinsic}({bits(arguments[0])}, "
+                f"ushort({self.generate_expression(arguments[1])}))"
+            )
+        return f"as_type<{mapped_type}>({inner})"
 
     def metal_wave_result_type(self, operation, arguments):
         if operation in self.METAL_WAVE_UINT_RESULT_INTRINSICS:

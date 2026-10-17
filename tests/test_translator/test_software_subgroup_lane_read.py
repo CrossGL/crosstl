@@ -98,7 +98,7 @@ def test_lane_read_rejects_non_scalar_integer_indices(target, index):
 
 
 @pytest.mark.parametrize("target", ("opengl", "directx"))
-@pytest.mark.parametrize("kind", ("bool", "double", "float2", "half", "float16_t"))
+@pytest.mark.parametrize("kind", ("bool", "double", "float2"))
 def test_lane_read_rejects_unsupported_payloads(target, kind):
     with pytest.raises(ValueError):
         _codegen(target).generate_stage(
@@ -109,6 +109,23 @@ def test_lane_read_rejects_unsupported_payloads(target, kind):
             ),
             "compute",
         )
+
+
+@pytest.mark.parametrize("target", ("opengl", "directx"))
+@pytest.mark.parametrize("kind", ("half", "float16_t"))
+def test_lane_read_moves_binary16_payloads(tmp_path, target, kind):
+    # binary16 registers move between lanes unchanged on both targets.
+    generated = _codegen(target).generate_stage(
+        parse(
+            _canonical(
+                f"{kind} value = {kind}(1); {kind} result = WaveReadLaneAt(value, 0u); "
+                "results[invocation] = uint(result);"
+            )
+        ),
+        "compute",
+    )
+    assert "WaveReadLaneAt" not in generated
+    _compile(generated, target, tmp_path)
 
 
 @pytest.mark.parametrize("target", ("opengl", "directx"))

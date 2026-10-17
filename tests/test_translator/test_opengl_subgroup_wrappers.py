@@ -135,13 +135,27 @@ def test_wrappers_preserve_resolved_nested_overload_identity(tmp_path):
     _compile(generated, "opengl", tmp_path)
 
 
-def test_wrapper_root_overloads_remain_diagnostic():
+def test_typed_same_arity_root_overloads_keep_function_identity(tmp_path):
+    # MLX overloads simd_shuffle per payload type; typed resolution selects one.
+    helpers = """float leaf(float value) { return WaveActiveSum(value); }
+    float wrapper(float value) { return leaf(value); }
+    uint wrapper(uint value) { return value; }"""
+    generated = _generate(
+        "float value = wrapper(float(invocation)); results[invocation] = uint(value);",
+        helpers,
+    )
+    assert "float wrapper(float value)" in generated
+    assert "uint wrapper(uint value)" in generated
+    _compile(generated, "opengl", tmp_path)
+
+
+def test_ambiguous_root_overloads_remain_diagnostic():
     helpers = """float leaf(float value) { return WaveActiveSum(value); }
     float wrapper(float value) { return leaf(value); }
     uint wrapper(uint value) { return value; }"""
     with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
         _generate(
-            "float value = wrapper(float(invocation)); results[invocation] = uint(value);",
+            "float value = float(wrapper(1)); results[invocation] = uint(value);",
             helpers,
         )
     assert raised.value.reason == "helper-identity-ambiguous"

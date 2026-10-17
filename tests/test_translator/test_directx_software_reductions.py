@@ -106,14 +106,51 @@ def test_software_reductions_reject_unsupported_payloads(value_type):
         _codegen().generate_stage(parse(source), "compute")
 
 
-@pytest.mark.parametrize("operation", ["WaveActiveProduct", "WavePrefixSum"])
-def test_binary16_support_does_not_enable_other_narrow_reductions(operation):
+def test_binary16_support_does_not_enable_other_narrow_reductions():
     source = _source(
         "uint",
-        f"float16_t value = float16_t(1); float16_t total = {operation}(value);",
+        "float16_t value = float16_t(1); float16_t total = WaveActiveProduct(value);",
     )
     with pytest.raises(DirectXSoftwareSubgroupError, match="binary16 sums, minima"):
         _codegen().generate_stage(parse(source), "compute")
+
+
+@pytest.mark.parametrize("operation", ["WavePrefixSum", "WavePrefixInclusiveProduct"])
+def test_binary16_scans_round_every_node_natively(tmp_path, operation):
+    source = _source(
+        "uint",
+        f"""float16_t value = float16_t(float(inputWords[index] % 5u) - 2.0);
+        float16_t total = {operation}(value);
+        outputWords[index] = uint(float(total) + 64.0);""",
+    )
+    generated = _codegen().generate_stage(parse(source), "compute")
+    assert "groupshared float16_t __crossgl_software_subgroup_scratch_float16_t" in (
+        generated
+    )
+    assert "precise float16_t result = value;" in generated
+    if operation == "WavePrefixSum":
+        # Metal returns -0.0 in the first lane of an exclusive binary16 sum.
+        assert "result = asfloat16((uint16_t)0x8000u);" in generated
+    _compile(generated, tmp_path, profile="cs_6_2", flags=("-enable-16bit-types",))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "wrap"),
+    [
+        ("int8_t value = int8_t(inputWords[index]);", "<< 24) >> 24)"),
+        ("uint8_t value = uint8_t(inputWords[index]);", "& 255u)"),
+    ],
+)
+def test_byte_scans_rewrap_32_bit_results(tmp_path, declaration, wrap):
+    source = _source(
+        "uint",
+        f"""{declaration}
+        outputWords[index] = uint(WavePrefixInclusiveSum(value));""",
+    )
+    generated = _codegen().generate_stage(parse(source), "compute")
+    # Modular sums commute with truncation, so the 32-bit scan is rewrapped.
+    assert wrap in generated
+    _compile(generated, tmp_path)
 
 
 @pytest.mark.parametrize("operation", ["WaveActiveMin", "WaveActiveMax"])

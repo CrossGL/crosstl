@@ -4649,6 +4649,7 @@ class GLSLCodeGen:
                 call_node=call,
             )
             if resolved is not None:
+                exactly_resolved_calls.add(id(call))
                 return resolved
             candidates = [
                 function
@@ -4662,6 +4663,7 @@ class GLSLCodeGen:
                 return candidates[0]
             return None
 
+        exactly_resolved_calls = set()
         edges = {id(function): [] for function in functions}
         unresolved_edges = {id(function): [] for function in functions}
         for function in functions:
@@ -4894,7 +4896,12 @@ class GLSLCodeGen:
             operation, operation_node = first_operation(target_id)
             target = functions_by_id[target_id]
             name = getattr(target, "name", None)
-            if source_overload_count(name, len(target.parameters or [])) != 1:
+            # Typed overload resolution selects one root by identity; only the
+            # name-based fallback cannot distinguish same-arity overloads.
+            if (
+                source_overload_count(name, len(target.parameters or [])) != 1
+                and id(call) not in exactly_resolved_calls
+            ):
                 raise self.glsl_software_subgroup_error(
                     "OpenGL software subgroup root helpers cannot use same-arity overloaded "
                     f"source function name '{name}'",
@@ -12383,7 +12390,11 @@ class GLSLCodeGen:
                             right, visible_aliases
                         )
                     elif operator in {"+=", "-="}:
-                        delta = right if operator == "+=" else UnaryOpNode("-", right)
+                        delta = (
+                            right
+                            if operator == "+="
+                            else self.glsl_pointer_offset_negation(right)
+                        )
                         replacement = dict(current)
                         replacement["offset"] = self.glsl_pointer_offset_sum(
                             replacement.get("offset"), delta
@@ -12401,7 +12412,11 @@ class GLSLCodeGen:
                             right, visible_aliases
                         )
                     elif operator in {"+=", "-="}:
-                        delta = right if operator == "+=" else UnaryOpNode("-", right)
+                        delta = (
+                            right
+                            if operator == "+="
+                            else self.glsl_pointer_offset_negation(right)
+                        )
                         replacement = dict(current)
                         replacement["offset"] = self.glsl_pointer_offset_sum(
                             replacement.get("offset"), delta
@@ -26519,7 +26534,16 @@ class GLSLCodeGen:
             return delta
         if delta in {None, 0, "0"}:
             return base
-        return BinaryOpNode(base, "+", delta)
+        node = BinaryOpNode(base, "+", delta)
+        # Pointer arithmetic adds each delta's value exactly; the sum itself is
+        # not a source-typed integer expression that could wrap.
+        node._glsl_pointer_offset_composition = True
+        return node
+
+    def glsl_pointer_offset_negation(self, delta):
+        node = UnaryOpNode("-", delta)
+        node._glsl_pointer_offset_composition = True
+        return node
 
     def glsl_workgroup_pointer_offset_interval(self, binding, intervals=None):
         interval = binding.get("offset_interval")
@@ -26631,7 +26655,7 @@ class GLSLCodeGen:
                 self.glsl_active_literal_int_constants(),
             )
             if operator == "-":
-                delta = UnaryOpNode("-", delta)
+                delta = self.glsl_pointer_offset_negation(delta)
                 if delta_interval is not None:
                     delta_interval = (-delta_interval[1], -delta_interval[0])
             binding["offset"] = self.glsl_pointer_offset_sum(
@@ -26742,7 +26766,7 @@ class GLSLCodeGen:
             if info is not None and info["width"] == 1 and info["bits"] > 32:
                 binding["wide_offset"] = True
             if operator == "-":
-                delta = UnaryOpNode("-", delta)
+                delta = self.glsl_pointer_offset_negation(delta)
             binding["offset"] = self.glsl_pointer_offset_sum(
                 binding.get("offset"), delta
             )
@@ -28667,13 +28691,96 @@ class GLSLCodeGen:
             and offset_info["bits"] > 32
             else None
         )
-        rendered = self.glsl_index_expression(
-            offset,
-            binding.get("root"),
-            target_signed=target_signed,
-            assertion_expression=binding.get("index_assertion_expression"),
-        )
+        try:
+            rendered = self.glsl_index_expression(
+                offset,
+                binding.get("root"),
+                target_signed=target_signed,
+                assertion_expression=binding.get("index_assertion_expression"),
+            )
+        except self.GLSL_INDEX_RANGE_ERROR:
+            rendered = self.glsl_signed_logical_offset_expression(offset)
+            if rendered is None:
+                raise
         return rendered or "0"
+
+    def glsl_signed_logical_offset_expression(self, offset):
+        """Render a composed pointer offset exactly in GLSL ``int`` arithmetic.
+
+        Pointer arithmetic moves by the exact value of each delta, so a
+        logical offset such as ``in + axis_size - offset - 4`` may be negative
+        before guarded accesses add their element index (MLX's reverse scans
+        form such pointers). The offset is accepted only when every delta's
+        proved value and every left-to-right partial sum fits ``int``; then
+        the termwise ``int`` sum cannot overflow and equals the exact offset.
+        The subscripts through it still need their own complete-offset proof.
+        """
+        terms = []
+
+        def flatten(node, sign):
+            if getattr(node, "_glsl_pointer_offset_composition", False):
+                if isinstance(node, BinaryOpNode):
+                    return flatten(node.left, sign) and flatten(node.right, sign)
+                if isinstance(node, UnaryOpNode):
+                    return flatten(node.operand, -sign)
+                return False
+            terms.append((sign, node))
+            return True
+
+        if not flatten(offset, 1) or len(terms) < 2:
+            return None
+        signed_int = IntegerRange(-(1 << 31), (1 << 31) - 1)
+        total = None
+        rendered = None
+        for sign, term in terms:
+            if isinstance(term, str):
+                return None
+            value = self.glsl_index_value_range(term)
+            if value is None:
+                return None
+            low, high = (
+                (value.minimum, value.maximum)
+                if sign > 0
+                else (-value.maximum, -value.minimum)
+            )
+            if not (
+                value.is_within(signed_int)
+                and signed_int.minimum <= low <= high <= signed_int.maximum
+            ):
+                return None
+            total = (low, high) if total is None else (total[0] + low, total[1] + high)
+            if not signed_int.minimum <= total[0] <= total[1] <= signed_int.maximum:
+                return None
+            info = self.glsl_value_type_info(self.glsl_source_expression_type(term))
+            if (
+                info is None
+                or info["width"] != 1
+                or info["family"]
+                not in {
+                    "int",
+                    "uint",
+                }
+            ):
+                return None
+            literal = self.literal_int_value(
+                term, self.glsl_active_literal_int_constants()
+            )
+            if isinstance(literal, int) and not isinstance(literal, bool):
+                text = self.glsl_target_index_literal(literal, "int")
+            else:
+                text = self.generate_expression_with_expected(term, None)
+                bits = (
+                    info["narrow"]["bits"]
+                    if info["narrow"] is not None
+                    else info["bits"]
+                )
+                if info["family"] != "int" or bits > 32:
+                    text = f"int({text})"
+            if rendered is None:
+                rendered = text if sign > 0 else f"(-{text})"
+            else:
+                rendered = f"({rendered} {'+' if sign > 0 else '-'} {text})"
+        return rendered
 
     def glsl_workgroup_pointer_access_expression(self, node):
         array = getattr(node, "array", getattr(node, "array_expr", None))
@@ -40518,7 +40625,10 @@ complex64_t crossgl_complex64_mod_assign(
         return "0.0", "1.0"
 
     def glsl_software_subgroup_payload_type(self, operation, source_type):
-        if operation == "WaveActiveSum" and self.glsl_half_width(source_type) == 1:
+        if (
+            operation == "WaveActiveSum"
+            or operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS
+        ) and self.glsl_half_width(source_type) == 1:
             self.glsl_apply_half_contract("value", "half", None)
             return "half"
         return self.map_type(source_type)
@@ -40553,7 +40663,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def glsl_software_subgroup_scan_helper(
-        self, operation, value_type, helper, scratch
+        self, operation, value_type, helper, scratch, *, binary16=False
     ):
         operator, inclusive = self.GLSL_SOFTWARE_SUBGROUP_SCANS[operation]
         qualifier = "precise " if value_type == "float" else ""
@@ -40561,6 +40671,10 @@ complex64_t crossgl_complex64_mod_assign(
         combine = f"{left} {operator} result"
         if value_type == "int":
             combine = f"int(uint({left}) {operator} uint(result))"
+        if binary16:
+            # A binary32 add or multiply of two binary16 values, rounded once to
+            # binary16, is the correctly rounded binary16 result at every node.
+            combine = f"{self.glsl_half_helper_names[1]}({combine})"
         # Separate each read phase from shared writes, including partial subgroups.
         code = (
             f"{value_type} {helper}({value_type} value) {{\n"
@@ -40595,6 +40709,8 @@ complex64_t crossgl_complex64_mod_assign(
             combine = f"result {operator} value"
             if value_type == "int":
                 combine = f"int(uint(result) {operator} uint(value))"
+            if binary16:
+                combine = f"{self.glsl_half_helper_names[1]}({combine})"
             code += f"    result = {combine};\n"
         return code + (
             "    memoryBarrierShared();\n"
@@ -40723,7 +40839,7 @@ complex64_t crossgl_complex64_mod_assign(
                 continue
             if operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS:
                 code += self.glsl_software_subgroup_scan_helper(
-                    operation, value_type, helper, scratch
+                    operation, value_type, helper, scratch, binary16=half_sum
                 )
                 continue
             if invocation_count == self.software_subgroup_width:
@@ -41106,10 +41222,12 @@ complex64_t crossgl_complex64_mod_assign(
             value_type = self.glsl_source_expression_type(arguments[0])
             mapped_type = self.map_type(value_type)
             layout = scalar_storage_layout(self.glsl_normalized_source_type(value_type))
+            # Narrow scalars already occupy canonical 32-bit GLSL registers, so
+            # moving them between lanes is lossless.
             valid_type = mapped_type in {"bool", "uvec2"} or (
                 mapped_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
                 and layout is not None
-                and layout.bit_width == 32
+                and layout.bit_width <= 32
             )
             if not valid_type:
                 raise self.glsl_software_subgroup_error(
@@ -41148,13 +41266,27 @@ complex64_t crossgl_complex64_mod_assign(
             else mapped_value_type in self.GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             or vector_shuffle_type is not None
         )
+        narrow_integer_scan = None
         if (
             operation == "WaveActiveProduct"
             or operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS
             or (operation == "WaveReadLaneAt" and vector_shuffle_type is None)
         ):
             layout = scalar_storage_layout(self.glsl_normalized_source_type(value_type))
-            valid_type = valid_type and layout is not None and layout.bit_width == 32
+            exact_width = layout is not None and layout.bit_width == 32
+            if not exact_width and layout is not None and layout.bit_width < 32:
+                if operation == "WaveReadLaneAt":
+                    # Lane reads move canonical 32-bit registers unchanged.
+                    exact_width = True
+                elif operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS:
+                    if layout.kind == "integer":
+                        # Modular sums and products commute with truncation, so a
+                        # 32-bit scan rewrapped to the source width is exact.
+                        narrow_integer_scan = layout
+                        exact_width = True
+                    elif self.glsl_half_width(value_type) == 1:
+                        exact_width = True
+            valid_type = valid_type and exact_width
         if not valid_type:
             raise self.glsl_software_subgroup_error(
                 f"OpenGL software subgroup operation '{operation}' requires "
@@ -41198,6 +41330,12 @@ complex64_t crossgl_complex64_mod_assign(
         if operation in {"WaveShuffleDown", "WaveReadLaneAt"}:
             delta = self.generate_expression(arguments[1])
             return f"{helper}({value}, uint({delta}))"
+        if narrow_integer_scan is not None:
+            # bitfieldExtract sign-extends int and zero-extends uint results.
+            return (
+                f"bitfieldExtract({helper}({value}), 0, "
+                f"{narrow_integer_scan.bit_width})"
+            )
         return f"{helper}({value})"
 
     def generate_glsl_wave_operation(

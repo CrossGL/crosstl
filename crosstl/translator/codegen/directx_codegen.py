@@ -7588,11 +7588,14 @@ class HLSLCodeGen:
     ):
         mapped_value_type = self.map_type(value_type)
         is_vote = operation in self.HLSL_SOFTWARE_SUBGROUP_VOTES
+        # Shuffles move registers unchanged, so every native scalar register
+        # type is lossless, including binary16 and widened 8-bit values.
+        shuffle_types = self.HLSL_SOFTWARE_SUBGROUP_SHUFFLE_TYPES | {"float16_t"}
         valid_type = (
             mapped_value_type == "bool"
             if is_vote
             else mapped_value_type in (
-                self.HLSL_SOFTWARE_SUBGROUP_SHUFFLE_TYPES
+                shuffle_types
                 if operation in {"WaveShuffleDown", "WaveReadLaneAt"}
                 else self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             )
@@ -7602,19 +7605,35 @@ class HLSLCodeGen:
             and mapped_value_type == "float16_t"
         ):
             valid_type = True
+        narrow_wrap = None
         if (
             operation == "WaveActiveProduct"
             or operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
         ):
             layout = scalar_storage_layout(self.type_name_string(value_type))
-            valid_type = valid_type and layout is not None and layout.bit_width == 32
-        if operation == "WaveShuffleAndFillUp":
-            layout = scalar_storage_layout(self.type_name_string(value_type))
-            valid_type = mapped_value_type in {"bool", "uint2"} or (
-                mapped_value_type in self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
+            scan = operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
+            if (
+                scan
                 and layout is not None
-                and layout.bit_width == 32
-            )
+                and layout.bit_width < 32
+                and (
+                    layout.kind == "integer"
+                    and mapped_value_type in {"int", "uint", "int16_t", "uint16_t"}
+                    or mapped_value_type == "float16_t"
+                )
+            ):
+                # 16-bit types scan natively; 8-bit values held in 32-bit
+                # registers scan modulo 2^32 and are rewrapped afterwards.
+                # bfloat16 carriers are raw bits and must never scan as integers.
+                valid_type = True
+                if mapped_value_type in {"int", "uint"}:
+                    narrow_wrap = layout
+            else:
+                valid_type = (
+                    valid_type and layout is not None and layout.bit_width == 32
+                )
+        if operation == "WaveShuffleAndFillUp":
+            valid_type = mapped_value_type in {"bool", "uint2"} | shuffle_types
         if not valid_type:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup votes require scalar bool payloads; "
@@ -7647,7 +7666,14 @@ class HLSLCodeGen:
         if modulo_expression is not None:
             arguments.append(f"uint({modulo_expression})")
         arguments.append(f"uint({invocation})")
-        return f"{helper}({', '.join(arguments)})"
+        call = f"{helper}({', '.join(arguments)})"
+        if narrow_wrap is not None:
+            shift = 32 - narrow_wrap.bit_width
+            if mapped_value_type == "int":
+                # Arithmetic right shift restores the source sign extension.
+                return f"(({call} << {shift}) >> {shift})"
+            return f"({call} & {(1 << narrow_wrap.bit_width) - 1}u)"
+        return call
 
     def hlsl_software_subgroup_reduction_body(self, operation, value_type, scratch):
         reducer = self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS[operation]
@@ -7723,7 +7749,7 @@ class HLSLCodeGen:
 
     def hlsl_software_subgroup_scan_body(self, operation, value_type, scratch):
         operator, inclusive = self.HLSL_SOFTWARE_SUBGROUP_SCANS[operation]
-        qualifier = "precise " if value_type == "float" else ""
+        qualifier = "precise " if value_type in {"float", "float16_t"} else ""
         left = f"{scratch}[subgroupBase + (lane & ~(2u * stride - 1u)) + stride - 1u]"
         combine = f"{left} {operator} result"
         if value_type == "int":
@@ -7744,6 +7770,8 @@ class HLSLCodeGen:
         identity = f"{value_type}({'0' if operator == '+' else '1'})"
         if value_type == "float" and operator == "+":
             identity = "asfloat(0x80000000u)"
+        if value_type == "float16_t" and operator == "+":
+            identity = "asfloat16((uint16_t)0x8000u)"
         code += (
             f"    result = {identity};\n"
             "    if (lane > 0u) {\n"

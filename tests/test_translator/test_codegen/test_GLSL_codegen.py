@@ -27676,25 +27676,52 @@ def test_glsl_software_subgroup_rejects_conditional_nested_overload_call():
     assert raised.value.operation == "WaveShuffleDown"
 
 
-def test_glsl_software_subgroup_rejects_overloaded_helper_identity():
-    code = """
-    shader GLSLSoftwareSubgroupOverloadedHelper {
-        float reduceValue(float value) {
-            return WaveActiveMin(value);
-        }
+GLSL_OVERLOADED_SUBGROUP_HELPER = """
+shader GLSLSoftwareSubgroupOverloadedHelper {
+    float reduceValue(float value) {
+        return WaveActiveMin(value);
+    }
 
-        int reduceValue(int value) {
-            return value;
-        }
+    int reduceValue(int value) {
+        return value;
+    }
 
-        compute {
-            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-            void main() {
-                float value = reduceValue(float(gl_LocalInvocationID.x));
-            }
+    compute {
+        layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            CALL
         }
     }
-    """
+}
+"""
+
+
+def test_glsl_software_subgroup_keeps_typed_overloaded_helper_identity():
+    # Exact typed resolution selects one root helper, so GLSL overloading keeps
+    # the lowered subgroup operation in the float overload only.
+    code = GLSL_OVERLOADED_SUBGROUP_HELPER.replace(
+        "CALL",
+        "float value = reduceValue(float(gl_LocalInvocationID.x));\n"
+        "            int other = reduceValue(int(gl_LocalInvocationID.x));",
+    )
+
+    generated = GLSLCodeGen(software_subgroup_width=32).generate(
+        parse_code(tokenize_code(code))
+    )
+
+    float_body = generated.split("float reduceValue(float value) {", 1)[1]
+    float_body = float_body.split("}", 1)[0]
+    int_body = generated.split("int reduceValue(int value) {", 1)[1].split("}", 1)[0]
+    assert "return crossglSoftwareSubgroupMinFloat(value);" in float_body
+    assert int_body.strip() == "return value;"
+    assert "float value = reduceValue(float(gl_LocalInvocationID.x));" in generated
+    assert "int other = reduceValue(int(gl_LocalInvocationID.x));" in generated
+
+
+def test_glsl_software_subgroup_rejects_ambiguous_overloaded_helper_identity():
+    code = GLSL_OVERLOADED_SUBGROUP_HELPER.replace(
+        "CALL", "float value = float(reduceValue(1u));"
+    )
 
     with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
         GLSLCodeGen(software_subgroup_width=32).generate(
