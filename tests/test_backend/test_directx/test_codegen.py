@@ -1415,6 +1415,177 @@ def test_codegen_hlsl_function_prototypes_are_not_emitted_as_definitions():
     assert len([line for line in definitions if line.rstrip().endswith("{")]) == 1
 
 
+STRUCT_METHOD_HLSL = textwrap.dedent("""
+    struct Counter;
+    struct Counter
+    {
+        int value;
+        float scale;
+        int AddAndGetSum(int x);
+        float Scaled();
+        static Counter Create();
+        void __ctor__init();
+    };
+
+    cbuffer _ : register(b0)
+    {
+        Counter constants;
+    }
+
+    RWStructuredBuffer<Counter> counters : register(u0);
+    RWStructuredBuffer<float> results : register(u1);
+
+    int Counter::AddAndGetSum(int x)
+    {
+        this.value += x;
+        return value;
+    }
+
+    float Counter::Scaled()
+    {
+        return value * this.scale;
+    }
+
+    static Counter Counter::Create()
+    {
+        Counter __this = (Counter)0;
+        __this.__ctor__init();
+        return __this;
+    }
+
+    void Counter::__ctor__init()
+    {
+        value = 42;
+        this.scale = 0.5;
+    }
+
+    [NumThreads(64, 1, 1)]
+    void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+    {
+        Counter local = Counter::Create();
+        results[ThreadIds.x] = counters[ThreadIds.x].AddAndGetSum(1)
+            + local.Scaled() + constants.Scaled();
+    }
+""").strip()
+
+
+def test_codegen_hlsl_struct_member_functions_lower_to_free_functions():
+    # Reduced from ComputeSharp generated shaders, which emit C# instance
+    # methods and constructors as HLSL struct member functions.
+    crossgl = generate_crossgl(STRUCT_METHOD_HLSL)
+
+    assert "int Counter_AddAndGetSum(inout Counter __this, int x) {" in crossgl
+    assert "__this.value += x;" in crossgl
+    assert "return __this.value;" in crossgl
+    assert "float Counter_Scaled(in Counter __this) {" in crossgl
+    assert "return __this.value * __this.scale;" in crossgl
+    assert "Counter Counter_Create() {" in crossgl
+    assert "Counter __this = Counter(0, 0.0);" in crossgl
+    assert "Counter___ctor__init(__this);" in crossgl
+    assert "void Counter___ctor__init(inout Counter __this) {" in crossgl
+    assert "Counter local = Counter_Create();" in crossgl
+    assert "Counter_AddAndGetSum(counters[ThreadIds.x], 1)" in crossgl
+    assert "Counter_Scaled(local)" in crossgl
+    assert "Counter_Scaled(constants)" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_metal_copies_buffer_elements_through_reference_parameters():
+    metal = MetalCodeGen().generate(parse_crossgl(generate_crossgl(STRUCT_METHOD_HLSL)))
+
+    assert "thread Counter& __this" in metal
+    lines = [line.strip() for line in metal.splitlines()]
+    copy_in = lines.index("Counter __crossgl_ref1 = counters[ThreadIds.x];")
+    call = next(
+        index
+        for index, line in enumerate(lines)
+        if "Counter_AddAndGetSum(__crossgl_ref1, 1)" in line
+    )
+    copy_out = lines.index("counters[ThreadIds.x] = __crossgl_ref1;")
+    assert copy_in < call < copy_out
+    assert "Counter_Scaled(_.constants)" in metal
+
+
+def test_metal_reference_argument_copy_back_requires_unconditional_evaluation():
+    hlsl = textwrap.dedent("""
+        RWStructuredBuffer<float> values : register(u0);
+
+        bool Bump(inout float value)
+        {
+            value += 1.0;
+            return value > 2.0;
+        }
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            bool done = ThreadIds.x > 3 && Bump(values[ThreadIds.x]);
+            values[0] = done ? 1.0 : 0.0;
+        }
+    """).strip()
+
+    with pytest.raises(ValueError, match="conditionally evaluated expression"):
+        MetalCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+
+
+def test_metal_unifies_mixed_numeric_builtin_arguments():
+    # Reduced from ComputeSharp generated shaders: HLSL converts integer
+    # operands implicitly, while Metal overloads are ambiguous for them.
+    hlsl = textwrap.dedent("""
+        cbuffer _ : register(b0)
+        {
+            int count;
+        }
+
+        RWStructuredBuffer<float> values : register(u0);
+        RWStructuredBuffer<int> integers : register(u1);
+        static const float Combo = abs(clamp(min(max(3.14, 2), 10), 0, 42));
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            values[0] = Combo + sin(2) + pow(2, 3);
+            values[1] = clamp(ThreadIds.x, 0, count);
+            values[2] = min(values[0], integers[0]);
+            values[3] = dot(int2(4, 15), float2(1.0, 1.0));
+            integers[1] = dot(int3(1, 2, 3), int3(4, 5, 6));
+            values[4] = radians(180.0) + degrees(1);
+        }
+    """).strip()
+
+    metal = MetalCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+
+    assert "abs(clamp(min(max(3.14, 2.0), 10.0), 0.0, 42.0))" in metal
+    assert "sin(2.0)" in metal
+    assert "pow(2.0, 3.0)" in metal
+    assert "clamp(ThreadIds.x, 0u, uint(_.count))" in metal
+    assert "min(values[0], float(integers[0]))" in metal
+    assert "dot(float2(int2(4, 15)), float2(1.0, 1.0))" in metal
+    assert "__crossgl_integer_dot(int3(1, 2, 3), int3(4, 5, 6))" in metal
+    assert "static inline T __crossgl_integer_dot(vec<T, N> a, vec<T, N> b)" in metal
+    assert "((180.0) * 0.017453292519943295)" in metal
+    assert "((float(1)) * 57.29577951308232)" in metal
+    assert "radians(" not in metal
+    assert "degrees(" not in metal
+
+
+def test_metal_member_access_keeps_compound_operand_grouping():
+    crossgl = generate_crossgl(textwrap.dedent("""
+        RWStructuredBuffer<float> values : register(u0);
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            float2 uv = float2(values[0], values[1]);
+            values[2] = (uv * 2.0 + 1.0).x;
+        }
+    """).strip())
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "(uv * 2.0 + 1.0).x" in metal
+
+
 def test_codegen_hlsl_program_scope_constants_lower_to_metal_cbuffer():
     # Reduced from MonoGame SpriteEffect.fx constants included through Macros.fxh.
     crossgl = generate_crossgl("""
