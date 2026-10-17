@@ -1249,6 +1249,51 @@ model on Metal, and only together with the upstream kernel. This covers
 456/17,832 entries; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+`contracts/gemv.current-tree.translation.json` pins 224 of the 256 entries of
+`gemv.metal` and their 672 artifacts: `gemv` and `gemv_t` for float32,
+float16, bfloat16 and complex64 over the seven and five tile shapes
+`matmul.cpp` selects, each with and without non-contiguous batches and
+`axpby`, and `gemv_gather` and `gemv_t_gather` over their three and five tile
+shapes. The 32 `gemv_wide` and `gemv_wide_gather` entries are excluded: their
+chunk loops stride by the threadgroup count, which the software subgroup
+translation cannot yet prove uniform. OpenGL and DirectX lower the kernels'
+SIMD-group shuffles to 32-lane software subgroups, which need every invocation
+at their barriers, so three translator changes came with this family. Programs
+whose early returns cannot be proven uniform, such as `GEMVKernel::run`'s exit
+for rows past the output, are rendered again with those returns converged into
+predicated statements. A void function's top-level branch whose condition may
+differ between invocations and which holds a barrier, such as `gemv_t`'s row
+loop under `if (out_col < out_vec_size)`, runs its barriers and their counted
+loops in every invocation and its other statements under the saved condition.
+The Metal frontend materializes thread `operator+=`-style templates in value
+form and lowers aggregate `x += y` on thread-local values to
+`x = helper(x, y)`, which complex64 accumulators need. Required CI executes
+every entry on Metal, Mesa EGL and Direct3D 12 WARP, 672 dispatches and
+262,440 checked elements per target, with `matmul.cpp`'s `(32, bn, bm)`
+threads and grids of `(ceil(outputs / outputs per threadgroup), 1, batches)`.
+Each entry runs a short case with fewer inputs than one block iteration, a
+ragged one with a partial tail block, leftover inputs and partial loads, and
+an aligned one; contiguous batches, `[2, 2]` batches with a broadcast vector
+and permuted matrix strides, and gathers over one- and two-dimensional index,
+vector and matrix layouts. A model of `GEMVKernel::run` and
+`GEMVTKernel::run` replays each thread's block position, early exit, tail
+shift, iteration and leftover loads, SIMD-group shuffle-down sums,
+threadgroup reduction and guarded stores, and must store each direct dot
+product. Inputs are small integers: float32 accumulates their products
+exactly in any order, results stay within 96 (bfloat16), 512 (float16) or
+2^20 (float32) and are never zero, and `alpha = 2` and `beta = -0.5` over
+biases that are 2 mod 4 keep `axpby` exact, so every target must give the
+model's words. Outputs start at a sentinel no result can equal, 16 trailing
+output guards are checked, unread input elements hold exact poison values and
+every input must be unchanged. OpenGL's index-range preconditions for the
+batch, gather, row and column offsets are justified by the model, which
+checks every load and store against its buffer, and mutated models that drop
+the leftover inputs, the tail shift, the batch offsets, `beta * bias` or the
+threadgroup reduction are rejected. Metal also runs the unchanged upstream
+kernels, and the translation must reproduce their words exactly. This covers
+224/17,832 entries; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

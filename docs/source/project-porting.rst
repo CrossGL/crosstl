@@ -913,6 +913,30 @@ gives both words that differ from the model for reverse contiguous scans of
 one-byte types, and only those 26 entries may. This is a 456/17,832 increment;
 it does not run the upstream MLX test suite or redirect the MLX host runtime.
 
+``gemv.current-tree.translation.json`` pins 224 of the 256 entries of
+``gemv.metal``: ``gemv`` and ``gemv_t`` for float32, float16, bfloat16 and
+complex64 over every tile shape ``matmul.cpp`` selects, with and without
+non-contiguous batches and ``axpby``, and ``gemv_gather`` and
+``gemv_t_gather``. The 32 ``gemv_wide`` and ``gemv_wide_gather`` entries,
+whose chunk loops stride by the threadgroup count, are excluded. Software
+subgroups need every invocation at their barriers, so programs whose early
+returns cannot be proven uniform are rendered again with those returns
+converged into predicated statements, and a void function's top-level branch
+whose condition may vary and which holds a barrier, such as ``gemv_t``'s row
+loop, runs its barriers and counted loops in every invocation and its other
+statements under the saved condition. The Metal frontend lowers aggregate
+``x += y`` on thread-local values through a value form of the source's thread
+``operator+=``, which complex64 accumulators need. Each target executes 672
+dispatches with ``matmul.cpp``'s ``(32, bn, bm)`` threadgroups: short, ragged
+and aligned cases over contiguous, non-contiguous and gathered batches. A
+thread-level model of ``GEMVKernel::run`` and ``GEMVTKernel::run`` must store
+each direct dot product; small integer inputs keep every float32 sum, every
+result and the ``axpby`` terms exact, so every word is compared exactly. The
+model justifies OpenGL's index-range preconditions load by load, and Metal
+also runs the unchanged upstream kernels, which the translation must
+reproduce exactly. This is a 224/17,832 increment; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,

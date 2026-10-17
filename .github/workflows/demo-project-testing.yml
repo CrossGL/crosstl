@@ -6489,7 +6489,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan]
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv]
 
     steps:
       - name: Checkout CrossTL
@@ -6913,6 +6913,34 @@ jobs:
               --basetemp=mlx-current-results/scan-family \
               --junitxml=mlx-current-results/scan-family.xml \
               demos/integrations/mlx/tests/kernels/test_current_scan_family.py
+
+      - name: Prove current MLX GEMV native parity
+        if: matrix.group == 'gemv'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMV: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX GEMV native parity" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gemv \
+              --junitxml=mlx-current-results/gemv.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemv.py
 
       - name: Upload current MLX native parity evidence
         if: always()
