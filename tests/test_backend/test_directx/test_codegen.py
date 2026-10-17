@@ -4048,10 +4048,10 @@ def test_codegen_rw_texture_indexing_uses_image_operations():
     output = generate_crossgl(code)
     assert "vec4 c = imageLoad(line, tid.x);" in output
     assert "imageStore(line, tid.x, c);" in output
-    assert "uint v = imageLoad(counters, uvec2(tid.x, 0));" in output
+    assert "uint v = imageLoad(counters, uvec2(tid.x, 0)).x;" in output
     assert (
         "imageStore(counters, uvec2(tid.x, 0), "
-        "imageLoad(counters, uvec2(tid.x, 0)) + 1);"
+        "uvec4(imageLoad(counters, uvec2(tid.x, 0)).x + 1, 0u, 0u, 0u));"
     ) in output
     assert "vec4 d = imageLoad(images[0], tid.xy);" in output
     assert "imageStore(images[1], tid.xy, d);" in output
@@ -4093,7 +4093,7 @@ def test_codegen_preserves_uav_coherency_and_register_space():
     assert "image2D outImage;" in output
     assert "@ register(u6, space2)" in output
     assert "RWStructuredBuffer<int> values;" in output
-    assert "uint value = imageLoad(counters, tid.xy);" in output
+    assert "uint value = imageLoad(counters, tid.xy).x;" in output
     assert "buffer_store(values, 0, int(value));" in output
     assert "imageStore(outImage, tid.xy, vec4(value, 0, 0, 1));" in output
 
@@ -5368,7 +5368,7 @@ def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads()
     assert "Texture2DMS<float4> msImage : register(t0);" in hlsl
     assert "Texture2DMSArray<uint> counters : register(t1);" in hlsl
     assert "float4 color = msImage.Load(pixel, sampleIndex);" in hlsl
-    assert "uint count = counters.Load(pixelLayer, sampleIndex);" in hlsl
+    assert "uint count = counters.Load(pixelLayer, sampleIndex).x;" in hlsl
     assert "bool mapped = true;" in hlsl
     assert "RWTexture2DMS" not in hlsl
     assert "RWTexture2DMSArray" not in hlsl
@@ -6481,7 +6481,8 @@ def test_codegen_math_intrinsics_mapping():
     output = generate_crossgl(MATH_INTRINSICS_HLSL)
     assert "dot" in output
     assert "normalize" in output
-    assert "vec4 m = (a * b);" in output
+    # mul of two vectors is their inner product in HLSL.
+    assert "vec4 m = dot(a, b);" in output
     assert "mix" in output
     assert "clamp(" in output
 

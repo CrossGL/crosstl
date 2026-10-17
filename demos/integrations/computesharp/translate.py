@@ -34,6 +34,9 @@ TARGETS = {
     "opengl": {"extension": ".comp", "entry_point": "main"},
 }
 MAX_ERROR_CHARS = 4000
+# ComputeSharp compiles its HLSL with DXC -Zpr (row-major matrix packing); the
+# HLSL frontend needs the same packing to order matrix products correctly.
+SOURCE_OPTIONS = {"matrix_packing": "row_major"}
 
 
 def sha256_text(text: str) -> str:
@@ -81,7 +84,10 @@ def translate_one(job: tuple[str, str, str, str]) -> dict[str, Any]:
     }
     try:
         result = crosstl.translate_with_metadata(
-            source_path, backend=target, format_output=False
+            source_path,
+            backend=target,
+            format_output=False,
+            source_options=SOURCE_OPTIONS,
         )
     except Exception as exc:  # noqa: BLE001 - each failure is recorded per shader
         record["status"] = "translation-failed"
