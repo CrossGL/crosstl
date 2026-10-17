@@ -33402,10 +33402,16 @@ complex64_t crossgl_complex64_mod_assign(
 
         real_member = MemberAccessNode(argument, "real")
         rendered = f"({self.generate_expression(argument)}).real"
-        return self.glsl_expected_type_conversion(
+        converted = self.glsl_expected_type_conversion(
             real_member,
             rendered,
             destination_type,
+        )
+        # Half and bfloat16 values live in float32 storage, so the projected
+        # real part must still be rounded: unrounded, 65520.0 stays finite
+        # instead of becoming +inf and pi keeps its float32 low bits.
+        return self.glsl_apply_narrow_float_contract(
+            converted, destination_type, real_member
         )
 
     @staticmethod

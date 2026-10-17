@@ -20260,6 +20260,51 @@ def test_opengl_registered_complex64_representation_to_scalar_uses_real_componen
     )
 
 
+def test_opengl_complex64_to_narrow_float_rounds_the_real_component(tmp_path):
+    shader = """
+    shader RegisteredComplex64NarrowFloatConversion {
+        struct complex_t_float {
+            float real;
+            float imag;
+        };
+
+        StructuredBuffer<complex_t_float> source @ binding(0);
+        RWStructuredBuffer<float> output @ binding(1);
+
+        half projectHalf(complex_t_float value) {
+            return half(value);
+        }
+
+        bfloat16_t projectBfloat(complex_t_float value) {
+            return bfloat16_t(value);
+        }
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main(uint3 dispatchId @ SV_DispatchThreadID) {
+                complex_t_float value = buffer_load(source, dispatchId.x);
+                buffer_store(output, 0u, float(projectHalf(value)));
+                buffer_store(output, 1u, float(projectBfloat(value)));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Narrow floats live in float32 storage: an unrounded real part would keep
+    # 65520.0 finite instead of +inf and pi's float32 low bits in bfloat16.
+    assert "return crossgl_round_half1((value).real);" in generated
+    assert "return crossgl_round_bfloat1((value).real);" in generated
+    assert "return (value).real;" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "registered_complex64_narrow_float_projection",
+        spirv_target="spirv1.3",
+    )
+
+
 @pytest.mark.parametrize("imag_type", ["float", "int"])
 @pytest.mark.parametrize(
     ("body", "operator", "operand_types"),

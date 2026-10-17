@@ -2282,7 +2282,11 @@ The current harness verifies:
   of those 14 entries. The compiled modules differ; this is not a claim of
   byte-identical compiler output. The conversion is checked over every bfloat16
   word, while all resource interfaces, materializations and index preconditions
-  remain unchanged.
+  remain unchanged. The 28 complex64-to-float16 and complex64-to-bfloat16
+  entries now round the projected real part through the same narrow-float
+  helpers as float32 sources, because float32 storage kept it unrounded (65520.0
+  stayed finite instead of +inf and bfloat16 pi kept its float32 low bits on
+  Mesa).
   Separately, `test_current_copy.py` executes current-pin contiguous and strided
   bfloat16-to-Boolean copies over all 65,536 bit patterns per entry, including
   signed zero, subnormals, infinities and NaNs. Generated Metal and OpenGL match
