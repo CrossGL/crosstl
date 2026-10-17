@@ -6489,7 +6489,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv]
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked]
 
     steps:
       - name: Checkout CrossTL
@@ -6941,6 +6941,67 @@ jobs:
               --basetemp=mlx-current-results/gemv \
               --junitxml=mlx-current-results/gemv.xml \
               demos/integrations/mlx/tests/kernels/test_current_gemv.py
+
+      # gemv_masked.metal's 240 gemv_masked and 288 gemv_t_masked entries run
+      # in two legs; the first also runs the module's model and contract
+      # tests.
+      - name: Prove current MLX masked GEMV native parity
+        if: matrix.group == 'gemv-masked'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMV_MASKED: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX masked GEMV native parity" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gemv-masked \
+              --junitxml=mlx-current-results/gemv-masked.xml \
+              -k "not test_current_mlx_gemv_t_masked_native_parity" \
+              demos/integrations/mlx/tests/kernels/test_current_gemv_masked.py
+
+      - name: Prove current MLX masked GEMV-T native parity
+        if: matrix.group == 'gemv-t-masked'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMV_MASKED: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX masked GEMV-T native parity" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gemv-t-masked \
+              --junitxml=mlx-current-results/gemv-t-masked.xml \
+              -k test_current_mlx_gemv_t_masked_native_parity \
+              demos/integrations/mlx/tests/kernels/test_current_gemv_masked.py
 
       - name: Upload current MLX native parity evidence
         if: always()

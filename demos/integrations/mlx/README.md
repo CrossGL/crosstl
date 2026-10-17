@@ -1294,6 +1294,51 @@ kernels, and the translation must reproduce their words exactly. This covers
 224/17,832 entries; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+`contracts/gemv_masked.current-tree.translation.json` pins all 528 entries of
+`gemv_masked.metal` and their 1,584 artifacts: `gemv_masked` and
+`gemv_t_masked` for float32, float16 and bfloat16 over the five and six tile
+shapes `BlockMaskedMM` selects, with every pairing of a boolean,
+multiplicative or absent output mask and operand mask except no masks at all,
+each with one and two batch dimensions. Their exits sit inside branches, so
+the software subgroup convergence of early returns now also handles a later
+`if (c) { ...; return; }` whose statements before the return neither
+synchronize nor leave: invocations taking it run those statements and then
+skip every later statement except barriers and collectives. A branch on a
+folded template constant, such as `if (has_output_mask)` around such an exit,
+is converged in place when the constant is true and dropped when it is false,
+`uniform<int>` loop bounds that a
+later barrier loop reads are computed by every invocation, and predicated
+`bool`, half and bfloat16 declarations start from `false` or `T(0)`. The
+Metal round trip restores `_NoMask`'s literal `constexpr operator bool()`
+members for each receiver address space, because Metal type-checks the
+statically dead `!mask` and `bool(mask[i])` branches. Metal host reflection
+now reads past non-virtual member function definitions in a struct, which do
+not change its layout, so each absent mask binds as a one-byte `_NoMask`
+record on Metal; OpenGL and Direct3D widen its `char` member to a 32-bit
+`int`. Required CI executes
+every entry on Metal, Mesa EGL and Direct3D 12 WARP in two legs, 1,584
+dispatches and 371,088 checked elements per target, with `matmul.cpp`'s
+`(32, bn, bm)` threads. Each entry runs a short case with fewer inputs than
+one block iteration, a ragged one with three output and input mask blocks,
+partial tails and leftover inputs, and an aligned one, over contiguous and
+`[2, 2]` batches whose output, matrix and vector masks have their own batch
+strides. A model of the masked `GEMVKernel::run` and `GEMVTKernel::run`
+replays each thread's block position, early exit, tail shift, output mask,
+operand masks and scales, loads, SIMD-group shuffle-down sums and guarded
+stores, and must reach the masked product computed directly: a false or zero
+output block is zero, a multiplicative output mask scales its block, and a
+false or zero input block is skipped while multiplicative operand masks scale
+it. Mask scales are 1, -1 and 2 and inputs are small integers, so every
+result is exact and every word is compared. Outputs start at a sentinel, 16
+trailing output guards are checked, unread mask elements hold a value no mask
+uses and every input must be unchanged. The model justifies OpenGL's six
+index-range preconditions for the batch offsets load by load, and mutated
+models that ignore either mask, drop the scales, the leftover inputs or the
+tail shift, or address every batch or its masks as the first are rejected.
+Metal also runs the unchanged upstream kernels, and the translation must
+reproduce their words exactly. This covers 528/17,832 entries; it does not
+run the upstream MLX test suite or redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

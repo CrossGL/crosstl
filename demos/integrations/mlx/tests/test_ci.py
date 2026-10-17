@@ -907,6 +907,8 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "convolution",
         "scan",
         "gemv",
+        "gemv-masked",
+        "gemv-t-masked",
     ]
     assert job["runs-on"] == "${{ matrix.os }}"
     assert job["if"] == "github.event_name != 'schedule'"
@@ -951,7 +953,7 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
     for step in families:
         assert step["name"].startswith("Prove current MLX ")
         assert step["name"] not in porting_steps
-        group = re.fullmatch(r"matrix\.group == '([a-z]+)'", step["if"]).group(1)
+        group = re.fullmatch(r"matrix\.group == '([a-z][a-z-]*)'", step["if"]).group(1)
         by_group[group].append(step)
         assert "continue-on-error" not in step
         assert "python tools/run_bounded_command.py" in step["run"]

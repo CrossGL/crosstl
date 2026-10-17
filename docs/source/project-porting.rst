@@ -937,6 +937,36 @@ also runs the unchanged upstream kernels, which the translation must
 reproduce exactly. This is a 224/17,832 increment; it does not run the
 upstream MLX test suite or redirect the MLX host runtime.
 
+``gemv_masked.current-tree.translation.json`` pins all 528 entries of
+``gemv_masked.metal``: ``gemv_masked`` and ``gemv_t_masked`` for float32,
+float16 and bfloat16 over the tile shapes ``BlockMaskedMM`` selects, with
+every pairing of a boolean, multiplicative or absent output and operand mask
+except no masks at all, over one and two batch dimensions. Software subgroup
+convergence of early returns now also handles a later
+``if (c) { ...; return; }`` whose statements before the return neither
+synchronize nor leave, as the masked kernels' exits for masked-out output
+blocks are: invocations taking it run those statements and skip every later
+statement except barriers and collectives. A branch on a folded template
+constant around such an exit is converged in place or dropped,
+``uniform<int>`` bounds of a later barrier loop are computed by every
+invocation, and predicated ``bool``, half and bfloat16 declarations start
+from ``false`` or ``T(0)``. The Metal round trip restores ``_NoMask``'s
+literal ``constexpr operator bool()`` members, which Metal needs for
+statically dead ``bool(mask[i])`` branches. Metal host reflection reads past
+non-virtual member function definitions, which leave a struct's layout
+unchanged, so absent masks bind as one-byte ``_NoMask`` records on Metal and
+as 32-bit records on OpenGL and Direct3D, which widen ``char`` to ``int``.
+Each target executes 1,584
+dispatches over short, ragged and aligned cases with contiguous and
+``[2, 2]`` batches whose masks have their own batch strides. A thread-level
+model of both kernels must reach the masked product computed directly; mask
+scales of 1, -1 and 2 and small integer inputs keep every result exact, so
+every word is compared exactly. The model justifies OpenGL's batch-offset
+index-range preconditions load by load, and Metal also runs the unchanged
+upstream kernels, which the translation must reproduce exactly. This is a
+528/17,832 increment; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,
