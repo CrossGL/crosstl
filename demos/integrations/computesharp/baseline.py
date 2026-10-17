@@ -12,6 +12,20 @@ from pathlib import Path
 
 TRX = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
 DEVICE_TYPE = "ComputeSharp.Tests.Extensions.Device"
+MAX_REPORTED_ERRORS = 500
+
+
+class AccountingError(ValueError):
+    """Raised when results do not match the contract; lists every mismatch."""
+
+    def __init__(self, errors: list[str]):
+        self.errors = list(errors)
+        shown = self.errors[:MAX_REPORTED_ERRORS]
+        more = len(self.errors) - len(shown)
+        text = f"{len(self.errors)} accounting mismatch(es):\n" + "\n".join(shown)
+        if more:
+            text += f"\n... {more} more"
+        super().__init__(text)
 
 
 def device_of(case: dict) -> str | None:
@@ -157,8 +171,10 @@ def verify_results(
         expected[(case["method"], case["displayName"])].append(case)
     root = ET.parse(trx_path).getroot()
     summary = root.find("t:ResultSummary", TRX)
-    if summary is None or summary.get("outcome") not in {"Passed", "Completed"}:
-        raise ValueError("MSTest run did not complete successfully")
+    run_outcome = summary.get("outcome") if summary is not None else None
+    if run_outcome not in {"Passed", "Completed", "Failed"}:
+        raise ValueError("MSTest run did not complete: " + str(run_outcome))
+    errors: list[str] = []
     definitions = {}
     for unit in root.findall("t:TestDefinitions/t:UnitTest", TRX):
         method = unit.find("t:TestMethod", TRX)
@@ -173,7 +189,8 @@ def verify_results(
         method = definitions.get(result.get("testId"))
         key = (method, result.get("testName"))
         if key not in expected:
-            raise ValueError("Unexpected executed case: " + str(key))
+            errors.append("Unexpected executed case: " + str(key))
+            continue
         observed[key].append((result.get("outcome"), *_trx_message(result)))
     counts = defaultdict(int)
     optional_skipped, gated, passed_ids = [], [], []
@@ -188,12 +205,13 @@ def verify_results(
         counts["expected-" + wanted] += len(cases)
         if wanted == "excluded":
             if outcomes:
-                raise ValueError("Excluded case was executed: " + str(key))
+                errors.append("Excluded case was executed: " + str(key))
             continue
         if len(outcomes) != len(cases):
-            raise ValueError(
+            errors.append(
                 f"Case {key} expected {len(cases)} results but found {len(outcomes)}"
             )
+            continue
         for case, (outcome, message, trace) in zip(cases, outcomes):
             inconclusive = outcome == "NotExecuted" and message.startswith(
                 "Assert.Inconclusive failed."
@@ -211,13 +229,17 @@ def verify_results(
             elif wanted == "inconclusive" and inconclusive and not missing_device:
                 gated.append(case["id"])
             else:
-                raise ValueError(
+                errors.append(
                     f"Case {key} expected {wanted} but reported {outcome}: {message.strip()[:200]}"
                 )
     if counts["passed"] == 0:
-        raise ValueError("No cases passed")
+        errors.append("No cases passed")
     if settings["deviceRows"]["Warp"] == "execute" and counts["warpPassed"] == 0:
-        raise ValueError("No WARP-row cases passed")
+        errors.append("No WARP-row cases passed")
+    if run_outcome == "Failed" and not errors:
+        errors.append("MSTest reported a failed run without a failing case")
+    if errors:
+        raise AccountingError(errors)
     return {
         "schemaVersion": 1,
         "kind": "computesharp.test-results",
