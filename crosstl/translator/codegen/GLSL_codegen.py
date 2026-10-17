@@ -400,7 +400,10 @@ from .stage_utils import (
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
+    converge_subgroup_divergent_barriers,
+    converge_subgroup_early_exits,
     converge_subgroup_guarded_returns,
+    has_subgroup_early_exits,
 )
 from .uniform_returns import UniformReturnAnalysis
 from .workgroup_access_contracts import parse_workgroup_access_assertions
@@ -8007,8 +8010,34 @@ class GLSLCodeGen:
             code = with_metadata_precondition_header(code, records)
         return with_dispatch_region_header(code, region)
 
+    GLSL_EARLY_EXIT_RETRY_REASONS = frozenset(
+        {"early-return-unproven", "potentially-divergent-control-flow"}
+    )
+
     def _generate_program(self, ast, target_stage=None):
-        """Render an AST to GLSL, optionally filtering stage entry points."""
+        """Render an AST to GLSL, optionally filtering stage entry points.
+
+        Software subgroups need every invocation at their barriers. A program
+        whose early returns cannot be proven uniform is rendered once more
+        with ``converge_subgroup_early_exits``; programs that validate as
+        written keep their output, and a failed retry reports the original
+        error.
+        """
+        retry = self.software_subgroup_width is not None and has_subgroup_early_exits(
+            ast, self.walk_ast
+        )
+        pristine = deepcopy(ast) if retry else None
+        try:
+            return self._generate_program_attempt(ast, target_stage, False)
+        except OpenGLSoftwareSubgroupError as error:
+            if not retry or error.reason not in self.GLSL_EARLY_EXIT_RETRY_REASONS:
+                raise
+            try:
+                return self._generate_program_attempt(pristine, target_stage, True)
+            except OpenGLSoftwareSubgroupError:
+                raise error from None
+
+    def _generate_program_attempt(self, ast, target_stage, early_exits):
         ast = lower_resource_aggregates(
             ast,
             storage_pointer_parameters=True,
@@ -8018,6 +8047,19 @@ class GLSLCodeGen:
         ast = lower_private_vector_views(ast, "opengl")
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
+            ast = converge_subgroup_divergent_barriers(
+                ast,
+                self.glsl_software_subgroup_stage_entries(ast, target_stage),
+                self.walk_ast,
+                self.map_operator,
+            )
+            if early_exits:
+                ast = converge_subgroup_early_exits(
+                    ast,
+                    self.glsl_software_subgroup_stage_entries(ast, target_stage),
+                    self.walk_ast,
+                    self.map_operator,
+                )
             ast = converge_subgroup_guarded_returns(
                 ast, self.walk_ast, self.map_operator
             )

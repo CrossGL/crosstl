@@ -16,13 +16,16 @@ from ..ast import (
     ConstructorNode,
     ContinueNode,
     CooperativeMatrixOpNode,
+    DoWhileNode,
     ExpressionStatementNode,
+    ForInNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     IfNode,
     LiteralNode,
+    LoopNode,
     MemberAccessNode,
     NamedType,
     PointerType,
@@ -35,6 +38,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
     WaveOpNode,
+    WhileNode,
 )
 from .loop_induction import (
     checked_induction_value,
@@ -1941,4 +1945,1140 @@ def converge_subgroup_bounded_loops(ast, entries, walk_ast, map_operator):
             IdentifierNode(step), "<", deepcopy(plan["stride"])
         )
         loop.update = UnaryOpNode("++", IdentifierNode(step), is_postfix=True)
+    return result
+
+
+_CONVERSIONS = re.compile(
+    r"(?:bool|half|float|double|float(?:16|32|64)_t|u?int(?:8|16|32|64)?(?:_t)?)"
+)
+_WORKGROUP_BARRIERS = frozenset({"workgroupBarrier", "workgroupExecutionBarrier"})
+# Updates a pure function may apply to its own value parameters and locals:
+# none reads memory or can trap.
+_PURE_UPDATE_OPERATORS = frozenset({"=", "+=", "-=", "*=", "&=", "|=", "^="})
+_SHARED_QUALIFIERS = frozenset(
+    {"threadgroup", "shared", "groupshared", "device", "constant", "static"}
+)
+
+
+def _literal_divisor(node, constants):
+    """The nonzero integer other than -1 that ``node`` denotes, if any."""
+    if isinstance(node, IdentifierNode) and node.name in constants:
+        node = constants[node.name]
+    if isinstance(node, CastNode):
+        node = node.expression
+    if (
+        isinstance(node, LiteralNode)
+        and type(node.value) is int
+        and node.value not in {0, -1}
+    ):
+        return node.value
+    return None
+
+
+def _inactive_safe(node, constants, map_operator, private=frozenset()):
+    """Whether an invocation that left early may evaluate ``node`` too.
+
+    Only identifiers, literals, members of named values, scalar conversions,
+    side-effect-free operators and integer division by a nonzero constant
+    other than -1 qualify; ``private`` names private arrays and structs whose
+    elements may also be read. Memory, calls and assignments never do.
+    """
+
+    def safe(child):
+        return _inactive_safe(child, constants, map_operator, private)
+
+    if isinstance(node, (LiteralNode, IdentifierNode)):
+        return True
+    if isinstance(node, CastNode):
+        return safe(node.expression)
+    if isinstance(node, MemberAccessNode):
+        return isinstance(node.object_expr, IdentifierNode) or (
+            _private_root(node, private) and safe(node.object_expr)
+        )
+    if isinstance(node, ArrayAccessNode):
+        return _private_root(node, private) and all(
+            safe(child) for child in (node.array_expr, node.index_expr)
+        )
+    if isinstance(node, UnaryOpNode):
+        return map_operator(node.operator) in {"+", "-", "!", "~"} and safe(
+            node.operand
+        )
+    if isinstance(node, BinaryOpNode):
+        operator = map_operator(node.operator)
+        if operator in {"/", "%"}:
+            return _literal_divisor(node.right, constants) is not None and safe(
+                node.left
+            )
+        return operator in _SPECULATIVE_OPERATORS and all(
+            safe(part) for part in (node.left, node.right)
+        )
+    if isinstance(node, TernaryOpNode):
+        return all(
+            safe(part) for part in (node.condition, node.true_expr, node.false_expr)
+        )
+    if isinstance(node, FunctionCallNode):
+        name = _call_name(node)
+        if not isinstance(name, str):
+            return False
+        if name in constants.get("__pure__", ()):
+            # A user function that only computes a value from its arguments.
+            return not getattr(node, "generic_args", None) and all(
+                safe(argument) for argument in node.arguments
+            )
+        if name in constants.get("__functions__", ()) or len(node.arguments) != 1:
+            return False
+        if _bitcast_name(name, node):
+            # Metal's bit reinterpretation reads no memory and cannot trap.
+            return safe(node.arguments[0])
+        return (
+            _CONVERSIONS.fullmatch(name) is not None
+            and not getattr(node, "generic_args", None)
+            and safe(node.arguments[0])
+        )
+    if isinstance(node, ConstructorNode):
+        return (
+            _CONVERSIONS.fullmatch(_type_name(node.constructor_type) or "") is not None
+            and not node.named_arguments
+            and len(node.arguments) == 1
+            and safe(node.arguments[0])
+        )
+    return False
+
+
+_AS_TYPE = re.compile(r"as_type<\s*[A-Za-z_][A-Za-z0-9_]*\s*>")
+
+
+def _bitcast_name(name, node):
+    """Whether a call is Metal's ``as_type<T>(x)``, however it was parsed."""
+    if name == "as_type":
+        return len(getattr(node, "generic_args", None) or []) == 1
+    return _AS_TYPE.fullmatch(name) is not None and not getattr(
+        node, "generic_args", None
+    )
+
+
+def _private_root(node, private):
+    while isinstance(node, (ArrayAccessNode, MemberAccessNode)):
+        node = (
+            node.array_expr if isinstance(node, ArrayAccessNode) else node.object_expr
+        )
+    return isinstance(node, IdentifierNode) and node.name in private
+
+
+def _private_locals(function, walk_ast):
+    """Locals of ``function`` held per invocation, never shared or aliased."""
+    names = {}
+    for node in walk_ast(function.body):
+        if not isinstance(node, VariableNode):
+            continue
+        if (
+            isinstance(node.var_type, (PointerType, ReferenceType))
+            or _qualifiers(node) & _SHARED_QUALIFIERS
+            or node.attributes
+            and any(attribute.name != "uniform_value" for attribute in node.attributes)
+        ):
+            names[node.name] = False
+        else:
+            names.setdefault(node.name, True)
+    parameters = {parameter.name for parameter in function.parameters or []}
+    return frozenset(
+        name for name, private in names.items() if private and name not in parameters
+    )
+
+
+def _barrier_statement(statement, functions):
+    expression = statement
+    if isinstance(statement, ExpressionStatementNode):
+        expression = statement.expression
+    return (
+        isinstance(expression, FunctionCallNode)
+        and _call_name(expression) in _WORKGROUP_BARRIERS
+        and _call_name(expression) not in functions
+        and not expression.arguments
+    )
+
+
+_RELATIVE_SHUFFLES = frozenset(
+    {
+        "WaveShuffleDown",
+        "WaveShuffleUp",
+        "WaveShuffleXor",
+        "simd_shuffle_down",
+        "simd_shuffle_up",
+        "simd_shuffle_xor",
+    }
+)
+
+
+def _collective_call(node, functions, wrappers=frozenset()):
+    """Whether ``node`` is a shuffle that invocations that left may run.
+
+    A relative shuffle returns another lane's value, and a source lane that
+    left gives an undefined value in Metal and HLSL alike, so the value it
+    supplies after convergence refines the source. Sums, scans, votes,
+    broadcasts and lane reads by index depend on which invocations are
+    active, or are not needed by MLX's kernels; they stay unproven.
+    """
+    if isinstance(node, WaveOpNode):
+        return node.operation in _RELATIVE_SHUFFLES
+    name = _call_name(node) if isinstance(node, FunctionCallNode) else None
+    if isinstance(name, str) and name in wrappers:
+        # A user overload set that only applies relative shuffles to its
+        # arguments, as complex ``simd_shuffle_down`` shuffles both halves.
+        return True
+    return (
+        isinstance(name, str) and name not in functions and name in _RELATIVE_SHUFFLES
+    )
+
+
+def _inactive_collective_statement(
+    statement, constants, private, functions, map_operator
+):
+    """``x op= collective(...)`` writing only private ``x`` from private values."""
+    node = statement
+    if isinstance(node, ExpressionStatementNode):
+        node = node.expression
+    if isinstance(node, VariableNode):
+        target, value = None, node.initial_value
+        if node.name not in private or value is None:
+            return False
+    elif isinstance(node, AssignmentNode):
+        target, value = node.target, node.value
+        if not _private_root(target, private) or not _inactive_safe(
+            target, constants, map_operator, private
+        ):
+            return False
+    else:
+        return False
+
+    def safe(expression):
+        if _collective_call(
+            expression, functions, constants.get("__collective__", frozenset())
+        ):
+            arguments = (
+                expression.arguments
+                if isinstance(expression, FunctionCallNode)
+                else getattr(expression, "arguments", None) or []
+            )
+            return not getattr(expression, "generic_args", None) and all(
+                safe(argument) for argument in arguments
+            )
+        if isinstance(expression, BinaryOpNode):
+            operator = map_operator(expression.operator)
+            if operator in {"/", "%"}:
+                return False
+            return operator in _SPECULATIVE_OPERATORS and all(
+                safe(part) for part in (expression.left, expression.right)
+            )
+        if isinstance(expression, (CastNode,)):
+            return safe(expression.expression)
+        if (
+            isinstance(expression, FunctionCallNode)
+            and _call_name(expression) in constants.get("__pure__", ())
+            and not getattr(expression, "generic_args", None)
+        ):
+            # A pure helper only combines its arguments, as the Metal
+            # frontend's ``x = operator+=(x, simd_shuffle_down(x, n))``.
+            return all(safe(argument) for argument in expression.arguments)
+        return _inactive_safe(expression, constants, map_operator, private)
+
+    return safe(value)
+
+
+def _value_function_kinds(functions, walk_ast, map_operator):
+    """Classify user overload sets that only compute values from arguments.
+
+    A ``"pure"`` function takes value parameters, declares private value
+    locals, assigns them or their members and ends in a return; every
+    expression reads only those names, literals and conversions through
+    side-effect-free operators and calls to pure functions. A
+    ``"collective"`` one may also apply relative shuffles to such values,
+    as the complex overload of ``simd_shuffle_down`` shuffles both halves.
+    A name is classified only when each of its overloads qualifies, so any
+    resolution of a call is safe for invocations that left early.
+    """
+    kinds = {}
+
+    def classify(name, visiting):
+        if name in kinds:
+            return kinds[name]
+        if name in visiting or name not in functions:
+            return None
+        visiting = visiting | {name}
+        result = "pure"
+        for function in functions[name]:
+            kind = function_kind(function, visiting)
+            if kind is None:
+                result = None
+                break
+            if kind == "collective":
+                result = "collective"
+        kinds[name] = result
+        return result
+
+    def value_type(type_node):
+        return (
+            type_node is not None
+            and not isinstance(type_node, (PointerType, ReferenceType))
+            and _type_name(type_node) not in {None, "void"}
+            and not set(getattr(type_node, "qualifiers", None) or [])
+            & _SHARED_QUALIFIERS
+        )
+
+    def function_kind(function, visiting):
+        if getattr(function, "generic_params", None) or not value_type(
+            function.return_type
+        ):
+            return None
+        names = set()
+        for parameter in function.parameters or []:
+            if (
+                not value_type(parameter.param_type)
+                or set(parameter.qualifiers or []) - {"in", "const", "thread"}
+                or parameter.default_value is not None
+            ):
+                return None
+            names.add(parameter.name)
+        collective = False
+
+        def safe(node):
+            nonlocal collective
+            if isinstance(node, (LiteralNode,)):
+                return True
+            if isinstance(node, IdentifierNode):
+                return node.name in names
+            if isinstance(node, MemberAccessNode):
+                return safe(node.object_expr)
+            if isinstance(node, CastNode):
+                return safe(node.expression)
+            if isinstance(node, UnaryOpNode):
+                return map_operator(node.operator) in {"+", "-", "!", "~"} and safe(
+                    node.operand
+                )
+            if isinstance(node, BinaryOpNode):
+                operator = map_operator(node.operator)
+                if operator in {"/", "%"}:
+                    return _literal_divisor(node.right, {}) is not None and safe(
+                        node.left
+                    )
+                return operator in _SPECULATIVE_OPERATORS and all(
+                    safe(part) for part in (node.left, node.right)
+                )
+            if isinstance(node, TernaryOpNode):
+                return all(
+                    safe(part)
+                    for part in (node.condition, node.true_expr, node.false_expr)
+                )
+            if isinstance(node, ConstructorNode):
+                return not node.named_arguments and all(
+                    safe(argument) for argument in node.arguments
+                )
+            if isinstance(node, WaveOpNode):
+                if node.operation not in _RELATIVE_SHUFFLES:
+                    return False
+                collective = True
+                return all(
+                    safe(argument)
+                    for argument in getattr(node, "arguments", None) or []
+                )
+            if not isinstance(node, FunctionCallNode):
+                return False
+            name = _call_name(node)
+            if not isinstance(name, str) or not all(
+                safe(argument) for argument in node.arguments
+            ):
+                return False
+            if name in functions:
+                kind = classify(name, visiting)
+                collective = collective or kind == "collective"
+                return kind is not None and not getattr(node, "generic_args", None)
+            if _bitcast_name(name, node):
+                return len(node.arguments) == 1
+            if name.startswith(("Wave", "Quad", "subgroup", "simd_", "quad_")):
+                # Only relative shuffles stay valid in invocations that left.
+                collective = True
+                return name in _RELATIVE_SHUFFLES and not getattr(
+                    node, "generic_args", None
+                )
+            return (
+                _CONVERSIONS.fullmatch(name) is not None
+                and len(node.arguments) == 1
+                and not getattr(node, "generic_args", None)
+            )
+
+        statements = _statements(function.body)
+        if not statements or not isinstance(statements[-1], ReturnNode):
+            return None
+        for statement in statements:
+            node = statement
+            if isinstance(node, ExpressionStatementNode):
+                node = node.expression
+            if isinstance(node, VariableNode):
+                if (
+                    not value_type(node.var_type)
+                    or node.attributes
+                    or _qualifiers(node) & _SHARED_QUALIFIERS
+                    or node.initial_value is not None
+                    and not safe(node.initial_value)
+                ):
+                    return None
+                names.add(node.name)
+            elif isinstance(node, AssignmentNode):
+                target = node.target
+                while isinstance(target, MemberAccessNode):
+                    target = target.object_expr
+                operator = map_operator(node.operator)
+                if (
+                    operator not in _PURE_UPDATE_OPERATORS
+                    or not isinstance(target, IdentifierNode)
+                    or target.name not in names
+                    or not safe(node.value)
+                ):
+                    return None
+            elif isinstance(node, ReturnNode):
+                if node is not statements[-1] or not safe(node.value):
+                    return None
+            else:
+                return None
+        return "collective" if collective else "pure"
+
+    for name in functions:
+        classify(name, frozenset())
+    return {name: kind for name, kind in kinds.items() if kind is not None}
+
+
+def _inactive_loop_header(loop, constants, map_operator):
+    """A counted loop every invocation may run: a fresh scalar counter."""
+    initializer, condition, update = loop.init, loop.condition, loop.update
+    if (
+        not isinstance(initializer, VariableNode)
+        or not isinstance(initializer.var_type, (PrimitiveType, NamedType))
+        or _CONVERSIONS.fullmatch(_type_name(initializer.var_type) or "") is None
+        or initializer.initial_value is None
+        or initializer.attributes
+        or not _inactive_safe(initializer.initial_value, constants, map_operator)
+        or condition is None
+        or not _inactive_safe(condition, constants, map_operator)
+    ):
+        return False
+    counter = initializer.name
+    if isinstance(update, UnaryOpNode):
+        return (
+            map_operator(update.operator) in {"++", "--"}
+            and isinstance(update.operand, IdentifierNode)
+            and update.operand.name == counter
+        )
+    if isinstance(update, ExpressionStatementNode):
+        update = update.expression
+    return (
+        isinstance(update, AssignmentNode)
+        and map_operator(update.operator) in {"+=", "-=", "*=", ">>=", "<<="}
+        and isinstance(update.target, IdentifierNode)
+        and update.target.name == counter
+        and _inactive_safe(update.value, constants, map_operator)
+    )
+
+
+def _escapes(statement, walk_ast):
+    """Whether ``statement`` returns, or breaks or continues an outer loop."""
+    loops = (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)
+
+    def visit(node, nested):
+        if isinstance(node, ReturnNode):
+            return True
+        if isinstance(node, (BreakNode, ContinueNode)) and not nested:
+            return True
+        inner = nested or (isinstance(node, loops) and node is not statement)
+        return any(
+            visit(child, inner)
+            for child in walk_ast(node)
+            if child is not node and _direct_child(node, child)
+        )
+
+    return visit(statement, isinstance(statement, loops))
+
+
+def _direct_child(parent, child):
+    for value in vars(parent).values():
+        if value is child:
+            return True
+        if isinstance(value, list) and any(item is child for item in value):
+            return True
+    return False
+
+
+def _const_literals(statements):
+    """Constant locals initialized with nonzero literals other than -1."""
+    constants = {}
+    for statement in statements:
+        if (
+            isinstance(statement, VariableNode)
+            and (not statement.is_mutable or "const" in _qualifiers(statement))
+            and _literal_divisor(statement.initial_value, {}) is not None
+        ):
+            constants[statement.name] = statement.initial_value
+    return constants
+
+
+def _written_roots(root, walk_ast):
+    names = set()
+    for node in walk_ast(root):
+        target = None
+        if isinstance(node, AssignmentNode):
+            target = node.target
+        elif isinstance(node, UnaryOpNode) and node.operator in {"++", "--"}:
+            target = node.operand
+        while isinstance(target, (ArrayAccessNode, MemberAccessNode)):
+            target = (
+                target.array_expr
+                if isinstance(target, ArrayAccessNode)
+                else target.object_expr
+            )
+        if isinstance(target, IdentifierNode):
+            names.add(target.name)
+    return names
+
+
+_ZERO_SCALARS = re.compile(
+    r"(?:half|float|double|float(?:16|32|64)_t|u?int(?:8|16|32|64)?(?:_t)?)"
+)
+
+
+def _predicated_segment(segment, later, active, walk_ast):
+    """Run ``segment`` under ``if (active)``, keeping names ``later`` reads.
+
+    Like ``_guarded_segment``, but a mutable scalar declared with a value
+    becomes a zero-initialized declaration before the guard and an
+    assignment inside it, so invocations that left read a defined zero.
+    """
+    if not segment:
+        return []
+    named = {
+        child.name for child in walk_ast(later) if isinstance(child, IdentifierNode)
+    }
+    hoisted, guarded = [], []
+    for statement in segment:
+        if not isinstance(statement, VariableNode) or statement.name not in named:
+            guarded.append(statement)
+            continue
+        if (
+            "const" in _qualifiers(statement)
+            or not statement.is_mutable
+            or statement.attributes
+            or isinstance(statement.var_type, (PointerType, ReferenceType))
+            or any(
+                isinstance(child, IdentifierNode) and child.name == statement.name
+                for child in walk_ast(guarded)
+            )
+        ):
+            return None
+        if statement.initial_value is None:
+            hoisted.append(statement)
+            continue
+        if not isinstance(
+            statement.var_type, (PrimitiveType, NamedType)
+        ) or not _ZERO_SCALARS.fullmatch(_type_name(statement.var_type) or ""):
+            return None
+        location = getattr(statement, "source_location", None)
+        hoisted.append(
+            VariableNode(
+                statement.name,
+                deepcopy(statement.var_type),
+                LiteralNode(0, deepcopy(statement.var_type)),
+                qualifiers=list(statement.qualifiers or []),
+                source_location=location,
+            )
+        )
+        guarded.append(
+            ExpressionStatementNode(
+                AssignmentNode(
+                    IdentifierNode(statement.name), statement.initial_value, "="
+                ),
+                source_location=location,
+            )
+        )
+    if guarded:
+        hoisted.append(IfNode(IdentifierNode(active), BlockNode(guarded)))
+    return hoisted
+
+
+def _early_exit_statements(statements, active, context):
+    """Predicate ``statements`` after an early exit; ``None`` if unproven.
+
+    Statements without collectives or barriers run under ``if (active)``.
+    Everything else must be safe in invocations that left: barriers, loops
+    with fresh counters and inactive-safe headers, branches on literal
+    conditions, inactive-safe declarations and collective updates of private
+    values. Inactive invocations thus publish nothing and only take part in
+    collectives and barriers, as the code generators' masking requires.
+    """
+    effects, walk_ast, map_operator = (
+        context["effects"],
+        context["walk_ast"],
+        context["map_operator"],
+    )
+    constants, private, functions = (
+        context["constants"],
+        context["private"],
+        context["functions"],
+    )
+    result, segment = [], []
+
+    def flush(later):
+        nonlocal segment
+        guarded = _predicated_segment(segment, later, active, walk_ast)
+        segment = []
+        if guarded is None:
+            return False
+        result.extend(guarded)
+        return True
+
+    for index, statement in enumerate(statements):
+        if _escapes(statement, walk_ast):
+            return None
+        kinds = effects(statement) & {"collective", "barrier"}
+        if (
+            isinstance(statement, VariableNode)
+            and statement.initial_value is not None
+            and not isinstance(statement.var_type, ReferenceType)
+            and (
+                isinstance(statement.var_type, PointerType)
+                or not _qualifiers(statement) & _SHARED_QUALIFIERS
+            )
+            and not statement.attributes
+            and _inactive_safe(statement.initial_value, constants, map_operator)
+        ):
+            # Every invocation may compute it, so later code keeps its value.
+            # A pointer declaration only offsets its base; nothing is read.
+            if not flush(statements[index:]):
+                return None
+            result.append(statement)
+            if not statement.is_mutable or "const" in _qualifiers(statement):
+                if _literal_divisor(statement.initial_value, {}) is not None:
+                    constants[statement.name] = statement.initial_value
+            continue
+        if not kinds:
+            segment.append(statement)
+            continue
+        if not flush(statements[index:]):
+            return None
+        if _barrier_statement(statement, functions):
+            result.append(statement)
+        elif isinstance(statement, IfNode) and (
+            isinstance(statement.condition, LiteralNode)
+            and statement.condition.value in {False, 0}
+            and not statement.else_branch
+        ):
+            result.append(statement)  # never runs
+        elif (
+            isinstance(statement, IfNode)
+            and statement.else_branch is None
+            and not getattr(statement, "else_if_conditions", None)
+        ):
+            block = _predicated_if(statement, active, context)
+            if block is None:
+                return None
+            result.append(block)
+        elif isinstance(statement, ForNode):
+            counter = getattr(statement.init, "name", None)
+            if not _inactive_loop_header(
+                statement, constants, map_operator
+            ) or counter in _written_roots(statement.body, walk_ast):
+                return None
+            body = _early_exit_statements(
+                _statements(statement.body),
+                active,
+                dict(context, constants=dict(constants)),
+            )
+            if body is None:
+                return None
+            result.append(
+                ForNode(
+                    statement.init,
+                    statement.condition,
+                    statement.update,
+                    BlockNode(body),
+                    source_location=getattr(statement, "source_location", None),
+                )
+            )
+        elif _inactive_collective_statement(
+            statement, constants, private, functions, map_operator
+        ):
+            result.append(statement)
+        else:
+            return None
+    if not flush([]):
+        return None
+    return result
+
+
+def _predicated_if(statement, active, context):
+    """Predicate ``if (c) { ... }`` whose branch synchronizes; ``None`` if unproven.
+
+    Every invocation reaches the branch's barriers and collectives; the rest
+    of the branch runs where ``active`` (every invocation when ``None``) and
+    the condition, evaluated once as before, both hold. A block keeps the
+    branch's scope.
+    """
+    constants, private, map_operator = (
+        context["constants"],
+        context["private"],
+        context["map_operator"],
+    )
+    condition = statement.condition
+    location = getattr(statement, "source_location", None)
+    prefix = []
+    inner = active
+    if not (isinstance(condition, LiteralNode) and condition.value in {True, 1}):
+        inner = context["fresh"]("__crossgl_subgroup_taken")
+        if active is None:
+            # Every invocation evaluated the condition in the source too.
+            prefix.append(
+                VariableNode(
+                    inner, PrimitiveType("bool"), condition, source_location=location
+                )
+            )
+        elif _inactive_safe(condition, constants, map_operator, private):
+            prefix.append(
+                VariableNode(
+                    inner,
+                    PrimitiveType("bool"),
+                    BinaryOpNode(IdentifierNode(active), "&&", condition),
+                    source_location=location,
+                )
+            )
+        else:
+            prefix += [
+                VariableNode(
+                    inner,
+                    PrimitiveType("bool"),
+                    LiteralNode(False, PrimitiveType("bool")),
+                    source_location=location,
+                ),
+                IfNode(
+                    IdentifierNode(active),
+                    BlockNode(
+                        [
+                            ExpressionStatementNode(
+                                AssignmentNode(IdentifierNode(inner), condition, "="),
+                                source_location=location,
+                            )
+                        ]
+                    ),
+                ),
+            ]
+    elif active is None:
+        return None
+    body = _early_exit_statements(
+        _statements(statement.then_branch),
+        inner,
+        dict(context, constants=dict(constants)),
+    )
+    if body is None:
+        return None
+    return BlockNode(prefix + body, source_location=location)
+
+
+def _early_exit_context(
+    function, effects, walk_ast, map_operator, functions, kinds=None, fresh=None
+):
+    kinds = kinds or {}
+    return {
+        "effects": effects,
+        "walk_ast": walk_ast,
+        "map_operator": map_operator,
+        "constants": {
+            "__functions__": frozenset(functions),
+            "__pure__": frozenset(
+                name for name, kind in kinds.items() if kind == "pure"
+            ),
+            "__collective__": frozenset(
+                name for name, kind in kinds.items() if kind == "collective"
+            ),
+        },
+        "private": _private_locals(function, walk_ast),
+        "functions": frozenset(functions),
+        "fresh": fresh or (lambda base: base),
+    }
+
+
+def _early_exit_plan(function, context):
+    statements = _statements(function.body)
+    for index, statement in enumerate(statements):
+        if any(isinstance(node, ReturnNode) for node in context["walk_ast"](statement)):
+            break
+    else:
+        return None
+    if (
+        not isinstance(statement, IfNode)
+        or statement.else_branch is not None
+        or getattr(statement, "else_if_conditions", None)
+        or len(_statements(statement.then_branch)) != 1
+        or not isinstance(_statements(statement.then_branch)[0], ReturnNode)
+        or _statements(statement.then_branch)[0].value is not None
+        or not _inactive_safe(
+            statement.condition, context["constants"], context["map_operator"]
+        )
+    ):
+        return None
+    rest = statements[index + 1 :]
+    if not context["effects"](BlockNode(rest)) & {"collective", "barrier"}:
+        return None
+    return index
+
+
+def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
+    """Predicate early returns that skip later collectives and barriers.
+
+    MLX's GEMV leaves rows past the output before its SIMD-group reduction::
+
+        if (out_row >= out_vec_size) return;
+        ... loads ...; result += simd_shuffle_down(result, n); ... stores ...
+
+    Apple GPUs run the reduction in the remaining lanes. Software subgroups
+    need every invocation to reach their barriers, so a void function's first
+    such return becomes ``bool active = !(condition);`` and every later
+    statement without a collective or barrier runs under ``if (active)``.
+    Invocations that would have left still run the collectives, barriers and
+    the counted loops around them, whose headers, like the condition, may not
+    read memory, call or trap; they write only private values that never
+    leave the function. Later returns, breaks or continues around collectives
+    and any other shape keep the source unchanged for the code generators to
+    validate.
+    """
+    nodes = list(walk_ast(ast))
+    functions = {}
+    for node in nodes:
+        if isinstance(node, FunctionNode):
+            functions.setdefault(node.name, []).append(node)
+    effects = _effect_checker(nodes, walk_ast)
+    kinds = _value_function_kinds(functions, walk_ast, map_operator)
+    reachable = set()
+    pending = [entry for stage, entry, _config in entries if stage == "compute"]
+    while pending:
+        function = pending.pop()
+        if id(function) in reachable:
+            continue
+        reachable.add(id(function))
+        for node in walk_ast(function.body):
+            if isinstance(node, FunctionCallNode) and _call_name(node) in functions:
+                pending.extend(functions[_call_name(node)])
+    plans = []
+    for candidates in functions.values():
+        for function in candidates:
+            if (
+                id(function) not in reachable
+                or _type_name(function.return_type) != "void"
+                or getattr(function, "generic_params", None)
+            ):
+                continue
+            context = _early_exit_context(
+                function, effects, walk_ast, map_operator, functions, kinds
+            )
+            index = _early_exit_plan(function, context)
+            if index is None:
+                continue
+            statements = _statements(function.body)
+            context["constants"].update(_const_literals(statements[:index]))
+            rest = _early_exit_statements(
+                statements[index + 1 :], "__crossgl_subgroup_active", context
+            )
+            if rest is not None:
+                plans.append((function, index))
+    if not plans:
+        return ast
+    reserved = {
+        node.name for node in nodes if isinstance(getattr(node, "name", None), str)
+    }
+
+    def fresh(base):
+        name = base
+        while name in reserved:
+            name += "_"
+        reserved.add(name)
+        return name
+
+    memo = {}
+    result = deepcopy(ast, memo)
+    copied_effects = _effect_checker(list(walk_ast(result)), walk_ast)
+    for original, index in plans:
+        function = memo[id(original)]
+        statements = _statements(function.body)
+        exit_branch = statements[index]
+        active = fresh("__crossgl_subgroup_active")
+        context = _early_exit_context(
+            function, copied_effects, walk_ast, map_operator, functions, kinds, fresh
+        )
+        context["constants"].update(_const_literals(statements[:index]))
+        rest = _early_exit_statements(statements[index + 1 :], active, context)
+        if rest is None:  # pragma: no cover - the copy has the planned shape
+            continue
+        location = getattr(exit_branch, "source_location", None)
+        body = [
+            *statements[:index],
+            VariableNode(
+                active,
+                PrimitiveType("bool"),
+                UnaryOpNode("!", exit_branch.condition),
+                source_location=location,
+            ),
+            *rest,
+        ]
+        if isinstance(function.body, BlockNode):
+            function.body.statements = body
+        else:
+            function.body = body
+    return result
+
+
+def has_subgroup_early_exits(ast, walk_ast):
+    """Whether a void function has a top-level ``if (...) return;``.
+
+    Code generators keep a copy of such programs to retry them with
+    ``converge_subgroup_early_exits`` when the source's exits are unproven.
+    """
+    for node in walk_ast(ast):
+        if not isinstance(node, FunctionNode) or _type_name(node.return_type) != "void":
+            continue
+        for statement in _statements(node.body):
+            if (
+                isinstance(statement, IfNode)
+                and statement.else_branch is None
+                and len(_statements(statement.then_branch)) == 1
+                and isinstance(_statements(statement.then_branch)[0], ReturnNode)
+            ):
+                return True
+    return False
+
+
+# System values every invocation of a workgroup shares; other entry
+# parameters with a system semantic may differ between invocations.
+_UNIFORM_SEMANTICS = frozenset(
+    {
+        "gl_WorkGroupID",
+        "gl_NumWorkGroups",
+        "gl_WorkGroupSize",
+        "gl_NumSubgroups",
+        "gl_SubgroupSize",
+        "SV_GroupID",
+    }
+)
+
+
+def _parameter_semantic(parameter):
+    semantic = getattr(parameter, "semantic", None)
+    if semantic:
+        return str(semantic)
+    for attribute in getattr(parameter, "attributes", None) or []:
+        name = getattr(attribute, "name", None)
+        if isinstance(name, str) and (
+            name.startswith("gl_") or name.upper().startswith("SV_")
+        ):
+            return name
+    return None
+
+
+def _read_names(root, walk_ast):
+    return {node.name for node in walk_ast(root) if isinstance(node, IdentifierNode)}
+
+
+def _root_name(node):
+    while isinstance(node, (ArrayAccessNode, MemberAccessNode)):
+        node = (
+            node.array_expr if isinstance(node, ArrayAccessNode) else node.object_expr
+        )
+    return node.name if isinstance(node, IdentifierNode) else None
+
+
+def _varying_names(function, varying_parameters, walk_ast):
+    """Names of ``function`` that may differ between a workgroup's invocations.
+
+    The analysis over-approximates: a name is varying when a varying value
+    reaches it through an initializer, assignment or call argument, or when a
+    branch or loop whose controls read a varying name writes it.
+    """
+    names = {
+        parameter.name
+        for index, parameter in enumerate(function.parameters or [])
+        if index in varying_parameters
+    }
+    loops = (ForNode, WhileNode, DoWhileNode)
+    while True:
+        count = len(names)
+        for node in walk_ast(function.body):
+            if isinstance(node, VariableNode):
+                if node.initial_value is not None and (
+                    _read_names(node.initial_value, walk_ast) & names
+                ):
+                    names.add(node.name)
+            elif isinstance(node, AssignmentNode):
+                root = _root_name(node.target)
+                if (
+                    root is not None
+                    and (
+                        _read_names(node.value, walk_ast)
+                        | _read_names(node.target, walk_ast)
+                    )
+                    & names
+                ):
+                    names.add(root)
+            elif isinstance(node, FunctionCallNode):
+                if any(
+                    _read_names(argument, walk_ast) & names
+                    for argument in node.arguments
+                ):
+                    # Reference arguments may receive varying values.
+                    names.update(
+                        root
+                        for root in map(_root_name, node.arguments)
+                        if root is not None
+                    )
+            elif isinstance(node, IfNode) or isinstance(node, loops):
+                controls = [
+                    getattr(node, part, None)
+                    for part in ("condition", "init", "update")
+                ] + list(getattr(node, "else_if_conditions", None) or [])
+                if any(
+                    _read_names(control, walk_ast) & names
+                    for control in controls
+                    if control is not None
+                ):
+                    names |= _written_roots(node, walk_ast)
+        if len(names) == count:
+            return names
+
+
+def _divergent_barrier_plan(function, varying, effects, walk_ast):
+    """Top-level ``if (c) { ... barrier ... }`` statements whose ``c`` may vary."""
+    if any(isinstance(node, ReturnNode) for node in walk_ast(function.body)):
+        return None  # converge_subgroup_early_exits owns functions that exit
+    indices = tuple(
+        index
+        for index, statement in enumerate(_statements(function.body))
+        if isinstance(statement, IfNode)
+        and statement.else_branch is None
+        and not getattr(statement, "else_if_conditions", None)
+        and "barrier" in effects(statement.then_branch)
+        and _read_names(statement.condition, walk_ast) & varying
+    )
+    return indices or None
+
+
+def converge_subgroup_divergent_barriers(ast, entries, walk_ast, map_operator):
+    """Run the workgroup barriers of possibly divergent branches everywhere.
+
+    MLX's GEMV-T accumulates only columns inside the output, with a barrier
+    in its row loop::
+
+        if (out_col < out_vec_size) {
+            for (int i = 0; i < n_iter; ++i) {
+                threadgroup_barrier(mem_flags::mem_none);
+                ... loads ...
+            }
+        }
+
+    Apple GPUs let the threads past the output skip that barrier. OpenGL and
+    Direct3D need every invocation of the workgroup at each barrier, so a
+    void function's top-level branch whose condition may differ between
+    invocations becomes ``bool taken = condition;`` and only the branch's
+    other statements run under ``if (taken)``. Its barriers, and the counted
+    loops around them, run in every invocation; loop headers and other
+    statements those invocations now evaluate must be safe as for
+    ``converge_subgroup_early_exits``. Branches that may not converge keep
+    the source unchanged.
+    """
+    nodes = list(walk_ast(ast))
+    functions = {}
+    for node in nodes:
+        if isinstance(node, FunctionNode):
+            functions.setdefault(node.name, []).append(node)
+    compute_entries = [entry for stage, entry, _config in entries if stage == "compute"]
+    if not compute_entries:
+        return ast
+    varying_parameters = {
+        id(entry): {
+            index
+            for index, parameter in enumerate(entry.parameters or [])
+            if _parameter_semantic(parameter) is not None
+            and _parameter_semantic(parameter) not in _UNIFORM_SEMANTICS
+        }
+        for entry in compute_entries
+    }
+    reachable, pending = {}, list(compute_entries)
+    queued = {id(entry) for entry in compute_entries}
+    varying = {}
+    while pending:
+        function = pending.pop()
+        queued.discard(id(function))
+        reachable[id(function)] = function
+        names = _varying_names(
+            function, varying_parameters.get(id(function), ()), walk_ast
+        )
+        varying[id(function)] = names
+        for call in walk_ast(function.body):
+            if (
+                not isinstance(call, FunctionCallNode)
+                or _call_name(call) not in functions
+            ):
+                continue
+            arguments = list(call.arguments)
+            for callee in functions[_call_name(call)]:
+                if len(callee.parameters or []) != len(arguments):
+                    continue
+                marked = varying_parameters.setdefault(id(callee), set())
+                added = {
+                    index
+                    for index, argument in enumerate(arguments)
+                    if _read_names(argument, walk_ast) & names
+                } - marked
+                if added or id(callee) not in reachable:
+                    marked |= added
+                    if id(callee) not in queued:
+                        queued.add(id(callee))
+                        pending.append(callee)
+    effects = _effect_checker(nodes, walk_ast)
+    kinds = _value_function_kinds(functions, walk_ast, map_operator)
+    plans = []
+    for key, function in reachable.items():
+        if _type_name(function.return_type) != "void" or getattr(
+            function, "generic_params", None
+        ):
+            continue
+        indices = _divergent_barrier_plan(function, varying[key], effects, walk_ast)
+        if indices is not None:
+            plans.append((function, indices))
+    if not plans:
+        return ast
+    reserved = {
+        node.name for node in nodes if isinstance(getattr(node, "name", None), str)
+    }
+
+    def fresh(base):
+        name = base
+        while name in reserved:
+            name += "_"
+        reserved.add(name)
+        return name
+
+    memo = {}
+    result = deepcopy(ast, memo)
+    copied_effects = _effect_checker(list(walk_ast(result)), walk_ast)
+    for original, indices in plans:
+        function = memo[id(original)]
+        statements = list(_statements(function.body))
+        context = _early_exit_context(
+            function, copied_effects, walk_ast, map_operator, functions, kinds, fresh
+        )
+        converged = list(statements)
+        for index in indices:
+            context["constants"].update(_const_literals(statements[:index]))
+            block = _predicated_if(statements[index], None, context)
+            if block is None:
+                break
+            converged[index] = block
+        else:
+            if isinstance(function.body, BlockNode):
+                function.body.statements = converged
+            else:
+                function.body = converged
     return result
