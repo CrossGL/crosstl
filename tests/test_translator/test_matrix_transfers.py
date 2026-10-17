@@ -64,7 +64,6 @@ from crosstl.translator.codegen.metal_codegen import (
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from tests.runtime_helpers import _validate
-from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
@@ -1099,6 +1098,34 @@ def _package(root, target):
     return descriptor, package
 
 
+def _source_binding_names(descriptor):
+    """Map each Metal kernel parameter to its target binding name."""
+    return {
+        binding["provenance"]["sourceResource"]["parameter"]: binding["name"]
+        for binding in descriptor["bindings"]
+    }
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_chunked_kernel_bindings_resolve_by_source_parameter(tmp_path, target):
+    descriptor, _ = _package(tmp_path, target)
+    names = _source_binding_names(descriptor)
+    assert set(names) == {"src", "dst", "T"}
+    (constant,) = (
+        binding for binding in descriptor["bindings"] if binding["name"] == names["T"]
+    )
+    assert constant["kind"] == "constant-buffer"
+    assert constant["scalarLayout"]["elementType"] == "int32"
+    # The member keeps the Metal name only where the target scopes it.
+    assert (
+        constant["scalarLayout"]["memberName"]
+        == {
+            "directx": "matrix_transfers_T",
+            "opengl": "T",
+        }[target]
+    )
+
+
 def test_expected_results_are_exact_in_binary32():
     src = _inputs()
     for steps in (0, 3, 8, 13):
@@ -1114,21 +1141,17 @@ def test_chunked_kernel_executes_natively(tmp_path, steps):
     descriptor, package = _package(tmp_path, target)
     src = _inputs()
     size = 8 + 4 * 320
-    inputs = _bound_values(
-        descriptor,
-        {
-            "src": dict(dtype="float32", shape=[len(src)], values=src),
-            "dst": dict(dtype="float32", shape=[size], values=[GUARD] * size),
-            "T": dict(dtype="int32", shape=[1], values=[steps]),
-        },
-    )
-    outputs = _bound_values(
-        descriptor,
-        {"dst": dict(dtype="float32", shape=[size], values=_expected(src, steps))},
-    )
-    names = {
-        binding["scalarLayout"].get("memberName", binding["name"]): binding["name"]
-        for binding in descriptor["bindings"]
+    # Bind by Metal parameter: DirectX scopes the constrained scalar's
+    # constant-buffer member to its entry point (``matrix_transfers_T``).
+    names = _source_binding_names(descriptor)
+    assert set(names) == {"src", "dst", "T"}, names
+    inputs = {
+        names["src"]: dict(dtype="float32", shape=[len(src)], values=src),
+        names["dst"]: dict(dtype="float32", shape=[size], values=[GUARD] * size),
+        names["T"]: dict(dtype="int32", shape=[1], values=[steps]),
+    }
+    outputs = {
+        names["dst"]: dict(dtype="float32", shape=[size], values=_expected(src, steps)),
     }
     request = build_native_loader_dispatch_request(
         descriptor,
