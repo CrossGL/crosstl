@@ -21293,12 +21293,13 @@ def test_for_statement_preserves_declaration_initializers():
     assert "const float weights[2];" in generated_code
     assert "for (int i = 0; (i < 2); (i++))" in generated_code
     assert "for (i = 0; (i < 4); (i++))" in generated_code
-    assert "for (const int fixed = 0; (fixed < 0); )" in generated_code
+    # ``fixed`` is reserved for future use in GLSL and is escaped.
+    assert "for (const int fixed_ = 0; (fixed_ < 0); )" in generated_code
     assert "for (; ; )" in generated_code
     assert "continue;" in generated_code
     assert "break;" in generated_code
     assert "for (int i = 0;;" not in generated_code
-    assert "for (const int fixed = 0;;" not in generated_code
+    assert "for (const int fixed_ = 0;;" not in generated_code
     assert "BreakNode(" not in generated_code
     assert "ContinueNode(" not in generated_code
     assert "None" not in generated_code

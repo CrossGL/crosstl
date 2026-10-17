@@ -1948,6 +1948,12 @@ class HLSLToCrossGLConverter:
         packoffset = getattr(node, "packoffset", None)
         if register:
             parts = [part.strip() for part in str(register).split(",") if part.strip()]
+            # A register class without a number (``register(s)``) denotes
+            # register 0 of that class, as DXC compiles it.
+            parts = [
+                f"{part}0" if part.lower() in {"b", "s", "t", "u"} else part
+                for part in parts
+            ]
             rendered = ", ".join(parts)
             lines += "    " * indent + f"@ register({rendered})\n"
         if packoffset:
@@ -4051,6 +4057,8 @@ class HLSLToCrossGLConverter:
         code += self.format_matrix_layout_attributes(node, 1)
         if self.is_structured_buffer_resource_type(getattr(node, "vtype", None)):
             code += f"    @ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_STRUCTURED_LAYOUT})\n"
+        if self.is_runtime_format_storage_texture(node):
+            code += "    @ format(unknown)\n"
         storage_prefix = self.format_global_storage_qualifier_prefix(node)
         precise_prefix = self.format_precise_qualifier_prefix(node)
         array_suffix = self.format_array_suffixes(node)
@@ -4079,6 +4087,37 @@ class HLSLToCrossGLConverter:
             code + f"    {declaration_prefix}{variable_type} "
             f"{variable_name}{array_suffix}{initializer};\n"
         )
+
+    RUNTIME_FORMAT_STORAGE_TEXTURES = (
+        "RWTexture1D",
+        "RWTexture1DArray",
+        "RWTexture2D",
+        "RWTexture2DArray",
+        "RWTexture3D",
+        "RasterizerOrderedTexture1D",
+        "RasterizerOrderedTexture1DArray",
+        "RasterizerOrderedTexture2D",
+        "RasterizerOrderedTexture2DArray",
+        "RasterizerOrderedTexture3D",
+    )
+
+    def is_runtime_format_storage_texture(self, node):
+        """True for typed storage textures, whose format the runtime chooses.
+
+        HLSL declares only the element type of a typed UAV; the bound view
+        decides the storage format. Unless the source names a format (for
+        example ``[[vk::image_format]]``), the declaration carries
+        ``@ format(unknown)`` so targets that need a format do not guess one.
+        """
+        if self.raw_type_base(getattr(node, "vtype", None)) not in (
+            self.RUNTIME_FORMAT_STORAGE_TEXTURES
+        ):
+            return False
+        for attribute in getattr(node, "attributes", None) or []:
+            name = str(getattr(attribute, "name", "") or "").lower()
+            if name == "format" or "image_format" in name:
+                return False
+        return True
 
     def is_hlsl_program_constant_global(self, node):
         if getattr(node, "value", None) is not None:
