@@ -921,6 +921,12 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "binary-3",
         "binary-4",
         "binary-5",
+        "binary-6",
+        "binary-7",
+        "binary-8",
+        "binary-9",
+        "binary-10",
+        "binary-11",
     ]
     assert job["runs-on"] == "${{ matrix.os }}"
     assert job["if"] == "github.event_name != 'schedule'"

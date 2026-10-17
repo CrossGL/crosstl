@@ -4745,7 +4745,7 @@
     "upstreamMetallibParityTargets": [
       "metal"
     ],
-    "ciShardCount": 6
+    "ciShardCount": 12
   },
   "scope": {
     "coveredEntryCount": 4122,

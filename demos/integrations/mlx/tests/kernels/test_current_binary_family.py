@@ -104,7 +104,7 @@ COMPLETE_OPS_HEADER_SHA256 = (
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY"
 SHARD_INDEX_ENV = "CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX"
 SHARD_COUNT_ENV = "CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT"
-CI_SHARD_COUNT = 6
+CI_SHARD_COUNT = 12
 CONTRACT_PATH = (
     ROOT / "demos/integrations/mlx/contracts/binary.current-tree.translation.json"
 )
@@ -651,13 +651,9 @@ def _complex_model(operator, a, b):
         denominator = exact(
             _add(exact(_multiply(y[0], y[0])), exact(_multiply(y[1], y[1])))
         )
-        real = exact(
-            _add(exact(_multiply(x[0], y[0])), exact(_multiply(x[1], y[1])))
-        )
+        real = exact(_add(exact(_multiply(x[0], y[0])), exact(_multiply(x[1], y[1]))))
         imag = exact(
-            _add(
-                exact(_multiply(x[1], y[0])), _negate(exact(_multiply(x[0], y[1])))
-            )
+            _add(exact(_multiply(x[1], y[0])), _negate(exact(_multiply(x[0], y[1]))))
         )
         return _complex_words((_divide(real, denominator), _divide(imag, denominator)))
     if operator == "Remainder":
@@ -769,7 +765,8 @@ SPECIALS = ["0", "-0", "inf", "-inf", "nan"]
 # Multiples of 1/4 up to 31.25: sums and differences stay below 64 and so
 # need at most eight significant bits, which bfloat16 holds.
 QUARTERS = _signed_values(
-    Fraction(k, 4) for k in (1, 2, 3, 4, 5, 7, 9, 10, 13, 16, 22, 31, 40, 49, 64, 99, 125)
+    Fraction(k, 4)
+    for k in (1, 2, 3, 4, 5, 7, 9, 10, 13, 16, 22, 31, 40, 49, 64, 99, 125)
 )
 # Products of these need at most six significant bits.
 SMALL = _signed_values(k * Fraction(2) ** e for k in (1, 3, 5, 7) for e in range(-2, 4))
@@ -848,7 +845,10 @@ def _int_domains(operator, dtype):
     if operator == "Multiply":
         if wide_signed or dtype == "uint16":
             limit = math.isqrt(2**31 - 1 if _promoted(dtype) else high)
-            values = _within(dtype, edges, limit) + [limit, -limit if _signed(dtype) else 0]
+            values = _within(dtype, edges, limit) + [
+                limit,
+                -limit if _signed(dtype) else 0,
+            ]
             return [(list(dict.fromkeys(values)), list(dict.fromkeys(values)))]
         return [(edges, edges)]
     if operator in ("Divide", "Remainder"):
@@ -902,7 +902,10 @@ def _complex_domains(operator):
         values = [
             _complex(re, im) for re, im in zip(quarters, quarters[3:] + quarters[:3])
         ]
-        values += [_complex(*pair) for pair in (("-0", "0"), ("inf", "1"), ("nan", "2"), ("1", "-inf"))]
+        values += [
+            _complex(*pair)
+            for pair in (("-0", "0"), ("inf", "1"), ("nan", "2"), ("1", "-inf"))
+        ]
         return [(values, list(reversed(values)))]
     if operator == "Multiply":
         small = SMALL[::3]
@@ -928,12 +931,12 @@ def _complex_domains(operator):
         ]
         return [(numerators, divisors)]
     if operator == "Remainder":
-        values = [_complex(re, im) for re, im in zip(QUARTERS, QUARTERS[5:] + QUARTERS[:5])]
+        values = [
+            _complex(re, im) for re, im in zip(QUARTERS, QUARTERS[5:] + QUARTERS[:5])
+        ]
         values += [_complex(*pair) for pair in (("0", "-0"), ("-0", "4"), ("-4", "8"))]
         divisors = [
-            _complex(re, im)
-            for re in ("2", "-0.5", "4")
-            for im in ("1", "-2", "0.25")
+            _complex(re, im) for re in ("2", "-0.5", "4") for im in ("1", "-2", "0.25")
         ]
         return [(values, divisors)]
     if operator in (*COMPARISONS, "NaNEqual", "Maximum", "Minimum"):
@@ -1068,7 +1071,11 @@ def _different(dtype, value):
 
 
 def _decoys(dtype):
-    return [1, 0] * (DECOY_COUNT // 2) if dtype == "bool_" else [GUARDS[dtype]] * DECOY_COUNT
+    return (
+        [1, 0] * (DECOY_COUNT // 2)
+        if dtype == "bool_"
+        else [GUARDS[dtype]] * DECOY_COUNT
+    )
 
 
 def _case(entry, name, target="metal"):
@@ -1556,17 +1563,65 @@ def test_binary_layouts_write_each_output_once(kernel):
         ("Add", "bool_", 1, 1, 1),
         ("Power", "bool_", 0, 0, 1),
         ("Remainder", "bool_", 1, 1, 0),
-        ("Multiply", "complex64", (0x40000000, 0x3F800000), (0x40400000, 0xC0000000), (0x41000000, 0xBF800000)),
-        ("Divide", "complex64", (0x40800000, 0x40000000), (0x00000000, 0x40000000), (0x3F800000, 0xC0000000)),
-        ("Remainder", "complex64", (0xC0800000, 0x40A00000), (0x40000000, 0xC0000000), (0x00000000, 0xBF800000)),
+        (
+            "Multiply",
+            "complex64",
+            (0x40000000, 0x3F800000),
+            (0x40400000, 0xC0000000),
+            (0x41000000, 0xBF800000),
+        ),
+        (
+            "Divide",
+            "complex64",
+            (0x40800000, 0x40000000),
+            (0x00000000, 0x40000000),
+            (0x3F800000, 0xC0000000),
+        ),
+        (
+            "Remainder",
+            "complex64",
+            (0xC0800000, 0x40A00000),
+            (0x40000000, 0xC0000000),
+            (0x00000000, 0xBF800000),
+        ),
         ("Greater", "complex64", (0x3F800000, 0x40000000), (0x3F800000, 0x3F800000), 1),
-        ("LessEqual", "complex64", (0x3F800000, 0x7FC00000), (0x3F800000, 0x3F800000), 0),
-        ("NaNEqual", "complex64", (0x3F800000, 0x7FC00000), (0x3F800000, 0x7FC00000), 1),
-        ("Maximum", "complex64", (0x7FC00000, 0x3F800000), (0x40000000, 0x0), (ANY_NAN, 0x3F800000)),
+        (
+            "LessEqual",
+            "complex64",
+            (0x3F800000, 0x7FC00000),
+            (0x3F800000, 0x3F800000),
+            0,
+        ),
+        (
+            "NaNEqual",
+            "complex64",
+            (0x3F800000, 0x7FC00000),
+            (0x3F800000, 0x7FC00000),
+            1,
+        ),
+        (
+            "Maximum",
+            "complex64",
+            (0x7FC00000, 0x3F800000),
+            (0x40000000, 0x0),
+            (ANY_NAN, 0x3F800000),
+        ),
         ("Power", "complex64", (0x40000000, 0x3F800000), (0, 0), (0x3F800000, 0)),
         ("Power", "complex64", (0x80000000, 0), (0, 0x7FC00000), (ANY_NAN, ANY_NAN)),
-        ("LogAddExp", "complex64", (0x7FC00000, 0x3F800000), (0xC1A00000, 0x3F800000), (ANY_NAN, 0)),
-        ("LogAddExp", "complex64", (0xC1A00000, 0x3E800000), (0x41A00000, 0xBE800000), (0x41A00000, 0xBE800000)),
+        (
+            "LogAddExp",
+            "complex64",
+            (0x7FC00000, 0x3F800000),
+            (0xC1A00000, 0x3F800000),
+            (ANY_NAN, 0),
+        ),
+        (
+            "LogAddExp",
+            "complex64",
+            (0xC1A00000, 0x3E800000),
+            (0x41A00000, 0xBE800000),
+            (0x41A00000, 0xBE800000),
+        ),
     ],
 )
 def test_operator_models_pin_mlx_semantics(operator, dtype, a, b, expected):
@@ -1651,7 +1706,7 @@ def test_binary_shards_partition_the_family(monkeypatch):
         monkeypatch.setenv(SHARD_COUNT_ENV, str(CI_SHARD_COUNT))
         shards.append(_selected_entries())
     assert sorted(entry for shard in shards for entry in shard) == sorted(ENTRIES)
-    assert {len(shard) for shard in shards} == {687}
+    assert {len(shard) for shard in shards} == {343, 344}
     monkeypatch.delenv(SHARD_COUNT_ENV)
     with pytest.raises(RuntimeError):
         _selected_entries()
@@ -1781,7 +1836,11 @@ def _dispatch(descriptor, package, target, entry, case):
         "c": _runtime_value(target, output, case["initial"]),
     }
     for parameter, (dtype_name, values) in case["constants"].items():
-        data[parameter] = {"dtype": dtype_name, "shape": [len(values)], "values": values}
+        data[parameter] = {
+            "dtype": dtype_name,
+            "shape": [len(values)],
+            "values": values,
+        }
     inputs, observed, output_name = {}, [], None
     # DirectX constant members carry the sanitized entry name as a prefix.
     prefix = re.sub(r"_+", "_", entry + "_")
