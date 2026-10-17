@@ -109,16 +109,21 @@ def translate_one(job: tuple[str, str, str, str]) -> dict[str, Any]:
 
 
 def validate_metal(record: dict[str, Any], output_dir: Path, metal: str) -> None:
+    """Compile and link one artifact into a Metal library.
+
+    Linking matters: the runtime compiles source into a library, and errors
+    such as program-scope global constructors only surface at link time.
+    """
     artifact = output_dir / record["artifact"]
     with tempfile.TemporaryDirectory() as scratch:
-        air = Path(scratch) / "shader.air"
+        library = Path(scratch) / "shader.metallib"
         completed = subprocess.run(
-            [metal, "-c", str(artifact), "-o", str(air)],
+            [metal, str(artifact), "-o", str(library)],
             capture_output=True,
             text=True,
         )
     if completed.returncode == 0:
-        record["validation"] = {"tool": "metal", "status": "compiled"}
+        record["validation"] = {"tool": "metal", "status": "linked"}
     else:
         record["status"] = "compile-failed"
         record["validation"] = {
