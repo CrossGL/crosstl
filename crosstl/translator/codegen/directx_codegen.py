@@ -2142,6 +2142,7 @@ class HLSLCodeGen:
         relative_wave_shuffle_out_of_range="undefined",
         software_subgroup_width=None,
         widen_native_float16=False,
+        groupshared_bool_storage="bool",
     ):
         """Initialize DirectX type maps and per-generation resource state."""
         self.target_profile = self.normalize_directx_target_profile(target_profile)
@@ -2153,6 +2154,7 @@ class HLSLCodeGen:
         self.set_relative_wave_shuffle_out_of_range(relative_wave_shuffle_out_of_range)
         self.set_software_subgroup_width(software_subgroup_width)
         self.set_widen_native_float16(widen_native_float16)
+        self.set_groupshared_bool_storage(groupshared_bool_storage)
         self.directx_cooperative_matrix_lowerings = {}
         self.required_hlsl_cooperative_matrix_mma = False
         self.required_hlsl_cooperative_matrix_fragment_offset = False
@@ -2726,6 +2728,29 @@ class HLSLCodeGen:
         if not isinstance(enabled, bool):
             raise TypeError("widen_native_float16 must be a boolean")
         self.widen_native_float16 = enabled
+
+    HLSL_GROUPSHARED_BOOL_STORAGES = frozenset({"bool", "uint"})
+
+    def set_groupshared_bool_storage(self, storage):
+        """Configure the word type of ``groupshared`` bool scalars and arrays.
+
+        DXC loads a ``groupshared bool`` word with ``!range [0, 2)``, so a
+        word the program reads before writing it, as MLX's contiguous scan
+        reads all 32 ``simdgroup_sums`` slots after writing one per
+        SIMD-group, makes the load undefined rather than an unspecified
+        value. ``"uint"`` declares those variables as ``uint`` words and
+        leaves every access to HLSL's implicit conversions: a store writes
+        ``bool`` as 0 or 1 and a ``bool`` read tests ``word != 0``, so written
+        words keep their values and unwritten ones read as an unspecified
+        value. ``"bool"`` keeps the declared type.
+        """
+        if not isinstance(storage, str):
+            raise TypeError("groupshared_bool_storage must be a string")
+        normalized = storage.strip().lower()
+        if normalized not in self.HLSL_GROUPSHARED_BOOL_STORAGES:
+            choices = ", ".join(sorted(self.HLSL_GROUPSHARED_BOOL_STORAGES))
+            raise ValueError(f"groupshared_bool_storage must be one of: {choices}")
+        self.groupshared_bool_storage = normalized
 
     def set_cooperative_matrix_software_lowering(self, enabled):
         """Configure checked lane-local cooperative-matrix operations."""
@@ -36584,6 +36609,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         else:
             mapped_type = self.map_type(vtype)
+            base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+            if self.groupshared_bool_storage == "uint" and base_type.strip() == "bool":
+                mapped_type = f"uint{array_suffix}"
         declaration = format_c_style_array_declaration(mapped_type, name)
         declaration = f"{self.local_variable_qualifier(node)}{declaration}"
         return f"{declaration};\n"

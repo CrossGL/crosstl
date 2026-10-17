@@ -339,6 +339,21 @@ resource bindings and module identities. Read-only input bindings are uploaded
 but not read back by the DirectX driver. These are direct kernel tests, not a
 claim of complete MLX host integration or upstream-suite coverage.
 
+Groupshared Boolean Storage
+---------------------------
+
+DXC loads a ``groupshared bool`` word with ``!range [0, 2)``. A program that
+reads a word before writing it, as MLX's ``contiguous_scan`` reads all 32
+``simdgroup_sums`` slots after writing one per SIMD-group, therefore has an
+undefined load in DXIL rather than an unspecified value. The DirectX-only
+``project.source_options.<backend>.target_options.directx.groupshared_bool_storage``
+option selects the word type: ``"bool"`` (the default) keeps the declaration,
+and ``"uint"`` declares groupshared bool scalars and arrays of any rank as
+``uint`` words. Accesses keep their source form and use HLSL's implicit
+conversions, so a store writes 0 or 1 and a Boolean read tests ``word != 0``;
+the loads carry no range metadata. Other element types and groupshared
+records with Boolean members are unchanged.
+
 Implementation Notes
 --------------------
 

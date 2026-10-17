@@ -1577,6 +1577,7 @@ DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION = (
     "relative_wave_shuffle_out_of_range"
 )
 DIRECTX_WIDEN_NATIVE_FLOAT16_SOURCE_OPTION = "widen_native_float16"
+DIRECTX_GROUPSHARED_BOOL_STORAGE_SOURCE_OPTION = "groupshared_bool_storage"
 METAL_PRESERVE_POINTER_POINTEE_CONST_SOURCE_OPTION = "preserve_pointer_pointee_const"
 METAL_RESOLVE_STANDARD_REMOVE_CV_ALIASES_SOURCE_OPTION = (
     "resolve_standard_remove_cv_aliases"
@@ -6165,6 +6166,7 @@ FRONTEND_EXCLUDED_SOURCE_OPTIONS = frozenset(
         COOPERATIVE_MATRIX_MMA_PROFILE_SOURCE_OPTION,
         PRIVATE_POINTER_OUT_OF_BOUNDS_READ_SOURCE_OPTION,
         DIRECTX_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_SOURCE_OPTION,
+        DIRECTX_GROUPSHARED_BOOL_STORAGE_SOURCE_OPTION,
         METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION,
         METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION,
     }
@@ -27629,6 +27631,23 @@ def _project_directx_widen_native_float16(
     return enabled
 
 
+def _project_directx_groupshared_bool_storage(
+    target: str,
+    source_options: Mapping[str, Any],
+) -> Any | None:
+    option = DIRECTX_GROUPSHARED_BOOL_STORAGE_SOURCE_OPTION
+    if option not in source_options:
+        return None
+    storage = source_options[option]
+    if target != "directx":
+        raise ValueError(
+            "groupshared_bool_storage is supported only by the DirectX target"
+        )
+    if not isinstance(storage, str) or storage not in {"bool", "uint"}:
+        raise ValueError("groupshared_bool_storage must be 'bool' or 'uint'")
+    return storage
+
+
 def _project_dispatch_region(
     target: str, source_options: Mapping[str, Any]
 ) -> DispatchRegion | None:
@@ -27681,6 +27700,7 @@ def _generate_project_target_from_crossgl_ast(
     private_pointer_out_of_bounds_read: str | None = None,
     directx_relative_wave_shuffle_out_of_range: Any | None = None,
     directx_widen_native_float16: Any | None = None,
+    directx_groupshared_bool_storage: Any | None = None,
     dispatch_region: DispatchRegion | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> str:
@@ -27719,6 +27739,13 @@ def _generate_project_target_from_crossgl_ast(
         if not callable(configure_float16_widening):
             raise ValueError(f"Target '{target}' does not consume widen_native_float16")
         configure_float16_widening(directx_widen_native_float16)
+    if directx_groupshared_bool_storage is not None:
+        configure_bool_storage = getattr(codegen, "set_groupshared_bool_storage", None)
+        if not callable(configure_bool_storage):
+            raise ValueError(
+                f"Target '{target}' does not consume groupshared_bool_storage"
+            )
+        configure_bool_storage(directx_groupshared_bool_storage)
     if directx_relative_wave_shuffle_out_of_range is not None:
         configure_relative_shuffle = getattr(
             codegen, "set_relative_wave_shuffle_out_of_range", None
@@ -27867,6 +27894,11 @@ def _generate_project_target_from_crossgl_ast(
                     directx_relative_wave_shuffle_out_of_range
                 ),
                 "widenNativeFloat16": directx_widen_native_float16,
+                **(
+                    {"groupsharedBoolStorage": directx_groupshared_bool_storage}
+                    if directx_groupshared_bool_storage is not None
+                    else {}
+                ),
                 **(
                     {"metadataPreconditions": resolved_metadata}
                     if resolved_metadata
@@ -28898,6 +28930,7 @@ def _translate_project_impl(
                 private_pointer_out_of_bounds_read = None
                 directx_relative_wave_shuffle_out_of_range = None
                 directx_widen_native_float16 = None
+                directx_groupshared_bool_storage = None
                 dispatch_region = None
                 try:
                     if metadata_preconditions and target not in {
@@ -29137,6 +29170,12 @@ def _translate_project_impl(
                     )
                     directx_widen_native_float16 = (
                         _project_directx_widen_native_float16(
+                            target,
+                            source_options,
+                        )
+                    )
+                    directx_groupshared_bool_storage = (
+                        _project_directx_groupshared_bool_storage(
                             target,
                             source_options,
                         )
@@ -29444,6 +29483,7 @@ def _translate_project_impl(
                         or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
+                        or directx_groupshared_bool_storage is not None
                         or dispatch_region is not None
                     ):
                         crossgl_ast = _crossgl_ast_for_project_target(
@@ -29637,6 +29677,9 @@ def _translate_project_impl(
                                             directx_widen_native_float16=(
                                                 directx_widen_native_float16
                                             ),
+                                            directx_groupshared_bool_storage=(
+                                                directx_groupshared_bool_storage
+                                            ),
                                         )
                                     except Exception as exc:
                                         if getattr(
@@ -29723,6 +29766,9 @@ def _translate_project_impl(
                                         directx_widen_native_float16=(
                                             directx_widen_native_float16
                                         ),
+                                        directx_groupshared_bool_storage=(
+                                            directx_groupshared_bool_storage
+                                        ),
                                     )
                                 except Exception as exc:
                                     if getattr(
@@ -29757,6 +29803,7 @@ def _translate_project_impl(
                         or private_pointer_out_of_bounds_read is not None
                         or directx_relative_wave_shuffle_out_of_range is not None
                         or directx_widen_native_float16 is not None
+                        or directx_groupshared_bool_storage is not None
                         or dispatch_region is not None
                     ):
                         crossgl_ast = crossgl_ast or _crossgl_ast_for_project_target(
@@ -29801,6 +29848,9 @@ def _translate_project_impl(
                                 directx_relative_wave_shuffle_out_of_range
                             ),
                             directx_widen_native_float16=directx_widen_native_float16,
+                            directx_groupshared_bool_storage=(
+                                directx_groupshared_bool_storage
+                            ),
                         )
                     if generated_source is None:
                         generated_source = translate(
