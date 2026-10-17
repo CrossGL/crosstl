@@ -641,6 +641,23 @@ def _translate_and_validate(
             payload["project"]["sourceOptions"]["metal"]["binary32_atan2_profile"]
             == "flush-subnormals"
         )
+    # _project_config selects the exact remainder helpers OpenGL uses, and
+    # every selected profile is recorded in the artifact provenance.
+    if workload.operator_type == "Remainder" and workload.input_type == "half":
+        expected_provenance["binary16RemainderProfile"] = "binary32-quotient"
+        assert (
+            payload["project"]["sourceOptions"]["metal"]["binary16_remainder_profile"]
+            == "binary32-quotient"
+        )
+    if workload.operator_type == "Remainder" and workload.input_type in {
+        "float",
+        "bfloat16_t",
+    }:
+        expected_provenance["binary32RemainderProfile"] = "flush-arithmetic-subnormals"
+        assert (
+            payload["project"]["sourceOptions"]["metal"]["binary32_remainder_profile"]
+            == "flush-arithmetic-subnormals"
+        )
     assert artifact["provenance"] == expected_provenance
     execution_entries = artifact["execution"]["entryPoints"]
     assert len(execution_entries) == 1
