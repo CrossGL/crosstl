@@ -32,6 +32,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    ParameterNode,
     PointerAccessNode,
     PointerReinterpretNode,
     PointerType,
@@ -1954,7 +1955,12 @@ class MetalCodeGen:
         target_stage = normalize_stage_name(target_stage)
         validate_pointer_reinterpretation_target(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
+        ast = self.rename_metal_reserved_program_identifiers(ast)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
+        self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)
+        self.metal_program_identifier_names = (
+            self.collect_metal_program_identifier_names(ast)
+        )
 
         self.texture_variables = []
         self.acceleration_structure_variables = []
@@ -2081,6 +2087,7 @@ class MetalCodeGen:
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_image_atomic_compare_helpers = set()
+        self.required_pointer_atomic_compare_helpers = set()
         self.required_metal_inverse_helpers = set()
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
@@ -2242,6 +2249,18 @@ class MetalCodeGen:
             )
             for node in nodes
         }
+        thread_private_globals, thread_private_ids = (
+            self.collect_metal_lowered_thread_private_globals(
+                ast, target_stage, global_vars, all_functions
+            )
+        )
+        for function_id, nodes in thread_private_globals.items():
+            self.metal_lowered_program_scope_groupshared_globals_by_function.setdefault(
+                function_id, []
+            ).extend(nodes)
+        self.metal_lowered_program_scope_groupshared_global_ids.update(
+            thread_private_ids
+        )
         self.metal_spirv_interface_variables = [
             node for node in global_vars if self.is_spirv_stage_interface_layout(node)
         ]
@@ -3089,6 +3108,7 @@ class MetalCodeGen:
 
         code += self.generate_image_atomic_compare_helpers()
         code += self.generate_buffer_atomic_compare_helpers()
+        code += self.generate_pointer_atomic_compare_helpers()
         code += self.generate_metal_wave_helpers()
         code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
@@ -5077,7 +5097,9 @@ class MetalCodeGen:
                 )
                 continue
             params.append(f"{declaration}{param_attr}")
-            if self.structured_buffer_parameter_requires_length(
+            if self.is_structured_buffer_type(
+                raw_param_type
+            ) and self.structured_buffer_parameter_requires_length(
                 self.current_function_name, p.name
             ):
                 length_name = self.structured_buffer_length_parameter_name(p.name)
@@ -7694,9 +7716,16 @@ class MetalCodeGen:
             if tail_return is not None:
                 return tail_return
             expr_code = self.generate_expression_statement(stmt)
-            return self.generate_statement_code(expr_code, indent)
+            return self.generate_statement_code(
+                expr_code, indent
+            ) + self.metal_image_store_fence_statement(
+                getattr(stmt, "expression", None), indent_str
+            )
         else:
-            return f"{indent_str}{self.generate_expression(stmt)};\n"
+            return (
+                f"{indent_str}{self.generate_expression(stmt)};\n"
+                f"{self.metal_image_store_fence_statement(stmt, indent_str)}"
+            )
 
     METAL_VECTOR_COMPONENT_NAMES = frozenset("xyzwrgba")
 
@@ -8565,6 +8594,88 @@ class MetalCodeGen:
 
         return lowered_by_function
 
+    def is_metal_thread_private_global(self, node):
+        """A mutable ``static`` program-scope value: one copy per thread."""
+        if not isinstance(node, VariableNode):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "static" not in qualifiers or qualifiers & {
+            "const",
+            "constant",
+            "uniform",
+            "extern",
+        }:
+            return False
+        if self.is_program_scope_groupshared_global(node):
+            return False
+        vtype = self.type_name_string(getattr(node, "vtype", None))
+        if not vtype:
+            return False
+        return not (
+            self.is_texture_or_image_resource_type(vtype)
+            or self.is_sampler_type(vtype)
+            or self.is_structured_buffer_type(vtype)
+        )
+
+    def collect_metal_lowered_thread_private_globals(
+        self, ast, target_stage, global_vars, all_functions
+    ):
+        """Move entry-only thread-private globals into the entry functions.
+
+        Metal program-scope variables live in the constant address space, so a
+        per-thread mutable global becomes a value-initialized local of every
+        entry that uses it. Globals that helpers also reference stay global and
+        keep their diagnostic.
+        """
+        candidates = [
+            node
+            for node in global_vars or []
+            if self.is_metal_thread_private_global(node)
+        ]
+        if not candidates:
+            return {}, set()
+        entries = self.metal_program_scope_groupshared_stage_entries(ast, target_stage)
+        entry_ids = {id(func) for _stage_name, func, _stage_locals in entries}
+        lowered_by_function = {}
+        lowered_ids = set()
+        for node in candidates:
+            name = self.metal_variable_name(node)
+            if not name:
+                continue
+            if any(
+                id(func) not in entry_ids
+                and self.node_uses_identifier(getattr(func, "body", []), name)
+                for func in all_functions or []
+            ):
+                continue
+            used_entries = []
+            blocked = False
+            for _stage_name, func, stage_locals in entries:
+                if not self.node_uses_identifier(getattr(func, "body", []), name):
+                    continue
+                if name in self.metal_entry_local_names(func, stage_locals):
+                    blocked = True
+                    break
+                used_entries.append(func)
+            if blocked:
+                continue
+            lowered = deepcopy(node)
+            lowered.qualifiers = [
+                qualifier
+                for qualifier in getattr(lowered, "qualifiers", []) or []
+                if str(qualifier).lower() != "static"
+            ]
+            if getattr(lowered, "initial_value", None) is None:
+                # Source thread-private globals start zeroed for each thread.
+                lowered.initial_value = ArrayLiteralNode([])
+            for func in used_entries:
+                lowered_by_function.setdefault(id(func), []).append(lowered)
+            lowered_ids.add(id(node))
+        return lowered_by_function, lowered_ids
+
     def metal_program_scope_groupshared_stage_entries(self, ast, target_stage):
         entries = []
         seen = set()
@@ -9134,6 +9245,9 @@ class MetalCodeGen:
             rendered = self.generate_expression(expr)
         finally:
             self.current_expression_expected_type = previous_expected_type
+        rendered = self.metal_implicit_vector_conversion(
+            expr, rendered, expected_type_name
+        )
         # Native Metal math on bfloat produces float/half values and Metal does
         # not implicitly convert those values back to bfloat.  Expected-type
         # boundaries are the source-language conversion point, so preserve the
@@ -9146,6 +9260,150 @@ class MetalCodeGen:
         ):
             return f"bfloat({rendered})"
         return rendered
+
+    METAL_IMPLICIT_VECTOR_COMPONENTS = frozenset(
+        {"float", "half", "int", "uint", "bool"}
+    )
+    METAL_SIMPLE_OPERAND = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\[\]]*\])*")
+
+    def metal_implicit_vector_conversion(self, expr, rendered, expected_type_name):
+        """Spell out source conversions Metal does not apply between vectors.
+
+        Source languages convert vectors with another component type or more
+        components implicitly (truncating to the leading components); Metal
+        only converts scalars implicitly, so the conversion is made explicit
+        where the destination type is known.
+        """
+        if not expected_type_name or not isinstance(rendered, str):
+            return rendered
+        expected = self.map_type(expected_type_name)
+        if not isinstance(expected, str) or self.is_matrix_value_type(expected):
+            return rendered
+        expected_component = self.vector_component_type(expected)
+        if expected_component not in self.METAL_IMPLICIT_VECTOR_COMPONENTS:
+            return rendered
+        if not (
+            self.is_vector_value_type(expected) or self.is_scalar_value_type(expected)
+        ):
+            return rendered
+        actual_type = self.expression_result_type(expr)
+        if actual_type is None:
+            return rendered
+        actual = self.map_type(actual_type)
+        if not isinstance(actual, str) or not self.is_vector_value_type(actual):
+            return rendered
+        actual_component = self.vector_component_type(actual)
+        if actual_component not in self.METAL_IMPLICIT_VECTOR_COMPONENTS:
+            return rendered
+        expected_width = self.vector_value_width(expected) or 1
+        actual_width = self.vector_value_width(actual)
+        if actual_width is None or actual_width < expected_width:
+            return rendered
+        converted = rendered
+        if actual_width > expected_width:
+            if isinstance(expr, FunctionCallNode):
+                # Builtin result widths are not modelled precisely enough to
+                # truncate call results.
+                return rendered
+            if not self.METAL_SIMPLE_OPERAND.fullmatch(converted):
+                converted = f"({converted})"
+            converted = f"{converted}.{'xyzw'[:expected_width]}"
+        if actual_component != expected_component:
+            converted = f"{expected}({converted})"
+        return converted
+
+    METAL_ARITHMETIC_COMPONENT_RANKS = {
+        "bool": 0,
+        "int": 1,
+        "uint": 2,
+        "half": 3,
+        "float": 4,
+    }
+    METAL_COMMON_TYPE_OPERATORS = frozenset(
+        {"+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "!=", "&", "|", "^"}
+    )
+
+    def metal_binary_operand_vector(self, operand):
+        """``(mapped type, component, width)`` of a known vector operand."""
+        operand_type = self.expression_result_type(operand)
+        if operand_type is None:
+            return None
+        mapped = self.map_type(operand_type)
+        if not isinstance(mapped, str) or not self.is_vector_value_type(mapped):
+            return None
+        component = self.vector_component_type(mapped)
+        if component not in self.METAL_ARITHMETIC_COMPONENT_RANKS:
+            return None
+        return mapped, component, self.vector_value_width(mapped)
+
+    def metal_binary_common_component(self, operator, left_component, right_component):
+        if left_component == right_component:
+            return left_component
+        common = max(
+            (left_component, right_component),
+            key=self.METAL_ARITHMETIC_COMPONENT_RANKS.get,
+        )
+        if common == "bool":
+            common = "int"
+        if operator in {"&", "|", "^"} and common in {"half", "float"}:
+            return None
+        return common
+
+    def metal_mixed_vector_binary_operands(self, expr, operator, left, right):
+        """Convert vector operands with different component types.
+
+        Source languages apply the usual arithmetic conversions to vectors of
+        one width; Metal rejects mixed vector operands. Shifts keep the left
+        operand type. Returns ``(left, right, common component or None)``.
+        """
+        left_info = self.metal_binary_operand_vector(expr.left)
+        right_info = self.metal_binary_operand_vector(expr.right)
+        if left_info is None and right_info is None:
+            if operator != "%":
+                return left, right, None
+            scalar_components = {
+                self.vector_component_type(
+                    self.map_type(self.expression_result_type(operand))
+                )
+                for operand in (expr.left, expr.right)
+            }
+            if "float" in scalar_components:
+                return left, right, "float"
+            if "half" in scalar_components:
+                return left, right, "half"
+            return left, right, None
+        if left_info is None or right_info is None:
+            info = left_info or right_info
+            other = expr.right if left_info is not None else expr.left
+            other_type = self.map_type(self.expression_result_type(other))
+            if operator == "%" and info[1] in {"float", "half"}:
+                # fmod has no vector-scalar overloads.
+                if left_info is None and self.is_scalar_value_type(other_type):
+                    left = f"{info[0]}({left})"
+                elif right_info is None and self.is_scalar_value_type(other_type):
+                    right = f"{info[0]}({right})"
+            return left, right, info[1]
+        left_type, left_component, left_width = left_info
+        right_type, right_component, right_width = right_info
+        if left_width != right_width:
+            return left, right, None
+        if operator in {"<<", ">>"}:
+            if left_component != right_component and left_component in {"int", "uint"}:
+                right = f"{left_type}({right})"
+            return left, right, left_component
+        if operator not in self.METAL_COMMON_TYPE_OPERATORS:
+            return left, right, None
+        common = self.metal_binary_common_component(
+            operator, left_component, right_component
+        )
+        if common is None:
+            return left, right, None
+        common_type = f"{common}{left_width}"
+        if left_component != common:
+            left = f"{common_type}({left})"
+        if right_component != common:
+            right = f"{common_type}({right})"
+        return left, right, common
 
     def generate_metal_bfloat_promoted_argument(self, argument):
         rendered = self.generate_expression(argument)
@@ -9570,6 +9828,44 @@ class MetalCodeGen:
             return None
         return int(mapped_type[-1])
 
+    def metal_matrix_binary_result_type(self, operator, left_type, right_type):
+        """Result type of an arithmetic operation with a matrix operand.
+
+        Metal ``floatCxR`` has ``C`` columns of ``R`` rows: ``M * v`` takes a
+        ``C`` vector to an ``R`` vector and ``v * M`` an ``R`` vector to ``C``.
+        """
+        left = self.map_type(left_type) if left_type is not None else None
+        right = self.map_type(right_type) if right_type is not None else None
+        left_matrix = isinstance(left, str) and self.is_matrix_value_type(left)
+        right_matrix = isinstance(right, str) and self.is_matrix_value_type(right)
+        if not left_matrix and not right_matrix:
+            return None
+        if operator not in {"*", "+", "-", "/"}:
+            return None
+
+        def parts(matrix):
+            scalar, columns, rows = re.fullmatch(
+                r"(float|half|double)(\d)x(\d)", matrix
+            ).groups()
+            return scalar, int(columns), int(rows)
+
+        if left_matrix and right_matrix:
+            if operator != "*":
+                return left
+            scalar, _left_columns, rows = parts(left)
+            _scalar, right_columns, _right_rows = parts(right)
+            return f"{scalar}{right_columns}x{rows}"
+        matrix = left if left_matrix else right
+        other = right if left_matrix else left
+        if other is None:
+            return None
+        if self.is_vector_value_type(other) and operator == "*":
+            scalar, columns, rows = parts(matrix)
+            return f"{scalar}{rows if left_matrix else columns}"
+        if self.is_scalar_value_type(other):
+            return matrix
+        return None
+
     def cast_binary_operand_to_expected_vector(self, code, operand_type, expected_type):
         if operand_type is None:
             return code
@@ -9631,6 +9927,32 @@ class MetalCodeGen:
                     if width:
                         return f"bool{width}"
                 return "bool"
+            matrix_result = self.metal_matrix_binary_result_type(
+                operator, left_type, right_type
+            )
+            if matrix_result is not None:
+                return matrix_result
+            if (
+                self.is_vector_value_type(left_type)
+                and self.is_vector_value_type(right_type)
+                and operator not in {"<<", ">>"}
+            ):
+                left_mapped = self.map_type(left_type)
+                right_mapped = self.map_type(right_type)
+                left_component = self.vector_component_type(left_mapped)
+                right_component = self.vector_component_type(right_mapped)
+                if (
+                    left_component != right_component
+                    and self.vector_value_width(left_mapped)
+                    == self.vector_value_width(right_mapped)
+                    and left_component in self.METAL_ARITHMETIC_COMPONENT_RANKS
+                    and right_component in self.METAL_ARITHMETIC_COMPONENT_RANKS
+                ):
+                    common = self.metal_binary_common_component(
+                        operator, left_component, right_component
+                    )
+                    if common is not None:
+                        return f"{common}{self.vector_value_width(left_mapped)}"
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -9662,6 +9984,9 @@ class MetalCodeGen:
                 getattr(expr, "target", getattr(expr, "left", None))
             )
         if isinstance(expr, ArrayAccessNode):
+            block_member = self.glsl_buffer_block_member_access(expr.array)
+            if block_member is not None and block_member.get("is_array"):
+                return block_member["type"]
             array_type = self.expression_result_type(expr.array)
             if not array_type:
                 array_type = self.unsupported_glsl_buffer_block_expression_type(
@@ -9679,6 +10004,17 @@ class MetalCodeGen:
             pointee_type = self.pointer_pointee_type_name(array_type)
             if pointee_type is not None:
                 return pointee_type
+            mapped_array_type = (
+                self.map_type(array_type) if array_type is not None else None
+            )
+            if isinstance(mapped_array_type, str):
+                if self.is_vector_value_type(mapped_array_type):
+                    return self.vector_component_type(mapped_array_type)
+                if self.is_matrix_value_type(mapped_array_type):
+                    scalar, dimensions = re.fullmatch(
+                        r"(float|half|double)(\d)x(\d)", mapped_array_type
+                    ).group(1, 3)
+                    return f"{scalar}{dimensions}"
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
@@ -10206,17 +10542,13 @@ class MetalCodeGen:
         if hasattr(node, "target") and hasattr(node, "value"):
             target = node.target
             value = node.value
-            rhs = self.generate_expression_with_expected(
-                value, self.expression_result_type(target)
-            )
-            op = getattr(node, "operator", "=")
         else:
             target = node.left
             value = node.right
-            rhs = self.generate_expression_with_expected(
-                value, self.expression_result_type(target)
-            )
-            op = getattr(node, "operator", "=")
+        op = getattr(node, "operator", "=")
+        rhs = self.generate_expression_with_expected(
+            value, self.metal_assignment_value_type(target, value, op)
+        )
 
         reference_declaration = self.generate_local_reference_assignment_declaration(
             target, value, rhs
@@ -10279,6 +10611,37 @@ class MetalCodeGen:
         if op == "=" and self.pointer_assignment_needs_address(target, value):
             rhs = f"&{rhs}"
         return f"{lhs} {op} {rhs}"
+
+    METAL_EXACT_INTEGER_COMPOUND_OPERATORS = frozenset(
+        {"+=", "-=", "*=", "&=", "|=", "^=", "<<="}
+    )
+
+    def metal_assignment_value_type(self, target, value, op):
+        """Type the right-hand side converts to before it is combined.
+
+        A compound assignment combines in the operands' common type; converting
+        the right operand to the target type first is only exact for floating
+        targets and for wrapping integer operators.
+        """
+        target_type = self.expression_result_type(target)
+        if op == "=" or target_type is None:
+            return target_type
+        target_component = self.vector_component_type(self.map_type(target_type))
+        if target_component in {"float", "half"}:
+            return target_type
+        value_type = self.expression_result_type(value)
+        value_component = (
+            self.vector_component_type(self.map_type(value_type))
+            if value_type is not None
+            else None
+        )
+        if (
+            target_component in {"int", "uint"}
+            and value_component in {"int", "uint", "bool"}
+            and op in self.METAL_EXACT_INTEGER_COMPOUND_OPERATORS
+        ):
+            return target_type
+        return None
 
     def generate_metal_stage_io_lowered_assignment(self, target, rhs, op):
         if isinstance(target, MemberAccessNode):
@@ -10839,6 +11202,11 @@ class MetalCodeGen:
                     left = f"int({left})"
                 if self.map_type(self.expression_result_type(expr.right)) == "bool":
                     right = f"int({right})"
+            left, right, common = self.metal_mixed_vector_binary_operands(
+                expr, operator, left, right
+            )
+            if operator == "%" and common in {"float", "half"}:
+                return f"fmod({left}, {right})"
             if operator in {"+", "-", "*", "/", "%"}:
                 expected_type = self.current_expression_expected_type
                 expression_width = self.vector_value_width(
@@ -13949,12 +14317,6 @@ class MetalCodeGen:
                 args[0] if args else None,
                 f"requires {expected_arity} argument(s), got {len(args)}",
             )
-        if operation == "compare_exchange":
-            return self.unsupported_metal_buffer_resource_atomic_call(
-                func_name,
-                args[0],
-                "compare-exchange requires explicit Metal atomic storage",
-            )
 
         target = args[0]
         target_type = self.expression_result_type(target)
@@ -13980,6 +14342,18 @@ class MetalCodeGen:
         target_expr = self.generate_expression(target)
         if not self.is_metal_address_expression(target, target_expr):
             target_expr = f"&{target_expr}"
+        if operation == "compare_exchange":
+            compare = self.generate_expression_with_expected(
+                args[1], mapped_target_type
+            )
+            value = self.generate_expression_with_expected(args[2], mapped_target_type)
+            self.required_pointer_atomic_compare_helpers.add(
+                (address_space, mapped_target_type)
+            )
+            helper_name = self.pointer_atomic_compare_helper_name(
+                address_space, mapped_target_type
+            )
+            return f"{helper_name}({target_expr}, {compare}, {value})"
         value = self.generate_expression_with_expected(args[1], mapped_target_type)
         atomic_type = f"atomic_{mapped_target_type}"
         atomic_target = (
@@ -14876,10 +15250,77 @@ class MetalCodeGen:
         return f"{pointer_type} {name}"
 
     def structured_buffer_length_resource_name(self, name):
-        return f"{name}Length"
+        return self.metal_generated_companion_name(f"{name}Length")
 
     def structured_buffer_length_parameter_name(self, name):
-        return f"{name}Length"
+        return self.metal_generated_companion_name(f"{name}Length")
+
+    def metal_generated_companion_name(self, base_name):
+        """A deterministic generated name that no program identifier uses."""
+        used = getattr(self, "metal_program_identifier_names", set())
+        candidate = base_name
+        while candidate in used:
+            candidate = f"{candidate}_"
+        return candidate
+
+    METAL_RESERVED_PROGRAM_IDENTIFIERS = frozenset(
+        {
+            "kernel",
+            "vertex",
+            "fragment",
+            "device",
+            "constant",
+            "thread",
+            "threadgroup",
+            "threadgroup_imageblock",
+            "ray_data",
+            "object_data",
+        }
+    )
+
+    def rename_metal_reserved_program_identifiers(self, ast):
+        """Rename program-scope variables spelled like Metal keywords.
+
+        Program-scope resources and values become entry parameters or
+        declarations whose names Metal parses as keywords. Every declaration
+        and reference with the name is renamed on a copy of the AST.
+        """
+        reserved = {
+            getattr(node, "name", None)
+            for node in getattr(ast, "global_variables", []) or []
+        } & self.METAL_RESERVED_PROGRAM_IDENTIFIERS
+        for cbuffer in getattr(ast, "cbuffers", []) or []:
+            for member in getattr(cbuffer, "members", []) or []:
+                if (
+                    getattr(member, "name", None)
+                    in self.METAL_RESERVED_PROGRAM_IDENTIFIERS
+                ):
+                    reserved.add(member.name)
+        if not reserved:
+            return ast
+        ast = deepcopy(ast)
+        used = self.collect_metal_program_identifier_names(ast)
+        renames = {}
+        for name in sorted(reserved):
+            candidate = f"{name}_"
+            while candidate in used:
+                candidate = f"{candidate}_"
+            used.add(candidate)
+            renames[name] = candidate
+        for node in self.iter_unique_ast_nodes(ast):
+            if isinstance(node, (IdentifierNode, VariableNode, ParameterNode)):
+                new_name = renames.get(getattr(node, "name", None))
+                if new_name is not None:
+                    node.name = new_name
+        return ast
+
+    def collect_metal_program_identifier_names(self, ast):
+        names = set()
+        for node in self.iter_unique_ast_nodes(ast):
+            name = getattr(node, "name", None)
+            if isinstance(name, str):
+                names.add(name)
+        return names
 
     def format_structured_buffer_length_parameter(self, name, array_size=None):
         length_name = self.structured_buffer_length_parameter_name(name)
@@ -19658,11 +20099,15 @@ class MetalCodeGen:
         return len(args or []) == len(parameter_nodes)
 
     def collect_function_structured_buffer_length_dependencies(self, functions):
-        parameter_types = {
-            getattr(func, "name", None): self.structured_buffer_parameter_type_map(func)
-            for func in functions or []
-            if getattr(func, "name", None)
-        }
+        parameter_types = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if func_name:
+                # Overloads share a name; each keeps only its own buffer
+                # parameters when the declaration is rendered.
+                parameter_types.setdefault(func_name, {}).update(
+                    self.structured_buffer_parameter_type_map(func)
+                )
         dependencies = {func_name: set() for func_name in parameter_types}
 
         for func in functions or []:
@@ -20733,7 +21178,9 @@ class MetalCodeGen:
                 func_name, index
             ):
                 continue
-            args.append(self.generate_expression(arg))
+            args.append(
+                self.generate_function_value_argument(func_name, index, arg, param_type)
+            )
             if self.structured_buffer_parameter_requires_length(func_name, param_name):
                 length = self.structured_buffer_length_data_argument(arg)
                 if length is not None:
@@ -20745,6 +21192,38 @@ class MetalCodeGen:
                 if counter is not None:
                     args.append(counter)
         return args
+
+    def generate_function_value_argument(self, func_name, index, arg, param_type):
+        """Render a user-function argument with source implicit conversions.
+
+        Only unambiguous calls convert: the function has one overload and the
+        parameter is passed by value.
+        """
+        if (
+            param_type is None
+            or len(self.function_overloads_by_name.get(func_name, [])) != 1
+        ):
+            return self.generate_expression(arg)
+        if self.metal_reference_parameter_qualifier_for(func_name, index) is not None:
+            return self.generate_expression(arg)
+        return self.generate_expression_with_expected(arg, param_type)
+
+    def metal_reference_parameter_qualifier_for(self, func_name, index):
+        overloads = self.function_overloads_by_name.get(func_name, [])
+        if len(overloads) != 1:
+            return None
+        params = list(
+            getattr(overloads[0], "parameters", getattr(overloads[0], "params", []))
+            or []
+        )
+        if index >= len(params):
+            return None
+        names = self.parameter_qualifier_names(params[index])
+        if "inout" in names:
+            return "inout"
+        if "out" in names:
+            return "out"
+        return None
 
     def is_unsupported_metal_ray_function_table_array_parameter(self, func_name, index):
         parameter_nodes = self.function_parameter_nodes.get(func_name, [])
@@ -21923,6 +22402,7 @@ class MetalCodeGen:
             "atomicXor": ("fetch_xor", 2),
             "atomicExchange": ("exchange", 2),
             "atomicCompSwap": ("compare_exchange", 3),
+            "atomicCompareExchange": ("compare_exchange", 3),
         }
 
     def glsl_buffer_block_atomic_access(self, target):
@@ -25485,6 +25965,39 @@ class MetalCodeGen:
             )
         return "".join(helpers)
 
+    def pointer_atomic_compare_helper_name(self, address_space, component_type):
+        return f"__crossgl_{address_space}_atomic_compare_exchange_{component_type}"
+
+    def generate_pointer_atomic_compare_helpers(self):
+        """Strong compare-exchange returning the original value.
+
+        Metal only provides the weak form, which may fail spuriously; retry
+        while the observed value still equals the comparand.
+        """
+        helpers = []
+        for address_space, component_type in sorted(
+            getattr(self, "required_pointer_atomic_compare_helpers", set())
+        ):
+            atomic_type = f"atomic_{component_type}"
+            helper_name = self.pointer_atomic_compare_helper_name(
+                address_space, component_type
+            )
+            helpers.append(
+                f"{component_type} {helper_name}({address_space} {component_type}* target, "
+                f"{component_type} compareValue, {component_type} value) {{\n"
+                f"    {address_space} {atomic_type}* atomicTarget = "
+                f"reinterpret_cast<{address_space} {atomic_type}*>(target);\n"
+                f"    {component_type} original;\n"
+                "    do {\n"
+                "        original = compareValue;\n"
+                "    } while (!atomic_compare_exchange_weak_explicit(atomicTarget, "
+                "&original, value, memory_order_relaxed, memory_order_relaxed) "
+                "&& original == compareValue);\n"
+                "    return original;\n"
+                "}\n\n"
+            )
+        return "".join(helpers)
+
     def buffer_atomic_compare_helper_name(self, component_type):
         return f"__crossgl_buffer_atomic_compare_exchange_{component_type}"
 
@@ -25508,6 +26021,83 @@ class MetalCodeGen:
                 "}\n\n"
             )
         return "".join(helpers)
+
+    def collect_metal_read_after_write_images(self, ast):
+        """Names of storage images the program both loads and stores.
+
+        A thread only observes its own earlier ``write`` to a read_write
+        texture after a texture fence. ``True`` means every stored image needs
+        one because a load goes through a name other than a global image.
+        """
+        loaded = set()
+        stored = False
+        for node in self.iter_unique_ast_nodes(ast):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            args = list(getattr(node, "args", []) or [])
+            if name == "imageStore":
+                stored = True
+            if name != "imageLoad" or not args:
+                continue
+            image = args[0]
+            image_name = getattr(image, "name", None)
+            if not isinstance(image, (IdentifierNode, VariableNode)) or not image_name:
+                return True
+            loaded.add(image_name)
+        if not stored:
+            return set()
+        global_images = {
+            getattr(node, "name", None)
+            for node in getattr(ast, "global_variables", []) or []
+        }
+        if loaded - global_images:
+            return True
+        return loaded
+
+    def iter_unique_ast_nodes(self, root):
+        """Yield every AST node reachable from ``root`` once, iteratively."""
+        seen = set()
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            if node is None or isinstance(node, (str, int, float, bool)):
+                continue
+            if isinstance(node, (list, tuple, set)):
+                stack.extend(node)
+                continue
+            if isinstance(node, dict):
+                stack.extend(node.values())
+                continue
+            if not hasattr(node, "__dict__") or id(node) in seen:
+                continue
+            seen.add(id(node))
+            yield node
+            for key, value in vars(node).items():
+                if key not in {"parent", "annotations"}:
+                    stack.append(value)
+
+    def metal_image_store_fence_statement(self, stmt, indent_str):
+        """Fence after an image store whose image the program also reads.
+
+        Metal only makes a thread's ``write`` to a read_write texture visible to
+        its own later reads after ``fence()``.
+        """
+        if not isinstance(stmt, FunctionCallNode):
+            return ""
+        if self.function_call_name(stmt) != "imageStore":
+            return ""
+        args = list(getattr(stmt, "args", []) or [])
+        if len(args) < 3:
+            return ""
+        fenced = getattr(self, "metal_fenced_image_names", set())
+        image_name = getattr(args[0], "name", None)
+        if fenced is not True and image_name not in fenced:
+            return ""
+        image_type = self.texture_resource_type(args[0])
+        if self.is_multisample_storage_image_resource(image_type):
+            return ""
+        return f"{indent_str}{self.generate_expression(args[0])}.fence();\n"
 
     def generate_image_call(self, func_name, args):
         if func_name == "imageAtomicCompSwap" and len(args) >= 4:
@@ -25593,12 +26183,14 @@ class MetalCodeGen:
                 return self.unsupported_multisample_image_store_call(image_type)
             texel_coord, layer = self.image_coordinate_expression(image_type, coord)
             if sample is not None and layer is not None:
-                return f"{image_name}.write({value}, {texel_coord}, {layer}, {sample})"
-            if sample is not None:
-                return f"{image_name}.write({value}, {texel_coord}, {sample})"
-            if layer is not None:
-                return f"{image_name}.write({value}, {texel_coord}, {layer})"
-            return f"{image_name}.write({value}, {texel_coord})"
+                store = f"{image_name}.write({value}, {texel_coord}, {layer}, {sample})"
+            elif sample is not None:
+                store = f"{image_name}.write({value}, {texel_coord}, {sample})"
+            elif layer is not None:
+                store = f"{image_name}.write({value}, {texel_coord}, {layer})"
+            else:
+                store = f"{image_name}.write({value}, {texel_coord})"
+            return store
 
         return None
 

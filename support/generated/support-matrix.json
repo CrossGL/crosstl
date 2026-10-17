@@ -125,7 +125,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1549
+        "test_count": 1565
       },
       "translator_codegen": {
         "exists": true,
@@ -530,7 +530,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 589,
+        "unsupported_marker_count": 588,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
