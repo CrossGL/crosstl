@@ -883,6 +883,33 @@ two batches, one and three channel blocks, and partial output tiles in both
 directions. This is a 9/17,832 increment; it does not run the upstream MLX
 test suite or redirect the MLX host runtime.
 
+``scan.current-tree.translation.json`` pins all 456 entries of ``scan.metal``:
+``contiguous_scan`` and ``strided_scan`` for its 57 sum, product, max, min and
+``logaddexp`` helpers over bool, integer, float16, float32, bfloat16 and
+complex64 elements, inclusive and exclusive, forward and reverse. Sums and
+products of types narrower than 8 bytes use Apple's ``simd_prefix_*``
+intrinsics, the rest the kernels' ``simd_shuffle_and_fill_up`` loops; OpenGL
+and DirectX lower both to 32-lane software subgroups, and DirectX selects
+``native-precise`` binary32 addition and own-value out-of-range relative
+shuffles. The software subgroup convergence pass now stages guarded inputs
+around helpers that call ``cos``, ``sin``, ``sqrt`` or ``atan2``, end in
+``if``/``else`` returns or call the generated precise binary32 square root,
+which complex ``logaddexp`` needs. Each target executes 1,824 dispatches with
+``scan.cpp``'s groups: contiguous rows of 1, 37, one block and two blocks plus
+five elements, and strided ``(outer, axis, stride)`` arrays of ``(3, 1, 7)``,
+``(3, 37, 5)``, ``(3, 64, 32)`` and ``(1, 33, 70)``. A step-by-step model of
+both kernels, checked against a left fold of each line, gives the expected
+words; inputs keep every result exact in any association order, except one
+dense ``logaddexp`` case per kernel with a propagated 16 ulp (complex: 64 ulp)
+per-operation bound. Checked metadata preconditions bound ``axis_size`` and
+``stride`` to [1, 4096] and ``stride_blocks`` to [1, 128], and OpenGL needs
+index-range preconditions for the reverse kernels, which the model checks
+access by access. Metal also runs the unchanged upstream kernels, which the
+translation must reproduce exactly; the development machine's Metal compiler
+gives both words that differ from the model for reverse contiguous scans of
+one-byte types, and only those 26 entries may. This is a 456/17,832 increment;
+it does not run the upstream MLX test suite or redirect the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,

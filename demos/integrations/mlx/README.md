@@ -1198,6 +1198,53 @@ neighbouring channels, filters or tiles are rejected. This covers 9/17,832
 entries; it does not run the upstream MLX test suite or redirect the MLX host
 runtime.
 
+`contracts/scan.current-tree.translation.json` pins all 456 entries of
+`scan.metal` and their 1,368 artifacts: `contiguous_scan` and `strided_scan`
+for each of its 57 helpers (sum, product, max and min over bool, the eight
+integer types, float16, float32, bfloat16 and complex64, and `logaddexp` over
+the three floats and complex64), inclusive and exclusive, forward and reverse,
+such as `strided_scan_reverse_exclusive_prod_int64_int64`. Each thread reads
+`N_READS` elements, two for 8-byte types and four otherwise. Sums and products
+of narrower types scan with Apple's `simd_prefix_*` intrinsics, everything
+else with the kernels' own `simd_shuffle_and_fill_up` loops. OpenGL and
+DirectX lower both to 32-lane software subgroups; DirectX adds with the
+`native-precise` binary32 policy, and its relative wave shuffles return the
+lane's own value out of range, as Apple's do. Complex `logaddexp` needed the
+software subgroup convergence pass to stage guarded inputs around helpers
+that call `cos`, `sin`, `sqrt` or `atan2`, end in `if`/`else` returns
+(complex `log1p`) or call the generated precise binary32 square root.
+Required CI executes every entry on Metal, Mesa EGL and Direct3D 12 WARP,
+1,824 dispatches and 3,019,068 checked elements per target, on grids of three
+groups. Contiguous kernels use `scan.cpp`'s 128 threads on three rows of 1 and
+37 elements, one block of `N_READS * 128` and two blocks plus five, which
+carries the prefix across the block loop. Strided kernels use
+`(32 / N_READS) * 32` threads on axis 1 of `(outer, axis, stride)` arrays of
+`(3, 1, 7)`, `(3, 37, 5)`, `(3, 64, 32)` and `(1, 33, 70)`. A model of both
+kernels follows their block loops, SIMD-group scans, threadgroup carries and
+guarded loads and stores step by step, keeps unspecified threadgroup memory
+out of every result, checks that each input is read and each output written
+once, and matches an independent left fold of each line. Inputs make results
+exact in any association order: quarters with bounded prefix sums, signed
+powers of two, wrapping integers, overflow-free products, one zero sign per
+line for extrema and `logaddexp` values of 64 times an odd number or -inf.
+One case per `logaddexp` kernel takes dense inputs instead, with a bound
+propagated at 16 ulp per operation (64 for complex values); every other word
+is compared exactly. Outputs start different from their expected values, 16
+trailing output guards and 16 padded input elements are checked and every
+input must be unchanged. Checked metadata preconditions keep `axis_size` and
+`stride` in [1, 4096] and `stride_blocks` in [1, 128]. OpenGL also needs
+index-range preconditions for the reverse kernels, whose block pointers may
+sit before their line, and the model checks every executed access against
+them. Metal also runs the unchanged upstream kernels, and the translation
+must reproduce their words exactly. On the development machine (M2 Max,
+Metal 32023.918) both give words that differ from the model for reverse
+contiguous scans of one-byte types, which address blocks as
+`in + axis_size - offset - N_READS`; the same pointers formed with signed
+offsets give the model's words. Only those 26 entries may differ from the
+model on Metal, and only together with the upstream kernel. This covers
+456/17,832 entries; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
