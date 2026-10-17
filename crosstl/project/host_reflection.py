@@ -701,7 +701,7 @@ def _reflect_metal_source(
     stage: str | None,
 ) -> dict[str, Any]:
     source = _strip_comments(_read_text(artifact_path))
-    struct_declarations = _scalar_struct_declarations(source)
+    struct_declarations = _scalar_struct_declarations(source, member_functions=True)
     entry_points = []
     resources = []
     stage_names = {
@@ -1490,9 +1490,53 @@ def _struct_array_extent(text: str) -> int | None:
     return value
 
 
+STRUCT_DATA_MEMBER_RE = re.compile(
+    r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?:\[([^\[\]{};]*)\])?\s*;"
+)
+# A non-virtual member function definition: plain specifiers and return type
+# words, a name or ``operator`` spelling, one flat parameter list, Metal
+# address-space and ``const`` qualifiers, then its braced body. Constructors
+# with member initializer lists, templates and declarations without a body do
+# not match, so structs holding them keep an unproven layout.
+METAL_MEMBER_FUNCTION_HEADER_RE = re.compile(
+    r"\s*(?:[A-Za-z_]\w*\s*[*&]*\s+)*?"
+    r"(?:operator\b[^(){};:<>]*?|[A-Za-z_]\w*)"
+    r"\s*\([^(){};]*\)"
+    r"(?:\s*\b(?:const|thread|threadgroup|device|constant|noexcept)\b)*\s*\{"
+)
+METAL_MEMBER_FUNCTION_EXCLUDED_WORDS = frozenset({"virtual", "template", "friend"})
+
+
+def _metal_member_function_end(body: str, position: int) -> int | None:
+    """End of the member function definition at ``position``, if one is there.
+
+    Non-virtual member functions do not occupy storage, so they leave the
+    data members' layout unchanged.
+    """
+    header = METAL_MEMBER_FUNCTION_HEADER_RE.match(body, position)
+    if header is None:
+        return None
+    words = set(re.findall(r"[A-Za-z_]\w*", header.group(0)))
+    if words & METAL_MEMBER_FUNCTION_EXCLUDED_WORDS:
+        return None
+    function_body = _braced_body(body, header.end() - 1)
+    if function_body is None:
+        return None
+    end = header.end() + len(function_body) + 1
+    trailing = re.compile(r"\s*;").match(body, end)
+    return trailing.end() if trailing is not None else end
+
+
 def _scalar_struct_declarations(
     source: str,
+    *,
+    member_functions: bool = False,
 ) -> dict[str, list[tuple[str, str, int | None]]]:
+    """Structs whose bodies are plain scalar data members.
+
+    With ``member_functions`` (Metal), member function definitions between the
+    data members are skipped: they do not change the layout.
+    """
     declarations = {}
     seen = set()
     for match in re.finditer(r"\bstruct\s+([A-Za-z_]\w*)\s*\{", source):
@@ -1508,18 +1552,23 @@ def _scalar_struct_declarations(
             continue
         members = []
         position = 0
-        for member in re.finditer(
-            r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?:\[([^\[\]{};]*)\])?\s*;", body
-        ):
-            if member.start() != position:
-                break
-            extent = None
-            if member.group(3) is not None:
-                extent = _struct_array_extent(member.group(3))
-                if extent is None:
-                    break
-            members.append((member.group(1), member.group(2), extent))
-            position = member.end()
+        while True:
+            member = STRUCT_DATA_MEMBER_RE.match(body, position)
+            if member is not None:
+                extent = None
+                if member.group(3) is not None:
+                    extent = _struct_array_extent(member.group(3))
+                    if extent is None:
+                        break
+                members.append((member.group(1), member.group(2), extent))
+                position = member.end()
+                continue
+            if member_functions:
+                end = _metal_member_function_end(body, position)
+                if end is not None:
+                    position = end
+                    continue
+            break
         if body[position:].strip() or not 1 <= len(members) <= 64:
             continue
         types = {member[0] for member in members}

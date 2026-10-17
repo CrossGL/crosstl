@@ -26,6 +26,7 @@ from crosstl.project import (
 )
 from crosstl.project.host_reflection import reflect_target_host_interface
 from crosstl.project.metal_runtime import run_metal_command
+from crosstl.project.native_loader_dispatch import _validated_scalar_layout
 from crosstl.project.runtime_verification import (
     RuntimeAdapterDispatchError,
     RuntimeAdapterSetupError,
@@ -101,6 +102,92 @@ def test_metal_homogeneous_struct_is_not_a_vector(tmp_path):
     assert layout["elementStrideBytes"] == 8
     assert layout["componentCount"] == 2
     assert "vectorWidth" not in layout
+
+
+def _struct_reflection(tmp_path, body, declaration="const device Pair* values"):
+    source = tmp_path / "methods.metal"
+    source.write_text(
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        f"struct Pair {{ {body} }};\n"
+        f"kernel void sample({declaration} [[buffer(0)]]) {{}}\n",
+        encoding="utf-8",
+    )
+    return reflect_target_host_interface(source, target="metal")["resources"][0]
+
+
+@pytest.mark.parametrize(
+    "functions",
+    [
+        # MLX's _NoMask: a conversion operator for every address space.
+        "constexpr operator bool() thread { return true; } "
+        "constexpr operator bool() const threadgroup { return true; } "
+        "constexpr operator bool() const device { return true; } "
+        "constexpr operator bool() const constant { return true; }",
+        "float magnitude() const thread { if (real > 0) { return real; } "
+        "return -real; }",
+        "Pair() thread { real = 0; imag = 0; };",
+        "static float zero() { return 0.0f; } "
+        "bool operator==(const thread Pair& other) const { return real == other.real; }",
+        "const device float& first() const device { return real; }",
+    ],
+)
+def test_metal_member_functions_keep_struct_layout(tmp_path, functions):
+    plain = _struct_reflection(tmp_path, "float real; float imag;")["scalarLayout"]
+    for body in (
+        f"float real; float imag; {functions}",
+        f"{functions} float real; float imag;",
+        f"float real; {functions} float imag;",
+    ):
+        assert _struct_reflection(tmp_path, body)["scalarLayout"] == plain
+
+
+def test_metal_byte_struct_with_operators_dispatches_as_bytes(tmp_path):
+    layout = _struct_reflection(
+        tmp_path,
+        "char x; constexpr operator bool() thread { return true; } "
+        "constexpr operator bool() const device { return true; }",
+    )["scalarLayout"]
+    assert layout == {
+        "physicalType": "Pair",
+        "elementType": "int8",
+        "elementSizeBytes": 1,
+        "elementStrideBytes": 1,
+        "alignmentBytes": 1,
+        "memberOffsetBytes": 0,
+        "storageLayout": "metal-buffer",
+        "runtimeSized": True,
+        "componentCount": 1,
+        "structMembers": [{"name": "x", "physicalType": "char", "offsetBytes": 0}],
+    }
+    value = RuntimeValue(name="values", dtype="int8", shape=(4,), values=[0] * 4)
+    assert (
+        _validated_scalar_layout(
+            layout,
+            runtime_value=value,
+            target="metal",
+            resource_kind="buffer",
+            path="$.layout",
+        )
+        == layout
+    )
+
+
+@pytest.mark.parametrize(
+    "functions",
+    [
+        "virtual float value() const { return real; }",
+        "Pair(float value) : real(value), imag(0) {}",
+        "template <typename T> operator T() const { return T(real); }",
+        "friend bool operator==(Pair a, Pair b) { return a.real == b.real; }",
+        "float value() const;",
+        "static constant constexpr int count = 2;",
+        "float operator()(int index) const { return index ? imag : real; }",
+        "struct Inner { float value; };",
+    ],
+)
+def test_metal_unproven_struct_members_leave_layout_unavailable(tmp_path, functions):
+    resource = _struct_reflection(tmp_path, f"float real; float imag; {functions}")
+    assert "scalarLayout" not in resource
 
 
 @pytest.mark.parametrize(
