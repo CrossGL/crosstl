@@ -22,7 +22,8 @@ concurrency:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Hosted runners have taken 33 to 59 minutes for the whole suite.
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
