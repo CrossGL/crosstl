@@ -99,7 +99,7 @@ internal sealed unsafe class WICHelper
     public void SaveTexture<T>(TextureView2D<T> texture, ReadOnlySpan<char> filename)
         where T : unmanaged
     {
-        IImageEncoder encoder = EncoderForFilename(filename);
+        IImageEncoder encoder = EncoderForFilename<T>(filename);
         using Image image = ToImage(texture);
         using FileStream stream = File.Create(filename.ToString());
 
@@ -109,7 +109,7 @@ internal sealed unsafe class WICHelper
     public void SaveTexture<T>(TextureView2D<T> texture, Stream stream, ImageFormat format)
         where T : unmanaged
     {
-        IImageEncoder encoder = EncoderForFormat(format);
+        IImageEncoder encoder = EncoderForFormat<T>(format);
         using Image image = ToImage(texture);
 
         image.Save(stream, encoder);
@@ -215,7 +215,8 @@ internal sealed unsafe class WICHelper
         return image;
     }
 
-    private static IImageEncoder EncoderForFilename(ReadOnlySpan<char> filename)
+    private static IImageEncoder EncoderForFilename<T>(ReadOnlySpan<char> filename)
+        where T : unmanaged
     {
         string extension = Path.GetExtension(filename).ToString().ToLowerInvariant();
 
@@ -223,23 +224,41 @@ internal sealed unsafe class WICHelper
         {
             ".dib" or ".rle" or ".bmp" => new BmpEncoder(),
             ".png" => new PngEncoder(),
-            ".jpe" or ".jfif" or ".exif" or ".jpg" or ".jpeg" => new JpegEncoder(),
+            ".jpe" or ".jfif" or ".exif" or ".jpg" or ".jpeg" => CreateJpegEncoder<T>(),
             ".tif" or ".tiff" => new TiffEncoder(),
             ".jxr" or ".hdp" or ".wdp" or ".wmp" or ".dds" => throw new NotSupportedException($"The {extension} container is not available off Windows."),
             _ => throw new ArgumentException("Unsupported image file extension.", nameof(filename))
         };
     }
 
-    private static IImageEncoder EncoderForFormat(ImageFormat format)
+    private static IImageEncoder EncoderForFormat<T>(ImageFormat format)
+        where T : unmanaged
     {
         return format switch
         {
             ImageFormat.Bmp => new BmpEncoder(),
             ImageFormat.Png => new PngEncoder(),
-            ImageFormat.Jpeg => new JpegEncoder(),
+            ImageFormat.Jpeg => CreateJpegEncoder<T>(),
             ImageFormat.Tiff => new TiffEncoder(),
             ImageFormat.Wmp or ImageFormat.Dds => throw new NotSupportedException($"The {format} container is not available off Windows."),
             _ => throw new ArgumentException("Unsupported image format.", nameof(format))
+        };
+    }
+
+    /// <summary>
+    /// Creates a JPEG encoder with the defaults of the Windows Imaging Component JPEG encoder that the
+    /// original runtime uses: an image quality of 0.9 and 4:2:0 chroma subsampling for color images, and a
+    /// single luminance channel for the gray pixel formats (<see cref="R8"/> and <see cref="R16"/>).
+    /// </summary>
+    private static JpegEncoder CreateJpegEncoder<T>()
+        where T : unmanaged
+    {
+        bool isGray = typeof(T) == typeof(R8) || typeof(T) == typeof(R16);
+
+        return new JpegEncoder
+        {
+            Quality = 90,
+            ColorType = isGray ? JpegEncodingColor.Luminance : JpegEncodingColor.YCbCrRatio420
         };
     }
 }
