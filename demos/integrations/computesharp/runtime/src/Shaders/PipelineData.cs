@@ -124,6 +124,13 @@ namespace ComputeSharp.Portable.Shaders
             Dictionary<string, TranslatedBinding> byRegister = new(StringComparer.Ordinal);
             foreach (TranslatedBinding binding in shader.Bindings)
             {
+                // Static samplers are not descriptor ranges; OpenGL reports one sampler
+                // record per texture unit the sampler is combined with.
+                if (binding.Kind == "sampler")
+                {
+                    continue;
+                }
+
                 if (binding.Register is string register && !byRegister.TryAdd(register, binding))
                 {
                     throw new InvalidOperationException($"CrossTL reported two bindings for register {register} in {shader.Type}.");

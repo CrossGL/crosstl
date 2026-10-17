@@ -96,8 +96,6 @@ def build_native(target: str, output_dir: Path, log: Path) -> Path:
             str(library),
             str(source),
             "-lEGL",
-            "-lGL",
-            "-lpthread",
         ]
     if run_logged(command, log) != 0:
         raise SystemExit(f"Native backend build failed; see {log}")
