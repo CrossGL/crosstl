@@ -1394,7 +1394,7 @@ byte, the Metal, OpenGL and DirectX artifact its complete-family translation
 contract pins there, under the same configuration and arithmetic profiles;
 the 15 complex power entries reproduce the current artifacts this contract
 pins. Required CI executes every entry on Metal, Mesa EGL and Direct3D 12
-WARP in six legs, 8,244 dispatches and 390,122 checked elements per target,
+WARP in twelve legs, 8,244 dispatches and 390,122 checked elements per target,
 over the same tails, short last tiles and strided, transposed, permuted and
 broadcast layouts as the copy family, with separate strides for both
 operands. Operands come from 254 domains over the 238 operator and dtype
