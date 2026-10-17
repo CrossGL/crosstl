@@ -126,6 +126,7 @@ WAVE_INTRINSICS = {
 
 COOPERATIVE_MATRIX_INTRINSICS = {
     "cooperative_matrix_element": "element",
+    "cooperative_matrix_fill": "fill",
     "cooperative_matrix_load": "load",
     "cooperative_matrix_store": "store",
     "cooperative_matrix_multiply": "multiply",
@@ -2907,6 +2908,15 @@ class Parser:
             return self.lookup_value_type(expression.name)
         if isinstance(expression, CooperativeMatrixOpNode):
             return expression.expression_type
+        if isinstance(expression, ArrayAccessNode):
+            # One element of an array of matrices, such as ``tiles[i]``.
+            array_type = self.cooperative_matrix_expression_type(expression.array)
+            while isinstance(array_type, ReferenceType):
+                array_type = array_type.referenced_type
+            if isinstance(array_type, ArrayType) and isinstance(
+                array_type.element_type, CooperativeMatrixType
+            ):
+                return array_type.element_type
         return getattr(expression, "expression_type", None)
 
     def cooperative_matrix_operand_contract(self, expression, operation, label):
@@ -3163,6 +3173,15 @@ class Parser:
         arguments = operation_node.arguments
         if operation in {"load", "store"}:
             return operation_node
+        if operation == "fill":
+            # A fill names only its value; the declaration, assignment or
+            # return it initializes supplies the matrix contract.
+            if len(arguments) != 1:
+                raise SyntaxError(
+                    "Cooperative matrix fill expects 1 argument, got "
+                    f"{len(arguments)}"
+                )
+            return operation_node
 
         if operation == "element":
             if not arguments:
@@ -3308,6 +3327,8 @@ class Parser:
                 f"{self.format_cooperative_matrix_contract_value(expected_type)}"
             )
         if expression.result_type is None:
+            if expression.operation == "fill":
+                expression.set_result_contract(deepcopy(expected_contract))
             return
         result = self.merge_cooperative_matrix_contracts(
             expression.operation,

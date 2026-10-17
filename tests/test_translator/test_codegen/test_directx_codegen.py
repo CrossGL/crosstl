@@ -2186,11 +2186,18 @@ def test_hlsl_cooperative_matrix_software_lowering_rejects_contextual_contract_m
 
 
 @pytest.mark.parametrize(
-    "operation",
-    ["load", "store", "multiply", "multiply_accumulate"],
+    "operation, reason",
+    [
+        # Transfers are lane-local but address fragments by logical lane.
+        ("load", "exact-subgroup-width-required"),
+        ("store", "exact-subgroup-width-required"),
+        ("multiply", "unsupported-operation"),
+        ("multiply_accumulate", "unsupported-operation"),
+    ],
 )
 def test_hlsl_cooperative_matrix_software_lowering_rejects_non_lane_local_operations(
     operation,
+    reason,
 ):
     matrix_type = directx_cooperative_matrix_software_type()
     matrix_op = CooperativeMatrixOpNode(
@@ -2205,10 +2212,13 @@ def test_hlsl_cooperative_matrix_software_lowering_rejects_non_lane_local_operat
         )
 
     diagnostic = excinfo.value
-    assert diagnostic.reason == "unsupported-operation"
+    assert diagnostic.reason == reason
     assert diagnostic.operation == operation
     assert diagnostic.fragment_mapping == "tile_4x4_row_pair"
-    assert "non-lane-local operation" in str(diagnostic)
+    if reason == "unsupported-operation":
+        assert "non-lane-local operation" in str(diagnostic)
+    else:
+        assert "requires 32-lane software subgroups" in str(diagnostic)
 
 
 def test_hlsl_cooperative_matrix_type_reports_structured_diagnostic():

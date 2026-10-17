@@ -68,6 +68,9 @@ CASES = {
     ),
     "local-factor": ("int step = 1; step <= limit; step *= factor", (1, 2, 4, 8, 16)),
     "local-shift": ("uint step = 1u; step < limit; step <<= shift", (1, 4, 16)),
+    # Controls that read only literals run the same checked trips in every
+    # invocation, even when no stride pattern describes them.
+    "alternating-static": ("int step = 1; step < 16; step *= -2", (1, -2, 4, -8)),
 }
 
 LOCAL_CONSTANTS = {
@@ -134,7 +137,6 @@ def test_fixed_stride_collectives_compile(tmp_path, case, stride_target):
         "int step = 0; step < 16; step *= 2",
         "int step = 1; step < 16; step *= 1",
         "int step = 1; step < 16; step *= 0",
-        "int step = 1; step < 16; step *= -2",
         "int step = -1; step < 16; step *= 2",
         "int step = 16; step > 0; step *= 2",
         "int step = 1; step <= 1073741824; step *= 2",

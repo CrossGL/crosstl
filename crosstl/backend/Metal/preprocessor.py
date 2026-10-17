@@ -129,6 +129,19 @@ METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATE_RE = re.compile(
     + "|".join(sorted(METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATES, key=len, reverse=True))
     + r")\s*<"
 )
+# The <metal_simdgroup_matrix> library typedefs of the 8x8 SIMD-group matrix
+# specializations. Expanding them right after macro expansion lets every later
+# pass see the template spelling it already lowers.
+METAL_LIBRARY_MATRIX_TYPEDEFS = {
+    "simdgroup_half8x8": "simdgroup_matrix<half, 8, 8>",
+    "simdgroup_float8x8": "simdgroup_matrix<float, 8, 8>",
+    "simdgroup_bfloat8x8": "simdgroup_matrix<bfloat, 8, 8>",
+}
+METAL_LIBRARY_MATRIX_TYPEDEF_RE = re.compile(
+    r"(?<![A-Za-z0-9_:])(?P<qualifier>metal\s*::\s*)?(?P<name>"
+    + "|".join(sorted(METAL_LIBRARY_MATRIX_TYPEDEFS, key=len, reverse=True))
+    + r")\b"
+)
 METAL_RECEIVER_DECLARATOR_PREFIX_RE = re.compile(
     r"(?:\s+(?:const|volatile|thread|threadgroup|threadgroup_imageblock|device"
     r"|constant))*\s*(?:\*+|&&|&)?"
@@ -1012,6 +1025,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._static_constexpr_helper_resolution_stack = []
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
+        processed = self._canonicalize_metal_library_matrix_typedefs(processed)
         if "contract" in processed or "FP_CONTRACT" in processed:
             # Inspect active expanded tokens before materialization changes the
             # lexical scope of a directive or prunes its containing template.
@@ -1090,6 +1104,46 @@ class MetalPreprocessor(HLSLPreprocessor):
             return code
 
         return code
+
+    def _canonicalize_metal_library_matrix_typedefs(self, code: str) -> str:
+        """Spell the library 8x8 SIMD-group matrix typedefs as templates.
+
+        ``simdgroup_float8x8`` is ``simdgroup_matrix<float, 8, 8>``. A name the
+        source declares itself (struct, enum, typedef or alias) keeps the
+        source's meaning, as do names inside comments and literals and names
+        qualified by anything other than ``metal::``.
+        """
+        if "8x8" not in code:
+            return code
+        declared = set()
+        for name in METAL_LIBRARY_MATRIX_TYPEDEFS:
+            escaped = re.escape(name)
+            if re.search(
+                rf"\b(?:struct|class|union|enum)\s+{escaped}\b"
+                rf"|\busing\s+{escaped}\s*="
+                rf"|\btypedef\b[^;{{}}]*\b{escaped}\s*;",
+                code,
+            ):
+                declared.add(name)
+        ignored_spans = self._find_comment_and_literal_spans(code)
+        replacements = []
+        for match in METAL_LIBRARY_MATRIX_TYPEDEF_RE.finditer(code):
+            name = match.group("name")
+            if name in declared:
+                continue
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            replacements.append(
+                (
+                    match.start(),
+                    match.end(),
+                    (match.group("qualifier") or "")
+                    + METAL_LIBRARY_MATRIX_TYPEDEFS[name],
+                )
+            )
+        if not replacements:
+            return code
+        return self._apply_text_replacements(code, replacements)
 
     def _materialize_project_template_instantiations(
         self,
@@ -14481,7 +14535,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             prefix = METAL_RECEIVER_DECLARATOR_PREFIX_RE.match(code, close + 1)
             cursor = prefix.end() if prefix is not None else close + 1
             declared = name_re.match(code, cursor)
-            if declared is None or declared.end() > position:
+            if declared is None:
+                if not self._builtin_declarator_list_declares(
+                    code, cursor, receiver, position
+                ):
+                    continue
+            elif declared.end() > position:
                 continue
             scope_start, scope_end = self._innermost_lexical_scope(
                 scopes, start, len(code)
@@ -14494,6 +14553,73 @@ class MetalPreprocessor(HLSLPreprocessor):
             receiver_declaration is None
             or receiver_declaration.declaration_position < nearest
         )
+
+    def _builtin_declarator_list_declares(
+        self, code: str, cursor: int, receiver: str, position: int
+    ) -> bool:
+        """Whether a later declarator of one declaration names ``receiver``.
+
+        ``simdgroup_matrix<float, 8, 8> A, B[2], C = D;`` declares ``B`` and
+        ``C`` with the library type too. Anything other than plain
+        declarators, array extents and initializers ends the scan, so a
+        parameter list or an unparsed initializer fails closed.
+        """
+        identifier = re.compile(r"[A-Za-z_]\w*")
+        index = cursor
+        while index < position:
+            if index != cursor:
+                prefix = METAL_RECEIVER_DECLARATOR_PREFIX_RE.match(code, index)
+                if prefix is not None:
+                    index = prefix.end()
+            name = identifier.match(code, index)
+            if name is None:
+                return False
+            if name.group(0) == receiver:
+                return name.end() <= position
+            index = name.end()
+            while True:
+                while index < len(code) and code[index].isspace():
+                    index += 1
+                if index >= len(code) or code[index] != "[":
+                    break
+                close = self._find_matching_delimiter(code, index, "[", "]")
+                if close is None:
+                    return False
+                index = close + 1
+            if index < len(code) and code[index] in "({":
+                close = self._find_matching_delimiter(
+                    code, index, code[index], ")" if code[index] == "(" else "}"
+                )
+                if close is None:
+                    return False
+                index = close + 1
+            elif index < len(code) and code[index] == "=":
+                index += 1
+                depth = 0
+                while index < len(code):
+                    char = code[index]
+                    if char in "([{":
+                        depth += 1
+                    elif char in ")]}":
+                        if depth == 0:
+                            return False
+                        depth -= 1
+                    elif char == "<" and depth == 0:
+                        close = self._find_matching_angle(code, index)
+                        if close is None:
+                            return False
+                        index = close
+                    elif char in ",;" and depth == 0:
+                        break
+                    index += 1
+            while index < len(code) and code[index].isspace():
+                index += 1
+            if index >= len(code) or code[index] != ",":
+                return False
+            index += 1
+            while index < len(code) and code[index].isspace():
+                index += 1
+        return False
 
     def _receiver_contract_from_type_text(
         self,

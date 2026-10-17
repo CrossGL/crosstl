@@ -1665,6 +1665,7 @@ class CooperativeMatrixOpNode(ExpressionNode):
     SUPPORTED_OPERATIONS = frozenset(
         {
             "element",
+            "fill",
             "load",
             "store",
             "multiply",

@@ -344,11 +344,15 @@ from .image_access_contracts import (
 )
 from .index_range_contracts import truncating_division_interval
 from .loop_induction import (
+    checked_induction_value,
     fixed_stride_loop_terminates,
     geometric_loop_terminates,
+    init_less_counter_loops,
     loop_constant_bindings,
     metadata_bound_key,
     metadata_loop_bindings,
+    offset_counter_loop_terminates,
+    static_loop_trip_count,
     subgroup_strided_trips,
     walk_control_scopes,
 )
@@ -2148,6 +2152,7 @@ class HLSLCodeGen:
         self.set_widen_native_float16(widen_native_float16)
         self.directx_cooperative_matrix_lowerings = {}
         self.required_hlsl_cooperative_matrix_mma = False
+        self.required_hlsl_cooperative_matrix_fragment_offset = False
         self.texture_variables = set()
         self.sampler_variables = set()
         self.global_mixed_sampler_names = set()
@@ -3397,6 +3402,7 @@ class HLSLCodeGen:
         target_stage = normalize_stage_name(target_stage)
         self.directx_cooperative_matrix_lowerings = {}
         self.required_hlsl_cooperative_matrix_mma = False
+        self.required_hlsl_cooperative_matrix_fragment_offset = False
         self.hlsl_builtin_option_available = False
         ast = self.with_hlsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
@@ -5011,6 +5017,51 @@ class HLSLCodeGen:
             for node in self.walk_ast(root)
         )
 
+    def hlsl_software_subgroup_lane_local_matrix_nodes(self, root):
+        """Matrix fills and transfers, which software lowering keeps per lane."""
+        if not self.cooperative_matrix_software_lowering:
+            return []
+        return [
+            node
+            for node in self.walk_ast(root)
+            if isinstance(node, CooperativeMatrixOpNode)
+            and node.operation in {"fill", "load", "store"}
+        ]
+
+    def hlsl_software_subgroup_bind_lane_local_matrix_functions(self, ast, nodes):
+        """Give every function holding a transfer the logical invocation index.
+
+        Transfers address each lane's fragment elements and exchange nothing,
+        so any function may perform them. The entry stores ``SV_GroupIndex``
+        in a static global, which HLSL keeps private to each invocation.
+        """
+        if not nodes:
+            return
+        node_ids = {id(node) for node in nodes}
+        functions = [
+            function
+            for function in self.collect_functions(ast)
+            if getattr(function, "name", None)
+            and any(
+                id(node) in node_ids
+                for node in self.walk_ast(getattr(function, "body", None))
+            )
+        ]
+        variable = self.hlsl_software_subgroup_invocation_variable
+        if variable is None:
+            reserved_names = self.hlsl_helper_reserved_names(
+                self.collect_functions(ast)
+            )
+            self.hlsl_software_subgroup_reserved_names |= reserved_names
+            variable = "__crossgl_software_subgroup_invocation"
+            while variable in self.hlsl_software_subgroup_reserved_names:
+                variable += "_"
+            self.hlsl_software_subgroup_invocation_variable = variable
+        for function in functions:
+            self.hlsl_software_subgroup_invocation_expressions.setdefault(
+                function.name, variable
+            )
+
     def hlsl_software_subgroup_stage_entries(self, ast, target_stage=None):
         entries = []
         seen = set()
@@ -5168,6 +5219,15 @@ class HLSLCodeGen:
         metadata_bounds=None,
     ):
         initializer = getattr(node, "init", None)
+        if initializer is None:
+            return self.hlsl_software_subgroup_counter_loop_uniform(
+                node,
+                uniform_names,
+                call_mutations,
+                uniform_components,
+                loop_constants,
+                metadata_bounds,
+            )
         if not isinstance(initializer, VariableNode):
             return False
         loop_name = getattr(initializer, "name", None)
@@ -5188,6 +5248,8 @@ class HLSLCodeGen:
             ).items()
             if name in uniform_names and name != loop_name
         }
+        if self.hlsl_software_subgroup_static_for(node, constants, call_mutations):
+            return True
         initial_expression = getattr(initializer, "initial_value", None)
         uniform_components = {
             name: components
@@ -5322,6 +5384,139 @@ class HLSLCodeGen:
         return self.hlsl_software_subgroup_loop_controls_preserved(
             node, bound_names | stride_names | {loop_name}, call_mutations
         )
+
+    def hlsl_software_subgroup_static_for(self, node, constants, call_mutations):
+        """Accept a loop whose controls read only literal constants.
+
+        MLX's ``for (int step = 1; (1 << step) < C; step++)`` runs the same
+        checked trips in every invocation when its body leaves the counter
+        and the constants alone.
+        """
+        initializer = getattr(node, "init", None)
+        analysis = self.hlsl_software_subgroup_uniform_returns
+        if (
+            not isinstance(initializer, VariableNode)
+            or analysis._qualified(initializer, {"volatile"})
+            or analysis._qualified(initializer.var_type, {"volatile"})
+        ):
+            return False
+        trips = static_loop_trip_count(
+            self.type_name_string(initializer.var_type),
+            initializer.initial_value,
+            getattr(node, "condition", None),
+            getattr(node, "update", None),
+            initializer.name,
+            constants,
+        )
+        if trips is None:
+            return False
+        controls = {initializer.name}
+        for part in (node.condition, node.update):
+            controls |= self.hlsl_software_subgroup_expression_identifier_names(part)
+        return self.hlsl_software_subgroup_loop_controls_preserved(
+            node, controls, call_mutations
+        )
+
+    def hlsl_software_subgroup_counter_loop_uniform(
+        self,
+        node,
+        uniform_names,
+        call_mutations,
+        uniform_components,
+        loop_constants=None,
+        metadata_bounds=None,
+    ):
+        """Accept MLX's ``int t = 0; for (; t + C <= T; t += C)`` chunk loop.
+
+        ``init_less_counter_loops`` proves the counter is written only by this
+        loop's update and reached with its initializer's value. With a uniform
+        bound, a literal offset and stride, and a body that leaves them alone,
+        every invocation runs the same trips, so the counter stays uniform
+        after the loop too. The checked termination proof uses the bound's
+        literal value or metadata range.
+        """
+        record = getattr(self, "hlsl_software_subgroup_counter_loops", {}).get(id(node))
+        if record is None:
+            return False
+        name, declaration, _loop = record
+        analysis = self.hlsl_software_subgroup_uniform_returns
+        if (
+            name not in uniform_names
+            or analysis._qualified(declaration, {"volatile"})
+            or analysis._qualified(declaration.var_type, {"volatile"})
+        ):
+            return False
+        constants = {
+            key: value
+            for key, value in (
+                self.literal_int_constants if loop_constants is None else loop_constants
+            ).items()
+            if key in uniform_names and key != name
+        }
+        # The initializer runs at the declaration, where a later local may
+        # not yet shadow a constant it names; only literals are proven.
+        start = checked_induction_value(declaration.initial_value, {})
+        condition = getattr(node, "condition", None)
+        if start is None or not isinstance(condition, BinaryOpNode):
+            return False
+        operator = self.map_operator(condition.operator)
+        left = condition.left
+        offset = 0
+        offset_names = set()
+        if isinstance(left, BinaryOpNode) and self.map_operator(left.operator) == "+":
+            if self.expression_name(left.left) == name:
+                offset_node = left.right
+            elif self.expression_name(left.right) == name:
+                offset_node = left.left
+            else:
+                return False
+            offset = checked_induction_value(offset_node, constants)
+            offset_names = self.hlsl_software_subgroup_expression_identifier_names(
+                offset_node
+            )
+            if offset is None or name in offset_names:
+                return False
+        elif self.expression_name(left) != name:
+            return False
+        bound = condition.right
+        bound_names = self.hlsl_software_subgroup_expression_identifier_names(bound)
+        if name in bound_names:
+            return False
+        literal_bound = checked_induction_value(bound, constants)
+        if literal_bound is not None:
+            stops = [literal_bound]
+        else:
+            record = (metadata_bounds or {}).get(metadata_bound_key(bound))
+            if record is None or not self.hlsl_software_subgroup_uniform_expression(
+                bound, uniform_names, uniform_components
+            ):
+                return False
+            convert = _UnsignedLiteralInt if record["dtype"].startswith("u") else int
+            stops = [convert(record["minimum"]), convert(record["maximum"])]
+        update = node.update
+        stride_names = set()
+        if isinstance(update, AssignmentNode):
+            step = checked_induction_value(update.value, constants)
+            stride_names = self.hlsl_software_subgroup_expression_identifier_names(
+                update.value
+            )
+        else:
+            step = 1
+        if step is None or not offset_counter_loop_terminates(
+            self.type_name_string(declaration.var_type),
+            start,
+            offset,
+            stops,
+            step,
+            operator,
+        ):
+            return False
+        if not self.hlsl_software_subgroup_loop_controls_preserved(
+            node, {name} | bound_names | offset_names | stride_names, call_mutations
+        ):
+            return False
+        self.hlsl_software_subgroup_proven_counter_loops.add(id(node))
+        return True
 
     def hlsl_software_subgroup_loop_controls_preserved(
         self, node, control_names, call_mutations
@@ -6466,6 +6661,29 @@ class HLSLCodeGen:
         reassigned_names = self.hlsl_software_subgroup_reassigned_candidates(
             function, mutable_names, call_mutations
         )
+        # A chunk counter written only by its own initializer-free loop's
+        # update follows that loop: it stays uniform when the loop is.
+
+        def counter_writes(node):
+            if id(node) in call_mutations:
+                return call_mutations[id(node)]
+            if isinstance(node, VariableNode):
+                return self.hlsl_software_subgroup_expression_identifier_names(
+                    node.initial_value
+                )
+            return self.hlsl_software_subgroup_expression_identifier_names(
+                list(node.arguments or [])
+            )
+
+        self.hlsl_software_subgroup_counter_loops = (
+            init_less_counter_loops(function, self.walk_ast, counter_writes)
+            if entry
+            else {}
+        )
+        counter_names = {
+            record[0] for record in self.hlsl_software_subgroup_counter_loops.values()
+        }
+        reassigned_names = set(reassigned_names) | counter_names
         masked_if_plans = getattr(self, "hlsl_software_subgroup_masked_if_plans", {})
 
         def apply_reassignments(statement, names, components):
@@ -6474,6 +6692,14 @@ class HLSLCodeGen:
                 statement
             )
             if not written:
+                return
+            counter = self.hlsl_software_subgroup_counter_loops.get(id(statement))
+            if (
+                counter is not None
+                and id(statement) in self.hlsl_software_subgroup_proven_counter_loops
+                and written == {counter[0]}
+            ):
+                # Every invocation ran the uniform loop's trips.
                 return
             node = statement
             if isinstance(node, ExpressionStatementNode):
@@ -6799,6 +7025,8 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_result_overrides = {}
         self.hlsl_software_subgroup_guard_names = set()
         self.hlsl_software_subgroup_guard_constant_names = set()
+        self.hlsl_software_subgroup_counter_loops = {}
+        self.hlsl_software_subgroup_proven_counter_loops = set()
         if self.software_subgroup_width is None:
             return
 
@@ -6842,11 +7070,26 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_invocation_count = invocation_count
 
         all_records = self.hlsl_software_subgroup_operation_records(ast)
-        # Subgroup system inputs without collective operations need only the
-        # logical split of SV_GroupIndex into subgroup and lane IDs. That split
-        # is exact under any control flow, so no shuffle policy applies.
-        system_inputs_only = (
-            not all_records and self.hlsl_software_subgroup_uses_system_inputs(ast)
+        lane_local_matrix_nodes = self.hlsl_software_subgroup_lane_local_matrix_nodes(
+            ast
+        )
+        if lane_local_matrix_nodes and invocation_count % self.software_subgroup_width:
+            raise self.hlsl_software_subgroup_error(
+                "DirectX matrix fills and transfers require complete logical subgroups",
+                workgroup_size=concrete_workgroup_size,
+                operation="CooperativeMatrixTransfer",
+                reason="incomplete-matrix-subgroup",
+                source_location=getattr(
+                    lane_local_matrix_nodes[0], "source_location", None
+                ),
+            )
+        # Subgroup system inputs, matrix fills and matrix transfers without
+        # collective operations need only the logical split of SV_GroupIndex
+        # into subgroup and lane IDs. That split is exact under any control
+        # flow, so no shuffle policy applies.
+        system_inputs_only = not all_records and (
+            bool(lane_local_matrix_nodes)
+            or self.hlsl_software_subgroup_uses_system_inputs(ast)
         )
         if self.relative_wave_shuffle_out_of_range != "self" and not system_inputs_only:
             raise self.hlsl_software_subgroup_error(
@@ -6881,6 +7124,9 @@ class HLSLCodeGen:
                 )
 
         if system_inputs_only:
+            self.hlsl_software_subgroup_bind_lane_local_matrix_functions(
+                ast, lane_local_matrix_nodes
+            )
             return
         if not all_records:
             raise self.hlsl_software_subgroup_error(
@@ -7067,6 +7313,9 @@ class HLSLCodeGen:
             self.hlsl_software_subgroup_invocation_expressions[
                 functions_by_id[function_id].name
             ] = variable
+        self.hlsl_software_subgroup_bind_lane_local_matrix_functions(
+            ast, lane_local_matrix_nodes
+        )
 
         calls = [
             node for node in self.walk_ast(ast) if isinstance(node, FunctionCallNode)
@@ -7512,6 +7761,7 @@ class HLSLCodeGen:
         if not (
             self.required_hlsl_software_subgroup_helpers
             or self.required_hlsl_cooperative_matrix_mma
+            or self.required_hlsl_cooperative_matrix_fragment_offset
             or self.hlsl_software_subgroup_invocation_variable is not None
         ):
             return ""
@@ -7614,6 +7864,8 @@ class HLSLCodeGen:
             )
         if self.required_hlsl_cooperative_matrix_mma:
             code += self.generate_hlsl_cooperative_matrix_mma_helper()
+        if self.required_hlsl_cooperative_matrix_fragment_offset:
+            code += self.generate_hlsl_cooperative_matrix_fragment_offset_helper()
         return code
 
     def prepare_hlsl_physical_subgroup_id_helper_names(self, functions):
@@ -24786,6 +25038,272 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return "\n".join(lines)
 
+    def directx_cooperative_matrix_result_lowering(self, expr):
+        """The single fragment contract a context-typed result must take."""
+        lowerings = []
+        for source, candidate in (
+            ("result", getattr(expr, "result_type", None)),
+            ("expression", getattr(expr, "expression_type", None)),
+            ("contextual", self.current_expression_expected_type),
+        ):
+            if candidate is None or (
+                source == "contextual"
+                and self.type_name_string(candidate) in {"auto", "var"}
+            ):
+                continue
+            matrix_type = _directx_cooperative_matrix_contract_type(candidate)
+            if not isinstance(matrix_type, CooperativeMatrixType):
+                raise self.directx_cooperative_matrix_operation_error(
+                    expr,
+                    "DirectX matrix result must retain its cooperative contract",
+                    reason="incompatible-result-contract",
+                )
+            lowerings.append(
+                self.directx_cooperative_matrix_fragment_lowering(
+                    matrix_type,
+                    operation=expr.operation,
+                    source_location=getattr(expr, "source_location", None),
+                )
+            )
+        if not lowerings:
+            return None
+        if any(
+            self.directx_cooperative_matrix_contract_differences(lowerings[0], other)
+            for other in lowerings[1:]
+        ):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX matrix result contracts disagree",
+                matrix_type=lowerings[0]["matrix_type"],
+                reason="incompatible-result-contract",
+            )
+        return lowerings[0]
+
+    def generate_hlsl_cooperative_matrix_fill(self, expr):
+        """Fill every lane-local element; the result type comes from context."""
+        if len(expr.arguments) != 1:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX cooperative matrix fill requires exactly one value",
+                reason="invalid-operation-arity",
+            )
+        lowering = self.directx_cooperative_matrix_result_lowering(expr)
+        if lowering is None:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX cooperative matrix fill requires a declared matrix result",
+                reason="missing-result-contract",
+            )
+        component = lowering["component_type"]
+        value = self.generate_expression_with_expected(expr.arguments[0], component)
+        # One evaluation, replicated by the scalar-to-vector cast.
+        return f"(({lowering['hlsl_type']})(({component})({value})))"
+
+    def directx_cooperative_matrix_pure_expression(self, expression):
+        """Whether re-evaluating ``expression`` per element is unobservable."""
+        if isinstance(expression, (IdentifierNode, LiteralNode)):
+            return True
+        if isinstance(expression, ArrayAccessNode):
+            return self.directx_cooperative_matrix_pure_expression(
+                expression.array
+            ) and self.directx_cooperative_matrix_pure_expression(expression.index)
+        if isinstance(expression, MemberAccessNode):
+            return self.directx_cooperative_matrix_pure_expression(
+                expression.object_expr
+            )
+        if isinstance(expression, BinaryOpNode):
+            if self.map_operator(expression.operator) in {"=", ","}:
+                return False
+            return self.directx_cooperative_matrix_pure_expression(
+                expression.left
+            ) and self.directx_cooperative_matrix_pure_expression(expression.right)
+        if isinstance(expression, UnaryOpNode):
+            if self.map_operator(expression.operator) not in {"+", "-", "!", "~"}:
+                return False
+            return self.directx_cooperative_matrix_pure_expression(expression.operand)
+        return False
+
+    def generate_hlsl_cooperative_matrix_transfer(self, expr):
+        """Lower simdgroup_load/simdgroup_store to lane-local buffer accesses.
+
+        Lane ``l`` holds the elements the fragment mapping assigns it, so a
+        transfer needs no cross-lane exchange: each element reads or writes
+        ``pointer[row * stride + column]``, or ``pointer[column * stride +
+        row]`` for a transposed matrix.
+        """
+        from .GLSL_codegen import GLSLCodeGen
+
+        operation = expr.operation
+        arguments = list(expr.arguments)
+        if not 2 <= len(arguments) <= 5:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} requires 2 to 5 arguments",
+                reason="invalid-operation-arity",
+            )
+        if operation == "load":
+            matrix, pointer = arguments[:2]
+        else:
+            pointer, matrix = arguments[:2]
+        stride = arguments[2] if len(arguments) > 2 else None
+        origin = arguments[3] if len(arguments) > 3 else None
+        transpose = GLSLCodeGen.glsl_cooperative_matrix_literal_bool(
+            arguments[4] if len(arguments) > 4 else None
+        )
+        matrix_type = _directx_cooperative_matrix_contract_type(
+            self.directx_cooperative_matrix_expression_type(matrix)
+        )
+        if not isinstance(matrix_type, CooperativeMatrixType):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} requires a matrix with a "
+                "concrete cooperative-matrix contract",
+                reason="missing-operand-contract",
+            )
+        lowering = self.directx_cooperative_matrix_fragment_lowering(
+            matrix_type,
+            operation=operation,
+            source_location=getattr(expr, "source_location", None),
+        )
+        mapping = lowering["fragment_mapping_contract"]
+        if (
+            lowering["fragment_mapping"]
+            not in GLSLCodeGen.GLSL_COOPERATIVE_MATRIX_TRANSFER_MAPPINGS
+            or (lowering["rows"], lowering["columns"]) != (8, 8)
+            or (lowering["subgroup_size"], lowering["elements_per_lane"]) != (32, 2)
+            or any(
+                mapping.coordinate(lane, element)
+                != GLSLCodeGen.glsl_cooperative_matrix_transfer_coordinate(
+                    lane, element
+                )
+                for lane in range(32)
+                for element in range(2)
+            )
+        ):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} only supports the "
+                "tile_4x4_row_pair 8x8/32x2 fragment contract",
+                matrix_type=matrix_type,
+                reason="incompatible-transfer-contract",
+            )
+        if transpose is None:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} requires a literal "
+                "transpose flag",
+                matrix_type=matrix_type,
+                reason="dynamic-transpose",
+            )
+        if not GLSLCodeGen.glsl_cooperative_matrix_zero_origin(origin):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} only supports a zero "
+                "matrix origin",
+                matrix_type=matrix_type,
+                reason="nonzero-matrix-origin",
+            )
+        for label, value in (("matrix", matrix), ("pointer", pointer)):
+            if not self.directx_cooperative_matrix_pure_expression(value):
+                raise self.directx_cooperative_matrix_operation_error(
+                    expr,
+                    f"DirectX cooperative matrix {operation} {label} must be free "
+                    "of side effects",
+                    matrix_type=matrix_type,
+                    reason="impure-transfer-operand",
+                )
+        if stride is not None and not self.directx_cooperative_matrix_pure_expression(
+            stride
+        ):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} stride must be free of "
+                "side effects",
+                matrix_type=matrix_type,
+                reason="impure-transfer-operand",
+            )
+        if (
+            operation == "load"
+            and not self.hlsl_typed_buffer_atomic_original_is_lvalue(matrix)
+        ):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                "DirectX cooperative matrix load destination must be assignable",
+                matrix_type=matrix_type,
+                reason="destination-requires-lvalue",
+            )
+        binding = self.hlsl_resource_pointer_binding(pointer)
+        if (
+            binding is None
+            or binding.get("kind") == "workgroup-pointer"
+            or binding.get("pointer_reinterpretation") is not None
+            or self.hlsl_half_storage.binding_type(binding) is not None
+            or self.map_type(binding.get("element_type")) != lowering["component_type"]
+        ):
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} requires a storage-buffer "
+                "pointer with the matrix component type",
+                matrix_type=matrix_type,
+                reason="unsupported-transfer-pointer",
+            )
+        invocation = self.hlsl_software_subgroup_invocation_expressions.get(
+            self.current_function_name
+        )
+        if invocation is None:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} requires validated "
+                "software subgroups",
+                matrix_type=matrix_type,
+                reason="software-subgroup-contract-required",
+            )
+        self.required_hlsl_cooperative_matrix_fragment_offset = True
+        helper = self.hlsl_software_subgroup_identifier(
+            ("matrix", "fragment_offset"), "__crossgl_software_matrix_fragment_offset"
+        )
+        stride_text = (
+            f"uint({self.generate_expression(stride)})"
+            if stride is not None
+            else f"{lowering['columns']}u"
+        )
+        transpose_text = "true" if transpose else "false"
+        matrix_text = self.generate_expression(matrix)
+        if not isinstance(matrix, (IdentifierNode, VariableNode)):
+            matrix_text = f"({matrix_text})"
+        parts = []
+        for element in range(lowering["elements_per_lane"]):
+            index = (
+                f"{helper}(uint({invocation}) % 32u, {element}u, {stride_text}, "
+                f"{transpose_text})"
+            )
+            access = self.generate_hlsl_resource_pointer_access(
+                pointer, index, require_write=operation == "store"
+            )
+            if operation == "load":
+                parts.append(f"{matrix_text}[{element}] = {access}")
+            else:
+                parts.append(f"{access} = {matrix_text}[{element}]")
+        return f"({', '.join(parts)})"
+
+    def generate_hlsl_cooperative_matrix_fragment_offset_helper(self):
+        from .GLSL_codegen import GLSLCodeGen
+
+        helper = self.hlsl_software_subgroup_identifier(
+            ("matrix", "fragment_offset"), "__crossgl_software_matrix_fragment_offset"
+        )
+        row, column = GLSLCodeGen.GLSL_COOPERATIVE_MATRIX_TRANSFER_MAPPINGS[
+            "tile_4x4_row_pair"
+        ]
+        return (
+            f"uint {helper}(uint lane, uint element, uint stride, bool transpose) {{\n"
+            "    // The registered lane coordinates of this fragment element.\n"
+            f"    uint row = {row};\n"
+            f"    uint column = {column};\n"
+            "    return transpose ? column * stride + row : row * stride + column;\n"
+            "}\n\n"
+        )
+
     def directx_cooperative_matrix_operation_lowering(self, expr):
         operation = expr.operation
         result_type = getattr(expr, "result_type", None)
@@ -24794,6 +25312,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and self.software_subgroup_width == 32
         ):
             return self.generate_hlsl_cooperative_matrix_mma(expr)
+        if operation == "fill":
+            return self.generate_hlsl_cooperative_matrix_fill(expr)
+        if operation in {"load", "store"} and self.software_subgroup_width == 32:
+            return self.generate_hlsl_cooperative_matrix_transfer(expr)
+        if operation in {"load", "store"}:
+            raise self.directx_cooperative_matrix_operation_error(
+                expr,
+                f"DirectX cooperative matrix {operation} requires 32-lane software "
+                "subgroups",
+                matrix_type=result_type,
+                reason="exact-subgroup-width-required",
+            )
 
         if operation not in self.DIRECTX_COOPERATIVE_MATRIX_LANE_LOCAL_OPERATIONS:
             raise self.directx_cooperative_matrix_operation_error(

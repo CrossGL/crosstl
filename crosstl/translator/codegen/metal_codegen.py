@@ -12085,6 +12085,28 @@ class MetalCodeGen:
             )
 
         rendered = [self.generate_expression(argument) for argument in arguments]
+        if operation == "fill":
+            result_type = getattr(node, "result_type", None)
+            contract = (
+                self.cooperative_matrix_contract(result_type)
+                if result_type is not None
+                else None
+            )
+            if contract is None or len(arguments) != 1:
+                raise UnsupportedMetalFeatureError(
+                    "cooperative-matrix-operation-lowering",
+                    "Metal cooperative-matrix fill requires one value and a "
+                    "declared matrix result",
+                    missing_capabilities=(
+                        "metal.cooperative-matrix-operation-lowering",
+                    ),
+                    operation=operation,
+                    reason="missing-result-contract",
+                    source_location=getattr(node, "source_location", None),
+                )
+            matrix_type = self.map_cooperative_matrix_type(result_type, contract)
+            fill_arguments = matrix_type[len("simdgroup_matrix") :]
+            return f"make_filled_simdgroup_matrix{fill_arguments}({rendered[0]})"
         if operation == "element":
             return f"{rendered[0]}.thread_elements()[{rendered[1]}]"
         if operation == "multiply":

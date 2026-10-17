@@ -2,13 +2,18 @@
 
 from ..arithmetic_conversions import ArithmeticScalarKind, source_integer_shape
 from ..ast import (
+    AssignmentNode,
     BinaryOpNode,
     BlockNode,
     ForNode,
+    FunctionCallNode,
     IdentifierNode,
     IfNode,
     LiteralNode,
     MemberAccessNode,
+    PointerType,
+    ReferenceType,
+    ReturnNode,
     UnaryOpNode,
     VariableNode,
 )
@@ -421,3 +426,343 @@ def geometric_loop_terminates(type_name, start, bound, update, constants, operat
         if value > maximum:
             return False
     return True
+
+
+_INCREMENT_OPERATORS = {"++", "PRE_INCREMENT", "POST_INCREMENT"}
+# Unary operators that write their operand or take its address.
+_COUNTER_WRITE_OPERATORS = {
+    *_INCREMENT_OPERATORS,
+    "--",
+    "PRE_DECREMENT",
+    "POST_DECREMENT",
+    "&",
+}
+
+
+def _counter_update_name(update):
+    """The counter an ascending ``c += step`` or ``c++`` update writes."""
+    if isinstance(update, AssignmentNode):
+        if update.operator == "+=" and isinstance(update.target, IdentifierNode):
+            return update.target.name
+        return None
+    if isinstance(update, UnaryOpNode):
+        if update.operator in _INCREMENT_OPERATORS and isinstance(
+            update.operand, IdentifierNode
+        ):
+            return update.operand.name
+    return None
+
+
+def _identifier_names(walk_ast, root):
+    return {
+        node.name
+        for node in walk_ast(root)
+        if isinstance(node, IdentifierNode) and getattr(node, "name", None)
+    }
+
+
+def init_less_counter_loops(function, walk_ast, writes=None):
+    """Find MLX's ``int t = 0; for (; t + C <= T; t += C)`` counter loops.
+
+    The counter is a local declared once, with an initializer, in the
+    function's outermost statement list. The only write to it anywhere in the
+    function is the update of one later outermost ``for`` that has no
+    initializer, and no ``return`` precedes that loop. Every invocation then
+    reaches the loop with the counter's initial value; whether the loop is
+    uniform, and so whether the counter stays uniform after it, is the
+    caller's proof. Returns ``{id(loop): (name, declaration, loop)}``.
+
+    ``writes(node)`` names what a call or a pointer or reference declaration
+    may write or alias. Without it, every name such a node reads counts, so a
+    counter passed to a call or bound to a reference never qualifies.
+    """
+    if writes is None:
+
+        def writes(node):
+            if isinstance(node, VariableNode):
+                return _identifier_names(walk_ast, node.initial_value)
+            names = set()
+            for argument in node.arguments or []:
+                names |= _identifier_names(walk_ast, argument)
+            return names
+
+    body = getattr(function, "body", None)
+    statements = body.statements if isinstance(body, BlockNode) else body
+    if statements is None:
+        return {}
+    if not isinstance(statements, (list, tuple)):
+        statements = [statements]
+    parameters = {
+        parameter.name
+        for parameter in getattr(function, "parameters", None) or []
+        if getattr(parameter, "name", None)
+    }
+    nodes = list(walk_ast(body))
+    counts = {}
+    for node in nodes:
+        if isinstance(node, VariableNode) and node.name:
+            counts[node.name] = counts.get(node.name, 0) + 1
+    candidates = {}
+    declared = {}
+    for statement in statements:
+        if (
+            isinstance(statement, VariableNode)
+            and statement.name
+            and statement.initial_value is not None
+        ):
+            declared[statement.name] = statement
+        elif isinstance(statement, ForNode) and statement.init is None:
+            name = _counter_update_name(statement.update)
+            declaration = declared.get(name)
+            if (
+                declaration is not None
+                and counts.get(name) == 1
+                and name not in parameters
+                and name not in {item[0] for item in candidates.values()}
+            ):
+                candidates[id(statement)] = (name, declaration, statement)
+        if any(isinstance(node, ReturnNode) for node in walk_ast(statement)):
+            break
+    result = {}
+    for loop_id, (name, declaration, loop) in candidates.items():
+        writes_elsewhere = False
+        for node in nodes:
+            if node is loop.update:
+                continue
+            if (
+                isinstance(node, AssignmentNode)
+                and isinstance(node.target, IdentifierNode)
+                and node.target.name == name
+            ):
+                writes_elsewhere = True
+            elif (
+                isinstance(node, UnaryOpNode)
+                and node.operator in _COUNTER_WRITE_OPERATORS
+                and isinstance(node.operand, IdentifierNode)
+                and node.operand.name == name
+            ):
+                writes_elsewhere = True
+            elif isinstance(node, FunctionCallNode) or (
+                isinstance(node, VariableNode)
+                and isinstance(node.var_type, (PointerType, ReferenceType))
+            ):
+                # A reference parameter or alias may write the counter.
+                writes_elsewhere = name in (writes(node) or set())
+            if writes_elsewhere:
+                break
+        if not writes_elsewhere:
+            result[loop_id] = (name, declaration, loop)
+    return result
+
+
+def offset_counter_loop_terminates(type_name, start, offset, stops, step, operator):
+    """Prove ``for (; c + offset OP stop; c += step)`` from a known start.
+
+    For each extreme ``stop`` the loop visits ``start, start + step, ...``
+    while ``c + offset`` satisfies the condition. Both the visited counters
+    and every evaluated ``c + offset``, the last one included, must fit the
+    counter's type; the values grow monotonically, so the first and the
+    terminating counter decide.
+    """
+    if not isinstance(type_name, str) or not type_name.isidentifier():
+        return False
+    shape = source_integer_shape(
+        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
+    )
+    if shape is None or shape[2] != 1 or shape[1] > 32:
+        return False
+    if operator not in {"<", "<="}:
+        return False
+    values = (start, offset, step, *stops)
+    if not stops or any(
+        isinstance(value, bool) or not isinstance(value, int) for value in values
+    ):
+        return False
+    unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+    minimum = 0 if unsigned else -(1 << (shape[1] - 1))
+    maximum = (1 << (shape[1] - (not unsigned))) - 1
+    if int(step) <= 0 or int(offset) < 0:
+        return False
+    if (
+        unsigned or any(isinstance(value, _UnsignedLiteralInt) for value in values)
+    ) and min(int(value) for value in values) < 0:
+        # Mixed unsigned arithmetic can change comparisons before assignment.
+        return False
+    start, offset, step = int(start), int(offset), int(step)
+    for stop in stops:
+        stop = int(stop)
+        if not minimum <= stop <= maximum:
+            return False
+        limit = stop - offset - (operator == "<")
+        trips = 0 if start > limit else (limit - start) // step + 1
+        final = start + trips * step
+        for value in (start, final, start + offset, final + offset):
+            if not minimum <= value <= maximum:
+                return False
+    return True
+
+
+_STATIC_COMPARISONS = {
+    "<": lambda left, right: left < right,
+    "<=": lambda left, right: left <= right,
+    ">": lambda left, right: left > right,
+    ">=": lambda left, right: left >= right,
+    "==": lambda left, right: left == right,
+    "!=": lambda left, right: left != right,
+}
+_SIGNED_32 = (-(1 << 31), (1 << 31) - 1)
+
+
+def _checked_static_value(expression, environment):
+    """Evaluate a signed 32-bit integer expression, rejecting any overflow.
+
+    Only literals, names bound in ``environment``, arithmetic, shifts by
+    in-range amounts, bitwise operators and comparisons qualify; every
+    intermediate value must fit ``int`` so C++ undefined behavior never
+    decides the result.
+    """
+    if isinstance(expression, LiteralNode):
+        value = expression.value
+        literal_type = getattr(getattr(expression, "literal_type", None), "name", None)
+        if isinstance(value, bool):
+            return int(value)
+        if (
+            isinstance(value, _UnsignedLiteralInt)
+            or not isinstance(value, int)
+            or literal_type not in {None, "int"}
+        ):
+            # ``8u`` keeps an int value with a uint literal type; unsigned or
+            # wider operands change the comparison and arithmetic rules.
+            return None
+    elif isinstance(expression, IdentifierNode):
+        value = environment.get(expression.name)
+        if value is None or isinstance(value, _UnsignedLiteralInt):
+            return None
+    elif isinstance(expression, UnaryOpNode):
+        operand = _checked_static_value(expression.operand, environment)
+        if operand is None:
+            return None
+        value = {
+            "+": operand,
+            "-": -operand,
+            "~": ~operand,
+            "!": int(not operand),
+        }.get(expression.operator)
+    elif isinstance(expression, BinaryOpNode):
+        left = _checked_static_value(expression.left, environment)
+        right = _checked_static_value(expression.right, environment)
+        if left is None or right is None:
+            return None
+        operator = expression.operator
+        if operator in _STATIC_COMPARISONS:
+            value = int(_STATIC_COMPARISONS[operator](left, right))
+        elif operator in {"&&", "||"}:
+            both = bool(left) and bool(right)
+            value = int(both if operator == "&&" else bool(left) or bool(right))
+        elif operator == "+":
+            value = left + right
+        elif operator == "-":
+            value = left - right
+        elif operator == "*":
+            value = left * right
+        elif operator in {"/", "%"}:
+            if right == 0 or (left == _SIGNED_32[0] and right == -1):
+                return None
+            quotient = abs(left) // abs(right)
+            quotient = -quotient if (left < 0) != (right < 0) else quotient
+            value = quotient if operator == "/" else left - quotient * right
+        elif operator in {"<<", ">>"}:
+            if not 0 <= right < 31 or left < 0:
+                return None
+            value = left << right if operator == "<<" else left >> right
+        elif operator in {"&", "|", "^"}:
+            value = {"&": left & right, "|": left | right, "^": left ^ right}[operator]
+        else:
+            return None
+    else:
+        return None
+    if value is None or not _SIGNED_32[0] <= value <= _SIGNED_32[1]:
+        return None
+    return value
+
+
+def static_loop_trip_count(
+    type_name, start, condition, update, loop_name, constants, limit=4096
+):
+    """Run a loop's control on constants alone and return its trip count.
+
+    ``start``, the condition and the update may read only ``loop_name`` and
+    the immutable literal ``constants``, as MLX's
+    ``for (int step = 1; (1 << step) < C; step++)``. Every invocation then
+    computes the same sequence. Each value, the terminating update included,
+    must fit both ``int`` and the counter's type; a loop that exceeds
+    ``limit`` trips or reads anything else returns None.
+    """
+    if not isinstance(type_name, str) or not type_name.isidentifier():
+        return None
+    shape = source_integer_shape(
+        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
+    )
+    if (
+        shape is None
+        or shape[2] != 1
+        or shape[1] > 32
+        or shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+    ):
+        return None
+    minimum = -(1 << (shape[1] - 1))
+    maximum = (1 << (shape[1] - 1)) - 1
+    environment = {
+        name: value
+        for name, value in constants.items()
+        if name != loop_name and not isinstance(value, _UnsignedLiteralInt)
+    }
+    value = _checked_static_value(start, environment)
+    if value is None or not minimum <= value <= maximum:
+        return None
+    if isinstance(update, UnaryOpNode):
+        if update.operator in _INCREMENT_OPERATORS:
+            step = 1
+        elif update.operator in {"--", "PRE_DECREMENT", "POST_DECREMENT"}:
+            step = -1
+        else:
+            return None
+        if not (
+            isinstance(update.operand, IdentifierNode)
+            and update.operand.name == loop_name
+        ):
+            return None
+        operator, amount = "+=", step
+    elif isinstance(update, AssignmentNode):
+        if not (
+            isinstance(update.target, IdentifierNode)
+            and update.target.name == loop_name
+        ):
+            return None
+        operator = update.operator
+        amount = _checked_static_value(update.value, environment)
+        if amount is None or operator not in {"+=", "-=", "*=", "<<=", ">>="}:
+            return None
+    else:
+        return None
+    for trips in range(limit + 1):
+        taken = _checked_static_value(condition, {**environment, loop_name: value})
+        if taken is None:
+            return None
+        if not taken:
+            return trips
+        if operator == "+=":
+            value += amount
+        elif operator == "-=":
+            value -= amount
+        elif operator == "*=":
+            value *= amount
+        elif not 0 <= amount < 31 or value < 0:
+            return None
+        elif operator == "<<=":
+            value <<= amount
+        else:
+            value >>= amount
+        if not minimum <= value <= maximum:
+            return None
+    return None

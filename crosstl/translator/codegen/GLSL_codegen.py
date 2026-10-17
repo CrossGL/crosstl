@@ -115,6 +115,7 @@ from ..validation import (
 )
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
+    _UnsignedLiteralInt,
     collect_literal_int_constants,
     collect_struct_member_types,
     evaluate_literal_int_expression,
@@ -344,12 +345,16 @@ from .index_range_contracts import (
 from .integer_intervals import convert_integer_intervals
 from .loop_guard_bounds import guarded_additive_loop_entries
 from .loop_induction import (
+    checked_induction_value,
     fixed_stride_loop_terminates,
     geometric_loop_terminates,
+    init_less_counter_loops,
     loop_constant_bindings,
     metadata_bound_key,
     metadata_loop_bindings,
     metadata_parameter_bindings,
+    offset_counter_loop_terminates,
+    static_loop_trip_count,
     subgroup_strided_trips,
     walk_control_scopes,
 )
@@ -4428,6 +4433,17 @@ class GLSLCodeGen:
             for node in self.walk_ast(root)
         )
 
+    def glsl_software_subgroup_lane_local_matrix_nodes(self, root):
+        """Matrix fills and transfers, which software lowering keeps per lane."""
+        if not self.cooperative_matrix_software_lowering:
+            return []
+        return [
+            node
+            for node in self.walk_ast(root)
+            if isinstance(node, CooperativeMatrixOpNode)
+            and node.operation in {"fill", "load", "store"}
+        ]
+
     def glsl_software_subgroup_stage_entries(self, ast, target_stage=None):
         entries = []
         seen = set()
@@ -4852,6 +4868,9 @@ class GLSLCodeGen:
         )
         entry_arguments = self.glsl_software_subgroup_uniform_arguments(
             entry_function, entry_seeds, entry=True
+        )
+        self.glsl_software_subgroup_counter_loops = (
+            self.glsl_software_subgroup_entry_counter_loops(entry_function)
         )
         # Uniform loop proofs must see transitive collective calls as well as leaves.
         self.glsl_software_subgroup_analyze_uniform_statements(
@@ -5611,6 +5630,7 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_resolved_call_targets = {}
         self.glsl_software_subgroup_uniform_if_node_ids = set()
         self.glsl_software_subgroup_immutable_uniform_names = set()
+        self.glsl_software_subgroup_counter_loops = {}
         self.glsl_software_subgroup_entry_function_id = None
         self.glsl_software_subgroup_entry_function_name = None
         self.glsl_software_subgroup_helper_function_names = set()
@@ -5711,10 +5731,27 @@ class GLSLCodeGen:
             ast,
             discover_zero_trip=True,
         )
-        if not all_records and self.glsl_software_subgroup_uses_system_inputs(ast):
-            # Subgroup system inputs without collective operations need only
-            # the logical split of gl_LocalInvocationIndex into subgroup and
-            # lane IDs, which is exact under any control flow.
+        lane_local_matrix_nodes = self.glsl_software_subgroup_lane_local_matrix_nodes(
+            ast
+        )
+        if lane_local_matrix_nodes and invocation_count % self.software_subgroup_width:
+            raise self.glsl_software_subgroup_error(
+                "OpenGL matrix fills and transfers require complete logical subgroups",
+                workgroup_size=concrete_workgroup_size,
+                operation="CooperativeMatrixTransfer",
+                reason="incomplete-matrix-subgroup",
+                source_location=getattr(
+                    lane_local_matrix_nodes[0], "source_location", None
+                ),
+            )
+        if not all_records and (
+            lane_local_matrix_nodes
+            or self.glsl_software_subgroup_uses_system_inputs(ast)
+        ):
+            # Subgroup system inputs, matrix fills and matrix transfers
+            # without collective operations need only the logical split of
+            # gl_LocalInvocationIndex into subgroup and lane IDs, which is
+            # exact under any control flow.
             return
         if not all_records:
             raise self.glsl_software_subgroup_error(
@@ -5815,6 +5852,9 @@ class GLSLCodeGen:
         self.prepare_glsl_software_subgroup_strided_for_plans(
             entry_function,
             uniform_names,
+        )
+        self.glsl_software_subgroup_counter_loops = (
+            self.glsl_software_subgroup_entry_counter_loops(entry_function)
         )
         self.glsl_software_subgroup_analyze_uniform_statements(
             getattr(entry_function, "body", None),
@@ -6543,16 +6583,27 @@ class GLSLCodeGen:
                 nested_names.add(loop_name)
             elif trip_uniform:
                 nested_names.discard(loop_name)
+            counter = self.glsl_software_subgroup_counter_loops.get(id(statement))
+            if is_uniform and counter is not None:
+                # Written only by this uniform loop's update, the counter is
+                # uniform before, inside and after the loop.
+                self.glsl_software_subgroup_immutable_uniform_names.add(counter[0])
             self.glsl_software_subgroup_analyze_uniform_statements(
                 getattr(statement, "body", None),
                 nested_names,
             )
-            return names - (
-                self.glsl_software_subgroup_assigned_names(
-                    getattr(statement, "body", None)
-                )
-                & names
+            written = self.glsl_software_subgroup_assigned_names(
+                getattr(statement, "body", None)
             )
+            if not (is_uniform and counter is not None):
+                # An update or condition may write a counter declared outside
+                # the loop, as an initializer-free for does.
+                for part in ("init", "condition", "update"):
+                    written |= self.glsl_software_subgroup_assigned_names(
+                        getattr(statement, part, None)
+                    )
+                written.discard(loop_name)
+            return names - (written & names)
         if isinstance(
             statement, (WhileNode, DoWhileNode, LoopNode, SwitchNode, MatchNode)
         ):
@@ -6630,6 +6681,8 @@ class GLSLCodeGen:
         if self.software_subgroup_width is None:
             return True
         initializer = getattr(node, "init", None)
+        if initializer is None:
+            return self.glsl_software_subgroup_counter_loop_uniform(node, uniform_names)
         if not isinstance(initializer, VariableNode):
             return False
         loop_name = getattr(initializer, "name", None)
@@ -6651,6 +6704,8 @@ class GLSLCodeGen:
                 for name, value in constants.items()
                 if name in uniform_names
             }
+        if self.glsl_software_subgroup_static_for(node, constants):
+            return True
         initial_expression = getattr(initializer, "initial_value", None)
         initial_value = evaluate_literal_int_expression(initial_expression, constants)
         if initial_value is None and (
@@ -6811,6 +6866,151 @@ class GLSLCodeGen:
         )
         return self.glsl_software_subgroup_loop_controls_preserved(
             node, bound_names | stride_names | {loop_name}
+        )
+
+    def glsl_software_subgroup_static_for(self, node, constants):
+        """Accept a loop whose controls read only literal constants.
+
+        MLX's ``for (int step = 1; (1 << step) < C; step++)`` runs the same
+        checked trips in every invocation when its body leaves the counter
+        and the constants alone.
+        """
+        initializer = getattr(node, "init", None)
+        if not isinstance(initializer, VariableNode) or any(
+            self.glsl_software_subgroup_uniform_returns._qualified(value, {"volatile"})
+            for value in (initializer, initializer.var_type)
+        ):
+            return False
+        trips = static_loop_trip_count(
+            self.type_name_string(initializer.var_type),
+            initializer.initial_value,
+            getattr(node, "condition", None),
+            getattr(node, "update", None),
+            initializer.name,
+            constants,
+        )
+        if trips is None:
+            return False
+        controls = {initializer.name}
+        for part in (node.condition, node.update):
+            controls |= self.glsl_software_subgroup_expression_identifier_names(part)
+        return self.glsl_software_subgroup_loop_controls_preserved(node, controls)
+
+    def glsl_software_subgroup_entry_counter_loops(self, entry_function):
+        """Initializer-free counter loops whose counter no call may write.
+
+        Before the helper pass resolves call effects, every name a call or a
+        pointer or reference declaration reads counts as written.
+        """
+        mutations = getattr(self, "glsl_software_subgroup_call_mutations", {})
+
+        def writes(node):
+            if id(node) in mutations:
+                return mutations[id(node)]
+            if isinstance(node, VariableNode):
+                return self.glsl_software_subgroup_expression_identifier_names(
+                    node.initial_value
+                )
+            if self.glsl_software_subgroup_exit_constructor(node):
+                return set()
+            return self.glsl_software_subgroup_expression_identifier_names(
+                list(node.arguments or [])
+            )
+
+        return init_less_counter_loops(entry_function, self.walk_ast, writes)
+
+    def glsl_software_subgroup_counter_loop_uniform(self, node, uniform_names):
+        """Accept MLX's ``int t = 0; for (; t + C <= T; t += C)`` chunk loop.
+
+        ``init_less_counter_loops`` proves the counter is written only by this
+        loop's update and reached with its initializer's value. With a uniform
+        bound, a literal offset and stride, and a body that leaves them alone,
+        every invocation runs the same trips, so the counter stays uniform
+        after the loop too. The checked termination proof uses the bound's
+        literal value or metadata range.
+        """
+        record = getattr(self, "glsl_software_subgroup_counter_loops", {}).get(id(node))
+        if record is None or uniform_names is None:
+            return False
+        name, declaration, _loop = record
+        if name not in uniform_names or any(
+            self.glsl_software_subgroup_uniform_returns._qualified(value, {"volatile"})
+            for value in (declaration, declaration.var_type)
+        ):
+            return False
+        constants = {
+            key: value
+            for key, value in (
+                getattr(self, "glsl_software_subgroup_loop_constants", {})
+                .get(id(node), self.glsl_active_literal_int_constants())
+                .items()
+            )
+            if key in uniform_names and key != name
+        }
+        # The initializer runs at the declaration, where a later local may
+        # not yet shadow a constant it names; only literals are proven.
+        start = checked_induction_value(declaration.initial_value, {})
+        condition = getattr(node, "condition", None)
+        if start is None or not isinstance(condition, BinaryOpNode):
+            return False
+        operator = self.map_operator(condition.operator)
+        left = condition.left
+        offset = 0
+        offset_names = set()
+        if isinstance(left, BinaryOpNode) and self.map_operator(left.operator) == "+":
+            if self.expression_name(left.left) == name:
+                offset_node = left.right
+            elif self.expression_name(left.right) == name:
+                offset_node = left.left
+            else:
+                return False
+            offset = checked_induction_value(offset_node, constants)
+            offset_names = self.glsl_software_subgroup_expression_identifier_names(
+                offset_node
+            )
+            if offset is None or name in offset_names:
+                return False
+        elif self.expression_name(left) != name:
+            return False
+        bound = condition.right
+        bound_names = self.glsl_software_subgroup_expression_identifier_names(bound)
+        if name in bound_names:
+            return False
+        literal_bound = checked_induction_value(bound, constants)
+        if literal_bound is not None:
+            stops = [literal_bound]
+        else:
+            record = (
+                getattr(self, "glsl_software_subgroup_loop_metadata", {})
+                .get(id(node), {})
+                .get(metadata_bound_key(bound))
+            )
+            if record is None or not self.glsl_software_subgroup_uniform_expression(
+                bound, uniform_names
+            ):
+                return False
+            convert = _UnsignedLiteralInt if record["dtype"].startswith("u") else int
+            stops = [convert(record["minimum"]), convert(record["maximum"])]
+        update = node.update
+        stride_names = set()
+        if isinstance(update, AssignmentNode):
+            step = checked_induction_value(update.value, constants)
+            stride_names = self.glsl_software_subgroup_expression_identifier_names(
+                update.value
+            )
+        else:
+            step = 1
+        if step is None or not offset_counter_loop_terminates(
+            self.type_name_string(declaration.var_type),
+            start,
+            offset,
+            stops,
+            step,
+            operator,
+        ):
+            return False
+        return self.glsl_software_subgroup_loop_controls_preserved(
+            node, {name} | bound_names | offset_names | stride_names
         )
 
     def glsl_software_subgroup_loop_controls_preserved(self, node, control_names):
@@ -31860,6 +32060,10 @@ class GLSLCodeGen:
         operation = node.operation
         if operation in {"multiply_accumulate", "multiply"}:
             return self.generate_glsl_cooperative_matrix_multiply_accumulate(node)
+        if operation == "fill":
+            return self.generate_glsl_cooperative_matrix_fill(node)
+        if operation in {"load", "store"}:
+            return self.generate_glsl_cooperative_matrix_transfer(node)
 
         lane_local_arities = {
             "element": 2,
@@ -31988,6 +32192,255 @@ class GLSLCodeGen:
             self.generate_expression(argument) for argument in node.arguments
         )
         return f"{helper_name}({arguments})"
+
+    def generate_glsl_cooperative_matrix_fill(self, node):
+        """Fill every lane-local element; the result type comes from context."""
+        if len(node.arguments) != 1:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                "OpenGL cooperative-matrix fill expects 1 argument, got "
+                f"{len(node.arguments)}",
+                reason="invalid-argument-count",
+            )
+        contract = self.glsl_cooperative_matrix_result_contract(node, [])
+        if contract is None:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                "OpenGL cooperative-matrix fill requires a declared matrix result",
+                reason="missing-result-contract",
+            )
+        helper = self.glsl_cooperative_matrix_helper_name(contract, "fill")
+        component = contract["mapped_component_type"]
+        value = self.generate_expression_with_expected(node.arguments[0], component)
+        return f"{helper}({component}({value}))"
+
+    # Lane-local transfers address each element through the registered
+    # fragment mapping; this closed form must reproduce it exactly.
+    GLSL_COOPERATIVE_MATRIX_TRANSFER_MAPPINGS = {
+        "tile_4x4_row_pair": (
+            "((lane >> 2u) & 4u) + ((lane >> 1u) & 3u)",
+            "((lane >> 2u) & 2u) * 2u + (lane & 1u) * 2u + element",
+        )
+    }
+
+    @staticmethod
+    def glsl_cooperative_matrix_transfer_coordinate(lane, element):
+        """The closed form of ``GLSL_COOPERATIVE_MATRIX_TRANSFER_MAPPINGS``."""
+        row = ((lane >> 2) & 4) + ((lane >> 1) & 3)
+        column = ((lane >> 2) & 2) * 2 + (lane & 1) * 2 + element
+        return row, column
+
+    def glsl_cooperative_matrix_pure_expression(self, expression):
+        """Whether re-evaluating ``expression`` per element is unobservable."""
+        if isinstance(expression, (IdentifierNode, LiteralNode)):
+            return True
+        if isinstance(expression, ArrayAccessNode):
+            return self.glsl_cooperative_matrix_pure_expression(
+                expression.array
+            ) and self.glsl_cooperative_matrix_pure_expression(expression.index)
+        if isinstance(expression, MemberAccessNode):
+            return self.glsl_cooperative_matrix_pure_expression(expression.object_expr)
+        if isinstance(expression, BinaryOpNode):
+            if self.map_operator(expression.operator) in {"=", ","}:
+                return False
+            return self.glsl_cooperative_matrix_pure_expression(
+                expression.left
+            ) and self.glsl_cooperative_matrix_pure_expression(expression.right)
+        if isinstance(expression, UnaryOpNode):
+            if self.map_operator(expression.operator) not in {"+", "-", "!", "~"}:
+                return False
+            return self.glsl_cooperative_matrix_pure_expression(expression.operand)
+        return False
+
+    @staticmethod
+    def glsl_cooperative_matrix_literal_bool(value):
+        if value is None:
+            return False
+        if isinstance(value, LiteralNode) and isinstance(value.value, bool):
+            return value.value
+        if isinstance(value, LiteralNode) and value.value in {"true", "false"}:
+            return value.value == "true"
+        if isinstance(value, IdentifierNode) and value.name in {"true", "false"}:
+            return value.name == "true"
+        return None
+
+    @staticmethod
+    def glsl_cooperative_matrix_zero_origin(origin):
+        if origin is None:
+            return True
+
+        def zero(value):
+            return (
+                isinstance(value, LiteralNode)
+                and not isinstance(value.value, bool)
+                and str(value.value).rstrip("uUlL") in {"0", "0x0"}
+            )
+
+        if zero(origin):
+            return True
+        components = getattr(origin, "args", None)
+        if components is None:
+            components = getattr(origin, "arguments", None)
+        return bool(components) and all(zero(item) for item in components)
+
+    def generate_glsl_cooperative_matrix_transfer(self, node):
+        """Lower simdgroup_load/simdgroup_store to lane-local buffer accesses.
+
+        Lane ``l`` holds the elements the fragment mapping assigns it, so a
+        transfer needs no cross-lane exchange: each element reads or writes
+        ``pointer[row * stride + column]``, or ``pointer[column * stride +
+        row]`` for a transposed matrix.
+        """
+        operation = node.operation
+        arguments = list(node.arguments)
+        if not 2 <= len(arguments) <= 5:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix {operation} expects 2 to 5 arguments, "
+                f"got {len(arguments)}",
+                reason="invalid-argument-count",
+            )
+        if operation == "load":
+            matrix, pointer = arguments[:2]
+        else:
+            pointer, matrix = arguments[:2]
+        stride = arguments[2] if len(arguments) > 2 else None
+        origin = arguments[3] if len(arguments) > 3 else None
+        transpose = self.glsl_cooperative_matrix_literal_bool(
+            arguments[4] if len(arguments) > 4 else None
+        )
+        contract = self.glsl_cooperative_matrix_expression_contract(
+            matrix, operation=operation
+        )
+        if contract is None:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix {operation} requires a matrix with a "
+                "complete lane-fragment contract",
+                reason="missing-operand-contract",
+            )
+        mapping = contract["fragment_mapping_contract"]
+        closed_form = self.GLSL_COOPERATIVE_MATRIX_TRANSFER_MAPPINGS.get(
+            contract["fragment_mapping"]
+        )
+        if (
+            closed_form is None
+            or (contract["rows"], contract["columns"]) != (8, 8)
+            or (contract["subgroup_size"], contract["elements_per_lane"]) != (32, 2)
+            or any(
+                mapping.coordinate(lane, element)
+                != self.glsl_cooperative_matrix_transfer_coordinate(lane, element)
+                for lane in range(32)
+                for element in range(2)
+            )
+        ):
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix {operation} only supports the "
+                "tile_4x4_row_pair 8x8/32x2 fragment contract",
+                reason="incompatible-transfer-contract",
+                matrix_type=contract["matrix_type"],
+            )
+        if self.software_subgroup_width != 32:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix {operation} requires 32-lane software "
+                "subgroups",
+                reason="exact-subgroup-width-required",
+                matrix_type=contract["matrix_type"],
+            )
+        if transpose is None:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix {operation} requires a literal "
+                "transpose flag",
+                reason="dynamic-transpose",
+                matrix_type=contract["matrix_type"],
+            )
+        if not self.glsl_cooperative_matrix_zero_origin(origin):
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix {operation} only supports a zero "
+                "matrix origin",
+                reason="nonzero-matrix-origin",
+                matrix_type=contract["matrix_type"],
+            )
+        for label, value in (("matrix", matrix), ("pointer", pointer)):
+            if not self.glsl_cooperative_matrix_pure_expression(value):
+                self.glsl_cooperative_matrix_operation_error(
+                    node,
+                    f"OpenGL cooperative-matrix {operation} {label} must be free "
+                    "of side effects",
+                    reason="impure-transfer-operand",
+                    matrix_type=contract["matrix_type"],
+                )
+        if stride is not None and not self.glsl_cooperative_matrix_pure_expression(
+            stride
+        ):
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix {operation} stride must be free of "
+                "side effects",
+                reason="impure-transfer-operand",
+                matrix_type=contract["matrix_type"],
+            )
+        if operation == "load" and not self.glsl_reference_argument_is_lvalue(matrix):
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                "OpenGL cooperative-matrix load destination must be assignable",
+                reason="destination-requires-lvalue",
+                matrix_type=contract["matrix_type"],
+            )
+        binding = self.glsl_storage_pointer_binding(
+            pointer, self.glsl_storage_pointer_aliases()
+        )
+        if binding is None or binding.get("pointer_reinterpretation") is not None:
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix {operation} requires a storage-buffer "
+                "pointer with the matrix component type",
+                reason="unsupported-transfer-pointer",
+                matrix_type=contract["matrix_type"],
+            )
+        element_type = binding.get("element_type") if binding is not None else None
+        if (
+            element_type is None
+            or self.map_type(element_type) != contract["mapped_component_type"]
+        ):
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                f"OpenGL cooperative-matrix {operation} requires a storage-buffer "
+                "pointer with the matrix component type",
+                reason="unsupported-transfer-pointer",
+                matrix_type=contract["matrix_type"],
+            )
+        if operation == "store" and binding.get("access") == "read":
+            self.glsl_cooperative_matrix_operation_error(
+                node,
+                "OpenGL cooperative-matrix store requires a writable storage buffer",
+                reason="read-only-transfer-pointer",
+                matrix_type=contract["matrix_type"],
+            )
+        helper = self.glsl_cooperative_matrix_helper_name(contract, "fragment_offset")
+        stride_text = (
+            f"uint({self.generate_expression(stride)})"
+            if stride is not None
+            else f"{contract['columns']}u"
+        )
+        transpose_text = "true" if transpose else "false"
+        matrix_text = self.generate_expression(matrix)
+        root = binding["root"]
+        base = self.glsl_workgroup_pointer_offset_expression(binding)
+        parts = []
+        for element in range(contract["elements_per_lane"]):
+            offset = f"int({helper}({element}u, {stride_text}, {transpose_text}))"
+            index = offset if base in {"0", "0u"} else f"({base} + {offset})"
+            fragment = f"{matrix_text}.elements[{element}]"
+            if operation == "load":
+                parts.append(f"{fragment} = {root}[{index}]")
+            else:
+                parts.append(f"{root}[{index}] = {fragment}")
+        return f"({', '.join(parts)})"
 
     @staticmethod
     def glsl_cooperative_matrix_uint_array(name, values):
@@ -32333,6 +32786,35 @@ class GLSLCodeGen:
                 continue
 
             helper_name = contract["helpers"][operation]
+            if operation == "fill":
+                component = contract["mapped_component_type"]
+                lines = [
+                    f"{type_name} {helper_name}({component} value) {{",
+                    f"    {type_name} result;",
+                    *(
+                        f"    result.elements[{index}] = value;"
+                        for index in range(contract["elements_per_lane"])
+                    ),
+                    "    return result;",
+                    "}",
+                ]
+                blocks.append("\n".join(lines) + "\n")
+                continue
+            if operation == "fragment_offset":
+                row, column = self.GLSL_COOPERATIVE_MATRIX_TRANSFER_MAPPINGS[
+                    contract["fragment_mapping"]
+                ]
+                lines = [
+                    f"uint {helper_name}(uint element, uint stride, bool transpose) {{",
+                    "    // The registered lane coordinates of this fragment element.",
+                    "    uint lane = gl_LocalInvocationIndex % 32u;",
+                    f"    uint row = {row};",
+                    f"    uint column = {column};",
+                    "    return transpose ? column * stride + row : row * stride + column;",
+                    "}",
+                ]
+                blocks.append("\n".join(lines) + "\n")
+                continue
             lines = [f"{type_name} {helper_name}("]
             if operation == "negate":
                 lines[-1] += f"{type_name} value) {{"

@@ -819,11 +819,15 @@ EXTERNAL_FIXTURES = [
             "test/tint/builtins/gen/var/subgroupMatrixStore/" "17ec3e.wgsl.expected.msl"
         ),
         "roundtrip": True,
+        # The library typedef resolves to a cooperative matrix, so the fill
+        # becomes the CrossGL fill rather than an opaque mangled call.
         "contains": [
-            "simdgroup_half8x8 arg_2 = "
-            "make_filled_simdgroup_matrix_u3chalf_u2c8_u2c8_u3e(0.0);",
-            "const simdgroup_half8x8 v_1 = arg_2;",
+            "CooperativeMatrix<float16,8,8,subgroup,unspecified,unspecified> arg_2 = "
+            "cooperative_matrix_fill(float16(0.0));",
+            "const CooperativeMatrix<float16,8,8,subgroup,unspecified,unspecified> "
+            "v_1 = arg_2;",
         ],
+        "not_contains": ["simdgroup_half8x8", "make_filled_simdgroup_matrix_u3c"],
         "source": (
             """
             #include <metal_stdlib>

@@ -18775,6 +18775,27 @@ float {scalar}(float value) {{
 
     def generate_cooperative_matrix_function_call(self, expression, is_main):
         function_name = str(expression.name).rsplit("::", 1)[-1]
+        base_name, template_arguments = self.generic_type_parts(function_name)
+        base_name = base_name or function_name
+        if base_name in self.user_function_names:
+            return None
+        if base_name == "make_filled_simdgroup_matrix":
+            # make_filled_simdgroup_matrix<T, Cols, Rows = Cols>(T value): the
+            # declaration or assignment it initializes carries the contract.
+            if len(expression.args) != 1 or len(template_arguments) not in {2, 3}:
+                return None
+            element_type = self.map_type(template_arguments[0])
+            value = self.generate_expression(expression.args[0], is_main)
+            return f"cooperative_matrix_fill({element_type}({value}))"
+        if function_name == "simdgroup_multiply":
+            # simdgroup_multiply(d, a, b) stores a * b into d; it returns void.
+            if len(expression.args) != 3:
+                return None
+            destination, left, right = (
+                self.generate_expression(argument, is_main)
+                for argument in expression.args
+            )
+            return f"{destination} = cooperative_matrix_multiply({left}, {right})"
         operation = {
             "simdgroup_load": "cooperative_matrix_load",
             "simdgroup_store": "cooperative_matrix_store",

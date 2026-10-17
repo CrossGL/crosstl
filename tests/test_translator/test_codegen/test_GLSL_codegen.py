@@ -2241,8 +2241,10 @@ def test_opengl_cooperative_matrix_software_lowering_resets_generation_state():
 @pytest.mark.parametrize(
     ("operation", "reason"),
     [
-        ("load", "non-lane-local-operation"),
-        ("store", "non-lane-local-operation"),
+        # Transfers are lane-local under tile_4x4_row_pair and take the
+        # transfer path, which checks its operands first.
+        ("load", "invalid-argument-count"),
+        ("store", "invalid-argument-count"),
         # A plain product is a multiply-accumulate into +0.0 and takes the
         # same software MMA path, which checks its operands first.
         ("multiply", "invalid-argument-count"),

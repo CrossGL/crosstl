@@ -14052,6 +14052,7 @@ def _metal_preprocess_without_template_materialization(
         source,
         file_path=file_path,
     )
+    processed = preprocessor._canonicalize_metal_library_matrix_typedefs(processed)
     return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
 
