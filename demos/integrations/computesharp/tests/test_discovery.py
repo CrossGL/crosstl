@@ -407,7 +407,7 @@ def test_frozen_lock_matches_the_reviewed_contract():
     contract = CONTRACT.load_contract()
     assert (
         lock["contractSHA256"]
-        == hashlib.sha256((ROOT / "coverage.json").read_bytes()).hexdigest()
+        == hashlib.sha256(CONTRACT._contract_bytes(ROOT / "coverage.json")).hexdigest()
     )
     assert lock["commit"] == contract["commit"]
     assert (
@@ -485,6 +485,24 @@ def test_lock_freezes_categories_gates_and_profile_expectations(
     gated = next(entry for key, entry in lock["methods"].items() if ".Gated(" in key)
     assert gated["capabilityGates"] == {"fixture-feature:available": 1}
     CONTRACT.check(fixture_export, lock_path, FIXTURE_CONTRACT)
+
+
+def test_lock_accepts_a_crlf_checkout_of_the_contract(fixture_export, tmp_path):
+    lock_path = tmp_path / "lock.json"
+    lock = CONTRACT.build_lock(
+        CONTRACT.load_contract(FIXTURE_CONTRACT),
+        BASELINE.load_discovery(fixture_export),
+        FIXTURE_CONTRACT.read_bytes(),
+    )
+    lock_path.write_text(json.dumps(lock))
+    crlf = tmp_path / "contract-crlf.json"
+    text = FIXTURE_CONTRACT.read_bytes().replace(b"\r\n", b"\n")
+    crlf.write_bytes(text.replace(b"\n", b"\r\n"))
+    CONTRACT.check(fixture_export, lock_path, crlf)
+    changed = tmp_path / "contract-changed.json"
+    changed.write_bytes(text + b"\n")
+    with pytest.raises(ValueError, match="contractSHA256 differs"):
+        CONTRACT.check(fixture_export, lock_path, changed)
 
 
 def test_lock_rejects_changed_inventory(fixture_export, tmp_path):
