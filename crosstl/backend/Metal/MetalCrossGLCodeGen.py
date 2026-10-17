@@ -965,6 +965,11 @@ class MetalToCrossGLConverter:
         ">": "greater",
         "<=": "less_equal",
         ">=": "greater_equal",
+        "+=": "add_assign",
+        "-=": "subtract_assign",
+        "*=": "multiply_assign",
+        "/=": "divide_assign",
+        "%=": "modulo_assign",
     }
     metal_free_operator_helper_prefix = "crosstl_metal_operator_"
     binary_precedence = {
@@ -11103,10 +11108,116 @@ class MetalToCrossGLConverter:
         )
         return f"{helper}({vector}, {index})"
 
+    METAL_COMPOUND_ASSIGNMENT_OPERATORS = frozenset({"+=", "-=", "*=", "/=", "%="})
+
+    def metal_side_effect_free_lvalue_part(self, expr):
+        """Whether evaluating ``expr`` again reads the same value and writes nothing."""
+        if expr is None or isinstance(expr, (bool, int, float, str)):
+            return True
+        if isinstance(expr, VariableNode):
+            return not getattr(expr, "vtype", None)
+        if isinstance(expr, (MemberAccessNode,)):
+            return self.metal_side_effect_free_lvalue_part(expr.object)
+        if isinstance(expr, ArrayAccessNode):
+            return self.metal_side_effect_free_lvalue_part(
+                expr.array
+            ) and self.metal_side_effect_free_lvalue_part(expr.index)
+        if isinstance(expr, UnaryOpNode):
+            return expr.op not in {
+                "++",
+                "--",
+                "&",
+                "*",
+            } and self.metal_side_effect_free_lvalue_part(expr.operand)
+        if isinstance(expr, BinaryOpNode):
+            return all(
+                self.metal_side_effect_free_lvalue_part(part)
+                for part in (expr.left, expr.right)
+            )
+        if isinstance(expr, CastNode):
+            return self.metal_side_effect_free_lvalue_part(expr.expression)
+        return False
+
+    def metal_private_compound_lvalue(self, expr):
+        """Whether ``expr`` is a repeatable lvalue in thread storage.
+
+        Only member and element selections of a local value qualify, with
+        indices free of calls, assignments and increments. Pointer selections,
+        references and threadgroup, device or constant storage do not.
+        """
+        while isinstance(expr, (MemberAccessNode, ArrayAccessNode)):
+            if isinstance(expr, MemberAccessNode):
+                if getattr(expr, "is_pointer", False):
+                    return False
+                expr = expr.object
+                continue
+            array_type = self.expression_metal_type(expr.array)
+            if (
+                array_type is None
+                or "*" in str(array_type)
+                or self.metal_pointer_pointee_type_once(array_type) is not None
+                or not self.metal_side_effect_free_lvalue_part(expr.index)
+            ):
+                return False
+            expr = expr.array
+        if isinstance(expr, VariableNode) and not getattr(expr, "vtype", None):
+            name = expr.name
+        elif isinstance(expr, str) and expr.isidentifier():
+            name = expr
+        else:
+            return False
+        variable_type = self.current_variable_types.get(name)
+        if variable_type is None or any(
+            token in str(variable_type) for token in ("*", "&")
+        ):
+            return False
+        qualifiers = set(self.current_variable_type_qualifiers.get(name, ()))
+        qualifiers.update(str(variable_type).split())
+        return not qualifiers & {"threadgroup", "device", "constant", "volatile"}
+
+    def generate_metal_compound_operator_assignment(self, node, is_main):
+        """Lower ``x op= y`` on an aggregate through its source ``operator op=``.
+
+        The preprocessor materializes a thread ``operator op=`` as a helper
+        that applies the source body to a copy of ``x`` and returns it, so
+        ``x = helper(x, y)`` stores the value the source operator stores in
+        ``x``. ``x`` must be a repeatable thread-storage lvalue; anything
+        else keeps the source assignment.
+        """
+        operator = getattr(node, "operator", None)
+        if operator not in self.METAL_COMPOUND_ASSIGNMENT_OPERATORS:
+            return None
+        target_type = self.expression_metal_type(node.left)
+        if (
+            target_type is None
+            or self.normalized_metal_type(self.resolve_type_alias(target_type))
+            not in self.struct_member_types
+            or not self.metal_free_operator_candidates(operator, 2)
+            or not self.metal_private_compound_lvalue(node.left)
+        ):
+            return None
+        try:
+            call = self.generate_metal_free_operator_call(
+                operator,
+                (node.left, node.right),
+                is_main,
+                getattr(node, "source_location", None),
+            )
+        except MetalSourceOverloadResolutionError:
+            return None
+        if call is None:
+            return None
+        return f"{self.generate_expression(node.left, is_main)} = {call}"
+
     def generate_assignment(self, node, is_main):
         contracted_assignment = self.generate_metal_contracted_assignment(node, is_main)
         if contracted_assignment is not None:
             return contracted_assignment
+        compound_assignment = self.generate_metal_compound_operator_assignment(
+            node, is_main
+        )
+        if compound_assignment is not None:
+            return compound_assignment
         if (
             node.operator in {"/=", "+=", "-=", "*="}
             and self.metal_arithmetic_profile(node.operator[:-1])[0] is not None

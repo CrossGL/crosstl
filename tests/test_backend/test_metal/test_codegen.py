@@ -10754,6 +10754,123 @@ def test_metal_target_materializes_and_rebinds_aggregate_free_operator(tmp_path)
     )
 
 
+COMPOUND_BOX_SOURCE = """
+template <typename T>
+struct Box { T value; };
+
+template <typename T>
+constexpr Box<T> operator+(Box<T> a, Box<T> b) {
+  return {a.value + b.value};
+}
+
+template <typename T>
+constexpr thread Box<T>& operator+=(thread Box<T>& a, Box<T> b) {
+  a.value += b.value;
+  return a;
+}
+
+template <typename T>
+constexpr device Box<T>& operator+=(device Box<T>& a, Box<T> b) {
+  a.value += b.value;
+  return a;
+}
+
+kernel void add_boxes(device float* out [[buffer(0)]]) {
+  Box<float> a;
+  Box<float> b;
+  a.value = 1.0f;
+  b.value = 2.0f;
+  a += b;
+  Box<float> items[2];
+  items[0] = a;
+  items[1] = b;
+  items[1] += a + b;
+  out[0] = a.value + items[1].value;
+}
+"""
+
+
+def test_metal_compound_operator_updates_a_copy_and_stores_it(tmp_path):
+    """MLX's complex ``operator+=`` lowers to ``x = helper(x, y)``."""
+    preprocessed = MetalPreprocessor().preprocess(COMPOUND_BOX_SOURCE)
+    helper = "crosstl_metal_operator_add_assign__Box_float__Box_float"
+    normalized_preprocessed = normalize(preprocessed)
+    assert f"Box_float {helper}(Box_float a, Box_float b) {{" in normalized_preprocessed
+    assert "a.value += b.value; return a; }" in normalized_preprocessed
+    # Only the thread overload has a value form; the device one stays a template.
+    assert "device Box<T>& operator+=(device Box<T>& a, Box<T> b)" in (
+        normalized_preprocessed
+    )
+
+    crossgl = convert_without_preprocessing(preprocessed)
+    normalized_crossgl = normalize(crossgl)
+    assert f"a = {helper}(a, b);" in normalized_crossgl
+    assert (
+        f"items[1] = {helper}(items[1], "
+        "crosstl_metal_operator_add__Box_float__Box_float(a, b));"
+    ) in normalized_crossgl
+    assert "a += b;" not in normalized_crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert f"a = {helper}(a, b);" in normalize(metal)
+    assert_metal_compute_validates_if_available(
+        metal, tmp_path, "metal-compound-free-operator"
+    )
+    # Struct compound assignment does not exist in GLSL or HLSL; the call does.
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    # GLSL reserves double underscores, so the helper loses them.
+    assert f"a = {helper.replace('__', '_')}(a, b);" in normalize(glsl)
+    assert_opengl_compute_validates_if_available(
+        glsl, tmp_path, "opengl-compound-free-operator"
+    )
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert f"a = {helper}(a, b);" in normalize(hlsl)
+    assert " += b;" not in hlsl
+
+
+@pytest.mark.parametrize(
+    "operator_body, kernel_body",
+    [
+        # Storage that is not thread memory keeps the source assignment.
+        (
+            "a.value += b.value; return a;",
+            "device Box_float* boxes = (device Box_float*)out; boxes[0] += b;",
+        ),
+        # A body that returns another value has no value form.
+        ("a.value += b.value; return b;", "Box_float a; a.value = 1.0f; a += b;"),
+        # Neither does a body that returns early.
+        (
+            "if (b.value > 0.0f) { return a; } a.value += b.value; return a;",
+            "Box_float a; a.value = 1.0f; a += b;",
+        ),
+    ],
+)
+def test_metal_compound_operator_keeps_unproven_shapes(operator_body, kernel_body):
+    source = f"""
+    template <typename T>
+    struct Box {{ T value; }};
+
+    template <typename T>
+    constexpr thread Box<T>& operator+=(thread Box<T>& a, Box<T> b) {{
+      {operator_body}
+    }}
+
+    kernel void add_boxes(device float* out [[buffer(0)]]) {{
+      Box<float> b;
+      b.value = 2.0f;
+      {kernel_body}
+      out[1] = b.value;
+    }}
+    """
+    crossgl = normalize(
+        convert_without_preprocessing(MetalPreprocessor().preprocess(source))
+    )
+    assert "+= b;" in crossgl
+    assert "crosstl_metal_operator_add_assign__Box_float__Box_float(a, b)" not in (
+        crossgl
+    )
+
+
 def test_codegen_preserves_builtin_aggregate_pointer_arithmetic(tmp_path):
     source = """
     struct Payload { float value; };

@@ -9216,7 +9216,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         ">": "greater",
         "<=": "less_equal",
         ">=": "greater_equal",
+        "+=": "add_assign",
+        "-=": "subtract_assign",
+        "*=": "multiply_assign",
+        "/=": "divide_assign",
+        "%=": "modulo_assign",
     }
+    _COMPOUND_FREE_OPERATORS = frozenset({"+=", "-=", "*=", "/=", "%="})
 
     def _find_boolean_variable_templates(
         self, code: str
@@ -9527,7 +9533,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             code
         ).anonymous_namespace_spans
         operator_re = re.compile(
-            r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%<>])\s*\("
+            r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%]=|[+\-*/%<>])\s*\("
         )
         cursor = 0
         while True:
@@ -9648,6 +9654,55 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
             result = re.sub(pattern, materialized_name, result)
         return result
+
+    def _compound_free_operator_value_form(
+        self,
+        return_type: str,
+        parameters: str,
+        parameter_types: Sequence[str],
+        body: str,
+    ) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
+        """Return a materialized ``operator op=`` that updates and returns a copy.
+
+        MLX's complex ``operator+=`` takes ``thread complex_t<T>& a`` and a
+        value ``b``, updates ``a`` member by member and returns ``a``. With a
+        value ``b`` nothing else can alias ``a``, so running the same body on a
+        copy and returning it computes the value the reference form stores:
+        callers lower ``x op= y`` to ``x = helper(x, y)``. Only that shape
+        qualifies: a thread (or unqualified) non-const reference first
+        parameter, a value second parameter, a reference return of the same
+        type and a body whose single ``return`` is its last statement and
+        names the first parameter. Threadgroup and device overloads keep their
+        templates, so their compound assignments stay unlowered.
+        """
+        names = self._parameter_identifier_names(parameters)
+        declarations = [
+            item.strip() for item in self._split_top_level_commas(parameters)
+        ]
+        if len(names) != 2 or len(declarations) != 2 or len(parameter_types) != 2:
+            return None
+        reference = re.fullmatch(
+            r"(?:thread\s+)?(?P<type>[A-Za-z_]\w*)\s*&", parameter_types[0].strip()
+        )
+        if reference is None or "&" in parameter_types[1] or "*" in parameter_types[1]:
+            return None
+        value_type = reference.group("type")
+        returned = re.fullmatch(
+            r"(?:thread\s+)?(?P<type>[A-Za-z_]\w*)\s*&",
+            self._normalize_template_argument_text(return_type).strip(),
+        )
+        if returned is None or returned.group("type") != value_type:
+            return None
+        masked = self._mask_comments_and_literals(body)
+        returns = list(re.finditer(r"\breturn\b", masked))
+        final = re.search(rf"\breturn\s+{re.escape(names[0])}\s*;\s*$", masked.rstrip())
+        if len(returns) != 1 or final is None or final.start() != returns[0].start():
+            return None
+        if re.search(rf"&\s*{re.escape(names[0])}\b", masked):
+            # A body that takes the parameter's address could leak the copy.
+            return None
+        rendered = f"{value_type} {names[0]}, {declarations[1]}"
+        return value_type, rendered, (value_type, parameter_types[1])
 
     def _free_operator_helper_name(
         self, operator: str, parameter_types: Sequence[str]
@@ -9796,6 +9851,14 @@ class MetalPreprocessor(HLSLPreprocessor):
                         rf"\b{re.escape(source_name)}\s*<", parameter_type
                     ):
                         continue
+                    if definition.operator in self._COMPOUND_FREE_OPERATORS:
+                        # ``thread complex_t<T>& a`` binds ``T`` through the
+                        # referenced type; the value form drops the reference.
+                        parameter_type = re.sub(
+                            r"\b(?:thread|threadgroup|device|constant)\b|&",
+                            " ",
+                            parameter_type,
+                        ).strip()
                     self._infer_template_parameter_bindings_from_type(
                         parameter_type,
                         materialized_name,
@@ -9863,6 +9926,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 if re.search(r"\boperator\s*(?:==|!=|<=|>=|[+\-*/%<>])\s*\(", body):
                     continue
+                if definition.operator in self._COMPOUND_FREE_OPERATORS:
+                    value_form = self._compound_free_operator_value_form(
+                        return_type, parameters, parameter_types, body
+                    )
+                    if value_form is None:
+                        continue
+                    return_type, parameters, parameter_types = value_form
                 helper_name = self._free_operator_helper_name(
                     definition.operator,
                     parameter_types,
