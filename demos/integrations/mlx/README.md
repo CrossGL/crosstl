@@ -1213,7 +1213,16 @@ lane's own value out of range, as Apple's do. DirectX holds an exact bfloat16
 value as its bits in a `uint` and its lane moves now pass those bits on; they
 used to move `uint(float(x))`, which gave the 24 bfloat16 max, min and
 `logaddexp` scans wrong words on Direct3D 12 WARP, and those DirectX artifacts
-are re-pinned. Complex `logaddexp` needed the software subgroup convergence
+are re-pinned. `contiguous_scan` writes one `simdgroup_sums` slot per
+SIMD-group and then reads all 32, and DXC loads a `groupshared bool` word with
+`!range [0, 2)`, so loads of the never-written words are undefined in DXIL
+rather than unspecified values. With bool words, the four contiguous bool
+maximum scans gave lanes 1 to 4 of SIMD-group 0 a `true` from outside their
+prefix on WARP in two consecutive runs, after identical HLSL had passed once.
+The scan gate therefore sets DirectX's `groupshared_bool_storage = "uint"`,
+which declares groupshared bool scalars and arrays as `uint` words that HLSL
+converts to and from `bool` at each use; the 24 DirectX artifacts of the bool
+maximum, minimum and product scans are re-pinned. Complex `logaddexp` needed the software subgroup convergence
 pass to stage guarded inputs around helpers that call `cos`, `sin`, `sqrt` or
 `atan2`, end in `if`/`else` returns (complex `log1p`) or call the generated
 precise binary32 square root.

@@ -4579,35 +4579,35 @@
         "sizeBytes": 23343
       },
       "contig_scan_inclusive_prod_bool__bool_": {
-        "sha256": "8017b3d1ce638bba176d2b9467ee7dbf80df9f6ab1aedae4a48c8675b241c5f3",
+        "sha256": "7190ef4c452a8467338c6818b758f39cdc7c9668780e587587601ed41a47222d",
         "sizeBytes": 16390
       },
       "contig_scan_exclusive_prod_bool__bool_": {
-        "sha256": "b9b8d47e0d9d45bbbae8abda4260965ce354ddb931b7a74d7891daf3b761fb36",
+        "sha256": "72a9d63af81c77547ca536d8a83282ec166dbd440a74fab1e3ce6a3360eab330",
         "sizeBytes": 16543
       },
       "contig_scan_reverse_inclusive_prod_bool__bool_": {
-        "sha256": "3d10431978f6bf6e266b514d0fc7607493ba39195330b4e5ba829839bfb36478",
+        "sha256": "2068a44007ae669f4ee1cb8522c0b95bba946e4570d5e87ce8bf30ffb3c7ce16",
         "sizeBytes": 16894
       },
       "contig_scan_reverse_exclusive_prod_bool__bool_": {
-        "sha256": "3aeae29d414bc7faf43c5ade1bd4c113a74559da681d2571873f2998a7a57a6b",
+        "sha256": "e1009192372efc65f1dfc761b5749b31fead4fcf08f20dbf1f06401f4c103223",
         "sizeBytes": 17122
       },
       "strided_scan_inclusive_prod_bool__bool_": {
-        "sha256": "92ce03ca12cf9472255f6aecd88ef3aa5097dc5837a5b987a5b66ce121282d0e",
+        "sha256": "e89cb18706a9771c8da831bcf5422ace7b7d73d0738a1c60bec70a5c0b4e7d87",
         "sizeBytes": 19572
       },
       "strided_scan_exclusive_prod_bool__bool_": {
-        "sha256": "3275ecb36772c0173d7436a061c6714d2ffdc6c138efb4f73002a3c24ddc6f65",
+        "sha256": "60f1e084c16bf623300e34d3d986b273e7f13ab2a6edd4196af038917f653bc4",
         "sizeBytes": 20369
       },
       "strided_scan_reverse_inclusive_prod_bool__bool_": {
-        "sha256": "ed39f26211569a4ce8aac7bd22b01a9d600d727f326ac0ea7996796398d80926",
+        "sha256": "e054a1e894ee01017832419e2206b22f91a907f9f36a4ec6ff836eb7b18f4ab3",
         "sizeBytes": 20027
       },
       "strided_scan_reverse_exclusive_prod_bool__bool_": {
-        "sha256": "3c0bb0a8fc5a14f070cdfabe885e70bd3abbf21866b65e7168dc03d094104c40",
+        "sha256": "073e8ba8a2a38fd43982a6d0789c06a405e1997a357806d42f37ef329713ce0c",
         "sizeBytes": 20840
       },
       "contig_scan_inclusive_prod_uint8_uint8": {
@@ -4995,35 +4995,35 @@
         "sizeBytes": 23741
       },
       "contig_scan_inclusive_max_bool__bool_": {
-        "sha256": "c92305fa7f4af7e5e4c13c340326ede40a918309762d78cb85daecafd37946e2",
+        "sha256": "37e5e9d699b941f6c870ee672b25de790debf361e0a0c2d6a032dc122ccf5192",
         "sizeBytes": 16507
       },
       "contig_scan_exclusive_max_bool__bool_": {
-        "sha256": "44f0f7338c4f6d1b2ed477449c9b5a9dc55ddfdc0931baf368824fbd8277e08c",
+        "sha256": "6aca5bd8b1dc6bc887ecb7f42ed3c206558d3c9c3a559b3c65e9efc32096a664",
         "sizeBytes": 16661
       },
       "contig_scan_reverse_inclusive_max_bool__bool_": {
-        "sha256": "849b825a938cbdaa8770f90980ed7f9aabfa3e02922a35e1c8fe312c45d9b9dd",
+        "sha256": "61202d5c619b5c82ee791c07df5e8272e72f4a6875cf9d176d3d6633a0ab799c",
         "sizeBytes": 17007
       },
       "contig_scan_reverse_exclusive_max_bool__bool_": {
-        "sha256": "3c9b1af1e2e98dcbd8ec9aaff4db5de8a8974be897cfc9b7cc7cfcc6382f5774",
+        "sha256": "8b0143e707be911225d285d53c055ba8cb0a453203d6212c5b0e37bcf01a36e7",
         "sizeBytes": 17235
       },
       "strided_scan_inclusive_max_bool__bool_": {
-        "sha256": "6a5ec9f3a2a36c7814844135cd990c47ee3fe182de39beccade002c17fcf27ad",
+        "sha256": "261fa73b369ecf039efb53ef0e77d8397e9d109891989c792667cbe08297d896",
         "sizeBytes": 19679
       },
       "strided_scan_exclusive_max_bool__bool_": {
-        "sha256": "3a3b43aa0a626740e5ee51b7141bf2f364310477b8eb10f6e9221d0af90f1e4d",
+        "sha256": "11489bc21c10b2a546fac28a0e1ad2449cae8484be319c288c57ee7fc879df57",
         "sizeBytes": 20476
       },
       "strided_scan_reverse_inclusive_max_bool__bool_": {
-        "sha256": "b2f8d5ffdb1169f31147b7ca0864b9ddf5a2d218b3dd7fea134c0c5dbc4e7906",
+        "sha256": "2086780c33692cda09926e40fce9292d6298723fce2e8e595e22bcf082ada9a6",
         "sizeBytes": 20133
       },
       "strided_scan_reverse_exclusive_max_bool__bool_": {
-        "sha256": "680998240443ea8b7d7270e937bf78033a83d12c014f8a6f2b1ce1efe4fcb488",
+        "sha256": "5da9f77059d89ed414d01a89e3d0ddfd121cc4ac0dbb7ac91156d7f5e1a84b83",
         "sizeBytes": 20946
       },
       "contig_scan_inclusive_max_uint8_uint8": {
@@ -5411,35 +5411,35 @@
         "sizeBytes": 23511
       },
       "contig_scan_inclusive_min_bool__bool_": {
-        "sha256": "fd5721b52efe6db2f97c5bfa8dd77910585dc333b33b2f6b77630ee64e271c47",
+        "sha256": "2ccc71cecf5ee653b2cc0e82871c4aa795bb12ca34b955ee0687cf4a0bc25215",
         "sizeBytes": 16503
       },
       "contig_scan_exclusive_min_bool__bool_": {
-        "sha256": "933d28b9fcc52ea886d90af964b504e3d34e789b66d4b29ea004072f1996ae57",
+        "sha256": "21aa3458fe3564ad5f542b008e76be161f840cc147b558f550389c57f5ed925b",
         "sizeBytes": 16656
       },
       "contig_scan_reverse_inclusive_min_bool__bool_": {
-        "sha256": "f726689b8b19e1b20b1aad6f34330c7e496203d6bed6b895ec3d1369a11b2346",
+        "sha256": "9ed9d8af9c267967aba7cc94d5e861fd3141660dd076670c5fe448e96821c8ef",
         "sizeBytes": 17003
       },
       "contig_scan_reverse_exclusive_min_bool__bool_": {
-        "sha256": "c946dc27e1c095e335d859f123ae6919fc015508fc70deb03f7c3310107b99a8",
+        "sha256": "71ba4e878b5320880289166cf89d11325fed1b2cef35b4a63abc3fc202663b15",
         "sizeBytes": 17230
       },
       "strided_scan_inclusive_min_bool__bool_": {
-        "sha256": "8ad36cf71d5039607a4f454b7e1ee73cb0090ecb2284541caa3f4f13e38567e2",
+        "sha256": "4aaa8ef597c28719ad398c030511883eba7561df0a27cdc74ca6939eab699a2e",
         "sizeBytes": 19676
       },
       "strided_scan_exclusive_min_bool__bool_": {
-        "sha256": "135d2756f43a40d7b59875aebef4ecee7dd62c776b484c0b46b59fc5d0c38d2e",
+        "sha256": "d231e0b15b895b652e22844b35a1c459202ae3087f299403dcaf11caf164aa23",
         "sizeBytes": 20471
       },
       "strided_scan_reverse_inclusive_min_bool__bool_": {
-        "sha256": "f4e884fa750f2cafdebecd3f860da172bb1ca11513c8ef302749c99167c7a314",
+        "sha256": "096bbe8976edb53909521b60a03ed864f69ba1bf68b4ca2129c40cd27c233565",
         "sizeBytes": 20130
       },
       "strided_scan_reverse_exclusive_min_bool__bool_": {
-        "sha256": "fa017154f8fca063ad20fbd53a263012aff5199dd7a6e16fe95d84903a3ff19b",
+        "sha256": "7e1da62e994e1ec5abc020f93809614dafcd6c1df288bddded006cc81add637a",
         "sizeBytes": 20941
       },
       "contig_scan_inclusive_min_uint8_uint8": {
@@ -6078,6 +6078,7 @@
     },
     "directx": {
       "binary32AdditiveProfile": "native-precise",
+      "groupsharedBoolStorage": "uint",
       "relativeWaveShuffleOutOfRange": "self"
     },
     "logaddexpBounds": {

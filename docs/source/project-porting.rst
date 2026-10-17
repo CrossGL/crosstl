@@ -894,7 +894,14 @@ and DirectX lower both to 32-lane software subgroups, and DirectX selects
 shuffles. DirectX lane moves now pass an exact bfloat16 value's bits rather
 than ``uint(float(x))``, which gave the 24 bfloat16 max, min and
 ``logaddexp`` scans wrong words on Direct3D 12 WARP; their DirectX artifacts
-are re-pinned. The software subgroup convergence pass now stages guarded inputs
+are re-pinned. ``contiguous_scan`` reads all 32 ``simdgroup_sums`` slots after
+writing one per SIMD-group, and DXC loads ``groupshared bool`` words with
+``!range [0, 2)``, which makes loads of never-written words undefined; with
+bool words the four contiguous bool maximum scans failed on WARP in two
+consecutive runs. The gate sets DirectX's ``groupshared_bool_storage =
+"uint"``, which keeps groupshared bools in ``uint`` words converted at each
+use, and re-pins the 24 bool maximum, minimum and product DirectX artifacts.
+The software subgroup convergence pass now stages guarded inputs
 around helpers that call ``cos``, ``sin``, ``sqrt`` or ``atan2``, end in
 ``if``/``else`` returns or call the generated precise binary32 square root,
 which complex ``logaddexp`` needs. Each target executes 1,824 dispatches with

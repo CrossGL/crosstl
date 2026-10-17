@@ -312,6 +312,9 @@ def _config(directory, target, entry):
                         "software_subgroup_width": SIMD_SIZE,
                         "relative_wave_shuffle_out_of_range": "self",
                         "binary32_additive_profile": "native-precise",
+                        # contiguous_scan reads all 32 simdgroup_sums slots
+                        # after writing one per SIMD-group.
+                        "groupshared_bool_storage": "uint",
                         "dispatch_region": region,
                     },
                     "opengl": {
@@ -1338,6 +1341,7 @@ def _expected_validation_contract():
         "softwareSubgroupWidth": {"targets": ["opengl", "directx"], "width": 32},
         "directx": {
             "binary32AdditiveProfile": "native-precise",
+            "groupsharedBoolStorage": "uint",
             "relativeWaveShuffleOutOfRange": "self",
         },
         "logaddexpBounds": {
