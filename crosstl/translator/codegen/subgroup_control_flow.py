@@ -303,6 +303,60 @@ def converge_subgroup_guarded_returns(ast, walk_ast, map_operator):
     return result
 
 
+def _always_returns(statements):
+    """Whether every path through ``statements`` ends in a return."""
+    if not statements:
+        return False
+    last = statements[-1]
+    if isinstance(last, ReturnNode):
+        return True
+    if isinstance(last, BlockNode):
+        return _always_returns(_statements(last))
+    if isinstance(last, IfNode) and last.else_branch is not None:
+        return all(
+            _always_returns(_statements(branch))
+            for branch in (last.then_branch, *last.else_if_bodies, last.else_branch)
+        )
+    return False
+
+
+_BITCASTS = {"asfloat", "asuint", "asint", "int", "uint"}
+
+
+def _generated_scalar_helper(function, walk_ast):
+    """A precise ``float(float)`` helper reading and writing only its locals."""
+    parameters = function.parameters or []
+    if (
+        _type_name(function.return_type) != "float"
+        or len(parameters) != 1
+        or _type_name(parameters[0].param_type) != "float"
+        or parameters[0].qualifiers
+        or getattr(parameters[0].param_type, "qualifiers", None)
+        or "precise" not in {attribute.name for attribute in function.attributes or []}
+    ):
+        return False
+    nodes = list(walk_ast(function.body))
+    names = {parameters[0].name} | {
+        node.name for node in nodes if isinstance(node, VariableNode)
+    }
+    callees = set()
+    for node in nodes:
+        if isinstance(node, FunctionCallNode):
+            if _operation(node) not in _BITCASTS or node.generic_args:
+                return False
+            callees.add(_operation(node))
+        elif isinstance(node, VariableNode):
+            if _type_name(node.var_type) not in _SCALARS or node.attributes:
+                return False
+        elif isinstance(node, (ArrayAccessNode, MemberAccessNode)):
+            return False
+    return all(
+        node.name in names | callees
+        for node in nodes
+        if isinstance(node, IdentifierNode)
+    )
+
+
 def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
     """Stage guarded inputs around pure subgroup wrappers in compute entries.
 
@@ -397,7 +451,16 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         )
     }
     value_types = scalar_types | set(value_structs)
-    pure_float_arities = {"min": 2, "max": 2, "exp": 1, "log": 1}
+    pure_float_arities = {
+        "min": 2,
+        "max": 2,
+        "exp": 1,
+        "log": 1,
+        "cos": 1,
+        "sin": 1,
+        "sqrt": 1,
+        "atan2": 2,
+    }
     empty_types = {
         node.name
         for node in nodes
@@ -406,6 +469,26 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             node.members or node.generic_params or node.inheritance or node.attributes
         )
     }
+    # The Metal frontend's software binary32 square root for precise::sqrt is
+    # total and deterministic, so a staged zero input can neither trap nor
+    # diverge; its normalization loop is what the proofs below cannot bound.
+    # Only the generated precise signature over private scalars counts.
+    trusted_helpers = {
+        name
+        for name, candidates in functions.items()
+        if re.fullmatch(r"__crossgl_metal_precise_sqrt_float_*", name)
+        and len(candidates) == 1
+        and _generated_scalar_helper(candidates[0], walk_ast)
+    }
+
+    def trusted_call(node, types):
+        return (
+            isinstance(node, FunctionCallNode)
+            and _operation(node) in trusted_helpers
+            and not node.generic_args
+            and len(node.arguments) == 1
+            and value_type(node.arguments[0], types) in {"float", "float32_t"}
+        )
 
     def pure_float_call(node, types):
         operation = _operation(node)
@@ -786,7 +869,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
                 proof[1] for proof in proofs
             )
         operation = _operation(node)
-        if pure_float_call(node, types):
+        if pure_float_call(node, types) or trusted_call(node, types):
             proofs = [
                 expression_inputs(argument, parameters, types, visiting, initialized)
                 for argument in node.arguments
@@ -1128,7 +1211,7 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
             proof = None
             if (
                 statements
-                and isinstance(statements[-1], ReturnNode)
+                and _always_returns(statements)
                 and _type_name(function.return_type) in value_types
                 and not getattr(function, "generic_params", None)
                 and not any(

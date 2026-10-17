@@ -17014,6 +17014,42 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "int64_t"
         return literal_type
 
+    def hlsl_pointer_offset_result_type(self, operator, left_type, right_type):
+        """Return the pointer's own type for ``p + n``, ``n + p`` and ``p - n``.
+
+        Offsetting a storage pointer or buffer view keeps its element type, so
+        ``(p + n)[i]`` reads the element ``p`` points to, never the offset's.
+        """
+
+        def addressable(vtype):
+            return (
+                self.hlsl_pointer_element_type(vtype) is not None
+                or self.hlsl_typed_buffer_element_type(
+                    vtype,
+                    {
+                        "Buffer",
+                        "StructuredBuffer",
+                        "RWBuffer",
+                        "RWStructuredBuffer",
+                        "RasterizerOrderedBuffer",
+                        "RasterizerOrderedStructuredBuffer",
+                    },
+                )
+                is not None
+            )
+
+        def offset(vtype):
+            info = self.hlsl_integer_arithmetic_type_info(vtype)
+            return info is not None and info["width"] == 1
+
+        if operator not in {"+", "-"}:
+            return None
+        if addressable(left_type) and offset(right_type):
+            return left_type
+        if operator == "+" and offset(left_type) and addressable(right_type):
+            return right_type
+        return None
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -17042,6 +17078,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return right_type
             if operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
                 return self.hlsl_boolean_expression_result_type(left_type, right_type)
+            pointer_type = self.hlsl_pointer_offset_result_type(
+                operator, left_type, right_type
+            )
+            if pointer_type is not None:
+                return pointer_type
             if self.is_hlsl_complex64_type(left_type) or self.is_hlsl_complex64_type(
                 right_type
             ):

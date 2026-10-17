@@ -883,6 +883,12 @@ two batches, one and three channel blocks, and partial output tiles in both
 directions. This is a 9/17,832 increment; it does not run the upstream MLX
 test suite or redirect the MLX host runtime.
 
+DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
+pointer or buffer view ``p`` rather than of the integer offset, so values read
+through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,
+half or bfloat16 encoding; this re-pins the 18 fused gated-delta DirectX
+artifacts.
+
 All 24 entries use checked metadata rather than trusted index-range assertions.
 The runtime validates six conditions against uploaded shape, stride and size
 values. Each numerical case checks 32 output guards and observes seven inputs

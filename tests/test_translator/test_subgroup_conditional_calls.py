@@ -350,10 +350,161 @@ def test_unproven_predicates_and_shared_results_are_not_lifted(target, body):
         generator.generate_stage(ast, "compute")
 
 
+def _converges(target, helpers):
+    ast = parse(_source(helpers=helpers))
+    generator = _codegen(target)
+    entries = (
+        generator.hlsl_software_subgroup_stage_entries(ast)
+        if target == "directx"
+        else generator.glsl_software_subgroup_stage_entries(ast)
+    )
+    lowered = converge_subgroup_conditional_calls(
+        ast, entries, generator.walk_ast, generator.map_operator
+    )
+    return ast, generator, lowered is not ast
+
+
+# MLX's complex log1p ends in an if/else whose arms both return, and its
+# logaddexp combiner calls cos, sin, sqrt and atan2 on staged inputs.
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize(
+    "pick",
+    (
+        """float pick(float value) {
+            float angle = atan2(value, 1.0);
+            if (value < 0.5) {
+                float square = value * value;
+                if (square == 0.0) { return angle; }
+                return cos(angle) + sin(square);
+            } else {
+                return sqrt(value);
+            }
+        }""",
+        """float pick(float value) {
+            if (value < 0.5) { return cos(value); }
+            else if (value < 1.0) { return sin(value); }
+            else { return value; }
+        }""",
+        "float pick(float value) { { if (value < 0.5) { return cos(value); } return sin(value); } }",
+    ),
+)
+def test_helpers_returning_from_every_branch_converge(tmp_path, target, pick):
+    helpers = (
+        pick + "\nfloat wrapped(float value) { return WavePrefixSum(pick(value)); }"
+    )
+    ast, generator, converged = _converges(target, helpers)
+    assert converged
+    generated = generator.generate_stage(ast, "compute")
+    assert "subgroup_enabled" in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize(
+    "pick",
+    (
+        "float pick(float value) { if (value < 0.5) { return cos(value); } }",
+        "float pick(float value) { if (value < 0.5) { return cos(value); } else if (value < 1.0) { return sin(value); } }",
+        "float pick(float value) { { if (value < 0.5) { return cos(value); } } }",
+        "float pick(float value) { if (value < 0.5) { return cos(value); } else { value = 1.0; } }",
+    ),
+)
+def test_helpers_that_can_fall_off_their_end_stay_guarded(target, pick):
+    helpers = (
+        pick + "\nfloat wrapped(float value) { return WavePrefixSum(pick(value)); }"
+    )
+    ast, generator, converged = _converges(target, helpers)
+    assert not converged
+    with pytest.raises(ValueError):
+        generator.generate_stage(ast, "compute")
+
+
+# A stand-in with the generated helper's shape: a precise float(float) over
+# private scalars whose normalization loop the proofs cannot bound.
+PRECISE_SQRT = """@precise
+float __crossgl_metal_precise_sqrt_float(float value) {
+    uint bits = asuint(value);
+    uint magnitude = bits & 0x7fffffffu;
+    if (magnitude == 0u) { return asfloat(bits); }
+    uint significand = magnitude;
+    while ((significand & 0x00800000u) == 0u) { significand <<= 1u; }
+    return asfloat(significand);
+}"""
+SQRT_CALL = (
+    "float wrapped(float value) "
+    "{ return WavePrefixSum(__crossgl_metal_precise_sqrt_float(value)); }"
+)
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("suffix", ("", "_", "__"))
+def test_generated_precise_square_root_helper_converges(tmp_path, target, suffix):
+    # The frontend appends underscores when a user function owns the name.
+    name = "__crossgl_metal_precise_sqrt_float"
+    helpers = f"{PRECISE_SQRT}\n{SQRT_CALL}".replace(name, name + suffix)
+    ast, generator, converged = _converges(target, helpers)
+    assert converged
+    generated = generator.generate_stage(ast, "compute")
+    assert "subgroup_enabled" in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize(
+    "helpers",
+    (
+        # Memory effects, buffer reads and foreign calls are never trusted.
+        PRECISE_SQRT.replace(
+            "uint bits = asuint(value);",
+            "uint bits = asuint(value); results[0] = bits;",
+        )
+        + SQRT_CALL,
+        PRECISE_SQRT.replace("asuint(value);", "asuint(inputs[0]);") + SQRT_CALL,
+        PRECISE_SQRT.replace("asuint(value);", "asuint(exp(value));") + SQRT_CALL,
+        # Only the generated precise float(float) signature counts.
+        PRECISE_SQRT.replace("@precise\n", "") + SQRT_CALL,
+        PRECISE_SQRT.replace("(float value)", "(inout float value)") + SQRT_CALL,
+        PRECISE_SQRT.replace("(float value)", "(float value, float other)")
+        + SQRT_CALL.replace("(value))", "(value, value))"),
+        PRECISE_SQRT + PRECISE_SQRT.replace("(float value)", "(int value)") + SQRT_CALL,
+        # The same loop under any other name stays unproven.
+        (PRECISE_SQRT + SQRT_CALL).replace(
+            "__crossgl_metal_precise_sqrt_float", "normalize_bits"
+        ),
+        (PRECISE_SQRT + SQRT_CALL).replace(
+            "__crossgl_metal_precise_sqrt_float", "__crossgl_metal_precise_sqrt_float2"
+        ),
+    ),
+)
+def test_untrusted_square_root_helpers_stay_guarded(target, helpers):
+    ast, generator, converged = _converges(target, helpers)
+    assert not converged
+    with pytest.raises(ValueError):
+        generator.generate_stage(ast, "compute")
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_frontend_precise_square_root_converges_in_conditional_scans(tmp_path, target):
+    source = _native_source(128, 1, "sqrt")
+    _, descriptor, _ = _package(tmp_path, target, "float", (32, 4, 1), source=source)
+    (artifact,) = (
+        path
+        for path in (tmp_path / "out").rglob("*")
+        if path.suffix in {".hlsl", ".glsl"}
+    )
+    generated = artifact.read_text(encoding="utf-8")
+    # GLSL reserves double underscores, so its helper drops the prefix.
+    assert "crossgl_metal_precise_sqrt_float" in generated
+    assert "subgroup_enabled" in generated
+    _compile(generated, target, tmp_path)
+
+
 def _native_source(size, selected, operation="sum"):
     scan = "return simd_prefix_exclusive_sum(value);"
+    if operation == "sqrt":
+        scan = "return simd_prefix_exclusive_sum(metal::precise::sqrt(value));"
     combine = ""
-    if operation != "sum":
+    if operation not in {"sum", "sqrt"}:
         comparison = "<=" if operation == "min" else ">="
         fill = "0x7f800000u" if operation == "min" else "0xff800000u"
         combine = f"""float combine(float a, float b) {{
@@ -397,7 +548,7 @@ kernel void conditional_scan(device float* inputWords [[buffer(0)]],
 
 @pytest.mark.parametrize("shape", ((7, 5, 1), (32, 4, 1)))
 @pytest.mark.parametrize("selected", (0, 1, 3))
-@pytest.mark.parametrize("operation", ("sum", "min", "max"))
+@pytest.mark.parametrize("operation", ("sum", "min", "max", "sqrt"))
 def test_conditional_calls_preserve_guarded_effects_on_device(
     tmp_path, shape, selected, operation
 ):
@@ -412,7 +563,13 @@ def test_conditional_calls_preserve_guarded_effects_on_device(
         shape,
         source=_native_source(size, selected, operation),
     )
-    values = [(index % 13 - 6) * 0.125 for index in range(96)]
+    # Square-root inputs stay perfect squares after either round's +1, so
+    # every root and every partial sum is exact in binary32.
+    values = (
+        [(0.0, 0.5625, 3.515625)[index % 3] for index in range(96)]
+        if operation == "sqrt"
+        else [(index % 13 - 6) * 0.125 for index in range(96)]
+    )
     marker = 0xBAD01234
     expected = [marker] * (3 * size * 4)
     for group in range(3):
@@ -425,9 +582,11 @@ def test_conditional_calls_preserve_guarded_effects_on_device(
                 lane = invocation % 32
                 for round in range(2):
                     prefix = [values[group * 32 + i] + round for i in range(lane)]
+                    if operation == "sqrt":
+                        prefix = [math.sqrt(item) for item in prefix]
                     value = (
                         sum(prefix, -0.0)
-                        if operation == "sum"
+                        if operation in {"sum", "sqrt"}
                         else (
                             min(prefix, default=math.inf)
                             if operation == "min"

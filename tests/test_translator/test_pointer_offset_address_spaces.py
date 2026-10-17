@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import struct
 import sys
 from pathlib import Path
 
@@ -818,3 +819,155 @@ def test_pointer_array_returns_execute_natively(tmp_path, case):
         observations = record["details"]["inputObservations"]
         assert len(observations) == 2
         assert all(item["unchanged"] for item in observations.values())
+
+
+# Offsetting a pointer keeps its element type: ``(p + n)[i]`` and
+# ``*(p + n)`` read the element ``p`` points to whatever the offset's type.
+# Exact in binary16 and bfloat16; 0.75 and -1.5 expose integer truncation.
+TYPED_OFFSET_VALUES = (9.5, 0.75, -1.5, 2.25, 3.0, -4.5, 5.25, 6.0)
+TYPED_OFFSET_READS = (
+    ("(f + tid)[1]", 2),
+    ("*(f + signed_tid)", 1),
+    ("(h + tid)[1]", 2),
+    ("(tid + h)[0]", 1),
+    ("(b + signed_tid)[1]", 2),
+    ("*(b + tid)", 1),
+    ("(b + 3)[tid]", 4),
+    ("(b - 1)[tid + 2u]", 2),
+)
+TYPED_OFFSET_THREADS = 3
+
+
+def _typed_offset_source():
+    width = len(TYPED_OFFSET_READS)
+    stores = "\n    ".join(
+        f"results[{width}u * tid + {slot + 1}u] = static_cast<float>({expression});"
+        for slot, (expression, _) in enumerate(TYPED_OFFSET_READS)
+    )
+    return f"""#include <metal_stdlib>
+using namespace metal;
+kernel void typed_offsets(const device float* floats [[buffer(0)]],
+                          const device half* halves [[buffer(1)]],
+                          const device bfloat* brains [[buffer(2)]],
+                          device float* results [[buffer(3)]],
+                          device bfloat* narrowed [[buffer(4)]],
+                          uint tid [[thread_position_in_grid]]) {{
+    int signed_tid = int(tid);
+    auto f = floats + 1;
+    auto h = halves + 1;
+    auto b = brains + 1;
+    {stores}
+    (narrowed + tid)[1] = static_cast<bfloat>((f + tid)[1] * 2.0f);
+}}
+"""
+
+
+def _float_bits(value):
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _typed_offset_request(root, target):
+    from crosstl.project.runtime_value_encoding import FLOAT16_BITS, FLOAT32_BITS
+    from tests.test_translator.test_bfloat_buffer_runtime import _storage
+
+    original, descriptor, package = _package(
+        root,
+        target,
+        "float",
+        (1, 1, 1),
+        source=_typed_offset_source(),
+        software_subgroups=False,
+    )
+    marker = _float_bits(123.0)
+    width = len(TYPED_OFFSET_READS)
+    results = [marker] * (width * TYPED_OFFSET_THREADS + 2)
+    narrowed = [0x3EAA] * (TYPED_OFFSET_THREADS + 2)
+    expected_results = list(results)
+    expected_narrowed = list(narrowed)
+    for tid in range(TYPED_OFFSET_THREADS):
+        for slot, (_, index) in enumerate(TYPED_OFFSET_READS):
+            value = TYPED_OFFSET_VALUES[tid + index]
+            expected_results[width * tid + slot + 1] = _float_bits(value)
+        doubled = 2.0 * TYPED_OFFSET_VALUES[tid + 2]
+        expected_narrowed[tid + 1] = _float_bits(doubled) >> 16
+
+    def words(values, encoding=FLOAT32_BITS, dtype="float32"):
+        values = list(values)
+        return {
+            "dtype": dtype,
+            "encoding": encoding,
+            "values": values,
+            "shape": [len(values)],
+        }
+
+    inputs = {
+        "floats": words(_float_bits(value) for value in TYPED_OFFSET_VALUES),
+        # OpenGL widens binary16 storage to binary32 words.
+        "halves": (
+            words(_float_bits(value) for value in TYPED_OFFSET_VALUES)
+            if target == "opengl"
+            else words(
+                (
+                    struct.unpack("<H", struct.pack("<e", value))[0]
+                    for value in TYPED_OFFSET_VALUES
+                ),
+                FLOAT16_BITS,
+                "float16",
+            )
+        ),
+        "brains": _storage(
+            target, [_float_bits(value) >> 16 for value in TYPED_OFFSET_VALUES]
+        ),
+        "results": words(results),
+        "narrowed": _storage(target, narrowed),
+    }
+    expected = _bound_values(
+        descriptor,
+        {
+            "results": words(expected_results),
+            "narrowed": _storage(target, expected_narrowed),
+        },
+    )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        _bound_values(descriptor, inputs),
+        expected,
+        {"workgroupCount": [TYPED_OFFSET_THREADS, 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    return original, request, expected
+
+
+def test_directx_offset_pointer_reads_decode_their_element_type(tmp_path):
+    _, request, _ = _typed_offset_request(tmp_path, "directx")
+    generated = request.artifact_path.read_text(encoding="utf-8")
+    body = generated[generated.index("CSMain") :]
+    # No float, binary16 or bfloat16 element passes through an integer.
+    assert "__crossgl_uint_to_float" not in body
+    assert body.count("__crossgl_bfloat16_to_float(") == 4
+    assert "__crossgl_bfloat16_from_float(" in body
+    assert "__crossgl_bfloat16_to_float(uint(__crossgl_bfloat16_from_float" not in body
+    from tests.test_translator.test_half_buffer_runtime import _validate_half
+
+    if shutil.which("dxc"):
+        module = _validate_half(request.artifact_path, tmp_path, "directx")
+        assert module.is_file() and module.stat().st_size
+
+
+def test_offset_pointer_reads_keep_their_element_type_natively(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required pointer-offset execution")
+    from tests.test_translator.test_half_buffer_runtime import _validate_half
+
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    original, request, expected = _typed_offset_request(tmp_path, target)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=original,
+        original_entry="typed_offsets",
+        validate=_validate_half,
+    )

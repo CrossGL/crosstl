@@ -134,7 +134,11 @@ def test_precise_locals_do_not_hide_storage_or_initialization(target, declaratio
         "max(half(value), value)",
         "max(value, half(value))",
         "exp(float2(value, value))",
-        "sqrt(value)",
+        "tan(value)",
+        "sqrt(value, value)",
+        "atan2(value)",
+        "cos(inputs[0])",
+        "sin(int(value))",
     ),
 )
 def test_unproved_math_arguments_and_conversions_remain_guarded(target, expression):

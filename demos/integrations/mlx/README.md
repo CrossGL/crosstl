@@ -1015,7 +1015,11 @@ element and carries the state's error between chunks as a row 2-norm through
 each step's `g (I - beta k k^T)`; it stays below 2^-7 of each output's root
 mean square, and the Metal outputs use under 3% of it. A float64 simulation
 of the fused kernel's pointers, tail masks and tile transposes matches the
-reference, and 14 injected defects are rejected.
+reference, and 14 injected defects are rejected. DirectX used to give an
+offset pointer such as `v_ + dv_idx` the type of its integer offset, so
+`static_cast<float>((v_ + dv_idx)[i])` passed each value through an unsigned
+integer and bfloat16 loads and stores lost their encoding; `p + n`, `n + p`
+and `p - n` now keep the pointer's element type.
 
 Every dispatch of either kernel pads each input with 16 NaNs and checks 16
 guards per output and that every input is unchanged. Metal also runs the
