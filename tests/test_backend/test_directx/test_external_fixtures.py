@@ -729,7 +729,9 @@ EXTERNAL_FIXTURES = [
         contains=(
             "static const uint PSInput_Val = 3;",
             "uint PSMain(PSInput input) @ gl_FragData[0]",
-            "return input.Func();",
+            "return PSInput_Func(input);",
+            "uint PSInput_Func(in PSInput __this) {",
+            "return PSInput_Val;",
         ),
     ),
     ExternalFixture(
@@ -1757,7 +1759,8 @@ EXTERNAL_FIXTURES = [
             "struct SomeStruct {",
             "void Fun()",
             "rayQuery RayQ1 = RayQuery<0>();",
-            "Payload.DummyMethod();",
+            "void SomeStruct_DummyMethod(in SomeStruct __this) {",
+            "SomeStruct_DummyMethod(Payload);",
         ),
     ),
     ExternalFixture(

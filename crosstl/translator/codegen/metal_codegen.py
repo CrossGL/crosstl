@@ -331,6 +331,14 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .metal_hlsl_functions import MetalHlslFunctionMixin
+from .metal_hlsl_matrix import (
+    hlsl_emulated_matrix_shape,
+    hlsl_emulated_matrix_type_name,
+    metal_hlsl_matrix_prelude,
+)
+from .metal_hlsl_resources import MetalHlslResourceMixin
+from .metal_hlsl_values import MetalHlslValueMixin
 from .metal_refusals import metal_refusals
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -453,7 +461,7 @@ class CharTypeMapper:
         return char_type_mapping.get(vtype, vtype)
 
 
-class MetalCodeGen:
+class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctionMixin):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
     BINARY_PRECEDENCE = {
@@ -876,6 +884,7 @@ class MetalCodeGen:
         self.metal_program_scope_groupshared_globals = set()
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
         self.metal_lowered_program_scope_groupshared_global_ids = set()
+        self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
         self.metal_type_aliases = {}
         self.cbuffer_variables = []
@@ -883,6 +892,13 @@ class MetalCodeGen:
         self.cbuffer_parameter_names = {}
         self.cbuffer_member_references = {}
         self.ambiguous_cbuffer_members = set()
+        self.metal_hlsl_cbuffer_plans = {}
+        self.metal_hlsl_struct_plans = {}
+        self.metal_hlsl_structured_buffers = {}
+        self.metal_hlsl_cbuffer_array_members = {}
+        self.metal_runtime_initialized_constants = set()
+        self.metal_emulated_matrix_shapes = set()
+        self.metal_prelude_insertion_index = 0
         self.hlsl_program_constant_global_ids = set()
         self.cbuffers_by_name = {}
         self.user_function_names = set()
@@ -953,6 +969,10 @@ class MetalCodeGen:
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
         self.required_metal_inverse_helpers = set()
+        self.required_metal_integer_dot_helper = False
+        self.metal_argument_substitutions = {}
+        self.metal_writeback_statement_ids = set()
+        self.metal_writeback_temporary_count = 0
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
         self.required_metal_ray_query_helpers = set()
@@ -1854,97 +1874,6 @@ class MetalCodeGen:
                 pending.extend(candidates)
         return reachable_names
 
-    def resource_binding_records(self):
-        """Describe the argument-table slot assigned to each resource.
-
-        Valid after ``generate``. Each record names the source resource, its Metal
-        namespace (``buffer``, ``texture`` or ``sampler``) and slot, the slot count
-        for arrays, and the HLSL register that bound it when the source used one.
-        Hidden buffers synthesized for a resource (structured-buffer lengths and
-        counters) carry ``of`` with the owning resource name.
-        """
-
-        def register_of(node):
-            return self.metal_hlsl_register_bindings_by_id.get(id(node))
-
-        def count_of(node):
-            try:
-                return max(int(self.global_resource_shape(node)[1] or 1), 1)
-            except Exception:  # noqa: BLE001 - shape inference is best effort here
-                return 1
-
-        records = []
-        for cbuffer in self.cbuffer_variables:
-            records.append(
-                {
-                    "name": getattr(cbuffer, "name", None),
-                    "parameter": self.cbuffer_parameter_name(cbuffer),
-                    "kind": "constant-buffer",
-                    "namespace": "buffer",
-                    "binding": self.cbuffer_binding_indices.get(id(cbuffer), 0),
-                    "count": 1,
-                    "register": register_of(cbuffer),
-                }
-            )
-        groups = (
-            ("buffer", "buffer", self.metal_buffer_resource_variables),
-            ("texture", "texture", self.texture_variables),
-            ("acceleration-structure", "buffer", self.acceleration_structure_variables),
-            ("visible-function-table", "buffer", self.visible_function_table_variables),
-            (
-                "intersection-function-table",
-                "buffer",
-                self.intersection_function_table_variables,
-            ),
-            ("structured-buffer", "buffer", self.structured_buffer_variables),
-            ("buffer-block", "buffer", self.glsl_buffer_block_variables),
-        )
-        for kind, namespace, entries in groups:
-            for entry in entries:
-                node, binding = entry[0], entry[1]
-                record = {
-                    "name": getattr(node, "name", None),
-                    "kind": kind,
-                    "namespace": namespace,
-                    "binding": binding,
-                    "count": count_of(node),
-                    "register": register_of(node),
-                }
-                if (
-                    kind in {"texture", "structured-buffer", "buffer"}
-                    and len(entry) > 2
-                ):
-                    record["type"] = str(entry[2])
-                records.append(record)
-        for kind, entries in (
-            ("structured-buffer-length", self.structured_buffer_length_variables),
-            ("structured-buffer-counter", self.structured_buffer_counter_variables),
-        ):
-            for node, binding, _type, _array_size in entries:
-                records.append(
-                    {
-                        "name": None,
-                        "of": getattr(node, "name", None),
-                        "kind": kind,
-                        "namespace": "buffer",
-                        "binding": binding,
-                        "count": count_of(node),
-                        "register": None,
-                    }
-                )
-        for node, binding, _array_size in self.sampler_variables:
-            records.append(
-                {
-                    "name": getattr(node, "name", None),
-                    "kind": "sampler",
-                    "namespace": "sampler",
-                    "binding": binding,
-                    "count": count_of(node),
-                    "register": register_of(node),
-                }
-            )
-        return records
-
     def generate_stage(self, ast, shader_type):
         """Generate Metal source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
@@ -1970,7 +1899,12 @@ class MetalCodeGen:
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
+        ast = self.rename_metal_reserved_program_identifiers(ast)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
+        self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)
+        self.metal_program_identifier_names = (
+            self.collect_metal_program_identifier_names(ast)
+        )
 
         self.texture_variables = []
         self.acceleration_structure_variables = []
@@ -1990,6 +1924,7 @@ class MetalCodeGen:
         self.metal_program_scope_groupshared_globals = set()
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
         self.metal_lowered_program_scope_groupshared_global_ids = set()
+        self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
@@ -2105,7 +2040,12 @@ class MetalCodeGen:
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_image_atomic_compare_helpers = set()
+        self.required_pointer_atomic_compare_helpers = set()
         self.required_metal_inverse_helpers = set()
+        self.required_metal_integer_dot_helper = False
+        self.metal_argument_substitutions = {}
+        self.metal_writeback_statement_ids = set()
+        self.metal_writeback_temporary_count = 0
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
         self.required_metal_ray_query_helpers = set()
@@ -2115,6 +2055,7 @@ class MetalCodeGen:
         self.unsupported_glsl_buffer_block_variable_types = {}
         self.current_unsupported_glsl_buffer_block_parameters = set()
         self.current_unsupported_glsl_buffer_block_local_variables = set()
+        self.metal_emulated_matrix_shapes = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
         self.current_metal_mesh_output_config = None
@@ -2158,6 +2099,11 @@ class MetalCodeGen:
             layout = self.metal_union_layout_contract(node)
             if layout is not None:
                 self.metal_union_layouts[node.name] = layout
+        self.collect_metal_hlsl_buffer_layouts(ast)
+        if self.metal_hlsl_cbuffer_plans:
+            self.cbuffer_member_references = self.collect_cbuffer_member_references(
+                self.cbuffer_variables
+            )
         self.metal_generated_struct_names = set()
         self.metal_vertex_entry_input_struct_names = (
             self.collect_metal_stage_entry_parameter_struct_names(
@@ -2262,6 +2208,21 @@ class MetalCodeGen:
             )
             for node in nodes
         }
+        thread_private_globals, thread_private_ids = (
+            self.collect_metal_lowered_thread_private_globals(
+                ast, target_stage, global_vars, all_functions
+            )
+        )
+        for function_id, nodes in thread_private_globals.items():
+            self.metal_lowered_program_scope_groupshared_globals_by_function.setdefault(
+                function_id, []
+            ).extend(nodes)
+        self.metal_lowered_program_scope_groupshared_global_ids.update(
+            thread_private_ids
+        )
+        self.metal_runtime_initialized_constants = (
+            self.collect_metal_runtime_initialized_constants(global_vars)
+        )
         self.metal_spirv_interface_variables = [
             node for node in global_vars if self.is_spirv_stage_interface_layout(node)
         ]
@@ -2294,6 +2255,10 @@ class MetalCodeGen:
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
         self.required_metal_inverse_helpers = set()
+        self.required_metal_integer_dot_helper = False
+        self.metal_argument_substitutions = {}
+        self.metal_writeback_statement_ids = set()
+        self.metal_writeback_temporary_count = 0
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
         self.required_metal_ray_query_helpers = set()
@@ -2492,6 +2457,7 @@ class MetalCodeGen:
         if self.uses_metal_raytracing_namespace(ast, global_vars, all_functions):
             code += "using namespace metal::raytracing;\n"
         code += "\n"
+        self.metal_prelude_insertion_index = len(code)
         if self.requires_metal_system_thread_scope:
             code += self.generate_metal_system_thread_scope_support()
         if self.has_geometry_stage(ast, target_stage):
@@ -2988,6 +2954,27 @@ class MetalCodeGen:
                 )
             else:
                 mapped_type = self.map_type(vtype)
+                if (
+                    var_name in self.metal_runtime_initialized_constants
+                    and not array_suffix
+                ):
+                    qualifier = self.global_variable_qualifier(node)
+                    self.record_metal_program_scope_value_global(
+                        var_name, vtype, qualifier, node
+                    )
+                    init_expr = self.generate_expression_with_expected(
+                        getattr(node, "initial_value", None),
+                        getattr(node, "var_type", vtype),
+                    )
+                    # Metal program-scope constants need constant expressions;
+                    # a source constant computed by a function call becomes an
+                    # accessor that each use calls.
+                    code += (
+                        f"inline {mapped_type} {var_name}() {{\n"
+                        f"    return {init_expr};\n"
+                        "}\n"
+                    )
+                    continue
                 declaration = format_c_style_array_declaration(mapped_type, var_name)
                 if array_suffix:
                     declaration = f"{declaration}{array_suffix}"
@@ -3028,6 +3015,9 @@ class MetalCodeGen:
             code += self.generate_cbuffers(ast)
 
         stage_entry_names = self.stage_entry_names(ast, target_stage)
+        self.metal_compute_only_program = self.metal_program_is_compute_only(
+            ast, target_stage
+        )
 
         functions = order_functions_by_dependencies(
             getattr(ast, "functions", []),
@@ -3112,11 +3102,20 @@ class MetalCodeGen:
 
         code += self.generate_image_atomic_compare_helpers()
         code += self.generate_buffer_atomic_compare_helpers()
+        code += self.generate_pointer_atomic_compare_helpers()
         code += self.generate_metal_wave_helpers()
         code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_metal_inverse_helpers()
+        code += self.generate_metal_integer_dot_helper()
         code += functions_code
+        if self.metal_emulated_matrix_shapes:
+            index = self.metal_prelude_insertion_index
+            code = (
+                code[:index]
+                + metal_hlsl_matrix_prelude(self.metal_emulated_matrix_shapes)
+                + code[index:]
+            )
         return code
 
     def collect_metal_atomic_fence_calls(self, ast):
@@ -3868,6 +3867,10 @@ class MetalCodeGen:
             )
 
         for node in cbuffers:
+            layout_plan = self.metal_hlsl_cbuffer_plans.get(id(node))
+            if layout_plan is not None:
+                code += self.metal_hlsl_layout_struct_code(layout_plan)
+                continue
             if isinstance(node, StructNode):
                 code += f"struct {node.name} {{\n"
                 members = getattr(node, "members", [])
@@ -4093,6 +4096,18 @@ class MetalCodeGen:
             return {"name": node.name, "dependencies": set(), "code": code}
 
         is_union = node.name in self.metal_union_layouts
+        layout_plan = self.metal_hlsl_struct_plans.get(node.name)
+        if layout_plan is not None and not is_union:
+            dependencies = {
+                member.nested_struct
+                for member in layout_plan.members
+                if member.nested_struct and member.nested_struct != node.name
+            }
+            return {
+                "name": node.name,
+                "dependencies": dependencies,
+                "code": self.metal_hlsl_layout_struct_code(layout_plan),
+            }
         if not is_union:
             self.validate_struct_member_semantic_types(node)
         declaration_kind = "union" if is_union else "struct"
@@ -4881,6 +4896,7 @@ class MetalCodeGen:
         vertex_stage_input_parameters = []
         fragment_stage_input_parameters = []
         stage_builtin_parameter_alias_declarations = []
+        value_array_parameter_copy_statements = []
         vertex_stage_input_alias_declarations = []
         fragment_stage_input_alias_declarations = []
         stage_output_parameters = []
@@ -5076,10 +5092,31 @@ class MetalCodeGen:
             )
             if address_space is not None:
                 self.current_address_space_variables[p.name] = address_space
-            if self.is_readonly_raw_buffer_parameter(raw_param_type, p, shader_type):
+            value_array_dimensions = None
+            if shader_type is None:
+                value_array_dimensions = self.metal_value_array_parameter_dimensions(
+                    raw_param_type,
+                    p,
+                    self.map_resource_type_with_format(raw_param_type, p),
+                )
+                if (
+                    value_array_dimensions is not None
+                    and not self.metal_value_array_parameter_is_mutated(func, p.name)
+                ):
+                    value_array_dimensions = None
+            if (
+                value_array_dimensions is None
+                and self.is_readonly_raw_buffer_parameter(
+                    raw_param_type, p, shader_type
+                )
+            ):
                 self.current_readonly_raw_buffer_parameters.add(p.name)
-            readonly_parameter_reason = self.readonly_metal_parameter_reason(
-                raw_param_type, p, shader_type
+            readonly_parameter_reason = (
+                None
+                if value_array_dimensions is not None
+                else self.readonly_metal_parameter_reason(
+                    raw_param_type, p, shader_type
+                )
             )
             if readonly_parameter_reason is not None:
                 self.current_readonly_metal_parameters.add(p.name)
@@ -5244,9 +5281,23 @@ class MetalCodeGen:
                     raw_param_type, semantic, shader_type, p
                 )
             param_attr += self.metal_conditional_resource_attribute(p)
-            declaration = self.format_parameter_declaration(
-                raw_param_type, param_type, p.name, p, shader_type
-            )
+            if value_array_dimensions is not None:
+                input_name = self.metal_value_array_input_name(
+                    p.name,
+                    reserved_parameter_names
+                    | self.metal_function_local_variable_names(func),
+                )
+                reserved_parameter_names.add(input_name)
+                declaration = format_c_style_array_declaration(param_type, input_name)
+                value_array_parameter_copy_statements.extend(
+                    self.metal_value_array_copy_statements(
+                        param_type, p.name, input_name, value_array_dimensions
+                    )
+                )
+            else:
+                declaration = self.format_parameter_declaration(
+                    raw_param_type, param_type, p.name, p, shader_type
+                )
             if any(
                 str(getattr(attribute, "name", "")).lower() == "maybe_unused"
                 for attribute in getattr(p, "attributes", []) or []
@@ -5265,7 +5316,9 @@ class MetalCodeGen:
                 )
                 continue
             params.append(f"{declaration}{param_attr}")
-            if self.structured_buffer_parameter_requires_length(
+            if self.is_structured_buffer_type(
+                raw_param_type
+            ) and self.structured_buffer_parameter_requires_length(
                 self.current_function_name, p.name
             ):
                 length_name = self.structured_buffer_length_parameter_name(p.name)
@@ -5402,6 +5455,9 @@ class MetalCodeGen:
                 params_str, self.current_function_name
             )
             params_str = self.append_required_cbuffer_parameters(
+                params_str, self.current_function_name
+            )
+            params_str = self.append_required_thread_private_global_parameters(
                 params_str, self.current_function_name
             )
             params_str = self.append_required_global_resource_parameters(
@@ -5940,6 +5996,8 @@ class MetalCodeGen:
             code += f"    {diagnostic}\n"
         for declaration in stage_builtin_parameter_alias_declarations:
             code += f"    {declaration}\n"
+        for statement in value_array_parameter_copy_statements:
+            code += f"    {statement}\n"
         for declaration in vertex_stage_input_alias_declarations:
             code += f"    {declaration}\n"
         for declaration in fragment_stage_input_alias_declarations:
@@ -7656,18 +7714,34 @@ class MetalCodeGen:
     def collect_cbuffer_member_references(self, cbuffers):
         references = {}
         ambiguous_members = collect_duplicate_cbuffer_member_names(cbuffers)
+        layout_plans = getattr(self, "metal_hlsl_cbuffer_plans", {}) or {}
         for cbuffer in cbuffers:
             parameter_name = self.cbuffer_parameter_name(cbuffer)
+            plan = layout_plans.get(id(cbuffer))
             for member in getattr(cbuffer, "members", []) or []:
                 member_name = getattr(member, "name", None)
                 if not member_name or member_name in ambiguous_members:
                     continue
-                references[member_name] = f"{parameter_name}.{member_name}"
+                reference = f"{parameter_name}.{member_name}"
+                layout_member = plan.member(member_name) if plan is not None else None
+                if (
+                    layout_member is not None
+                    and layout_member.read_conversion
+                    and layout_member.array_count is None
+                ):
+                    reference = f"{layout_member.read_conversion}({reference})"
+                references[member_name] = reference
         self.ambiguous_cbuffer_members = ambiguous_members
         return references
 
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as Metal source."""
+        if id(stmt) not in self.metal_writeback_statement_ids:
+            writebacks = self.metal_reference_argument_writebacks(stmt)
+            if writebacks:
+                return self.generate_statement_with_argument_writebacks(
+                    stmt, indent, writebacks
+                )
         indent_str = "    " * indent
         if isinstance(stmt, (VariableNode, BackendVariableNode)):
             var_type = self.local_variable_declared_type(stmt)
@@ -7908,9 +7982,16 @@ class MetalCodeGen:
             if tail_return is not None:
                 return tail_return
             expr_code = self.generate_expression_statement(stmt)
-            return self.generate_statement_code(expr_code, indent)
+            return self.generate_statement_code(
+                expr_code, indent
+            ) + self.metal_image_store_fence_statement(
+                getattr(stmt, "expression", None), indent_str
+            )
         else:
-            return f"{indent_str}{self.generate_discarded_expression(stmt)};\n"
+            return (
+                f"{indent_str}{self.generate_discarded_expression(stmt)};\n"
+                f"{self.metal_image_store_fence_statement(stmt, indent_str)}"
+            )
 
     def generate_tail_expression_statement(self, stmt, indent=0):
         if not getattr(stmt, "is_tail_expression", False):
@@ -9151,6 +9232,9 @@ class MetalCodeGen:
             rendered = self.generate_expression(expr)
         finally:
             self.current_expression_expected_type = previous_expected_type
+        rendered = self.metal_implicit_vector_conversion(
+            expr, rendered, expected_type_name
+        )
         # Native Metal math on bfloat produces float/half values and Metal does
         # not implicitly convert those values back to bfloat.  Expected-type
         # boundaries are the source-language conversion point, so preserve the
@@ -9589,9 +9673,11 @@ class MetalCodeGen:
             builtin_type = self.metal_compute_builtin_result_type(expr.name)
             if builtin_type is not None:
                 return builtin_type
-            return self.local_variable_types.get(
-                expr.name
-            ) or self.metal_program_scope_value_global_types.get(expr.name)
+            return (
+                self.local_variable_types.get(expr.name)
+                or self.metal_program_scope_value_global_types.get(expr.name)
+                or self.metal_global_resource_value_type(expr.name)
+            )
         if isinstance(expr, (VariableNode, BackendVariableNode)):
             name = getattr(expr, "name", None)
             builtin_type = self.metal_graphics_builtin_result_type(name)
@@ -9600,15 +9686,22 @@ class MetalCodeGen:
             builtin_type = self.metal_compute_builtin_result_type(name)
             if builtin_type is not None:
                 return builtin_type
-            return self.local_variable_types.get(
-                name
-            ) or self.metal_program_scope_value_global_types.get(name)
+            return (
+                self.local_variable_types.get(name)
+                or self.metal_program_scope_value_global_types.get(name)
+                or self.metal_global_resource_value_type(name)
+            )
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
             operator = self.map_operator(getattr(expr, "op", ""))
+            emulated_result = self.metal_emulated_matrix_binary_result_type(
+                operator, left_type, right_type
+            )
+            if emulated_result is not None:
+                return emulated_result
             pointer_operand = self.pointer_arithmetic_operand(
                 expr, (left_type, right_type)
             )
@@ -9624,6 +9717,32 @@ class MetalCodeGen:
                     if width:
                         return f"bool{width}"
                 return "bool"
+            matrix_result = self.metal_matrix_binary_result_type(
+                operator, left_type, right_type
+            )
+            if matrix_result is not None:
+                return matrix_result
+            if (
+                self.is_vector_value_type(left_type)
+                and self.is_vector_value_type(right_type)
+                and operator not in {"<<", ">>"}
+            ):
+                left_mapped = self.map_type(left_type)
+                right_mapped = self.map_type(right_type)
+                left_component = self.vector_component_type(left_mapped)
+                right_component = self.vector_component_type(right_mapped)
+                if (
+                    left_component != right_component
+                    and self.vector_value_width(left_mapped)
+                    == self.vector_value_width(right_mapped)
+                    and left_component in self.METAL_ARITHMETIC_COMPONENT_RANKS
+                    and right_component in self.METAL_ARITHMETIC_COMPONENT_RANKS
+                ):
+                    common = self.metal_binary_common_component(
+                        operator, left_component, right_component
+                    )
+                    if common is not None:
+                        return f"{common}{self.vector_value_width(left_mapped)}"
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -9657,6 +9776,9 @@ class MetalCodeGen:
                 getattr(expr, "target", getattr(expr, "left", None))
             )
         if isinstance(expr, ArrayAccessNode):
+            block_member = self.glsl_buffer_block_member_access(expr.array)
+            if block_member is not None and block_member.get("is_array"):
+                return block_member["type"]
             array_type = self.expression_result_type(expr.array)
             if not array_type:
                 array_type = self.unsupported_glsl_buffer_block_expression_type(
@@ -9675,11 +9797,29 @@ class MetalCodeGen:
             pointee_type = self.pointer_pointee_type_name(array_type)
             if pointee_type is not None:
                 return pointee_type
+            emulated_matrix = (
+                hlsl_emulated_matrix_shape(array_type_name) if array_type_name else None
+            )
+            if emulated_matrix is not None:
+                # Like Metal matrices, indexing selects a column.
+                scalar, rows, _columns = emulated_matrix
+                return f"{scalar}{rows}"
             if self.is_vector_value_type(array_type):
                 native = self.metal_native_narrow_bitcast_storage_type(array_type)
                 if native is not None and native[-1:] in {"2", "3", "4"}:
                     return native[:-1]
                 return self.vector_component_type(array_type)
+            mapped_array_type = (
+                self.map_type(array_type) if array_type is not None else None
+            )
+            if isinstance(mapped_array_type, str):
+                if self.is_vector_value_type(mapped_array_type):
+                    return self.vector_component_type(mapped_array_type)
+                if self.is_matrix_value_type(mapped_array_type):
+                    scalar, dimensions = re.fullmatch(
+                        r"(float|half|double)(\d)x(\d)", mapped_array_type
+                    ).group(1, 3)
+                    return f"{scalar}{dimensions}"
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
@@ -9767,6 +9907,17 @@ class MetalCodeGen:
                 func_name
             ):
                 return "RayDesc"
+            if isinstance(func_name, str) and hlsl_emulated_matrix_shape(func_name):
+                return func_name
+            if func_name in {"and", "or"} and len(args) == 2:
+                for arg in args:
+                    shape = self.metal_expression_emulated_matrix_shape(arg)
+                    if shape is not None:
+                        return f"bool{shape[1]}x{shape[2]}"
+            if func_name == "select" and len(args) == 3:
+                for arg in args[:2]:
+                    if self.metal_expression_emulated_matrix_shape(arg) is not None:
+                        return self.expression_result_type(arg)
             if func_name in self.METAL_WAVE_INTRINSIC_ARITIES:
                 return self.metal_wave_result_type(func_name, args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
@@ -9784,6 +9935,9 @@ class MetalCodeGen:
                     return f"{component_prefix}{rows}x{columns}"
                 return arg_type
             if func_name == "dot" and args:
+                unified_type = self.metal_unified_builtin_result_type(func_name, args)
+                if unified_type is not None:
+                    return unified_type
                 return (
                     self.vector_component_type(self.expression_result_type(args[0]))
                     or "float"
@@ -9809,7 +9963,7 @@ class MetalCodeGen:
             ):
                 return self.expression_result_type(args[0])
             if (
-                func_name in {"inverseSqrt", "inversesqrt"}
+                func_name in {"inverseSqrt", "inversesqrt", "roundEven"}
                 and args
                 and func_name not in self.user_function_names
             ):
@@ -9831,7 +9985,20 @@ class MetalCodeGen:
             )
             if integer_bit_result_type is not None:
                 return integer_bit_result_type
+            if (
+                func_name in self.METAL_ANGLE_CONVERSION_FACTORS
+                and len(args or []) == 1
+                and func_name not in self.user_function_names
+            ):
+                argument_type = self.map_type(self.expression_result_type(args[0]))
+                if self.vector_component_type(argument_type) in {"int", "uint"}:
+                    width = self.vector_value_width(argument_type)
+                    return f"float{width or ''}"
+                return self.expression_result_type(args[0])
             if func_name in {"mix", "clamp", "min", "max", "saturate"} and args:
+                unified_type = self.metal_unified_builtin_result_type(func_name, args)
+                if unified_type is not None:
+                    return unified_type
                 return self.expression_result_type(args[0])
             if is_resource_size_query_operation(func_name) and args:
                 texture_type = self.texture_argument_resource_type(args[0])
@@ -10132,6 +10299,11 @@ class MetalCodeGen:
             }:
                 return str(func_name)
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
+            literal_type_name = self.type_name_string(
+                getattr(expr, "literal_type", None)
+            )
+            if literal_type_name in {"bool", "int", "uint", "float", "half"}:
+                return literal_type_name
             value = getattr(expr, "value", None)
             if isinstance(value, float):
                 return "float"
@@ -10220,17 +10392,13 @@ class MetalCodeGen:
         if hasattr(node, "target") and hasattr(node, "value"):
             target = node.target
             value = node.value
-            rhs = self.generate_expression_with_expected(
-                value, self.expression_result_type(target)
-            )
-            op = getattr(node, "operator", "=")
         else:
             target = node.left
             value = node.right
-            rhs = self.generate_expression_with_expected(
-                value, self.expression_result_type(target)
-            )
-            op = getattr(node, "operator", "=")
+        op = getattr(node, "operator", "=")
+        rhs = self.generate_expression_with_expected(
+            value, self.metal_assignment_value_type(target, value, op)
+        )
         if op == "=":
             converted = self.metal_registered_structure_assignment(target, value)
             if converted is not None:
@@ -10293,6 +10461,12 @@ class MetalCodeGen:
         if address_space_assignment is not None:
             return address_space_assignment
 
+        layout_store = self.metal_hlsl_layout_store_target(target)
+        if layout_store is not None:
+            lhs, write_conversion = layout_store
+            if write_conversion and op == "=":
+                rhs = f"{write_conversion}({rhs})"
+            return f"{lhs} {op} {rhs}"
         if op != "=":
             byte_update = self.metal_narrow_integer_update_expression(
                 node, target, op, value
@@ -10873,6 +11047,9 @@ class MetalCodeGen:
         """Render a CrossGL AST expression into Metal expression syntax."""
         if expr is None:
             return ""
+        substitutions = self.metal_argument_substitutions
+        if substitutions and id(expr) in substitutions:
+            return substitutions[id(expr)]
         elif isinstance(expr, str):
             builtin_name = self.metal_builtin_expression_name(expr)
             if builtin_name != expr:
@@ -10912,6 +11089,11 @@ class MetalCodeGen:
                 and name in self.cbuffer_member_references
             ):
                 return self.cbuffer_member_references[name]
+            if (
+                name not in self.local_variable_types
+                and name in self.metal_runtime_initialized_constants
+            ):
+                return f"{name}()"
             return self.metal_local_identifier_name(name)
         elif isinstance(expr, bool):
             return "true" if expr else "false"
@@ -10959,6 +11141,11 @@ class MetalCodeGen:
                     left = f"int({left})"
                 if self.map_type(self.expression_result_type(expr.right)) == "bool":
                     right = f"int({right})"
+            left, right, common = self.metal_mixed_vector_binary_operands(
+                expr, operator, left, right
+            )
+            if operator == "%" and common in {"float", "half"}:
+                return f"fmod({left}, {right})"
             if operator in {"+", "-", "*", "/", "%"}:
                 expected_type = self.current_expression_expected_type
                 expression_width = self.vector_value_width(
@@ -11004,6 +11191,9 @@ class MetalCodeGen:
                 not in {"ulong", "uint64_t"}
             ):
                 return "(-9223372036854775807L - 1L)"
+            negated_literal = self.metal_negated_wide_integer_literal(expr)
+            if negated_literal is not None:
+                return negated_literal
             local_reinterpret = self.generate_metal_local_reinterpret_read(expr)
             if local_reinterpret is not None:
                 return local_reinterpret
@@ -11059,6 +11249,10 @@ class MetalCodeGen:
             block_load = self.generate_glsl_buffer_block_array_load(expr)
             if block_load is not None:
                 return block_load
+            layout_element = self.metal_hlsl_layout_element_access(expr)
+            if layout_element is not None:
+                access, conversion = layout_element
+                return f"{conversion}({access})" if conversion else access
             array = self.generate_expression(expr.array)
             if isinstance(
                 expr.array,
@@ -11089,6 +11283,11 @@ class MetalCodeGen:
             if constructor is not None:
                 return constructor
             constructor_type = getattr(expr, "constructor_type", None)
+            matrix_constructor = self.generate_metal_matrix_constructor_override(
+                constructor_type, getattr(expr, "arguments", [])
+            )
+            if matrix_constructor is not None:
+                return matrix_constructor
             if self.is_builtin_value_constructor_type(constructor_type):
                 metal_type = self.map_type(constructor_type)
                 matrix_resize = self.generate_metal_matrix_resize_constructor(
@@ -11097,8 +11296,9 @@ class MetalCodeGen:
                 if matrix_resize is not None:
                     return matrix_resize
                 args = ", ".join(
-                    self.generate_expression_with_expected(arg, None)
-                    for arg in getattr(expr, "arguments", [])
+                    self.generate_metal_value_constructor_arguments(
+                        metal_type, getattr(expr, "arguments", [])
+                    )
                 )
                 if getattr(
                     expr, "is_braced_constructor", False
@@ -11204,6 +11404,20 @@ class MetalCodeGen:
             static_generic_call = generate_static_generic_numeric_call(self, func_name)
             if static_generic_call is not None:
                 return static_generic_call
+
+            if isinstance(func_name, str) and not self.metal_function_name_is_shadowed(
+                func_name
+            ):
+                matrix_constructor = self.generate_metal_matrix_constructor_override(
+                    func_name, expr.args
+                )
+                if matrix_constructor is not None:
+                    return matrix_constructor
+                logical_intrinsic = self.generate_metal_hlsl_logical_intrinsic(
+                    func_name, expr.args
+                )
+                if logical_intrinsic is not None:
+                    return logical_intrinsic
 
             if func_name == "RayDesc" and self.requires_metal_builtin_ray_desc(
                 func_name
@@ -11397,11 +11611,24 @@ class MetalCodeGen:
             )
             if integer_bit_call is not None:
                 return integer_bit_call
+            angle_conversion = self.generate_metal_angle_conversion_call(
+                func_name, expr.args
+            )
+            if angle_conversion is not None:
+                return angle_conversion
             if (
                 func_name in self.METAL_STDLIB_BUILTIN_FUNCTIONS
                 and func_name not in self.user_function_names
             ):
-                if func_name in self.METAL_BFLOAT_ARGUMENT_PROMOTED_FUNCTIONS:
+                integer_dot = self.generate_metal_integer_dot_call(func_name, expr.args)
+                if integer_dot is not None:
+                    return integer_dot
+                unified_args = self.generate_metal_unified_builtin_arguments(
+                    func_name, expr.args
+                )
+                if unified_args is not None:
+                    args = ", ".join(unified_args)
+                elif func_name in self.METAL_BFLOAT_ARGUMENT_PROMOTED_FUNCTIONS:
                     args = ", ".join(
                         self.generate_metal_bfloat_promoted_argument(arg)
                         for arg in expr.args
@@ -11690,8 +11917,9 @@ class MetalCodeGen:
                 if matrix_resize is not None:
                     return matrix_resize
                 args = ", ".join(
-                    self.generate_expression_with_expected(arg, None)
-                    for arg in expr.args
+                    self.generate_metal_value_constructor_arguments(
+                        metal_type, expr.args
+                    )
                 )
                 rendered = f"{metal_type}({args})"
                 return (
@@ -11737,6 +11965,11 @@ class MetalCodeGen:
                 args.extend(
                     self.cbuffer_parameter_name(cbuffer)
                     for cbuffer in self.required_function_cbuffers(func_name)
+                )
+                args.extend(
+                    self.required_function_thread_private_global_argument_names(
+                        func_name
+                    )
                 )
                 args.extend(self.required_function_resource_argument_names(func_name))
                 args.extend(
@@ -11784,10 +12017,21 @@ class MetalCodeGen:
                 obj = self.generate_expression_with_expected(expr.object, None)
             finally:
                 self.suppress_image_load_component_suffix = previous_suppression
-            if isinstance(expr.object, (BinaryOpNode, TernaryOpNode, UnaryOpNode)):
+            if isinstance(
+                expr.object, (BinaryOpNode, TernaryOpNode, UnaryOpNode)
+            ) and not self.metal_expression_is_parenthesized(obj):
+                # Member access binds tighter than every operator; keep the
+                # operand grouping that CrossGL expresses through the tree.
                 obj = f"({obj})"
             if self.member_access_uses_pointer_operator(expr):
                 return f"{obj}->{expr.member}"
+            layout_member = self.metal_hlsl_layout_member(expr)
+            if (
+                layout_member is not None
+                and layout_member.read_conversion
+                and layout_member.array_count is None
+            ):
+                return f"{layout_member.read_conversion}({obj}.{expr.member})"
             return f"{obj}.{expr.member}"
         elif isinstance(expr, PointerAccessNode):
             pointer = self.generate_expression_with_expected(expr.pointer_expr, None)
@@ -11813,6 +12057,16 @@ class MetalCodeGen:
                     return f"{value}u"
                 if isinstance(value, bool):
                     return "true" if value else "false"
+                if isinstance(value, int):
+                    # Unsuffixed decimal literals beyond int are long in
+                    # Metal; the source type of such a literal is uint up to
+                    # 2^32 - 1 (as in GLSL and HLSL) and 64-bit above it.
+                    if value > 0x7FFFFFFFFFFFFFFF:
+                        return f"{value}ul"
+                    if 0x7FFFFFFF < value <= 0xFFFFFFFF:
+                        return f"{value}u"
+                    if value < -0x80000000:
+                        return f"{value}l"
                 if isinstance(value, str) and not (
                     value.startswith('"') and value.endswith('"')
                 ):
@@ -11844,6 +12098,11 @@ class MetalCodeGen:
                 and name in self.cbuffer_member_references
             ):
                 return self.cbuffer_member_references[name]
+            if (
+                name not in self.local_variable_types
+                and name in self.metal_runtime_initialized_constants
+            ):
+                return f"{name}()"
             return name
         else:
             return str(expr)
@@ -14363,12 +14622,6 @@ class MetalCodeGen:
                 args[0] if args else None,
                 f"requires {expected_arity} argument(s), got {len(args)}",
             )
-        if operation == "compare_exchange":
-            return self.unsupported_metal_buffer_resource_atomic_call(
-                func_name,
-                args[0],
-                "compare-exchange requires explicit Metal atomic storage",
-            )
 
         target = args[0]
         target_type = self.expression_result_type(target)
@@ -14408,6 +14661,18 @@ class MetalCodeGen:
         target_expr = self.generate_expression(target)
         if not self.is_metal_address_expression(target, target_expr):
             target_expr = f"&{target_expr}"
+        if operation == "compare_exchange":
+            compare = self.generate_expression_with_expected(
+                args[1], mapped_target_type
+            )
+            value = self.generate_expression_with_expected(args[2], mapped_target_type)
+            self.required_pointer_atomic_compare_helpers.add(
+                (address_space, mapped_target_type)
+            )
+            helper_name = self.pointer_atomic_compare_helper_name(
+                address_space, mapped_target_type
+            )
+            return f"{helper_name}({target_expr}, {compare}, {value})"
         bitwise_float = (
             mapped_target_type == "float"
             and address_space == "threadgroup"
@@ -15408,6 +15673,9 @@ class MetalCodeGen:
         self, vtype, name, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
+        layout_storage = self.metal_hlsl_structured_buffers.get(name)
+        if layout_storage is not None:
+            element_type = layout_storage[0]
         address_space = self.structured_buffer_address_space(vtype, node)
         memory_qualifiers = self.resource_memory_qualifier_prefix(node, vtype)
         pointer_type = f"{memory_qualifiers}{address_space} {element_type}*"
@@ -15417,10 +15685,10 @@ class MetalCodeGen:
         return f"{pointer_type} {name}"
 
     def structured_buffer_length_resource_name(self, name):
-        return f"{name}Length"
+        return self.metal_generated_companion_name(f"{name}Length")
 
     def structured_buffer_length_parameter_name(self, name):
-        return f"{name}Length"
+        return self.metal_generated_companion_name(f"{name}Length")
 
     def format_structured_buffer_length_parameter(self, name, array_size=None):
         length_name = self.structured_buffer_length_parameter_name(name)
@@ -20296,11 +20564,15 @@ class MetalCodeGen:
         return len(args or []) == len(parameter_nodes)
 
     def collect_function_structured_buffer_length_dependencies(self, functions):
-        parameter_types = {
-            getattr(func, "name", None): self.structured_buffer_parameter_type_map(func)
-            for func in functions or []
-            if getattr(func, "name", None)
-        }
+        parameter_types = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if func_name:
+                # Overloads share a name; each keeps only its own buffer
+                # parameters when the declaration is rendered.
+                parameter_types.setdefault(func_name, {}).update(
+                    self.structured_buffer_parameter_type_map(func)
+                )
         dependencies = {func_name: set() for func_name in parameter_types}
 
         for func in functions or []:
@@ -21372,7 +21644,6 @@ class MetalCodeGen:
                 func_name, index
             ):
                 continue
-            rendered = self.generate_expression(arg)
             native_type = self.metal_native_narrow_bitcast_storage_type(param_type)
             parameters = self.function_parameter_nodes.get(func_name, [])
             qualifiers = (
@@ -21385,6 +21656,7 @@ class MetalCodeGen:
                 and not qualifiers.intersection({"out", "inout"})
                 and len(self.function_overloads_by_name.get(func_name, [])) <= 1
             ):
+                rendered = self.generate_expression(arg)
                 # Native aggregate vectors need an explicit value conversion
                 # when the callee uses the widened arithmetic representation.
                 converted = self.metal_narrow_integer_conversion_expression(
@@ -21394,6 +21666,10 @@ class MetalCodeGen:
                     rendered = converted
                 elif native_type[-1:] in {"2", "3", "4"}:
                     rendered = f"{self.map_type(param_type)}({rendered})"
+            else:
+                rendered = self.generate_function_value_argument(
+                    func_name, index, arg, param_type
+                )
             args.append(rendered)
             if self.structured_buffer_parameter_requires_length(func_name, param_name):
                 length = self.structured_buffer_length_data_argument(arg)
@@ -22638,6 +22914,7 @@ class MetalCodeGen:
             "atomicXor": ("fetch_xor", 2),
             "atomicExchange": ("exchange", 2),
             "atomicCompSwap": ("compare_exchange", 3),
+            "atomicCompareExchange": ("compare_exchange", 3),
         }
 
     @staticmethod
@@ -23038,109 +23315,6 @@ class MetalCodeGen:
                 self.reserve_deferred_hlsl_register_bindings(
                     used_bindings, source_bindings
                 )
-
-    HLSL_REGISTER_CLASS_ORDER = {"b": 0, "t": 1, "u": 2, "s": 3}
-
-    @staticmethod
-    def metal_namespace_register_classes(namespace):
-        if namespace == "buffer":
-            return ("b", "t", "u")
-        if namespace == "texture":
-            return ("t", "u")
-        if namespace == "sampler":
-            return ("s",)
-        return ()
-
-    def hlsl_register_binding(self, node, register_classes):
-        """Return ``(class, index)`` when ``node`` is bound only by an HLSL register.
-
-        HLSL register classes (``b``, ``t``, ``u`` and ``s``) are separate binding
-        namespaces, while Metal shares one argument table between constant,
-        shader-resource and unordered-access buffers and another between read-only
-        and read-write textures. Register numbers are therefore source bindings,
-        not target slots; explicit ``@binding``/``@buffer``/``@texture`` attributes
-        keep their exact target meaning.
-        """
-        selected = None
-        for attr in getattr(node, "attributes", None) or []:
-            attr_name = str(getattr(attr, "name", "") or "").lower()
-            arguments = getattr(attr, "arguments", []) or []
-            if attr_name in {"binding", "buffer", "texture", "sampler"} and arguments:
-                return None
-            if attr_name != "register" or not arguments or len(arguments) > 1:
-                continue
-            raw_value = self.attribute_value_to_string(arguments[0])
-            if raw_value is None:
-                continue
-            raw_value = str(raw_value).strip().lower()
-            register_class = raw_value[:1]
-            digits = raw_value[1:]
-            if register_class not in register_classes or not digits.isdigit():
-                continue
-            selected = (register_class, int(digits))
-        return selected
-
-    def defer_hlsl_register_binding(
-        self, node, namespace, resource_count, name, register_classes
-    ):
-        register = self.hlsl_register_binding(node, register_classes)
-        if register is None:
-            return False
-        if any(entry[0] is node for entry in self.metal_deferred_register_bindings):
-            return True
-        self.metal_deferred_register_bindings.append(
-            (
-                node,
-                namespace,
-                register,
-                max(resource_count or 1, 1),
-                name,
-                len(self.metal_deferred_register_bindings),
-            )
-        )
-        return True
-
-    def reserve_deferred_hlsl_register_bindings(self, used_bindings, source_bindings):
-        """Assign Metal slots to register-bound resources after exact bindings.
-
-        Each resource keeps its register number when that slot is free in the Metal
-        namespace and otherwise takes the next free slot. Resources are visited in
-        register-class order (b, t, u, s), then register number, so the mapping does
-        not depend on declaration order. Overlapping registers of the same class
-        remain errors.
-        """
-        deferred = sorted(
-            self.metal_deferred_register_bindings,
-            key=lambda entry: (
-                self.HLSL_REGISTER_CLASS_ORDER.get(entry[2][0], 99),
-                entry[2][1],
-                entry[5],
-            ),
-        )
-        for node, namespace, register, count, name, _order in deferred:
-            if id(node) in self.metal_resource_binding_indices_by_id:
-                continue
-            register_class, register_index = register
-            self.reserve_source_resource_binding_range(
-                source_bindings,
-                f"register {register_class}",
-                0,
-                register_index,
-                count,
-                name,
-                stage_scope=self.metal_source_binding_stage_scope(node),
-            )
-            target_binding = self.next_available_resource_binding(
-                used_bindings, namespace, register_index, count
-            )
-            self.reserve_resource_binding_range(
-                used_bindings, "Metal", namespace, target_binding, count, name
-            )
-            self.metal_resource_binding_indices_by_id[id(node)] = target_binding
-            self.metal_hlsl_register_bindings_by_id[id(node)] = (
-                f"{register_class}{register_index}"
-            )
-        self.metal_deferred_register_bindings = []
 
     def next_available_resource_binding(
         self, used_bindings, namespace, binding_index, count
@@ -25846,15 +26020,21 @@ class MetalCodeGen:
     def image_load_component_suffix(self, image_type, image_format):
         if self.suppress_image_load_component_suffix:
             return ""
+        expected_scalar = self.is_scalar_value_type(
+            self.current_expression_expected_type
+        )
+        scalar_integer_resource = (
+            self.is_scalar_integer_image_resource(image_type, image_format)
+            and self.expected_component_count() != 4
+        )
+        if image_format is None and not expected_scalar:
+            # Unformatted loads yield four channels; only a scalar context
+            # selects the first one.
+            scalar_integer_resource = False
         return storage_image_load_component_suffix(
             image_format,
-            expected_scalar=self.is_scalar_value_type(
-                self.current_expression_expected_type
-            ),
-            scalar_integer_resource=self.is_scalar_integer_image_resource(
-                image_type, image_format
-            )
-            and self.expected_component_count() != 4,
+            expected_scalar=expected_scalar,
+            scalar_integer_resource=scalar_integer_resource,
             float_resource=self.is_float_image_resource(image_type),
         )
 
@@ -25935,7 +26115,10 @@ class MetalCodeGen:
         if image_format:
             return image_format_result_type(image_format)
         image_type = self.texture_argument_resource_type(image_arg)
-        return metal_storage_image_component_type(image_type)
+        component_type = metal_storage_image_component_type(image_type)
+        # Without a format qualifier, imageLoad yields all four channels, as
+        # Metal's read() does; callers select components explicitly.
+        return f"{component_type}4" if component_type else None
 
     def image_load_component_kind(self, image_type, image_format):
         if image_format:
@@ -26374,12 +26557,14 @@ class MetalCodeGen:
                 return self.unsupported_multisample_image_store_call(image_type)
             texel_coord, layer = self.image_coordinate_expression(image_type, coord)
             if sample is not None and layer is not None:
-                return f"{image_name}.write({value}, {texel_coord}, {layer}, {sample})"
-            if sample is not None:
-                return f"{image_name}.write({value}, {texel_coord}, {sample})"
-            if layer is not None:
-                return f"{image_name}.write({value}, {texel_coord}, {layer})"
-            return f"{image_name}.write({value}, {texel_coord})"
+                store = f"{image_name}.write({value}, {texel_coord}, {layer}, {sample})"
+            elif sample is not None:
+                store = f"{image_name}.write({value}, {texel_coord}, {sample})"
+            elif layer is not None:
+                store = f"{image_name}.write({value}, {texel_coord}, {layer})"
+            else:
+                store = f"{image_name}.write({value}, {texel_coord})"
+            return store
 
         return None
 
@@ -26472,6 +26657,14 @@ class MetalCodeGen:
             return f"{texture_name}.sample({sampler_arg}, {coord})"
         if is_texture_sample_lod_operation(func_name) and extra_args:
             if self.is_texture1d_sample_resource(texture_type):
+                if self.metal_texture1d_explicit_lod_matches_kernel_sampling(
+                    extra_args[0]
+                ):
+                    if is_array_texture:
+                        return (
+                            f"{texture_name}.sample({sampler_arg}, {coord_xy}, {layer})"
+                        )
+                    return f"{texture_name}.sample({sampler_arg}, {coord})"
                 return self.unsupported_texture1d_sampling_option_call(
                     func_name, texture_type
                 )
@@ -26907,6 +27100,11 @@ class MetalCodeGen:
         if self.requires_metal_builtin_ray_desc(vtype_str):
             self.required_metal_ray_desc_runtime = True
             return "CglRayDesc"
+
+        emulated_matrix = hlsl_emulated_matrix_shape(vtype_str)
+        if emulated_matrix is not None:
+            self.metal_emulated_matrix_shapes.add(emulated_matrix)
+            return hlsl_emulated_matrix_type_name(emulated_matrix)
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
