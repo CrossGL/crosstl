@@ -1,0 +1,202 @@
+using System.Collections;
+using System.Globalization;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+internal static class Program
+{
+    private const string TestNamespace = "Microsoft.VisualStudio.TestTools.UnitTesting.";
+    private const BindingFlags StaticProperties = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true
+    };
+
+    public static int Main(string[] args)
+    {
+        if (args.Length != 2)
+        {
+            Console.Error.WriteLine("Usage: Discovery <test-assembly.dll> <new-output-directory>");
+            return 2;
+        }
+
+        string output = Path.GetFullPath(args[1]);
+        string temporary = output + ".partial-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            if (Path.Exists(output))
+                throw new InvalidOperationException("Output already exists: " + output);
+            string assemblyPath = Path.GetFullPath(args[0]);
+            string assemblyHash = Hash(File.ReadAllBytes(assemblyPath));
+            AssemblyDependencyResolver resolver = new(assemblyPath);
+            AssemblyLoadContext.Default.Resolving += (_, name) =>
+            {
+                string? dependency = resolver.ResolveAssemblyToPath(name);
+                return dependency is null ? null : AssemblyLoadContext.Default.LoadFromAssemblyPath(dependency);
+            };
+            Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
+            Type[] types = assembly.GetTypes().OrderBy(TypeName, StringComparer.Ordinal).ToArray();
+            List<object> cases = [];
+            HashSet<string> identities = [];
+            Dictionary<string, int> occurrences = [];
+            int methodCount = 0;
+            foreach (Type type in types.Where(t => HasAttribute(t, TestNamespace + "TestClassAttribute")))
+            {
+                foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic |
+                             BindingFlags.Instance | BindingFlags.Static).OrderBy(m => m.Name, StringComparer.Ordinal))
+                {
+                    object[] attributes = method.GetCustomAttributes(inherit: true).ToArray();
+                    if (!attributes.Any(a => DerivesFrom(a.GetType(), TestNamespace + "TestMethodAttribute")))
+                        continue;
+                    methodCount++;
+                    string methodName = TypeName(type) + "." + method.Name;
+                    string signature = methodName + "(" + string.Join(",", method.GetParameters().Select(p => TypeName(p.ParameterType))) + ")";
+                    bool ignored = HasAttribute(type, TestNamespace + "IgnoreAttribute") || HasAttribute(method, TestNamespace + "IgnoreAttribute");
+                    object[] sources = attributes.Where(a => DataInterface(a.GetType()) is not null).ToArray();
+                    if (sources.Length == 0)
+                    {
+                        if (method.GetParameters().Length != 0)
+                            throw new InvalidOperationException("Missing test data: " + signature);
+                        AddCase([], method.Name);
+                    }
+                    foreach (object source in sources)
+                    {
+                        Type dataInterface = DataInterface(source.GetType())!;
+                        object? data = dataInterface.GetMethod("GetData")!.Invoke(source, [method]);
+                        if (data is not IEnumerable rows)
+                            throw new InvalidOperationException("Invalid data source: " + signature);
+                        int rowCount = 0;
+                        foreach (object? row in rows)
+                        {
+                            if (row is not object?[] arguments || arguments.Length != method.GetParameters().Length)
+                                throw new InvalidOperationException("Test data arity differs: " + signature);
+                            string displayName = (string?)dataInterface.GetMethod("GetDisplayName")!.Invoke(source, [method, arguments]) ?? method.Name;
+                            AddCase(arguments, displayName);
+                            rowCount++;
+                        }
+                        if (rowCount == 0)
+                            throw new InvalidOperationException("Empty data source: " + signature);
+                    }
+
+                    void AddCase(object?[] arguments, string displayName)
+                    {
+                        JsonObject[] values = arguments.Select(Argument).ToArray();
+                        string row = signature + "\n" + JsonSerializer.Serialize(values);
+                        // MSTest executes repeated data rows separately under the same display name,
+                        // so each repetition is a distinct case identified by its ordinal.
+                        int occurrence = occurrences[row] = occurrences.GetValueOrDefault(row) + 1;
+                        string id = Hash(Encoding.UTF8.GetBytes(row + "\n" + occurrence.ToString(CultureInfo.InvariantCulture)));
+                        if (!identities.Add(id))
+                            throw new InvalidOperationException("Duplicate test case: " + signature);
+                        cases.Add(new { id, method = methodName, signature, displayName, occurrence, arguments = values, ignored });
+                    }
+                }
+            }
+            if (cases.Count == 0)
+                throw new InvalidOperationException("No test cases discovered");
+
+            Directory.CreateDirectory(Path.Combine(temporary, "hlsl"));
+            List<object> shaders = [];
+            foreach (Type type in types.Where(t => t.GetInterfaces().Any(i => i.IsGenericType &&
+                         i.GetGenericTypeDefinition().FullName == "ComputeSharp.Descriptors.IComputeShaderDescriptor`1")))
+            {
+                string source = (string)Property(type, "HlslSource");
+                if (string.IsNullOrWhiteSpace(source))
+                    throw new InvalidOperationException("Empty HLSL source: " + TypeName(type));
+                string id = Hash(Encoding.UTF8.GetBytes(TypeName(type)));
+                string path = "hlsl/" + id + ".hlsl";
+                byte[] bytes = Encoding.UTF8.GetBytes(source);
+                File.WriteAllBytes(Path.Combine(temporary, "hlsl", id + ".hlsl"), bytes);
+                object ranges = Property(type, "ResourceDescriptorRanges");
+                object rangeArray = ranges.GetType().GetMethod("ToArray", Type.EmptyTypes)!.Invoke(ranges, null)!;
+                shaders.Add(new
+                {
+                    id,
+                    type = TypeName(type),
+                    path,
+                    sha256 = Hash(bytes),
+                    threads = new[] { (int)Property(type, "ThreadsX"), (int)Property(type, "ThreadsY"), (int)Property(type, "ThreadsZ") },
+                    constantBufferSize = (int)Property(type, "ConstantBufferSize"),
+                    staticSamplerRequired = (bool)Property(type, "IsStaticSamplerRequired"),
+                    resourceDescriptorRanges = JsonSerializer.SerializeToNode(rangeArray, rangeArray.GetType(), JsonOptions)
+                });
+            }
+            if (shaders.Count == 0)
+                throw new InvalidOperationException("No generated HLSL descriptors discovered");
+            if (Hash(File.ReadAllBytes(assemblyPath)) != assemblyHash)
+                throw new InvalidOperationException("Test assembly changed during export");
+            object report = new
+            {
+                schemaVersion = 1,
+                kind = "computesharp.discovery",
+                assembly = new { name = assembly.GetName().Name, sha256 = assemblyHash },
+                testMethodCount = methodCount,
+                caseCount = cases.Count,
+                shaderCount = shaders.Count,
+                coverageFrozen = false,
+                nativeExecutionQualified = false,
+                tests = cases,
+                shaders
+            };
+            File.WriteAllText(Path.Combine(temporary, "discovery.json"), JsonSerializer.Serialize(report, JsonOptions) + "\n", new UTF8Encoding(false));
+            Directory.Move(temporary, output);
+            Console.WriteLine($"Exported {cases.Count} cases, {methodCount} methods and {shaders.Count} HLSL descriptors");
+            return 0;
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(error);
+            if (Directory.Exists(temporary))
+                Directory.Delete(temporary, recursive: true);
+            return 1;
+        }
+    }
+
+    private static bool HasAttribute(MemberInfo member, string name) =>
+        member.GetCustomAttributes(inherit: true).Any(a => DerivesFrom(a.GetType(), name));
+
+    private static bool DerivesFrom(Type? type, string name) =>
+        type is not null && (type.FullName == name || DerivesFrom(type.BaseType, name));
+
+    private static Type? DataInterface(Type type) =>
+        type.GetInterfaces().SingleOrDefault(i => i.FullName == TestNamespace + "ITestDataSource");
+
+    private static object Property(Type type, string name) =>
+        type.GetProperties(StaticProperties).Single(p => p.Name == name || p.Name.EndsWith("." + name, StringComparison.Ordinal)).GetValue(null)
+        ?? throw new InvalidOperationException("Missing descriptor property: " + name);
+
+    private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static string TypeName(Type type) => type.IsArray ? TypeName(type.GetElementType()!) + "[" + new string(',', type.GetArrayRank() - 1) + "]" :
+        type.IsGenericType ? type.GetGenericTypeDefinition().FullName! + "<" + string.Join(",", type.GetGenericArguments().Select(TypeName)) + ">" : type.FullName ?? type.Name;
+
+    private static JsonObject Argument(object? value)
+    {
+        if (value is null)
+            return new() { ["kind"] = "null" };
+        if (value is Type type)
+            return new() { ["kind"] = "type", ["name"] = TypeName(type) };
+        if (value is Enum enumeration)
+            return new() { ["kind"] = "enum", ["type"] = TypeName(value.GetType()), ["name"] = enumeration.ToString(), ["value"] = enumeration.ToString("D") };
+        if (value is float single)
+            return new() { ["kind"] = "System.Single", ["bits"] = BitConverter.SingleToUInt32Bits(single).ToString("x8", CultureInfo.InvariantCulture) };
+        if (value is double number)
+            return new() { ["kind"] = "System.Double", ["bits"] = BitConverter.DoubleToUInt64Bits(number).ToString("x16", CultureInfo.InvariantCulture) };
+        if (value is string text)
+            return new() { ["kind"] = "System.String", ["value"] = text };
+        if (value is bool flag)
+            return new() { ["kind"] = "System.Boolean", ["value"] = flag };
+        if (value is char character)
+            return new() { ["kind"] = "System.Char", ["value"] = (int)character };
+        if (value is sbyte or byte or short or ushort or int or uint or long or ulong)
+            return new() { ["kind"] = TypeName(value.GetType()), ["value"] = ((IFormattable)value).ToString(null, CultureInfo.InvariantCulture) };
+        if (value is Array array && array.Rank == 1)
+            return new() { ["kind"] = "array", ["type"] = TypeName(array.GetType()), ["items"] = new JsonArray(array.Cast<object?>().Select(v => (JsonNode)Argument(v)).ToArray()) };
+        throw new InvalidOperationException("Unsupported test argument type: " + TypeName(value.GetType()));
+    }
+}
