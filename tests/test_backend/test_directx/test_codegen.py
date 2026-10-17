@@ -2468,7 +2468,7 @@ def test_codegen_hitobject_array_byval_parameter_modifier_macro_from_dxc():
     output = generate_crossgl(hlsl)
 
     assert "MOD" not in output
-    assert "void MakeNop(dx_HitObject obj[2])" in output
+    assert "void MakeNop(in dx_HitObject obj[2])" in output
     assert "dx_HitObject obj[2]" in output
     parse_crossgl(output)
 
@@ -2748,7 +2748,7 @@ def test_codegen_function_array_return_from_dxc_longvec_decls():
 
     output = generate_crossgl(hlsl)
 
-    assert "vec4[10] lv_param_arr_passthru(vec4 vec[10])" in output
+    assert "vec4[10] lv_param_arr_passthru(in vec4 vec[10])" in output
     assert "return vec;" in output
 
     shader_ast = parse_crossgl(output)
@@ -4197,10 +4197,10 @@ def test_codegen_rw_texture_indexing_uses_image_operations():
     output = generate_crossgl(code)
     assert "vec4 c = imageLoad(line, tid.x);" in output
     assert "imageStore(line, tid.x, c);" in output
-    assert "uint v = imageLoad(counters, uvec2(tid.x, 0));" in output
+    assert "uint v = imageLoad(counters, uvec2(tid.x, 0)).x;" in output
     assert (
         "imageStore(counters, uvec2(tid.x, 0), "
-        "imageLoad(counters, uvec2(tid.x, 0)) + 1u);"
+        "uvec4(imageLoad(counters, uvec2(tid.x, 0)).x + 1u, 0u, 0u, 0u));"
     ) in output
     assert "vec4 d = imageLoad(images[0], tid.xy);" in output
     assert "imageStore(images[1], tid.xy, d);" in output
@@ -4242,7 +4242,7 @@ def test_codegen_preserves_uav_coherency_and_register_space():
     assert "image2D outImage;" in output
     assert "@ register(u6, space2)" in output
     assert "RWStructuredBuffer<int> values;" in output
-    assert "uint value = imageLoad(counters, tid.xy);" in output
+    assert "uint value = imageLoad(counters, tid.xy).x;" in output
     assert "buffer_store(values, 0, int(value));" in output
     assert "imageStore(outImage, tid.xy, vec4(value, 0, 0, 1));" in output
 
@@ -5501,7 +5501,7 @@ def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads()
     assert "Texture2DMS<float4> msImage : register(t0);" in hlsl
     assert "Texture2DMSArray<uint> counters : register(t1);" in hlsl
     assert "float4 color = msImage.Load(pixel, sampleIndex);" in hlsl
-    assert "uint count = counters.Load(pixelLayer, sampleIndex);" in hlsl
+    assert "uint count = counters.Load(pixelLayer, sampleIndex).x;" in hlsl
     assert "RWTexture2DMS" not in hlsl
     assert "RWTexture2DMSArray" not in hlsl
     assert "CheckAccessFullyMapped(" not in hlsl
@@ -6613,7 +6613,8 @@ def test_codegen_math_intrinsics_mapping():
     output = generate_crossgl(MATH_INTRINSICS_HLSL)
     assert "dot" in output
     assert "normalize" in output
-    assert "vec4 m = (a * b);" in output
+    # mul of two vectors is their inner product in HLSL.
+    assert "vec4 m = dot(a, b);" in output
     assert "mix" in output
     assert "clamp(" in output
 
@@ -7212,6 +7213,25 @@ def test_codegen_texture_sample_position_invalid_imports_diagnostic():
 def test_codegen_preserves_parentheses():
     output = generate_crossgl(PAREN_HLSL)
     assert "clamp((a - b) / c, 0.0, 1.0)" in output
+
+
+def test_codegen_subscripts_computed_values_as_a_whole():
+    output = generate_crossgl(textwrap.dedent("""
+        RWStructuredBuffer<float> results : register(u0);
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 id : SV_DispatchThreadID)
+        {
+            float4 p = float4(id, 1);
+            int2 n = int2(id.xy);
+            results[0] = (p * 2.0 + 1.0)[1] + (-p)[2] + (n.x > 0 ? p : p.wzyx)[3];
+        }
+        """).strip())
+
+    assert "((p * 2.0) + 1.0)[1]" in output
+    assert "(-p)[2]" in output
+    assert "(n.x > 0 ? p : p.wzyx)[3]" in output
+    glsl = GLSLCodeGen().generate(parse_crossgl(output))
+    assert "((((p * 2.0) + 1.0)[1] + (-p)[2]) + ((n.x > 0) ? p : p.wzyx)[3])" in glsl
 
 
 def test_codegen_multiview_and_viewport_semantics():

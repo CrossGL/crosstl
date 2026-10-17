@@ -507,10 +507,10 @@ def _load_opencl():
     return OpenCLLexer, OpenCLParser
 
 
-def _reverse_directx():
+def _reverse_directx(matrix_packing=None):
     from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
-    return HLSLToCrossGLConverter()
+    return HLSLToCrossGLConverter(matrix_packing=matrix_packing)
 
 
 def _reverse_metal(
