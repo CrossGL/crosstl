@@ -325,6 +325,122 @@ def test_metal_thread_private_globals_become_entry_locals():
     assert "int scale = 3;" in metal
 
 
+HELPER_PRIVATE_GLOBALS_HLSL = """
+    static int objID;
+    static float accum = 1.0;
+    static float history[3];
+
+    RWStructuredBuffer<float> results : register(u0);
+
+    float Mark(float3 p)
+    {
+        objID = p.x > 0 ? 1 : 2;
+        history[1] = p.y;
+        accum += 1.0;
+        return p.z;
+    }
+
+    float March(float3 p)
+    {
+        return Mark(p) + history[1];
+    }
+
+    float Unrelated(float x)
+    {
+        return x * 2.0;
+    }
+
+    [NumThreads(64, 1, 1)]
+    void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+    {
+        float d = March(float3(ThreadIds));
+        int id = objID;
+        results[ThreadIds.x] = Unrelated(d) + id + accum + history[1];
+    }
+"""
+
+
+def test_metal_forwards_helper_thread_private_globals_by_reference(tmp_path):
+    metal = generate_metal(HELPER_PRIVATE_GLOBALS_HLSL)
+
+    # Stores in helpers must reach the entry's per-thread copy.
+    assert "program-scope global" not in metal
+    assert "constant int objID" not in metal
+    assert (
+        "float Mark(float3 p, thread int& objID, thread float& accum, "
+        "thread float (&history)[3])" in metal
+    )
+    assert "objID = p.x > 0 ? 1 : 2;" in metal
+    # Callers of helpers that reach the globals forward them as well.
+    assert (
+        "float March(float3 p, thread int& objID, thread float& accum, "
+        "thread float (&history)[3])" in metal
+    )
+    assert "return Mark(p, objID, accum, history) + history[1];" in metal
+    assert "float Unrelated(float x) {" in metal
+    # Each invocation starts from the source initializers.
+    assert "int objID = {};" in metal
+    assert "float accum = 1.0;" in metal
+    assert "float history[3] = {};" in metal
+    assert "float d = March(float3(ThreadIds), objID, accum, history);" in metal
+    compile_metal_if_available(metal, tmp_path)
+
+
+def test_metal_keeps_diagnostic_for_shadowed_thread_private_globals():
+    metal = generate_metal("""
+        static int counter;
+        RWStructuredBuffer<int> results : register(u0);
+
+        int Bump(int counter)
+        {
+            return counter + 1;
+        }
+
+        int Touch()
+        {
+            counter += 1;
+            return counter;
+        }
+
+        [NumThreads(1, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            results[0] = Bump(2) + Touch();
+        }
+    """)
+
+    assert "unsupported Metal program-scope global store" in metal
+    assert "thread int& counter" not in metal
+
+
+def test_metal_1d_explicit_base_lod_samples_in_kernels(tmp_path):
+    source = """
+        SamplerState linearSampler : register(s0);
+        Texture1D<float4> line : register(t0);
+        RWTexture1D<float4> output : register(u0);
+
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            float u = ThreadIds.x / 64.0;
+            output[ThreadIds.x] = line.SampleLevel(linearSampler, u, 0)
+                + line.SampleLevel(linearSampler, u, 0.0);
+        }
+    """
+    metal = generate_metal(source)
+
+    # Metal 1D textures have one mip level and kernel sampling selects LOD 0.
+    assert "line.sample(linearSampler, u) + line.sample(linearSampler, u)" in metal
+    assert "unsupported Metal texture sampling" not in metal
+    compile_metal_if_available(metal, tmp_path)
+
+    dynamic = generate_metal(source.replace("u, 0.0)", "u, (float)ThreadIds.y)"))
+    assert (
+        "unsupported Metal texture sampling: textureLod on texture1d<float> "
+        "supports only implicit sampling" in dynamic
+    )
+
+
 def test_metal_renames_program_identifiers_spelled_like_keywords():
     metal = generate_metal(
         CONVERSION_HLSL.replace(

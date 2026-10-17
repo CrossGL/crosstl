@@ -13,6 +13,7 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    ArrayType,
     AssignmentNode,
     ASTNode,
     BinaryOpNode,
@@ -914,6 +915,7 @@ class MetalCodeGen:
         self.metal_program_scope_groupshared_globals = set()
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
         self.metal_lowered_program_scope_groupshared_global_ids = set()
+        self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
         self.metal_type_aliases = {}
         self.cbuffer_variables = []
@@ -2000,6 +2002,7 @@ class MetalCodeGen:
         self.metal_program_scope_groupshared_globals = set()
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
         self.metal_lowered_program_scope_groupshared_global_ids = set()
+        self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
@@ -3075,6 +3078,9 @@ class MetalCodeGen:
             code += self.generate_cbuffers(ast)
 
         stage_entry_names = self.stage_entry_names(ast, target_stage)
+        self.metal_compute_only_program = self.metal_program_is_compute_only(
+            ast, target_stage
+        )
 
         functions = order_functions_by_dependencies(
             getattr(ast, "functions", []),
@@ -5310,6 +5316,9 @@ class MetalCodeGen:
                 params_str, self.current_function_name
             )
             params_str = self.append_required_cbuffer_parameters(
+                params_str, self.current_function_name
+            )
+            params_str = self.append_required_thread_private_global_parameters(
                 params_str, self.current_function_name
             )
             params_str = self.append_required_global_resource_parameters(
@@ -8970,13 +8979,18 @@ class MetalCodeGen:
     def collect_metal_lowered_thread_private_globals(
         self, ast, target_stage, global_vars, all_functions
     ):
-        """Move entry-only thread-private globals into the entry functions.
+        """Give every invocation its own copy of each thread-private global.
 
         Metal program-scope variables live in the constant address space, so a
         per-thread mutable global becomes a value-initialized local of every
-        entry that uses it. Globals that helpers also reference stay global and
-        keep their diagnostic.
+        entry that reaches it. Helper functions that reach it, directly or
+        through calls, receive the entry's copy as a ``thread`` reference
+        parameter appended to their signature and to every call site. Globals
+        that a function shadows with a parameter or local of the same name, or
+        whose type cannot be passed by reference, stay global and keep their
+        diagnostic.
         """
+        self.metal_forwarded_thread_private_globals = {}
         candidates = [
             node
             for node in global_vars or []
@@ -8986,22 +9000,54 @@ class MetalCodeGen:
             return {}, set()
         entries = self.metal_program_scope_groupshared_stage_entries(ast, target_stage)
         entry_ids = {id(func) for _stage_name, func, _stage_locals in entries}
+        helpers = [
+            func
+            for func in all_functions or []
+            if id(func) not in entry_ids and getattr(func, "name", None)
+        ]
+        helper_calls = {}
+        for func in helpers:
+            helper_calls.setdefault(func.name, set()).update(
+                self.called_user_function_names(func)
+            )
         lowered_by_function = {}
         lowered_ids = set()
         for node in candidates:
             name = self.metal_variable_name(node)
             if not name:
                 continue
-            if any(
-                id(func) not in entry_ids
-                and self.node_uses_identifier(getattr(func, "body", []), name)
-                for func in all_functions or []
-            ):
-                continue
+            reaching_helpers = {
+                func.name
+                for func in helpers
+                if self.node_uses_identifier(getattr(func, "body", []), name)
+            }
+            changed = True
+            while changed:
+                changed = False
+                for helper_name, calls in helper_calls.items():
+                    if helper_name not in reaching_helpers and (
+                        calls & reaching_helpers
+                    ):
+                        reaching_helpers.add(helper_name)
+                        changed = True
+            reference_parameter = None
+            if reaching_helpers:
+                reference_parameter = self.metal_thread_private_reference_parameter(
+                    node, name
+                )
+                if reference_parameter is None or any(
+                    name in self.metal_function_declared_names(func)
+                    for func in helpers
+                    if func.name in reaching_helpers
+                ):
+                    continue
             used_entries = []
             blocked = False
             for _stage_name, func, stage_locals in entries:
-                if not self.node_uses_identifier(getattr(func, "body", []), name):
+                if not (
+                    self.node_uses_identifier(getattr(func, "body", []), name)
+                    or self.called_user_function_names(func) & reaching_helpers
+                ):
                     continue
                 if name in self.metal_entry_local_names(func, stage_locals):
                     blocked = True
@@ -9009,6 +9055,10 @@ class MetalCodeGen:
                 used_entries.append(func)
             if blocked:
                 continue
+            for helper_name in sorted(reaching_helpers):
+                self.metal_forwarded_thread_private_globals.setdefault(
+                    helper_name, []
+                ).append((name, reference_parameter, getattr(node, "vtype", None)))
             lowered = deepcopy(node)
             lowered.qualifiers = [
                 qualifier
@@ -9078,6 +9128,56 @@ class MetalCodeGen:
                 if name:
                     names.add(name)
         return names
+
+    def metal_function_declared_names(self, func):
+        names = {
+            getattr(param, "name", None)
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
+            if getattr(param, "name", None)
+        }
+        return names | self.metal_entry_local_names(func)
+
+    def metal_thread_private_reference_parameter(self, node, name):
+        """Return a ``thread`` reference declaration for a forwarded global."""
+        vtype = getattr(node, "vtype", None)
+        sizes = []
+        while isinstance(vtype, ArrayType):
+            size = getattr(vtype, "size", None)
+            if size is None:
+                return None
+            sizes.append(self.expression_to_string(size))
+            vtype = vtype.element_type
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[" in type_name:
+            return None
+        mapped_type = self.map_type(type_name)
+        if not mapped_type:
+            return None
+        if sizes:
+            suffix = "".join(f"[{size}]" for size in sizes)
+            return f"thread {mapped_type} (&{name}){suffix}"
+        return f"thread {mapped_type}& {name}"
+
+    def append_required_thread_private_global_parameters(self, params_str, func_name):
+        forwarded = getattr(self, "metal_forwarded_thread_private_globals", {}).get(
+            func_name, []
+        )
+        if not forwarded:
+            return params_str
+        declarations = [declaration for _name, declaration, _vtype in forwarded]
+        for name, _declaration, vtype in forwarded:
+            self.local_variable_types[name] = self.type_name_string(vtype)
+        if params_str:
+            return f"{params_str}, {', '.join(declarations)}"
+        return ", ".join(declarations)
+
+    def required_function_thread_private_global_argument_names(self, func_name):
+        return [
+            name
+            for name, _declaration, _vtype in getattr(
+                self, "metal_forwarded_thread_private_globals", {}
+            ).get(func_name, [])
+        ]
 
     def metal_variable_name(self, node):
         return getattr(node, "name", getattr(node, "variable_name", None))
@@ -12445,6 +12545,11 @@ class MetalCodeGen:
                 args.extend(
                     self.cbuffer_parameter_name(cbuffer)
                     for cbuffer in self.required_function_cbuffers(func_name)
+                )
+                args.extend(
+                    self.required_function_thread_private_global_argument_names(
+                        func_name
+                    )
                 )
                 args.extend(self.required_function_resource_argument_names(func_name))
                 args.extend(
@@ -24880,6 +24985,51 @@ class MetalCodeGen:
             return False
         return texture_type.startswith(("texture1d<", "texture1d_array<"))
 
+    def metal_texture1d_explicit_lod_matches_kernel_sampling(self, lod_arg):
+        """Return whether an explicit 1D LOD equals Metal kernel sampling.
+
+        Metal 1D and 1D-array textures always have exactly one mip level and
+        their sample() overloads take no LOD argument. Kernel functions have no
+        derivatives, so sample() selects level 0 with the magnification filter,
+        which is exactly what an explicit LOD of zero selects. Graphics stages
+        derive an implicit LOD that can select the minification filter instead,
+        so only programs whose emitted entry points are all kernels qualify.
+        """
+        if not getattr(self, "metal_compute_only_program", False):
+            return False
+        if self.literal_int_value(lod_arg, self.literal_int_constants) == 0:
+            return True
+        value = getattr(lod_arg, "value", lod_arg)
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return float(value) == 0.0
+        if isinstance(value, str):
+            text = value.strip()
+            while text and text[-1] in "fFhHlLuU":
+                text = text[:-1]
+            try:
+                return float(text) == 0.0
+            except ValueError:
+                return False
+        return False
+
+    def metal_program_is_compute_only(self, ast, target_stage):
+        stage_names = set()
+        for stage_type, stage in (getattr(ast, "stages", {}) or {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+            if getattr(stage, "entry_point", None) is not None:
+                stage_names.add(stage_name)
+        for func in getattr(ast, "functions", []) or []:
+            qualifier_name = function_stage_name(func)
+            if not qualifier_name:
+                continue
+            if should_emit_qualified_function(target_stage, qualifier_name):
+                stage_names.add(qualifier_name)
+        return stage_names == {"compute"}
+
     def unsupported_texture1d_sampling_option_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(texture_type)
         return (
@@ -26845,6 +26995,14 @@ class MetalCodeGen:
             return f"{texture_name}.sample({sampler_arg}, {coord})"
         if is_texture_sample_lod_operation(func_name) and extra_args:
             if self.is_texture1d_sample_resource(texture_type):
+                if self.metal_texture1d_explicit_lod_matches_kernel_sampling(
+                    extra_args[0]
+                ):
+                    if is_array_texture:
+                        return (
+                            f"{texture_name}.sample({sampler_arg}, {coord_xy}, {layer})"
+                        )
+                    return f"{texture_name}.sample({sampler_arg}, {coord})"
                 return self.unsupported_texture1d_sampling_option_call(
                     func_name, texture_type
                 )
