@@ -28,6 +28,7 @@ from ..ast import (
     FunctionCallNode,
     IdentifierNode,
     IfNode,
+    LiteralNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
@@ -1573,6 +1574,12 @@ class MetalCodeGen:
             ]
         self.prune_entry_scoped_declarations(scoped_ast, selected_copy_function)
         self.prune_entry_scoped_structs(scoped_ast, selected_copy_function)
+        # Scoping drops conversion helpers no call reaches; the struct members
+        # they came from are still needed (see
+        # ``collect_metal_constant_conversion_operators``).
+        scoped_ast.metal_constant_conversion_operators = (
+            self.collect_metal_constant_conversion_operators(self.all_functions(ast))
+        )
         return scoped_ast
 
     def entry_scoped_functions(self, ast, entry_function):
@@ -1883,6 +1890,14 @@ class MetalCodeGen:
             if getattr(cbuffer, "name", None)
         }
         all_functions = self.all_functions(ast)
+        self.metal_constant_conversion_operators = (
+            self.collect_metal_constant_conversion_operators(all_functions)
+        )
+        for struct_name, receivers in (
+            getattr(ast, "metal_constant_conversion_operators", None) or {}
+        ).items():
+            known = self.metal_constant_conversion_operators.setdefault(struct_name, [])
+            known += [item for item in receivers if item not in known]
         self.validate_metal_mesh_payload_parameter_placement(ast, all_functions)
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
@@ -3845,6 +3860,91 @@ class MetalCodeGen:
         native = self.metal_native_narrow_bitcast_storage_type(base)
         return native + suffix if native is not None else self.map_type(value_type)
 
+    METAL_CONVERSION_RECEIVER_RE = re.compile(
+        r"(?P<struct>[A-Za-z_][A-Za-z0-9_]*?)__operator_bool"
+        r"(?:__metal_receiver_(?P<cv>const_volatile|const|volatile|mutable)"
+        r"_(?P<spaces>[a-z_]+)_(?P<reference>unqualified|lvalue|rvalue))?"
+    )
+    METAL_RECEIVER_ADDRESS_SPACES = ("thread", "threadgroup", "device", "constant")
+
+    def collect_metal_constant_conversion_operators(self, functions):
+        """Return ``{struct: [(receiver qualifiers, value), ...]}``.
+
+        The Metal frontend moves a struct's ``operator bool()`` into a free
+        helper named ``Struct__operator_bool``, with a
+        ``__metal_receiver_<cv>_<address space>_<reference>`` suffix when it
+        has an overload per receiver, as MLX's masked GEMV's ``_NoMask`` has
+        for thread, threadgroup, device and constant values. Metal type-checks
+        branches that are statically dead, so a translated ``!mask`` or
+        ``bool(mask[i])`` needs the members again. Only helpers whose body is
+        a single ``return true;`` or ``return false;`` are restored, as
+        ``constexpr`` members with the same receiver qualifiers (a lone
+        operator, whose helper has no suffix, becomes a ``const`` member).
+        """
+
+        operators = {}
+        for function in functions or []:
+            match = self.METAL_CONVERSION_RECEIVER_RE.fullmatch(
+                str(getattr(function, "name", "") or "")
+            )
+            parameters = list(
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            body = getattr(function, "body", None)
+            statements = getattr(body, "statements", body)
+            if (
+                match is None
+                or self.type_name_string(getattr(function, "return_type", None))
+                != "bool"
+                or len(parameters) != 1
+                or self.type_name_string(getattr(parameters[0], "param_type", None))
+                != match.group("struct")
+                or not isinstance(statements, list)
+                or len(statements) != 1
+                or not isinstance(statements[0], ReturnNode)
+                or not isinstance(statements[0].value, LiteralNode)
+                or not isinstance(statements[0].value.value, bool)
+            ):
+                continue
+            if match.group("cv") is None:
+                # A lone operator's helper does not record whether the member
+                # was const. A literal body never writes its receiver, so a
+                # const member accepts every receiver the source's did.
+                qualifiers = {
+                    str(item).lower()
+                    for item in list(
+                        getattr(parameters[0], "qualifiers", []) or []
+                    ) + list(getattr(parameters[0].param_type, "qualifiers", []) or [])
+                }
+                receiver = ["const"] + (
+                    [
+                        space
+                        for space in self.METAL_RECEIVER_ADDRESS_SPACES
+                        if space in qualifiers
+                    ][:1]
+                    or ["thread"]
+                )
+            else:
+                spaces = match.group("spaces").split("_")
+                if not set(spaces) <= set(self.METAL_RECEIVER_ADDRESS_SPACES):
+                    continue
+                receiver = {
+                    "const_volatile": ["const", "volatile"],
+                    "const": ["const"],
+                    "volatile": ["volatile"],
+                    "mutable": [],
+                }[match.group("cv")] + spaces
+                receiver.append(
+                    {"unqualified": "", "lvalue": "&", "rvalue": "&&"}[
+                        match.group("reference")
+                    ]
+                )
+            text = " ".join(item for item in receiver if item)
+            entries = operators.setdefault(match.group("struct"), [])
+            if text not in {existing for existing, _ in entries}:
+                entries.append((text, statements[0].value.value))
+        return operators
+
     def metal_plain_struct_definition(self, node):
         if not isinstance(node, StructNode):
             return None
@@ -3889,6 +3989,13 @@ class MetalCodeGen:
                 "a position output even when the GLSL source did not write "
                 "gl_Position. */\n"
                 f"    float4 {fallback_position} [[position]];\n"
+            )
+        for receiver, value in (
+            getattr(self, "metal_constant_conversion_operators", {}) or {}
+        ).get(node.name, ()):
+            code += (
+                f"    constexpr operator bool() {receiver} "
+                f"{{ return {'true' if value else 'false'}; }}\n"
             )
         code += "};\n"
         dependencies.discard(node.name)
