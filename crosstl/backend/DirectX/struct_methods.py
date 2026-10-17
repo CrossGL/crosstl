@@ -13,7 +13,7 @@ reference semantics of an HLSL receiver within one invocation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, Iterator, Optional
+from typing import Callable, Dict, Iterable, Iterator
 
 from ..common_ast import (
     ArrayAccessNode,
@@ -37,7 +37,7 @@ class StructMethod:
     owner: str
     name: str
     static: bool = False
-    definition: Optional[FunctionNode] = None
+    definition: FunctionNode | None = None
     inline: bool = False
     mutates_receiver: bool = False
 
@@ -145,7 +145,7 @@ def method_local_names(function: FunctionNode, children) -> set:
 
 def analyze_receiver_mutations(
     table: StructMethodTable,
-    struct_fields: Dict[str, set],
+    struct_fields: dict[str, set],
     children,
     writes_argument: Callable[[FunctionCallNode, int], bool],
 ) -> None:
