@@ -1383,6 +1383,40 @@ unchanged upstream kernels, which must produce the same bytes. This covers
 2,496/17,832 entries; it does not run the upstream MLX test suite or
 redirect the MLX host runtime.
 
+`contracts/binary.current-tree.translation.json` pins all 4,122 entries of
+`binary.metal`: the scalar and vector kernels with one element per thread,
+with work per thread and on two-dimensional grids, and the strided kernels of
+one to three dimensions and of any rank, for all 24 operators over every
+dtype each one instantiates. `binary.metal` and `binary.h` are byte-identical
+at the corpus commit and `binary_ops.h` only changed complex `Power`, which
+now takes `log(hypot(re, im))`. Every other entry must reproduce, byte for
+byte, the Metal, OpenGL and DirectX artifact its complete-family translation
+contract pins there, under the same configuration and arithmetic profiles;
+the 15 complex power entries reproduce the current artifacts this contract
+pins. Required CI executes every entry on Metal, Mesa EGL and Direct3D 12
+WARP in six legs, 8,244 dispatches and 390,122 checked elements per target,
+over the same tails, short last tiles and strided, transposed, permuted and
+broadcast layouts as the copy family, with separate strides for both
+operands. Operands come from 254 domains over the 238 operator and dtype
+families in which every pair is defined in C++ and has an exactly defined
+result: integers wrap after promotion, with signed overflow, division by
+zero, `MIN / -1`, negative or oversized shifts and overflowing powers kept
+out; floating sums, products, quotients and remainders need no rounding and
+stay normal, next to signed zeros, infinities and NaNs, and float16
+remainders follow Metal's binary16 `fmod`, `x - trunc(x / y) * y` in float32,
+which gives NaN for an infinite divisor and +0 for an exact zero; selections and
+comparisons also take the extremes, the smallest normals and values one ulp
+from one; `LogAddExp`, `ArcTan2` and `Power` use only their exactly defined
+values, and complex operands follow `complex.h` with exact float32
+intermediates. An independent model gives every output element and a NaN
+result accepts any NaN. Outputs start at values that differ from their
+results, 16 trailing guards must keep their values, four decoys follow both
+inputs and every input must be unchanged. Metal also runs the unchanged
+upstream kernels, which must produce the same bytes. Rounding, subnormal and
+accuracy behaviour stays with the per-operator gates. This covers
+4,122/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

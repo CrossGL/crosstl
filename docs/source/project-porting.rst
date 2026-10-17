@@ -993,6 +993,24 @@ Metal also runs the unchanged upstream kernels, which the translation must
 match byte for byte. This is a 2,496/17,832 increment; it does not run the
 upstream MLX test suite or redirect the MLX host runtime.
 
+``binary.current-tree.translation.json`` pins all 4,122 entries of
+``binary.metal``: every scalar, vector, two-dimensional and strided layout for
+all 24 operators over the dtypes each instantiates. Only complex ``Power``
+changed at the corpus commit, so its 15 entries reproduce artifacts this
+contract pins and every other entry reproduces the Metal, OpenGL and DirectX
+artifact its complete-family translation contract pins. Each target executes
+8,244 dispatches. Operands come from per-operator domains in which every pair
+is defined in C++ and exactly modelled: integers wrap after promotion with
+undefined pairs kept out, floating results need no rounding and stay normal
+next to signed zeros, infinities and NaNs, float16 remainders follow Metal's
+binary16 ``fmod`` (``x - trunc(x / y) * y`` in float32), ``LogAddExp``,
+``ArcTan2`` and ``Power`` use only exactly defined values, and complex operands
+follow ``complex.h`` with exact intermediates. Guards and inputs must be
+unchanged, and Metal also runs the unchanged upstream kernels, which the
+translation must match byte for byte. Rounding and subnormal behaviour stays
+with the per-operator gates. This is a 4,122/17,832 increment; it does not run
+the upstream MLX test suite or redirect the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,
