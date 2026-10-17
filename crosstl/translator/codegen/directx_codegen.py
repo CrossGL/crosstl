@@ -28669,6 +28669,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         *HLSL_WAVE_SHUFFLE_AND_FILL_INTRINSICS,
     }
 
+    def hlsl_wave_shuffle_payload_type(self, value_type, mapped_value_type):
+        """The expected type that moves a shuffled value's register unchanged.
+
+        Exact bfloat16 values travel as their bits in a ``uint``. Generating
+        them for ``uint`` would convert the number, so ``simd_shuffle_down``
+        and ``simd_shuffle_and_fill_up`` of MLX's bfloat16 scan values moved
+        ``uint(float(x))``; the source type keeps the bits, as
+        ``WaveReadLaneAt`` already does.
+        """
+        if value_type is not None and self.is_hlsl_bfloat16_type(value_type):
+            return value_type
+        return mapped_value_type
+
     def generate_hlsl_wave_shuffle_and_fill_up_call(self, operation, args):
         value_type = self.expression_result_type(args[0])
         mapped_value_type = self.map_type(
@@ -28679,8 +28692,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"DirectX wave intrinsic '{operation}' requires a statically "
                 "known value type"
             )
-        value = self.generate_expression_with_expected(args[0], mapped_value_type)
-        fill = self.generate_expression_with_expected(args[1], mapped_value_type)
+        payload_type = self.hlsl_wave_shuffle_payload_type(
+            value_type, mapped_value_type
+        )
+        value = self.generate_expression_with_expected(args[0], payload_type)
+        fill = self.generate_expression_with_expected(args[1], payload_type)
         delta = self.generate_expression_with_expected(args[2], "uint")
         delta_type = self.map_type(self.expression_result_type(args[2]))
         if delta_type in {"int16_t", "uint16_t", "min16int", "min16uint"}:
@@ -28767,7 +28783,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or self.current_expression_expected_type
             )
             mapped_value_type = self.map_type(value_type)
-            value = self.generate_expression_with_expected(args[0], mapped_value_type)
+            value = self.generate_expression_with_expected(
+                args[0],
+                self.hlsl_wave_shuffle_payload_type(value_type, mapped_value_type),
+            )
             delta = self.generate_expression_with_expected(args[1], "uint")
             if self.software_subgroup_width is not None:
                 result = self.hlsl_software_subgroup_call(

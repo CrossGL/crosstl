@@ -1209,10 +1209,14 @@ of narrower types scan with Apple's `simd_prefix_*` intrinsics, everything
 else with the kernels' own `simd_shuffle_and_fill_up` loops. OpenGL and
 DirectX lower both to 32-lane software subgroups; DirectX adds with the
 `native-precise` binary32 policy, and its relative wave shuffles return the
-lane's own value out of range, as Apple's do. Complex `logaddexp` needed the
-software subgroup convergence pass to stage guarded inputs around helpers
-that call `cos`, `sin`, `sqrt` or `atan2`, end in `if`/`else` returns
-(complex `log1p`) or call the generated precise binary32 square root.
+lane's own value out of range, as Apple's do. DirectX holds an exact bfloat16
+value as its bits in a `uint` and its lane moves now pass those bits on; they
+used to move `uint(float(x))`, which gave the 24 bfloat16 max, min and
+`logaddexp` scans wrong words on Direct3D 12 WARP, and those DirectX artifacts
+are re-pinned. Complex `logaddexp` needed the software subgroup convergence
+pass to stage guarded inputs around helpers that call `cos`, `sin`, `sqrt` or
+`atan2`, end in `if`/`else` returns (complex `log1p`) or call the generated
+precise binary32 square root.
 Required CI executes every entry on Metal, Mesa EGL and Direct3D 12 WARP,
 1,824 dispatches and 3,019,068 checked elements per target, on grids of three
 groups. Contiguous kernels use `scan.cpp`'s 128 threads on three rows of 1 and

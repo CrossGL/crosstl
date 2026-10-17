@@ -891,7 +891,10 @@ products of types narrower than 8 bytes use Apple's ``simd_prefix_*``
 intrinsics, the rest the kernels' ``simd_shuffle_and_fill_up`` loops; OpenGL
 and DirectX lower both to 32-lane software subgroups, and DirectX selects
 ``native-precise`` binary32 addition and own-value out-of-range relative
-shuffles. The software subgroup convergence pass now stages guarded inputs
+shuffles. DirectX lane moves now pass an exact bfloat16 value's bits rather
+than ``uint(float(x))``, which gave the 24 bfloat16 max, min and
+``logaddexp`` scans wrong words on Direct3D 12 WARP; their DirectX artifacts
+are re-pinned. The software subgroup convergence pass now stages guarded inputs
 around helpers that call ``cos``, ``sin``, ``sqrt`` or ``atan2``, end in
 ``if``/``else`` returns or call the generated precise binary32 square root,
 which complex ``logaddexp`` needs. Each target executes 1,824 dispatches with
