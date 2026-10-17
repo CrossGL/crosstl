@@ -869,6 +869,8 @@ class MetalCodeGen:
         self.structured_buffer_counter_variables = []
         self.metal_buffer_resource_variables = []
         self.metal_resource_binding_indices_by_id = {}
+        self.metal_deferred_register_bindings = []
+        self.metal_hlsl_register_bindings_by_id = {}
         self.metal_source_binding_stage_by_id = {}
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_groupshared_globals = set()
@@ -1852,6 +1854,97 @@ class MetalCodeGen:
                 pending.extend(candidates)
         return reachable_names
 
+    def resource_binding_records(self):
+        """Describe the argument-table slot assigned to each resource.
+
+        Valid after ``generate``. Each record names the source resource, its Metal
+        namespace (``buffer``, ``texture`` or ``sampler``) and slot, the slot count
+        for arrays, and the HLSL register that bound it when the source used one.
+        Hidden buffers synthesized for a resource (structured-buffer lengths and
+        counters) carry ``of`` with the owning resource name.
+        """
+
+        def register_of(node):
+            return self.metal_hlsl_register_bindings_by_id.get(id(node))
+
+        def count_of(node):
+            try:
+                return max(int(self.global_resource_shape(node)[1] or 1), 1)
+            except Exception:  # noqa: BLE001 - shape inference is best effort here
+                return 1
+
+        records = []
+        for cbuffer in self.cbuffer_variables:
+            records.append(
+                {
+                    "name": getattr(cbuffer, "name", None),
+                    "parameter": self.cbuffer_parameter_name(cbuffer),
+                    "kind": "constant-buffer",
+                    "namespace": "buffer",
+                    "binding": self.cbuffer_binding_indices.get(id(cbuffer), 0),
+                    "count": 1,
+                    "register": register_of(cbuffer),
+                }
+            )
+        groups = (
+            ("buffer", "buffer", self.metal_buffer_resource_variables),
+            ("texture", "texture", self.texture_variables),
+            ("acceleration-structure", "buffer", self.acceleration_structure_variables),
+            ("visible-function-table", "buffer", self.visible_function_table_variables),
+            (
+                "intersection-function-table",
+                "buffer",
+                self.intersection_function_table_variables,
+            ),
+            ("structured-buffer", "buffer", self.structured_buffer_variables),
+            ("buffer-block", "buffer", self.glsl_buffer_block_variables),
+        )
+        for kind, namespace, entries in groups:
+            for entry in entries:
+                node, binding = entry[0], entry[1]
+                record = {
+                    "name": getattr(node, "name", None),
+                    "kind": kind,
+                    "namespace": namespace,
+                    "binding": binding,
+                    "count": count_of(node),
+                    "register": register_of(node),
+                }
+                if (
+                    kind in {"texture", "structured-buffer", "buffer"}
+                    and len(entry) > 2
+                ):
+                    record["type"] = str(entry[2])
+                records.append(record)
+        for kind, entries in (
+            ("structured-buffer-length", self.structured_buffer_length_variables),
+            ("structured-buffer-counter", self.structured_buffer_counter_variables),
+        ):
+            for node, binding, _type, _array_size in entries:
+                records.append(
+                    {
+                        "name": None,
+                        "of": getattr(node, "name", None),
+                        "kind": kind,
+                        "namespace": "buffer",
+                        "binding": binding,
+                        "count": count_of(node),
+                        "register": None,
+                    }
+                )
+        for node, binding, _array_size in self.sampler_variables:
+            records.append(
+                {
+                    "name": getattr(node, "name", None),
+                    "kind": "sampler",
+                    "namespace": "sampler",
+                    "binding": binding,
+                    "count": count_of(node),
+                    "register": register_of(node),
+                }
+            )
+        return records
+
     def generate_stage(self, ast, shader_type):
         """Generate Metal source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
@@ -1891,6 +1984,8 @@ class MetalCodeGen:
         self.structured_buffer_counter_variables = []
         self.metal_buffer_resource_variables = []
         self.metal_resource_binding_indices_by_id = {}
+        self.metal_deferred_register_bindings = []
+        self.metal_hlsl_register_bindings_by_id = {}
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_groupshared_globals = set()
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
@@ -22922,6 +23017,14 @@ class MetalCodeGen:
                 if self.explicit_resource_set_index(node) != descriptor_set:
                     continue
                 namespace, binding, resource_count, var_name = metadata
+                if descriptor_set is None and self.defer_hlsl_register_binding(
+                    node,
+                    namespace,
+                    resource_count,
+                    var_name,
+                    self.metal_namespace_register_classes(namespace),
+                ):
+                    continue
                 self.pre_reserve_explicit_resource_binding(
                     used_bindings,
                     source_bindings,
@@ -22931,6 +23034,113 @@ class MetalCodeGen:
                     var_name,
                     node,
                 )
+            if descriptor_set is None:
+                self.reserve_deferred_hlsl_register_bindings(
+                    used_bindings, source_bindings
+                )
+
+    HLSL_REGISTER_CLASS_ORDER = {"b": 0, "t": 1, "u": 2, "s": 3}
+
+    @staticmethod
+    def metal_namespace_register_classes(namespace):
+        if namespace == "buffer":
+            return ("b", "t", "u")
+        if namespace == "texture":
+            return ("t", "u")
+        if namespace == "sampler":
+            return ("s",)
+        return ()
+
+    def hlsl_register_binding(self, node, register_classes):
+        """Return ``(class, index)`` when ``node`` is bound only by an HLSL register.
+
+        HLSL register classes (``b``, ``t``, ``u`` and ``s``) are separate binding
+        namespaces, while Metal shares one argument table between constant,
+        shader-resource and unordered-access buffers and another between read-only
+        and read-write textures. Register numbers are therefore source bindings,
+        not target slots; explicit ``@binding``/``@buffer``/``@texture`` attributes
+        keep their exact target meaning.
+        """
+        selected = None
+        for attr in getattr(node, "attributes", None) or []:
+            attr_name = str(getattr(attr, "name", "") or "").lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if attr_name in {"binding", "buffer", "texture", "sampler"} and arguments:
+                return None
+            if attr_name != "register" or not arguments or len(arguments) > 1:
+                continue
+            raw_value = self.attribute_value_to_string(arguments[0])
+            if raw_value is None:
+                continue
+            raw_value = str(raw_value).strip().lower()
+            register_class = raw_value[:1]
+            digits = raw_value[1:]
+            if register_class not in register_classes or not digits.isdigit():
+                continue
+            selected = (register_class, int(digits))
+        return selected
+
+    def defer_hlsl_register_binding(
+        self, node, namespace, resource_count, name, register_classes
+    ):
+        register = self.hlsl_register_binding(node, register_classes)
+        if register is None:
+            return False
+        if any(entry[0] is node for entry in self.metal_deferred_register_bindings):
+            return True
+        self.metal_deferred_register_bindings.append(
+            (
+                node,
+                namespace,
+                register,
+                max(resource_count or 1, 1),
+                name,
+                len(self.metal_deferred_register_bindings),
+            )
+        )
+        return True
+
+    def reserve_deferred_hlsl_register_bindings(self, used_bindings, source_bindings):
+        """Assign Metal slots to register-bound resources after exact bindings.
+
+        Each resource keeps its register number when that slot is free in the Metal
+        namespace and otherwise takes the next free slot. Resources are visited in
+        register-class order (b, t, u, s), then register number, so the mapping does
+        not depend on declaration order. Overlapping registers of the same class
+        remain errors.
+        """
+        deferred = sorted(
+            self.metal_deferred_register_bindings,
+            key=lambda entry: (
+                self.HLSL_REGISTER_CLASS_ORDER.get(entry[2][0], 99),
+                entry[2][1],
+                entry[5],
+            ),
+        )
+        for node, namespace, register, count, name, _order in deferred:
+            if id(node) in self.metal_resource_binding_indices_by_id:
+                continue
+            register_class, register_index = register
+            self.reserve_source_resource_binding_range(
+                source_bindings,
+                f"register {register_class}",
+                0,
+                register_index,
+                count,
+                name,
+                stage_scope=self.metal_source_binding_stage_scope(node),
+            )
+            target_binding = self.next_available_resource_binding(
+                used_bindings, namespace, register_index, count
+            )
+            self.reserve_resource_binding_range(
+                used_bindings, "Metal", namespace, target_binding, count, name
+            )
+            self.metal_resource_binding_indices_by_id[id(node)] = target_binding
+            self.metal_hlsl_register_bindings_by_id[id(node)] = (
+                f"{register_class}{register_index}"
+            )
+        self.metal_deferred_register_bindings = []
 
     def next_available_resource_binding(
         self, used_bindings, namespace, binding_index, count
@@ -22979,6 +23189,14 @@ class MetalCodeGen:
                 cbuffer, {"binding", "buffer"}, ("b",)
             )
             if binding is None:
+                continue
+            if self.defer_hlsl_register_binding(
+                cbuffer,
+                "buffer",
+                1,
+                getattr(cbuffer, "name", "<anonymous>"),
+                ("b",),
+            ):
                 continue
             self.pre_reserve_explicit_resource_binding(
                 used_bindings,
