@@ -40825,7 +40825,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def glsl_software_subgroup_payload_type(self, operation, source_type):
         if (
-            operation == "WaveActiveSum"
+            operation in {"WaveActiveSum", "WaveActiveProduct"}
             or operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS
         ) and self.glsl_half_width(source_type) == 1:
             self.glsl_apply_half_contract("value", "half", None)
@@ -41097,9 +41097,10 @@ complex64_t crossgl_complex64_mod_assign(
                     active += " && lane + stride < activeCount"
                 combine = f"            {left} = {reduction(left, right)};\n"
                 if half_sum:
+                    node = "product" if product else "sum"
                     combine = (
-                        f"            precise float sum = {reduction(left, right)};\n"
-                        f"            {left} = {self.glsl_half_helper_names[1]}(sum);\n"
+                        f"            precise float {node} = {reduction(left, right)};\n"
+                        f"            {left} = {self.glsl_half_helper_names[1]}({node});\n"
                     )
                 code += (
                     f"{value_type} {helper}({value_type} value) {{\n"
@@ -41473,6 +41474,13 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             layout = scalar_storage_layout(self.glsl_normalized_source_type(value_type))
             exact_width = layout is not None and layout.bit_width == 32
+            if (
+                operation == "WaveActiveProduct"
+                and self.glsl_half_width(value_type) == 1
+            ):
+                # A binary32 product of two binary16 values is exact; the
+                # helper rounds it to binary16 at every node.
+                exact_width = True
             if not exact_width and layout is not None and layout.bit_width < 32:
                 if operation == "WaveReadLaneAt":
                     # Lane reads move canonical 32-bit registers unchanged.

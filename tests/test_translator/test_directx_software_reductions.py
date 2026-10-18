@@ -107,12 +107,55 @@ def test_software_reductions_reject_unsupported_payloads(value_type):
 
 
 def test_binary16_support_does_not_enable_other_narrow_reductions():
+    # 16-bit integer sums wrap at 16 bits, which a 32-bit software sum would
+    # not reproduce; only selections and binary16 arithmetic are native.
     source = _source(
         "uint",
-        "float16_t value = float16_t(1); float16_t total = WaveActiveProduct(value);",
+        "int16_t value = int16_t(1); int16_t total = WaveActiveSum(value);",
     )
-    with pytest.raises(DirectXSoftwareSubgroupError, match="binary16 sums, minima"):
+    with pytest.raises(
+        DirectXSoftwareSubgroupError, match="binary16 sums, products, minima"
+    ):
         _codegen().generate_stage(parse(source), "compute")
+
+
+@pytest.mark.parametrize("operation", ["WaveActiveMin", "WaveActiveMax"])
+@pytest.mark.parametrize("value_type", ["int16_t", "uint16_t"])
+def test_sixteen_bit_integer_extrema_select_native_operands(
+    tmp_path, operation, value_type
+):
+    # MLX's Min and Max reductions of int16 and uint16 call simd_min and
+    # simd_max on 16-bit values; a comparison selects one operand exactly.
+    source = _source(
+        "uint",
+        f"""{value_type} value = {value_type}(inputWords[index] * 977u);
+        {value_type} total = {operation}(value);
+        outputWords[index] = uint(total);""",
+    )
+    generated = _codegen().generate_stage(parse(source), "compute")
+    reducer = "min" if operation == "WaveActiveMin" else "max"
+    helper = f"__crossgl_software_subgroup_{reducer}_{value_type}("
+    assert f"{value_type} {helper}" in generated
+    assert (
+        f"groupshared {value_type} __crossgl_software_subgroup_scratch_{value_type}"
+        in (generated)
+    )
+    assert f"result = {reducer}(result, operand);" in generated
+    _compile(generated, tmp_path, profile="cs_6_2", flags=("-enable-16bit-types",))
+
+
+def test_binary16_products_round_natively(tmp_path):
+    source = _source(
+        "uint",
+        """float16_t value = float16_t(float(inputWords[index] % 3u) - 1.0);
+        float16_t total = WaveActiveProduct(value);
+        outputWords[index] = uint(float(total) + 2.0);""",
+    )
+    generated = _codegen().generate_stage(parse(source), "compute")
+    assert "float16_t __crossgl_software_subgroup_product_float16_t(" in generated
+    assert "precise float16_t product = " in generated
+    assert "stride <<= 1u" in generated
+    _compile(generated, tmp_path, profile="cs_6_2", flags=("-enable-16bit-types",))
 
 
 @pytest.mark.parametrize("operation", ["WavePrefixSum", "WavePrefixInclusiveProduct"])

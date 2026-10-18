@@ -605,6 +605,127 @@ def test_half_sums_execute_with_partial_groups_and_scratch_reuse(tmp_path, shape
     assert all(item["unchanged"] for item in observations.values())
 
 
+# MLX's Prod<half> reductions call simd_product on binary16 values. Every
+# pattern below keeps each partial product exact and inside binary16's range
+# for any association order, so Metal's unspecified order and the software
+# helper's pairwise tree give the same words.
+HALF_PRODUCT_PATTERNS = (
+    [1.0] * 32,
+    [-1.0] * 32,
+    [-1.0] * 31 + [2.0],
+    [2.0] * 15 + [0.5] * 17,
+    [-2.0, 0.5] * 15 + [1.0, 1.0],
+    [0.0] + [1.0] * 31,
+    [-0.0] + [-1.0] * 31,
+    [2**-24] + [2.0] * 4 + [1.0] * 27,
+    [65504.0] + [-1.0] * 31,
+    [math.inf] + [-1.0] * 31,
+    [math.inf, 0.0] + [1.0] * 30,
+    [math.nan] + [1.0] * 31,
+)
+
+
+def _half_product_source(size):
+    return f"""#include <metal_stdlib>
+using namespace metal;
+uint half_bits(half value) {{
+    return isnan(value) ? 0x7e00u : uint(as_type<ushort>(value));
+}}
+kernel void half_products(const device uint* inputs [[buffer(0)]],
+                          device uint* outputs [[buffer(1)]],
+                          uint invocation [[thread_index_in_threadgroup]],
+                          uint3 group [[threadgroup_position_in_grid]]) {{
+    uint index = group.x * {size}u + invocation;
+    half value = as_type<half>(ushort(inputs[index]));
+    outputs[index] = half_bits(simd_product(value));
+}}
+"""
+
+
+def _half_product_reference(words):
+    product = math.prod(_half_value(word) for word in words)
+    return 0x7E00 if math.isnan(product) else _half_word(product)
+
+
+def test_half_product_reference_is_exact_for_every_order():
+    for pattern in HALF_PRODUCT_PATTERNS:
+        words = [_half_word(value) for value in pattern]
+        values = [_half_value(word) for word in words]
+        assert values == pattern or any(math.isnan(value) for value in pattern)
+        # Powers of two whose growing and shrinking factors each stay inside
+        # binary16 keep every partial product of every order exact.
+        finite = [abs(value) for value in values if math.isfinite(value) and value]
+        assert all(math.frexp(value)[0] == 0.5 for value in finite if value != 65504)
+        assert math.prod(value for value in finite if value > 1) <= 65504
+        assert math.prod(value for value in finite if value < 1) >= 2**-24
+    assert _half_product_reference([_half_word(-1.0)] * 31 + [0x4000]) == 0xC000
+    assert _half_product_reference([0x8000] + [_half_word(-1.0)] * 31) == 0x0000
+    assert _half_product_reference([0x7C00, 0] + [0x3C00] * 30) == 0x7E00
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_half_product_package_rounds_every_node(tmp_path, target):
+    _, descriptor, package = _package(
+        tmp_path, target, "float", (32, 1, 1), source=_half_product_source(32)
+    )
+    generated = (package / descriptor["artifact"]["packagePath"]).read_text()
+    assert "simd_product(" not in generated and "WaveActiveProduct(" not in generated
+    if target == "directx":
+        assert "precise float16_t product = " in generated
+    else:
+        assert "precise float product = " in generated
+        assert "= crossgl_round_half1(product);" in generated
+    compiled = tmp_path / "compiled"
+    compiled.mkdir()
+    _compile(generated, target, compiled)
+
+
+@pytest.mark.parametrize("shape", [(5, 1, 1), (32, 1, 1), (7, 5, 1), (32, 4, 1)])
+def test_half_products_execute_with_partial_groups(tmp_path, shape):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required partial subgroup readbacks")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    size = math.prod(shape)
+    words, wanted = [], []
+    for pattern in HALF_PRODUCT_PATTERNS:
+        group = [_half_word(pattern[index % 32]) for index in range(size)]
+        words.extend(group)
+        for start in range(0, size, 32):
+            lanes = group[start : start + 32]
+            wanted.extend([_half_product_reference(lanes)] * len(lanes))
+    wanted.extend([0xDEAD] * 32)
+    source, descriptor, package = _package(
+        tmp_path, target, "float", shape, source=_half_product_source(size)
+    )
+
+    def payload(data):
+        return dict(dtype="uint32", shape=[len(data)], values=data)
+
+    inputs = _bound_values(
+        descriptor,
+        {"inputs": payload(words), "outputs": payload([0xDEAD] * len(wanted))},
+    )
+    expected = _bound_values(descriptor, {"outputs": payload(wanted)})
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        expected,
+        dict(
+            workgroupCount=[len(HALF_PRODUCT_PATTERNS), 1, 1],
+            workgroupSize=list(shape),
+        ),
+        observe_inputs=[name for name in inputs if name not in expected],
+    )
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="half_products",
+    )
+
+
 # MLX's non-precise block softmax reduces binary16 values, and its bfloat16
 # overloads convert float reductions back, under ``simd_group_id == 0``. A guard
 # on the subgroup index alone includes each subgroup completely or not at all,

@@ -214,8 +214,25 @@ def test_integer_shuffle_keeps_overflow_safe_canonical_offsets(tmp_path, kind):
     _compile(generated, "directx", tmp_path)
 
 
-@pytest.mark.parametrize("kind", KINDS)
-@pytest.mark.parametrize("operation", ["Sum", "Min", "Max", "Product"])
+# 16-bit integer minima and maxima select one native operand, so they are
+# supported (test_directx_software_reductions.py runs them); every other
+# reduction of these payloads stays unsupported.
+UNSUPPORTED_REDUCTIONS = [
+    (kind, operation)
+    for kind in KINDS
+    for operation in ("Sum", "Min", "Max", "Product")
+    if not (KINDS[kind][2] == 16 and operation in ("Min", "Max"))
+]
+
+
+def test_unsupported_reductions_keep_every_wide_and_arithmetic_case():
+    assert len(UNSUPPORTED_REDUCTIONS) == 12
+    assert ("short", "Sum") in UNSUPPORTED_REDUCTIONS
+    assert ("ulong", "Max") in UNSUPPORTED_REDUCTIONS
+    assert ("ushort", "Min") not in UNSUPPORTED_REDUCTIONS
+
+
+@pytest.mark.parametrize(("kind", "operation"), UNSUPPORTED_REDUCTIONS)
 def test_integer_shuffle_support_does_not_enable_wider_reductions(kind, operation):
     value_type = KINDS[kind][0]
     with pytest.raises(DirectXSoftwareSubgroupError) as error:

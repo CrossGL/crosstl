@@ -7681,11 +7681,23 @@ class HLSLCodeGen:
             and mapped_value_type == "float16_t"
         ):
             valid_type = True
+        if operation in {"WaveActiveMin", "WaveActiveMax"} and mapped_value_type in {
+            "int16_t",
+            "uint16_t",
+        }:
+            # A comparison selects one operand, so 16-bit integer extrema are
+            # exact in their native registers.
+            valid_type = True
+        binary16_product = (
+            operation == "WaveActiveProduct" and mapped_value_type == "float16_t"
+        )
+        if binary16_product:
+            # Native binary16 multiplies round every node of the product tree.
+            valid_type = True
         narrow_wrap = None
         if (
-            operation == "WaveActiveProduct"
-            or operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
-        ):
+            operation == "WaveActiveProduct" and not binary16_product
+        ) or operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS:
             layout = scalar_storage_layout(self.type_name_string(value_type))
             scan = operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
             if (
@@ -7714,7 +7726,8 @@ class HLSLCodeGen:
             raise self.hlsl_software_subgroup_error(
                 "DirectX software subgroup votes require scalar bool payloads; "
                 "arithmetic supports 32-bit float, int, and uint, plus binary16 sums, "
-                "minima and maxima; shuffles also support signed and unsigned 16-bit "
+                "products, minima and maxima and 16-bit integer minima and maxima; "
+                "shuffles also support signed and unsigned 16-bit "
                 "and 64-bit integers and two-word uint2 payloads",
                 workgroup_size=self.hlsl_software_subgroup_workgroup_size,
                 operation=operation,

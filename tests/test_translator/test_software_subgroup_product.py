@@ -230,7 +230,7 @@ def test_product_rejects_unproven_barrier_participation(target, body):
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 @pytest.mark.parametrize(
     "kind",
-    ["bool", "double", "float2", "int64_t", "half", "float16_t", "uint16_t", "int8_t"],
+    ["bool", "double", "float2", "int64_t", "uint16_t", "int8_t"],
 )
 def test_product_rejects_unsupported_payloads(target, kind):
     with pytest.raises(ValueError):
@@ -242,6 +242,41 @@ def test_product_rejects_unsupported_payloads(target, kind):
             ),
             "compute",
         )
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("kind", ["half", "float16_t"])
+def test_binary16_products_round_every_node(tmp_path, target, kind):
+    # MLX's Prod<half> reductions call simd_product on binary16 values. A
+    # binary32 product of two binary16 values is exact, so rounding it once to
+    # binary16 gives the correctly rounded binary16 product at every node.
+    generated = _codegen(target).generate_stage(
+        parse(
+            _canonical(
+                f"uint counter = invocation; {kind} value = {kind}(float(counter++ % 3u) - 1.0); "
+                f"{kind} total = WaveActiveProduct(value); results[invocation] = uint(float(total) + 2.0);"
+            )
+        ),
+        "compute",
+    )
+    assert generated.count("counter++") == 1
+    assert "WaveActiveProduct(" not in generated and "subgroupMul(" not in generated
+    assert "stride <<= 1u" in generated
+    if target == "directx":
+        assert (
+            "groupshared float16_t __crossgl_software_subgroup_scratch_float16_t" in (
+                generated
+            )
+        )
+        assert "precise float16_t product = " in generated
+        _compile(
+            generated, target, tmp_path, directx_compile_flags=("-enable-16bit-types",)
+        )
+    else:
+        assert "crossglSoftwareSubgroupProductHalf" in generated
+        assert "precise float product = " in generated
+        assert "= crossgl_round_half1(product);" in generated
+        _compile(generated, target, tmp_path)
 
 
 @pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
