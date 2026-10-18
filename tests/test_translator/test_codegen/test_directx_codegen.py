@@ -47731,6 +47731,279 @@ def test_hlsl_private_pointer_descending_compound_step_preserves_offset_slice():
     assert "backing + 4" not in generated
 
 
+def test_hlsl_private_pointer_tracks_cumulative_loop_rebase(tmp_path):
+    shader = """
+    shader CumulativePrivatePointerRebase {
+        void write_values(thread float* values) {
+            for (int i = 0; i < 3; ++i) {
+                values += 2 * i;
+                values[1] = 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[8];
+                write_values(backing);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Offsets 0, 2 and 6 reach element 7, so the view needs all eight values.
+    assert (
+        generated.count("void write_values(inout float values[8], int values_base)")
+        == 2
+    )
+    assert "values_base += int((2 * i));" in generated
+    assert "values += " not in generated
+    assert "values[(values_base + 1)] = 1.0;" in generated
+    assert "write_values(backing, 0);" in generated
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_private_pointer_lowers_mlx_qdot_pointer_steps(tmp_path):
+    shader = """
+    shader QuantizedDotPointerSteps {
+        float qdot3(thread float* x_thread) {
+            float accum = 0.0;
+            for (int i = 0; i < (16 / 8); i++) {
+                x_thread += 8 * i;
+                accum += x_thread[0];
+                accum += x_thread[7];
+            }
+            return accum;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float x_thread[16];
+                float total = qdot3(x_thread);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float qdot3(inout float x_thread[16], int x_thread_base)" in generated
+    assert "inout float x_thread[8]" not in generated
+    assert "x_thread_base += int((8 * i));" in generated
+    assert "x_thread += " not in generated
+    assert "accum += x_thread[(x_thread_base + 7)];" in generated
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_private_pointer_tracks_forwarded_rebase(tmp_path):
+    shader = """
+    shader ForwardedPrivatePointerRebase {
+        void write_one(thread float* values) {
+            values[1] = 1.0;
+        }
+
+        void write_values(thread float* values) {
+            for (int i = 0; i < 3; ++i) {
+                values += 2 * i;
+                write_one(values);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[8];
+                write_values(backing);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void write_values(inout float values[8], int values_base)" in generated
+    assert "values_base += int((2 * i));" in generated
+    assert "write_one(values, values_base);" in generated
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_private_pointer_lowers_straight_line_and_conditional_rebases(
+    tmp_path,
+):
+    shader = """
+    shader StraightLinePrivatePointerRebase {
+        StructuredBuffer<int> flags @ binding(0);
+
+        void write_values(thread float* values, int flag) {
+            values += 1;
+            if (flag > 0) {
+                values += 4;
+            }
+            values -= 1;
+            values[1] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[6];
+                write_values(backing, buffer_load(flags, 0));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # The view starts at 0 or 4 after the branch, so element 1 needs extent 6.
+    assert "void write_values(inout float values[6], int values_base, int flag)" in (
+        generated
+    )
+    assert "values_base += int(1);" in generated
+    assert "values_base += int(4);" in generated
+    assert "values_base -= int(1);" in generated
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "values += 0; values -= 0; values[0] = 1.0;",
+        "for (int i = 0; i < (8 / 8); ++i) { values += 8 * i; values[0] = 1.0; }",
+    ],
+    ids=["literal-zero", "loop-proven-zero"],
+)
+def test_hlsl_private_pointer_elides_proven_zero_rebase(body, tmp_path):
+    shader = f"""
+    shader ZeroPrivatePointerRebase {{
+        void write_value(thread float* values) {{
+            {body}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                float backing[2];
+                write_value(backing);
+            }}
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "values_base +=" not in generated
+    assert "values_base -=" not in generated
+    assert "values += " not in generated
+    assert "values[(values_base + 0)] = 1.0;" in generated
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_private_pointer_rejects_cumulative_rebase_out_of_bounds():
+    shader = """
+    shader CumulativePrivatePointerOutOfBounds {
+        void write_values(thread float* values) {
+            for (int i = 0; i < 3; ++i) {
+                values += 2 * i;
+                values[1] = 1.0;
+            }
+        }
+
+        void dispatch() {
+            float backing[7];
+            write_values(backing);
+        }
+    }
+    """
+
+    with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason == "view-out-of-bounds"
+    assert "requires elements 0 through 7" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        (
+            "for (int i = 0; i < count; ++i) { values += 1; values[0] = 1.0; }",
+            "statically enumerable iterations",
+        ),
+        (
+            "for (int i = 0; i < 2; ++i) { values += 1 - (3 * i); values[0] = 1.0; }",
+            "may become negative (-1)",
+        ),
+        (
+            "for (int i = 0; i < 2; ++i) { values += 1; i += 0; values[0] = 1.0; }",
+            "statically enumerable iterations",
+        ),
+        (
+            "for (int i = 0; i < 2; ++i) { if (count > 0) { break; } values += 1; }",
+            "statically enumerable iterations",
+        ),
+        (
+            "int step = 1; while (step < count) { values += step; step += 1; }",
+            "statically enumerable iterations",
+        ),
+        ("values += count; values[0] = 1.0;", "not statically bounded"),
+        ("values += next_offset(); values[0] = 1.0;", "has side effects"),
+        (
+            "for (int i = 0; i < 2147483647; ++i) { values += i + 1; values[0] = 1.0; }",
+            "statically enumerable iterations",
+        ),
+    ],
+    ids=[
+        "unknown-trip-count",
+        "negative-cumulative-offset",
+        "counter-written-in-body",
+        "early-exit",
+        "while-loop",
+        "unknown-offset",
+        "side-effecting-offset",
+        "excessive-iterations",
+    ],
+)
+def test_hlsl_private_pointer_rejects_unprovable_rebase(body, detail):
+    shader = f"""
+    shader UnprovablePrivatePointerRebase {{
+        int next_offset() {{
+            return 0;
+        }}
+
+        void write_values(thread float* values, int count) {{
+            {body}
+            values[0] = 2.0;
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                float backing[8];
+                write_values(backing, 2);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXPrivatePointerParameterError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason == "pointer-parameter-rebinding"
+    assert excinfo.value.function_name == "write_values"
+    assert excinfo.value.parameter_name == "values"
+    assert detail in str(excinfo.value)
+
+
 def test_hlsl_metal_private_scalar_struct_view_materializes_exact_value(tmp_path):
     shader = """
     #include <metal_stdlib>

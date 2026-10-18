@@ -414,6 +414,15 @@ from .workgroup_access_contracts import parse_workgroup_access_assertions
 # positive extent, so the pair cannot collide with a concrete contract.
 HLSL_NULL_WORKGROUP_POINTER_CONTRACT = ("nullptr", 0)
 
+# Private pointer parameters lower to ``array, int base``.  A Metal rebase such
+# as ``x_thread += 8 * i`` becomes ``x_thread_base += int(8 * i)``; the analysis
+# tracks the rebased view start as an interval under this tuple key, which can
+# never collide with an identifier name in the same interval map.
+HLSL_PRIVATE_POINTER_OFFSET_KEY = "private-pointer-view-offset"
+HLSL_PRIVATE_POINTER_MAX_REBASE_ITERATIONS = 4096
+HLSL_PRIVATE_POINTER_MAX_REBASE_SIMULATION_STEPS = 1 << 16
+HLSL_PRIVATE_POINTER_BASE_MAX = (1 << 31) - 1
+
 
 class DirectXUnresolvedSourceTypeError(ValueError):
     """Diagnostic exception for source expressions with missing type metadata."""
@@ -2233,6 +2242,9 @@ class HLSLCodeGen:
         self.hlsl_resource_pointer_postincrement_helpers = {}
         self.hlsl_private_pointer_reinterpret_word_views = {}
         self.hlsl_private_pointer_zero_index_access_ids = set()
+        self.hlsl_private_pointer_rebase_ids = set()
+        self.hlsl_private_pointer_nonzero_rebase_ids = set()
+        self.hlsl_private_pointer_rejected_rebases = {}
         self.current_hlsl_private_pointer_variant = {}
         self.current_hlsl_private_pointer_base_names = {}
         self.function_hlsl_workgroup_pointer_parameters = {}
@@ -3554,6 +3566,9 @@ class HLSLCodeGen:
         self.hlsl_resource_pointer_postincrement_helpers = {}
         self.hlsl_private_pointer_reinterpret_word_views = {}
         self.hlsl_private_pointer_zero_index_access_ids = set()
+        self.hlsl_private_pointer_rebase_ids = set()
+        self.hlsl_private_pointer_nonzero_rebase_ids = set()
+        self.hlsl_private_pointer_rejected_rebases = {}
         self.current_hlsl_private_pointer_variant = {}
         self.current_hlsl_private_pointer_base_names = {}
         self.function_hlsl_workgroup_pointer_parameters = {}
@@ -23942,6 +23957,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = node.right
             op = getattr(node, "operator", "=")
 
+        private_rebase = self.generate_hlsl_private_pointer_rebase_assignment(
+            node, target, value, op, statement_context=statement_context
+        )
+        if private_rebase is not None:
+            return private_rebase
         self.hlsl_private_pointer_word_view_write_error(target)
         self.hlsl_storage_struct_view_write_error(target)
         record_transfer = self.generate_hlsl_workgroup_record_transfer(
@@ -24181,6 +24201,56 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if mapped_type == "int64_t":
             return "int64_t"
         return "int"
+
+    def generate_hlsl_private_pointer_rebase_assignment(
+        self, node, target, value, op, *, statement_context=False
+    ):
+        """Lower ``p += n`` on a private pointer parameter to ``p_base += int(n)``.
+
+        Private pointer parameters are emitted as ``array, int base`` pairs, so
+        moving the pointer moves only the by-value base index.  The private
+        pointer analysis must have proven every reachable view offset of this
+        rebase non-negative and within the backing arrays it validated.
+        """
+
+        name = self.hlsl_private_pointer_rebase_target(
+            node, set(self.current_hlsl_private_pointer_base_names)
+        )
+        if name is None:
+            return None
+        function_name = self.current_function_name
+
+        def reject(detail):
+            raise DirectXPrivatePointerParameterError(
+                "DirectX cannot rebase private pointer parameter "
+                f"'{function_name}.{name}' because {detail}",
+                function_name=function_name,
+                parameter_name=name,
+                reason="pointer-parameter-rebinding",
+                source_location=getattr(node, "source_location", None),
+            )
+
+        rejected = self.hlsl_private_pointer_rejected_rebases.get(id(node))
+        if rejected is not None:
+            reject(rejected)
+        if id(node) not in self.hlsl_private_pointer_rebase_ids:
+            reject("no bounded view offset was proven for it")
+        if not statement_context:
+            reject("the rebased pointer value is used")
+        if id(node) not in self.hlsl_private_pointer_nonzero_rebase_ids:
+            return ""
+        scalar_parameters = self.function_private_pointer_scalar_parameters.get(
+            function_name, set()
+        )
+        variant = self.current_hlsl_private_pointer_variant.get(name)
+        if name in scalar_parameters:
+            reject("it is bound to a scalar")
+        if self.hlsl_private_pointer_word_view_for_variant(variant) is not None:
+            reject("it is bound to a reinterpreted scalar view")
+        operator = self.map_operator(op)
+        rendered_delta = self.generate_expression(value)
+        base_name = self.current_hlsl_private_pointer_base_names[name]
+        return f"{base_name} {operator} int({rendered_delta})"
 
     def generate_hlsl_resource_pointer_offset_assignment(
         self, target, value, op, *, statement_context=False
@@ -41785,7 +41855,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return {
                     "root_kind": "parameter",
                     "root": name,
-                    "offset": (0, 0),
+                    "offset": (
+                        (intervals or {}).get(
+                            (HLSL_PRIVATE_POINTER_OFFSET_KEY, name), (0, 0)
+                        )
+                    ),
                     "side_effecting": False,
                 }
             if name in local_extents:
@@ -41928,6 +42002,253 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return loop_name, (reachable_minimum, start[0])
         return loop_name, None
 
+    def hlsl_private_pointer_rebase_target(self, node, parameter_names):
+        """Return the private pointer parameter moved by ``p += n`` or ``p -= n``."""
+
+        if not isinstance(node, AssignmentNode):
+            return None
+        if self.map_operator(getattr(node, "operator", "=")) not in {"+=", "-="}:
+            return None
+        target = getattr(node, "target", getattr(node, "left", None))
+        if not isinstance(target, (str, IdentifierNode, VariableNode)):
+            return None
+        name = self.expression_name(target)
+        return name if name in parameter_names else None
+
+    def hlsl_private_pointer_statement_assignment_ids(self, function):
+        """Return ids of assignments whose value is discarded as a statement."""
+
+        assignment_ids = set()
+
+        def visit_statement(statement):
+            if statement is None:
+                return
+            if isinstance(statement, (list, tuple)):
+                for child in statement:
+                    visit_statement(child)
+                return
+            if isinstance(statement, AssignmentNode):
+                assignment_ids.add(id(statement))
+                return
+            if isinstance(statement, ExpressionStatementNode):
+                expression = getattr(statement, "expression", None)
+                if isinstance(expression, AssignmentNode) and not getattr(
+                    statement, "is_tail_expression", False
+                ):
+                    assignment_ids.add(id(expression))
+                return
+            if isinstance(statement, BlockNode):
+                visit_statement(getattr(statement, "statements", None))
+                return
+            if isinstance(statement, IfNode):
+                visit_statement(getattr(statement, "then_branch", None))
+                visit_statement(getattr(statement, "else_branch", None))
+                for branch in getattr(statement, "else_if_bodies", []) or []:
+                    visit_statement(branch)
+                return
+            if isinstance(
+                statement, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)
+            ):
+                visit_statement(getattr(statement, "body", None))
+                return
+            if isinstance(statement, MatchNode):
+                for arm in getattr(statement, "arms", []) or []:
+                    visit_statement(getattr(arm, "body", None))
+                return
+            if isinstance(statement, SwitchNode):
+                for case in getattr(statement, "cases", []) or []:
+                    visit_statement(getattr(case, "statements", None))
+                visit_statement(getattr(statement, "default_case", None))
+
+        visit_statement(getattr(function, "body", None))
+        return assignment_ids
+
+    def hlsl_private_pointer_mutation_root_names(self, target):
+        if isinstance(target, (str, IdentifierNode, VariableNode)):
+            name = self.expression_name(target)
+            return {name} if name else set()
+        if isinstance(target, ArrayAccessNode):
+            return self.hlsl_private_pointer_mutation_root_names(target.array)
+        if isinstance(target, MemberAccessNode):
+            return self.hlsl_private_pointer_mutation_root_names(target.object)
+        if isinstance(target, SwizzleNode):
+            return self.hlsl_private_pointer_mutation_root_names(
+                getattr(target, "expression", None)
+            )
+        return set()
+
+    HLSL_PRIVATE_POINTER_OUTPUT_BUILTINS = frozenset(
+        {"modf", "frexp", "sincos", "remquo"}
+    )
+
+    def hlsl_private_pointer_call_writes_argument(
+        self, call, argument_index, functions_by_name
+    ):
+        name = self.function_call_name(call)
+        functions_by_name = functions_by_name or {}
+        function = functions_by_name.get(name)
+        if function is None and isinstance(name, str):
+            function = functions_by_name.get(self.hlsl_materialized_function_name(name))
+        if function is None:
+            return name in self.HLSL_PRIVATE_POINTER_OUTPUT_BUILTINS or str(
+                name
+            ).startswith(("atomic", "Interlocked"))
+        parameters = list(getattr(function, "parameters", []) or [])
+        if argument_index >= len(parameters):
+            return True
+        parameter = parameters[argument_index]
+        if self.hlsl_parameter_direction_qualifiers(parameter) & {"out", "inout"}:
+            return True
+        parameter_type = getattr(
+            parameter, "param_type", getattr(parameter, "vtype", None)
+        )
+        return isinstance(parameter_type, (ReferenceType, PointerType)) or any(
+            hasattr(parameter_type, attribute)
+            for attribute in ("referenced_type", "pointee_type")
+        )
+
+    def hlsl_private_pointer_mutated_names(self, root, functions_by_name=None):
+        """Return names a subtree may write.
+
+        Identifiers passed to ``out``/``inout``/reference/pointer parameters of
+        user functions, or to output builtins, count as written.
+        """
+
+        mutated = set()
+        for node in self.walk_ast(root):
+            if isinstance(node, AssignmentNode):
+                mutated.update(
+                    self.hlsl_private_pointer_mutation_root_names(
+                        getattr(node, "target", getattr(node, "left", None))
+                    )
+                )
+            elif isinstance(node, UnaryOpNode) and (
+                self.map_operator(node.op) in {"++", "--", "&"}
+                or node.op in {
+                    "PRE_INCREMENT",
+                    "PRE_DECREMENT",
+                    "POST_INCREMENT",
+                    "POST_DECREMENT",
+                }
+            ):
+                mutated.update(
+                    self.hlsl_private_pointer_mutation_root_names(node.operand)
+                )
+            elif isinstance(node, FunctionCallNode):
+                for index, argument in enumerate(getattr(node, "arguments", []) or []):
+                    if self.hlsl_private_pointer_call_writes_argument(
+                        node, index, functions_by_name
+                    ):
+                        mutated.update(
+                            self.hlsl_private_pointer_mutation_root_names(argument)
+                        )
+        return mutated
+
+    def hlsl_private_pointer_rebase_loop_iteration_values(
+        self, node, intervals, constants, functions_by_name=None
+    ):
+        """Return the finite iteration values of a loop that rebases a view.
+
+        The loop must count with a constant step from an exact start towards a
+        bound the interval analysis can prove, and its body must not leave the
+        loop early or write the counter or the bound.  Otherwise ``None``.
+        """
+
+        init = getattr(node, "init", None)
+        loop_name = getattr(init, "name", None)
+        start = intervals.get(loop_name) if loop_name else None
+        if start is None or start[0] != start[1]:
+            return None
+        condition = getattr(node, "condition", None)
+        if not isinstance(
+            condition, BinaryOpNode
+        ) or self.hlsl_private_pointer_expression_has_side_effects(condition):
+            return None
+
+        update = getattr(node, "update", None)
+        step = None
+        if isinstance(update, UnaryOpNode):
+            update_operator = self.map_operator(update.op)
+            if self.expression_name(update.operand) == loop_name:
+                if update_operator == "++" or update.op in {
+                    "PRE_INCREMENT",
+                    "POST_INCREMENT",
+                }:
+                    step = 1
+                elif update_operator == "--" or update.op in {
+                    "PRE_DECREMENT",
+                    "POST_DECREMENT",
+                }:
+                    step = -1
+        elif isinstance(update, AssignmentNode):
+            update_target = getattr(update, "target", getattr(update, "left", None))
+            update_value = getattr(update, "value", getattr(update, "right", None))
+            update_operator = self.map_operator(getattr(update, "operator", "="))
+            update_interval = self.hlsl_private_pointer_interval(
+                update_value, intervals, constants
+            )
+            if (
+                self.expression_name(update_target) == loop_name
+                and update_operator in {"+=", "-="}
+                and update_interval is not None
+                and update_interval[0] == update_interval[1]
+            ):
+                step = update_interval[0]
+                if update_operator == "-=":
+                    step = -step
+        if step in {None, 0}:
+            return None
+
+        body = getattr(node, "body", None)
+        for child in self.walk_ast(body):
+            if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
+                return None
+            if isinstance(child, (VariableNode, ArrayNode)) and (
+                getattr(child, "name", None) == loop_name
+            ):
+                return None
+        mutated = self.hlsl_private_pointer_mutated_names(body, functions_by_name)
+        if loop_name in mutated:
+            return None
+        dependencies = {
+            getattr(child, "name", None)
+            for child in self.walk_ast(condition)
+            if isinstance(child, (IdentifierNode, VariableNode))
+        }
+        dependencies.discard(loop_name)
+        if dependencies & mutated:
+            return None
+
+        proven_name, loop_interval = self.hlsl_private_pointer_loop_interval(
+            node, intervals, constants
+        )
+        if proven_name != loop_name or loop_interval is None:
+            return None
+        first = start[0]
+        if step > 0:
+            if loop_interval[0] != first or loop_interval[1] < first:
+                return None
+            iteration_count = ((loop_interval[1] - first) // step) + 1
+            if iteration_count > HLSL_PRIVATE_POINTER_MAX_REBASE_ITERATIONS:
+                return None
+            values = tuple(range(first, loop_interval[1] + 1, step))
+        else:
+            if loop_interval[1] != first or loop_interval[0] > first:
+                return None
+            iteration_count = ((first - loop_interval[0]) // (-step)) + 1
+            if iteration_count > HLSL_PRIVATE_POINTER_MAX_REBASE_ITERATIONS:
+                return None
+            values = tuple(range(first, loop_interval[0] - 1, step))
+        if not values or (min(values), max(values)) != loop_interval:
+            return None
+        terminal_value = values[-1] + step
+        if any(
+            value < -(1 << 31) or value > HLSL_PRIVATE_POINTER_BASE_MAX
+            for value in (*values, terminal_value)
+        ):
+            return None
+        return values
+
     def hlsl_analyze_private_pointer_function(
         self, function, functions_by_name, direct_spans, calls
     ):
@@ -41994,6 +42315,96 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             literal = self.literal_int_value(value, constants)
             if literal is not None:
                 intervals[name] = (literal, literal)
+        offset_keys = tuple(
+            (HLSL_PRIVATE_POINTER_OFFSET_KEY, name) for name in sorted(parameter_names)
+        )
+        for key in offset_keys:
+            intervals[key] = (0, 0)
+        statement_assignment_ids = self.hlsl_private_pointer_statement_assignment_ids(
+            function
+        )
+        rebase_state = {"unsafe_depth": 0, "simulation_steps": 0}
+
+        def contains_rebase(node):
+            return any(
+                self.hlsl_private_pointer_rebase_target(child, parameter_names)
+                is not None
+                for child in self.walk_ast(node)
+            )
+
+        def reject_rebase(node, detail):
+            self.hlsl_private_pointer_rejected_rebases.setdefault(id(node), detail)
+
+        def visit_rebase(node, rebased_name, active_intervals):
+            assigned = getattr(node, "value", getattr(node, "right", None))
+            visit(assigned, active_intervals)
+            key = (HLSL_PRIVATE_POINTER_OFFSET_KEY, rebased_name)
+            current = active_intervals.get(key)
+            if id(node) not in statement_assignment_ids:
+                return reject_rebase(node, "the rebased pointer value is used")
+            if rebase_state["unsafe_depth"]:
+                return reject_rebase(
+                    node,
+                    "the rebase is not in straight-line code or in a loop with "
+                    "statically enumerable iterations",
+                )
+            if self.hlsl_private_pointer_expression_has_side_effects(assigned):
+                return reject_rebase(node, "the rebase offset has side effects")
+            delta = self.hlsl_private_pointer_interval(
+                assigned, active_intervals, constants
+            )
+            if delta is None or current is None:
+                return reject_rebase(
+                    node, "the rebase offset is not statically bounded"
+                )
+            if self.map_operator(getattr(node, "operator", "=")) == "-=":
+                delta = (-delta[1], -delta[0])
+            replacement = (current[0] + delta[0], current[1] + delta[1])
+            if replacement[0] < 0:
+                return reject_rebase(
+                    node, f"the view offset may become negative ({replacement[0]})"
+                )
+            if replacement[1] > HLSL_PRIVATE_POINTER_BASE_MAX:
+                return reject_rebase(
+                    node, "the view offset may overflow the 32-bit view base"
+                )
+            self.hlsl_private_pointer_rebase_ids.add(id(node))
+            if delta != (0, 0):
+                self.hlsl_private_pointer_nonzero_rebase_ids.add(id(node))
+            active_intervals[key] = replacement
+            return None
+
+        def visit_unsafe_rebase_scope(node, callback):
+            unsafe = contains_rebase(node)
+            if unsafe:
+                rebase_state["unsafe_depth"] += 1
+            try:
+                callback()
+            finally:
+                if unsafe:
+                    rebase_state["unsafe_depth"] -= 1
+
+        def visit_enumerated_rebase_loop(node, loop_intervals):
+            if rebase_state["unsafe_depth"]:
+                return None
+            iteration_values = self.hlsl_private_pointer_rebase_loop_iteration_values(
+                node, loop_intervals, constants, functions_by_name
+            )
+            if iteration_values is None or (
+                rebase_state["simulation_steps"] + len(iteration_values)
+                > HLSL_PRIVATE_POINTER_MAX_REBASE_SIMULATION_STEPS
+            ):
+                return None
+            rebase_state["simulation_steps"] += len(iteration_values)
+            loop_name = getattr(getattr(node, "init", None), "name", None)
+            states = [{key: loop_intervals.get(key) for key in offset_keys}]
+            for iteration_value in iteration_values:
+                loop_intervals[loop_name] = (iteration_value, iteration_value)
+                visit(getattr(node, "condition", None), loop_intervals)
+                visit(getattr(node, "body", None), loop_intervals)
+                visit(getattr(node, "update", None), loop_intervals)
+                states.append({key: loop_intervals.get(key) for key in offset_keys})
+            return states
 
         def record_access(binding, index_expression, active_intervals, source):
             if binding is None or binding.get("root_kind") != "parameter":
@@ -42083,6 +42494,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     active_intervals[value.name] = interval
                 return
             if isinstance(value, AssignmentNode):
+                rebased_name = self.hlsl_private_pointer_rebase_target(
+                    value, parameter_names
+                )
+                if rebased_name is not None:
+                    visit_rebase(value, rebased_name, active_intervals)
+                    return
                 target = getattr(value, "target", getattr(value, "left", None))
                 assigned = getattr(value, "value", getattr(value, "right", None))
                 visit(target, active_intervals)
@@ -42199,6 +42616,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         if condition
                         else getattr(value, "else_branch", None)
                     )
+                    skipped_branch = (
+                        getattr(value, "else_branch", None)
+                        if condition
+                        else getattr(value, "then_branch", None)
+                    )
+                    # A proven-dead branch never moves the view; its rebases
+                    # may still be emitted when HLSL keeps the branch.
+                    for child in self.walk_ast(skipped_branch):
+                        if (
+                            self.hlsl_private_pointer_rebase_target(
+                                child, parameter_names
+                            )
+                            is not None
+                            and id(child) in statement_assignment_ids
+                        ):
+                            self.hlsl_private_pointer_rebase_ids.add(id(child))
+                            self.hlsl_private_pointer_nonzero_rebase_ids.add(id(child))
                     visit(selected_branch, active_intervals)
                     return
                 then_intervals = dict(active_intervals)
@@ -42211,54 +42645,87 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if isinstance(value, ForNode):
                 loop_intervals = dict(active_intervals)
                 visit(getattr(value, "init", None), loop_intervals)
-                loop_name, loop_interval = self.hlsl_private_pointer_loop_interval(
-                    value, loop_intervals, constants
-                )
-                if loop_name:
-                    if loop_interval is None:
-                        loop_intervals.pop(loop_name, None)
-                    else:
-                        loop_intervals[loop_name] = loop_interval
-                visit(getattr(value, "condition", None), loop_intervals)
-                visit(getattr(value, "body", None), loop_intervals)
+                has_rebase = contains_rebase(value)
+                if has_rebase:
+                    states = visit_enumerated_rebase_loop(value, loop_intervals)
+                    if states is not None:
+                        # The loop may stop after any enumerated iteration, so
+                        # the view start after it is the hull of every state.
+                        for key in offset_keys:
+                            bounds = [state[key] for state in states]
+                            active_intervals[key] = (
+                                min(bound[0] for bound in bounds),
+                                max(bound[1] for bound in bounds),
+                            )
+                        return
+                    rebase_state["unsafe_depth"] += 1
+                try:
+                    loop_name, loop_interval = self.hlsl_private_pointer_loop_interval(
+                        value, loop_intervals, constants
+                    )
+                    if loop_name:
+                        if loop_interval is None:
+                            loop_intervals.pop(loop_name, None)
+                        else:
+                            loop_intervals[loop_name] = loop_interval
+                    visit(getattr(value, "condition", None), loop_intervals)
+                    visit(getattr(value, "body", None), loop_intervals)
+                finally:
+                    if has_rebase:
+                        rebase_state["unsafe_depth"] -= 1
                 return
             if isinstance(value, ForInNode):
-                loop_intervals = dict(active_intervals)
-                iterable = getattr(value, "iterable", None)
-                start = self.hlsl_private_pointer_interval(
-                    getattr(iterable, "start", None), loop_intervals, constants
-                )
-                end = self.hlsl_private_pointer_interval(
-                    getattr(iterable, "end", None), loop_intervals, constants
-                )
-                pattern = getattr(value, "pattern", None)
-                if pattern and start and end:
-                    maximum = end[1] - (
-                        0 if getattr(iterable, "inclusive", False) else 1
+
+                def visit_for_in():
+                    loop_intervals = dict(active_intervals)
+                    iterable = getattr(value, "iterable", None)
+                    start = self.hlsl_private_pointer_interval(
+                        getattr(iterable, "start", None), loop_intervals, constants
                     )
-                    loop_intervals[pattern] = (start[0], maximum)
-                elif pattern:
-                    loop_intervals.pop(pattern, None)
-                visit(getattr(value, "body", None), loop_intervals)
+                    end = self.hlsl_private_pointer_interval(
+                        getattr(iterable, "end", None), loop_intervals, constants
+                    )
+                    pattern = getattr(value, "pattern", None)
+                    if pattern and start and end:
+                        maximum = end[1] - (
+                            0 if getattr(iterable, "inclusive", False) else 1
+                        )
+                        loop_intervals[pattern] = (start[0], maximum)
+                    elif pattern:
+                        loop_intervals.pop(pattern, None)
+                    visit(getattr(value, "body", None), loop_intervals)
+
+                visit_unsafe_rebase_scope(value, visit_for_in)
                 return
             if isinstance(value, (WhileNode, DoWhileNode, LoopNode)):
-                loop_intervals = dict(active_intervals)
-                visit(getattr(value, "condition", None), loop_intervals)
-                visit(getattr(value, "body", None), loop_intervals)
+
+                def visit_loop():
+                    loop_intervals = dict(active_intervals)
+                    visit(getattr(value, "condition", None), loop_intervals)
+                    visit(getattr(value, "body", None), loop_intervals)
+
+                visit_unsafe_rebase_scope(value, visit_loop)
                 return
             if not hasattr(value, "__dict__"):
                 return
-            for key, child in vars(value).items():
-                if key in {
-                    "parent",
-                    "annotations",
-                    "array",
-                    "index",
-                    "args",
-                    "name",
-                }:
-                    continue
-                visit(child, active_intervals)
+
+            def visit_children():
+                for key, child in vars(value).items():
+                    if key in {
+                        "parent",
+                        "annotations",
+                        "array",
+                        "index",
+                        "args",
+                        "name",
+                    }:
+                        continue
+                    visit(child, active_intervals)
+
+            if isinstance(value, (SwitchNode, MatchNode)):
+                visit_unsafe_rebase_scope(value, visit_children)
+                return
+            visit_children()
 
         visit(getattr(function, "body", []), intervals)
         self.current_hlsl_private_pointer_condition_interval_names = set()
