@@ -4,6 +4,14 @@ All notable changes to CrossTL are documented in this file.
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- CrossTL requires Python 3.11 or later. Python 3.8, 3.9 and 3.10 have reached end of life and are no longer supported.
+
+### Improved
+
+- Continuous integration tests every supported Python version, 3.11 through 3.15. Pull requests test the oldest and newest on every push.
+
 ---
 
 ## [3.4.0] - 2026-10-07

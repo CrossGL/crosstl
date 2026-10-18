@@ -94,10 +94,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -118,7 +118,7 @@ jobs:
 
       - name: Upload support matrix check report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: support-matrix-check-report
           path: |
@@ -155,7 +155,7 @@ jobs:
 
       - name: Upload CI coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-coverage-report
           path: |
@@ -171,7 +171,7 @@ jobs:
       - name: Download test failure summaries
         if: github.event_name == 'workflow_run'
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Upload support signal reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: support-signal-reports
           path: |
@@ -371,7 +371,7 @@ jobs:
 
       - name: Upload support issue sync reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: support-issue-sync-reports
           path: |

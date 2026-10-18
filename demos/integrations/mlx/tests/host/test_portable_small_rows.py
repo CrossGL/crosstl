@@ -700,7 +700,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
     retained = next(
         step
         for step in job["steps"]
-        if step.get("uses") == "actions/upload-artifact@v4"
+        if step.get("uses", "").startswith("actions/upload-artifact@")
     )
     assert retained["if"] == "always()"
     assert retained["with"]["include-hidden-files"] is True

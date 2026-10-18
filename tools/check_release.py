@@ -92,7 +92,7 @@ def _metadata(data, version):
     for key, expected in (
         ("Name", "crosstl"),
         ("Version", version),
-        ("Requires-Python", ">=3.8"),
+        ("Requires-Python", ">=3.11"),
         ("License-Expression", "Apache-2.0"),
         ("License-File", "LICENSE"),
     ):

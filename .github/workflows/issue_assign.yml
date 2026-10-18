@@ -18,7 +18,7 @@ jobs:
       issues: write
     steps:
       - name: take the issue
-        uses: bdougie/take-action@1439165ac45a7461c2d89a59952cd7d941964b87
+        uses: bdougie/take-action@v1.6.1
         with:
           message: Thank you for taking on this issue! If you have any questions or need assistance, feel free to ask.
           trigger: "@CrossGL-issue-bot assign me"
