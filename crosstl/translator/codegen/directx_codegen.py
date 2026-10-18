@@ -16,6 +16,7 @@ from ..ast import (
     ArrayNode,
     ArrayType,
     AssignmentNode,
+    AtomicOpNode,
     AttributeNode,
     BinaryOpNode,
     BlockNode,
@@ -21623,7 +21624,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             direct_loop = None
         if direct_loop is not None:
             _loop_range, parts = direct_loop
-            if self.hlsl_private_pointer_expression_has_side_effects(parts[3]):
+            if self.hlsl_resource_pointer_array_offset_has_side_effects(parts[3]):
                 reject("side-effecting-offset", parts[3])
             replacement = self.hlsl_resource_pointer_binding(parts[3])
             initialization_assignments.append(parts)
@@ -21666,9 +21667,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 == 1
             ):
                 reject("initialization-unproven", chain_parts[3])
-            if self.hlsl_private_pointer_expression_has_side_effects(
+            if self.hlsl_resource_pointer_array_offset_has_side_effects(
                 seed[3]
-            ) or self.hlsl_private_pointer_expression_has_side_effects(chain_parts[3]):
+            ) or self.hlsl_resource_pointer_array_offset_has_side_effects(
+                chain_parts[3]
+            ):
                 reject("side-effecting-offset", chain_parts[3])
             replacement = self.hlsl_resource_pointer_binding(seed[3])
             initialization_assignments.extend((seed, chain_parts))
@@ -21847,6 +21850,46 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             node=node,
             reason="pointer-element-escape",
         )
+
+    # Keys that tie a selected element binding to its pointer array; a
+    # materialized pointer alias drops them and keeps only the element's view.
+    HLSL_RESOURCE_POINTER_ARRAY_ELEMENT_KEYS = frozenset(
+        {
+            "pointer_array_binding",
+            "array_name",
+            "parameter_name",
+            "declaration_node",
+            "declaration_id",
+            "extent",
+            "offset_array",
+            "initialization_target_ids",
+            "required_access",
+        }
+    )
+
+    def hlsl_materialized_resource_pointer_array_element(self, binding, node):
+        """Turn ``xs[i] + k`` into a plain pointer alias of the array's root.
+
+        Every element of a concrete (non-parameter) storage pointer array shares
+        one proven backing root, so copying a selected element only snapshots
+        its offset, exactly like any other pointer alias initialisation.  The
+        selection index was already proven in bounds when the element binding
+        was built.  Elements of pointer-array parameters keep refusing.
+        """
+
+        array_binding = binding and binding.get("pointer_array_binding")
+        if array_binding is None:
+            return binding
+        if array_binding.get("parameter_binding"):
+            self.hlsl_resource_pointer_array_selection_escape_error(binding, node)
+        materialized = {
+            key: value
+            for key, value in binding.items()
+            if key not in self.HLSL_RESOURCE_POINTER_ARRAY_ELEMENT_KEYS
+        }
+        materialized["kind"] = "resource-pointer"
+        materialized["is_pointer_alias"] = True
+        return materialized
 
     def hlsl_resource_pointer_alias_expression(self, expression):
         if isinstance(expression, str):
@@ -22937,8 +22980,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not isinstance(vtype, PointerType) and not workgroup_declaration:
             return None
         initial_value = getattr(node, "initial_value", None)
-        binding = self.hlsl_resource_pointer_binding(initial_value)
-        self.hlsl_resource_pointer_array_selection_escape_error(binding, node)
+        binding = self.hlsl_materialized_resource_pointer_array_element(
+            self.hlsl_resource_pointer_binding(initial_value), node
+        )
         if (
             binding is None
             and initial_value is None
@@ -23248,8 +23292,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"'{target_name}'"
             )
 
-        replacement = self.hlsl_resource_pointer_binding(value)
-        self.hlsl_resource_pointer_array_selection_escape_error(replacement, value)
+        replacement = self.hlsl_materialized_resource_pointer_array_element(
+            self.hlsl_resource_pointer_binding(value), value
+        )
         if replacement is None:
             if current.get("kind") == "workgroup-pointer":
                 raise self.hlsl_workgroup_pointer_error(
@@ -41588,6 +41633,79 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             local_types[name] = node_type
         return local_types
 
+    # Integer conversions a private pointer offset may apply.
+    HLSL_PRIVATE_POINTER_CAST_CALLS = frozenset(
+        {
+            "int",
+            "uint",
+            "short",
+            "ushort",
+            "int16",
+            "uint16",
+            "int32_t",
+            "uint32_t",
+            "size_t",
+            "ptrdiff_t",
+        }
+    )
+    # Integer builtins a storage pointer array offset may also call: each is
+    # pure, so the offset still only snapshots its operands.
+    HLSL_RESOURCE_POINTER_ARRAY_PURE_CALLS = frozenset({"min", "max", "clamp", "abs"})
+    HLSL_SIDE_EFFECTING_UNARY_OPERATORS = frozenset(
+        {
+            "++",
+            "--",
+            "PRE_INCREMENT",
+            "PRE_DECREMENT",
+            "POST_INCREMENT",
+            "POST_DECREMENT",
+        }
+    )
+
+    def hlsl_resource_pointer_array_offset_has_side_effects(self, expression):
+        """Return whether a storage pointer array offset may have side effects.
+
+        Beyond the private pointer predicate's integer conversions, the pure
+        integer builtins ``min``, ``max``, ``clamp`` and ``abs`` are allowed
+        unless a user function shadows them.  Call arguments are inspected
+        too, and atomics, assignments, increments and any other call count as
+        side effects.
+        """
+
+        if expression is None or isinstance(expression, (str, int, float, bool)):
+            return False
+        if isinstance(expression, (list, tuple)):
+            return any(
+                self.hlsl_resource_pointer_array_offset_has_side_effects(item)
+                for item in expression
+            )
+        if isinstance(expression, (AssignmentNode, AtomicOpNode)):
+            return True
+        if isinstance(expression, UnaryOpNode) and (
+            expression.op in self.HLSL_SIDE_EFFECTING_UNARY_OPERATORS
+            or self.map_operator(expression.op)
+            in self.HLSL_SIDE_EFFECTING_UNARY_OPERATORS
+        ):
+            return True
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            pure = (
+                function_name in self.HLSL_RESOURCE_POINTER_ARRAY_PURE_CALLS
+                and function_name not in self.function_return_types
+            )
+            if not pure and function_name not in self.HLSL_PRIVATE_POINTER_CAST_CALLS:
+                return True
+            return self.hlsl_resource_pointer_array_offset_has_side_effects(
+                getattr(expression, "arguments", None)
+            )
+        if not hasattr(expression, "__dict__"):
+            return False
+        return any(
+            self.hlsl_resource_pointer_array_offset_has_side_effects(child)
+            for key, child in vars(expression).items()
+            if key not in {"parent", "annotations", "array", "index", "args", "name"}
+        )
+
     def hlsl_private_pointer_expression_has_side_effects(self, expression):
         if expression is None or isinstance(expression, (str, int, float, bool)):
             return False
@@ -41597,18 +41715,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return True
         if isinstance(expression, FunctionCallNode):
             function_name = self.function_call_name(expression)
-            if function_name not in {
-                "int",
-                "uint",
-                "short",
-                "ushort",
-                "int16",
-                "uint16",
-                "int32_t",
-                "uint32_t",
-                "size_t",
-                "ptrdiff_t",
-            }:
+            if function_name not in self.HLSL_PRIVATE_POINTER_CAST_CALLS:
                 return True
         if not hasattr(expression, "__dict__"):
             return False

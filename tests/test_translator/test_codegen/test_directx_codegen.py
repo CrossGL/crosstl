@@ -10098,7 +10098,7 @@ def test_hlsl_metal_device_pointer_array_rejects_dynamic_backing_root(tmp_path):
     assert diagnostic.reason == "backing-contract-unproven"
 
 
-def test_hlsl_metal_device_pointer_array_rejects_element_escape(tmp_path):
+def test_hlsl_metal_device_pointer_array_element_materializes_alias(tmp_path):
     shader = """
     #include <metal_stdlib>
     using namespace metal;
@@ -10108,17 +10108,242 @@ def test_hlsl_metal_device_pointer_array_rejects_element_escape(tmp_path):
       for (int i = 0; i < 2; ++i) {
         rows[i] = input + i * 4;
       }
-      const device float* selected = rows[0];
+      const device float* selected = rows[1];
       output[0] = selected[0];
+      output[1] = selected[3];
     }
 
-    kernel void pointer_array_escape(
+    kernel void pointer_array_element(
         const device float* input [[buffer(0)]],
         device float* output [[buffer(1)]]) {
       read_row(input, output);
     }
     """
-    shader_path = tmp_path / "pointer_array_escape.metal"
+    shader_path = tmp_path / "pointer_array_element.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "pointer_array_element.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    # The alias snapshots the selected element's offset into the shared root.
+    assert "int64_t rows_offsets[2];" in generated
+    assert "int64_t selected_offset = int64_t(rows_offsets[uint(1)]);" in generated
+    assert "output[uint(output_offset)] = input[uint(selected_offset)];" in generated
+    assert (
+        "output[uint((output_offset + 1))] = input[uint((selected_offset + 3))];"
+        in generated
+    )
+    assert "float* selected" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_device_pointer_array_offset_element_snapshots_per_iteration(
+    tmp_path,
+):
+    # MLX qmv_wide_impl: clamped vector rows in a pointer array, and a moving
+    # chunk pointer derived from the selected row.
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <int Vectors>
+    void dot_rows(
+        const device float* x,
+        const device float* w,
+        device float* y,
+        constant int& rows,
+        constant int& stride,
+        int first) {
+      const device float* xv[Vectors];
+      for (int v = 0; v < Vectors; v++) {
+        xv[v] = x + min(first + v, rows - 1) * stride;
+      }
+      float result[Vectors] = {0};
+      for (int k0 = 0; k0 < 8; k0 += 4) {
+        for (int v = 0; v < Vectors; v++) {
+          const device float* xc = xv[v] + k0;
+          float acc = 0;
+          for (int i = 0; i < 4; i++) {
+            acc += xc[i] * w[k0 + i];
+          }
+          result[v] += acc;
+        }
+      }
+      for (int v = 0; v < Vectors; v++) {
+        y[v] = result[v];
+      }
+    }
+
+    kernel void pointer_array_wide(
+        const device float* x [[buffer(0)]],
+        const device float* w [[buffer(1)]],
+        device float* y [[buffer(2)]],
+        constant int& rows [[buffer(3)]],
+        constant int& stride [[buffer(4)]],
+        uint3 tid [[threadgroup_position_in_grid]]) {
+      dot_rows<3>(x, w, y, rows, stride, int(tid.x) * 3);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_wide.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "pointer_array_wide.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t xv_offsets[3];" in generated
+    assert re.search(
+        r"xv_offsets\[uint\(v\)\] = int64_t\(\(x_offset \+ "
+        r"\(min\(\(first \+ v\), \(rows - 1\)\) \* stride\)\)\);",
+        generated,
+    ), generated
+    # Each iteration re-snapshots the element selected by the loop counter.
+    assert (
+        "int64_t xc_offset = int64_t((xv_offsets[uint(v)] + k0));" in generated
+    ), generated
+    assert "x[uint((xc_offset + i))]" in generated
+    assert "float* xc" not in generated
+    assert "float* xv" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_device_pointer_array_element_reassigns_alias(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_rows(const device float* input, device float* output) {
+      const device float* rows[2];
+      rows[0] = input + 1;
+      for (int i = 1; i < 2; ++i) {
+        rows[i] = rows[i - 1] + max(2, abs(-3));
+      }
+      const device float* cursor = input;
+      output[0] = cursor[0];
+      cursor = rows[1] + 1;
+      output[1] = cursor[0];
+    }
+
+    kernel void pointer_array_reassign(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      read_rows(input, output);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_reassign.metal"
+    shader_path.write_text(shader)
+    assert_metal_warnings_clean_if_available(
+        shader_path, tmp_path / "pointer_array_reassign.air"
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t rows_offsets[2];" in generated
+    assert "max(2, abs((-3)))" in generated or "max(2, abs(-3))" in generated
+    assert "cursor_offset = int64_t((rows_offsets[uint(1)] + 1));" in generated
+    assert "output[uint((output_offset + 1))] = input[uint(cursor_offset)];" in (
+        generated
+    )
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "offset,helper",
+    [
+        ("pick(i, 1) * 4", "int pick(int a, int b) { return a > b ? a : b; }"),
+        ("min(counter++, 1) * 4", ""),
+        ("max(i, 0) * 4", "int max(int a, int b) { return a > b ? a : b; }"),
+    ],
+    ids=["user-call", "pure-call-side-effecting-argument", "shadowed-builtin"],
+)
+def test_hlsl_metal_device_pointer_array_rejects_side_effecting_offsets(
+    tmp_path, offset, helper
+):
+    namespace = "" if helper.startswith("int max") else "using namespace metal;"
+    shader = f"""
+    #include <metal_stdlib>
+    {namespace}
+
+    {helper}
+
+    void read_rows(const device float* input, device float* output) {{
+      int counter = 0;
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {{
+        rows[i] = input + {offset};
+      }}
+      for (int i = 0; i < 2; ++i) {{
+        output[i] = rows[i][0] + float(counter);
+      }}
+    }}
+
+    kernel void pointer_array_side_effects(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {{
+      read_rows(input, output);
+    }}
+    """
+    shader_path = tmp_path / "pointer_array_side_effects.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.array_name == "rows"
+    assert excinfo.value.reason == "side-effecting-offset"
+
+
+def test_hlsl_metal_device_pointer_array_parameter_rejects_element_escape(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_selected(
+        const device float* rows[2],
+        device float* output) {
+      const device float* selected = rows[1];
+      output[0] = selected[0];
+    }
+
+    kernel void pointer_array_parameter_escape(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = input + i * 2;
+      }
+      read_selected(rows, output);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_parameter_escape.metal"
     shader_path.write_text(shader)
 
     with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
