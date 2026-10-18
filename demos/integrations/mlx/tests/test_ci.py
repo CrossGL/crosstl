@@ -867,7 +867,7 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     coverage = _load_ci_coverage_module()
     jobs = coverage.workflow_job_names(workflow)
-    assert len(jobs) == 38
+    assert len(jobs) == 40
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
@@ -946,7 +946,7 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "quantized-qmv-1",
     ]
     assert job["runs-on"] == "${{ matrix.os }}"
-    assert job["if"] == "github.event_name != 'schedule'"
+    assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
     assert job["name"] == (
         "MLX current-tree native parity (${{ matrix.os }}, ${{ matrix.group }})"
     )
@@ -1011,7 +1011,10 @@ def test_affine_metal_numerics_reuse_the_complete_source_bundle():
         job, "Verify affine Metal numerical roundtrip"
     )
     assert "runs-on: macOS-latest" in job
-    assert "needs: mlx-quantized-metal-sources" in job
+    assert yaml.safe_load(job)["mlx-quantized-complete-metal-roundtrip"]["needs"] == [
+        "ci-plan",
+        "mlx-quantized-metal-sources",
+    ]
     assert 'MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"' in job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
     assert "sparse-checkout set mlx/backend/metal/kernels" in job
@@ -1497,8 +1500,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '-k "argmin_float32 or argmax_float32"' not in current_arg_reduce
     assert "timeout-minutes: 60" in mlx_porting
     assert re.search(r"\bschedule\s*:", mlx_porting)
-    assert 'cron: "31 4 * * 1"' in mlx_porting
-    assert "github.event_name != 'schedule'" in mlx_porting
+    assert 'cron: "31 4 * * *"' in mlx_porting
+    assert "needs.ci-plan.outputs.heavy == 'true'" in mlx_porting
     assert "--mode reduced-frontier" in mlx_porting
     assert "--require-metal-toolchain" in mlx_porting
     assert "Install macOS Metal Toolchain" in mlx_porting
@@ -1746,7 +1749,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "out-full-corpus" in mlx_porting
     assert "name: mlx-full-corpus-scout" in mlx_porting
     assert "include-hidden-files: true" in mlx_porting
-    assert "retention-days: 30" in mlx_porting
+    assert "retention-days: 14" in mlx_porting
     assert 'command_name="validate-directx-frontier-toolchain"' in harness
     assert 'command_name="validate-vulkan-frontier-toolchain"' in harness
     assert "require_directx_toolchain" in harness
@@ -3045,10 +3048,13 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
         "mlx-unary-metal-roundtrip",
     )
     assert "name: MLX complete unary Metal compilation" in family_metal_job
-    assert "if: github.event_name != 'schedule'" in family_metal_job
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in family_metal_job
     assert "runs-on: macOS-latest" in family_metal_job
     assert "timeout-minutes: 75" in family_metal_job
-    assert "needs: mlx-unary-metal-sources" in family_metal_job
+    assert yaml.safe_load(family_metal_job)["mlx-unary-metal-roundtrip"]["needs"] == [
+        "ci-plan",
+        "mlx-unary-metal-sources",
+    ]
     assert "strategy:" not in family_metal_job
     assert 'python-version: "3.12"' in family_metal_job
     assert "xcrun --sdk macosx metal --version" in family_metal_job
@@ -3152,7 +3158,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
         "name: MLX complete unary OpenGL translation "
         "(shard ${{ matrix.shard_index }} of 5)" in opengl_job
     )
-    assert "if: github.event_name != 'schedule'" in opengl_job
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in opengl_job
     assert "runs-on: ubuntu-latest" in opengl_job
     assert "timeout-minutes: 120" in opengl_job
     assert "fail-fast: false" in opengl_job
@@ -3209,7 +3215,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_directx_proof():
         "name: MLX complete unary DirectX translation "
         "(shard ${{ matrix.shard_index }} of 5)" in directx_job
     )
-    assert "if: github.event_name != 'schedule'" in directx_job
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in directx_job
     assert "runs-on: ubuntu-24.04" in directx_job
     assert "timeout-minutes: 180" in directx_job
     assert "fail-fast: false" in directx_job
@@ -3267,7 +3273,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
         "name: MLX complete binary Metal sources "
         "(shard ${{ matrix.shard_index }} of 24)" in sources
     )
-    assert "if: github.event_name != 'schedule'" in sources
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in sources
     assert "runs-on: ubuntu-24.04" in sources
     assert "timeout-minutes: 180" in sources
     assert "fail-fast: false" in sources
@@ -3317,8 +3323,11 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
         assert "if-no-files-found: error" in step
 
     native = _workflow_job_section(mlx_porting, "mlx-binary-complete-metal-roundtrip")
-    assert "if: github.event_name != 'schedule'" in native
-    assert "needs: mlx-binary-metal-sources" in native
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in native
+    assert yaml.safe_load(native)["mlx-binary-complete-metal-roundtrip"]["needs"] == [
+        "ci-plan",
+        "mlx-binary-metal-sources",
+    ]
     assert "runs-on: macOS-latest" in native
     assert "timeout-minutes: 60" in native
     assert "strategy:" not in native
@@ -3405,7 +3414,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
         "name: MLX complete binary OpenGL translation "
         "(shard ${{ matrix.shard_index }} of 24)" in binary_opengl_job
     )
-    assert "if: github.event_name != 'schedule'" in binary_opengl_job
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in binary_opengl_job
     assert "runs-on: ubuntu-latest" in binary_opengl_job
     assert "timeout-minutes: 240" in binary_opengl_job
     assert "fail-fast: false" in binary_opengl_job
@@ -3461,7 +3470,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_directx_proof():
         "name: MLX complete binary DirectX translation "
         "(shard ${{ matrix.shard_index }} of 24)" in directx_job
     )
-    assert "if: github.event_name != 'schedule'" in directx_job
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in directx_job
     assert "runs-on: ubuntu-24.04" in directx_job
     assert "timeout-minutes: 240" in directx_job
     assert "fail-fast: false" in directx_job
@@ -3785,7 +3794,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
         "name: MLX complete copy OpenGL translation "
         "(shard ${{ matrix.shard_index }} of 24)" in copy_opengl_job
     )
-    assert "if: github.event_name != 'schedule'" in copy_opengl_job
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in copy_opengl_job
     assert "runs-on: ubuntu-latest" in copy_opengl_job
     assert "timeout-minutes: 180" in copy_opengl_job
     assert "fail-fast: false" in copy_opengl_job
@@ -3841,7 +3850,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
         "name: MLX complete copy DirectX translation "
         "(shard ${{ matrix.shard_index }} of 24)" in copy_directx_job
     )
-    assert "if: github.event_name != 'schedule'" in copy_directx_job
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in copy_directx_job
     assert "runs-on: ubuntu-24.04" in copy_directx_job
     assert "timeout-minutes: 180" in copy_directx_job
     assert "fail-fast: false" in copy_directx_job
@@ -4007,7 +4016,7 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
         "name: MLX complete reduce OpenGL translation "
         "(shard ${{ matrix.shard_index }} of 24)" in reduce_opengl_job
     )
-    assert "if: github.event_name != 'schedule'" in reduce_opengl_job
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in reduce_opengl_job
     assert "runs-on: ubuntu-latest" in reduce_opengl_job
     assert "timeout-minutes: 180" in reduce_opengl_job
     assert "fail-fast: false" in reduce_opengl_job
@@ -4063,7 +4072,7 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_directx_proof():
         "name: MLX complete reduce DirectX translation "
         "(shard ${{ matrix.shard_index }} of 24)" in reduce_directx_job
     )
-    assert "if: github.event_name != 'schedule'" in reduce_directx_job
+    assert "if: needs.ci-plan.outputs.heavy == 'true'" in reduce_directx_job
     assert "runs-on: ubuntu-24.04" in reduce_directx_job
     assert "timeout-minutes: 240" in reduce_directx_job
     assert "fail-fast: false" in reduce_directx_job

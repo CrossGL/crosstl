@@ -202,7 +202,7 @@ def test_axis_gather_ci_requires_native_unchanged_upstream_test():
         "opengl",
     }
     assert (
-        job["if"] == "github.event_name != 'schedule'"
+        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
         and "continue-on-error" not in job
     )
     steps = {step.get("name"): step for step in job["steps"]}

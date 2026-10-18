@@ -19,7 +19,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  python-versions:
+    name: Select Python versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.select.outputs.versions }}
+    steps:
+      - name: Select Python versions
+        id: select
+        env:
+          # Pushes to main and pull requests labelled ci:full test every supported
+          # version; other pull requests test the oldest and the newest.
+          FULL_PYTHON_VERSIONS: '["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]'
+          PULL_REQUEST_PYTHON_VERSIONS: '["3.8", "3.13"]'
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: |
+          if [ "$FULL" = "true" ]; then
+            echo "versions=$FULL_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
+          else
+            echo "versions=$PULL_REQUEST_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: python-versions
     runs-on: ${{ matrix.OS }}
     timeout-minutes: 45
     env:
@@ -38,7 +61,7 @@ jobs:
             "CUDA",
             "HIP",
           ]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
         OS: [ubuntu-latest, windows-latest, macOS-latest]
         exclude:
           - OS: windows-latest

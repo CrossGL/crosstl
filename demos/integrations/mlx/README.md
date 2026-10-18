@@ -39,9 +39,18 @@ source revision, required toolchains, numerical assertions and evidence uploads.
 Complete DirectX corpus compilation uses pinned DXC on Ubuntu; Direct3D runtime
 execution remains on Windows. Metal compilation and execution remain on macOS.
 See the [CI coverage policy](../../../.github/TESTING.md) for the platform split.
-Scheduled runs cover the existing corpus audits; changes to translation code,
-tests, demo inputs or toolchain configuration run the complete workflow on pull
-requests and main-branch pushes. Each job and matrix leg has its own queue.
+Full native, parity, corpus and host jobs run nightly, on manual dispatch, and
+for main-branch pushes that change `demos/integrations/mlx/**` or this demo's
+workflow. A pull request runs them only when it carries the `ci:full` label,
+because the full tier is several hundred jobs on runners every open pull
+request shares. Run `gh workflow run demo-project-testing.yml --ref <branch>`
+for a single full run of a branch. Pull requests that change the MLX demo,
+core, tests or toolchains run a short Linux smoke job that translates pinned integer
+and float32 `arange` entries to all three targets, checks their artifact hashes,
+validates HLSL/GLSL and executes their numerical cases with Mesa EGL, including
+input observations and output guards. The selector
+compares the complete Git diff, including deleted and renamed paths.
+Each job and matrix leg has its own queue.
 Active project-demo jobs finish even when a newer revision arrives. The pending
 job in each concurrency group can be replaced by a newer pending job; these
 groups are not first-in, first-out queues. No test matrix or numerical gate is
@@ -1566,7 +1575,11 @@ and an `a` that puts the larger magnitude at either end, so each scale, edge
 and code is exact; others are all zero (the `eps` scale), all negative (the
 kernel's `w_max` starts at zero), a positive constant and free multiples of
 1/64, whose scales and codes need correctly rounded float32 division. A
-lane-level model of the reduction, rounding, shuffles and byte writes must
+DirectX target option selects `binary32_division_profile = "rne-flush"`
+for quantization so DXC cannot replace a division by a constant with a rounded
+reciprocal multiplication. Dequantization and the Metal/OpenGL configurations
+retain their existing arithmetic. A lane-level model of the reduction,
+rounding, shuffles and byte writes must
 write every output byte once and reproduce MLX's least-significant-bit-first
 code stream, and mutated models that drop the shuffled codes, truncate codes
 or always take the upper edge are rejected. Dequantize unpacks random codes

@@ -35,18 +35,113 @@ on:
       - "requirements*.txt"
       - "setup.cfg"
   schedule:
-    - cron: "31 4 * * 1"
+    - cron: "31 4 * * *"
   workflow_dispatch:
 permissions:
   contents: read
   actions: read
 
 jobs:
+  ci-plan:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-ci-plan
+      cancel-in-progress: false
+    name: MLX validation plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      heavy: ${{ steps.plan.outputs.heavy }}
+      smoke: ${{ steps.plan.outputs.smoke }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Select validation tier
+        id: plan
+        env:
+          MLX_CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          MLX_CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Pull requests run the full tier only with the ci:full label; use
+          # `gh workflow run demo-project-testing.yml --ref <branch>` for a single full run.
+          MLX_CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: python -m demos.integrations.mlx.ci_plan --event "${{ github.event_name }}"
+
+  mlx-smoke:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-mlx-smoke
+      cancel-in-progress: false
+    name: MLX translation and numerical smoke
+    needs: ci-plan
+    if: needs.ci-plan.outputs.smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      EGL_PLATFORM: surfaceless
+      PYOPENGL_PLATFORM: egl
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install smoke prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools spirv-tools
+          python -m pip install -e . pytest pytest-xdist numpy moderngl PyOpenGL "PyYAML>=6,<7"
+      - name: Checkout pinned MLX kernels
+        # The full tree is retained in the native jobs; smoke reads only kernel sources.
+        run: |
+          git init mlx-smoke-upstream
+          git -C mlx-smoke-upstream config core.autocrlf false
+          git -C mlx-smoke-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-smoke-upstream sparse-checkout init --cone
+          git -C mlx-smoke-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-smoke-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-smoke-upstream checkout --detach FETCH_HEAD
+      - name: Install pinned Linux DXC
+        uses: ./.github/actions/install-linux-dxc
+        with:
+          pinned: "true"
+      - name: Run pinned MLX smoke
+        env:
+          CROSTL_REQUIRE_MLX_SMOKE: "1"
+          CROSTL_REQUIRE_MLX_CURRENT_ARANGE: "1"
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-smoke-upstream
+          CROSTL_MLX_CURRENT_TARGET: opengl
+        run: |
+          set -euo pipefail
+          mkdir -p mlx-smoke-results
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "Pinned MLX numerical smoke" -- \
+            python -m pytest -q -n auto --dist loadgroup \
+              --basetemp=mlx-smoke-results/pytest --junitxml=mlx-smoke-results/results.xml \
+              demos/integrations/mlx/tests/test_smoke.py \
+              'demos/integrations/mlx/tests/kernels/test_current_arange.py::test_current_mlx_arange_native_parity[arangeint32]' \
+              'demos/integrations/mlx/tests/kernels/test_current_arange.py::test_current_mlx_arange_native_parity[arangefloat32]' \
+              2>&1 | tee mlx-smoke-results/execution.log
+      - name: Upload smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-smoke
+          path: mlx-smoke-results
+          if-no-files-found: warn
+          retention-days: 7
+
   opengl:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-opengl
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -204,10 +299,11 @@ jobs:
           retention-days: 14
 
   metal:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-metal
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -338,10 +434,11 @@ jobs:
           retention-days: 14
 
   metal-float:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-metal-float
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -401,10 +498,11 @@ jobs:
           retention-days: 14
 
   directx:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-directx
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -560,10 +658,11 @@ jobs:
           retention-days: 14
 
   metal-host:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-metal-host
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -854,10 +953,11 @@ jobs:
           retention-days: 14
 
   native-metal-reference:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-native-metal-reference
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -937,10 +1037,11 @@ jobs:
           retention-days: 14
 
   directx-dispatch-sequence:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-directx-dispatch-sequence
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -1025,10 +1126,11 @@ jobs:
           tests/test_translator/test_runtime_graph_device.py::test_directx_dispatch_sequence_executes_shared_temporary_on_device
 
   opengl-dispatch-sequence:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-opengl-dispatch-sequence
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -1085,10 +1187,11 @@ jobs:
           tests/test_translator/test_runtime_graph_device.py::test_opengl_dispatch_sequence_executes_shared_temporary_on_device
 
   portable-host:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-portable-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -2219,7 +2322,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-small-row-reductions-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -2229,7 +2332,7 @@ jobs:
       CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
 
     name: MLX small-row reductions (${{ matrix.target }})
-    needs: portable-host
+    needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 340
     strategy:
@@ -2466,7 +2569,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-half-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -2476,7 +2579,7 @@ jobs:
       CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
 
     name: MLX half host (${{ matrix.target }})
-    needs: portable-host
+    needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 355
     strategy:
@@ -2733,7 +2836,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-integer64-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -2743,7 +2846,7 @@ jobs:
       CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
 
     name: MLX integer64 host (${{ matrix.target }})
-    needs: portable-host
+    needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 350
     strategy:
@@ -2918,7 +3021,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-slice-update-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -2928,7 +3031,7 @@ jobs:
       CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
 
     name: MLX slice update and indexing host (${{ matrix.target }})
-    needs: integer64-host
+    needs: [ci-plan, integer64-host]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 315
     strategy:
@@ -3106,7 +3209,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-scatter-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3116,7 +3219,7 @@ jobs:
       CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
 
     name: MLX general scatter host (${{ matrix.target }}, ${{ matrix.profile }})
-    needs: integer64-host
+    needs: [ci-plan, integer64-host]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     strategy:
@@ -3260,10 +3363,11 @@ jobs:
           retention-days: 14
 
   row-packages:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-row-packages-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3326,7 +3430,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-reductions-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3336,7 +3440,7 @@ jobs:
       CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
 
     name: MLX ${{ matrix.family }} reductions (${{ matrix.target }})
-    needs: [portable-host, row-packages]
+    needs: [ci-plan, portable-host, row-packages]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     strategy:
@@ -3560,6 +3664,7 @@ jobs:
           retention-days: 14
 
   mlx-metal-porting:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-metal-porting-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -3570,7 +3675,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX Metal project porting (${{ matrix.os }})
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     strategy:
@@ -6476,6 +6581,7 @@ jobs:
   # runner and family group, so that each leg's bounded steps fit its own
   # deadline instead of extending the MLX Metal project porting job.
   mlx-current-native-parity:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-native-parity-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -6484,11 +6590,13 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX current-tree native parity (${{ matrix.os }}, ${{ matrix.group }})
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 210
     strategy:
       fail-fast: false
+      # 135 legs, a third of them on macOS: leave runners for other pull requests.
+      max-parallel: 24
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
         group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, quantized, quantized-qmv-0, quantized-qmv-1]
@@ -8096,6 +8204,7 @@ jobs:
           retention-days: 14
 
   mlx-unary-metal-sources:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-metal-sources-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -8106,7 +8215,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete unary Metal sources (shard ${{ matrix.shard_index }} of 5)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -8182,8 +8291,8 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete unary Metal compilation
-    if: github.event_name != 'schedule'
-    needs: mlx-unary-metal-sources
+    if: needs.ci-plan.outputs.heavy == 'true'
+    needs: [ci-plan, mlx-unary-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 75
     steps:
@@ -8231,6 +8340,7 @@ jobs:
           retention-days: 14
 
   mlx-unary-complete-opengl-translation:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-complete-opengl-translation-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -8241,7 +8351,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete unary OpenGL translation (shard ${{ matrix.shard_index }} of 5)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -8307,6 +8417,7 @@ jobs:
           retention-days: 14
 
   mlx-unary-complete-directx-translation:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-complete-directx-translation-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -8317,7 +8428,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete unary DirectX translation (shard ${{ matrix.shard_index }} of 5)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -8382,6 +8493,7 @@ jobs:
           retention-days: 14
 
   mlx-binary-metal-sources:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-binary-metal-sources-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -8392,7 +8504,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete binary Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -8468,8 +8580,8 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete binary Metal compilation
-    if: github.event_name != 'schedule'
-    needs: mlx-binary-metal-sources
+    if: needs.ci-plan.outputs.heavy == 'true'
+    needs: [ci-plan, mlx-binary-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
     steps:
@@ -8517,6 +8629,7 @@ jobs:
           retention-days: 14
 
   mlx-copy-metal-sources:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-copy-metal-sources-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -8527,7 +8640,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete copy Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -8603,8 +8716,8 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete copy Metal compilation
-    if: github.event_name != 'schedule'
-    needs: mlx-copy-metal-sources
+    if: needs.ci-plan.outputs.heavy == 'true'
+    needs: [ci-plan, mlx-copy-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
     steps:
@@ -8652,6 +8765,7 @@ jobs:
           retention-days: 14
 
   mlx-reduce-metal-sources:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-reduce-metal-sources-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -8662,7 +8776,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete reduce Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -8738,8 +8852,8 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete reduce Metal compilation
-    if: github.event_name != 'schedule'
-    needs: mlx-reduce-metal-sources
+    if: needs.ci-plan.outputs.heavy == 'true'
+    needs: [ci-plan, mlx-reduce-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
     steps:
@@ -8787,6 +8901,7 @@ jobs:
           retention-days: 14
 
   mlx-quantized-metal-sources:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-quantized-metal-sources-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -8797,7 +8912,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete quantized Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -8875,8 +8990,8 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
     name: MLX complete quantized Metal compilation
-    if: github.event_name != 'schedule'
-    needs: mlx-quantized-metal-sources
+    if: needs.ci-plan.outputs.heavy == 'true'
+    needs: [ci-plan, mlx-quantized-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
     steps:
@@ -8945,6 +9060,7 @@ jobs:
           retention-days: 14
 
   mlx-quantized-wide-opengl:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-quantized-wide-opengl
       cancel-in-progress: false
@@ -8955,7 +9071,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX quantized wide OpenGL translation
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -9013,6 +9129,7 @@ jobs:
           retention-days: 14
 
   mlx-reduce-complete-opengl-translation:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-reduce-complete-opengl-translation-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -9023,7 +9140,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete reduce OpenGL translation (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -9089,6 +9206,7 @@ jobs:
           retention-days: 14
 
   mlx-copy-complete-opengl-translation:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-copy-complete-opengl-translation-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -9099,7 +9217,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete copy OpenGL translation (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -9165,6 +9283,7 @@ jobs:
           retention-days: 14
 
   mlx-copy-complete-directx-translation:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-copy-complete-directx-translation-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -9175,7 +9294,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete copy DirectX translation (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9240,6 +9359,7 @@ jobs:
           retention-days: 14
 
   mlx-reduce-complete-directx-translation:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-reduce-complete-directx-translation-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -9250,7 +9370,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete reduce DirectX translation (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -9315,6 +9435,7 @@ jobs:
           retention-days: 14
 
   mlx-binary-complete-opengl-translation:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-binary-complete-opengl-translation-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -9325,7 +9446,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete binary OpenGL translation (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -9391,6 +9512,7 @@ jobs:
           retention-days: 14
 
   mlx-binary-complete-directx-translation:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-binary-complete-directx-translation-${{ strategy.job-index }}
       cancel-in-progress: false
@@ -9401,7 +9523,7 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete binary DirectX translation (shard ${{ matrix.shard_index }} of 24)
-    if: github.event_name != 'schedule'
+    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -9466,6 +9588,7 @@ jobs:
           retention-days: 14
 
   mlx-full-corpus-scout:
+    needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-full-corpus-scout
       cancel-in-progress: false
@@ -9534,4 +9657,4 @@ jobs:
             mlx-upstream/.crosstl-mlx-porting/out-full-corpus/**
             mlx-upstream/.crosstl-mlx-porting/full-corpus-summary.json
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 14

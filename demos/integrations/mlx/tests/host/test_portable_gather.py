@@ -273,8 +273,8 @@ def test_gather_ci_requires_unchanged_tests_on_all_three_targets():
         row["target"]: row["os"] for row in job["strategy"]["matrix"]["include"]
     } == {"directx": "windows-2025", "opengl": "ubuntu-24.04", "metal": "macos-26"}
     assert (
-        job["needs"] == "integer64-host"
-        and job["if"] == "github.event_name != 'schedule'"
+        job["needs"] == ["ci-plan", "integer64-host"]
+        and job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
         and "continue-on-error" not in job
     )
     steps = {step.get("name"): step for step in job["steps"]}

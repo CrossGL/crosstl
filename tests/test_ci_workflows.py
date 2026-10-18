@@ -328,6 +328,19 @@ def _matrix_values(workflow_text, key):
     )
     if block:
         return _parse_matrix_values(block.group(1))
+    dynamic = re.search(
+        rf"^\s*{re.escape(key)}:\s*"
+        r"\$\{\{\s*fromJSON\(needs\.[\w-]+\.outputs\.[\w-]+\)\s*\}\}\s*$",
+        workflow_text,
+        flags=re.MULTILINE,
+    )
+    if dynamic:
+        name = "FULL_" + key.upper().replace("-", "_") + "S"
+        declared = re.search(
+            rf"^\s*{name}:\s*'(\[[^\n]+\])'\s*$", workflow_text, flags=re.MULTILINE
+        )
+        assert declared, f"run-time matrix key {key} must declare {name}"
+        return _parse_matrix_values(declared.group(1))
     raise AssertionError(f"matrix key not found: {key}")
 
 
@@ -362,10 +375,23 @@ def _assert_windows_legacy_python_is_excluded(workflow_text, os_key="OS"):
 
 
 def _assert_grouped_native_python_policy(workflow_text, component_key):
-    job = yaml.safe_load(workflow_text)["jobs"]["test"]
+    workflow = yaml.safe_load(workflow_text)
+    job = workflow["jobs"]["test"]
     matrix = job["strategy"]["matrix"]
     assert set(matrix) == {component_key, "python-version", "OS", "exclude", "include"}
-    assert set(matrix["python-version"]) == PYTHON_VERSIONS
+    # Pull requests test the oldest and newest Python unless labelled ci:full;
+    # pushes to main test every supported version.
+    assert job["needs"] == "python-versions"
+    assert matrix["python-version"] == (
+        "${{ fromJSON(needs.python-versions.outputs.versions) }}"
+    )
+    select = workflow["jobs"]["python-versions"]["steps"][0]
+    assert set(json.loads(select["env"]["FULL_PYTHON_VERSIONS"])) == PYTHON_VERSIONS
+    assert json.loads(select["env"]["PULL_REQUEST_PYTHON_VERSIONS"]) == ["3.8", "3.13"]
+    assert select["env"]["FULL"] == (
+        "${{ github.event_name != 'pull_request' || "
+        "contains(github.event.pull_request.labels.*.name, 'ci:full') }}"
+    )
     assert set(matrix["OS"]) == RUNNER_OSES
     assert matrix["exclude"] == [
         {"OS": "windows-latest"},

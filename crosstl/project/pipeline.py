@@ -15219,7 +15219,7 @@ def _materialize_implicit_template_function_calls(
         return_types,
         type_cache=type_cache,
         work_budget=work_budget,
-        decay_local_array_arguments=target == "opengl",
+        decay_local_array_arguments=target in _METAL_ARRAY_DECAY_TEMPLATE_TARGETS,
     )
     context_by_materialized_name = {
         context.materialized_name: context for context in source_contexts
@@ -15567,6 +15567,11 @@ _METAL_STORAGE_TYPE_QUALIFIERS = frozenset(
 _METAL_ADDRESS_SPACE_QUALIFIERS = frozenset(
     {"constant", "device", "thread", "threadgroup"}
 )
+# Targets whose materialized helpers deduce a by-value type parameter from a
+# local array argument as C++ does, through array-to-pointer decay: both lower
+# the resulting thread pointer as a private array view with a movable base, so
+# helpers such as MLX's ``dequantize(..., W w_local)`` may rebase it.
+_METAL_ARRAY_DECAY_TEMPLATE_TARGETS = frozenset({"opengl", "directx"})
 
 
 def _metal_template_argument_binding_type(type_text: str) -> str:
@@ -22755,7 +22760,7 @@ def _project_template_materialization_for_artifact(
         preprocessor,
         materialized,
         work_budget=explicit_work_budget,
-        decay_local_array_arguments=target == "opengl",
+        decay_local_array_arguments=target in _METAL_ARRAY_DECAY_TEMPLATE_TARGETS,
         known_materializations={
             **concrete_materializations,
             **implicit_materialization.materialized_names,
@@ -22812,7 +22817,7 @@ def _project_template_materialization_for_artifact(
             materialized,
             work_budget=explicit_work_budget,
             include_struct_members=True,
-            decay_local_array_arguments=target == "opengl",
+            decay_local_array_arguments=target in _METAL_ARRAY_DECAY_TEMPLATE_TARGETS,
             known_materializations=inferred_plain_materialized_names,
         )
         specializations.extend(struct_field_specializations)
@@ -23191,7 +23196,7 @@ def _project_template_materialization_for_artifact(
         materialized,
         work_budget=explicit_work_budget,
         include_struct_members=True,
-        decay_local_array_arguments=target == "opengl",
+        decay_local_array_arguments=target in _METAL_ARRAY_DECAY_TEMPLATE_TARGETS,
         known_materializations=late_known_materializations,
     )
     specializations.extend(late_helper_specializations)

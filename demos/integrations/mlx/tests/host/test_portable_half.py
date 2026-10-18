@@ -567,9 +567,9 @@ def test_half_ci_requires_every_target_and_retained_evidence():
         Path(".github/workflows/demo-project-testing.yml").read_text()
     )
     job = workflow["jobs"]["half-host"]
-    assert job["needs"] == "portable-host"
+    assert job["needs"] == ["ci-plan", "portable-host"]
     assert (
-        job["if"] == "github.event_name != 'schedule'"
+        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
         and "continue-on-error" not in job
     )
     assert {

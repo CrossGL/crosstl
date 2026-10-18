@@ -1089,7 +1089,10 @@ a row of workgroups and a two-by-two grid that exercises the
 ``threads_per_grid`` row stride. Quantize groups make every scale, edge and
 code exact, except an all-zero group (the ``eps`` scale), an all-negative
 group (``w_max`` starts at zero), a positive constant and free dyadic values
-that need correctly rounded float32 division. A lane-level model must write
+that need correctly rounded float32 division. DirectX quantization selects
+``binary32_division_profile = "rne-flush"`` to prevent rounded reciprocal
+multiplication from changing codes under DXC optimization. A lane-level model
+must write
 every byte once and reproduce MLX's least-significant-bit-first code stream;
 dequantize's power-of-two scales and biases ``-a * scale`` keep every output
 exact in the element type. Every word is compared exactly, guards and inputs

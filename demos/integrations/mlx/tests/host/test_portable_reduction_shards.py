@@ -430,7 +430,7 @@ def test_ci_requires_shards_and_complete_native_gates():
         Path(".github/workflows/demo-project-testing.yml").read_text()
     )
     build = workflow["jobs"]["row-packages"]
-    assert build["runs-on"] == "ubuntu-24.04" and "needs" not in build
+    assert build["runs-on"] == "ubuntu-24.04" and build["needs"] == "ci-plan"
     assert build["strategy"]["matrix"] == {
         "target": ["metal", "opengl", "directx"],
         "shard": list(range(shards.SHARD_COUNT)),
@@ -450,7 +450,7 @@ def test_ci_requires_shards_and_complete_native_gates():
         "checkout --detach"
     )
     job = workflow["jobs"]["reductions"]
-    assert job["needs"] == ["portable-host", "row-packages"]
+    assert job["needs"] == ["ci-plan", "portable-host", "row-packages"]
     native = {step.get("name"): step for step in job["steps"]}
     for name in (
         "Select same-run row shards",

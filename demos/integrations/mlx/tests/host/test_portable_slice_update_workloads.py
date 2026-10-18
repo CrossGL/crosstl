@@ -224,10 +224,10 @@ def test_slice_update_ci_requires_native_execution_and_evidence():
         Path(".github/workflows/demo-project-testing.yml").read_text()
     )
     job = workflow["jobs"]["slice-update-host"]
-    assert job["needs"] == "integer64-host"
+    assert job["needs"] == ["ci-plan", "integer64-host"]
     assert (
         "continue-on-error" not in job
-        and job["if"] == "github.event_name != 'schedule'"
+        and job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
     )
     assert {
         (item["target"], item["os"]) for item in job["strategy"]["matrix"]["include"]
