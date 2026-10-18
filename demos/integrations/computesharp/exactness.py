@@ -269,11 +269,15 @@ def analyze(
     library: Path | None = None,
     device: dict[str, Any] | None = None,
     workers: int = 0,
+    require_float_operations: bool = True,
 ) -> dict[str, Any]:
     """Compile every translated artifact of a manifest and count its arithmetic.
 
     ``device`` is the preflight description of the device the OpenGL backend
     creates; without it the backend is queried once more.
+    ``require_float_operations`` fails a report that found no floating-point
+    operation at all, which would mean the analysis saw nothing; a suite
+    whose shaders do no float arithmetic states why it turns this off.
     """
     manifest_path = artifacts / target / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -311,11 +315,17 @@ def analyze(
         "target": target,
         "tool": tool,
         "manifestSha256": sha256_file(manifest_path),
+        "floatOperationsRequired": require_float_operations,
         "artifacts": dict(sorted(entries.items())),
     }
     report["totals"] = totals(report)
     try:
-        verify(report, manifest, manifest_sha256=report["manifestSha256"])
+        verify(
+            report,
+            manifest,
+            manifest_sha256=report["manifestSha256"],
+            require_float_operations=require_float_operations,
+        )
     except ExactnessError as exc:
         report["status"] = "failed"
         report["errors"] = exc.errors[:100]
@@ -338,6 +348,7 @@ def verify(
     manifest: dict[str, Any],
     *,
     manifest_sha256: str | None = None,
+    require_float_operations: bool = True,
 ) -> dict[str, Any]:
     """Check a report against the manifest whose artifacts it analyzed."""
     errors: list[str] = []
@@ -371,7 +382,7 @@ def verify(
             errors.append(f"{shader_id}: {entry.get('contractible')} contractible")
         analyzed += 1
     counted = totals({"artifacts": entries})
-    if analyzed and counted.get("floatOperations", 0) == 0:
+    if require_float_operations and analyzed and counted.get("floatOperations", 0) == 0:
         errors.append("no floating-point operation was found in any artifact")
     if errors:
         raise ExactnessError(errors)
@@ -387,7 +398,11 @@ def verify(
 
 
 def verify_file(
-    report_path: Path, manifest_path: Path, *, target: str
+    report_path: Path,
+    manifest_path: Path,
+    *,
+    target: str,
+    require_float_operations: bool = True,
 ) -> dict[str, Any]:
     """Check the ``exactness.json`` of a run against the run's manifest."""
     if not report_path.is_file():
@@ -398,7 +413,12 @@ def verify_file(
             [f"the report is for {report.get('target')!r}, not {target!r}"]
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    return verify(report, manifest, manifest_sha256=sha256_file(manifest_path))
+    return verify(
+        report,
+        manifest,
+        manifest_sha256=sha256_file(manifest_path),
+        require_float_operations=require_float_operations,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

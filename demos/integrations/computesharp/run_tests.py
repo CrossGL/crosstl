@@ -41,11 +41,11 @@ import baseline  # noqa: E402
 import collect_outputs  # noqa: E402
 import evidence as evidence_module  # noqa: E402
 import exactness  # noqa: E402
+import program_runner  # noqa: E402
+import suites  # noqa: E402
 
-TEST_PROJECT = Path("tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj")
-TEST_ASSEMBLY = Path(
-    "tests/ComputeSharp.Tests/bin/Release/net10.0/ComputeSharp.Tests.dll"
-)
+TEST_PROJECT = suites.Suite(suites.MAIN_SUITE, "mstest").project
+TEST_ASSEMBLY = suites.Suite(suites.MAIN_SUITE, "mstest").assembly
 NATIVE_SOURCES = {
     "metal": ("csbackend_metal.m", "libcsbackend_metal.dylib"),
     "opengl": ("csbackend_gl.c", "libcsbackend_gl.so"),
@@ -320,7 +320,16 @@ def run_tests(
     capture: Path | None = None,
     capture_cases: list[str] | None = None,
     deadline: float = RUN_DEADLINE_SECONDS,
+    assembly: Path = TEST_ASSEMBLY,
+    program: Path | None = None,
 ) -> Path:
+    """Run the suite's cases and return the TRX results.
+
+    ``program`` is the discovery export of a suite that is a program; its one
+    case is the entry point, which ``program_runner`` executes instead of
+    ``dotnet test``.
+    """
+
     if results_dir.exists():
         shutil.rmtree(results_dir)
     results_dir.mkdir(parents=True)
@@ -352,10 +361,25 @@ def run_tests(
             evidence.unlink()
     if fault is not None:
         environment["CROSSTL_COMPUTESHARP_FAULT"] = fault
+    if program is not None:
+        if excluded or extra_filter:
+            raise SystemExit("A program has one case, which cannot be filtered out")
+        try:
+            return program_runner.run(
+                adapted / assembly,
+                program,
+                results_dir,
+                log=log,
+                env=environment,
+                deadline=deadline,
+                trx_name=trx_name,
+            )
+        except program_runner.ProgramError as exc:
+            raise SystemExit(str(exc)) from exc
     command = [
         "dotnet",
         "test",
-        str(adapted / TEST_ASSEMBLY),
+        str(adapted / assembly),
         "--logger",
         f"trx;LogFileName={trx_name}",
         "--results-directory",
@@ -374,11 +398,11 @@ def run_tests(
     return trx
 
 
-def build_tests(adapted: Path, log: Path) -> None:
+def build_tests(adapted: Path, log: Path, project: Path = TEST_PROJECT) -> None:
     command = [
         "dotnet",
         "build",
-        str(adapted / TEST_PROJECT),
+        str(adapted / project),
         "-c",
         "Release",
         "-p:CrossTLTrustedCorpusBaseline=true",
@@ -428,6 +452,9 @@ def run_negative_controls(
     work: Path,
     spec_path: Path,
     passed: Counter[str] | None,
+    assembly: Path = TEST_ASSEMBLY,
+    policy: Path = evidence_module.POLICY,
+    program: bool = False,
 ) -> dict[str, Any]:
     """Run every frozen fault and require each of its control cases to fail."""
 
@@ -446,9 +473,11 @@ def run_negative_controls(
             )
             continue
         directory = work / "controls" / fault
-        selection = "|".join(
-            f"FullyQualifiedName={method}" for method in control["methods"]
-        )
+        selection = None
+        if not program:
+            selection = "|".join(
+                f"FullyQualifiedName={method}" for method in control["methods"]
+            )
         try:
             trx = run_tests(
                 adapted=adapted,
@@ -462,6 +491,8 @@ def run_negative_controls(
                 extra_filter=selection,
                 log=directory / "test-run.log",
                 deadline=CONTROL_RUN_DEADLINE_SECONDS,
+                assembly=assembly,
+                program=discovery if program else None,
             )
         except DeadlineExceeded as exc:
             results.append({"fault": fault, "status": "failed", "errors": [str(exc)]})
@@ -476,6 +507,7 @@ def run_negative_controls(
                 profile=profile,
                 contract_path=contract,
                 passed=passed,
+                policy_path=policy,
             )
         )
     status = (
@@ -490,8 +522,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--discovery", required=True, type=Path)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--work", required=True, type=Path)
-    parser.add_argument("--contract", type=Path, default=HERE / "coverage.json")
-    parser.add_argument("--controls", type=Path, default=CONTROLS)
+    parser.add_argument(
+        "--suite",
+        default=suites.MAIN_SUITE,
+        help="ported upstream test project to run (see test_projects.json)",
+    )
+    parser.add_argument("--contract", type=Path, help="override the suite contract")
+    parser.add_argument("--controls", type=Path, help="override the suite controls")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument(
         "--prebuilt-tests",
@@ -514,6 +551,14 @@ def main(argv: list[str] | None = None) -> int:
         help="run only the negative controls, for diagnosis",
     )
     args = parser.parse_args(argv)
+    suite = suites.suite(args.suite)
+    program = suite.kind == "program"
+    if program and args.filter:
+        raise SystemExit(
+            f"{suite.name} is a program with one case; --filter does not apply"
+        )
+    args.contract = args.contract or suite.contract
+    args.controls = args.controls or suite.negative_controls
 
     contract = json.loads(args.contract.read_text(encoding="utf-8"))
     profile = contract["profiles"].get(args.profile)
@@ -529,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_build:
         build_native(target, native_library.parent, logs / "native-build.log")
         if not args.prebuilt_tests:
-            build_tests(args.adapted, logs / "test-build.log")
+            build_tests(args.adapted, logs / "test-build.log", suite.project)
     device_check = preflight(native_library, profile)
     print(json.dumps({"preflight": device_check}, indent=2))
     if device_check["status"] != "passed":
@@ -562,6 +607,7 @@ def main(argv: list[str] | None = None) -> int:
     report: dict[str, Any] = {
         "schemaVersion": 2,
         "kind": "computesharp-translated-run",
+        "suite": suite.name,
         "profile": args.profile,
         "target": target,
         "execution": profile.get("execution"),
@@ -573,7 +619,11 @@ def main(argv: list[str] | None = None) -> int:
     }
     status = 0
     exactness_report = exactness.analyze(
-        target, artifacts, library=native_library, device=device_check.get("device")
+        target,
+        artifacts,
+        library=native_library,
+        device=device_check.get("device"),
+        require_float_operations=suite.no_float_arithmetic_reason is None,
     )
     (work / "exactness.json").write_text(
         json.dumps(exactness_report, indent=2, sort_keys=True) + "\n",
@@ -591,7 +641,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.controls_only:
         evidence = None if args.no_evidence else work / "evidence.jsonl"
         excluded = excluded_methods(args.contract, args.discovery, args.profile)
-        image_checks = json.loads(IMAGE_CHECKS.read_text(encoding="utf-8"))
+        capture_cases = []
+        if suite.image_checks is not None:
+            image_checks = json.loads(suite.image_checks.read_text(encoding="utf-8"))
+            capture_cases = image_checks["captureCases"]
         try:
             trx = run_tests(
                 adapted=args.adapted,
@@ -605,7 +658,9 @@ def main(argv: list[str] | None = None) -> int:
                 extra_filter=args.filter,
                 log=logs / "test-run.log",
                 capture=None if evidence is None else work / "captures",
-                capture_cases=image_checks["captureCases"],
+                capture_cases=capture_cases,
+                assembly=suite.assembly,
+                program=args.discovery if program else None,
             )
         except DeadlineExceeded as exc:
             report.update(
@@ -642,13 +697,14 @@ def main(argv: list[str] | None = None) -> int:
                     trx=trx,
                     profile=args.profile,
                     contract_path=args.contract,
+                    policy_path=suite.evidence_policy,
                 )
             except evidence_module.EvidenceError as exc:
                 report["evidence"] = {"status": "failed", "errors": exc.errors[:200]}
                 status = 1
         report["failures"] = summarize_failures(trx)
         outputs = collect_outputs.collect(
-            (args.adapted / TEST_ASSEMBLY).resolve().parent, work / "outputs"
+            (args.adapted / suite.assembly).resolve().parent, work / "outputs"
         )
         report["outputs"] = {
             "directory": str(work / "outputs"),
@@ -672,6 +728,9 @@ def main(argv: list[str] | None = None) -> int:
             work=work,
             spec_path=args.controls,
             passed=passed,
+            assembly=suite.assembly,
+            policy=suite.evidence_policy,
+            program=program,
         )
         if report["negativeControls"]["status"] != "passed":
             status = 1
@@ -688,6 +747,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = {
         key: report.get(key)
         for key in (
+            "suite",
             "profile",
             "translation",
             "status",

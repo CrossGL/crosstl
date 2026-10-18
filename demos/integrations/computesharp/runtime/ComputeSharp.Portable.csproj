@@ -35,7 +35,20 @@
 
   <PropertyGroup>
     <UpstreamRuntime>$(ComputeSharpRoot)/src/ComputeSharp</UpstreamRuntime>
+    <!-- The upstream runtime grants ComputeSharp.Tests.Internals access to its internals;
+         the key is read from the pinned build properties instead of being copied. -->
+    <UpstreamBuildProps>$(ComputeSharpRoot)/build/Directory.Build.props</UpstreamBuildProps>
+    <UpstreamAssemblySignPublicKey Condition="Exists('$(UpstreamBuildProps)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(UpstreamBuildProps)')), '(?&lt;=&lt;AssemblySignPublicKey&gt;)[0-9A-Fa-f]+(?=&lt;/AssemblySignPublicKey&gt;)'))</UpstreamAssemblySignPublicKey>
   </PropertyGroup>
+
+  <Target Name="CheckUpstreamPublicKey" BeforeTargets="GenerateAssemblyInfo;CoreCompile">
+    <Error Condition="'$(UpstreamAssemblySignPublicKey)' == ''"
+           Text="No AssemblySignPublicKey in $(UpstreamBuildProps)." />
+  </Target>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ComputeSharp.Tests.Internals, PublicKey=$(UpstreamAssemblySignPublicKey)" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core/ComputeSharp.Core.csproj" />

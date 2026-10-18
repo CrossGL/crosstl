@@ -281,17 +281,34 @@ def main() -> int:
     for name in ("freeze", "check"):
         command = sub.add_parser(name)
         command.add_argument("--discovery", required=True, type=Path)
-        command.add_argument("--lock", type=Path, default=LOCK)
+        command.add_argument(
+            "--suite",
+            default="ComputeSharp.Tests",
+            help="ported upstream test project whose contract and lock apply",
+        )
+        command.add_argument(
+            "--contract", type=Path, help="override the suite contract"
+        )
+        command.add_argument("--lock", type=Path, help="override the suite lock")
     args = parser.parse_args()
     try:
+        import suites
+
+        selected = suites.suite(args.suite)
+        if selected.contract is None:
+            raise ValueError(f"{args.suite} has no coverage contract")
+        contract_path = args.contract or selected.contract
+        lock_path = args.lock or selected.lock
         if args.command == "freeze":
-            contract_bytes = _contract_bytes(CONTRACT)
+            contract_bytes = _contract_bytes(contract_path)
             lock = build_lock(
-                load_contract(), load_discovery(args.discovery), contract_bytes
+                load_contract(contract_path),
+                load_discovery(args.discovery),
+                contract_bytes,
             )
-            args.lock.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+            lock_path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
         else:
-            lock = check(args.discovery, args.lock)
+            lock = check(args.discovery, lock_path, contract_path)
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(1, str(error) + "\n")
     summary = {name: entry["expected"] for name, entry in lock["profiles"].items()}

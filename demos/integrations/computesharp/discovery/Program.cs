@@ -104,6 +104,21 @@ internal static class Program
                     }
                 }
             }
+            // A test project that is a program has no MSTest methods: its one case is the
+            // entry point, which throws when the program's own check fails.
+            string projectKind = "mstest";
+            if (methodCount == 0 && assembly.EntryPoint is MethodInfo entryPoint)
+            {
+                projectKind = "program";
+                Type owner = entryPoint.DeclaringType ?? throw new InvalidOperationException("Entry point has no declaring type");
+                methodCount++;
+                string methodName = TypeName(owner) + "." + entryPoint.Name;
+                string signature = methodName + "(" + string.Join(",", entryPoint.GetParameters().Select(p => TypeName(p.ParameterType))) + ")";
+                (string path, int line) = locator.Locate(entryPoint);
+                methods.Add(new { method = methodName, signature, source = new { path, line } });
+                string id = Hash(Encoding.UTF8.GetBytes(signature + "\n[]\n1"));
+                cases.Add(new { id, method = methodName, signature, displayName = entryPoint.Name, occurrence = 1, arguments = Array.Empty<JsonObject>(), ignored = false });
+            }
             if (cases.Count == 0)
                 throw new InvalidOperationException("No test cases discovered");
 
@@ -142,6 +157,7 @@ internal static class Program
                 schemaVersion = 1,
                 kind = "computesharp.discovery",
                 assembly = new { name = assembly.GetName().Name, sha256 = assemblyHash },
+                projectKind,
                 testMethodCount = methodCount,
                 caseCount = cases.Count,
                 shaderCount = shaders.Count,

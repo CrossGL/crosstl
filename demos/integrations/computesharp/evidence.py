@@ -188,7 +188,9 @@ def load_policy(
     ``capabilityQueries`` states, for every contract capability, the fields of
     the runtime capability record that answers it; a list value matches any of
     its items. ``hostOnlyMethods`` names required GPU methods whose cases do
-    no device work on the translated runtime, each with the reason.
+    no device work on the translated runtime, each with the reason. A suite
+    whose required cases transfer and read back resources without dispatching
+    states why in ``noDispatchReason``; every other run must dispatch.
     """
 
     try:
@@ -215,6 +217,11 @@ def load_policy(
             errors.append(f"host-only method {method} is not a required GPU method")
         if not isinstance(reason, str) or len(reason.strip()) < 20:
             errors.append(f"host-only method {method} needs a specific reason")
+    no_dispatch = policy.get("noDispatchReason")
+    if no_dispatch is not None and (
+        not isinstance(no_dispatch, str) or len(no_dispatch.strip()) < 20
+    ):
+        errors.append("noDispatchReason needs a specific reason")
     if errors:
         raise EvidenceError(errors)
     return policy
@@ -526,7 +533,7 @@ def verify(
 
     if not devices:
         errors.append("no device record: the translated backend never initialized")
-    if counts["dispatch"] == 0:
+    if counts["dispatch"] == 0 and policy.get("noDispatchReason") is None:
         errors.append("no dispatch was recorded")
     device_fp64 = {record.get("fp64") for record in devices}
     if fp64_answers and fp64_answers != device_fp64:

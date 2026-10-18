@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.evidence-policy",
+  "capabilityQueries": {
+    "fp64": {
+      "capability": "fp64"
+    },
+    "rw-texture-rgb32": {
+      "capability": "texture",
+      "readWrite": true,
+      "elementType": [
+        "ComputeSharp.Float3",
+        "ComputeSharp.Int3",
+        "ComputeSharp.UInt3"
+      ]
+    }
+  },
+  "hostOnlyMethods": {},
+  "noDispatchReason": "No Internals test dispatches a shader: the debug view tests upload, copy and read back device resources, and the dispatch-data loader tests load shader arguments over device buffers without running the shader."
+}
