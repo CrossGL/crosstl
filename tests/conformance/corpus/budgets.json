@@ -1,0 +1,5 @@
+{
+ "schemaVersion": 1,
+ "timeoutSeconds": 300,
+ "p95Seconds": {"glsl": 5, "hlsl": 5, "metal": 300, "spirv": 5}
+}

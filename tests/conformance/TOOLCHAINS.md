@@ -71,3 +71,27 @@ run) as the `conformance-<profile>` artifact; commit that candidate to record a 
 
 Pull requests run the fixture cases under `strict` and `relaxed`; the nightly tier, `workflow_dispatch` and pull
 requests labelled `conformance-full` add six seeded held-out kernels per family and language.
+
+## Corpus tier
+
+`tests/conformance/corpus/` measures translation of third-party programs. `manifest.json` pins seven open-source
+projects (repository, commit, licence) and 1,667 translation units in ten slices: GLSL, HLSL and MSL sources, plus
+SPIR-V derived from the GLSL slice with glslang 16.6.0 and spirv-dis v2026.4. Each unit carries its SHA-256,
+stages, include directories and defines, and is kept only when its project's own toolchain accepts it. The runner
+fetches each project as a shallow sparse checkout of exactly the listed files and refuses to measure a corpus
+whose files or derived modules differ from the manifest.
+
+```bash
+python -m tests.conformance.corpus.run --output /tmp/corpus-run --targets metal,hlsl,glsl,essl,spirv
+```
+
+Every (unit, target) cell is translated in a persistent worker (only `crosstl.translate` is timed), checked by
+the target's native checker, and classified as usable, degraded (accepted but with a fallback marker or no entry
+point), refused (typed diagnostic), invalid, translator error, timeout or worker crash. `summary.json` reports the
+usable share per (source, target) pair over feasible cells and the p50/p95/max latency per source language.
+`scoreboards/<profile>.json` stores one outcome code per cell; a cell that gets worse, cannot be checked, or a p95
+above `budgets.json` fails the run. Latency is wall time, and the worker's CPU time is recorded beside it, because
+a loaded runner inflates the first far more than the second. Translations are journalled in
+`translations.jsonl` as they finish, so `--resume` continues an interrupted run. `.github/workflows/corpus.yml`
+runs the tier nightly, on demand and on pull requests labelled `corpus`: Linux checks HLSL, GLSL, GLSL ES and
+SPIR-V outputs, macOS checks MSL outputs.

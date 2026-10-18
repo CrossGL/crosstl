@@ -1,7 +1,7 @@
 name: Install pinned shader validators
 description: >-
-  Install glslang 16.6.0 from its release archive and build SPIRV-Tools v2026.4 (spirv-as, spirv-val) from source
-  at the commits that release pins, on Linux x86_64. These are the validator versions in
+  Install glslang 16.6.0 from its release archive and build SPIRV-Tools v2026.4 (spirv-as, spirv-val, spirv-dis)
+  from source at the commits that release pins, on Linux x86_64 or macOS. These are the validator versions in
   tests/conformance/TOOLCHAINS.md; moving a pin changes conformance outcomes, so update the scoreboards with it.
 
 runs:
@@ -12,7 +12,7 @@ runs:
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         path: ${{ runner.temp }}/spirv-tools-bin
-        key: spirv-tools-ef96ed763b43b59b33b31b362f09a02b729fa1c9-headers-496543121ce6419f23d6fa5d7194ba66c36212d2-${{ runner.os }}-${{ runner.arch }}-1
+        key: spirv-tools-ef96ed763b43b59b33b31b362f09a02b729fa1c9-headers-496543121ce6419f23d6fa5d7194ba66c36212d2-${{ runner.os }}-${{ runner.arch }}-2
 
     - name: Build SPIRV-Tools v2026.4
       if: steps.cache.outputs.cache-hit != 'true'
@@ -31,18 +31,28 @@ runs:
         git -C "$source/external/spirv-headers" checkout -q --detach FETCH_HEAD
         cmake -S "$source" -B "$source/build" -DCMAKE_BUILD_TYPE=Release -DSPIRV_SKIP_TESTS=ON \
           -DSPIRV_WERROR=OFF -DSPIRV_TOOLS_BUILD_STATIC=ON
-        cmake --build "$source/build" --parallel --target spirv-as spirv-val
+        cmake --build "$source/build" --parallel --target spirv-as spirv-val spirv-dis
         mkdir -p "$RUNNER_TEMP/spirv-tools-bin"
-        cp "$source/build/tools/spirv-as" "$source/build/tools/spirv-val" "$RUNNER_TEMP/spirv-tools-bin/"
+        cp "$source/build/tools/spirv-as" "$source/build/tools/spirv-val" "$source/build/tools/spirv-dis" \
+          "$RUNNER_TEMP/spirv-tools-bin/"
 
     - name: Install glslang 16.6.0
       shell: bash
       run: |
         set -euo pipefail
         archive="$RUNNER_TEMP/glslang.tar.gz"
+        case "$RUNNER_OS" in
+          Linux)
+            asset=glslang-16.6.0-linux-x86_64-release.tar.gz
+            digest=2c34071f56ecf39d16233294d3739cf43f981fd39080f2fd9dccb782101191ce;;
+          macOS)
+            asset=glslang-16.6.0-macos-universal-release.tar.gz
+            digest=4f8c05f2888a73ed0b7b274bc524af9130e09ae94b43c0f3f9ed83cfae852834;;
+          *) echo "No pinned glslang archive for $RUNNER_OS" >&2; exit 1;;
+        esac
         curl -fsSLo "$archive" --retry 8 --retry-all-errors --retry-delay 10 --connect-timeout 30 \
-          https://github.com/KhronosGroup/glslang/releases/download/16.6.0/glslang-16.6.0-linux-x86_64-release.tar.gz
-        echo "2c34071f56ecf39d16233294d3739cf43f981fd39080f2fd9dccb782101191ce  $archive" | sha256sum --check --strict
+          "https://github.com/KhronosGroup/glslang/releases/download/16.6.0/$asset"
+        echo "$digest  $archive" | shasum -a 256 --check --strict
         mkdir -p "$RUNNER_TEMP/glslang"
         tar -xzf "$archive" -C "$RUNNER_TEMP/glslang"
         echo "$RUNNER_TEMP/glslang/bin" >> "$GITHUB_PATH"
