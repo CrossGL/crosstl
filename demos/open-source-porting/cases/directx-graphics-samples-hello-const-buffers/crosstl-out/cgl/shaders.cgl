@@ -5,6 +5,7 @@ shader main {
     }
     // Constant Buffers
     @ register(b0)
+    @ buffer_layout(hlsl_cbuffer)
     cbuffer SceneConstantBuffer {
         vec4 offset;
         vec4 padding[15];
