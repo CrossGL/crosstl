@@ -11,11 +11,12 @@ on Windows (WARP) is the independent baseline.
 
 ## Results
 
-The artifacts of workflow run
-[39099713804](https://github.com/CrossGL/crosstl/actions/runs/39099713804)
-(commit `0583b807e31ef8ea98e029093c60340a42338df8`) qualify every profile;
-`results.json` is the machine-readable summary that `qualify.py` computes from
-them.
+The qualification job of workflow run
+[39105438960](https://github.com/CrossGL/crosstl/actions/runs/39105438960)
+(commit `3a2de27370336852276bc67bea59d86cf9c692d3`) recomputed every check from
+the fresh artifacts of the three profile jobs and passed. `results.json` is the
+machine-readable summary that job wrote; `results_summary.py` regenerates it
+byte for byte from the job's `qualification.json`.
 
 | Profile | Device | Execution | Required GPU passed | Capability-gated | Windows-specific | Negative controls |
 | --- | --- | --- | ---: | ---: | ---: | --- |
