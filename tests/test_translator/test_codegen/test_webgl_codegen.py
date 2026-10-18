@@ -14,6 +14,7 @@ from crosstl.translator.codegen.webgl_codegen import (
     WebGLBooleanCompoundAssignmentError,
     WebGLBooleanOrderedIntrinsicError,
     WebGLCodeGen,
+    WebGLPreciseQualifierError,
     WebGLStructConstructionError,
 )
 from crosstl.translator.lexer import Lexer
@@ -1501,3 +1502,35 @@ def test_webgl_boolean_min_max_reports_unrepresentable_operand_shapes():
     assert exc_info.value.operation == "min"
     assert exc_info.value.operand_types == ("bvec2", "bvec3")
     assert exc_info.value.reason == "operand-type-mismatch"
+
+
+def test_webgl_rejects_arithmetic_that_must_be_evaluated_as_written():
+    # GLSL ES 3.00 has no precise qualifier, so a precise helper cannot keep
+    # its evaluation order; before this check the output used the keyword.
+    shader = """
+    shader PreciseHelper {
+        @precise
+        float stable(float a, float b, float c) {
+            return a * b + c;
+        }
+        struct FragmentInput { vec2 uv @location(0); }
+        struct FragmentOutput { vec4 color @location(0); }
+        fragment {
+            FragmentOutput main(FragmentInput input) {
+                FragmentOutput output;
+                output.color = vec4(stable(input.uv.x, input.uv.y, 0.5));
+                return output;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WebGLPreciseQualifierError) as exc_info:
+        WebGLCodeGen().generate(parse_shader(shader))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.webgl-precise-unsupported"
+    )
+    assert exc_info.value.version_line == "#version 300 es"
+    relaxed = WebGLCodeGen().generate(parse_shader(shader.replace("@precise\n", "")))
+    assert "precise" not in relaxed

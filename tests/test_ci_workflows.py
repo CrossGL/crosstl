@@ -888,6 +888,29 @@ def test_full_suite_runs_runtime_parity_only_for_available_adapters():
     assert '-k "runtime_parity"' in full_suite
 
 
+def test_full_suite_checks_hlsl_evaluation_semantics_on_native_drivers():
+    workflows = _workflow_texts()
+    full_suite = workflows.get("full-tests.yml", "")
+    ci_coverage = _load_ci_coverage_module()
+
+    step = ci_coverage.workflow_step_section(
+        full_suite, "Check HLSL evaluation semantics on the native driver"
+    )
+    assert (
+        "if: (matrix.adapter == 'opengl' || matrix.adapter == 'metal') && "
+        "steps.probe_runtime_parity.outputs.available == 'true'"
+    ) in step
+    assert 'CROSSTL_REQUIRE_HLSL_VALUE_ARRAY_EXECUTION: "1"' in step
+    assert (
+        "CROSSTL_REQUIRE_MESA_NIR_EXACTNESS: "
+        "${{ matrix.adapter == 'opengl' && '1' || '' }}"
+    ) in step
+    assert "EGL_PLATFORM: surfaceless" in step
+    assert "tests/test_backend/test_directx/test_hlsl_value_array_parameters.py" in step
+    assert "tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py" in step
+    assert "-k" not in step
+
+
 def test_full_suite_runs_fail_closed_windows_directx_native_runtime_smoke():
     workflows = _workflow_texts()
     full_suite = workflows.get("full-tests.yml", "")
