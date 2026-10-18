@@ -72,7 +72,7 @@ Machine-readable results:
   device preflight, deadlines, arithmetic exactness, accounting, evidence
   summary and negative controls; `exactness.json` lists every artifact with
   its hash and floating-point operation counts.
-- `qualification.json` and `results.json` of the `Project Demo Testing`
+- `qualification.json` and `results.json` of the `ComputeSharp Port Testing`
   workflow (`computesharp-qualification` artifact): every check recomputed from
   the raw artifacts of all three profiles, with per-case image metrics and
   difference images.
@@ -490,13 +490,17 @@ WARP job, the adapted-source parity job, the macOS Metal job, the Linux Mesa
 llvmpipe job and then the qualification job, with bounded timeouts and seven
 to fourteen days of artifact retention.
 
-The workflow runs on pull requests and pushes to `main` only when this
-directory, the workflow, the packaging files or the CrossTL code that the HLSL
-translation imports changes: the top-level `crosstl/*.py` modules,
-`crosstl/backend/**` and `crosstl/translator/**`. `crosstl/project/**` and
-other demos do not trigger it. `tests/test_workflow.py` translates generated
-ComputeSharp HLSL in a fresh interpreter and fails if a loaded CrossTL module
-falls outside these paths.
+Every pull request, merge-queue group and push to `main` starts the workflow,
+and it ends in one `ComputeSharp validation result` check that fails when any
+job fails or is cancelled. Its `ComputeSharp validation plan` job
+(`ci_plan.py`) diffs the event from its merge base and skips the port's jobs
+unless this directory, the workflow, the packaging files or the CrossTL code
+that the HLSL translation imports changed: the top-level `crosstl/*.py`
+modules, `crosstl/backend/**` and `crosstl/translator/**`.
+`crosstl/project/**` and other demos do not select it; manual dispatches always
+do. `tests/test_workflow.py` translates generated ComputeSharp HLSL in a fresh
+interpreter and fails if a loaded CrossTL module falls outside these paths. A
+new push to a pull request cancels that pull request's superseded run.
 
 ## Licenses
 

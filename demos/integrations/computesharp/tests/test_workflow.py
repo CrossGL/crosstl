@@ -1,10 +1,11 @@
-"""Checks for the ComputeSharp workflow triggers and retained artifacts.
+"""Checks for the ComputeSharp workflow triggers, plan, result and artifacts.
 
-The workflow is path-filtered to the demo and to the CrossTL modules that its
-HLSL translation imports. The import test translates actual generated
-ComputeSharp HLSL in a fresh interpreter and requires every loaded CrossTL
-module to match a trigger path, so a new dependency of the translation path
-cannot silently stop triggering the port's CI.
+Every pull request, merge-queue group and push to main starts the workflow so
+that its single result check can be required; ``ci_plan.py`` skips the port's
+jobs when nothing the port depends on changed. The import test translates
+actual generated ComputeSharp HLSL in a fresh interpreter and requires every
+loaded CrossTL module to match a relevant path, so a new dependency of the
+translation path cannot silently skip the port's CI.
 """
 
 from __future__ import annotations
@@ -16,13 +17,17 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+import yaml
+
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
-from fixture_support import ROOT  # noqa: E402
+from fixture_support import ROOT, load_module  # noqa: E402
 
+PLAN = load_module("computesharp_ci_plan", ROOT / "ci_plan.py")
 REPO_ROOT = ROOT.parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "project-demo-testing.yml"
-TRIGGER_PATHS = {
+RELEVANT_PATHS = {
     ".github/workflows/project-demo-testing.yml",
     "crosstl/*.py",
     "crosstl/backend/**",
@@ -31,6 +36,7 @@ TRIGGER_PATHS = {
     "pyproject.toml",
     "setup.py",
 }
+RESULT_CHECK = "ComputeSharp validation result"
 MAX_RETENTION_DAYS = 14
 
 # Shaders emitted by the ComputeSharp source generator at the pinned commit
@@ -91,46 +97,190 @@ void Execute(uint3 ThreadIds : SV_DispatchThreadID)
 }
 
 
-def event_paths(text: str, event: str) -> list[str]:
-    lines = text.splitlines()
-    start = lines.index("on:")
-    header = f"  {event}:"
-    index = lines.index(header, start)
-    paths: list[str] = []
-    for line in lines[index + 1 :]:
-        if line.startswith("  ") and not line.startswith("    "):
-            break
-        if line.strip() == "paths:":
-            paths = []
-            continue
-        item = re.fullmatch(r"\s+- \"([^\"]+)\"", line)
-        if item:
-            paths.append(item.group(1))
-    return paths
+def load_workflow() -> dict:
+    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
-def filter_regex(pattern: str) -> re.Pattern[str]:
-    """GitHub path filters: ``*`` stays in one directory, ``**`` spans them."""
-    parts = re.split(r"(\*\*|\*)", pattern)
-    regex = "".join(
-        ".*" if part == "**" else "[^/]*" if part == "*" else re.escape(part)
-        for part in parts
+def test_planner_owns_the_relevant_paths():
+    assert set(PLAN.RELEVANT_PATHS) == RELEVANT_PATHS
+    assert len(PLAN.RELEVANT_PATHS) == len(RELEVANT_PATHS)
+
+
+def test_every_pull_request_and_merge_group_starts_the_workflow():
+    triggers = load_workflow()[True]
+    assert set(triggers) == {"pull_request", "push", "merge_group", "workflow_dispatch"}
+    assert triggers["pull_request"] == {"branches": ["main"]}
+    assert triggers["push"] == {"branches": ["main"]}
+    # Path filters would leave the required result check unreported.
+    for event, policy in triggers.items():
+        assert not set(policy or {}) & {"paths", "paths-ignore"}, event
+    assert "schedule" not in triggers
+
+
+def test_plan_job_selects_the_port_from_the_event_diff():
+    plan = load_workflow()["jobs"]["plan"]
+    assert plan["outputs"] == {"run": "${{ steps.plan.outputs.run }}"}
+    assert plan["timeout-minutes"] <= 5
+    checkout = plan["steps"][0]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["fetch-depth"] == 0
+    step = next(step for step in plan["steps"] if step.get("id") == "plan")
+    assert step["run"] == (
+        'python demos/integrations/computesharp/ci_plan.py --event "$COMPUTESHARP_CI_EVENT"'
     )
-    return re.compile(regex)
+    assert step["env"] == {
+        "COMPUTESHARP_CI_EVENT": "${{ github.event_name }}",
+        "COMPUTESHARP_CI_BASE": (
+            "${{ github.event.pull_request.base.sha || "
+            "github.event.merge_group.base_sha || github.event.before }}"
+        ),
+        "COMPUTESHARP_CI_HEAD": (
+            "${{ github.event.pull_request.head.sha || "
+            "github.event.merge_group.head_sha || github.sha }}"
+        ),
+    }
 
 
-def triggers(path: str, patterns: set[str]) -> bool:
-    return any(filter_regex(pattern).fullmatch(path) for pattern in patterns)
+def test_every_port_job_waits_for_the_plan():
+    jobs = load_workflow()["jobs"]
+    for name, job in jobs.items():
+        if name in {"plan", "result"}:
+            continue
+        needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
+        assert "plan" in needs, name
+        assert "needs.plan.outputs.run == 'true'" in job["if"], name
 
 
-def test_pull_requests_and_pushes_use_the_same_bounded_trigger_paths():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    for event in ("pull_request", "push"):
-        assert set(event_paths(text, event)) == TRIGGER_PATHS, event
-    assert "schedule:" not in text
+def test_one_result_job_reports_every_job():
+    jobs = load_workflow()["jobs"]
+    result = jobs["result"]
+    assert result["name"] == RESULT_CHECK
+    assert result["if"] == "always()"
+    assert set(result["needs"]) == set(jobs) - {"result"}
+    assert result["timeout-minutes"] <= 5
+    step = result["steps"][0]
+    assert step["env"]["RESULTS"] == "${{ join(needs.*.result, ' ') }}"
+    assert "success|skipped) ;;" in step["run"]
+    assert "exit 1" in step["run"]
 
 
-def test_trigger_paths_exclude_other_projects():
+def test_superseded_pull_request_runs_are_replaced():
+    policy = load_workflow()["concurrency"]
+    assert policy == {
+        "group": (
+            "ci-${{ github.workflow }}-${{ github.event_name }}-"
+            "${{ github.event.pull_request.number || github.run_id }}"
+        ),
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    }
+
+
+def test_jobs_are_bounded_and_cache_pip_downloads():
+    for name, job in load_workflow()["jobs"].items():
+        assert 0 < job["timeout-minutes"] <= 90, name
+        installs = any("pip install" in step.get("run", "") for step in job["steps"])
+        for step in job["steps"]:
+            if step.get("uses", "").startswith("actions/setup-python@"):
+                assert (step["with"].get("cache") == "pip") == installs, name
+
+
+@pytest.mark.parametrize(
+    "event,paths,run",
+    [
+        ("schedule", (), True),
+        ("workflow_dispatch", (), True),
+        ("pull_request", (), False),
+        ("pull_request", ("docs/source/project-porting.rst",), False),
+        ("pull_request", ("demos/integrations/mlx/run_mlx_porting.py",), False),
+        ("pull_request", ("crosstl/translator/codegen/GLSL_codegen.py",), True),
+        ("merge_group", ("crosstl/project/pipeline.py",), False),
+        ("merge_group", ("README.md", "crosstl/_crosstl.py"), True),
+        ("push", ("demos/integrations/computesharp/results.json",), True),
+        ("push", (".github/workflows/project-demo-testing.yml",), True),
+        ("push", (".github/workflows/demo-project-testing.yml",), False),
+    ],
+)
+def test_validation_plan_follows_the_changed_paths(event, paths, run):
+    assert PLAN.validation_plan(event, paths) == {"run": run}
+
+
+def test_validation_plan_rejects_unknown_events():
+    with pytest.raises(ValueError, match="Unsupported workflow event"):
+        PLAN.validation_plan("pull_request_target", ())
+
+
+def _git(repo: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    return completed.stdout.strip()
+
+
+def _commit(repo: Path, relative: str, message: str) -> str:
+    path = repo / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(message, encoding="utf-8")
+    _git(repo, "add", relative)
+    _git(
+        repo,
+        "-c",
+        "user.name=CI",
+        "-c",
+        "user.email=ci@example.invalid",
+        "commit",
+        "-q",
+        "-m",
+        message,
+    )
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_plan_reads_the_diff_from_the_merge_base(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    root = _commit(repo, "README.md", "root")
+    _git(repo, "checkout", "-q", "-b", "port")
+    head = _commit(repo, "docs/notes.md", "docs only")
+    _git(repo, "checkout", "-q", "main")
+    # A translator change that reached the base after the branch point must
+    # not select the port for the branch.
+    base = _commit(repo, "crosstl/translator/parser.py", "base change")
+    monkeypatch.chdir(repo)
+    assert PLAN.changed_paths(base, head) == ("docs/notes.md",)
+    assert PLAN.plan_for_event("pull_request", base, head) == {"run": False}
+    moved = _commit(repo, "demos/integrations/computesharp/run_tests.py", "port")
+    assert PLAN.plan_for_event("merge_group", root, moved) == {"run": True}
+    # A push without a known old tip validates everything.
+    assert PLAN.plan_for_event("push", "0" * 40, head) == {"run": True}
+    assert PLAN.plan_for_event("push", "f" * 40, head) == {"run": True}
+    with pytest.raises(ValueError, match="full Git commit hashes"):
+        PLAN.changed_paths("main", head)
+
+    output = tmp_path / "github-output"
+    assert (
+        PLAN.main(
+            [
+                "--event",
+                "pull_request",
+                "--base",
+                base,
+                "--head",
+                head,
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    assert output.read_text(encoding="utf-8") == "run=false\n"
+
+
+def test_relevant_paths_exclude_other_projects():
     for path in (
         "crosstl/project/pipeline.py",
         "crosstl/project/native_runtime_drivers.py",
@@ -139,7 +289,7 @@ def test_trigger_paths_exclude_other_projects():
         "tests/test_translator/test_project_translation.py",
         "docs/source/project-porting.rst",
     ):
-        assert not triggers(path, TRIGGER_PATHS), path
+        assert not PLAN.is_relevant(path), path
     for path in (
         "crosstl/_crosstl.py",
         "crosstl/backend/DirectX/DirectxParser.py",
@@ -147,10 +297,10 @@ def test_trigger_paths_exclude_other_projects():
         "crosstl/translator/codegen/metal_codegen.py",
         "demos/integrations/computesharp/runtime/README.md",
     ):
-        assert triggers(path, TRIGGER_PATHS), path
+        assert PLAN.is_relevant(path), path
 
 
-def test_trigger_paths_cover_every_module_the_translation_loads(tmp_path):
+def test_relevant_paths_cover_every_module_the_translation_loads(tmp_path):
     for name, source in GENERATED_HLSL.items():
         (tmp_path / f"{name}.hlsl").write_text(source, encoding="utf-8")
     script = textwrap.dedent("""
@@ -196,7 +346,7 @@ def test_trigger_paths_cover_every_module_the_translation_loads(tmp_path):
     assert "crosstl/backend/DirectX/DirectxParser.py" in loaded
     assert "crosstl/translator/codegen/metal_codegen.py" in loaded
     assert "crosstl/translator/codegen/GLSL_codegen.py" in loaded
-    uncovered = [path for path in loaded if not triggers(path, TRIGGER_PATHS)]
+    uncovered = [path for path in loaded if not PLAN.is_relevant(path)]
     assert uncovered == []
 
 
@@ -209,8 +359,12 @@ def test_uploaded_artifacts_have_bounded_retention():
     assert max(retention) <= MAX_RETENTION_DAYS
 
 
-def test_filter_matching_follows_github_glob_semantics():
-    assert triggers("crosstl/_crosstl.py", {"crosstl/*.py"})
-    assert not triggers("crosstl/project/pipeline.py", {"crosstl/*.py"})
-    assert triggers("crosstl/backend/Metal/MetalParser.py", {"crosstl/backend/**"})
-    assert not triggers("crosstl/backends.py", {"crosstl/backend/**"})
+def test_path_matching_follows_github_glob_semantics():
+    def matches(path: str, pattern: str) -> bool:
+        return PLAN.path_regex(pattern).fullmatch(path) is not None
+
+    assert matches("crosstl/_crosstl.py", "crosstl/*.py")
+    assert not matches("crosstl/project/pipeline.py", "crosstl/*.py")
+    assert matches("crosstl/backend/Metal/MetalParser.py", "crosstl/backend/**")
+    assert not matches("crosstl/backends.py", "crosstl/backend/**")
+    assert not matches("pyproject.toml.bak", "pyproject.toml")
