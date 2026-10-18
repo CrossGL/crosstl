@@ -129,6 +129,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python demos/integrations/computesharp/source.py --source upstream-computesharp --check evidence/source.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Evaluate the HLSL intrinsics on WARP
+        shell: pwsh
+        run: |
+          $probe = Join-Path $env:GITHUB_WORKSPACE "demos/integrations/computesharp/precision/IntrinsicProbe.csproj"
+          $root = Join-Path $env:GITHUB_WORKSPACE "upstream-computesharp"
+          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" -- run warp evidence/precision/directx
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" --no-build -- export evidence/precision/shaders
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
