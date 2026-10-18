@@ -36,11 +36,11 @@ jobs:
     outputs:
       run: ${{ steps.plan.outputs.run }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Select the port's validation
@@ -58,8 +58,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -72,7 +72,7 @@ jobs:
           dotnet-version: "10.0.400"
       - name: Install test dependencies
         run: python -m pip install pytest pytest-xdist pyyaml==6.0.3 numpy==2.5.4 pillow==13.0.0
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Sergio0694/ComputeSharp
           ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
@@ -89,7 +89,7 @@ jobs:
         run: >-
           python -m pytest -q -n auto demos/integrations/computesharp/tests
           --junitxml=evidence/discovery-tests.xml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: compute-discovery-contract
@@ -105,14 +105,14 @@ jobs:
     env:
       CI_RUNNER_DOTNET_TEST_PLATFORM: x64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: Sergio0694/ComputeSharp
           ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
           path: upstream-computesharp
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - uses: actions/setup-dotnet@v4
@@ -188,7 +188,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" --no-build -- export evidence/precision/shaders
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: original-compute-directx-baseline
@@ -202,14 +202,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: Sergio0694/ComputeSharp
           ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
           path: upstream-computesharp
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - uses: actions/setup-dotnet@v4
@@ -231,7 +231,7 @@ jobs:
           dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
           adapted-computesharp/tests/ComputeSharp.Tests/bin/Release/net10.0/ComputeSharp.Tests.dll
           evidence/adapted-discovery
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: original-compute-directx-baseline
           path: original
@@ -244,7 +244,7 @@ jobs:
         run: >-
           python demos/integrations/computesharp/coverage_contract.py check
           --discovery evidence/adapted-discovery
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: adapted-source-parity
@@ -258,14 +258,14 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: Sergio0694/ComputeSharp
           ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
           path: upstream-computesharp
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -328,7 +328,7 @@ jobs:
       - name: Compress dispatch evidence
         if: always()
         run: find evidence -name evidence.jsonl -exec gzip -9 {} \;
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: translated-metal
@@ -342,14 +342,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: Sergio0694/ComputeSharp
           ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
           path: upstream-computesharp
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -415,7 +415,7 @@ jobs:
       - name: Compress dispatch evidence
         if: always()
         run: find evidence -name evidence.jsonl -exec gzip -9 {} \;
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: translated-opengl
@@ -429,8 +429,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -440,15 +440,15 @@ jobs:
           python-version: "3.12"
       - name: Install image comparison dependencies
         run: python -m pip install numpy==2.5.4 pillow==13.0.0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: original-compute-directx-baseline
           path: profiles/directx
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: translated-metal
           path: profiles/metal
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: translated-opengl
           path: profiles/opengl
@@ -461,7 +461,7 @@ jobs:
           --directx profiles/directx --metal profiles/metal --opengl profiles/opengl
           --output qualification
           --workflow-run "$WORKFLOW_RUN" --source-commit "$SOURCE_COMMIT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: computesharp-qualification
