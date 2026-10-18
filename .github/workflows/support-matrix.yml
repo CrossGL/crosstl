@@ -30,11 +30,6 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Validate support matrix
@@ -71,11 +66,6 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Probe backend documentation sources
