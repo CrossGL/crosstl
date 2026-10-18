@@ -17,6 +17,7 @@ from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.metal_refusal_helpers import metal_partial_output, refused_metal
 
 
 def generate_crossgl(code: str, **options) -> str:
@@ -230,8 +231,9 @@ def test_metal_row_major_matrix_products_compile(tmp_path):
     metal = generate_metal(ROW_MAJOR_HLSL, matrix_packing="row_major")
 
     assert "float2 rotated = Rotate(0.5) * v;" in metal
-    # A matrix-scalar product stays a matrix rather than a converted vector.
-    assert "float2 applied = (v + float2(1.0)) * Rotate(0.5) * 2.0;" in metal
+    # A matrix-scalar product stays a matrix rather than a converted vector,
+    # and is evaluated before the vector-matrix product as in the source.
+    assert "float2 applied = (v + float2(1.0)) * (Rotate(0.5) * 2.0);" in metal
     compile_metal_if_available(metal, tmp_path)
 
 
@@ -386,8 +388,10 @@ def test_metal_forwards_helper_thread_private_globals_by_reference(tmp_path):
     compile_metal_if_available(metal, tmp_path)
 
 
-def test_metal_keeps_diagnostic_for_shadowed_thread_private_globals():
-    metal = generate_metal("""
+def test_metal_refuses_shadowed_thread_private_global_stores():
+    metal, message = metal_partial_output(
+        generate_metal,
+        """
         static int counter;
         RWStructuredBuffer<int> results : register(u0);
 
@@ -407,9 +411,10 @@ def test_metal_keeps_diagnostic_for_shadowed_thread_private_globals():
         {
             results[0] = Bump(2) + Touch();
         }
-    """)
+    """,
+    )
 
-    assert "unsupported Metal program-scope global store" in metal
+    assert "program-scope global store: global 'counter'" in message
     assert "thread int& counter" not in metal
 
 
@@ -434,10 +439,12 @@ def test_metal_1d_explicit_base_lod_samples_in_kernels(tmp_path):
     assert "unsupported Metal texture sampling" not in metal
     compile_metal_if_available(metal, tmp_path)
 
-    dynamic = generate_metal(source.replace("u, 0.0)", "u, (float)ThreadIds.y)"))
+    message = refused_metal(
+        generate_metal, source.replace("u, 0.0)", "u, (float)ThreadIds.y)")
+    )
     assert (
-        "unsupported Metal texture sampling: textureLod on texture1d<float> "
-        "supports only implicit sampling" in dynamic
+        "texture sampling: textureLod on texture1d<float> "
+        "supports only implicit sampling" in message
     )
 
 
@@ -688,3 +695,49 @@ def test_metal_rejects_integer_matrix_constructors_it_cannot_split():
             """,
             matrix_packing="row_major",
         )
+
+
+NONDECIMAL_LITERAL_HLSL = """
+RWStructuredBuffer<float> results : register(u0);
+RWStructuredBuffer<uint> bits : register(u1);
+
+[numthreads(1, 1, 1)]
+void Execute(uint3 tid : SV_DispatchThreadID)
+{
+    results[0] = asfloat(0xFFC00000);
+    results[1] = asfloat(0x7F800000);
+    bits[0] = tid.x & 0x80000000;
+    bits[1] = 0x80000000 >> 31;
+    bits[2] = 0b10000000000000000000000000000000 >> 31;
+    bits[3] = 020000000000 >> 31;
+}
+"""
+
+
+def test_nondecimal_literals_beyond_int_keep_the_c_type(tmp_path):
+    # An unsuffixed hex, binary or octal literal is the first of int, uint,
+    # int64_t and uint64_t that holds it, so 0xFFC00000 is a uint.
+    crossgl = generate_crossgl(NONDECIMAL_LITERAL_HLSL)
+    assert "uintBitsToFloat(4290772992u)" in crossgl
+    assert "intBitsToFloat(2139095040)" in crossgl
+    assert crossgl.count("2147483648u") == 4
+
+    metal = generate_metal(NONDECIMAL_LITERAL_HLSL)
+    assert "as_type<float>(4290772992u)" in metal
+    assert "4290772992l" not in metal
+    assert "2147483648l" not in metal
+    compile_metal_if_available(metal, tmp_path)
+
+
+def test_nondecimal_literals_beyond_uint_are_64_bit():
+    crossgl = generate_crossgl("""
+        RWStructuredBuffer<uint64_t> wide : register(u0);
+        [numthreads(1, 1, 1)]
+        void Execute(uint3 tid : SV_DispatchThreadID)
+        {
+            wide[0] = 0x100000000;
+            wide[1] = 0xFFFFFFFFFFFFFFFF;
+        }
+        """)
+    assert "int64(4294967296)" in crossgl
+    assert "uint64(18446744073709551615)" in crossgl
