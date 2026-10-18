@@ -13,6 +13,9 @@ from the job reports:
   count as translated GPU execution;
 - the dispatch evidence of each translated run verifies against its manifest,
   translated artifacts, discovery and TRX, and every negative control failed;
+- the intrinsic probe of each translated target evaluated the same generated
+  HLSL over the same inputs as WARP, and its sin, cos and tan results are
+  bit-identical to WARP (see ``precision_report.py``);
 - every ShadersTests case of each translated target has exactly one captured
   readback whose pixels hash to the recorded readback, reproduce the upstream
   assertion and stay within the per-case bounds derived from the WARP output;
@@ -42,6 +45,7 @@ import baseline  # noqa: E402
 import compare_discovery  # noqa: E402
 import coverage_contract  # noqa: E402
 import evidence as evidence_module  # noqa: E402
+import precision_report  # noqa: E402
 
 CONTROLS = HERE / "negative_controls.json"
 IMAGE_CHECKS = HERE / "image_checks.json"
@@ -640,6 +644,13 @@ def qualify_target(
         passed=passed,
     )
     _check(report, "run", _run_report, run / "results.json", profile)
+    _check(
+        report,
+        "intrinsicPrecision",
+        precision_report.compare,
+        directx / "precision" / "directx",
+        directory / "precision" / name,
+    )
     directx_outputs = directx / "outputs"
     _check(
         report,

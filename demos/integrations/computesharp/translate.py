@@ -37,14 +37,14 @@ MAX_ERROR_CHARS = 4000
 # ComputeSharp compiles its HLSL with DXC -Zpr (row-major matrix packing); the
 # HLSL frontend needs the same packing to order matrix products correctly.
 #
-# Direct3D GPUs reduce sin/cos/tan operands in single-precision revolutions
-# (x / 2pi rounded to float). The Metal runtime compiles with fast fp32
-# functions, which reduce the same way in hardware. OpenGL drivers such as
-# llvmpipe reduce exactly, which changes sin-based hashes, so the OpenGL
-# artifacts request the Direct3D reduction from the HLSL frontend.
+# The DirectX baseline and the upstream reference images come from WARP, which
+# evaluates runtime sin/cos/tan with its own single-precision table method.
+# Shaders that hash sin values (frac(sin(x) * 43758.5) and similar) amplify
+# last-bit differences into different noise, so both targets request the
+# WARP evaluation from the HLSL frontend; precision/ measures the result.
 SOURCE_OPTIONS = {
-    "metal": {"matrix_packing": "row_major"},
-    "opengl": {"matrix_packing": "row_major", "trigonometric_reduction": "revolutions"},
+    "metal": {"matrix_packing": "row_major", "trigonometric_reduction": "warp"},
+    "opengl": {"matrix_packing": "row_major", "trigonometric_reduction": "warp"},
 }
 
 
