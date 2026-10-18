@@ -9,6 +9,7 @@ compiler's own and run only against the toolchain version the data was recorded 
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import subprocess
@@ -114,7 +115,9 @@ def run_metal(std, path):
         for line in result.stdout.splitlines()
         if not line.startswith("#pragma clang module import")
     ]
-    return result.returncode == 0, "\n".join(lines)
+    if result.returncode != 0:
+        return False, result.stderr.strip()
+    return True, "\n".join(lines)
 
 
 def run_dxc(profile, extra, path):
@@ -160,7 +163,7 @@ def assert_same(reference, mine, chosen):
     if not accepted:
         assert not mine[
             0
-        ], f"the compiler rejects the source but the shared preprocessor gave:\n{mine[1]}"
+        ], f"the compiler rejects the source ({text}) but the shared preprocessor gave:\n{mine[1]}"
         return
     assert mine[0], "the shared preprocessor refused a source the compiler accepts"
     assert tokens(mine[1], chosen) == tokens(text, chosen)
@@ -424,16 +427,38 @@ needs_metal = pytest.mark.skipif(
 needs_dxc = pytest.mark.skipif(DXC is None, reason="dxc is not installed")
 
 
+@functools.cache
+def metal_reference_standard():
+    """The recorded default ``-std`` when the installed compiler accepts it, else the newest recorded standard it
+    does accept. A compiler older than the recorded one (a CI image, say) rejects the newest ``-std`` outright,
+    which would read as the compiler rejecting every case."""
+    standards = metal_standards("macos")
+    preferred = metal_default_standard()
+    for std in (preferred, *reversed(standards)):
+        probe = subprocess.run(
+            [*METAL, "-E", "-P", "-x", "metal", f"-std={std}", "-"],
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return std
+    return None
+
+
 @needs_metal
 @pytest.mark.parametrize("name", sorted(CPP_CASES) + sorted(CPP_ERRORS))
 def test_cpp_case_matches_metal(name, tmp_path):
     source = CPP_CASES[name] if name in CPP_CASES else CPP_ERRORS[name][0]
     path = tmp_path / f"{name}.metal"
     path.write_text(source)
-    chosen = msl_dialect()
-    assert_same(
-        run_metal(metal_default_standard(), path), ours(source, chosen, path), chosen
-    )
+    std = metal_reference_standard()
+    if std is None:
+        pytest.skip(f"{metal_version()} accepts none of the recorded -std values")
+    chosen = msl_dialect(std)
+    assert_same(run_metal(std, path), ours(source, chosen, path), chosen)
 
 
 @needs_metal

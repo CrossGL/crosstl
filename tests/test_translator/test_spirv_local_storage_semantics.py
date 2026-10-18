@@ -39,15 +39,39 @@ def validate(spv_code: str, tmp_path) -> None:
 
 
 INSTRUCTION = re.compile(r"^\s*(?:(%\w+)\s*=\s*)?(Op\w+)\s*(.*)$")
+OP_NAME = re.compile(r'^\s*OpName\s+(%\w+)\s+"(\w+)"')
+
+
+def debug_names(spv: str) -> dict:
+    """Map numeric ids to ``%<OpName>``.
+
+    The emitter's text is disassembled with friendly names only when SPIRV-Tools
+    is installed, so the tests resolve OpName themselves.
+    """
+    names = {}
+    for line in spv.splitlines():
+        match = OP_NAME.match(line)
+        if match:
+            names.setdefault(match.group(1), f"%{match.group(2)}")
+    return names
 
 
 def instructions(spv: str):
+    names = debug_names(spv)
     parsed = []
     for line in spv.splitlines():
         match = INSTRUCTION.match(line)
         if match:
             result, opcode, operands = match.groups()
-            parsed.append((result, opcode, operands.split()))
+            if opcode == "OpName":
+                continue
+            parsed.append(
+                (
+                    names.get(result, result),
+                    opcode,
+                    [names.get(operand, operand) for operand in operands.split()],
+                )
+            )
     return parsed
 
 
@@ -99,9 +123,11 @@ def test_value_local_from_readonly_buffer_is_a_copy(tmp_path):
     assert "%a" not in roots
     # No anonymous zero-initialised variable stands in for a write to an alias.
     assert not any(len(ops) > 3 for _, ops in function_variables(spv))
-    condition = re.search(r"(%\w+) = OpSLessThan %bool (%\w+) (%\w+)", spv)
     defs = {r: (op, ops) for r, op, ops in instructions(spv) if r}
-    assert defs[condition.group(2)] == ("OpLoad", ["%int", "%k"])
+    conditions = [ops for _, op, ops in instructions(spv) if op == "OpSLessThan"]
+    assert len(conditions) == 1
+    loaded = defs[conditions[0][1]]
+    assert loaded[0] == "OpLoad" and loaded[1][1] == "%k"
     validate(spv, tmp_path)
 
 

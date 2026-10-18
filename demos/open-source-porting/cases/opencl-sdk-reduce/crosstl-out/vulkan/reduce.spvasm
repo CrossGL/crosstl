@@ -5308,8 +5308,8 @@ OpStore %4203 %4204
 OpBranch %4205
 %4205 = OpLabel
 %4209 = OpLoad %29 %4203
-%4210 = OpBitcast %4 %4209
-%4211 = OpINotEqual %3 %4210 %39
+%4210 = OpBitcast %29 %39
+%4211 = OpINotEqual %3 %4209 %4210
 OpLoopMerge %4208 %4207 None
 OpBranchConditional %4211 %4206 %4208
 %4206 = OpLabel
@@ -13541,8 +13541,8 @@ OpStore %4203 %10381
 OpBranch %4205
 %4208 = OpLabel
 %10382 = OpLoad %29 %4155
-%10383 = OpBitcast %4 %10382
-%10384 = OpIEqual %3 %10383 %39
+%10383 = OpBitcast %29 %39
+%10384 = OpIEqual %3 %10382 %10383
 OpSelectionMerge %10385 None
 OpBranchConditional %10384 %10386 %10387
 %10386 = OpLabel
