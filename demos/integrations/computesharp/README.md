@@ -12,23 +12,23 @@ on Windows (WARP) is the independent baseline.
 ## Results
 
 The qualification job of workflow run
-[39158755138](https://github.com/CrossGL/crosstl/actions/runs/39158755138)
-(commit `fd5513cbc201e33ecfa2c073c3881ef93ff19e37`) recomputed every check from
+[39166359222](https://github.com/CrossGL/crosstl/actions/runs/39166359222)
+(commit `ac48e845a9465b488b00aae044219ef3e452bc61`) recomputed every check from
 the fresh artifacts of the three profile jobs and passed. `results.json` is the
 machine-readable summary that job wrote; `results_summary.py` regenerates it
 byte for byte from the job's `qualification.json`.
 
 This run also verified arithmetic exactness on the target compilers: 144 Metal
-artifacts with 10,766 floating-point operations and 148 OpenGL artifacts with
-32,072 floating-point operations had no contractible operations. Four Metal
+artifacts with 11,336 floating-point operations and 148 OpenGL artifacts with
+32,235 floating-point operations had no contractible operations. Four Metal
 artifacts require fp64 and are not compiled on that profile, as declared by the
 frozen capability contract.
 
 | Profile | Device | Execution | Required GPU passed | Capability-gated | Windows-specific | Negative controls |
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | `directx-warp` (original) | Direct3D 12 WARP (Microsoft Basic Render Driver), Windows Server 2025 | software | 1,809 WARP rows (1,964 cases in total) | 11 | run, 61 cases | n/a |
-| `metal-apple-gpu` | Apple Paravirtual device (the GPU of the `macos-15` runner), macOS 15.7.9, Metal | hardware | 3,604 (3,713 cases in total) | 18 | excluded | 5 of 5 rejected |
-| `opengl-mesa-llvmpipe` | llvmpipe (LLVM 20.1.2, 256 bits), Mesa 25.2.8, OpenGL 4.5 core through EGL, Ubuntu 24.04 | software | 3,600 (3,709 cases in total) | 22 | excluded | 5 of 5 rejected |
+| `metal-apple-gpu` | Apple Paravirtual device (the GPU of the `macos-15` runner), macOS 15.7.9, Metal | hardware | 3,604 (3,713 cases in total) | 18 | excluded | 6 of 6 rejected |
+| `opengl-mesa-llvmpipe` | llvmpipe (LLVM 20.1.2, 256 bits), Mesa 25.2.8, OpenGL 4.5 core through EGL, Ubuntu 24.04 | software | 3,600 (3,709 cases in total) | 22 | excluded | 6 of 6 rejected |
 
 Every one of the 3,792 discovered cases is accounted for on every profile:
 required cases pass, capability-gated cases report the upstream capability
