@@ -3,9 +3,10 @@ name: Conformance
 # Translation conformance and differential execution (tests/conformance). Every cell of the hazard suite is
 # translated, checked by the target's native validator and executed on the runtimes provisioned here, then
 # compared with the committed scoreboard for this CI profile; a cell that regresses, goes missing or loses its
-# runtime fails the job. Pull requests run the fixture cases on the Linux leg. Pushes to main, the nightly
-# schedule, manual runs and pull requests labelled "ci:full" also run the macOS and Windows legs; the nightly
-# schedule and "ci:full" add the seeded held-out kernels, and a manual run takes their number as an input.
+# runtime fails the job. Pull requests run the fixture cases on the Linux leg. Pushes to main, the merge queue,
+# the nightly schedule, manual runs and pull requests labelled "ci:full" also run the macOS and Windows legs; the
+# merge queue, the nightly schedule and "ci:full" add the seeded held-out kernels, and a manual run takes their
+# number as an input.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -33,6 +34,8 @@ on:
       - ".github/actions/install-shader-validators/**"
       - "pyproject.toml"
       - "requirements.txt"
+  # The merge queue validates the exact commit that lands on main with the full tier.
+  merge_group:
   schedule:
     - cron: "23 2 * * *"
   workflow_dispatch:
@@ -137,7 +140,7 @@ jobs:
         run: |
           set -euo pipefail
           heldout=0
-          if [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$FULL_LABEL" = true ]; then
+          if [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$GITHUB_EVENT_NAME" = merge_group ] || [ "$FULL_LABEL" = true ]; then
             heldout=6
           elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             heldout="$HELDOUT_INPUT"
@@ -304,3 +307,23 @@ jobs:
             ${{ env.CONFORMANCE_OUT }}/toolchains.md
             ${{ env.CONFORMANCE_OUT }}/*/run.json
             ${{ env.CONFORMANCE_OUT }}/*/results.jsonl
+
+  result:
+    # The one check per workflow that branch protection and the merge queue can require.
+    name: Conformance result
+    if: always()
+    needs: [harness, legs, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done

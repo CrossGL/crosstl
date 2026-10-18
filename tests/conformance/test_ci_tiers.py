@@ -1,8 +1,8 @@
 """CI tiering of the conformance and corpus workflows.
 
 macOS and Windows runners are scarce and shared, so a pull request runs only the Linux legs of these workflows;
-the macOS and Windows legs run on pushes to main, on the nightly schedule, on manual dispatch, and on a pull
-request labelled ``ci:full``. Every job carries a timeout.
+the macOS and Windows legs run on pushes to main, in the merge queue (conformance only), on the nightly schedule,
+on manual dispatch, and on a pull request labelled ``ci:full``. Every job carries a timeout.
 """
 
 import json
@@ -100,3 +100,20 @@ def test_corpus_pull_requests_are_path_filtered():
     for required in ("crosstl/**", "tests/conformance/corpus/**", ".github/workflows/corpus.yml"):
         assert required in paths
     assert "schedule" in trigger and "workflow_dispatch" in trigger
+
+
+def test_conformance_merge_queue_runs_the_full_tier():
+    workflow = load("conformance.yml")
+    assert "merge_group" in workflow["on"]
+    tier = next(step for step in workflow["jobs"]["native"]["steps"] if step.get("name", "").startswith("Select tier"))
+    assert '"$GITHUB_EVENT_NAME" = merge_group' in tier["run"], "the merge queue adds the held-out kernels"
+
+
+def test_conformance_result_requires_every_job():
+    jobs = load("conformance.yml")["jobs"]
+    result = jobs["result"]
+    assert result["name"] == "Conformance result"
+    assert result["if"] == "always()"
+    assert sorted(result["needs"]) == sorted(job for job in jobs if job != "result")
+    script = result["steps"][0]["run"]
+    assert "success|skipped) ;;" in script and "exit 1" in script
