@@ -812,7 +812,7 @@
         "translated": 144
       },
       "translator": {
-        "commit": "ecd79339ae8de57813fc165f7470a4f1c335eacf",
+        "commit": "d9fe11e11399a9dca22ab6c8a9c25355d6fa44a7",
         "package": "crosstl",
         "translatorTreeClean": true
       }
@@ -1558,15 +1558,15 @@
         "translated": 148
       },
       "translator": {
-        "commit": "ecd79339ae8de57813fc165f7470a4f1c335eacf",
+        "commit": "d9fe11e11399a9dca22ab6c8a9c25355d6fa44a7",
         "package": "crosstl",
         "translatorTreeClean": true
       }
     }
   },
   "provenance": {
-    "sourceCommit": "e7fc356587f6a021ed1d7de548286d8443ff18d7",
-    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39142838757/attempts/1"
+    "sourceCommit": "fd5513cbc201e33ecfa2c073c3881ef93ff19e37",
+    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39158755138/attempts/1"
   },
   "schemaVersion": 1,
   "status": "passed",

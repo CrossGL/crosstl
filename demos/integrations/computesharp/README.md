@@ -12,8 +12,8 @@ on Windows (WARP) is the independent baseline.
 ## Results
 
 The qualification job of workflow run
-[39142838757](https://github.com/CrossGL/crosstl/actions/runs/39142838757)
-(commit `e7fc356587f6a021ed1d7de548286d8443ff18d7`) recomputed every check from
+[39158755138](https://github.com/CrossGL/crosstl/actions/runs/39158755138)
+(commit `fd5513cbc201e33ecfa2c073c3881ef93ff19e37`) recomputed every check from
 the fresh artifacts of the three profile jobs and passed. `results.json` is the
 machine-readable summary that job wrote; `results_summary.py` regenerates it
 byte for byte from the job's `qualification.json`.
