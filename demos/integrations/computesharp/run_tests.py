@@ -54,6 +54,7 @@ FAULTS = (
     "omit-dispatch",
     "swap-bindings",
     "perturb-constants",
+    "perturb-unorm-scales",
     "corrupt-readback",
     "corrupt-guard",
 )

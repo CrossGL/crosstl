@@ -32,6 +32,15 @@
       ]
     },
     {
+      "fault": "perturb-unorm-scales",
+      "purpose": "Every UNORM store scale buffer holds one level per channel, so translated stores to UNORM textures write only 0 or 1.",
+      "methods": [
+        "ComputeSharp.Tests.DispatchTests.Verify_DispatchAsPixelShader",
+        "ComputeSharp.Tests.ComputeContextTests.Transition_ReadWriteTexture2D_Normalized",
+        "ComputeSharp.Tests.Texture2DTests.SampleFromSourceTexture_ComputeShader"
+      ]
+    },
+    {
       "fault": "corrupt-readback",
       "purpose": "The first byte of every buffer and texture readback is altered on the host.",
       "methods": [

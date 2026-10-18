@@ -13,8 +13,9 @@ complete and consistent with the translated artifacts and the frozen inventory:
   content hash and thread-group size match the manifest;
 - every dispatch uses a compiled pipeline, binds every descriptor range of the
   generated shader to the target slot that CrossTL reported, binds only device
-  resources that were allocated and not yet released, and launches
-  ``ceil(dispatch / threads)`` thread groups;
+  resources that were allocated and not yet released, binds the channel scales
+  of the view format to every UNORM store scale buffer of the artifact, and
+  launches ``ceil(dispatch / threads)`` thread groups;
 - readbacks read allocated, live device resources; every resource is released
   at most once;
 - every capability query that answers a contract capability returns the value
@@ -58,7 +59,33 @@ MEMORY_KINDS = ("device", "host")
 POLICY = HERE / "evidence_policy.json"
 POLICY_KIND = "computesharp.evidence-policy"
 RANGE_PREFIXES = {0: "t", 1: "u", 2: "b"}
+# Channel scales (2^n - 1) of the UNORM DXGI formats of the supported texture
+# element types; absent channels are 0. The runtime binds them to the
+# ``crosstl_unorm_store_<register>`` buffers of CrossTL's UNORM store rounding.
+UNORM_STORE_SCALE_PREFIX = "crosstl_unorm_store_"
+UNORM_CHANNEL_SCALES = {
+    28: [255, 255, 255, 255],  # R8G8B8A8_UNORM
+    87: [255, 255, 255, 255],  # B8G8R8A8_UNORM
+    11: [65535, 65535, 65535, 65535],  # R16G16B16A16_UNORM
+    49: [255, 255, 0, 0],  # R8G8_UNORM
+    35: [65535, 65535, 0, 0],  # R16G16_UNORM
+    61: [255, 0, 0, 0],  # R8_UNORM
+    56: [65535, 0, 0, 0],  # R16_UNORM
+}
 MAX_ERRORS = 200
+
+
+def expected_unorm_scales(format_code: Any, fault: str | None) -> list[int] | None:
+    """The channel scales a dispatch must bind for a view of ``format_code``.
+
+    The ``perturb-unorm-scales`` control binds one level per channel instead,
+    so its evidence must show exactly that perturbation.
+    """
+
+    scales = UNORM_CHANNEL_SCALES.get(format_code)
+    if scales is not None and fault == "perturb-unorm-scales":
+        return [min(scale, 1) for scale in scales]
+    return scales
 
 
 class EvidenceError(ValueError):
@@ -434,6 +461,12 @@ def verify(
                     for item in entry["bindings"]
                     if item.get("kind") != "sampler"
                 }
+                unorm_scales = {
+                    item["name"][len(UNORM_STORE_SCALE_PREFIX) :]: item
+                    for item in entry["bindings"]
+                    if item.get("kind") == "constant-buffer"
+                    and str(item.get("name") or "").startswith(UNORM_STORE_SCALE_PREFIX)
+                }
                 for item in bindings:
                     target = targets.get(item["register"])
                     if (
@@ -444,6 +477,24 @@ def verify(
                         problem(
                             record,
                             f"register {item['register']} is not bound to the slot CrossTL reported",
+                        )
+                    scale_target = unorm_scales.get(item["register"])
+                    if scale_target is None:
+                        if "unormScales" in item or "unormScaleSlot" in item:
+                            problem(
+                                record,
+                                f"register {item['register']} has UNORM store scales the artifact does not declare",
+                            )
+                    elif item.get("unormScaleSlot") != scale_target.get(
+                        "binding"
+                    ) or item.get("unormScales") != expected_unorm_scales(
+                        item.get("format"), fault
+                    ):
+                        problem(
+                            record,
+                            f"register {item['register']} UNORM store scales {item.get('unormScales')} "
+                            f"at slot {item.get('unormScaleSlot')} do not match format {item.get('format')} "
+                            "and the slot CrossTL reported",
                         )
                     if type(item.get("resourceId")) is not int:
                         problem(record, f"register {item['register']} has no resource")

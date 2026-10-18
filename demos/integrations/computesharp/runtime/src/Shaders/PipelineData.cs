@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using ComputeSharp.Descriptors;
+using ComputeSharp.Graphics.Helpers;
 using ComputeSharp.Interop;
 using ComputeSharp.Portable.Diagnostics;
 using ComputeSharp.Portable.Native;
@@ -95,7 +96,7 @@ namespace ComputeSharp.Shaders.Loading
 namespace ComputeSharp.Portable.Shaders
 {
     /// <summary>The target binding of one descriptor range.</summary>
-    internal sealed record RangeBinding(int RangeIndex, ResourceDescriptorRangeType Type, string Register, TranslatedBinding Target, TranslatedBinding? Length);
+    internal sealed record RangeBinding(int RangeIndex, ResourceDescriptorRangeType Type, string Register, TranslatedBinding Target, TranslatedBinding? Length, TranslatedBinding? UnormScale);
 
     /// <summary>Maps the upstream root signature (root constants and descriptor ranges) to target slots.</summary>
     internal sealed class DispatchPlan
@@ -117,7 +118,11 @@ namespace ComputeSharp.Portable.Shaders
 
         public int ConstantBufferSize { get; }
 
-        public int MaximumBindingCount => 1 + (Ranges.Length * 2) + Samplers.Length;
+        public int MaximumBindingCount => 1 + (Ranges.Length * 3) + Samplers.Length;
+
+        /// <summary>The prefix of the constant buffers that hold the channel scales of UNORM storage texture stores.</summary>
+        /// <remarks>CrossTL's <c>unorm_store_rounding="single_precision"</c> HLSL option names them after the texture register.</remarks>
+        public const string UnormStoreScalePrefix = "crosstl_unorm_store_";
 
         public static DispatchPlan Create(TranslatedShader shader, ReadOnlySpan<ResourceDescriptorRange> ranges, bool isStaticSamplerRequired, int constantBufferSize)
         {
@@ -138,6 +143,12 @@ namespace ComputeSharp.Portable.Shaders
             }
 
             TranslatedBinding? constants = byRegister.GetValueOrDefault("b0");
+            HashSet<TranslatedBinding> bound = new(ReferenceEqualityComparer.Instance);
+            if (constants is not null)
+            {
+                bound.Add(constants);
+            }
+
             RangeBinding[] result = new RangeBinding[ranges.Length];
             for (int i = 0; i < ranges.Length; i++)
             {
@@ -157,15 +168,37 @@ namespace ComputeSharp.Portable.Shaders
                 }
 
                 TranslatedBinding? length = null;
+                TranslatedBinding? unormScale = null;
                 foreach (TranslatedBinding binding in shader.Bindings)
                 {
                     if (binding.Of is string owner && owner == target.Name && binding.Kind.EndsWith("-length", StringComparison.Ordinal))
                     {
                         length = binding;
                     }
+
+                    if (binding.Kind == "constant-buffer" && binding.Name == UnormStoreScalePrefix + register)
+                    {
+                        if (range.Type != ResourceDescriptorRangeType.UnorderedAccessView)
+                        {
+                            throw new InvalidOperationException($"The CrossTL {shader.Type} artifact has UNORM store scales for the read-only register {register}.");
+                        }
+
+                        unormScale = binding;
+                    }
                 }
 
-                result[i] = new RangeBinding(i, range.Type, register, target, length);
+                bound.Add(target);
+                if (length is not null)
+                {
+                    bound.Add(length);
+                }
+
+                if (unormScale is not null)
+                {
+                    bound.Add(unormScale);
+                }
+
+                result[i] = new RangeBinding(i, range.Type, register, target, length, unormScale);
             }
 
             List<TranslatedBinding> samplers = [];
@@ -180,6 +213,17 @@ namespace ComputeSharp.Portable.Shaders
             if (samplers.Count > 0 && !isStaticSamplerRequired)
             {
                 throw new InvalidOperationException($"The CrossTL {shader.Type} artifact declares a sampler but the shader has no static sampler.");
+            }
+
+            // Every binding CrossTL reports must receive a resource; an unbound slot
+            // would make the target read whatever the slot held before.
+            foreach (TranslatedBinding binding in shader.Bindings)
+            {
+                if (binding.Kind != "sampler" && !bound.Contains(binding))
+                {
+                    throw new InvalidOperationException(
+                        $"The CrossTL {shader.Type} artifact declares the {binding.Kind} {binding.Name ?? binding.Of} ({binding.Namespace} {binding.Binding}), which no descriptor range binds.");
+                }
             }
 
             return new DispatchPlan(constants, result, [.. samplers], constantBufferSize);
@@ -287,10 +331,12 @@ namespace ComputeSharp.Portable.Shaders
 
             NativeBinding[] bindings = new NativeBinding[plan.MaximumBindingCount];
             uint[] lengths = new uint[plan.Ranges.Length];
+            float[] unormScales = new float[plan.Ranges.Length * 4];
             int count = 0;
 
             fixed (byte* constantPointer = constants)
             fixed (uint* lengthPointer = lengths)
+            fixed (float* unormScalePointer = unormScales)
             {
                 if (plan.Constants is TranslatedBinding constantBinding)
                 {
@@ -316,6 +362,33 @@ namespace ComputeSharp.Portable.Shaders
                         Object = view.Handle,
                         Size = (ulong)view.SizeInBytes,
                     };
+                    if (range.UnormScale is TranslatedBinding scaleBinding)
+                    {
+                        Span<float> scales = unormScales.AsSpan(range.RangeIndex * 4, 4);
+                        if (!DXGIFormatHelper.TryGetUnormChannelScales(view.Format, scales))
+                        {
+                            throw new InvalidOperationException(
+                                $"{pipelineData.TypeName} stores UNORM values to register {range.Register}, but {view.Description} has the non-UNORM format {view.Format}.");
+                        }
+
+                        if (BackendSelection.Fault == "perturb-unorm-scales")
+                        {
+                            // One level per channel: every store becomes 0 or 1.
+                            for (int c = 0; c < 4; c++)
+                            {
+                                scales[c] = Math.Min(scales[c], 1f);
+                            }
+                        }
+
+                        bindings[count++] = new NativeBinding
+                        {
+                            Kind = NativeBindingKind.ConstantBytes,
+                            Slot = (uint)scaleBinding.Binding,
+                            Data = unormScalePointer + (range.RangeIndex * 4),
+                            Size = 4 * sizeof(float),
+                        };
+                    }
+
                     if (range.Length is TranslatedBinding lengthBinding)
                     {
                         lengths[range.RangeIndex] = (uint)view.Length;
@@ -345,7 +418,7 @@ namespace ComputeSharp.Portable.Shaders
                 }
 
                 long sequence = EvidenceLog.NextSequence();
-                WriteEvidence(sequence, pipelineData, builder, constants, bindings, count, groupsX, groupsY, groupsZ, dispatchX, dispatchY, dispatchZ);
+                WriteEvidence(sequence, pipelineData, builder, constants, unormScales, bindings, count, groupsX, groupsY, groupsZ, dispatchX, dispatchY, dispatchZ);
                 list.Dispatch(pipelineData.Pipeline, (uint)groupsX, (uint)groupsY, (uint)groupsZ, bindings, count);
                 list.DispatchSequence.Add(sequence);
             }
@@ -390,6 +463,7 @@ namespace ComputeSharp.Portable.Shaders
             ComputeSharp.Shaders.Loading.PipelineData pipelineData,
             DispatchBuilder builder,
             byte[] constants,
+            float[] unormScales,
             NativeBinding[] bindings,
             int count,
             int groupsX,
@@ -434,6 +508,22 @@ namespace ComputeSharp.Portable.Shaders
                     {
                         json.WriteString("resource", resource.Description);
                         json.WriteNumber("resourceId", resource.ResourceId);
+                        if (resource.Format != 0)
+                        {
+                            json.WriteNumber("format", resource.Format);
+                        }
+                    }
+
+                    if (range.UnormScale is TranslatedBinding scaleBinding)
+                    {
+                        json.WriteNumber("unormScaleSlot", scaleBinding.Binding);
+                        json.WriteStartArray("unormScales");
+                        for (int c = 0; c < 4; c++)
+                        {
+                            json.WriteNumberValue(unormScales[(range.RangeIndex * 4) + c]);
+                        }
+
+                        json.WriteEndArray();
                     }
 
                     json.WriteEndObject();

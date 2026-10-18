@@ -48,11 +48,18 @@ MAX_ERROR_CHARS = 4000
 # multiply-adds, including inside dot, mix, length, normalize, smoothstep,
 # cross, reflect and matrix products, and llvmpipe adds dot products in a
 # different order, so both targets also disable contraction.
+#
+# Direct3D stores a float to a UNORM channel by scaling it in single
+# precision and rounding to even; Apple GPUs round the exact product (0.3f
+# stores 77 instead of 76 in an 8-bit channel). Both targets quantize UNORM
+# texture stores as Direct3D does, with channel scales the portable runtime
+# binds from the format of each view.
 SOURCE_OPTIONS = {
     target: {
         "matrix_packing": "row_major",
         "trigonometric_reduction": "warp",
         "floating_point_contraction": "off",
+        "unorm_store_rounding": "single_precision",
     }
     for target in ("metal", "opengl")
 }

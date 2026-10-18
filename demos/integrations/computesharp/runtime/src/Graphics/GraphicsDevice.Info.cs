@@ -224,6 +224,30 @@ namespace ComputeSharp.Graphics.Helpers
             throw new ArgumentException($"The type {typeof(T)} is not a supported texture element type.", nameof(T));
         }
 
+        /// <summary>
+        /// Writes the scale (2^n - 1) of each channel of a UNORM format and zero for the channels it does not have.
+        /// </summary>
+        /// <returns>Whether <paramref name="format"/> is one of the UNORM formats of the supported texture element types.</returns>
+        public static bool TryGetUnormChannelScales(uint format, Span<float> scales)
+        {
+            (float scale, int channels) = format switch
+            {
+                28 or 87 => (255f, 4),
+                11 => (65535f, 4),
+                49 => (255f, 2),
+                35 => (65535f, 2),
+                61 => (255f, 1),
+                56 => (65535f, 1),
+                _ => (0f, 0)
+            };
+            for (int i = 0; i < 4; i++)
+            {
+                scales[i] = i < channels ? scale : 0f;
+            }
+
+            return channels > 0;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsNormalizedType<T>()
             where T : unmanaged

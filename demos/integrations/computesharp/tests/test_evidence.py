@@ -9,6 +9,7 @@ corresponds to a runtime or harness defect the verifier must reject.
 import gzip
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -396,6 +397,85 @@ def test_inconsistent_evidence_is_rejected(baseline_fixture, tmp_path, mutation)
             (discovery, trx, manifest), _write(tmp_path / "evidence.jsonl", records)
         )
     assert raised.value.errors
+
+
+def _with_unorm_store_scales(translated_fixture, tmp_path):
+    """The fixture artifacts with a UNORM store scale buffer for register u2."""
+    discovery, trx, manifest_path = translated_fixture
+    artifacts = tmp_path / "artifacts"
+    shutil.copytree(manifest_path.parent.parent, artifacts)
+    manifest = json.loads(manifest_path.read_text())
+    ((_hlsl, entry),) = manifest["shaders"].items()
+    slot = 1 + max(item["binding"] for item in entry["bindings"])
+    entry["bindings"].append(
+        {
+            "name": "crosstl_unorm_store_u2",
+            "parameter": "crosstl_unorm_store_u2",
+            "kind": "constant-buffer",
+            "namespace": "buffer",
+            "binding": slot,
+            "count": 1,
+            "register": None,
+        }
+    )
+    copy = artifacts / manifest_path.parent.name / manifest_path.name
+    copy.write_text(json.dumps(manifest))
+    return (discovery, trx, copy), slot
+
+
+@pytest.mark.parametrize(
+    "mutation", [None, "scales", "slot", "format", "missing", "undeclared"]
+)
+def test_unorm_store_scales_must_match_the_view_format(
+    translated_fixture, tmp_path, mutation
+):
+    fixture, slot = _with_unorm_store_scales(translated_fixture, tmp_path)
+    if mutation == "undeclared":
+        fixture = translated_fixture
+    records = _records(fixture[2])
+    binding = records["dispatch"]["bindings"][0]
+    binding.update(
+        {"format": 28, "unormScaleSlot": slot, "unormScales": [255, 255, 255, 255]}
+    )
+    if mutation == "scales":
+        binding["unormScales"] = [1, 1, 1, 1]
+    elif mutation == "slot":
+        binding["unormScaleSlot"] = slot + 1
+    elif mutation == "format":
+        binding["format"] = 11
+    elif mutation == "missing":
+        del binding["unormScales"], binding["unormScaleSlot"]
+    evidence = _write(tmp_path / "evidence.jsonl", records)
+    if mutation is None:
+        assert _verify(fixture, evidence)["status"] == "passed"
+        return
+    with pytest.raises(EVIDENCE.EvidenceError) as raised:
+        _verify(fixture, evidence)
+    assert any("UNORM store scales" in error for error in raised.value.errors)
+
+
+@pytest.mark.parametrize(
+    "scales, accepted",
+    [([1, 1, 1, 1], True), ([255, 255, 255, 255], False), ([0, 0, 0, 0], False)],
+)
+def test_unorm_scale_control_evidence_must_show_the_perturbation(
+    translated_fixture, tmp_path, scales, accepted
+):
+    fixture, slot = _with_unorm_store_scales(translated_fixture, tmp_path)
+    records = _records(fixture[2])
+    for record in records.values():
+        record["fault"] = "perturb-unorm-scales"
+    records["dispatch"]["bindings"][0].update(
+        {"format": 28, "unormScaleSlot": slot, "unormScales": scales}
+    )
+    evidence = _write(tmp_path / "evidence.jsonl", records)
+    if accepted:
+        summary = _verify(fixture, evidence, fault="perturb-unorm-scales")
+        assert summary["status"] == "passed"
+        return
+    with pytest.raises(EVIDENCE.EvidenceError) as raised:
+        _verify(fixture, evidence, fault="perturb-unorm-scales")
+    assert any("UNORM store scales" in error for error in raised.value.errors)
 
 
 def test_negative_control_evidence_must_carry_its_fault(translated_fixture, tmp_path):
