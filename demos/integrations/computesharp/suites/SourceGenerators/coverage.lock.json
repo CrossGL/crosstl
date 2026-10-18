@@ -1,0 +1,1172 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.coverage-lock",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "contractSHA256": "35e9f33519997178c7daf7056b8c9e2cd135d5185e060f2db8f8b300481561e6",
+  "testMethodCount": 94,
+  "caseCount": 110,
+  "allCasesDigest": "034cb2363131eeb24b256db332ba1f4d17b8696dce5938e71b76ad872b9bab55",
+  "totals": {
+    "required-gpu": {
+      "methods": 0,
+      "cases": 0
+    },
+    "cpu-only": {
+      "methods": 94,
+      "cases": 110
+    },
+    "windows-specific": {
+      "methods": 0,
+      "cases": 0
+    }
+  },
+  "profiles": {
+    "directx-warp": {
+      "role": "original-baseline",
+      "execution": "software",
+      "expected": {
+        "pass": 110,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      },
+      "requiredGpuExpected": {
+        "pass": 0,
+        "inconclusive": 0,
+        "optional": 0,
+        "excluded": 0
+      }
+    }
+  },
+  "methods": {
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator.SimpleShader_ComputeShader()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator.cs",
+        "line": 13
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "b8a9eb562d05f72e0830800830a0145e75c288f5e76218370fd01cd3aa8ce178"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator.SimpleShader_PixelShader()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator.cs",
+        "line": 306
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "8ce131919abe30cb73b23a9c95c35be8763edda75f35e19187dc0eaaf3a4b7ec"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator.SimpleShader_WithPrimaryConstructorParameters()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator.cs",
+        "line": 569
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "735b6d7394cd6188c433322e0d568ceaef82ea3c2f35b51c3246f63f77ab9457"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.AllowsUnsafeBlocksNotEnabled_Warns()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 13
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "6bfd5dfb32a35f78831d1828c8ed011d98b0466c9ee61a0698d9f7d730ac7af9"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.ExceededDispatchDataSize_ConstantBufferTooLarge_WithDoubles_Warns()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 638
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "f8fb659450af5ca744d33c545dd81165beeb32562e2c98820adeb349a082083b"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.ExceededDispatchDataSize_ConstantBufferTooLarge_WithManyResources_Warns()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 663
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "c667a87673805f38f850987e2e3e770370c1ec264a0ec2f407dc71a972ca8f04"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.ExceededDispatchDataSize_ConstantBufferTooLarge_WithNestedTypes_Warns()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 572
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "066b763f620229d648096e72db2dcfbd56c876c2a7c903a3736b19e23912f5aa"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.GloballyCoherentAttribute_IncorrectType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 213
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "86b422adfd274ba934f06a33c20fa793929157dee47ac961394b8ed08f41e29d"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.GloballyCoherentAttribute_NotWithinShaderType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 195
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "081ba5f4c421adcda5fd7b5543015baabd71c9898c16d20bdacbff049b152765"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.GloballyCoherentAttribute_StaticField()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 235
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "cd2b54f3daf511ce8e49672bf5668016961873a3daa80baed03c032e217a2f31"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.GloballyCoherentAttribute_ValidField_DoesNotWarn()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 257
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "41ae1f43543fb4f7416ac79e44ca137c28a8c3b5e02668ae801d93d9ff7b304b"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.GroupSharedAttribute_IncorrectType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 297
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "5c9d6a217ccd812536fc4b8766ba13cffdcdd04ee911e7f2ca478141183f14a4"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.GroupSharedAttribute_InstanceField()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 319
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "435f9794756980149805e4d2dcb631fd643466853f6bfffbe9821613961be903"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.GroupSharedAttribute_NotWithinShaderType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 279
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "908fadd2f0dce8047ef5067c3929e93e63328d14250d67e5e5a1c15bdc97595f"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.GroupSharedAttribute_ValidField_DoesNotWarn()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 341
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "0e0592f8fcf2a7cdfb9fc37572d086c685eee9a7e70e74b5d86bf9cd1fa55195"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.InvalidGeneratedComputeShaderDescriptorAttributeTarget_GenericType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 378
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "d9a48fa9e5fc7784706f23a764e5ee12d1c62405ba7979cbdc2855ba975df77b"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.InvalidGeneratedComputeShaderDescriptorAttributeTarget_NoInterface()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 363
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "a79f839bd3d886c0707bd110b41b45681b3eadc00f550f1479e26e0acafa6efe"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.InvalidGeneratedComputeShaderDescriptorAttributeTarget_TypeNestedInsideGenericType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 396
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "db774897bf600c9c2b611054391ed9658a650eccd6defbdf6faf2651532c6534"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.InvalidThreadGroupSizeAttributeDefaultThreadGroupSizes_Default_Warns()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 475
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "a4c4a5e44e4fe785f48b849d83e589689f3b4040b7bfaeeef4040fba4585a3b7"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.InvalidThreadGroupSizeAttributeDefaultThreadGroupSizes_OutOfRange_Warns()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 493
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "b7556e855accc47c9738eaef66d6dc2043a9e6ea8401450c329711b13cc21abd"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.InvalidThreadGroupSizeAttributeDefaultThreadGroupSizes_Valid_DoesNotWarn()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 511
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "1086f457d516efbe6beb8eb6c9919f71ba84819589ef364c0d6c138e48879ee1"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.InvalidThreadGroupSizeAttributeValues_OutOfRange_Warns(System.Int32,System.Int32,System.Int32)": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 536
+      },
+      "cases": 7,
+      "devices": {
+        "none": 7
+      },
+      "caseDigest": "f51b4d8da2cbe83a8d27dc8ce1c63ab4527f86dd09aad5c6c408b43982c3b039"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.InvalidThreadGroupSizeAttributeValues_Valid_DoesNotWarn()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 554
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "b80b8025ca734d56ee406313e13cd1e0dbc131ecacc9dfcc14adcf321b6914f7"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.MissingComputeShaderDescriptor_ComputeShader()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 34
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "d4aa6af17248357863574dfcd53a5e210033ee4d3485c29496ffa559260cc76d"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.MissingComputeShaderDescriptor_ComputeShaderOfT()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 53
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "947b06cba66b2cfe46ece8a1cdac97f18a0c4d37d2eaadf08793a39a935ef890"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.MissingComputeShaderDescriptor_ManuallyImplemented_DoesNotWarn()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 72
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "78ef8811774160de8605f6d05b8ccdb9678ca451265e8f050c6e5cb50ef0dae2"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.MissingThreadGroupSizeAttribute_AttributePresent_DoesNotWarn()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 457
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "ba582ad900e97c8b28c1ddcdc470471f348bb285a6d429ef9ce428c3af44fe5d"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.MissingThreadGroupSizeAttribute_MissingAttribute_Warns()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 440
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "6cbb2cef0990c78244b4c6bb588ca1e304e317377cfeacf6dafe6c4a0e646faa"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.MultipleComputeShaderInterfacesOnShader_TwoInterfaces()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 417
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "e307f305226050c51ce43887c053ea108aaa4706895bdbdcddb56c0c43a2c82e"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.NotAccessibleNestedShaderType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 118
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "a40081ff6647c5a665c0d3fffbb480871d6e409556b3da216411b8fc7cc1b76c"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.NotAccessibleShaderFieldType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 143
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "eae1ed76fafac4ea5d705c626b240ddc1d640049ca89c75c14c65235e39fad20"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Analyzers.NotReadOnlyShaderType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Analyzers.cs",
+        "line": 174
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "1674bcfe54a308c0eb3a2482beea5fcdc5dee82ed995e40e21425c1ef480279d"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.AnonymousObjectCreationExpression()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 200
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "03d07e58c7cda78c90645c6582d6cf4d50a0051a17977790d28bd265679fb6f8"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.AsyncModifierOnMethodOrFunction_LocalFunction()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 223
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "0bc66efb4bd13a348c64adaf2a2524867aa5158584346113140cc82372e76190"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.AsyncModifierOnMethodOrFunction_StaticMethod()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 248
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "d8b3dc4ef7d5dc52e14c5da5635de203abf4b2f403303f68b594a5644b1fa739"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.AwaitExpression()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 270
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "e5875f209bee36f6a6af6c06229d5126033e22dff0ba2cbfa858ffec89b9c5b4"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.CheckedExpression(System.String)": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 295
+      },
+      "cases": 2,
+      "devices": {
+        "none": 2
+      },
+      "caseDigest": "c1d4ce8321d53abb3855cf1440f3dd3a4f8d9548f80ddd6c5fdec072e848ae2e"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.CheckedStatement(System.String)": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 320
+      },
+      "cases": 2,
+      "devices": {
+        "none": 2
+      },
+      "caseDigest": "6cc3b1108b035c4b5865d1ff77afb73a980296896818544de32e070e22da68cd"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.FixedStatement()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 346
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "8e248005bab70f8ec0c33f789556b450f960d022d86a54864be3719f0172b2da"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.ForEachStatement()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 371
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "21b29ca3ce54b8e7581c25c0804dac79169eb23916a374b0cecc40fc33d9aa8b"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.FunctionPointer()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 783
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "c9b24d18dd309b1be9b25fff4c758cb6b2627b1710f9ae656f608fc18bc16ad8"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InstancePropertyDeclaration()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1060
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "ea2821a95064f7508d323ea3a5735dbad674c09f28329f1567be6c583a5173ce"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidBaseConstructorDeclaration()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1309
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "19af413ba8f0ef2bb937464ac703a889b313189def1cf3e645fa37b89810e6c5"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidCollectionExpression()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1288
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "98f3191e7886cda8d971b4f9dee9169515f14e0671be11d22055c60bc6bf0ef4"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidDiscoveredType_CustomType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1156
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "4f141aeeaa269cbd15165103a45bbee03309ae5001ca4416a820a42dcce3596b"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidDiscoveredType_CustomType_SystemBoolean()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1186
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "fe0109125edfaa493a7796070da91c23bd8241893ca69085a5bf431b19899330"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidDiscoveredType_Primitive()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1132
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "b6743afba18ddd307ef534417ec782d27d9e8fb6cf540012b5f470cb4369b10a"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidDispatchInfoUsage_LocalFunction(System.String,System.String)": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 77
+      },
+      "cases": 5,
+      "devices": {
+        "none": 5
+      },
+      "caseDigest": "804339d1a7656486fd876a197e94f674d08364eabc03312546198cb032a9e5b4"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidDispatchInfoUsage_StaticMethod(System.String,System.String)": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 107
+      },
+      "cases": 5,
+      "devices": {
+        "none": 5
+      },
+      "caseDigest": "9f9995015ea15d8e4ee025b2d48574adab48c9a6f9d49af65c51d788706e2c69"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidInitializerExpression_CollectionInitializer()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1267
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "eaa5e4e5209de42f11c0cd821422f65d8f2a87d3e40bb9eaba4658d24f0e23f8"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidInitializerExpression_ImplicitObjectCreation()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1241
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "3a8ca9b1855e2d9061268b6a5592da509846ca2abc334b7729615b4298b519ae"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidInitializerExpression_ObjectCreation()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1215
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "710e69f12b04e8d36653b8a50f4858746a64e82a77bf5afa9ff5f5a3e60cd986"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidMethodCall()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1084
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "b6a83727f5e947804339bd19c5192a65823e33f1db4099f83b4d76309d8994c3"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidMethodCall_SystemMath()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1108
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "7b69151ddba6052e5cba7b8711fed426d739e794d1634725bf646ed95a1164df"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidMethodOrConstructorCall_PrimaryConstructor()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1342
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "cb8a3431e51d20334977c58ee77bdb16e9588b045fd2527c43a357bfcec3a618"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidObjectCreationExpression_Explicit()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 154
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "9203e90adef5c785a07a61111b079c9c6686bf9e6ca17ac61549c501cb92ef24"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidObjectCreationExpression_Implicit()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 177
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "be4ecd69a7ee4c4de89c22ca839acabd718eb87414d631f62deabb978a22fd2a"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidObjectDeclaration()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 737
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "30d5127d22ae8b9cc3f3ca4dae85053349360d2fe6e977c5262e1e0f1188d66e"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidShaderField()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 12
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "044c932e0d5763d6ce7869b0dd1d43b2e522b360cceb27f8155294929b3672c0"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidShaderFixedField()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 33
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "364069c70c291cebaec343e99e028cb59232214d5a1ee85e62bef1467a463276"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidShaderStaticFieldType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 932
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "db97cb09ffc2e91e94ed624897f7c28188c31f263e52da0d4513762937c0cd54"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidThisExpression_Argument()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1403
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "867bcedb93e139f57a340b1aa8e21aeb597f33e8029974d84cf29eba705669a7"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidThisExpression_Return()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1371
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "6d5ce3bf61113e8749c20e031cddf3a58be0b56ad8812422f26999557e944047"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.InvalidThreadIdsNormalizedUsage()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 129
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "0bbb8f28d9dcc098c2fa3f20d0808bab68dc61cdcb7e8cf556f2d30ad3ab15f0"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.LockStatement()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 396
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "3e0dd0d3f2c49622410baa3d2901d2d7c88b906d699666d925b79364e4051101"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.MissingRequiresDoublePrecisionSupportAttribute()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1506
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "7585a0905897a12ea07aa688b45bc000d4fe4edb7e330fbe40afdee78108e5b3"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.MissingShaderResources()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 54
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "ad36d107f0a39a32e4e7a97bf435bc3946615a50a8a6d605d367ab733260f2ef"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.NonConstantMatrixSwizzledIndex()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 904
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "62c05a32dfc5eaec27a8068177e38ba3ad6eec1e1b221349a4d54ff51d29e741"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.PointerType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 760
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "2bd4a2028b6e0fd67ea74bbe2277ddfa4ff46aaefe9657a287b35fd124d279a9"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.PropertyDeclaration_AutoProp()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 956
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "a5112be120a0fa51ce6aeb46c876d4801274ac6f14c19b596c6417139c2654f1"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.PropertyDeclaration_AutoProp_WithExplicitInterfaceImplementation()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 980
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "d8352e4d9da42e0fb03b16fe9d9e365fb0117d366c536715101c3d69b89c5a5e"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.PropertyDeclaration_GetterBlock()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1009
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "f75707eb3fb122d68bff14b92158be1cd506325a218f3795f5de3e3b30127b49"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.QueryExpression()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 421
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "85d0f86f55a35625d5381353c08595e6c8eced99c2d483279a16033713afe4ba"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.RangeExpression()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 444
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "3e4c5cdad46c39f1845b9f1378d534028e0365323cf2749f7aed652428f8676a"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.RecursiveMembers()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1440
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "52ca43db292009930e016a43efe55088c671198008353e6be0907772804628d2"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.RecursivePattern()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 467
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "4be4088ebfb0d321bf020499763647e7adf71daf5d49179ad440ccb0c3650b88"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.RefType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 492
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "14b8e9c6f67a5fe3d36628dcea61fc4bbd3f05ddbbe9391a0cb5c01e2e0928b2"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.RelationalPattern()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 515
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "8787193adcf2be014bdc43412d8037e34f26b945a371e3ccc11451cb6b60dcba"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.SizeOfExpression()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 540
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "2d5a0aaef3cd44baa973fcb30f6de30a620e1d2af59970d47917e4cf220870cf"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.StackAllocArrayCreationExpression()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 563
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "a15295c2305b066d5f9f88d0955c6fc90f87e92efc636bd46d8be0052734b88e"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.StaticPropertyDeclaration()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1036
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "dcf442acf7267b938b03d37c811324881c16aadfb928262104627a66a44fedb1"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.StringLiteralExpression()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 881
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "39255f4eec1d748be0e2be18dde84a93cd3dcc45c61328aade06c9de61e0038a"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.ThrowExpressionOrStatement()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 586
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "a6c7c88b2f2fab90ad9e84e262fcc147605fe37bc1d10421272578e965dfb35b"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.TryStatement()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 609
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "25bc8106769ab3756ac1d3be4098ce1689ad7e8141539d556efde7b035dd3a3b"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.TupleType()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 637
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "ad7e0af79ac0d3f4d0f5479ba507cc408f31280abeb30d7b3295e9dd78fd446e"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.UnnecessaryRequiresDoublePrecisionSupportAttribute()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 1531
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "b07dc57109f56c6e48aba5a868b725e5848e47747d2575f731c1034d66eec868"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.UnsafeModifier_LocalFunction()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 831
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "528fb0bde50e9fa92d28e466c520000d861adb39803c55b54766be95444d7c8f"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.UnsafeModifier_StaticMethod()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 856
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "8e16a1a3fd1803fdcfd96e1312bbf043f692921adf6830a88e21dd7ec0b7e912"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.UnsafeStatement()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 806
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "07b1427b5b1cde720f29d2e02b3db399725c4f73f15d8b8488edb337bccc59d2"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.UsingDeclaration()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 660
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "cacd7cab8a91b65dd1fb1e022b516e0835736fb0a0bf3b91974b035e6641b690"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.UsingStatement()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 683
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "83b27e00ae6c4d7c2ac68ac977f7d4d67115c76f9f8a36e65a5825911ed1531f"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Diagnostics.YieldStatement()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Diagnostics.cs",
+        "line": 708
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "8579c47f45f114baa8f2c339c9b16a77057462178ad7af487f4e3cf42dc93989"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Incrementality.AddedComment_DoesNotModifyOutput()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Incrementality.cs",
+        "line": 57
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "a03ace1619d489b84bb5c9a8e075724d1d096e524e8fd060a00c37691f97639f"
+    },
+    "ComputeSharp.Tests.SourceGenerators.Test_ComputeShaderDescriptorGenerator_Incrementality.AddedStatement_ModifiesOutput()": {
+      "category": "cpu-only",
+      "source": {
+        "path": "tests/ComputeSharp.Tests.SourceGenerators/Test_ComputeShaderDescriptorGenerator_Incrementality.cs",
+        "line": 13
+      },
+      "cases": 1,
+      "devices": {
+        "none": 1
+      },
+      "caseDigest": "4d9ec870875c1fb5cabb0afd32ee939bf756a8c66f038c5a8824d4e7a3b50185"
+    }
+  },
+  "hostOnly": true
+}

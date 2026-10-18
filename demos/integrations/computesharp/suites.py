@@ -13,6 +13,11 @@ executable without MSTest methods) is one case, its entry point, which
 ``program_runner.py`` runs. Every contract must
 share the target profiles, capabilities and categories of the main contract,
 so one profile cannot mean different devices in different suites.
+
+A Windows-specific or CPU-only project is either retained, with a contract and
+lock that classify all of its cases in that category for the original
+``directx-warp`` profile alone and the ``dotnet test`` runs that reproduce its
+upstream steps (``retained.py`` executes them), or names the reason it is not.
 """
 
 from __future__ import annotations
@@ -36,6 +41,11 @@ SCOPES = ("ported", "windows-specific", "cpu-only", "out-of-scope")
 PROJECT_KINDS = ("mstest", "program")
 SUITE_FILES = ("contract", "lock", "evidencePolicy", "negativeControls")
 MAIN_SUITE = "ComputeSharp.Tests"
+# The category of every case of a retained project of each scope.
+RETAINED_SCOPES = {"windows-specific": "windows-specific", "cpu-only": "cpu-only"}
+RETAINED_PROFILE = "directx-warp"
+CONFIGURATIONS = ("Debug", "Release")
+_RUN_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 SHARED_CONTRACT_KEYS = ("categories", "profiles", "deviceRowPolicy", "capabilities")
 _PROJECT_REFERENCE = re.compile(r"tests[\\/]([A-Za-z0-9_.]+)[\\/]")
 
@@ -53,6 +63,9 @@ class Suite:
     image_checks: Path | None = None
     # Why no translated artifact of the suite does float arithmetic, if so.
     no_float_arithmetic_reason: str | None = None
+    scope: str = "ported"
+    # How a retained project builds and runs (``retained`` of its inventory entry).
+    retention: dict | None = None
 
     @property
     def project(self) -> Path:
@@ -97,6 +110,7 @@ def load_inventory(path: Path = INVENTORY) -> dict:
                 raise ValueError(
                     f"{name} describes a variant of an unknown step {step}"
                 )
+        _check_retention(name, entry)
         files = entry.get("suite")
         if entry["scope"] == "ported":
             if not isinstance(files, dict) or not set(SUITE_FILES) <= set(files):
@@ -111,8 +125,63 @@ def load_inventory(path: Path = INVENTORY) -> dict:
     return inventory
 
 
+def _reason(value) -> bool:
+    return isinstance(value, str) and len(value.strip()) >= 30
+
+
+def _check_retention(name: str, entry: dict) -> None:
+    """A retained project reproduces every upstream step it does not explain."""
+
+    retained = entry.get("retained")
+    if entry["scope"] not in RETAINED_SCOPES:
+        if retained is not None or "notRetainedReason" in entry:
+            raise ValueError(f"{name} is not Windows-specific or CPU-only")
+        return
+    if retained is None:
+        if not _reason(entry.get("notRetainedReason")):
+            raise ValueError(f"{name} must be retained or say why it is not")
+        return
+    if "notRetainedReason" in entry or not isinstance(retained, dict):
+        raise ValueError(f"{name} is retained and must not say why it is not")
+    if not all(isinstance(retained.get(key), str) for key in ("contract", "lock")):
+        raise ValueError(f"{name} must name its retained contract and lock")
+    if retained.get("configuration") not in CONFIGURATIONS:
+        raise ValueError(f"{name} must name the configuration its steps build")
+    if type(retained.get("hostOnly")) is not bool:
+        raise ValueError(f"{name} must state whether it is host-only")
+    runs = retained.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise ValueError(f"{name} must list its retained runs")
+    names, reproduced = set(), set()
+    for run in runs:
+        label = run.get("name") if isinstance(run, dict) else None
+        if not isinstance(label, str) or not _RUN_NAME.match(label) or label in names:
+            raise ValueError(f"{name} has an invalid or repeated run name")
+        names.add(label)
+        if run.get("filter") is not None and not isinstance(run["filter"], str):
+            raise ValueError(f"{name} run {label} has an invalid filter")
+        if type(run.get("accounted")) is not bool:
+            raise ValueError(f"{name} run {label} must state whether it is accounted")
+        step = run.get("upstreamStep")
+        if step is not None:
+            if step not in entry["upstreamSteps"]:
+                raise ValueError(f"{name} run {label} reproduces an unknown step")
+            reproduced.add(step)
+        elif not run["accounted"] or not _reason(run.get("reason")):
+            raise ValueError(f"{name} run {label} must reproduce a step or say why")
+    if not any(run["accounted"] for run in runs):
+        raise ValueError(f"{name} has no accounted run")
+    unexplained = (
+        set(entry["upstreamSteps"]) - reproduced - set(entry.get("variants", {}))
+    )
+    if unexplained:
+        raise ValueError(
+            f"{name} neither reproduces nor explains {', '.join(sorted(unexplained))}"
+        )
+
+
 def _suite(name: str, entry: dict) -> Suite:
-    files = entry.get("suite") or {}
+    files = entry.get("suite") or entry.get("retained") or {}
 
     def resolve(key: str) -> Path | None:
         value = files.get(key)
@@ -127,6 +196,8 @@ def _suite(name: str, entry: dict) -> Suite:
         negative_controls=resolve("negativeControls"),
         image_checks=resolve("imageChecks"),
         no_float_arithmetic_reason=files.get("noFloatArithmeticReason"),
+        scope=entry["scope"],
+        retention=entry.get("retained"),
     )
 
 
@@ -141,8 +212,23 @@ def ported_suites(inventory: dict | None = None) -> dict[str, Suite]:
     }
 
 
-def suite(name: str, inventory: dict | None = None) -> Suite:
+def retained_suites(inventory: dict | None = None) -> dict[str, Suite]:
+    """Return every retained Windows-specific or CPU-only project in name order."""
+
+    inventory = inventory or load_inventory()
+    return {
+        name: _suite(name, entry)
+        for name, entry in sorted(inventory["projects"].items())
+        if entry.get("retained") is not None
+    }
+
+
+def suite(name: str, inventory: dict | None = None, *, retained: bool = False) -> Suite:
+    """The ported project ``name``, or also a retained one if ``retained``."""
+
     suites = ported_suites(inventory)
+    if retained:
+        suites.update(retained_suites(inventory))
     if name not in suites:
         raise ValueError(f"{name} is not a ported upstream test project")
     return suites[name]
@@ -204,16 +290,51 @@ def check_contracts(inventory: dict) -> list[str]:
         for key in SHARED_CONTRACT_KEYS:
             if _shared(contract, key) != _shared(main, key):
                 problems.append(f"{name}: contract {key} differs from {MAIN_SUITE}")
-        if item.lock.is_file():
-            lock = json.loads(item.lock.read_text(encoding="utf-8"))
-            digest = hashlib.sha256(
-                item.contract.read_bytes().replace(b"\r\n", b"\n")
-            ).hexdigest()
-            if lock.get("contractSHA256") != digest:
-                problems.append(
-                    f"{name}: the lock was not frozen from the current contract"
-                )
+        problems.extend(_check_lock_frozen(name, item))
+    for name, item in retained_suites(inventory).items():
+        problems.extend(_check_retained_contract(name, item, main))
     return problems
+
+
+def _check_lock_frozen(name: str, item: Suite) -> list[str]:
+    if not item.lock.is_file():
+        return []
+    lock = json.loads(item.lock.read_text(encoding="utf-8"))
+    digest = hashlib.sha256(
+        item.contract.read_bytes().replace(b"\r\n", b"\n")
+    ).hexdigest()
+    if lock.get("contractSHA256") != digest:
+        return [f"{name}: the lock was not frozen from the current contract"]
+    host_only = bool(item.retention and item.retention.get("hostOnly"))
+    if lock.get("hostOnly", False) is not host_only:
+        return [f"{name}: the lock and the inventory disagree on host-only export"]
+    return []
+
+
+def _check_retained_contract(name: str, item: Suite, main: dict) -> list[str]:
+    """A retained contract has the original profile alone and the scope's category."""
+
+    problems = [
+        f"{name}: missing {path.relative_to(HERE)}"
+        for path in (item.contract, item.lock)
+        if not path.is_file()
+    ]
+    if not item.contract.is_file():
+        return problems
+    contract = json.loads(item.contract.read_text(encoding="utf-8"))
+    for key in SHARED_CONTRACT_KEYS:
+        wanted = _shared(main, key)
+        if key == "profiles":
+            wanted = {RETAINED_PROFILE: main["profiles"][RETAINED_PROFILE]}
+        if _shared(contract, key) != wanted:
+            problems.append(f"{name}: contract {key} differs from {MAIN_SUITE}")
+    category = RETAINED_SCOPES[item.scope]
+    entries = {**contract.get("classes", {}), **contract.get("methods", {})}
+    if not entries or any(e.get("category") != category for e in entries.values()):
+        problems.append(f"{name}: every case of the project must be {category}")
+    if any(entry.get("gates") for entry in contract.get("capabilities", {}).values()):
+        problems.append(f"{name}: a retained project has no capability gates")
+    return problems + _check_lock_frozen(name, item)
 
 
 def check(source: Path, inventory_path: Path = INVENTORY) -> dict:
@@ -269,8 +390,12 @@ def main(argv: list[str] | None = None) -> int:
             report = check(args.source)
         else:
             report = {
-                name: {"kind": item.kind, "project": item.project.as_posix()}
-                for name, item in ported_suites().items()
+                name: {
+                    "kind": item.kind,
+                    "scope": item.scope,
+                    "project": item.project.as_posix(),
+                }
+                for name, item in {**ported_suites(), **retained_suites()}.items()
             }
     except (OSError, ValueError, KeyError) as error:
         parser.exit(1, str(error) + "\n")

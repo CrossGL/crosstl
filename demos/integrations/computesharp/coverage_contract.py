@@ -224,7 +224,7 @@ def build_lock(contract: dict, discovery: dict, contract_bytes: bytes) -> dict:
                 outcome: required.get(outcome, 0) for outcome in OUTCOMES
             },
         }
-    return {
+    lock = {
         "schemaVersion": 1,
         "kind": "computesharp.coverage-lock",
         "commit": PIN,
@@ -236,6 +236,11 @@ def build_lock(contract: dict, discovery: dict, contract_bytes: bytes) -> dict:
         "profiles": profiles,
         "methods": methods,
     }
+    # A host-only project has no generated shaders; its lock says so, and the
+    # lock of every other project rejects a host-only export.
+    if discovery.get("hostOnly") is True:
+        lock["hostOnly"] = True
+    return lock
 
 
 def compare_locks(expected: dict, actual: dict) -> list[str]:
@@ -284,7 +289,7 @@ def main() -> int:
         command.add_argument(
             "--suite",
             default="ComputeSharp.Tests",
-            help="ported upstream test project whose contract and lock apply",
+            help="ported or retained upstream test project whose contract and lock apply",
         )
         command.add_argument(
             "--contract", type=Path, help="override the suite contract"
@@ -294,7 +299,7 @@ def main() -> int:
     try:
         import suites
 
-        selected = suites.suite(args.suite)
+        selected = suites.suite(args.suite, retained=True)
         if selected.contract is None:
             raise ValueError(f"{args.suite} has no coverage contract")
         contract_path = args.contract or selected.contract

@@ -174,6 +174,11 @@ jobs:
         run: >-
           python demos/integrations/computesharp/companions.py baseline
           --source upstream-computesharp --output evidence/suites
+      - name: Retain the original Windows-specific and CPU-only test projects
+        if: ${{ !cancelled() }}
+        run: >-
+          python demos/integrations/computesharp/retained.py run
+          --source upstream-computesharp --output evidence/retained
       - name: Evaluate the HLSL intrinsics on WARP
         shell: pwsh
         run: |

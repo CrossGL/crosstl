@@ -22,9 +22,12 @@ internal static class Program
 
     public static int Main(string[] args)
     {
-        if (args.Length != 2)
+        // A host-side test project (for example the source generator tests) compiles no shader
+        // into its assembly; only such a project may be exported without HLSL descriptors.
+        bool hostOnly = args.Length == 3 && args[2] == "--host-only";
+        if (args.Length != 2 && !hostOnly)
         {
-            Console.Error.WriteLine("Usage: Discovery <test-assembly.dll> <new-output-directory>");
+            Console.Error.WriteLine("Usage: Discovery <test-assembly.dll> <new-output-directory> [--host-only]");
             return 2;
         }
 
@@ -82,7 +85,7 @@ internal static class Program
                         {
                             if (row is not object?[] arguments || arguments.Length != method.GetParameters().Length)
                                 throw new InvalidOperationException("Test data arity differs: " + signature);
-                            string displayName = (string?)dataInterface.GetMethod("GetDisplayName")!.Invoke(source, [method, arguments]) ?? method.Name;
+                            string displayName = (string?)dataInterface.GetMethod("GetDisplayName")!.Invoke(source, [method, DisplayArguments(source, arguments)]) ?? method.Name;
                             AddCase(arguments, displayName);
                             rowCount++;
                         }
@@ -148,8 +151,10 @@ internal static class Program
                     resourceDescriptorRanges = JsonSerializer.SerializeToNode(rangeArray, rangeArray.GetType(), JsonOptions)
                 });
             }
-            if (shaders.Count == 0)
+            if (shaders.Count == 0 && !hostOnly)
                 throw new InvalidOperationException("No generated HLSL descriptors discovered");
+            if (shaders.Count != 0 && hostOnly)
+                throw new InvalidOperationException("A host-only test project contains generated HLSL descriptors");
             if (Hash(File.ReadAllBytes(assemblyPath)) != assemblyHash)
                 throw new InvalidOperationException("Test assembly changed during export");
             object report = new
@@ -167,7 +172,7 @@ internal static class Program
                 tests = cases,
                 shaders
             };
-            File.WriteAllText(Path.Combine(temporary, "discovery.json"), JsonSerializer.Serialize(report, JsonOptions) + "\n", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(temporary, "discovery.json"), Serialize(report, hostOnly) + "\n", new UTF8Encoding(false));
             Directory.Move(temporary, output);
             Console.WriteLine($"Exported {cases.Count} cases, {methodCount} methods and {shaders.Count} HLSL descriptors");
             return 0;
@@ -184,11 +189,33 @@ internal static class Program
     private static bool HasAttribute(MemberInfo member, string name) =>
         member.GetCustomAttributes(inherit: true).Any(a => DerivesFrom(a.GetType(), name));
 
+    // The report of a host-only project states it, so a lock frozen from a shader-bearing
+    // project cannot be satisfied by an export that skipped the descriptor check.
+    private static string Serialize(object report, bool hostOnly)
+    {
+        if (!hostOnly)
+            return JsonSerializer.Serialize(report, JsonOptions);
+        JsonObject node = JsonSerializer.SerializeToNode(report, JsonOptions)!.AsObject();
+        node["hostOnly"] = true;
+        return node.ToJsonString(JsonOptions);
+    }
+
     private static bool DerivesFrom(Type? type, string name) =>
         type is not null && (type.FullName == name || DerivesFrom(type.BaseType, name));
 
     private static Type? DataInterface(Type type) =>
         type.GetInterfaces().SingleOrDefault(i => i.FullName == TestNamespace + "ITestDataSource");
+
+    // The MSTest adapter names a DataRow case without an explicit display name with its string
+    // arguments in quotes, which DataRowAttribute.GetDisplayName itself omits. Other data sources
+    // name their cases as GetDisplayName does.
+    private static object?[] DisplayArguments(object source, object?[] arguments)
+    {
+        if (source.GetType().FullName != TestNamespace + "DataRowAttribute" ||
+            source.GetType().GetProperty("DisplayName")?.GetValue(source) is not null)
+            return arguments;
+        return arguments.Select(a => a is string text ? (object)("\"" + text + "\"") : a).ToArray();
+    }
 
     private static object Property(Type type, string name) =>
         type.GetProperties(StaticProperties).Single(p => p.Name == name || p.Name.EndsWith("." + name, StringComparison.Ordinal)).GetValue(null)

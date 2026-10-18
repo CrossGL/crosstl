@@ -29,6 +29,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Callable
 
@@ -97,7 +98,14 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _discover(assembly: Path, directory: Path, logs: Path, runner: Callable) -> None:
+def _discover(
+    assembly: Path,
+    directory: Path,
+    logs: Path,
+    runner: Callable,
+    *,
+    host_only: bool = False,
+) -> None:
     runner(
         [
             "dotnet",
@@ -109,6 +117,7 @@ def _discover(assembly: Path, directory: Path, logs: Path, runner: Callable) -> 
             "--",
             str(assembly),
             str(directory / "discovery"),
+            *(["--host-only"] if host_only else []),
         ],
         logs / "discovery.log",
         deadline=BUILD_DEADLINE_SECONDS,
@@ -274,9 +283,13 @@ def translated_suite(
 
 
 def run_all(
-    selected: list[suites.Suite], output: Path, run_one: Callable
+    selected: list[suites.Suite],
+    output: Path,
+    run_one: Callable,
+    *,
+    report_name: str = "companions.json",
 ) -> dict[str, Any]:
-    """Run every suite, record each outcome and write ``companions.json``."""
+    """Run every suite, record each outcome and write ``report_name``."""
 
     output.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {"schemaVersion": 1, "suites": {}}
@@ -285,7 +298,7 @@ def run_all(
         directory.mkdir(parents=True, exist_ok=True)
         try:
             entry = {"status": "passed", **run_one(item, directory)}
-        except (StepError, OSError, ValueError, KeyError) as exc:
+        except (StepError, OSError, ValueError, KeyError, ET.ParseError) as exc:
             entry = {"status": "failed", "error": str(exc)}
         report["suites"][item.name] = entry
     report["status"] = (
@@ -293,7 +306,7 @@ def run_all(
         if selected and all(e["status"] == "passed" for e in report["suites"].values())
         else "failed"
     )
-    (output / "companions.json").write_text(
+    (output / report_name).write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return report
