@@ -2105,9 +2105,11 @@ class TestVulkanSPIRVCodeGen:
         # C++ integral promotion converts the bool operands to signed int before
         # the division/modulo, so the arithmetic lowers through the signed
         # integer opcodes (never the float OpFDiv/OpFMod) and the integer result
-        # is compared back to a bool for the return value.
+        # is compared back to a bool for the return value. C++ `%` truncates, so
+        # it is OpSRem rather than the floored OpSMod.
         assert "OpSDiv" in spv_code
-        assert "OpSMod" in spv_code
+        assert "OpSRem" in spv_code
+        assert "OpSMod" not in spv_code
         assert "OpINotEqual" in spv_code
         assert not re.search(r"OpF(?:Div|Mod) %\d+", spv_code)
         assert "WARNING" not in spv_code
@@ -4398,10 +4400,12 @@ class TestVulkanSPIRVCodeGen:
         )
 
         shl_ids = spirv_result_ids_for_opcode(spv_code, "OpShiftLeftLogical")
-        shr_ids = spirv_result_ids_for_opcode(spv_code, "OpShiftRightLogical")
+        # A signed left operand shifts right arithmetically (sign-extending).
+        shr_ids = spirv_result_ids_for_opcode(spv_code, "OpShiftRightArithmetic")
 
         assert shl_ids, "Missing OpShiftLeftLogical"
-        assert shr_ids, "Missing OpShiftRightLogical"
+        assert shr_ids, "Missing OpShiftRightArithmetic"
+        assert "OpShiftRightLogical" not in spv_code
 
         left_var = spirv_named_variable(
             spv_code, "shifted_left", storage_class="Function"
@@ -4451,7 +4455,7 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert re.search(
-            rf"%\d+ = OpShiftRightLogical {re.escape(ivec2_type.group(1))} "
+            rf"%\d+ = OpShiftRightArithmetic {re.escape(ivec2_type.group(1))} "
             rf"%\d+ {re.escape(shift_count_vectors[1][0])}\b",
             spv_code,
         )
@@ -4553,7 +4557,7 @@ class TestVulkanSPIRVCodeGen:
         assert "3" in extract_ops, "Missing extract for component 3 (a)"
         assert "WARNING" not in spv_code
 
-    def test_fmod_intrinsics_use_core_fmod_and_argument_result_type(self):
+    def test_mod_is_floored_and_fmod_is_truncated_with_argument_result_type(self):
         source_code = """
         shader FmodIntrinsics {
             compute {
@@ -4573,13 +4577,18 @@ class TestVulkanSPIRVCodeGen:
 
         assert float_type is not None
         assert vec2_type is not None
+        # GLSL mod is floored (sign of y): OpFMod. C fmod truncates (sign of x):
+        # OpFRem.
         assert re.search(
             rf"%\d+ = OpFMod {re.escape(float_type.group(1))} %\d+ %\d+",
             spv_code,
         )
         assert re.search(
-            rf"%\d+ = OpFMod {re.escape(vec2_type.group(1))} %\d+ %\d+",
+            rf"%\d+ = OpFRem {re.escape(vec2_type.group(1))} %\d+ %\d+",
             spv_code,
+        )
+        assert not re.search(
+            rf"%\d+ = OpFMod {re.escape(vec2_type.group(1))} ", spv_code
         )
         assert " Fmod " not in spv_code
 
@@ -28631,6 +28640,7 @@ class TestVulkanSPIRVCodeGen:
                     int g = a >> 1;
                     uint ua = 255u;
                     uint ub = ua & 0x0Fu;
+                    uint uc = ua >> 1u;
                 }
             }
         }
@@ -28644,6 +28654,8 @@ class TestVulkanSPIRVCodeGen:
         assert "OpBitwiseOr" in spv_code
         assert "OpBitwiseXor" in spv_code
         assert "OpShiftLeftLogical" in spv_code
+        # int >> is arithmetic, uint >> is logical.
+        assert "OpShiftRightArithmetic" in spv_code
         assert "OpShiftRightLogical" in spv_code
         c_id = spirv_named_variable(spv_code, "c", storage_class="Function")
         d_id = spirv_named_variable(spv_code, "d", storage_class="Function")
@@ -29835,7 +29847,7 @@ class TestVulkanSPIRVCodeGen:
         assert "OpBitwiseOr" in spv_code
         assert "OpBitwiseXor" in spv_code
         assert "OpShiftLeftLogical" in spv_code
-        assert "OpShiftRightLogical" in spv_code
+        assert "OpShiftRightArithmetic" in spv_code
         mask_id = spirv_named_variable(spv_code, "mask", storage_class="Function")
         assert mask_id
         and_ids = spirv_result_ids_for_opcode(spv_code, "OpBitwiseAnd")

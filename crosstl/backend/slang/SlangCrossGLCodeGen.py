@@ -495,7 +495,7 @@ class SlangToCrossGLConverter:
             "fwidth_coarse": "fwidthCoarse",
             "fwidth_fine": "fwidthFine",
             "frac": "fract",
-            "fmod": "mod",
+            "fmod": "fmod",
             "lerp": "mix",
             "rsqrt": "inversesqrt",
             "atan2": "atan",

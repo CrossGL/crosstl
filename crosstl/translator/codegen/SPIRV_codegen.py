@@ -89,6 +89,7 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .spirv_float_semantics import SpirvFloatSemanticsMixin
 
 
 class SpirvType:
@@ -196,7 +197,7 @@ class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
         )
 
 
-class VulkanSPIRVCodeGen:
+class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin):
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     POINTER_OFFSET_RESET_MARKER_PREFIX = "; __crosstl_pointer_offset_reset_"
@@ -271,6 +272,9 @@ class VulkanSPIRVCodeGen:
     UNSIGNED_INTEGER_TYPES = {"uint", "u64"}
     INTEGER_TYPE_NAMES = SIGNED_INTEGER_TYPES | UNSIGNED_INTEGER_TYPES
     BFLOAT16_TYPE_NAME = "bfloat16"
+    # Internal binary operator for GLSL's floored `mod` (OpFMod/OpSMod); the
+    # source-level `%` operator is the truncated remainder.
+    FLOORED_MOD_OPERATOR = "FLOORED_MOD"
 
     def __init__(
         self,
@@ -1051,7 +1055,7 @@ class VulkanSPIRVCodeGen:
             if operator == "/":
                 return "UDiv" if is_unsigned else "SDiv"
             if operator == "%":
-                return "UMod" if is_unsigned else "SMod"
+                return "UMod" if is_unsigned else "SRem"
             if operator in {"&", "|", "^"}:
                 return {
                     "&": "BitwiseAnd",
@@ -2214,13 +2218,32 @@ class VulkanSPIRVCodeGen:
             return "float"
         if self.BFLOAT16_TYPE_NAME in normalized:
             return "float"
-        if any(self.integer_type_width(name) == 64 for name in normalized):
-            if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
-                return "u64"
-            return "i64"
-        if "int" in normalized:
-            return "int"
-        return "uint"
+        return self.usual_arithmetic_integer_type_name(normalized)
+
+    def usual_arithmetic_integer_type_name(self, normalized: List[str]) -> str:
+        """Apply the C/C++ usual arithmetic conversions to 32/64-bit integer types.
+
+        Two operands of the same signedness convert to the wider type. Otherwise
+        the unsigned operand wins unless the signed operand is strictly wider, so
+        ``int < uint`` compares as unsigned (C++ [expr.arith.conv], HLSL and
+        GLSL 4.00 implicit int-to-uint conversion) while ``long < uint`` stays
+        signed 64-bit.
+        """
+        result = normalized[0] if normalized else "int"
+        for name in normalized[1:]:
+            if name == result:
+                continue
+            result_width = self.integer_type_width(result) or 32
+            name_width = self.integer_type_width(name) or 32
+            result_unsigned = result in self.UNSIGNED_INTEGER_TYPES
+            if result_unsigned == (name in self.UNSIGNED_INTEGER_TYPES):
+                result = name if name_width > result_width else result
+                continue
+            unsigned, signed = (result, name) if result_unsigned else (name, result)
+            unsigned_width = self.integer_type_width(unsigned) or 32
+            signed_width = self.integer_type_width(signed) or 32
+            result = unsigned if unsigned_width >= signed_width else signed
+        return result
 
     def promoted_bitwise_integer_type_name(
         self, type_names: List[str]
@@ -2228,13 +2251,7 @@ class VulkanSPIRVCodeGen:
         normalized = [self.normalize_primitive_name(name) for name in type_names]
         if any(name not in self.INTEGER_TYPE_NAMES for name in normalized):
             return None
-        if any(self.integer_type_width(name) == 64 for name in normalized):
-            if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
-                return "u64"
-            return "i64"
-        if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
-            return "uint"
-        return "int"
+        return self.usual_arithmetic_integer_type_name(normalized)
 
     def ternary_result_type(self, true_value: SpirvId, false_value: SpirvId) -> SpirvId:
         true_type = self.value_types.get(true_value.id) or self.ensure_registered_type(
@@ -3102,7 +3119,7 @@ class VulkanSPIRVCodeGen:
         result_type = self.ensure_registered_type(result_type)
         result_component_type = self.scalar_or_vector_component_type(result_type.type)
         if (
-            op in {"+", "-", "*", "MULTIPLY", "/", "%"}
+            op in {"+", "-", "*", "MULTIPLY", "/", "%", self.FLOORED_MOD_OPERATOR}
             and result_component_type == self.BFLOAT16_TYPE_NAME
         ):
             result_vector = self.vector_component_type_and_count(
@@ -3127,7 +3144,12 @@ class VulkanSPIRVCodeGen:
             "*": ("OpFMul", "OpIMul", "OpIMul"),
             "MULTIPLY": ("OpFMul", "OpIMul", "OpIMul"),
             "/": ("OpFDiv", "OpSDiv", "OpUDiv"),
-            "%": ("OpFMod", "OpSMod", "OpUMod"),
+            # C, C++, MSL and HLSL `%` (and C `fmod`) truncate the quotient, so the
+            # remainder takes the sign of the dividend: OpSRem/OpFRem. OpSMod and
+            # OpFMod take the sign of the divisor and only implement GLSL's
+            # floored `mod`, which callers request with FLOORED_MOD_OPERATOR.
+            "%": ("OpFRem", "OpSRem", "OpUMod"),
+            self.FLOORED_MOD_OPERATOR: ("OpFMod", "OpSMod", "OpUMod"),
         }
         comparison_ops = {
             "==": ("OpFOrdEqual", "OpIEqual", "OpIEqual"),
@@ -3254,8 +3276,20 @@ class VulkanSPIRVCodeGen:
                 result_type, left, right
             )
             spv_op = shift_op
+            if (
+                op == ">>"
+                and self.scalar_or_vector_component_type(result_type.type)
+                in self.SIGNED_INTEGER_TYPES
+            ):
+                # C++20/MSL, HLSL and GLSL shift a signed left operand right
+                # arithmetically (sign-extending); OpShiftRightLogical would
+                # zero-fill and turn -8 >> 1 into a large positive value.
+                spv_op = "OpShiftRightArithmetic"
         else:
             spv_op = f"Op{op}"
+
+        if spv_op == "OpFRem":
+            return self.emit_truncated_float_remainder(result_type, left, right)
 
         id_value = self.get_id()
         self.emit(f"%{id_value} = {spv_op} %{result_type.id} %{left.id} %{right.id}")
@@ -3579,6 +3613,7 @@ class VulkanSPIRVCodeGen:
             "OpFMul",
             "OpFDiv",
             "OpFMod",
+            "OpFRem",
             "OpFNegate",
             "OpDot",
             "OpMatrixTimesScalar",
@@ -11450,6 +11485,10 @@ class VulkanSPIRVCodeGen:
         if integer_bit_call is not None:
             return integer_bit_call
 
+        float_semantics_call = self.call_float_semantics_function(function_name, args)
+        if float_semantics_call is not None:
+            return float_semantics_call
+
         exact_operand_counts = {
             "min": 2,
             "max": 2,
@@ -11764,7 +11803,10 @@ class VulkanSPIRVCodeGen:
 
         elif function_name in {"fmod", "mod"} and len(args) == 2:
             result_type = self.ensure_registered_type(args[0].type)
-            return self.binary_operation("%", result_type, args[0], args[1])
+            # `fmod` is C's truncated remainder (sign of x); `mod` is GLSL's
+            # floored x - y * floor(x / y) (sign of y).
+            operator = "%" if function_name == "fmod" else self.FLOORED_MOD_OPERATOR
+            return self.binary_operation(operator, result_type, args[0], args[1])
 
         # GLSL standard library functions
         else:

@@ -6367,9 +6367,10 @@ def test_codegen_fmod_and_atan2_intrinsics_from_microsoft_docs_import_to_crossgl
         }
     """)
 
-    assert "float wrapped = mod(p.x, 1.0);" in crossgl
+    # HLSL fmod's result has the sign of x (truncated); CrossGL mod is floored.
+    assert "float wrapped = fmod(p.x, 1.0);" in crossgl
     assert "float angle = atan(p.y, p.x);" in crossgl
-    assert "fmod(" not in crossgl
+    assert " mod(" not in crossgl
     assert "atan2(" not in crossgl
     parse_crossgl(crossgl)
 

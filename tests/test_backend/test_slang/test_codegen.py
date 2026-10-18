@@ -3652,7 +3652,7 @@ def test_slang_double_asuint_call_is_not_lowered_to_float_bitcast():
     cgl_translator.parse(generated_code)
 
 
-def test_slang_fmod_builtin_lowers_to_crossgl_mod():
+def test_slang_fmod_builtin_lowers_to_crossgl_fmod():
     code = """
     void main() {
         float wrapped = fmod(5.0, 2.0);
@@ -3664,9 +3664,10 @@ def test_slang_fmod_builtin_lowers_to_crossgl_mod():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float wrapped = mod(5.0, 2.0);" in generated_code
-    assert "vec2 wrappedVec = mod(vec2(5.0, 7.0), vec2(2.0, 3.0));" in generated_code
-    assert "fmod(" not in generated_code
+    # fmod truncates (sign of x); CrossGL mod is GLSL's floored remainder.
+    assert "float wrapped = fmod(5.0, 2.0);" in generated_code
+    assert "vec2 wrappedVec = fmod(vec2(5.0, 7.0), vec2(2.0, 3.0));" in generated_code
+    assert " mod(" not in generated_code
 
 
 def test_slang_lerp_builtin_lowers_to_crossgl_mix():

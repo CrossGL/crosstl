@@ -647,7 +647,7 @@ class TestCudaCodeGen:
         ) in result
         assert "const dim3(" not in result
 
-    def test_fmod_builtins_convert_to_crossgl_mod(self):
+    def test_fmod_builtins_convert_to_crossgl_fmod(self):
         code = """
         __global__ void wrap(float* out, float x) {
             out[0] = fmodf(x, 1.0f);
@@ -662,9 +662,10 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "out[0] = mod(x, 1.0f);" in result
-        assert "out[1] = mod(x, 2.0);" in result
-        assert "fmod" not in result
+        # C fmod truncates (result has the sign of x); CrossGL mod is floored.
+        assert "out[0] = fmod(x, 1.0f);" in result
+        assert "out[1] = fmod(x, 2.0);" in result
+        assert " mod(" not in result
 
     def test_atan2_builtins_convert_to_crossgl_atan2(self):
         code = """

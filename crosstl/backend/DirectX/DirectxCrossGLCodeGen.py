@@ -263,7 +263,7 @@ class HLSLToCrossGLConverter:
             "firstbithigh": "findMSB",
             "firstbitlow": "findLSB",
             "frac": "fract",
-            "fmod": "mod",
+            "fmod": "fmod",
             "lerp": "mix",
             "reversebits": "bitfieldReverse",
             "rsqrt": "inverseSqrt",
