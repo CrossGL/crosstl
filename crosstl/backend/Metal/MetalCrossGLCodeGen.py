@@ -11274,25 +11274,32 @@ class MetalToCrossGLConverter:
         if self.binary16_widening_profile is not None and not initializer_type:
             initializer_type = self.expression_metal_type(node.left)
         try:
-            rhs = self.generate_initializer_value(
-                node.right,
-                is_main,
-                initializer_type,
-                (
-                    self.variable_has_array_initializer_shape(node.left)
-                    if isinstance(node.left, VariableNode)
-                    else False
-                ),
-                (
-                    self.declaration_constructor_receiver_address_space(node.left)
-                    if isinstance(node.left, VariableNode)
-                    else None
-                ),
-                copy_initialize_lvalue=(
-                    isinstance(node.left, VariableNode)
-                    and bool(getattr(node.left, "vtype", None))
-                ),
-            )
+            # `device T& r = buffer[i]` binds the element; buffer_load would
+            # bind a copy and drop every write through `r`.
+            if self.binds_reference_to_structured_buffer_element(node):
+                rhs = self.generate_structured_buffer_element_lvalue(
+                    node.right, is_main
+                )
+            else:
+                rhs = self.generate_initializer_value(
+                    node.right,
+                    is_main,
+                    initializer_type,
+                    (
+                        self.variable_has_array_initializer_shape(node.left)
+                        if isinstance(node.left, VariableNode)
+                        else False
+                    ),
+                    (
+                        self.declaration_constructor_receiver_address_space(node.left)
+                        if isinstance(node.left, VariableNode)
+                        else None
+                    ),
+                    copy_initialize_lvalue=(
+                        isinstance(node.left, VariableNode)
+                        and bool(getattr(node.left, "vtype", None))
+                    ),
+                )
         finally:
             if pushed_context:
                 self.materialized_constexpr_expression_contexts.pop()
@@ -22267,6 +22274,23 @@ float {scalar}(float value) {{
             return self.generate_expression(expr, is_main)
         finally:
             self.suppress_structured_buffer_index_lowering = previous
+
+    def binds_reference_to_structured_buffer_element(self, node):
+        declaration = getattr(node, "left", None)
+        return (
+            getattr(node, "operator", None) == "="
+            and isinstance(declaration, VariableNode)
+            and bool(getattr(declaration, "vtype", None))
+            and self.reference_parameter(declaration)
+            and self.is_structured_buffer_element_access(node.right)
+        )
+
+    def generate_structured_buffer_element_lvalue(self, access, is_main=False):
+        buffer = self.generate_without_structured_buffer_index_lowering(
+            access.array, is_main
+        )
+        index = self.generate_expression(access.index, is_main)
+        return f"{buffer}[{index}]"
 
     def generate_structured_buffer_load(self, access, is_main=False):
         buffer = self.generate_without_structured_buffer_index_lowering(

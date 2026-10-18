@@ -90,6 +90,7 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
+from .spirv_local_references import SpirvLocalReferenceMixin
 
 
 class SpirvType:
@@ -197,7 +198,7 @@ class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
         )
 
 
-class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin):
+class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     POINTER_OFFSET_RESET_MARKER_PREFIX = "; __crosstl_pointer_offset_reset_"
@@ -19243,6 +19244,19 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin):
         if source_metadata is None and source_storage_buffer_metadata is None:
             return False
 
+        referenced_type_name = (
+            self.referenced_value_type_name(var_type_name)
+            if var_type_source is not None
+            else None
+        )
+        if referenced_type_name is not None and isinstance(
+            initial_value, (ArrayAccessNode, MemberAccessNode)
+        ):
+            self.bind_local_storage_element_reference(
+                node.name, source_pointer, referenced_type_name
+            )
+            return True
+
         declared_alias_type_name = self.storage_buffer_resource_type_name(var_type_name)
         inferred_alias_type_name = self.storage_buffer_expression_type_name(
             initial_value
@@ -19252,6 +19266,10 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin):
         else:
             alias_type_name = declared_alias_type_name or inferred_alias_type_name
         if var_type_source is not None:
+            # A declared value type (``int s = a[i]``, ``S s = b[i]``) copies
+            # the element; it must never alias the source storage.
+            if self.declared_type_name_is_value(var_type_name):
+                return False
             base_type_name = self.array_base_type_name(var_type_name)
             if not (
                 self.is_resource_type_name(base_type_name)
