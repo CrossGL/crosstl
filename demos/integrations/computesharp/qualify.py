@@ -25,7 +25,8 @@ from the job reports:
   WARP GPU output and the CPU reference of the Windows run.
 
 The report is ``qualification.json``, with amplified difference images under
-``images/``. The process exits non-zero unless every check passes.
+``images/``, and its summary ``results.json`` (see ``results_summary.py``). The
+process exits non-zero unless every check passes.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ import compare_discovery  # noqa: E402
 import coverage_contract  # noqa: E402
 import evidence as evidence_module  # noqa: E402
 import precision_report  # noqa: E402
+import results_summary  # noqa: E402
 
 CONTROLS = HERE / "negative_controls.json"
 IMAGE_CHECKS = HERE / "image_checks.json"
@@ -576,6 +578,9 @@ def qualify_directx(
         }
     else:
         report["outputs"] = _failure([f"missing {outputs}"])
+    probe = directory / "precision" / "directx" / "probe.json"
+    if probe.is_file():
+        report["device"] = json.loads(probe.read_text(encoding="utf-8")).get("device")
     return report
 
 
@@ -693,6 +698,7 @@ def qualify(
     lock_path: Path = coverage_contract.LOCK,
     controls_path: Path = CONTROLS,
     image_checks_path: Path = IMAGE_CHECKS,
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=True)
     controls = json.loads(controls_path.read_text(encoding="utf-8"))
@@ -731,6 +737,7 @@ def qualify(
         ),
         "imageChecksSHA256": _sha256(image_checks_path),
         "negativeControlsSHA256": _sha256(controls_path),
+        "provenance": dict(provenance or {}),
         "status": (
             "passed"
             if all(value["status"] == "passed" for value in profiles.values())
@@ -741,6 +748,7 @@ def qualify(
     (output / "qualification.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    results_summary.write(output / "results.json", results_summary.summarize(report))
     return report
 
 
@@ -779,6 +787,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lock", type=Path, default=coverage_contract.LOCK)
     parser.add_argument("--controls", type=Path, default=CONTROLS)
     parser.add_argument("--image-checks", type=Path, default=IMAGE_CHECKS)
+    parser.add_argument("--workflow-run", help="URL of the workflow run qualified")
+    parser.add_argument(
+        "--source-commit", help="commit whose workflow produced the artifacts"
+    )
     args = parser.parse_args(argv)
     targets = {
         name: path
@@ -793,6 +805,9 @@ def main(argv: list[str] | None = None) -> int:
         lock_path=args.lock,
         controls_path=args.controls,
         image_checks_path=args.image_checks,
+        provenance=results_summary.provenance_from_arguments(
+            args.workflow_run, args.source_commit
+        ),
     )
     print("\n".join(summary_lines(report)))
     return 0 if report["status"] == "passed" else 1

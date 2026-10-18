@@ -352,3 +352,9 @@ def test_qualification_reports_missing_artifacts_without_crashing(tmp_path):
         (tmp_path / "qualification" / "qualification.json").read_text()
     )
     assert written["status"] == "failed"
+    summary = json.loads((tmp_path / "qualification" / "results.json").read_text())
+    assert summary["kind"] == "computesharp-port-results"
+    assert summary["status"] == "failed"
+    assert summary["profiles"]["opengl-mesa-llvmpipe"]["errors"] == [
+        "no opengl artifacts were supplied"
+    ]

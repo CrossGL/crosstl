@@ -11,11 +11,17 @@ on Windows (WARP) is the independent baseline.
 
 ## Results
 
+The artifacts of workflow run
+[39099713804](https://github.com/CrossGL/crosstl/actions/runs/39099713804)
+(commit `0583b807e31ef8ea98e029093c60340a42338df8`) qualify every profile;
+`results.json` is the machine-readable summary that `qualify.py` computes from
+them.
+
 | Profile | Device | Execution | Required GPU passed | Capability-gated | Windows-specific | Negative controls |
 | --- | --- | --- | ---: | ---: | ---: | --- |
-| `directx-warp` (original) | Direct3D 12 WARP | software | 1,809 WARP rows (1,964 cases in total) | 11 | run, 61 cases | n/a |
-| `metal-apple-gpu` | Apple M2 Max, Metal 3 | hardware | 3,604 (3,713 cases in total) | 18 | excluded | 5 of 5 rejected |
-| `opengl-mesa-llvmpipe` | Mesa 25.2.8 llvmpipe, OpenGL 4.5 core through EGL | software | 3,600 (3,709 cases in total) | 22 | excluded | 5 of 5 rejected |
+| `directx-warp` (original) | Direct3D 12 WARP (Microsoft Basic Render Driver), Windows Server 2025 | software | 1,809 WARP rows (1,964 cases in total) | 11 | run, 61 cases | n/a |
+| `metal-apple-gpu` | Apple Paravirtual device (the GPU of the `macos-15` runner), macOS 15.7.9, Metal | hardware | 3,604 (3,713 cases in total) | 18 | excluded | 5 of 5 rejected |
+| `opengl-mesa-llvmpipe` | llvmpipe (LLVM 20.1.2, 256 bits), Mesa 25.2.8, OpenGL 4.5 core through EGL, Ubuntu 24.04 | software | 3,600 (3,709 cases in total) | 22 | excluded | 5 of 5 rejected |
 
 Every one of the 3,792 discovered cases is accounted for on every profile:
 required cases pass, capability-gated cases report the upstream capability
@@ -23,17 +29,44 @@ check, Windows-specific cases do not run on translated targets, and CPU-only
 cases are reported separately and never counted as translated GPU execution.
 Original discrete-device rows are optional on Windows because hosted runners
 have no GPU; on the translated targets both device rows run on the one device.
+Local runs on an Apple M2 Max produce bit-identical shader images to the CI
+device.
+
+Image differences of the shader outputs against the original WARP output
+(mean absolute error of the RGB channels in 0-255 units; the bound is derived
+from WARP and the reference image only, see [Image Checks](#image-checks)):
+
+| Shader | WARP vs reference | Metal vs WARP | OpenGL vs WARP | Bound |
+| --- | ---: | ---: | ---: | ---: |
+| `ColorfulInfinity` | 0.000 | 0.0000 | 0.0000 | 0.500 |
+| `ContouredLayers` | 7.437 | 0.0477 | 0.0354 | 15.373 |
+| `ExtrudedTruchetPattern` | 0.002 | 0.1216 | 0.1221 | 0.505 |
+| `FourColorGradient` | 9.003 | 0.0000 | 0.0000 | 18.507 |
+| `FractalTiling` | 0.000 | 0.0000 | 0.0000 | 0.501 |
+| `HelloWorld` | 0.000 | 0.0000 | 0.0000 | 0.500 |
+| `MengerJourney` | 0.010 | 0.0042 | 0.0042 | 0.520 |
+| `Octagrams` | 0.000 | 0.0088 | 0.0019 | 0.500 |
+| `ProteanClouds` | 0.000 | 0.0000 | 0.0000 | 0.500 |
+| `PyramidPattern` | 0.046 | 0.1294 | 0.1300 | 0.592 |
+| `TerracedHills` | 0.020 | 0.0139 | 0.0139 | 0.540 |
+| `TriangleGridContouring` | 0.001 | 0.0001 | 0.0001 | 0.501 |
+| `TwoTiledTruchet` | 0.000 | 0.0008 | 0.0009 | 0.500 |
 
 Machine-readable results:
 
 - `coverage.json` and `coverage.lock.json`: the frozen inventory and the expected
   outcome counts of every profile.
+- `results.json`: the summary of the qualifying workflow run: devices, case
+  outcomes per category, evidence counts, negative controls, intrinsic
+  precision against WARP and the image metrics of every output with its bound.
+  `results_summary.py` regenerates it from the run's `qualification.json`.
 - `results.json` of each translated run (`run_tests.py`): translation counts,
-  device preflight, accounting, evidence summary and negative controls.
-- `qualification.json` of the `Project Demo Testing` workflow
-  (`computesharp-qualification` artifact): every check recomputed from the raw
-  artifacts of all three profiles, with per-case image metrics and difference
-  images.
+  device preflight, deadlines, accounting, evidence summary and negative
+  controls.
+- `qualification.json` and `results.json` of the `Project Demo Testing`
+  workflow (`computesharp-qualification` artifact): every check recomputed from
+  the raw artifacts of all three profiles, with per-case image metrics and
+  difference images.
 
 ## How the Port Works
 
@@ -156,6 +189,15 @@ python demos/integrations/computesharp/qualify.py \
   --opengl translated-opengl --output qualification
 ```
 
+Regenerate the published summary from the qualification artifact of a run:
+
+```sh
+python demos/integrations/computesharp/results_summary.py \
+  --qualification computesharp-qualification/qualification.json \
+  --workflow-run https://github.com/CrossGL/crosstl/actions/runs/<run>/attempts/<attempt> \
+  --source-commit <commit> --output demos/integrations/computesharp/results.json
+```
+
 Run the tooling tests (they build a small MSTest fixture with the .NET SDK):
 
 ```sh
@@ -239,7 +281,11 @@ readback, each attributed to the executing case: the HLSL and artifact hashes,
 thread-group size, dispatch size and thread groups, constant bytes, each
 register with the slot and resource bound to it, and readback sizes and hashes.
 Every native buffer carries 256-byte guard regions with a fixed pattern that is
-verified after each submission. `evidence.py` checks the evidence against the
+verified after each submission. Runs have deadlines: MSTest stops the test host
+when one case runs longer than 5 minutes (the slowest case takes about 10
+seconds), and the runner stops a complete run after 25 minutes and a control
+run after 4 minutes, so a hung dispatch fails the run instead of holding the
+job. `evidence.py` checks the evidence against the
 manifest, the artifact files, the discovery and the TRX: every pipeline uses a
 translated artifact, every descriptor range is bound to the slot CrossTL
 reported, the thread groups cover the dispatch, dispatches come only from
@@ -377,7 +423,8 @@ shipped application.
 `qualify.py` checks, for each profile: the coverage lock, discovery parity with
 the original Windows export, TRX accounting with per-category outcome counts,
 the dispatch evidence, every negative control, the job report (including the
-device preflight) and the image checks. The workflow runs the original Windows
+device preflight), the intrinsic precision and the image checks, and writes
+`qualification.json` with the summary `results.json` (`results_summary.py`). The workflow runs the original Windows
 WARP job, the adapted-source parity job, the macOS Metal job, the Linux Mesa
 llvmpipe job and then the qualification job, with bounded timeouts and seven
 to fourteen days of artifact retention.

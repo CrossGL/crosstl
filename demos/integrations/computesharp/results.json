@@ -1,0 +1,1270 @@
+{
+  "contractSHA256": "d42e62eb332982539b6c9c76046beab0f6443adb129daa79dbb49955bd5d3bda",
+  "imageChecksSHA256": "1f8d7d8a2e9d0f4cfafe8cedc5314041542ccef0c5ca4839817d6af0b0e288af",
+  "kind": "computesharp-port-results",
+  "negativeControlsSHA256": "a705ad56478d2497c553588782878ef88227d72ecf6ab53d9f409465e0948637",
+  "profiles": {
+    "directx-warp": {
+      "cases": {
+        "capabilityGated": 11,
+        "categories": {
+          "cpu-only": {
+            "discovered": 109,
+            "executed": 109,
+            "notRun": 0,
+            "outcomes": {
+              "Passed": 109
+            }
+          },
+          "required-gpu": {
+            "discovered": 3622,
+            "executed": 3622,
+            "notRun": 0,
+            "outcomes": {
+              "NotExecuted": 1813,
+              "Passed": 1809
+            }
+          },
+          "windows-specific": {
+            "discovered": 61,
+            "executed": 61,
+            "notRun": 0,
+            "outcomes": {
+              "NotExecuted": 15,
+              "Passed": 46
+            }
+          }
+        },
+        "expected": {
+          "excluded": 0,
+          "inconclusive": 11,
+          "optional": 1817,
+          "pass": 1964
+        },
+        "optionalHardwareSkipped": 1817,
+        "requiredCasesPassed": 1964,
+        "requiredGpuCasesPassed": 1809
+      },
+      "checks": {
+        "accounting": "passed",
+        "categories": "passed",
+        "coverage": "passed",
+        "outputs": "passed"
+      },
+      "device": {
+        "architecture": "X64",
+        "hardware": false,
+        "name": "Microsoft Basic Render Driver",
+        "os": "Microsoft Windows 10.0.26100",
+        "runtime": "4.0.0.0"
+      },
+      "execution": "software",
+      "outputs": {
+        "outputs": 18,
+        "references": 15,
+        "status": "passed"
+      },
+      "status": "passed"
+    },
+    "metal-apple-gpu": {
+      "cases": {
+        "capabilityGated": 18,
+        "categories": {
+          "cpu-only": {
+            "discovered": 109,
+            "executed": 109,
+            "notRun": 0,
+            "outcomes": {
+              "Passed": 109
+            }
+          },
+          "required-gpu": {
+            "discovered": 3622,
+            "executed": 3622,
+            "notRun": 0,
+            "outcomes": {
+              "NotExecuted": 18,
+              "Passed": 3604
+            }
+          },
+          "windows-specific": {
+            "discovered": 61,
+            "executed": 0,
+            "notRun": 61,
+            "outcomes": {}
+          }
+        },
+        "expected": {
+          "excluded": 61,
+          "inconclusive": 18,
+          "optional": 0,
+          "pass": 3713
+        },
+        "optionalHardwareSkipped": 0,
+        "requiredCasesPassed": 3713,
+        "requiredGpuCasesPassed": 3604
+      },
+      "checks": {
+        "accounting": "passed",
+        "categories": "passed",
+        "coverage": "passed",
+        "discoveryParity": "passed",
+        "evidence": "passed",
+        "intrinsicPrecision": "passed",
+        "negativeControls": "passed",
+        "processingImages": "passed",
+        "run": "passed",
+        "shaderImages": "passed"
+      },
+      "device": {
+        "api": "Metal",
+        "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+        "fp64": false,
+        "hardware": true,
+        "maxThreadsPerGroup": 1024,
+        "name": "Apple Paravirtual device"
+      },
+      "evidence": {
+        "casesWithDispatch": 434,
+        "casesWithEvidence": 1953,
+        "dispatchedShaders": 113,
+        "pipelines": 134,
+        "records": {
+          "device": 1,
+          "dispatch": 169678,
+          "pipeline": 134,
+          "readback": 58430
+        },
+        "status": "passed",
+        "translatedShaders": 144
+      },
+      "execution": "hardware",
+      "host": {
+        "machine": "arm64",
+        "system": "Darwin"
+      },
+      "intrinsicPrecision": {
+        "device": {
+          "architecture": "Arm64",
+          "hardware": true,
+          "name": "Apple Paravirtual device",
+          "os": "macOS 15.7.9",
+          "runtime": "4.0.0.0"
+        },
+        "functions": {
+          "atan": {
+            "expression": "atan(x)",
+            "identical": 50143,
+            "ulpMax": 2247
+          },
+          "atan2": {
+            "expression": "atan2(x, y)",
+            "identical": 6490,
+            "ulpMax": 3294247
+          },
+          "cos": {
+            "expression": "cos(x)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpMax": 0
+          },
+          "div": {
+            "expression": "1.0 / x",
+            "identical": 155660,
+            "ulpMax": 0
+          },
+          "dot2": {
+            "expression": "dot(float2(x, y), float2(27.619, 57.583))",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 0
+          },
+          "dot3": {
+            "expression": "dot(float3(x, y, z), float3(0.2126, 0.7152, 0.0722))",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 0
+          },
+          "exp": {
+            "expression": "exp(x)",
+            "identical": 124880,
+            "ulpMax": 2
+          },
+          "exp2": {
+            "expression": "exp2(x)",
+            "identical": 124948,
+            "ulpMax": 8388608
+          },
+          "frac": {
+            "expression": "frac(x)",
+            "identical": 155658,
+            "ulpMax": 0
+          },
+          "length2": {
+            "expression": "length(float2(x, y))",
+            "identical": 108282,
+            "ulpMax": 2
+          },
+          "lerp": {
+            "expression": "lerp(x, y, frac(z))",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 0
+          },
+          "log": {
+            "expression": "log(x)",
+            "identical": 117786,
+            "ulpMax": 3240472
+          },
+          "log2": {
+            "expression": "log2(x)",
+            "identical": 108217,
+            "ulpMax": 4675013
+          },
+          "mad": {
+            "expression": "mad(x, 27.619, y)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 0
+          },
+          "multiply-add": {
+            "expression": "x * 27.619 + y",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 0
+          },
+          "normalize3": {
+            "expression": "normalize(float3(x, y, z)).x",
+            "identical": 116030,
+            "ulpMax": 3
+          },
+          "pow": {
+            "expression": "pow(abs(x), frac(y) * 4.0)",
+            "identical": 99526,
+            "ulpMax": 89
+          },
+          "pow-0.4545": {
+            "expression": "pow(abs(x), 0.4545)",
+            "identical": 61842,
+            "ulpMax": 25
+          },
+          "pow-2.2": {
+            "expression": "pow(abs(x), 2.2)",
+            "identical": 57885,
+            "ulpMax": 88
+          },
+          "rcp": {
+            "expression": "rcp(x)",
+            "identical": 155660,
+            "ulpMax": 0
+          },
+          "rsqrt": {
+            "expression": "rsqrt(x)",
+            "identical": 128984,
+            "ulpMax": 2
+          },
+          "sin": {
+            "expression": "sin(x)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpMax": 0
+          },
+          "smoothstep": {
+            "expression": "smoothstep(0.0, 1.0, frac(x))",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 0
+          },
+          "sqrt": {
+            "expression": "sqrt(x)",
+            "identical": 131672,
+            "ulpMax": 2
+          },
+          "tan": {
+            "expression": "tan(x)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpMax": 0
+          }
+        },
+        "inputs": 155660,
+        "referenceDevice": {
+          "architecture": "X64",
+          "hardware": false,
+          "name": "Microsoft Basic Render Driver",
+          "os": "Microsoft Windows 10.0.26100",
+          "runtime": "4.0.0.0"
+        },
+        "status": "passed"
+      },
+      "negativeControls": {
+        "faults": {
+          "corrupt-guard": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer"
+            ],
+            "status": "passed"
+          },
+          "corrupt-readback": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+            ],
+            "status": "passed"
+          },
+          "omit-dispatch": {
+            "cases": 10,
+            "failed": 10,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D",
+              "ComputeSharp.Tests.ShadersTests.ContouredLayers"
+            ],
+            "status": "passed"
+          },
+          "perturb-constants": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.ShaderMembersTests.BoolInstanceFields"
+            ],
+            "status": "passed"
+          },
+          "swap-bindings": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadOnlyBuffer",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+            ],
+            "status": "passed"
+          }
+        },
+        "status": "passed"
+      },
+      "processingImages": {
+        "methods": {
+          "ComputeSharp.Tests.ImageProcessingTests.BokehBlur": {
+            "directxUpstreamDelta": 1.3212766897482922e-06,
+            "largePixelFractionBound": 0.010810956790123456,
+            "largePixelFractionVsDirectX": 0.0,
+            "meanAbsoluteErrorBound": 0.7309063143004115,
+            "meanAbsoluteErrorVsDirectX": 0.0004369212962962963,
+            "upstreamDelta": 1.3102441431729534e-06,
+            "upstreamThreshold": 9e-06
+          },
+          "ComputeSharp.Tests.ImageProcessingTests.GaussianBlur": {
+            "directxUpstreamDelta": 4.005292723024263e-06,
+            "largePixelFractionBound": 0.03285763888888889,
+            "largePixelFractionVsDirectX": 0.0,
+            "meanAbsoluteErrorBound": 1.1999649562757202,
+            "meanAbsoluteErrorVsDirectX": 8.63233024691358e-05,
+            "upstreamDelta": 4.0057691995230145e-06,
+            "upstreamThreshold": 4.6e-06
+          }
+        },
+        "status": "passed"
+      },
+      "shaderImages": {
+        "casesCompared": 52,
+        "casesExecuted": 52,
+        "shaders": {
+          "ColorfulInfinity": {
+            "directxMeanAbsoluteErrorVsReference": 6.872106481481481e-06,
+            "directxUpstreamDelta": 7.86462174580165e-11,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.500013744212963,
+                "meanAbsoluteErrorVsDirectX": 6.872106481481481e-06,
+                "sha256": "09a28e6cde5e2d04c7675fc497e3881d706e5124eb90e032eabdb24e78288647",
+                "upstreamDelta": 1.24178238091605e-10
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "ContouredLayers": {
+            "directxMeanAbsoluteErrorVsReference": 7.436741898148148,
+            "directxUpstreamDelta": 8.510805559794172e-05,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.7734066840277778,
+                "largePixelFractionVsDirectX": 0.00025065104166666665,
+                "maxAbsoluteErrorVsDirectX": 80,
+                "meanAbsoluteErrorBound": 15.373483796296297,
+                "meanAbsoluteErrorVsDirectX": 0.04768952546296296,
+                "sha256": "c690797137f126e66c2a8bccd0e71a92edf087ec692a767826683abc076d81c4",
+                "upstreamDelta": 8.529022507322212e-05
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.000703
+          },
+          "ExtrudedTruchetPattern": {
+            "directxMeanAbsoluteErrorVsReference": 0.002298538773148148,
+            "directxUpstreamDelta": 2.630509010240499e-08,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0010303819444444444,
+                "largePixelFractionVsDirectX": 0.00025824652777777776,
+                "maxAbsoluteErrorVsDirectX": 202,
+                "meanAbsoluteErrorBound": 0.5045970775462963,
+                "meanAbsoluteErrorVsDirectX": 0.12162145543981481,
+                "sha256": "df2c4a933c98c35ed0b0e0b2cdc7c4f1087fc5a20aa2c13046ebcaae280bf4be",
+                "upstreamDelta": 1.3910860158481897e-06
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00011
+          },
+          "FourColorGradient": {
+            "directxMeanAbsoluteErrorVsReference": 9.003360821759259,
+            "directxUpstreamDelta": 0.00010303685994231241,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.6984240451388889,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 18.506721643518517,
+                "meanAbsoluteErrorVsDirectX": 2.0978009259259258e-05,
+                "sha256": "a1dacf17bbfc6307086935b4be38f99f10479365131829f339b87ee67dfdea15",
+                "upstreamDelta": 0.0001030369758420013
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00021
+          },
+          "FractalTiling": {
+            "directxMeanAbsoluteErrorVsReference": 0.00035951967592592595,
+            "directxUpstreamDelta": 4.114438955435179e-09,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5007190393518518,
+                "meanAbsoluteErrorVsDirectX": 9.765625e-06,
+                "sha256": "a92825dcda47241289f03313f716f6d8a301441f7e26c06721ae76c8b9b2b9c0",
+                "upstreamDelta": 4.159970976068768e-09
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 5e-07
+          },
+          "HelloWorld": {
+            "directxMeanAbsoluteErrorVsReference": 0.0,
+            "directxUpstreamDelta": 0.0,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 0,
+                "meanAbsoluteErrorBound": 0.5,
+                "meanAbsoluteErrorVsDirectX": 0.0,
+                "sha256": "789587d073ddd84150adc1b7f0ab5302252e1812001a12fb365d0a20a76b2ce8",
+                "upstreamDelta": 0.0
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "MengerJourney": {
+            "directxMeanAbsoluteErrorVsReference": 0.010125506365740741,
+            "directxUpstreamDelta": 1.1587899251248273e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0013211805555555555,
+                "largePixelFractionVsDirectX": 5.4253472222222224e-06,
+                "maxAbsoluteErrorVsDirectX": 36,
+                "meanAbsoluteErrorBound": 0.5202510127314814,
+                "meanAbsoluteErrorVsDirectX": 0.0042426215277777775,
+                "sha256": "08e02620b1832bfeb0965dec8547b23cc4641e95dfa18ff9046272b4bcf620a4",
+                "upstreamDelta": 1.643416195650331e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 1.1e-05
+          },
+          "Octagrams": {
+            "directxMeanAbsoluteErrorVsReference": 4.701967592592593e-06,
+            "directxUpstreamDelta": 5.38105698396955e-11,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 2.4956597222222224e-05,
+                "maxAbsoluteErrorVsDirectX": 23,
+                "meanAbsoluteErrorBound": 0.5000094039351852,
+                "meanAbsoluteErrorVsDirectX": 0.008768446180555556,
+                "sha256": "7689fae6c1e9c0f9a2f969ae76f491154b900ca0573c671b84e6defbe2b9663d",
+                "upstreamDelta": 1.0037740912404737e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 6e-07
+          },
+          "ProteanClouds": {
+            "directxMeanAbsoluteErrorVsReference": 1.2297453703703704e-05,
+            "directxUpstreamDelta": 1.40735336503819e-10,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5000245949074074,
+                "meanAbsoluteErrorVsDirectX": 2.423321759259259e-05,
+                "sha256": "c5edec61a5d2c7f48609bc3a3efed5a09e374e40d86e745b7617568673dd45b6",
+                "upstreamDelta": 2.773313984045845e-10
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "PyramidPattern": {
+            "directxMeanAbsoluteErrorVsReference": 0.046072410300925924,
+            "directxUpstreamDelta": 5.272649382115578e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.00449609375,
+                "largePixelFractionVsDirectX": 0.0016644965277777778,
+                "maxAbsoluteErrorVsDirectX": 60,
+                "meanAbsoluteErrorBound": 0.5921448206018518,
+                "meanAbsoluteErrorVsDirectX": 0.1293822337962963,
+                "sha256": "ca65c8d904e4564784371f83904abd9e15ace4d03c91d42ac8dd5b74f35acccd",
+                "upstreamDelta": 1.9872036478069395e-06
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00021
+          },
+          "TerracedHills": {
+            "directxMeanAbsoluteErrorVsReference": 0.019874855324074073,
+            "directxUpstreamDelta": 2.2745313943778982e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0010130208333333334,
+                "largePixelFractionVsDirectX": 2.8211805555555554e-05,
+                "maxAbsoluteErrorVsDirectX": 121,
+                "meanAbsoluteErrorBound": 0.5397497106481481,
+                "meanAbsoluteErrorVsDirectX": 0.013891782407407408,
+                "sha256": "0718f7f448552eff83a106e161416f6ff72159d68e6ce79a3a8ef2630d1cb540",
+                "upstreamDelta": 2.776542618236227e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 2.6e-05
+          },
+          "TriangleGridContouring": {
+            "directxMeanAbsoluteErrorVsReference": 0.0006799768518518519,
+            "directxUpstreamDelta": 7.78183625374058e-09,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5013599537037037,
+                "meanAbsoluteErrorVsDirectX": 7.55931712962963e-05,
+                "sha256": "efda46605441c3ee6fb519b93ff9edce307377e55b24e6d714dac814b29d58c9",
+                "upstreamDelta": 7.926710864847452e-09
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.0006
+          },
+          "TwoTiledTruchet": {
+            "directxMeanAbsoluteErrorVsReference": 6.076388888888889e-05,
+            "directxUpstreamDelta": 6.95398133312988e-10,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 5,
+                "meanAbsoluteErrorBound": 0.5001215277777777,
+                "meanAbsoluteErrorVsDirectX": 0.0008279079861111111,
+                "sha256": "49a6316491edca1e9b0fad1f7022fecdd1ebfe9dbd643b952275151dfdcb77ac",
+                "upstreamDelta": 1.0145362052084127e-08
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00032
+          }
+        },
+        "status": "passed"
+      },
+      "status": "passed",
+      "translation": {
+        "compile-failed": 4,
+        "translated": 144
+      },
+      "translator": {
+        "commit": "8daf6aa431ccdff80857a70a0e413c40ec364362",
+        "package": "crosstl",
+        "translatorTreeClean": true
+      }
+    },
+    "opengl-mesa-llvmpipe": {
+      "cases": {
+        "capabilityGated": 22,
+        "categories": {
+          "cpu-only": {
+            "discovered": 109,
+            "executed": 109,
+            "notRun": 0,
+            "outcomes": {
+              "Passed": 109
+            }
+          },
+          "required-gpu": {
+            "discovered": 3622,
+            "executed": 3622,
+            "notRun": 0,
+            "outcomes": {
+              "NotExecuted": 22,
+              "Passed": 3600
+            }
+          },
+          "windows-specific": {
+            "discovered": 61,
+            "executed": 0,
+            "notRun": 61,
+            "outcomes": {}
+          }
+        },
+        "expected": {
+          "excluded": 61,
+          "inconclusive": 22,
+          "optional": 0,
+          "pass": 3709
+        },
+        "optionalHardwareSkipped": 0,
+        "requiredCasesPassed": 3709,
+        "requiredGpuCasesPassed": 3600
+      },
+      "checks": {
+        "accounting": "passed",
+        "categories": "passed",
+        "coverage": "passed",
+        "discoveryParity": "passed",
+        "evidence": "passed",
+        "intrinsicPrecision": "passed",
+        "negativeControls": "passed",
+        "processingImages": "passed",
+        "run": "passed",
+        "shaderImages": "passed"
+      },
+      "device": {
+        "api": "OpenGL 4.5 core",
+        "driver": "4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+        "fp64": true,
+        "hardware": false,
+        "maxThreadsPerGroup": 1024,
+        "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+      },
+      "evidence": {
+        "casesWithDispatch": 440,
+        "casesWithEvidence": 1959,
+        "dispatchedShaders": 116,
+        "pipelines": 137,
+        "records": {
+          "device": 1,
+          "dispatch": 169684,
+          "pipeline": 137,
+          "readback": 58440
+        },
+        "status": "passed",
+        "translatedShaders": 148
+      },
+      "execution": "software",
+      "host": {
+        "machine": "x86_64",
+        "system": "Linux"
+      },
+      "intrinsicPrecision": {
+        "device": {
+          "architecture": "X64",
+          "hardware": false,
+          "name": "llvmpipe (LLVM 20.1.2, 256 bits)",
+          "os": "Ubuntu 24.04.5 LTS",
+          "runtime": "4.0.0.0"
+        },
+        "functions": {
+          "atan": {
+            "expression": "atan(x)",
+            "identical": 50455,
+            "ulpMax": 8388434
+          },
+          "atan2": {
+            "expression": "atan2(x, y)",
+            "identical": 6038,
+            "ulpMax": 872414885
+          },
+          "cos": {
+            "expression": "cos(x)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpMax": 0
+          },
+          "div": {
+            "expression": "1.0 / x",
+            "identical": 155658,
+            "ulpMax": 2097152
+          },
+          "dot2": {
+            "expression": "dot(float2(x, y), float2(27.619, 57.583))",
+            "identical": 155657,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 58
+          },
+          "dot3": {
+            "expression": "dot(float3(x, y, z), float3(0.2126, 0.7152, 0.0722))",
+            "identical": 155658,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 605657
+          },
+          "exp": {
+            "expression": "exp(x)",
+            "identical": 118771,
+            "ulpMax": 3
+          },
+          "exp2": {
+            "expression": "exp2(x)",
+            "identical": 120142,
+            "ulpMax": 3
+          },
+          "frac": {
+            "expression": "frac(x)",
+            "identical": 155658,
+            "ulpMax": 1065353216
+          },
+          "length2": {
+            "expression": "length(float2(x, y))",
+            "identical": 155660,
+            "ulpMax": 0
+          },
+          "lerp": {
+            "expression": "lerp(x, y, frac(z))",
+            "identical": 155657,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 1
+          },
+          "log": {
+            "expression": "log(x)",
+            "identical": 144061,
+            "ulpMax": 1020260556
+          },
+          "log2": {
+            "expression": "log2(x)",
+            "identical": 141383,
+            "ulpMax": 1015152640
+          },
+          "mad": {
+            "expression": "mad(x, 27.619, y)",
+            "identical": 155657,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 28
+          },
+          "multiply-add": {
+            "expression": "x * 27.619 + y",
+            "identical": 155657,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 28
+          },
+          "normalize3": {
+            "expression": "normalize(float3(x, y, z)).x",
+            "identical": 155659,
+            "ulpMax": 0
+          },
+          "pow": {
+            "expression": "pow(abs(x), frac(y) * 4.0)",
+            "identical": 94974,
+            "ulpMax": 1065353215
+          },
+          "pow-0.4545": {
+            "expression": "pow(abs(x), 0.4545)",
+            "identical": 51406,
+            "ulpMax": 580600162
+          },
+          "pow-2.2": {
+            "expression": "pow(abs(x), 2.2)",
+            "identical": 47787,
+            "ulpMax": 84
+          },
+          "rcp": {
+            "expression": "rcp(x)",
+            "identical": 155658,
+            "ulpMax": 2097152
+          },
+          "rsqrt": {
+            "expression": "rsqrt(x)",
+            "identical": 155658,
+            "ulpMax": 449510157
+          },
+          "sin": {
+            "expression": "sin(x)",
+            "identical": 155659,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpMax": 8388606
+          },
+          "smoothstep": {
+            "expression": "smoothstep(0.0, 1.0, frac(x))",
+            "identical": 155659,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpMax": 1065353216
+          },
+          "sqrt": {
+            "expression": "sqrt(x)",
+            "identical": 155658,
+            "ulpMax": 439682291
+          },
+          "tan": {
+            "expression": "tan(x)",
+            "identical": 155659,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpMax": 8388606
+          }
+        },
+        "inputs": 155660,
+        "referenceDevice": {
+          "architecture": "X64",
+          "hardware": false,
+          "name": "Microsoft Basic Render Driver",
+          "os": "Microsoft Windows 10.0.26100",
+          "runtime": "4.0.0.0"
+        },
+        "status": "passed"
+      },
+      "negativeControls": {
+        "faults": {
+          "corrupt-guard": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer"
+            ],
+            "status": "passed"
+          },
+          "corrupt-readback": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+            ],
+            "status": "passed"
+          },
+          "omit-dispatch": {
+            "cases": 10,
+            "failed": 10,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D",
+              "ComputeSharp.Tests.ShadersTests.ContouredLayers"
+            ],
+            "status": "passed"
+          },
+          "perturb-constants": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.ShaderMembersTests.BoolInstanceFields"
+            ],
+            "status": "passed"
+          },
+          "swap-bindings": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadOnlyBuffer",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+            ],
+            "status": "passed"
+          }
+        },
+        "status": "passed"
+      },
+      "processingImages": {
+        "methods": {
+          "ComputeSharp.Tests.ImageProcessingTests.BokehBlur": {
+            "directxUpstreamDelta": 1.3212766897482922e-06,
+            "largePixelFractionBound": 0.010810956790123456,
+            "largePixelFractionVsDirectX": 0.0,
+            "meanAbsoluteErrorBound": 0.7309063143004115,
+            "meanAbsoluteErrorVsDirectX": 2.427340534979424e-05,
+            "upstreamDelta": 1.321307964267515e-06,
+            "upstreamThreshold": 9e-06
+          },
+          "ComputeSharp.Tests.ImageProcessingTests.GaussianBlur": {
+            "directxUpstreamDelta": 4.005292723024263e-06,
+            "largePixelFractionBound": 0.03285763888888889,
+            "largePixelFractionVsDirectX": 0.0,
+            "meanAbsoluteErrorBound": 1.1999649562757202,
+            "meanAbsoluteErrorVsDirectX": 3.825874485596708e-05,
+            "upstreamDelta": 4.005163945592168e-06,
+            "upstreamThreshold": 4.6e-06
+          }
+        },
+        "status": "passed"
+      },
+      "shaderImages": {
+        "casesCompared": 52,
+        "casesExecuted": 52,
+        "shaders": {
+          "ColorfulInfinity": {
+            "directxMeanAbsoluteErrorVsReference": 6.872106481481481e-06,
+            "directxUpstreamDelta": 7.86462174580165e-11,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.500013744212963,
+                "meanAbsoluteErrorVsDirectX": 1.4467592592592593e-05,
+                "sha256": "8ce350d2133021ca1942ec986e566171fe8af7e205758e7a2c128874588c6e02",
+                "upstreamDelta": 1.614317095190865e-10
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "ContouredLayers": {
+            "directxMeanAbsoluteErrorVsReference": 7.436741898148148,
+            "directxUpstreamDelta": 8.510805559794172e-05,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.7734066840277778,
+                "largePixelFractionVsDirectX": 0.0002517361111111111,
+                "maxAbsoluteErrorVsDirectX": 80,
+                "meanAbsoluteErrorBound": 15.373483796296297,
+                "meanAbsoluteErrorVsDirectX": 0.035369646990740744,
+                "sha256": "efa266a5e6f9c403a69efb8fe2a041c294bae1a6f181c6821b97efc9e02a7179",
+                "upstreamDelta": 8.525900666416589e-05
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.000703
+          },
+          "ExtrudedTruchetPattern": {
+            "directxMeanAbsoluteErrorVsReference": 0.002298538773148148,
+            "directxUpstreamDelta": 2.630509010240499e-08,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0010303819444444444,
+                "largePixelFractionVsDirectX": 0.00026258680555555557,
+                "maxAbsoluteErrorVsDirectX": 210,
+                "meanAbsoluteErrorBound": 0.5045970775462963,
+                "meanAbsoluteErrorVsDirectX": 0.12205367476851851,
+                "sha256": "192ca6baa36acde2095f2a0be679ec1f8a9b70f9dfa629ca88a5acafaafad2a3",
+                "upstreamDelta": 1.396206298532167e-06
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00011
+          },
+          "FourColorGradient": {
+            "directxMeanAbsoluteErrorVsReference": 9.003360821759259,
+            "directxUpstreamDelta": 0.00010303685994231241,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.6984240451388889,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 18.506721643518517,
+                "meanAbsoluteErrorVsDirectX": 1.8807870370370372e-05,
+                "sha256": "1a24b6c169077c07adee14888f13c7719e4cdf63f253076e0e48863e1452db79",
+                "upstreamDelta": 0.0001030369758420013
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00021
+          },
+          "FractalTiling": {
+            "directxMeanAbsoluteErrorVsReference": 0.00035951967592592595,
+            "directxUpstreamDelta": 4.114438955435179e-09,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5007190393518518,
+                "meanAbsoluteErrorVsDirectX": 6.510416666666667e-06,
+                "sha256": "34efd99454af3b0802aab8e9832e6e5f0005498f73da8cc4f9c3e3777e2de0d5",
+                "upstreamDelta": 4.1061604062290715e-09
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 5e-07
+          },
+          "HelloWorld": {
+            "directxMeanAbsoluteErrorVsReference": 0.0,
+            "directxUpstreamDelta": 0.0,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 0,
+                "meanAbsoluteErrorBound": 0.5,
+                "meanAbsoluteErrorVsDirectX": 0.0,
+                "sha256": "789587d073ddd84150adc1b7f0ab5302252e1812001a12fb365d0a20a76b2ce8",
+                "upstreamDelta": 0.0
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "MengerJourney": {
+            "directxMeanAbsoluteErrorVsReference": 0.010125506365740741,
+            "directxUpstreamDelta": 1.1587899251248273e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0013211805555555555,
+                "largePixelFractionVsDirectX": 5.4253472222222224e-06,
+                "maxAbsoluteErrorVsDirectX": 51,
+                "meanAbsoluteErrorBound": 0.5202510127314814,
+                "meanAbsoluteErrorVsDirectX": 0.00416919849537037,
+                "sha256": "aec683600b7c9ae8b1f6c06a59129f6ac88004041776fd589899d8dc3bc5095a",
+                "upstreamDelta": 1.6350134682061324e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 1.1e-05
+          },
+          "Octagrams": {
+            "directxMeanAbsoluteErrorVsReference": 4.701967592592593e-06,
+            "directxUpstreamDelta": 5.38105698396955e-11,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 5.4253472222222224e-06,
+                "maxAbsoluteErrorVsDirectX": 23,
+                "meanAbsoluteErrorBound": 0.5000094039351852,
+                "meanAbsoluteErrorVsDirectX": 0.0019151475694444444,
+                "sha256": "a3426394c2d75e3e66e19b12562bb0267740fcf6568e1798a1e1d8b730dc726a",
+                "upstreamDelta": 2.1921598297771333e-08
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 6e-07
+          },
+          "ProteanClouds": {
+            "directxMeanAbsoluteErrorVsReference": 1.2297453703703704e-05,
+            "directxUpstreamDelta": 1.40735336503819e-10,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5000245949074074,
+                "meanAbsoluteErrorVsDirectX": 2.4956597222222224e-05,
+                "sha256": "2b20b5e82f3ba3055ac21a2a33e5564aa8c8203c559d3794c3d8cbf586297193",
+                "upstreamDelta": 2.524957507862635e-10
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "PyramidPattern": {
+            "directxMeanAbsoluteErrorVsReference": 0.046072410300925924,
+            "directxUpstreamDelta": 5.272649382115578e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.00449609375,
+                "largePixelFractionVsDirectX": 0.0016655815972222222,
+                "maxAbsoluteErrorVsDirectX": 60,
+                "meanAbsoluteErrorBound": 0.5921448206018518,
+                "meanAbsoluteErrorVsDirectX": 0.13001012731481482,
+                "sha256": "1292d8b8618c84d25b65e849cdb81cd64d4d05ab837a55248a398a7cb3d030e5",
+                "upstreamDelta": 1.9943894285178405e-06
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00021
+          },
+          "TerracedHills": {
+            "directxMeanAbsoluteErrorVsReference": 0.019874855324074073,
+            "directxUpstreamDelta": 2.2745313943778982e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0010130208333333334,
+                "largePixelFractionVsDirectX": 2.712673611111111e-05,
+                "maxAbsoluteErrorVsDirectX": 121,
+                "meanAbsoluteErrorBound": 0.5397497106481481,
+                "meanAbsoluteErrorVsDirectX": 0.013873336226851852,
+                "sha256": "33451fac4e7671e8ffedff6472cebdc89cae0df599a2f59e548df0cf2fa91063",
+                "upstreamDelta": 2.774266017204547e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 2.6e-05
+          },
+          "TriangleGridContouring": {
+            "directxMeanAbsoluteErrorVsReference": 0.0006799768518518519,
+            "directxUpstreamDelta": 7.78183625374058e-09,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5013599537037037,
+                "meanAbsoluteErrorVsDirectX": 6.618923611111112e-05,
+                "sha256": "bd1c4aa6f5237625ce3f29d2ee608c1b0e34d4f003836f1d3cd091912bd7e1dd",
+                "upstreamDelta": 7.918432315641346e-09
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.0006
+          },
+          "TwoTiledTruchet": {
+            "directxMeanAbsoluteErrorVsReference": 6.076388888888889e-05,
+            "directxUpstreamDelta": 6.95398133312988e-10,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 5,
+                "meanAbsoluteErrorBound": 0.5001215277777777,
+                "meanAbsoluteErrorVsDirectX": 0.0009074797453703703,
+                "sha256": "9649409e5b1d240d917d4fb4d374f796325ccd03025de8177ad368131b842b3c",
+                "upstreamDelta": 1.1056002464755898e-08
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00032
+          }
+        },
+        "status": "passed"
+      },
+      "status": "passed",
+      "translation": {
+        "translated": 148
+      },
+      "translator": {
+        "commit": "8daf6aa431ccdff80857a70a0e413c40ec364362",
+        "package": "crosstl",
+        "translatorTreeClean": true
+      }
+    }
+  },
+  "provenance": {
+    "sourceCommit": "0583b807e31ef8ea98e029093c60340a42338df8",
+    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39099713804/attempts/1"
+  },
+  "schemaVersion": 1,
+  "status": "passed",
+  "upstreamCommit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a"
+}

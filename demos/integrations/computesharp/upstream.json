@@ -6,5 +6,5 @@
   "sdkVersion": "10.0.400",
   "targets": ["metal", "opengl"],
   "coverageFrozen": true,
-  "nativeExecutionQualified": false
+  "nativeExecutionQualified": true
 }
