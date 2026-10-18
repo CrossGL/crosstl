@@ -1263,9 +1263,8 @@ the MLX host runtime.
 float16, bfloat16 and complex64 over the seven and five tile shapes
 `matmul.cpp` selects, each with and without non-contiguous batches and
 `axpby`, and `gemv_gather` and `gemv_t_gather` over their three and five tile
-shapes. The 32 `gemv_wide` and `gemv_wide_gather` entries are excluded: their
-chunk loops stride by the threadgroup count, which the software subgroup
-translation cannot yet prove uniform. OpenGL and DirectX lower the kernels'
+shapes. The 32 `gemv_wide` and `gemv_wide_gather` entries have their own gate,
+described below. OpenGL and DirectX lower the kernels'
 SIMD-group shuffles to 32-lane software subgroups, which need every invocation
 at their barriers, so three translator changes came with this family. Programs
 whose early returns cannot be proven uniform, such as `GEMVKernel::run`'s exit
@@ -1302,6 +1301,35 @@ threadgroup reduction are rejected. Metal also runs the unchanged upstream
 kernels, and the translation must reproduce their words exactly. This covers
 224/17,832 entries; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
+
+`contracts/gemv_wide.current-tree.translation.json` pins the other 32 entries
+of `gemv.metal`, `gemv_wide` and `gemv_wide_gather` for float16 and bfloat16
+with two to five vectors per threadgroup and 16 or 32 K lanes, in the 80
+function-constant specializations `matmul.cpp` selects: every
+`(gemv_wide_has_batch, gemv_wide_do_axpby)` pair for `gemv_wide` and
+`do_axpby = false` for `gemv_wide_gather`. Metal keeps the function constants
+and OpenGL keeps them as specialization constants, so one artifact serves an
+entry's specializations there, while DirectX bakes each pair into its own
+artifact. The kernels' `for (chunk = tid.x; chunk < n_chunks; chunk +=
+tgpg.x)` loop holds SIMD-group shuffles, so the software subgroup translation
+now accepts a 32-bit counter stepped by a uniform operand: the update is
+modular, so every invocation visits the same values whatever the operand.
+Required CI executes 240 dispatches and 48,208 checked elements per target on
+Metal, Mesa EGL and Direct3D 12 WARP with `matmul.cpp`'s `(32, k_lanes / 8, 1)`
+threadgroups: a short case whose second vector chunk is partial, whose last
+row block is clamped and whose K needs only the leftover loop, a ragged case
+whose two grid columns walk three chunks round-robin over an unrolled block
+and leftover loads, and an aligned case, over contiguous, `[2, 2]`
+non-contiguous and gathered batches and broadcast, strided and contiguous
+biases. A lane-level model of `GemvWide::run` must store each direct product;
+small integer inputs keep every float32 sum, result and `axpby` term exact, so
+every word is compared exactly. The model justifies OpenGL's 16 or 18
+index-range preconditions load by load, and mutated models that drop the
+leftover loads, the chunk stride, half of the K lanes, the batch offsets or
+`beta * bias` are rejected. Metal also runs the unchanged upstream kernels with
+the same function constants, and the translation must reproduce their words
+exactly. This covers 32/17,832 entries; it does not run the upstream MLX test
+suite or redirect the MLX host runtime.
 
 `contracts/gemv_masked.current-tree.translation.json` pins all 528 entries of
 `gemv_masked.metal` and their 1,584 artifacts: `gemv_masked` and

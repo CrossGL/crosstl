@@ -924,8 +924,8 @@ it does not run the upstream MLX test suite or redirect the MLX host runtime.
 ``gemv.metal``: ``gemv`` and ``gemv_t`` for float32, float16, bfloat16 and
 complex64 over every tile shape ``matmul.cpp`` selects, with and without
 non-contiguous batches and ``axpby``, and ``gemv_gather`` and
-``gemv_t_gather``. The 32 ``gemv_wide`` and ``gemv_wide_gather`` entries,
-whose chunk loops stride by the threadgroup count, are excluded. Software
+``gemv_t_gather``. The 32 ``gemv_wide`` and ``gemv_wide_gather`` entries
+have their own gate, below. Software
 subgroups need every invocation at their barriers, so programs whose early
 returns cannot be proven uniform are rendered again with those returns
 converged into predicated statements, and a void function's top-level branch
@@ -943,6 +943,24 @@ model justifies OpenGL's index-range preconditions load by load, and Metal
 also runs the unchanged upstream kernels, which the translation must
 reproduce exactly. This is a 224/17,832 increment; it does not run the
 upstream MLX test suite or redirect the MLX host runtime.
+
+``gemv_wide.current-tree.translation.json`` pins the other 32 entries of
+``gemv.metal``, ``gemv_wide`` and ``gemv_wide_gather``, in the 80
+function-constant specializations ``matmul.cpp`` selects. Metal and OpenGL
+keep the constants, so one artifact serves an entry's specializations, and
+DirectX bakes each into its own artifact. The kernels' chunk loop steps a
+32-bit counter by the threadgroup count around SIMD-group shuffles; software
+subgroups accept such a loop because a modular update visits the same values
+in every invocation for any uniform operand. Each target executes 240
+dispatches with ``(32, k_lanes / 8, 1)`` threadgroups: short, ragged and
+aligned cases with partial vector chunks, clamped row blocks, round-robin
+chunks over two grid columns, unrolled and leftover loads, and contiguous,
+non-contiguous and gathered batches. A lane-level model of ``GemvWide::run``
+must store each direct product; small integer inputs keep every float32 sum,
+result and ``axpby`` term exact, so every word is compared exactly, and
+Metal also runs the unchanged upstream kernels with the same function
+constants. This is a 32/17,832 increment; it does not run the upstream MLX
+test suite or redirect the MLX host runtime.
 
 ``gemv_masked.current-tree.translation.json`` pins all 528 entries of
 ``gemv_masked.metal``: ``gemv_masked`` and ``gemv_t_masked`` for float32,

@@ -4,7 +4,7 @@
 bfloat16 and complex64 over every tile shape ``matmul.cpp`` selects, each
 with and without non-contiguous batches and ``axpby``, and ``gemv_gather``
 and ``gemv_t_gather`` over their tile shapes. Its 32 ``gemv_wide`` and
-``gemv_wide_gather`` entries stay outside this gate.
+``gemv_wide_gather`` entries have their own gate, ``test_current_gemv_wide.py``.
 
 Every entry runs three cases on ``matmul.cpp``'s threadgroups of
 ``(32, bn, bm)`` threads and grids of ``(ceil(outputs / outputs per group), 1,
@@ -1147,8 +1147,8 @@ def _expected_scope():
             "kernels": ["gemv_wide", "gemv_wide_gather"],
             "count": WIDE_ENTRY_COUNT,
             "reason": (
-                "the chunk loop strides by the threadgroup count, which the "
-                "software subgroup translation cannot yet prove uniform"
+                "test_current_gemv_wide.py pins and executes their 80 "
+                "function-constant specializations"
             ),
         },
         "runtimeCoveredEntryCount": len(ENTRIES),

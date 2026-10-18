@@ -6938,11 +6938,41 @@ jobs:
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
             --label "current MLX GEMV native parity" \
-            --timeout-seconds 7200 -- \
+            --timeout-seconds 5400 -- \
             python -m pytest -q -n auto \
               --basetemp=mlx-current-results/gemv \
               --junitxml=mlx-current-results/gemv.xml \
               demos/integrations/mlx/tests/kernels/test_current_gemv.py
+
+      # gemv.metal's 32 gemv_wide and gemv_wide_gather entries, in all 80
+      # function-constant specializations matmul.cpp selects.
+      - name: Prove current MLX wide GEMV native parity
+        if: matrix.group == 'gemv'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMV_WIDE: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX wide GEMV native parity" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gemv-wide \
+              --junitxml=mlx-current-results/gemv-wide.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemv_wide.py
 
       # gemv_masked.metal's 240 gemv_masked and 288 gemv_t_masked entries run
       # in two legs; the first also runs the module's model and contract

@@ -3289,7 +3289,7 @@
         "gemv_wide_gather"
       ],
       "count": 32,
-      "reason": "the chunk loop strides by the threadgroup count, which the software subgroup translation cannot yet prove uniform"
+      "reason": "test_current_gemv_wide.py pins and executes their 80 function-constant specializations"
     },
     "runtimeCoveredEntryCount": 224,
     "artifactCountByTarget": 224,
