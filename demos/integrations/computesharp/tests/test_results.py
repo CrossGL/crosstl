@@ -11,6 +11,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 from fixture_support import ROOT, load_module  # noqa: E402
@@ -96,6 +98,14 @@ def synthetic_report():
             "preflightDevice": {"name": "GPU", "hardware": True, "fp64": False},
             "translator": {"commit": "c" * 40},
             "translation": {"translated": 1},
+        },
+        "arithmeticExactness": {
+            "status": "passed",
+            "tool": {"compiler": "test compiler"},
+            "exactArtifacts": 1,
+            "notCompiled": 0,
+            "floatOperations": 12,
+            "contractible": 0,
         },
         "intrinsicPrecision": {
             "status": "passed",
@@ -201,6 +211,15 @@ def test_summary_keeps_outcomes_devices_controls_precision_and_images():
     assert shader["outputs"][0]["meanAbsoluteErrorVsDirectX"] == 0.01
     assert shader["outputs"][0]["meanAbsoluteErrorBound"] == 0.5
     assert "checks" in metal and metal["checks"]["shaderImages"] == "passed"
+    assert metal["checks"]["arithmeticExactness"] == "passed"
+    assert metal["arithmeticExactness"] == {
+        "status": "passed",
+        "tool": {"compiler": "test compiler"},
+        "exactArtifacts": 1,
+        "notCompiled": 0,
+        "floatOperations": 12,
+        "contractible": 0,
+    }
 
     assert summary["profiles"]["opengl-mesa-llvmpipe"] == {
         "status": "failed",
@@ -283,6 +302,18 @@ def test_published_results_qualify_the_current_contract():
     shaders = set(image_checks["shaderImages"]["upstreamThresholds"])
     for name in TRANSLATED:
         profile = results["profiles"][name]
+        assert profile["checks"].get("arithmeticExactness") == "passed", name
+        exactness = profile.get("arithmeticExactness")
+        assert isinstance(exactness, dict), name
+        assert exactness.get("status") == "passed", name
+        assert exactness.get("contractible") == 0, name
+        assert exactness.get("floatOperations", 0) > 0, name
+        assert exactness.get("exactArtifacts", 0) > 0, name
+        assert exactness["exactArtifacts"] == profile["translation"]["translated"], name
+        assert exactness.get("notCompiled") == profile["translation"].get(
+            "compile-failed", 0
+        ), name
+        assert exactness.get("tool"), name
         assert profile["evidence"]["records"]["dispatch"] > 0
         assert set(profile["negativeControls"]["faults"]) == faults
         for fault in profile["negativeControls"]["faults"].values():
@@ -304,3 +335,39 @@ def test_published_results_qualify_the_current_contract():
         for function in profile["intrinsicPrecision"]["functions"].values():
             if "required" in function:
                 assert function["identical"] > 0
+
+
+@pytest.mark.parametrize("profile_name", TRANSLATED)
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing-check",
+        "missing-report",
+        "contractible",
+        "empty",
+        "artifacts",
+        "not-compiled",
+    ],
+)
+def test_published_results_reject_incomplete_arithmetic_evidence(
+    tmp_path, monkeypatch, profile_name, defect
+):
+    results = json.loads(PUBLISHED.read_text(encoding="utf-8"))
+    profile = results["profiles"][profile_name]
+    if defect == "missing-check":
+        profile["checks"].pop("arithmeticExactness")
+    elif defect == "missing-report":
+        profile.pop("arithmeticExactness")
+    elif defect == "contractible":
+        profile["arithmeticExactness"]["contractible"] = 1
+    elif defect == "empty":
+        profile["arithmeticExactness"]["floatOperations"] = 0
+    elif defect == "artifacts":
+        profile["arithmeticExactness"]["exactArtifacts"] -= 1
+    else:
+        profile["arithmeticExactness"]["notCompiled"] += 1
+    invalid = tmp_path / "results.json"
+    invalid.write_text(json.dumps(results), encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "PUBLISHED", invalid)
+    with pytest.raises(AssertionError):
+        test_published_results_qualify_the_current_contract()

@@ -67,6 +67,21 @@
       "status": "passed"
     },
     "metal-apple-gpu": {
+      "arithmeticExactness": {
+        "contractible": 0,
+        "exactArtifacts": 144,
+        "floatOperations": 10766,
+        "notCompiled": 4,
+        "status": "passed",
+        "tool": {
+          "compiler": "Apple metal version 32023.620 (metalfe-32023.620)",
+          "flags": [
+            "-fmetal-math-mode=safe",
+            "-fmetal-math-fp32-functions=fast",
+            "-O2"
+          ]
+        }
+      },
       "cases": {
         "capabilityGated": 18,
         "categories": {
@@ -106,6 +121,7 @@
       },
       "checks": {
         "accounting": "passed",
+        "arithmeticExactness": "passed",
         "categories": "passed",
         "coverage": "passed",
         "discoveryParity": "passed",
@@ -796,12 +812,23 @@
         "translated": 144
       },
       "translator": {
-        "commit": "636098e5a9c8b7435b3e228d60512a20e24afdc1",
+        "commit": "5b8ca82f988c58732c00f3d9dc16999a3578dbe2",
         "package": "crosstl",
         "translatorTreeClean": true
       }
     },
     "opengl-mesa-llvmpipe": {
+      "arithmeticExactness": {
+        "contractible": 0,
+        "exactArtifacts": 148,
+        "floatOperations": 32072,
+        "notCompiled": 0,
+        "status": "passed",
+        "tool": {
+          "driver": "llvmpipe (LLVM 20.1.2, 256 bits) 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+          "dump": "MESA_GLSL=dump"
+        }
+      },
       "cases": {
         "capabilityGated": 22,
         "categories": {
@@ -841,6 +868,7 @@
       },
       "checks": {
         "accounting": "passed",
+        "arithmeticExactness": "passed",
         "categories": "passed",
         "coverage": "passed",
         "discoveryParity": "passed",
@@ -1242,8 +1270,8 @@
             "largePixelFractionBound": 0.010810956790123456,
             "largePixelFractionVsDirectX": 0.0,
             "meanAbsoluteErrorBound": 0.7309063143004115,
-            "meanAbsoluteErrorVsDirectX": 2.427340534979424e-05,
-            "upstreamDelta": 1.321307964267515e-06,
+            "meanAbsoluteErrorVsDirectX": 4.21167695473251e-05,
+            "upstreamDelta": 1.3210375316601157e-06,
             "upstreamThreshold": 9e-06
           },
           "ComputeSharp.Tests.ImageProcessingTests.GaussianBlur": {
@@ -1288,12 +1316,12 @@
             "outputs": [
               {
                 "largePixelFractionBound": 0.7734066840277778,
-                "largePixelFractionVsDirectX": 0.0002517361111111111,
+                "largePixelFractionVsDirectX": 0.00025065104166666665,
                 "maxAbsoluteErrorVsDirectX": 80,
                 "meanAbsoluteErrorBound": 15.373483796296297,
-                "meanAbsoluteErrorVsDirectX": 0.035369646990740744,
-                "sha256": "efa266a5e6f9c403a69efb8fe2a041c294bae1a6f181c6821b97efc9e02a7179",
-                "upstreamDelta": 8.525900666416589e-05
+                "meanAbsoluteErrorVsDirectX": 0.041774088541666664,
+                "sha256": "81cebfbefb50c79ebf05755fe468aa03c58ac84a51287b843cd7c01312b8a865",
+                "upstreamDelta": 8.52889708730174e-05
               }
             ],
             "size": [
@@ -1311,9 +1339,9 @@
                 "largePixelFractionVsDirectX": 0.00026258680555555557,
                 "maxAbsoluteErrorVsDirectX": 210,
                 "meanAbsoluteErrorBound": 0.5045970775462963,
-                "meanAbsoluteErrorVsDirectX": 0.12205367476851851,
-                "sha256": "192ca6baa36acde2095f2a0be679ec1f8a9b70f9dfa629ca88a5acafaafad2a3",
-                "upstreamDelta": 1.396206298532167e-06
+                "meanAbsoluteErrorVsDirectX": 0.12212854456018518,
+                "sha256": "43231f803eebf8b4a11c55a1ce0458e9ca958973a2c072a4d94d3478b1e63841",
+                "upstreamDelta": 1.397071406924205e-06
               }
             ],
             "size": [
@@ -1332,8 +1360,8 @@
                 "maxAbsoluteErrorVsDirectX": 1,
                 "meanAbsoluteErrorBound": 18.506721643518517,
                 "meanAbsoluteErrorVsDirectX": 1.8807870370370372e-05,
-                "sha256": "1a24b6c169077c07adee14888f13c7719e4cdf63f253076e0e48863e1452db79",
-                "upstreamDelta": 0.0001030369758420013
+                "sha256": "f97007069c60ffb51992ed7f143893721854ad842082184caf924cb329156a88",
+                "upstreamDelta": 0.00010303698412055052
               }
             ],
             "size": [
@@ -1391,8 +1419,8 @@
                 "largePixelFractionVsDirectX": 5.4253472222222224e-06,
                 "maxAbsoluteErrorVsDirectX": 51,
                 "meanAbsoluteErrorBound": 0.5202510127314814,
-                "meanAbsoluteErrorVsDirectX": 0.00416919849537037,
-                "sha256": "aec683600b7c9ae8b1f6c06a59129f6ac88004041776fd589899d8dc3bc5095a",
+                "meanAbsoluteErrorVsDirectX": 0.00416847511574074,
+                "sha256": "62d47b19db01564b2e2ca8d6c2b393e54b40de8d00923acd215b6e91938fd661",
                 "upstreamDelta": 1.6350134682061324e-07
               }
             ],
@@ -1408,12 +1436,12 @@
             "outputs": [
               {
                 "largePixelFractionBound": 0.001,
-                "largePixelFractionVsDirectX": 5.4253472222222224e-06,
+                "largePixelFractionVsDirectX": 6.510416666666667e-06,
                 "maxAbsoluteErrorVsDirectX": 23,
                 "meanAbsoluteErrorBound": 0.5000094039351852,
-                "meanAbsoluteErrorVsDirectX": 0.0019151475694444444,
-                "sha256": "a3426394c2d75e3e66e19b12562bb0267740fcf6568e1798a1e1d8b730dc726a",
-                "upstreamDelta": 2.1921598297771333e-08
+                "meanAbsoluteErrorVsDirectX": 0.002607783564814815,
+                "sha256": "4c17017496b039baa549aaf0e7555e7ac7186a5693737d40e41ca52a444b3f3d",
+                "upstreamDelta": 2.9889701908649326e-08
               }
             ],
             "size": [
@@ -1431,9 +1459,9 @@
                 "largePixelFractionVsDirectX": 0.0,
                 "maxAbsoluteErrorVsDirectX": 1,
                 "meanAbsoluteErrorBound": 0.5000245949074074,
-                "meanAbsoluteErrorVsDirectX": 2.4956597222222224e-05,
-                "sha256": "2b20b5e82f3ba3055ac21a2a33e5564aa8c8203c559d3794c3d8cbf586297193",
-                "upstreamDelta": 2.524957507862635e-10
+                "meanAbsoluteErrorVsDirectX": 2.0616319444444445e-05,
+                "sha256": "7d2357a53b3c5b32f63c010311e55fec25b586ac723317e920b1c4bb46ee8020",
+                "upstreamDelta": 2.359386523740495e-10
               }
             ],
             "size": [
@@ -1448,12 +1476,12 @@
             "outputs": [
               {
                 "largePixelFractionBound": 0.00449609375,
-                "largePixelFractionVsDirectX": 0.0016655815972222222,
+                "largePixelFractionVsDirectX": 0.0016644965277777778,
                 "maxAbsoluteErrorVsDirectX": 60,
                 "meanAbsoluteErrorBound": 0.5921448206018518,
-                "meanAbsoluteErrorVsDirectX": 0.13001012731481482,
-                "sha256": "1292d8b8618c84d25b65e849cdb81cd64d4d05ab837a55248a398a7cb3d030e5",
-                "upstreamDelta": 1.9943894285178405e-06
+                "meanAbsoluteErrorVsDirectX": 0.12938404224537037,
+                "sha256": "a6c964f140759244728afef2153b35603a8901ddd6454c46286158cb6ff893b6",
+                "upstreamDelta": 1.9872243441799547e-06
               }
             ],
             "size": [
@@ -1471,9 +1499,9 @@
                 "largePixelFractionVsDirectX": 2.712673611111111e-05,
                 "maxAbsoluteErrorVsDirectX": 121,
                 "meanAbsoluteErrorBound": 0.5397497106481481,
-                "meanAbsoluteErrorVsDirectX": 0.013873336226851852,
-                "sha256": "33451fac4e7671e8ffedff6472cebdc89cae0df599a2f59e548df0cf2fa91063",
-                "upstreamDelta": 2.774266017204547e-07
+                "meanAbsoluteErrorVsDirectX": 0.013883101851851851,
+                "sha256": "b0888923ea74c4cb7796cb59fbe8c0f5c4a9808db2c111b36306f81d0b06eb0c",
+                "upstreamDelta": 2.774555766426761e-07
               }
             ],
             "size": [
@@ -1491,9 +1519,9 @@
                 "largePixelFractionVsDirectX": 0.0,
                 "maxAbsoluteErrorVsDirectX": 1,
                 "meanAbsoluteErrorBound": 0.5013599537037037,
-                "meanAbsoluteErrorVsDirectX": 6.618923611111112e-05,
-                "sha256": "bd1c4aa6f5237625ce3f29d2ee608c1b0e34d4f003836f1d3cd091912bd7e1dd",
-                "upstreamDelta": 7.918432315641346e-09
+                "meanAbsoluteErrorVsDirectX": 6.872106481481482e-05,
+                "sha256": "8767dee834ff0c27f46f5747af39ed0d19f26ebf3f8efb6f4da76df2363cd59f",
+                "upstreamDelta": 7.914293041038291e-09
               }
             ],
             "size": [
@@ -1511,9 +1539,9 @@
                 "largePixelFractionVsDirectX": 0.0,
                 "maxAbsoluteErrorVsDirectX": 5,
                 "meanAbsoluteErrorBound": 0.5001215277777777,
-                "meanAbsoluteErrorVsDirectX": 0.0009074797453703703,
-                "sha256": "9649409e5b1d240d917d4fb4d374f796325ccd03025de8177ad368131b842b3c",
-                "upstreamDelta": 1.1056002464755898e-08
+                "meanAbsoluteErrorVsDirectX": 0.0008998842592592592,
+                "sha256": "d8ce26e57bf5ba8c90eebcd80099269b7ddfd0ee9d6a845576a100a9168af45c",
+                "upstreamDelta": 1.0969077698091776e-08
               }
             ],
             "size": [
@@ -1530,15 +1558,15 @@
         "translated": 148
       },
       "translator": {
-        "commit": "636098e5a9c8b7435b3e228d60512a20e24afdc1",
+        "commit": "5b8ca82f988c58732c00f3d9dc16999a3578dbe2",
         "package": "crosstl",
         "translatorTreeClean": true
       }
     }
   },
   "provenance": {
-    "sourceCommit": "3a2de27370336852276bc67bea59d86cf9c692d3",
-    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39105438960/attempts/1"
+    "sourceCommit": "7cb6ed975bf9da345f23e51051fbe35d10af3cd6",
+    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39125235522/attempts/1"
   },
   "schemaVersion": 1,
   "status": "passed",
