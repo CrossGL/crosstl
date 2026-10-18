@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 """Verify the dispatch evidence of a translated ComputeSharp run.
 
-The portable runtime writes one JSON object per line for the device, every pipeline
-it compiles, every dispatch and every readback, each attributed to the executing
-test case. This module checks that the evidence is complete and consistent with the
-translated artifacts and the frozen inventory:
+The portable runtime writes one JSON object per line for the device, every
+capability query made through the public API, every resource allocation and
+release, every pipeline it compiles, every dispatch and every readback, each
+attributed to the executing test case. This module checks that the evidence is
+complete and consistent with the translated artifacts and the frozen inventory:
 
 - the device record names the selected backend, states hardware or software
   execution as the profile requires and references the manifest that was used;
 - every pipeline loads a translated artifact listed in the manifest, whose file
   content hash and thread-group size match the manifest;
 - every dispatch uses a compiled pipeline, binds every descriptor range of the
-  generated shader to the target slot that CrossTL reported, and launches
+  generated shader to the target slot that CrossTL reported, binds only device
+  resources that were allocated and not yet released, and launches
   ``ceil(dispatch / threads)`` thread groups;
-- every record belongs to an executed test case, and dispatches only come from
-  required GPU cases;
+- readbacks read allocated, live device resources; every resource is released
+  at most once;
+- every capability query that answers a contract capability returns the value
+  the profile declares, and every case of a capability-gated method shows the
+  query that decided it;
+- every record belongs to an executed test case (releases excepted, because
+  finalizers release resources while other cases run), dispatches only come
+  from required GPU cases, and every executed required GPU case left evidence
+  unless the evidence policy lists its method as host-only with a reason;
 - no fault was injected, unless a negative control expects one.
 """
 
@@ -36,7 +45,18 @@ sys.path.insert(0, str(HERE))
 
 import baseline  # noqa: E402
 
-RECORD_KINDS = ("device", "pipeline", "dispatch", "readback")
+RECORD_KINDS = (
+    "device",
+    "capability",
+    "resource",
+    "release",
+    "pipeline",
+    "dispatch",
+    "readback",
+)
+MEMORY_KINDS = ("device", "host")
+POLICY = HERE / "evidence_policy.json"
+POLICY_KIND = "computesharp.evidence-policy"
 RANGE_PREFIXES = {0: "t", 1: "u", 2: "b"}
 MAX_ERRORS = 200
 
@@ -104,17 +124,84 @@ def _groups(dispatch: list[int], threads: list[int]) -> list[int]:
 def case_categories(contract_path: Path, discovery: dict) -> dict[str, str]:
     """Map every fully qualified case display name to its contract category."""
 
+    return {
+        name: info["category"]
+        for name, info in case_details(contract_path, discovery).items()
+    }
+
+
+def case_details(contract_path: Path, discovery: dict) -> dict[str, dict[str, Any]]:
+    """Map every fully qualified case display name to its method, category and gate."""
+
     from coverage_contract import classify, load_contract
 
     contract = load_contract(contract_path)
-    categories: dict[str, str] = {}
+    details: dict[str, dict[str, Any]] = {}
     for record in classify(contract, discovery):
         owner = record["method"].rsplit(".", 1)[0]
         name = f"{owner}.{record['displayName']}"
-        previous = categories.setdefault(name, record["category"])
-        if previous != record["category"]:
-            raise EvidenceError([f"{name}: cases with one name have two categories"])
-    return categories
+        info = {
+            "method": record["method"],
+            "category": record["category"],
+            "gate": record["gate"],
+        }
+        previous = details.setdefault(name, info)
+        if previous != info:
+            raise EvidenceError(
+                [f"{name}: cases with one name have different categories or gates"]
+            )
+    return details
+
+
+def load_policy(
+    path: Path, contract: dict[str, Any], details: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """Load the evidence policy and check it against the contract and the inventory.
+
+    ``capabilityQueries`` states, for every contract capability, the fields of
+    the runtime capability record that answers it; a list value matches any of
+    its items. ``hostOnlyMethods`` names required GPU methods whose cases do
+    no device work on the translated runtime, each with the reason.
+    """
+
+    try:
+        policy = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EvidenceError([f"evidence policy {path}: {exc}"]) from exc
+    errors = []
+    if policy.get("kind") != POLICY_KIND or policy.get("schemaVersion") != 1:
+        errors.append(f"evidence policy {path} is not a {POLICY_KIND} version 1")
+    queries = policy.get("capabilityQueries")
+    host_only = policy.get("hostOnlyMethods")
+    if not isinstance(queries, dict) or not isinstance(host_only, dict):
+        errors.append("evidence policy needs capabilityQueries and hostOnlyMethods")
+        raise EvidenceError(errors)
+    for capability in contract.get("capabilities", {}):
+        query = queries.get(capability)
+        if not isinstance(query, dict) or not isinstance(query.get("capability"), str):
+            errors.append(f"no runtime capability query answers {capability}")
+    for capability in sorted(set(queries) - set(contract.get("capabilities", {}))):
+        errors.append(f"capability query for unknown capability {capability}")
+    categories = {info["method"]: info["category"] for info in details.values()}
+    for method, reason in sorted(host_only.items()):
+        if categories.get(method) != "required-gpu":
+            errors.append(f"host-only method {method} is not a required GPU method")
+        if not isinstance(reason, str) or len(reason.strip()) < 20:
+            errors.append(f"host-only method {method} needs a specific reason")
+    if errors:
+        raise EvidenceError(errors)
+    return policy
+
+
+def _answers(record: dict[str, Any], query: dict[str, Any]) -> bool:
+    for key, value in query.items():
+        actual = record.get(key)
+        if isinstance(value, list):
+            if actual not in value:
+                return False
+        elif actual != value:
+            return False
+    return True
 
 
 def verify(
@@ -126,6 +213,7 @@ def verify(
     profile: str,
     contract_path: Path,
     fault: str | None = None,
+    policy_path: Path = POLICY,
 ) -> dict[str, Any]:
     """Check one evidence file and return a summary; raise EvidenceError on problems."""
 
@@ -134,7 +222,11 @@ def verify(
     manifest_sha256 = _file_sha256(manifest_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     discovery = baseline.load_discovery(discovery_dir)
-    categories = case_categories(contract_path, discovery)
+    details = case_details(contract_path, discovery)
+    categories = {name: info["category"] for name, info in details.items()}
+    policy = load_policy(policy_path, contract, details)
+    queries = policy["capabilityQueries"]
+    host_only = policy["hostOnlyMethods"]
     executed = Counter(case["name"] for case in trx_cases(trx))
     shaders = manifest["shaders"]
     artifact_root = manifest_path.parent.parent
@@ -150,9 +242,27 @@ def verify(
     cases_with_records: set[str] = set()
     cases_with_dispatch: Counter[str] = Counter()
     dispatched_shaders: Counter[str] = Counter()
+    resources: dict[int, dict[str, Any]] = {}
+    released: set[int] = set()
+    memory_counts: Counter[str] = Counter()
+    capability_answers: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    fp64_answers: set[bool] = set()
 
     def problem(record: dict[str, Any], text: str) -> None:
         errors.append(f"line {record['_line']} ({record.get('record')}): {text}")
+
+    def live_device_resource(record: dict[str, Any], identifier: Any, use: str) -> None:
+        resource = resources.get(identifier) if type(identifier) is int else None
+        if resource is None:
+            problem(
+                record, f"{use} uses resource {identifier!r}, which was never allocated"
+            )
+        elif resource["memory"] != "device":
+            problem(
+                record, f"{use} uses {resource['type']} in {resource['memory']} memory"
+            )
+        elif identifier in released:
+            problem(record, f"{use} uses resource {identifier} after its release")
 
     for record in read_records(evidence):
         kind = record.get("record")
@@ -169,7 +279,9 @@ def verify(
                 record, f"fault {record.get('fault')!r} where {fault!r} was expected"
             )
         case = record.get("case")
-        if not isinstance(case, str) or not case:
+        if kind == "release" and case is None:
+            pass
+        elif not isinstance(case, str) or not case:
             problem(record, "record is not attributed to a test case")
         elif case not in executed:
             problem(record, f"case {case!r} is not an executed result")
@@ -199,6 +311,58 @@ def verify(
                 or record["bufferGuardBytes"] <= 0
             ):
                 problem(record, "buffer guards are not enabled")
+        elif kind == "capability":
+            available = record.get("available")
+            if (
+                not isinstance(record.get("capability"), str)
+                or type(available) is not bool
+            ):
+                problem(record, "capability query has no name or answer")
+                continue
+            for capability, query in queries.items():
+                if not _answers(record, query):
+                    continue
+                declared = settings["capabilities"].get(capability)
+                if available is not declared:
+                    problem(
+                        record,
+                        f"the device answers {capability}={available} but the profile declares {declared}",
+                    )
+                if isinstance(case, str):
+                    capability_answers[case].append(record | {"answers": capability})
+            if record["capability"] == "fp64":
+                fp64_answers.add(available)
+        elif kind == "resource":
+            identifier = record.get("resourceId")
+            if type(identifier) is not int or identifier < 1:
+                problem(record, f"resource id {identifier!r} is invalid")
+                continue
+            if identifier in resources:
+                problem(record, f"resource {identifier} was allocated twice")
+                continue
+            memory = record.get("memory")
+            size = record.get("bytes")
+            if memory not in MEMORY_KINDS:
+                problem(
+                    record, f"resource memory {memory!r} is not one of {MEMORY_KINDS}"
+                )
+            if type(size) is not int or size < 1:
+                problem(record, f"resource size {size!r} is invalid")
+            if not isinstance(record.get("type"), str) or not record["type"]:
+                problem(record, "resource type is missing")
+            resources[identifier] = {
+                "memory": memory,
+                "type": record.get("type"),
+            }
+            memory_counts[str(memory)] += 1
+        elif kind == "release":
+            identifier = record.get("resourceId")
+            if type(identifier) is not int or identifier not in resources:
+                problem(record, f"released resource {identifier!r} was never allocated")
+            elif identifier in released:
+                problem(record, f"resource {identifier} was released twice")
+            else:
+                released.add(identifier)
         elif kind == "pipeline":
             hlsl = record.get("hlslSha256")
             entry = shaders.get(hlsl)
@@ -283,6 +447,10 @@ def verify(
                         )
                     if type(item.get("resourceId")) is not int:
                         problem(record, f"register {item['register']} has no resource")
+                    else:
+                        live_device_resource(
+                            record, item["resourceId"], f"register {item['register']}"
+                        )
             if isinstance(case, str):
                 cases_with_dispatch[case] += 1
                 if categories.get(case) != "required-gpu":
@@ -291,6 +459,7 @@ def verify(
         elif kind == "readback":
             if type(record.get("bytes")) is not int or record["bytes"] <= 0:
                 problem(record, "readback size is missing")
+            live_device_resource(record, record.get("resourceId"), "readback")
             digest = record.get("sha256")
             if not isinstance(digest, str) or len(digest) != 64:
                 problem(record, "readback hash is missing")
@@ -308,12 +477,44 @@ def verify(
         errors.append("no device record: the translated backend never initialized")
     if counts["dispatch"] == 0:
         errors.append("no dispatch was recorded")
-    if errors:
-        raise EvidenceError(errors)
+    device_fp64 = {record.get("fp64") for record in devices}
+    if fp64_answers and fp64_answers != device_fp64:
+        errors.append(
+            f"fp64 queries answered {sorted(fp64_answers)} but the device reports {sorted(device_fp64, key=str)}"
+        )
 
     required_executed = sorted(
         name for name in executed if categories.get(name) == "required-gpu"
     )
+    host_only_cases = []
+    gated_cases = 0
+    for name in required_executed:
+        info = details[name]
+        if name not in cases_with_records:
+            if info["method"] in host_only:
+                host_only_cases.append(name)
+            else:
+                errors.append(f"{name}: the required GPU case left no evidence")
+        gate = info["gate"]
+        if gate is None:
+            continue
+        capability = gate["capability"]
+        declared = settings["capabilities"].get(capability)
+        if not any(
+            answer["answers"] == capability and answer["available"] is declared
+            for answer in capability_answers.get(name, [])
+        ):
+            errors.append(
+                f"{name}: no {capability} capability query decided the gated case"
+            )
+        gated_cases += 1
+    if errors:
+        raise EvidenceError(errors)
+
+    # A host-only method whose executed cases all left evidence no longer needs its entry.
+    without = {details[name]["method"] for name in host_only_cases}
+    ran = {details[name]["method"] for name in required_executed}
+    stale_host_only = sorted(set(host_only) & ran - without)
     translated = {
         key for key, value in shaders.items() if value.get("status") == "translated"
     }
@@ -335,12 +536,16 @@ def verify(
         "dispatchedShaders": len(dispatched_shaders),
         "translatedShaders": len(translated),
         "translatedShadersNotDispatched": never,
+        "policySha256": _file_sha256(policy_path),
+        "resources": dict(sorted(memory_counts.items())),
+        "releasedResources": len(released),
         "casesWithEvidence": len(cases_with_records),
         "casesWithDispatch": len(cases_with_dispatch),
         "requiredCaseNamesExecuted": len(required_executed),
-        "requiredCaseNamesWithoutEvidence": sum(
-            1 for name in required_executed if name not in cases_with_records
-        ),
+        "requiredCaseNamesWithEvidence": len(required_executed) - len(host_only_cases),
+        "hostOnlyCaseNames": len(host_only_cases),
+        "hostOnlyMethodsWithEvidence": stale_host_only,
+        "gatedCaseNamesWithCapabilityQuery": gated_cases,
     }
 
 
@@ -365,6 +570,7 @@ def verify_control(
     profile: str,
     contract_path: Path,
     passed: Counter[str] | None = None,
+    policy_path: Path = POLICY,
 ) -> dict[str, Any]:
     """Check one negative-control run: every case of its methods ran and failed.
 
@@ -411,6 +617,7 @@ def verify_control(
                 profile=profile,
                 contract_path=contract_path,
                 fault=fault,
+                policy_path=policy_path,
             )
         except (EvidenceError, OSError) as exc:
             errors.extend(
@@ -438,6 +645,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trx", required=True, type=Path)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--contract", type=Path, default=HERE / "coverage.json")
+    parser.add_argument("--policy", type=Path, default=POLICY)
     parser.add_argument("--fault")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
@@ -450,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             contract_path=args.contract,
             fault=args.fault,
+            policy_path=args.policy,
         )
     except EvidenceError as exc:
         print(exc, file=sys.stderr)

@@ -68,8 +68,12 @@ def synthetic_report():
         "evidence": {
             "status": "passed",
             "records": {"device": 1, "dispatch": 4, "pipeline": 1, "readback": 2},
+            "resources": {"device": 2, "host": 1},
             "pipelines": 1,
-            "requiredCaseNamesWithoutEvidence": 0,
+            "requiredCaseNamesExecuted": 3,
+            "requiredCaseNamesWithEvidence": 2,
+            "hostOnlyCaseNames": 1,
+            "hostOnlyMethodsWithEvidence": [],
         },
         "negativeControls": {
             "status": "passed",
@@ -175,7 +179,10 @@ def test_summary_keeps_outcomes_devices_controls_precision_and_images():
     assert metal["cases"]["requiredGpuCasesPassed"] == 2
     assert metal["cases"]["categories"]["required-gpu"]["outcomes"]["Passed"] == 2
     assert metal["evidence"]["records"]["dispatch"] == 4
-    assert "requiredCaseNamesWithoutEvidence" not in metal["evidence"]
+    assert metal["evidence"]["resources"] == {"device": 2, "host": 1}
+    assert metal["evidence"]["requiredCaseNamesWithEvidence"] == 2
+    assert metal["evidence"]["hostOnlyCaseNames"] == 1
+    assert "hostOnlyMethodsWithEvidence" not in metal["evidence"]
     assert metal["negativeControls"]["faults"]["omit-dispatch"] == {
         "status": "passed",
         "methods": ["T.M"],

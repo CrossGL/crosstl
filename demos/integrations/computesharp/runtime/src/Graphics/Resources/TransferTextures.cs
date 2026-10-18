@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using ComputeSharp.Graphics.Resources.Enums;
 using ComputeSharp.Interop;
 using ComputeSharp.Portable;
+using ComputeSharp.Portable.Diagnostics;
 using ComputeSharp.Portable.Native;
 
 #pragma warning disable CA1063
@@ -40,6 +41,18 @@ namespace ComputeSharp.Resources
 
             this.mappedData = (T*)NativeMemory.AlignedAlloc(size, 512);
             NativeMemory.Clear(this.mappedData, size);
+            ResourceId = EvidenceLog.NextResourceId();
+
+            EvidenceLog.Resource(ResourceId, GetType(), "host", (long)size, json =>
+            {
+                json.WriteString("elementType", EvidenceLog.TypeName(typeof(T)));
+                json.WriteNumber("elementBytes", sizeof(T));
+                json.WriteNumber("width", width);
+                json.WriteNumber("height", 1);
+                json.WriteNumber("depth", 1);
+                json.WriteNumber("rowPitch", (long)width * sizeof(T));
+                json.WriteString("allocationMode", allocationMode.ToString());
+            });
         }
 
         /// <summary>Gets the <see cref="ComputeSharp.GraphicsDevice"/> associated with the current instance.</summary>
@@ -47,6 +60,8 @@ namespace ComputeSharp.Resources
 
         /// <summary>Gets the width of the current texture.</summary>
         public int Width { get; }
+
+        internal long ResourceId { get; }
 
         internal T* MappedData => this.mappedData;
 
@@ -76,7 +91,11 @@ namespace ComputeSharp.Resources
 
         void IReferenceTrackedObject.DangerousOnDispose()
         {
-            NativeMemory.AlignedFree(this.mappedData);
+            if (this.mappedData is not null)
+            {
+                NativeMemory.AlignedFree(this.mappedData);
+                EvidenceLog.Release(ResourceId);
+            }
 
             this.mappedData = null;
         }
@@ -158,6 +177,18 @@ namespace ComputeSharp.Resources
 
             this.mappedData = (T*)NativeMemory.AlignedAlloc(size, 512);
             NativeMemory.Clear(this.mappedData, size);
+            ResourceId = EvidenceLog.NextResourceId();
+
+            EvidenceLog.Resource(ResourceId, GetType(), "host", (long)size, json =>
+            {
+                json.WriteString("elementType", EvidenceLog.TypeName(typeof(T)));
+                json.WriteNumber("elementBytes", sizeof(T));
+                json.WriteNumber("width", width);
+                json.WriteNumber("height", height);
+                json.WriteNumber("depth", 1);
+                json.WriteNumber("rowPitch", RowPitch);
+                json.WriteString("allocationMode", allocationMode.ToString());
+            });
         }
 
         /// <summary>Gets the <see cref="ComputeSharp.GraphicsDevice"/> associated with the current instance.</summary>
@@ -170,6 +201,8 @@ namespace ComputeSharp.Resources
         public int Height { get; }
 
         internal int RowPitch { get; }
+
+        internal long ResourceId { get; }
 
         internal T* MappedData => this.mappedData;
 
@@ -187,7 +220,11 @@ namespace ComputeSharp.Resources
 
         void IReferenceTrackedObject.DangerousOnDispose()
         {
-            NativeMemory.AlignedFree(this.mappedData);
+            if (this.mappedData is not null)
+            {
+                NativeMemory.AlignedFree(this.mappedData);
+                EvidenceLog.Release(ResourceId);
+            }
 
             this.mappedData = null;
         }
@@ -236,6 +273,18 @@ namespace ComputeSharp.Resources
 
             this.mappedData = (T*)NativeMemory.AlignedAlloc(size, 512);
             NativeMemory.Clear(this.mappedData, size);
+            ResourceId = EvidenceLog.NextResourceId();
+
+            EvidenceLog.Resource(ResourceId, GetType(), "host", (long)size, json =>
+            {
+                json.WriteString("elementType", EvidenceLog.TypeName(typeof(T)));
+                json.WriteNumber("elementBytes", sizeof(T));
+                json.WriteNumber("width", width);
+                json.WriteNumber("height", height);
+                json.WriteNumber("depth", depth);
+                json.WriteNumber("rowPitch", RowPitch);
+                json.WriteString("allocationMode", allocationMode.ToString());
+            });
         }
 
         /// <summary>Gets the <see cref="ComputeSharp.GraphicsDevice"/> associated with the current instance.</summary>
@@ -251,6 +300,8 @@ namespace ComputeSharp.Resources
         public int Depth { get; }
 
         internal int RowPitch { get; }
+
+        internal long ResourceId { get; }
 
         internal T* MappedData => this.mappedData;
 
@@ -268,7 +319,11 @@ namespace ComputeSharp.Resources
 
         void IReferenceTrackedObject.DangerousOnDispose()
         {
-            NativeMemory.AlignedFree(this.mappedData);
+            if (this.mappedData is not null)
+            {
+                NativeMemory.AlignedFree(this.mappedData);
+                EvidenceLog.Release(ResourceId);
+            }
 
             this.mappedData = null;
         }

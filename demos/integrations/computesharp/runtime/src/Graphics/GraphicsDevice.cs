@@ -102,49 +102,70 @@ public sealed unsafe partial class GraphicsDevice : IReferenceTrackedObject
 
         ThrowIfDeviceLost();
 
-        return Native.Info.SupportsFp64 != 0;
+        bool available = Native.Info.SupportsFp64 != 0;
+
+        EvidenceLog.Capability("fp64", available);
+
+        return available;
     }
 
     /// <summary>Checks whether the current device supports the creation of <see cref="ReadOnlyTexture1D{T}"/> resources for a specified type <typeparamref name="T"/>.</summary>
     public bool IsReadOnlyTexture1DSupportedForType<T>()
         where T : unmanaged
     {
-        return IsTextureSupported<T>(CsBackend.Texture1D, CsBackend.UsageShaderRead);
+        return QueryTextureSupport<T>(CsBackend.Texture1D, CsBackend.UsageShaderRead);
     }
 
     /// <summary>Checks whether the current device supports the creation of <see cref="ReadWriteTexture1D{T}"/> resources for a specified type <typeparamref name="T"/>.</summary>
     public bool IsReadWriteTexture1DSupportedForType<T>()
         where T : unmanaged
     {
-        return IsTextureSupported<T>(CsBackend.Texture1D, CsBackend.UsageShaderRead | CsBackend.UsageShaderWrite);
+        return QueryTextureSupport<T>(CsBackend.Texture1D, CsBackend.UsageShaderRead | CsBackend.UsageShaderWrite);
     }
 
     /// <summary>Checks whether the current device supports the creation of <see cref="ReadOnlyTexture2D{T}"/> resources for a specified type <typeparamref name="T"/>.</summary>
     public bool IsReadOnlyTexture2DSupportedForType<T>()
         where T : unmanaged
     {
-        return IsTextureSupported<T>(CsBackend.Texture2D, CsBackend.UsageShaderRead);
+        return QueryTextureSupport<T>(CsBackend.Texture2D, CsBackend.UsageShaderRead);
     }
 
     /// <summary>Checks whether the current device supports the creation of <see cref="ReadWriteTexture2D{T}"/> resources for a specified type <typeparamref name="T"/>.</summary>
     public bool IsReadWriteTexture2DSupportedForType<T>()
         where T : unmanaged
     {
-        return IsTextureSupported<T>(CsBackend.Texture2D, CsBackend.UsageShaderRead | CsBackend.UsageShaderWrite);
+        return QueryTextureSupport<T>(CsBackend.Texture2D, CsBackend.UsageShaderRead | CsBackend.UsageShaderWrite);
     }
 
     /// <summary>Checks whether the current device supports the creation of <see cref="ReadOnlyTexture3D{T}"/> resources for a specified type <typeparamref name="T"/>.</summary>
     public bool IsReadOnlyTexture3DSupportedForType<T>()
         where T : unmanaged
     {
-        return IsTextureSupported<T>(CsBackend.Texture3D, CsBackend.UsageShaderRead);
+        return QueryTextureSupport<T>(CsBackend.Texture3D, CsBackend.UsageShaderRead);
     }
 
     /// <summary>Checks whether the current device supports the creation of <see cref="ReadWriteTexture3D{T}"/> resources for a specified type <typeparamref name="T"/>.</summary>
     public bool IsReadWriteTexture3DSupportedForType<T>()
         where T : unmanaged
     {
-        return IsTextureSupported<T>(CsBackend.Texture3D, CsBackend.UsageShaderRead | CsBackend.UsageShaderWrite);
+        return QueryTextureSupport<T>(CsBackend.Texture3D, CsBackend.UsageShaderRead | CsBackend.UsageShaderWrite);
+    }
+
+    /// <summary>Answers a public texture capability query and records the answer.</summary>
+    private bool QueryTextureSupport<T>(uint dimension, uint usage)
+        where T : unmanaged
+    {
+        bool available = IsTextureSupported<T>(dimension, usage);
+
+        EvidenceLog.Capability("texture", available, json =>
+        {
+            json.WriteString("elementType", EvidenceLog.TypeName(typeof(T)));
+            json.WriteNumber("dimension", dimension);
+            json.WriteNumber("format", DXGIFormatHelper.GetForType<T>());
+            json.WriteBoolean("readWrite", (usage & CsBackend.UsageShaderWrite) != 0);
+        });
+
+        return available;
     }
 
     internal bool IsTextureSupported<T>(uint dimension, uint usage)

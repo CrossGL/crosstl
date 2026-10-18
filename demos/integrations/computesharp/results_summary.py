@@ -56,11 +56,18 @@ def _cases(profile: dict[str, Any]) -> dict[str, Any]:
 def _evidence(section: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "records",
+        "resources",
+        "releasedResources",
         "pipelines",
         "translatedShaders",
         "dispatchedShaders",
         "casesWithEvidence",
         "casesWithDispatch",
+        "requiredCaseNamesExecuted",
+        "requiredCaseNamesWithEvidence",
+        "hostOnlyCaseNames",
+        "gatedCaseNamesWithCapabilityQuery",
+        "policySha256",
     )
     return {"status": section.get("status")} | {
         key: section[key] for key in keys if key in section

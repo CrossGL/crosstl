@@ -17,12 +17,22 @@ import pytest
 
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
-from fixture_support import FIXTURE_CONTRACT, ROOT, load_module  # noqa: E402
+from fixture_support import (  # noqa: E402
+    FIXTURE_CONTRACT,
+    FIXTURE_POLICY,
+    ROOT,
+    load_module,
+)
 
 EVIDENCE = load_module("computesharp_evidence", ROOT / "evidence.py")
 PROFILE = "translated"
 DEVICE_CASE = "DiscoveryFixture.Cases.Device (Warp)"
 DISPATCH_CASE = "DiscoveryFixture.Cases.Values (1.5,System.UInt32)"
+UPLOAD_CASE = "DiscoveryFixture.Cases.Values (-0,System.Int32)"
+DISCRETE_CASE = "DiscoveryFixture.Cases.Device (Discrete)"
+UNGATED_CASE = "DiscoveryFixture.Cases.Gated (System.Int32)"
+GATED_CASE = "DiscoveryFixture.Cases.Gated (System.Single)"
+HOST_ONLY_CASE = "DiscoveryFixture.Cases.Expanded expanded"
 
 
 @pytest.fixture(scope="session")
@@ -49,13 +59,14 @@ def translated_fixture(baseline_fixture, tmp_path_factory):
 
 
 def _records(manifest_path):
+    """Consistent evidence for every required fixture case, keyed by role."""
     manifest = json.loads(manifest_path.read_text())
     ((hlsl, entry),) = manifest["shaders"].items()
     assert entry["status"] == "translated"
     target = next(item for item in entry["bindings"] if item["register"] == "u2")
     common = {"backend": "metal", "case": DISPATCH_CASE}
-    return [
-        {
+    return {
+        "device": {
             "record": "device",
             "backend": "metal",
             "case": DEVICE_CASE,
@@ -69,7 +80,48 @@ def _records(manifest_path):
             "translatorCommit": manifest["translator"]["commit"],
             "bufferGuardBytes": 256,
         },
-        {
+        "gate": {
+            "record": "capability",
+            "backend": "metal",
+            "case": GATED_CASE,
+            "capability": "fixture-feature",
+            "available": True,
+        },
+        "buffer": {
+            **common,
+            "record": "resource",
+            "resourceId": 7,
+            "type": "ComputeSharp.ReadWriteBuffer<System.UInt32>",
+            "memory": "device",
+            "bytes": 260,
+        },
+        "upload": {
+            "record": "resource",
+            "backend": "metal",
+            "case": UPLOAD_CASE,
+            "resourceId": 8,
+            "type": "ComputeSharp.UploadBuffer<System.Int32>",
+            "memory": "host",
+            "bytes": 64,
+        },
+        "texture": {
+            "record": "resource",
+            "backend": "metal",
+            "case": DISCRETE_CASE,
+            "resourceId": 9,
+            "type": "ComputeSharp.ReadWriteTexture2D<System.Single>",
+            "memory": "device",
+            "bytes": 1024,
+        },
+        "ungated": {
+            "record": "capability",
+            "backend": "metal",
+            "case": UNGATED_CASE,
+            "capability": "texture",
+            "available": True,
+        },
+        "upload-release": {"record": "release", "backend": "metal", "resourceId": 8},
+        "pipeline": {
             **common,
             "record": "pipeline",
             "shader": entry["type"],
@@ -77,7 +129,7 @@ def _records(manifest_path):
             "artifactSha256": entry["artifactSha256"],
             "threads": entry["threads"],
         },
-        {
+        "dispatch": {
             **common,
             "record": "dispatch",
             "shader": entry["type"],
@@ -95,7 +147,7 @@ def _records(manifest_path):
                 }
             ],
         },
-        {
+        "readback": {
             **common,
             "record": "readback",
             "resource": "ReadWriteBuffer<uint>[65]",
@@ -103,10 +155,13 @@ def _records(manifest_path):
             "bytes": 260,
             "sha256": "0" * 64,
         },
-    ]
+        "release": {"record": "release", "backend": "metal", "resourceId": 7},
+    }
 
 
 def _write(path, records, compress=False):
+    if isinstance(records, dict):
+        records = list(records.values())
     text = "".join(json.dumps(record) + "\n" for record in records)
     if compress:
         with gzip.open(path, "wt", encoding="utf-8") as stream:
@@ -116,7 +171,7 @@ def _write(path, records, compress=False):
     return path
 
 
-def _verify(translated_fixture, evidence, fault=None):
+def _verify(translated_fixture, evidence, fault=None, policy=FIXTURE_POLICY):
     discovery, trx, manifest = translated_fixture
     return EVIDENCE.verify(
         evidence=evidence,
@@ -126,6 +181,7 @@ def _verify(translated_fixture, evidence, fault=None):
         profile=PROFILE,
         contract_path=FIXTURE_CONTRACT,
         fault=fault,
+        policy_path=policy,
     )
 
 
@@ -136,24 +192,49 @@ def test_consistent_evidence_is_accepted(translated_fixture, tmp_path, compress)
     summary = _verify(translated_fixture, _write(tmp_path / name, records, compress))
     assert summary["status"] == "passed"
     assert summary["records"] == {
+        "capability": 2,
         "device": 1,
         "dispatch": 1,
         "pipeline": 1,
         "readback": 1,
+        "release": 2,
+        "resource": 3,
     }
     assert summary["device"]["hardware"] is True
     assert summary["dispatchedShaders"] == summary["translatedShaders"] == 1
     assert summary["translatedShadersNotDispatched"] == []
     assert summary["casesWithDispatch"] == 1
-    assert summary["casesWithEvidence"] == 2
+    assert summary["casesWithEvidence"] == 6
+    assert summary["resources"] == {"device": 2, "host": 1}
+    assert summary["releasedResources"] == 2
+    assert summary["requiredCaseNamesExecuted"] == 7
+    assert summary["requiredCaseNamesWithEvidence"] == 6
+    assert summary["hostOnlyCaseNames"] == 1
+    assert summary["hostOnlyMethodsWithEvidence"] == []
+    assert summary["gatedCaseNamesWithCapabilityQuery"] == 1
+    assert (
+        summary["policySha256"]
+        == hashlib.sha256(FIXTURE_POLICY.read_bytes()).hexdigest()
+    )
+
+
+def test_host_only_methods_that_leave_evidence_are_reported(
+    translated_fixture, tmp_path
+):
+    records = _records(translated_fixture[2])
+    records["host"] = {**records["upload"], "case": HOST_ONLY_CASE, "resourceId": 10}
+    summary = _verify(translated_fixture, _write(tmp_path / "evidence.jsonl", records))
+    assert summary["hostOnlyCaseNames"] == 0
+    assert summary["hostOnlyMethodsWithEvidence"] == ["DiscoveryFixture.Cases.Expanded"]
 
 
 def _mutate(records, manifest_path, mutation):
-    device, pipeline, dispatch, readback = records
+    device, pipeline = records["device"], records["pipeline"]
+    dispatch, readback = records["dispatch"], records["readback"]
     if mutation == "no-device":
-        records.remove(device)
+        del records["device"]
     elif mutation == "no-dispatch":
-        records.remove(dispatch)
+        del records["dispatch"]
     elif mutation == "backend":
         dispatch["backend"] = "opengl"
     elif mutation == "software-device":
@@ -200,7 +281,46 @@ def _mutate(records, manifest_path, mutation):
     elif mutation == "readback-hash":
         readback["sha256"] = "abc"
     elif mutation == "unknown-record":
-        records.append({**readback, "record": "upload"})
+        records["upload-copy"] = {**readback, "record": "upload"}
+    elif mutation == "unallocated-binding":
+        dispatch["bindings"][0]["resourceId"] = 42
+    elif mutation == "host-binding":
+        dispatch["bindings"][0]["resourceId"] = 8
+    elif mutation == "unallocated-readback":
+        del records["buffer"]
+    elif mutation == "use-after-release":
+        release = records.pop("release")
+        items = list(records.items())
+        index = [key for key, _ in items].index("dispatch")
+        items.insert(index, ("release", release))
+        records.clear()
+        records.update(items)
+    elif mutation == "double-release":
+        records["again"] = dict(records["upload-release"])
+    elif mutation == "unknown-release":
+        records["upload-release"]["resourceId"] = 99
+    elif mutation == "duplicate-resource":
+        records["texture"]["resourceId"] = 7
+    elif mutation == "resource-size":
+        records["buffer"]["bytes"] = 0
+    elif mutation == "resource-memory":
+        records["texture"]["memory"] = "shared"
+    elif mutation == "unattributed-resource":
+        records["texture"].pop("case")
+    elif mutation == "case-without-evidence":
+        del records["texture"]
+    elif mutation == "gate-without-query":
+        del records["gate"]
+    elif mutation == "gate-answer":
+        records["gate"]["available"] = False
+    elif mutation == "capability-without-answer":
+        records["ungated"].pop("available")
+    elif mutation == "fp64-answer":
+        records["fp64"] = {
+            **records["ungated"],
+            "capability": "fp64",
+            "available": True,
+        }
     else:
         raise AssertionError(mutation)
 
@@ -231,6 +351,21 @@ def _mutate(records, manifest_path, mutation):
         "unexpected-fault",
         "readback-hash",
         "unknown-record",
+        "unallocated-binding",
+        "host-binding",
+        "unallocated-readback",
+        "use-after-release",
+        "double-release",
+        "unknown-release",
+        "duplicate-resource",
+        "resource-size",
+        "resource-memory",
+        "unattributed-resource",
+        "case-without-evidence",
+        "gate-without-query",
+        "gate-answer",
+        "capability-without-answer",
+        "fp64-answer",
     ],
 )
 def test_inconsistent_evidence_is_rejected(baseline_fixture, tmp_path, mutation):
@@ -271,7 +406,7 @@ def test_negative_control_evidence_must_carry_its_fault(translated_fixture, tmp_
             _write(tmp_path / "plain.jsonl", records),
             fault="swap-bindings",
         )
-    for record in records:
+    for record in records.values():
         record["fault"] = "swap-bindings"
     summary = _verify(
         translated_fixture,
@@ -286,3 +421,58 @@ def test_invalid_json_lines_are_rejected(translated_fixture, tmp_path):
     path.write_text('{"record": "device"\n')
     with pytest.raises(EVIDENCE.EvidenceError):
         _verify(translated_fixture, path)
+
+
+def _policy(tmp_path, **changes):
+    policy = json.loads(FIXTURE_POLICY.read_text())
+    policy.update(changes)
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps(policy))
+    return path
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"kind": "other"},
+        {"capabilityQueries": {}},
+        {
+            "capabilityQueries": {
+                "fixture-feature": {"capability": "fixture-feature"},
+                "fp64": {"capability": "fp64"},
+            }
+        },
+        {
+            "hostOnlyMethods": {
+                "DiscoveryFixture.Cases.Plain": (
+                    "Fixture platform case that never runs on a device."
+                )
+            }
+        },
+        {
+            "hostOnlyMethods": {
+                "DiscoveryFixture.Cases.Missing": (
+                    "Fixture method that is not in the inventory."
+                )
+            }
+        },
+        {"hostOnlyMethods": {"DiscoveryFixture.Cases.Expanded": "host"}},
+    ],
+)
+def test_invalid_evidence_policies_are_rejected(translated_fixture, tmp_path, changes):
+    records = _records(translated_fixture[2])
+    evidence = _write(tmp_path / "evidence.jsonl", records)
+    with pytest.raises(EVIDENCE.EvidenceError):
+        _verify(translated_fixture, evidence, policy=_policy(tmp_path, **changes))
+
+
+def test_port_evidence_policy_matches_the_port_contract():
+    contract = json.loads((ROOT / "coverage.json").read_text())
+    policy = json.loads(EVIDENCE.POLICY.read_text())
+    assert set(policy["capabilityQueries"]) == set(contract["capabilities"])
+    for method, reason in policy["hostOnlyMethods"].items():
+        entry = contract["methods"].get(method) or contract["classes"].get(
+            method.rsplit(".", 1)[0]
+        )
+        assert entry is not None and entry["category"] == "required-gpu", method
+        assert len(reason) >= 20, method

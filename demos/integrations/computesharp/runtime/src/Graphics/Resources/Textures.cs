@@ -18,7 +18,7 @@ namespace ComputeSharp.Portable
         private readonly GraphicsDevice device;
         private IntPtr handle;
 
-        public NativeTexture(GraphicsDevice device, uint dimension, uint format, int width, int height, int depth, bool readWrite, int elementSize)
+        public NativeTexture(GraphicsDevice device, Type owner, Type elementType, uint dimension, uint format, int width, int height, int depth, bool readWrite, int elementSize)
         {
             this.device = device;
             Dimension = dimension;
@@ -27,6 +27,18 @@ namespace ComputeSharp.Portable
             ResourceId = EvidenceLog.NextResourceId();
             uint usage = CsBackend.UsageShaderRead | (readWrite ? CsBackend.UsageShaderWrite : 0);
             this.handle = device.Native.CreateTexture(dimension, format, (uint)width, (uint)height, (uint)depth, usage);
+
+            EvidenceLog.Resource(ResourceId, owner, "device", (long)width * height * depth * elementSize, json =>
+            {
+                json.WriteString("elementType", EvidenceLog.TypeName(elementType));
+                json.WriteNumber("elementBytes", elementSize);
+                json.WriteNumber("dimension", dimension);
+                json.WriteNumber("format", format);
+                json.WriteNumber("width", width);
+                json.WriteNumber("height", height);
+                json.WriteNumber("depth", depth);
+                json.WriteBoolean("readWrite", readWrite);
+            });
         }
 
         public IntPtr Handle => this.handle;
@@ -64,8 +76,14 @@ namespace ComputeSharp.Portable
 
         public void Destroy()
         {
+            if (this.handle == IntPtr.Zero)
+            {
+                return;
+            }
+
             this.device.Native.DestroyTexture(this.handle);
             this.handle = IntPtr.Zero;
+            EvidenceLog.Release(ResourceId);
         }
     }
 
@@ -109,7 +127,7 @@ namespace ComputeSharp.Resources
             GraphicsDevice = device;
             Width = width;
             this.state = this.isReadWrite ? TextureState.UnorderedAccess : TextureState.Common;
-            this.texture = new NativeTexture(device, CsBackend.Texture1D, DXGIFormatHelper.GetForType<T>(), width, 1, 1, this.isReadWrite, sizeof(T));
+            this.texture = new NativeTexture(device, GetType(), typeof(T), CsBackend.Texture1D, DXGIFormatHelper.GetForType<T>(), width, 1, 1, this.isReadWrite, sizeof(T));
         }
 
         /// <summary>Gets the <see cref="ComputeSharp.GraphicsDevice"/> associated with the current instance.</summary>
@@ -322,7 +340,7 @@ namespace ComputeSharp.Resources
             Width = width;
             Height = height;
             this.state = this.isReadWrite ? TextureState.UnorderedAccess : TextureState.Common;
-            this.texture = new NativeTexture(device, CsBackend.Texture2D, DXGIFormatHelper.GetForType<T>(), width, height, 1, this.isReadWrite, sizeof(T));
+            this.texture = new NativeTexture(device, GetType(), typeof(T), CsBackend.Texture2D, DXGIFormatHelper.GetForType<T>(), width, height, 1, this.isReadWrite, sizeof(T));
         }
 
         /// <summary>Gets the <see cref="ComputeSharp.GraphicsDevice"/> associated with the current instance.</summary>
@@ -572,7 +590,7 @@ namespace ComputeSharp.Resources
             Height = height;
             Depth = depth;
             this.state = this.isReadWrite ? TextureState.UnorderedAccess : TextureState.Common;
-            this.texture = new NativeTexture(device, CsBackend.Texture3D, DXGIFormatHelper.GetForType<T>(), width, height, depth, this.isReadWrite, sizeof(T));
+            this.texture = new NativeTexture(device, GetType(), typeof(T), CsBackend.Texture3D, DXGIFormatHelper.GetForType<T>(), width, height, depth, this.isReadWrite, sizeof(T));
         }
 
         /// <summary>Gets the <see cref="ComputeSharp.GraphicsDevice"/> associated with the current instance.</summary>
