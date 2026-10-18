@@ -12114,7 +12114,10 @@ def test_codegen_canonicalizes_qualified_log10_stdlib_wrapper(namespace):
     crossgl = convert_without_preprocessing(source)
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
-    assert "bfloat16 result = bfloat16(log10(float(value)));" in normalize(crossgl)
+    # The binary32 call keeps a precise:: namespace for the backends that
+    # honor it, as float and half calls do.
+    call = "precise::log10" if namespace == "precise" else "log10"
+    assert f"bfloat16 result = bfloat16({call}(float(value)));" in normalize(crossgl)
     assert (
         "uint result = __crossgl_bfloat16_from_float("
         "float(log10(__crossgl_bfloat16_to_float(uint(value)))));" in normalize(hlsl)

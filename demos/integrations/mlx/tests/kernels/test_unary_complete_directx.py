@@ -38,7 +38,7 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "95febabb5aaf38ae7f75ddae8a00cf14f07d1e0110124851ac7f037c5e414e1e"
+    "2295da8b1f55f8f51790e17aee304ea41a72773b3e8ecf29e218343773956b1b"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -259,12 +259,12 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5303901,
+        "generatedSizeBytesTotal": 5335152,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 18719,
+                "sizeBytes": 19084,
             },
         },
         "nativeCompiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
@@ -298,13 +298,13 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 5303901
+    assert sum(entry["sizeBytes"] for entry in entries) == 5335152
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         3462,
         "v_Absint32int32",
     )
     assert max((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
-        18719,
+        19084,
         "gn4large_ArcTancomplex64complex64",
     )
 
@@ -621,8 +621,64 @@ def test_unary_artifact_refresh_preserves_corpus_scope():
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
             },
+            {
+                "reason": (
+                    "Keep precise hyperbolic signs, exact self-differences and "
+                    "precise free complex operators in HLSL."
+                ),
+                "previousContractSha256": (
+                    "95febabb5aaf38ae7f75ddae8a00cf14f07d1e0110124851ac7f037c5e414e1e"
+                ),
+                "changedEntryCount": 91,
+                "unaffectedEntryCount": 786,
+                "reviewedBodyCount": 91,
+                "nativeCompiledChangedEntryCount": 91,
+                "preciseHyperbolicChangedEntryCount": 30,
+                "freeComplexOperatorChangedEntryCount": 61,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
         ],
     }
+
+
+def test_unary_precise_hyperbolic_refresh_scope_is_exact():
+    # Real precise:: sinh and tanh call the sign- and NaN-exact helpers; the
+    # complex bodies, and the unused complex overloads of the unsigned 32-bit
+    # Sign layouts, return MLX's free complex operators through precise results.
+    hyperbolic = [
+        workload
+        for workload in UNARY_DIRECTX_WORKLOADS
+        if workload.operator_type in {"Sinh", "Tanh"}
+        and workload.input_type in {"float", "half", "bfloat16_t"}
+    ]
+    assert len(hyperbolic) == 30
+    complex_operators = [
+        workload
+        for workload in UNARY_DIRECTX_WORKLOADS
+        if (
+            workload.input_type == "complex64_t"
+            and workload.operator_type in {
+                "ArcCos",
+                "ArcSin",
+                "ArcTan",
+                "Cos",
+                "Cosh",
+                "Exp",
+                "Negative",
+                "Rsqrt",
+                "Sign",
+                "Sin",
+                "Sinh",
+                "Square",
+                "Tan",
+                "Tanh",
+            }
+        )
+        or (workload.operator_type == "Sign" and workload.input_type == "uint32_t")
+    ]
+    assert len(complex_operators) == 61
 
 
 def test_unary_unsigned_conversion_refresh_scope_is_exact():

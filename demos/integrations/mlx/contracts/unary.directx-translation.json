@@ -484,7 +484,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 5303901,
+    "generatedSizeBytesTotal": 5335152,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "v_Absint32int32",
@@ -492,7 +492,7 @@
       },
       "maximum": {
         "entryPoint": "gn4large_ArcTancomplex64complex64",
-        "sizeBytes": 18719
+        "sizeBytes": 19084
       }
     },
     "nativeCompiler": "dxc -enable-16bit-types -WX -T cs_6_2 -E CSMain",
@@ -664,8 +664,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "fa1a3729e9d1346279bdc904c43f015a5dfbaa4a591fbec913d7119fee85fcf7",
-      "sizeBytes": 18466
+      "sha256": "d4bc48009dd4e7f28cef5c90e611ad129c75d269969a4c142652b284d4b72dd2",
+      "sizeBytes": 18685
     },
     {
       "entryPoint": "gn1_ArcCosfloat16float16",
@@ -741,8 +741,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "bfba51ecef65bc7be7a42c7e963536be03828b9bae20751c7b839c43d91f25c9",
-      "sizeBytes": 18466
+      "sha256": "a4e949d00fa8f78aea8f42a4547a2a8b23cf44b364007ef11b941af59bf5fc6a",
+      "sizeBytes": 18685
     },
     {
       "entryPoint": "gn1_ArcSinfloat16float16",
@@ -818,8 +818,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "de63fd16eb248cfc0d7f20f764f476f81e50814927b846d943987c35d2a0dd13",
-      "sizeBytes": 18597
+      "sha256": "ffcffac597f609a59be503ce8f45385113f61d603f9317abaf7dd7ee7bcb728e",
+      "sizeBytes": 18962
     },
     {
       "entryPoint": "gn1_ArcTanfloat16float16",
@@ -1126,8 +1126,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "65bc0f9c252c1248ef848ddb9f045d451d8152bc071d083a67c6c6c29a5c53b7",
-      "sizeBytes": 12291
+      "sha256": "231b5515e6b88c4a38673d5be38f7780226438e5c1fafee1270997e20d4ab3dc",
+      "sizeBytes": 12671
     },
     {
       "entryPoint": "gn1_Cosfloat16float16",
@@ -1170,8 +1170,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "602f198cbc5ef649149b240ff3c7c99219140c2f8d35fe9d0654ebf85b544695",
-      "sizeBytes": 12269
+      "sha256": "4f4151a99dfdf08b584735a23f07d43602d88ee367433965ae92f533a02d0116",
+      "sizeBytes": 12649
     },
     {
       "entryPoint": "gn1_Coshfloat16float16",
@@ -1280,8 +1280,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "cf662044de6bab6bb6f369c88ba0b65b0a9b40996bae93f2c259b1c1025f2370",
-      "sizeBytes": 7696
+      "sha256": "cdf49c2efd3ad90a471605991b24e6d1f9f7deacd13b2ce75e7d47c1ce3837f2",
+      "sizeBytes": 7926
     },
     {
       "entryPoint": "gn1_Expfloat16float16",
@@ -1731,8 +1731,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "7fb79f09976de5539691c9426703e91be94f50580d573bb3680c029dc14104fa",
-      "sizeBytes": 5428
+      "sha256": "bb65ffd3800027127e9d749f455d42a396a6f5fb2b5a06aa76b2125e26fb261a",
+      "sizeBytes": 5501
     },
     {
       "entryPoint": "gn1_Negativefloat16float16",
@@ -1918,8 +1918,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "2fe1f64914479bebe42f91fb4d1c762ec614e45bd9b0ba229ac1f059e88439af",
-      "sizeBytes": 8697
+      "sha256": "157832e75eea6bd9137757278ecb1aa1d1da8890e768fe80315227eee2333f96",
+      "sizeBytes": 8770
     },
     {
       "entryPoint": "gn1_Rsqrtfloat16float16",
@@ -2006,8 +2006,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "43e08aec81aa7dd736ca43988908f51521df0e78582e639c6fd1e728087ee236",
-      "sizeBytes": 8617
+      "sha256": "014067ad95305ef2a4c7bb219aea1fa641d1503fd4da9f34ec47086649bb4001",
+      "sizeBytes": 8690
     },
     {
       "entryPoint": "gn1_Signfloat16float16",
@@ -2094,8 +2094,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "abafb50ab7e926e22b16690d34cbeca8c58876657183bd9edd4c0d6798b158ff",
-      "sizeBytes": 8557
+      "sha256": "9d061f3f511e78dc27f57aafa8e8b309975794b1ff05537397735bae66a7ef55",
+      "sizeBytes": 8630
     },
     {
       "entryPoint": "gn1_Signuint64uint64",
@@ -2138,8 +2138,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "51334d9f53d7c3c8f952ba9d1843f4331128fad1a6aca24ea8846dcffd8309c1",
-      "sizeBytes": 12260
+      "sha256": "475ccb7e5fb485bb8f4d3b30c382cebaf22f6f6172506e833158aa29b01782ef",
+      "sizeBytes": 12640
     },
     {
       "entryPoint": "gn1_Sinfloat16float16",
@@ -2171,8 +2171,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "ea597067d4d572a62499fb7d1ab54e1338ddf14682e77178c05770750144be33",
-      "sizeBytes": 5332
+      "sha256": "f217514529af9ebfa5e87dba00b488db2b5d5879c25da47ba2f17c3bd3635a46",
+      "sizeBytes": 5712
     },
     {
       "entryPoint": "gn1_Sinhcomplex64complex64",
@@ -2182,8 +2182,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "df73271bcbd8485d531ca3070342b1b3990124cb1434900f78d5d997154cdb32",
-      "sizeBytes": 12269
+      "sha256": "55ef8e8e513b1c72824d89f5b6a50e70203ed9598685a0f2f0ede15979c6e27a",
+      "sizeBytes": 12649
     },
     {
       "entryPoint": "gn1_Sinhfloat16float16",
@@ -2193,8 +2193,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "4365663b35c4753959ecc72ac7c64383dd47184631d5afa901c8af401e2b09ac",
-      "sizeBytes": 4889
+      "sha256": "8e252eebc8f8752add58397009c89c8d4dfc3f6dda5469b6b5be25c5766f8f98",
+      "sizeBytes": 5403
     },
     {
       "entryPoint": "gn1_Sinhfloat32float32",
@@ -2204,8 +2204,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "f0dca1730089793d0f654d51a8b23158ffabd8fcf34f72c6905af8656cf150b8",
-      "sizeBytes": 4623
+      "sha256": "a0cf654d2717fcb31345a9eb69ba6ce1b81e7e15dad7c7d7502c6ac268bad73e",
+      "sizeBytes": 5003
     },
     {
       "entryPoint": "gn1_Sqrtbfloat16bfloat16",
@@ -2281,8 +2281,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "6d988c150471492438d5b5050c0907812b77ab849d1c22b76744ab2ab92bc7b3",
-      "sizeBytes": 5512
+      "sha256": "f0b50690ebbb5ffd7ae6ac7f743707191e4e62f799c0dae1aa7e1aff1072e536",
+      "sizeBytes": 5585
     },
     {
       "entryPoint": "gn1_Squarefloat16float16",
@@ -2413,8 +2413,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "8dc1ab6057729994e9badd65ae4689eaefa3be2a9d69f47f74dd18f4aa387be0",
-      "sizeBytes": 5198
+      "sha256": "0a7fc14c9a436fe583cab70e287cb501e6266ac7f89a25b40593b2977f44bda5",
+      "sizeBytes": 5740
     },
     {
       "entryPoint": "gn1_Tanfloat16float16",
@@ -2446,8 +2446,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "c46dc465749db4aa5b0dc4e5ca04593c2218bddfcdbfdfedbf334994bf8917e4",
-      "sizeBytes": 5332
+      "sha256": "581c5b833ca6dce5d92233ff66249a7f4287f2e680f4dddf012ed5bcbbb34cf9",
+      "sizeBytes": 5874
     },
     {
       "entryPoint": "gn1_Tanhcomplex64complex64",
@@ -2457,8 +2457,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "7fc3cd137181db479ad3809475ffeed45379fbbcdb24beb7a31aaec38b934d16",
-      "sizeBytes": 5207
+      "sha256": "773ce2f818e57811ade1db0d4233d81136544df9ac97a9ec805a112810ae267e",
+      "sizeBytes": 5749
     },
     {
       "entryPoint": "gn1_Tanhfloat16float16",
@@ -2468,8 +2468,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "b45dd8eea6d6aea66f4057a1aeb6af3ca13708fcaf5afd700cf0d93b53e2335a",
-      "sizeBytes": 4889
+      "sha256": "0166bf5b92c6001b14ed76f45322bb2ad39e266e398365c5e0655741d57c1ca9",
+      "sizeBytes": 5565
     },
     {
       "entryPoint": "gn1_Tanhfloat32float32",
@@ -2479,8 +2479,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "2cbe2367a0f415c3106edc78fbd49633c73e9533a1e5bd69e27bed26dc48155c",
-      "sizeBytes": 4623
+      "sha256": "7129bf4750530bc298ac5840757b4761d08b2092a1586d0a8987364a5a997e9f",
+      "sizeBytes": 5165
     },
     {
       "entryPoint": "gn1_ToFP8bfloat16uint8",
@@ -2677,8 +2677,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "3e37f1763edd7c3f6f92393c28ec11a12bd8729c4e4c44257b42bf8129b3eb12",
-      "sizeBytes": 18588
+      "sha256": "3ff3686d1cdb906e8e7eb479bcf8cf69d4fe7be7850a619e8109c1f9d87cee89",
+      "sizeBytes": 18807
     },
     {
       "entryPoint": "gn4large_ArcCosfloat16float16",
@@ -2754,8 +2754,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "78545d1e7eb233f1f684d06e330077792efe59a78a0326c34761810ebcead7ce",
-      "sizeBytes": 18588
+      "sha256": "3704b2309e12aa1db4d926ede9bb3c4f8657bd4737afded392fcb85e101f8177",
+      "sizeBytes": 18807
     },
     {
       "entryPoint": "gn4large_ArcSinfloat16float16",
@@ -2831,8 +2831,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "2d8b2b329854b58fbaf18a454a3ac682bb72fcb37a35671d26eda98853b14174",
-      "sizeBytes": 18719
+      "sha256": "0fd672f7d395da3852cd9a2baeb0bc84b9c07c1a94a78247c89efca01ac16be2",
+      "sizeBytes": 19084
     },
     {
       "entryPoint": "gn4large_ArcTanfloat16float16",
@@ -3139,8 +3139,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "f8290e257d973efca932ff64d7ff3af91a0cf7e700faf3694845c265d74acda1",
-      "sizeBytes": 12413
+      "sha256": "6abaf76594d56e2c08c0fefe40f063f12df989a2db12c0030a7a16d586021978",
+      "sizeBytes": 12793
     },
     {
       "entryPoint": "gn4large_Cosfloat16float16",
@@ -3183,8 +3183,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "102d226824034f9693d04d075e0e05d8a2d38b3b85a2e466889738f06c4a5a52",
-      "sizeBytes": 12391
+      "sha256": "accbd33d9758991ccf2bd3d9d971be25bfd6bf66b3845b26ebbe94f90887223b",
+      "sizeBytes": 12771
     },
     {
       "entryPoint": "gn4large_Coshfloat16float16",
@@ -3293,8 +3293,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "cecf5685639d8692ac607a1e2db6f6a80b2839f9e9172d0a9e7fa360c4d9090e",
-      "sizeBytes": 7818
+      "sha256": "f2c3effb863074e18296604453c55b7efdbe81efbf2c13a1540acd2ca66d0240",
+      "sizeBytes": 8048
     },
     {
       "entryPoint": "gn4large_Expfloat16float16",
@@ -3744,8 +3744,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "f1794d3250a36f9affe983ecb77a7e9aeffde4de77150ac8034f79769b699b9a",
-      "sizeBytes": 5550
+      "sha256": "b5ff13abffe1492473ce1fd7def0e952be0c654c5eab8c75b148abe1bb4a2ebd",
+      "sizeBytes": 5623
     },
     {
       "entryPoint": "gn4large_Negativefloat16float16",
@@ -3931,8 +3931,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "ddce40a15b17fb90e16ab9fb0e1819328be0a64463f694fdf340f4fb709d5214",
-      "sizeBytes": 8819
+      "sha256": "17c8b29b6f20208b381c91896a99014011f82d0530c9e393b2f91ce5a1f449f7",
+      "sizeBytes": 8892
     },
     {
       "entryPoint": "gn4large_Rsqrtfloat16float16",
@@ -4019,8 +4019,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "54254633e4cb087fded748c778e25030a6ba15dfcb58b93638294f55345208e1",
-      "sizeBytes": 8739
+      "sha256": "5e6cb7f751a79e5cb06b5d277179bdc92f4ed369065d31f6880dd71047a251df",
+      "sizeBytes": 8812
     },
     {
       "entryPoint": "gn4large_Signfloat16float16",
@@ -4107,8 +4107,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "e196251222ff8bf3893c2c28fcc331b94ad730b83454593b5c3a4c1456049f98",
-      "sizeBytes": 8679
+      "sha256": "67fdb5588ea20817c844dcf4c66bf27c8e0cba846e8c1bae5c2ae69d0c5d6015",
+      "sizeBytes": 8752
     },
     {
       "entryPoint": "gn4large_Signuint64uint64",
@@ -4151,8 +4151,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "51ecf3689a577df31efd352e27bb06736f9840d773ed844e51f0c55f740ae3a2",
-      "sizeBytes": 12382
+      "sha256": "20633252e444aa3ca4baef764e649907fb41c49cdc83461216e52c86895ae7af",
+      "sizeBytes": 12762
     },
     {
       "entryPoint": "gn4large_Sinfloat16float16",
@@ -4184,8 +4184,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "eefcf766a9d92c0db3ade941ca71789c4314dc24f4c8957466755e055a1e2d90",
-      "sizeBytes": 5454
+      "sha256": "ff9485915c87b855826bc6ad008f4f9b6c8f6aa5c232b29f9b4cfa900b47f9e4",
+      "sizeBytes": 5834
     },
     {
       "entryPoint": "gn4large_Sinhcomplex64complex64",
@@ -4195,8 +4195,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "3c552cb7b6c98c29d79676913c9bab7280d3347d5e99ae9158bc06f8aa24e09e",
-      "sizeBytes": 12391
+      "sha256": "7649bb3d17688ad290f0a91ead5f54eb0726a78262f3346a6f62c81ba9d5b723",
+      "sizeBytes": 12771
     },
     {
       "entryPoint": "gn4large_Sinhfloat16float16",
@@ -4206,8 +4206,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "4012fcb8481bbc82e5fd65d7f73cc671772329ade2d1ce29bd0057ac6564d75c",
-      "sizeBytes": 4999
+      "sha256": "234b3342f8be841de28d0ad8b3177698d94f19db01ceee23fba571377e3da54d",
+      "sizeBytes": 5513
     },
     {
       "entryPoint": "gn4large_Sinhfloat32float32",
@@ -4217,8 +4217,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "7188fc3028a01541bf9a9f325e7ac38f63b418ffdc5ead855d29d0ce8c241609",
-      "sizeBytes": 4745
+      "sha256": "77d8dea4feb3a20106f2c71f6544758e8ea8eeca245bafb0fafe6e5cf12be056",
+      "sizeBytes": 5125
     },
     {
       "entryPoint": "gn4large_Sqrtbfloat16bfloat16",
@@ -4294,8 +4294,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "84ef2387ff6818a0ad7acca24ebdc4ca7a0021920b440f615c3dc0364fad05dc",
-      "sizeBytes": 5634
+      "sha256": "8ba06c8f228a0ef2346945f8d922d6f8548d04d62ea900e278f7dc967ee8c5e7",
+      "sizeBytes": 5707
     },
     {
       "entryPoint": "gn4large_Squarefloat16float16",
@@ -4426,8 +4426,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "27c6d55a719f4b296b13074c84d9236c3c8f35c251fa85509a7f047cc4e42927",
-      "sizeBytes": 5320
+      "sha256": "d86c3aa6757e9ee1c6fea769efef13af51b859fec4c2455d246dfe69bc56eb12",
+      "sizeBytes": 5862
     },
     {
       "entryPoint": "gn4large_Tanfloat16float16",
@@ -4459,8 +4459,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "7947d822732a09564e3f1e449e01346b1a8c8e25883bd6de25d1619565cb9dd4",
-      "sizeBytes": 5454
+      "sha256": "f72bebefc233e3885e2791eb6d3066b6877f222cf24392d2ade35380c08b636e",
+      "sizeBytes": 5996
     },
     {
       "entryPoint": "gn4large_Tanhcomplex64complex64",
@@ -4470,8 +4470,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "ebcbad949a2c4d26a290270be30742baadfb3a577ee4f53b34e787c5f479223e",
-      "sizeBytes": 5329
+      "sha256": "8d3b2ec60cfb4b37228f577e4e70147dd78d8d8caed0d7a9a4cd0981e0731919",
+      "sizeBytes": 5871
     },
     {
       "entryPoint": "gn4large_Tanhfloat16float16",
@@ -4481,8 +4481,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "5ccaf1ee4b2911f5d917382b7452e9cb4f4dd8cd16f36b19161ae1caf0d2a616",
-      "sizeBytes": 4999
+      "sha256": "de9aa2f92ca7cb52688f7e8cbb97f844b068ebbad648d7cb4a14b91e3862e629",
+      "sizeBytes": 5675
     },
     {
       "entryPoint": "gn4large_Tanhfloat32float32",
@@ -4492,8 +4492,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "fadbabf1dcc7a02ad95ec453b7f539fcec0beff02d50a86aa634459f4893e6b6",
-      "sizeBytes": 4745
+      "sha256": "86f2f4d0b8ffcb7f1fc132e1ff7bd34142dd908638ae61c8da0bfbab6ba3dc69",
+      "sizeBytes": 5287
     },
     {
       "entryPoint": "gn4large_ToFP8bfloat16uint8",
@@ -4690,8 +4690,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "bafe75a1016ddfc4cf4d67983032cb32908b555bca51c6d503dacebf1db4021c",
-      "sizeBytes": 17685
+      "sha256": "5fae6de028e4fea12af6a1430a3967eaeeae6da6a72f339d8b76a1427af9ef17",
+      "sizeBytes": 17904
     },
     {
       "entryPoint": "v2_ArcCosfloat16float16",
@@ -4767,8 +4767,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "69eb6207d9ad6c6a51e6bf17f7c39f5ab7acff8ce9c91a2fe4793baf5f57fad7",
-      "sizeBytes": 17685
+      "sha256": "e5eaaab2f8261f7b8aa226729883a576b712a29c95abc4c1d2b2862749a26b08",
+      "sizeBytes": 17904
     },
     {
       "entryPoint": "v2_ArcSinfloat16float16",
@@ -4844,8 +4844,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "2c6debb478cad5872eefa60f5d3b3937173029e94b9f5baf6590c0ef1dfa1862",
-      "sizeBytes": 17816
+      "sha256": "4a7f3d81420c3b9d3bb21b46e686985752f3b8fecda56cd971a7d50df77eda33",
+      "sizeBytes": 18181
     },
     {
       "entryPoint": "v2_ArcTanfloat16float16",
@@ -5152,8 +5152,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "08121011a337f903b1118c4b1914a6cfef36975cf6e23fa50dd3f76301d3255f",
-      "sizeBytes": 11504
+      "sha256": "ba6883fa8a2169d7bea79b2c7bb88a1cf1f902a4dc51f26087d37dff58f5e2b7",
+      "sizeBytes": 11884
     },
     {
       "entryPoint": "v2_Cosfloat16float16",
@@ -5196,8 +5196,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "b3eec5829b901a9ecef2a417d2b70b7f75c726433f3e0a68c74d2b176e55dd94",
-      "sizeBytes": 11484
+      "sha256": "dc6adc728622ba7e67889f35ecec8e8cb7c46a140c0f6ab3ffc723e7ec8d7dea",
+      "sizeBytes": 11864
     },
     {
       "entryPoint": "v2_Coshfloat16float16",
@@ -5306,8 +5306,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "69fe0f005f5ab9ae69a6c8400dcd407c1a5fe992f5217251c5205307d6f01acf",
-      "sizeBytes": 6909
+      "sha256": "4b497b7a0626edc5564f9976330f98f44a72a5f7f7164cd50f692b44d7161326",
+      "sizeBytes": 7139
     },
     {
       "entryPoint": "v2_Expfloat16float16",
@@ -5757,8 +5757,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "fceeac5b6f9b58e7b7e4619bd52ab80790ae3a25bda964f77cc1939147c2f345",
-      "sizeBytes": 4651
+      "sha256": "f1b3a315024c7b43db737ecb8d3b2ffc3d01fec9ce7027cfce06f364546b56b6",
+      "sizeBytes": 4724
     },
     {
       "entryPoint": "v2_Negativefloat16float16",
@@ -5944,8 +5944,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "23d7ab1555fd4d1a8a07da364661d4bfd483747ff64a54d51d8d63209d94734a",
-      "sizeBytes": 7914
+      "sha256": "9a44688ca5563f6e2e676180ebad847a8f1f358e3ccb639085974c023306b9c4",
+      "sizeBytes": 7987
     },
     {
       "entryPoint": "v2_Rsqrtfloat16float16",
@@ -6032,8 +6032,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "b96fed2612b55f91761fa1ef8979abc9b5ff7ed3ec14229d638d6b6bff91b687",
-      "sizeBytes": 7832
+      "sha256": "cb6df606f0cf072a81fcf0160c19fd5ede4346ae787debf3f10180f85683025e",
+      "sizeBytes": 7905
     },
     {
       "entryPoint": "v2_Signfloat16float16",
@@ -6120,8 +6120,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "5213aea4db689cf43201d5c887f7b6fcd6b5c4a764e850627ef70b668f1a4567",
-      "sizeBytes": 8073
+      "sha256": "3021a1fcbda016104c2273e1dda04d07cc60971fb30768eaf087bee049eb4b95",
+      "sizeBytes": 8146
     },
     {
       "entryPoint": "v2_Signuint64uint64",
@@ -6164,8 +6164,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "37dbe4d1e1290605075424f5dab8d9b53575d4a246c9114c00ed0bbf9210aeb5",
-      "sizeBytes": 11473
+      "sha256": "cde19b8e95e96216188d3be499c4688ed0335dd99f9a1c32b3122a64bf5a6d4c",
+      "sizeBytes": 11853
     },
     {
       "entryPoint": "v2_Sinfloat16float16",
@@ -6197,8 +6197,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "a75428b2dfea7887b4b591fd35b7548606706ae63e8bfc93baf3f8b9923603c1",
-      "sizeBytes": 4864
+      "sha256": "4d68f9af894656e5bac0aa7dbb4c533b1d034aa91993a7cea230f617c6ce112d",
+      "sizeBytes": 5244
     },
     {
       "entryPoint": "v2_Sinhcomplex64complex64",
@@ -6208,8 +6208,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "cb15186bd6d4328b33ec831a7a86bc373546d30998cde5f52aae2350ce9f3ef9",
-      "sizeBytes": 11484
+      "sha256": "fd2ec15b5a092d0a2da999ec4d7dc4f1a5cf09fbf68c09bb784fa57e2abb61a4",
+      "sizeBytes": 11864
     },
     {
       "entryPoint": "v2_Sinhfloat16float16",
@@ -6219,8 +6219,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "cdd48bf7e997d7e803a5ecc3ed48b08db80e755c45332115f0efb04968d70a05",
-      "sizeBytes": 4406
+      "sha256": "e7768259b794fd5505fcca123995349debbc624ebdd76f278d717fe5c01e25c8",
+      "sizeBytes": 4920
     },
     {
       "entryPoint": "v2_Sinhfloat32float32",
@@ -6230,8 +6230,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "26ac85b4fcc1062a23183212cf3116eb46f3dcd1cc54a39287813c01023bafd2",
-      "sizeBytes": 4134
+      "sha256": "ff50143496cd2489f1c97b53a04508e46e04a13d2d32129aaa4b6ac7428ae181",
+      "sizeBytes": 4514
     },
     {
       "entryPoint": "v2_Sqrtbfloat16bfloat16",
@@ -6307,8 +6307,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "cf29ec8ec80f1d651d663858d8ff66761d895098e8257886de762853fb6947be",
-      "sizeBytes": 4731
+      "sha256": "06db2de31752241a1fe4265e5eba88a1f8eb96f8d61e325520dedefc44e6d8cb",
+      "sizeBytes": 4804
     },
     {
       "entryPoint": "v2_Squarefloat16float16",
@@ -6439,8 +6439,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "fc4e01736253bb9a6bfeab932f0b647d3a40126263abbcbe98f2abf34d8565ca",
-      "sizeBytes": 4411
+      "sha256": "ab2fbb4623a5580419537470cf899fbdee260921bd58bec0f715e6966839a91c",
+      "sizeBytes": 4953
     },
     {
       "entryPoint": "v2_Tanfloat16float16",
@@ -6472,8 +6472,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "65ae65923eb82ecf8c84d94be4ec203f19f670a0d731a598d10d9b8bad38f1b0",
-      "sizeBytes": 4864
+      "sha256": "0fefbe9fb59c4b61ba5b07bafcc33a63fef0146ad9f16a9f9db5e891da1c7bba",
+      "sizeBytes": 5406
     },
     {
       "entryPoint": "v2_Tanhcomplex64complex64",
@@ -6483,8 +6483,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "111abe4d0131dafa03ac43444e78e6631ec5e8969bc235c2af162a8d6917a559",
-      "sizeBytes": 4422
+      "sha256": "8910f7969078f4ae58fded2fab50944b8de5d947a6a3a47a3129576d5433086c",
+      "sizeBytes": 4964
     },
     {
       "entryPoint": "v2_Tanhfloat16float16",
@@ -6494,8 +6494,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "a7ca2079076152a662423e1d3b4557c7de9a8da2a10998edb3b16ed2bf930292",
-      "sizeBytes": 4406
+      "sha256": "acb63d1c42056d80a461293deafa18fc6367feeae7bd30f881981fc53a78cd1f",
+      "sizeBytes": 5082
     },
     {
       "entryPoint": "v2_Tanhfloat32float32",
@@ -6505,8 +6505,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "65ec89c49f1f11e5a9e2e49a7138c4d17c027983b02c55022532d74dfc359c10",
-      "sizeBytes": 4134
+      "sha256": "3463e990b1702b158cef49f0cddbd0263804cf106013763b340c4b52c3824e88",
+      "sizeBytes": 4676
     },
     {
       "entryPoint": "v2_ToFP8bfloat16uint8",
@@ -6703,8 +6703,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "cca8ca3a6e1255baf420ed72a8ece8a089a8c2b478f64984129894efba20eb1d",
-      "sizeBytes": 17347
+      "sha256": "5ef37cab203736e2ea740ba9bcd9a2ea339e087f620219f74a1225bde57a5489",
+      "sizeBytes": 17566
     },
     {
       "entryPoint": "v_ArcCosfloat16float16",
@@ -6780,8 +6780,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "ed27485778acfe94eb078a988e35902d5d819db2d0ab56ec821be286f58bdb85",
-      "sizeBytes": 17347
+      "sha256": "beca344745fcf9cc2a59a1ada6b3ce76eb06cad7c1ae51fe13bf127ffdbae412",
+      "sizeBytes": 17566
     },
     {
       "entryPoint": "v_ArcSinfloat16float16",
@@ -6857,8 +6857,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "360c172df30f07c7f2dbda3f147bdcb3b84772fdfc67852e038737df58959b0b",
-      "sizeBytes": 17478
+      "sha256": "650f71f507d71e28b27947f7fc83b2d6351948aedfa4ee93148327f5def1ef4e",
+      "sizeBytes": 17843
     },
     {
       "entryPoint": "v_ArcTanfloat16float16",
@@ -7165,8 +7165,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "af09c7d7952c04a3a3afb74ee8caf49dab96cd2ab861d6ec92d6e2447dc5d50f",
-      "sizeBytes": 11166
+      "sha256": "bd9ead0bc942db2f40832af2dc434cbdf658abe3e360cea64a2215e33fe2bc0e",
+      "sizeBytes": 11546
     },
     {
       "entryPoint": "v_Cosfloat16float16",
@@ -7209,8 +7209,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "fd2faca6f7229b25806f3e4d8c588f6a4212b5360e91caf9adc379a128d7e96c",
-      "sizeBytes": 11146
+      "sha256": "5f711d0f961f5d4b9e84b1e62ee218b6291f37c646be7dbafeec8d802f04c856",
+      "sizeBytes": 11526
     },
     {
       "entryPoint": "v_Coshfloat16float16",
@@ -7319,8 +7319,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "8c3626d17317deec11c049cc78339f8cf4c3eaad78d49c68b84a341c4f92c05d",
-      "sizeBytes": 6571
+      "sha256": "36212cdbd5a1a89cbfde969cbbdecbd6f56d6bcf4e969593407ca44f982809e0",
+      "sizeBytes": 6801
     },
     {
       "entryPoint": "v_Expfloat16float16",
@@ -7770,8 +7770,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "011df43405f33b7b9f25b5f1c947a5700068e9732394c6f73ab1629a30172ba0",
-      "sizeBytes": 4313
+      "sha256": "c3699affdeed89dc17f29530789d11880544da1b3f27d960d347f1ff068da635",
+      "sizeBytes": 4386
     },
     {
       "entryPoint": "v_Negativefloat16float16",
@@ -7957,8 +7957,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "9636951d6fefda26a07dfeb10fbe3b97dac2a1a8f910995d60e01f457a9d7131",
-      "sizeBytes": 7576
+      "sha256": "ef6d99714b63ea4f3fb03f3b5cd71c47b5b543a567a34fb0784921a870cb996e",
+      "sizeBytes": 7649
     },
     {
       "entryPoint": "v_Rsqrtfloat16float16",
@@ -8045,8 +8045,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "f2149773e52faaf81705ef403445bfb09da251e4e74590b95d136578acf4532d",
-      "sizeBytes": 7494
+      "sha256": "c2b7a990d7c3cf2afbcd2c608dcf25bd191dbd46694b0a770d0656a57e2470bc",
+      "sizeBytes": 7567
     },
     {
       "entryPoint": "v_Signfloat16float16",
@@ -8133,8 +8133,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "70920168f3c53e48a84c895ece9cdca7a236a51d2977090e61f5b076958586cf",
-      "sizeBytes": 7422
+      "sha256": "71e4c8dbaf01f26393427502f26761d44a6f9c7cbcbd980a55f43ca31aacafba",
+      "sizeBytes": 7495
     },
     {
       "entryPoint": "v_Signuint64uint64",
@@ -8177,8 +8177,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "3b1790370cf27ebbe8308d0d222979b276ba2b4ea531017303a354b629ab0379",
-      "sizeBytes": 11135
+      "sha256": "b32625828b614859d53e92d093d6baba79ebd88bbecb6b32e06217c6b10efbab",
+      "sizeBytes": 11515
     },
     {
       "entryPoint": "v_Sinfloat16float16",
@@ -8210,8 +8210,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "7b962f9f803b4eec954da15ad27ac8e8f3a2eb7674a36ae28533b64631cc5da3",
-      "sizeBytes": 4205
+      "sha256": "31f677bc3c03bb9bab49064097476844d6fe3bc96edcc5df53a8ffdb3f56000a",
+      "sizeBytes": 4585
     },
     {
       "entryPoint": "v_Sinhcomplex64complex64",
@@ -8221,8 +8221,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "601435ad7fb07527e3b36360a9a653e2b5fdcbeb70aab8df8b146e3e7190f59b",
-      "sizeBytes": 11146
+      "sha256": "ec2cc045cd95fc46693352a23934327f0e7c991cab561c4f6b0fad3d80d79aac",
+      "sizeBytes": 11526
     },
     {
       "entryPoint": "v_Sinhfloat16float16",
@@ -8232,8 +8232,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "7e4c043268786e36df5c22c67ea3f420f115ba5e3f58b90b10574c8cca99e33e",
-      "sizeBytes": 3758
+      "sha256": "db1166776d4259c6a2ffa8900dfa6df699093582643c0f482ba58836dc662ed0",
+      "sizeBytes": 4272
     },
     {
       "entryPoint": "v_Sinhfloat32float32",
@@ -8243,8 +8243,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "8efc7d0af37db33706892cf6f03b18bdbb8e44f5a5b53c3515aa8e1d1720933d",
-      "sizeBytes": 3492
+      "sha256": "8d2bf0f4021bbd0a41497fa9359a41fa99bb65780e70d0a2d88165dc37d61305",
+      "sizeBytes": 3872
     },
     {
       "entryPoint": "v_Sqrtbfloat16bfloat16",
@@ -8320,8 +8320,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "bdcd334253675386374678f87b0d284fa97a0318927fc7814396249c68b6e9ea",
-      "sizeBytes": 4393
+      "sha256": "92220b54151c54595339684fe1e1cb49a076ab6e1e14fdf9d172d89144867e96",
+      "sizeBytes": 4466
     },
     {
       "entryPoint": "v_Squarefloat16float16",
@@ -8452,8 +8452,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "6407d05edb5736b5e3e9b3a83d1a44b13513d480870db03612fcdcb1e150a2a7",
-      "sizeBytes": 4073
+      "sha256": "cfa51957ab7ba99e00c0abc38a7f69e11405493d6ebf72fa35cb07113440f82f",
+      "sizeBytes": 4615
     },
     {
       "entryPoint": "v_Tanfloat16float16",
@@ -8485,8 +8485,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "9b0202edd3047e2297ab8c5a8e38402083dea8e7f673e9889c5716eb734945a4",
-      "sizeBytes": 4205
+      "sha256": "2688231ad91079a39c369139d43e3ea2cfc6db5f11ad8c822a4ba3cfae1ef423",
+      "sizeBytes": 4747
     },
     {
       "entryPoint": "v_Tanhcomplex64complex64",
@@ -8496,8 +8496,8 @@
       "inputType": "complex64_t",
       "outputType": "complex64_t",
       "family": "complex64-same-type",
-      "sha256": "98d9b58ac208c240dbea0ce8d2ad9018d9bd59f46da99d648564a97421f554e4",
-      "sizeBytes": 4084
+      "sha256": "5fe9186672c2e80825f9936a8a782d1f75cbdc8a65e71a330eee7a7d3e3b37dc",
+      "sizeBytes": 4626
     },
     {
       "entryPoint": "v_Tanhfloat16float16",
@@ -8507,8 +8507,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "958f11d501844253fcada5eacc0b864b02329d12d31157d5e39d6978e6be02bf",
-      "sizeBytes": 3758
+      "sha256": "1791d84559c2c729e2ad86fb90f03d7ae2bd777f4e9396b97a6ea1813caba826",
+      "sizeBytes": 4434
     },
     {
       "entryPoint": "v_Tanhfloat32float32",
@@ -8518,8 +8518,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "b536b9f0cf26a36cc79ad19f075dc1656fec1c2f0f42ae873a70be2ade612f0a",
-      "sizeBytes": 3492
+      "sha256": "83f3e7305da9472897fd8dbd1f7924973893fb2b4e302668059104fb05d8c563",
+      "sizeBytes": 4034
     },
     {
       "entryPoint": "v_ToFP8bfloat16uint8",
@@ -9827,8 +9827,8 @@
       "inputType": "uint32_t",
       "outputType": "uint32_t",
       "family": "uint32-same-type",
-      "sha256": "292019b00e92ad69d79aa02722f8cafb25439974ecb0bbd2286968e2cdf6adce",
-      "sizeBytes": 7747
+      "sha256": "c4e9c6c7fd382e93740868940201e4d727a16b11831b818e8407d257d32f6160",
+      "sizeBytes": 7820
     },
     {
       "entryPoint": "vn_Signuint8uint8",
@@ -9882,8 +9882,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "6f677b04fbdf0506f9422c3196613719c0309e30c56b0a48ca2e7ddd5ea34b7a",
-      "sizeBytes": 4538
+      "sha256": "a8aa83d2d9af590aeabee804cfb39e7b7fa0500e6f8025d46c00e65f2071629d",
+      "sizeBytes": 4918
     },
     {
       "entryPoint": "vn_Sinhfloat16float16",
@@ -9893,8 +9893,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "d7643f7e30e1869e35c15195876e11b2ca7b446446812e3c567d8e83b8d7b4fd",
-      "sizeBytes": 4104
+      "sha256": "3256ebda8352c984c6e850aaee92df2c96fb53224b2e1ee7adf8650226561b27",
+      "sizeBytes": 4618
     },
     {
       "entryPoint": "vn_Sinhfloat32float32",
@@ -9904,8 +9904,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "502d61712074ef221cc9e5a0b631d127b251962dd288478e3343128102a6860d",
-      "sizeBytes": 3808
+      "sha256": "ad4cb709cd0d8d3cdcd59c3a67e2375b5623506135712576dfecd44f285c8804",
+      "sizeBytes": 4188
     },
     {
       "entryPoint": "vn_Sqrtbfloat16bfloat16",
@@ -10091,8 +10091,8 @@
       "inputType": "bfloat16_t",
       "outputType": "bfloat16_t",
       "family": "bfloat16-same-type",
-      "sha256": "275c9ecd8a9f0b865efbf4f2ae1685774dd846853ed474407a336a2030f43e66",
-      "sizeBytes": 4538
+      "sha256": "315003b8de4ad7a53d29abacba51bc2696f67984bade0b72b299ef32ec23c3fb",
+      "sizeBytes": 5080
     },
     {
       "entryPoint": "vn_Tanhfloat16float16",
@@ -10102,8 +10102,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "0a4e905541d37134db2474249a58affe586e23bc46a0e1978662e9b6e53a8bb0",
-      "sizeBytes": 4104
+      "sha256": "7d44fcb499c7135e70d451ab619ee70673416f36e22666d726264dc3239ce9b8",
+      "sizeBytes": 4780
     },
     {
       "entryPoint": "vn_Tanhfloat32float32",
@@ -10113,8 +10113,8 @@
       "inputType": "float",
       "outputType": "float",
       "family": "float32-same-type",
-      "sha256": "c6158d899c5dfbfeaf9934bb048015893fe2b7a76857f33ffd06e96507c9a45c",
-      "sizeBytes": 3808
+      "sha256": "4442817af53a5c4cabc6f806f1faf137af71da58978df1980cc595f58858bc59",
+      "sizeBytes": 4350
     },
     {
       "entryPoint": "vn_ToFP8bfloat16uint8",
@@ -10226,6 +10226,19 @@
         "nativeCompiledEntryCount": 46,
         "byteIdenticalDxilChangedEntryCount": 0,
         "conversionModelInputCount": 4294967296,
+        "unchangedSourceAndInterfaceContracts": true,
+        "numericalExecution": false,
+        "fullUpstreamSuite": false
+      },
+      {
+        "reason": "Keep precise hyperbolic signs, exact self-differences and precise free complex operators in HLSL.",
+        "previousContractSha256": "95febabb5aaf38ae7f75ddae8a00cf14f07d1e0110124851ac7f037c5e414e1e",
+        "changedEntryCount": 91,
+        "unaffectedEntryCount": 786,
+        "reviewedBodyCount": 91,
+        "nativeCompiledChangedEntryCount": 91,
+        "preciseHyperbolicChangedEntryCount": 30,
+        "freeComplexOperatorChangedEntryCount": 61,
         "unchangedSourceAndInterfaceContracts": true,
         "numericalExecution": false,
         "fullUpstreamSuite": false

@@ -57,6 +57,15 @@ METAL_PRECISE_MATH_FUNCTIONS = frozenset(
 _FAST_PREFIXES = ("metal::fast::", "fast::")
 _PRECISE_PREFIXES = ("metal::precise::", "precise::")
 
+# The Metal frontend lowers C++ free arithmetic operators, such as those of
+# MLX's complex_t, to helpers whose CrossGL names start with these prefixes.
+# Their bodies are IEEE arithmetic in Metal's -fno-fast-math build, also when
+# an operand is a constant whose zero components target compilers fold away.
+METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES = tuple(
+    f"crosstl_metal_operator_{label}__"
+    for label in ("add", "subtract", "multiply", "divide", "modulo", "negate")
+)
+
 
 def _namespaced_operation(name, prefixes, functions):
     text = str(name).lstrip(":")

@@ -2235,7 +2235,7 @@ The current harness verifies:
   at the same legacy reference revision to OpenGL. The schema-v2
   `contracts/unary.opengl-translation.json` contract pins every standalone
   `main` artifact across the same five shapes, 37 operators, 20 type pairs,
-  1,243 materializations, and 3,363 reflected resources, totaling 5,256,586
+  1,243 materializations, and 3,363 reflected resources, totaling 5,316,552
   generated GLSL bytes. The references incorporate reviewed scalar/vector
   conversions and numeric helpers; every complete shader body and host
   interface is compared before accepting an identity change. The
@@ -2246,6 +2246,16 @@ The current harness verifies:
   and pass NaN through, `fma` through a `precise` result and `cexpf.h`'s
   `x - x` through a `precise` difference, since Mesa otherwise loses the sign
   of zero, turns `tanh(NaN)` into -1, splits `fma` and folds `x - x` to zero.
+  A further refresh re-pins 68 artifacts for Mesa 25.2's IEEE folds: bfloat
+  `precise::` `sinh`, `tanh`, `asinh` and `atanh` keep their helpers, `log1p`'s
+  `1 + x` locals that feed an equality test are `precise`, so Mesa no longer
+  rewrites `(1 + x) == 1` as `x == 0`, complex `log1p` calls a canonical
+  `atan2` that keeps the sign of a zero `y`, and MLX's free complex operators
+  settle zero operands with integer tests before a `precise` IEEE operation,
+  because Mesa folds `0 * x` to +0 and `x + 0` to `x` even under `precise`.
+  The five uint32 `Sign` artifacts change too: `Sign` has a non-template
+  `uint32_t` overload, so they also carry its `complex64_t` overload and
+  those operators.
   Every current artifact compiles and passes
   SPIR-V validation. These math corrections are not predecessor-equivalence
   claims, and whole-family numerical parity remains unproven. Translation
@@ -2313,6 +2323,14 @@ The current harness verifies:
   `float(...)` constructors reconstructs all 46 accepted sources; old and new
   bodies compile with warnings fatal and their DXIL differs. An exhaustive model
   of the helper matches correctly rounded conversion for all 2^32 inputs.
+  A later review updates 91 bodies, bringing the source total to 5,335,152
+  bytes: 30 float16, float32 and bfloat `precise::` Sinh and Tanh bodies call
+  helpers that keep the operand's sign at zero, pass NaN through and saturate
+  Tanh at the binary32 rounding threshold (WARP returns +0 for `sinh(-0)` and
+  NaN for `tanh(x)` once `exp(2|x|)` overflows), complex Exp-based bodies
+  keep `cexpf.h`'s `y - y` as an exact difference, and complex bodies return
+  MLX's free complex operators through `precise` results, so DXC no longer
+  folds the zero components of complex constants.
   All 877 current artifacts compile with warnings fatal.
   Source pins, classifications, materializations, resource bindings and dispatch
   contracts remain unchanged. The required Windows Square and ArcCos numerical tests retain
@@ -2462,7 +2480,7 @@ The current harness verifies:
   `contracts/binary.opengl-translation.json` contract pins every standalone
   `main` artifact across all 18 shapes, 11 templates, 24 operators, 25 type
   pairs, 6,026 materializations, and 19,106 reflected resources, totaling
-  18,629,638 generated GLSL bytes. Seven explicit
+  18,740,485 generated GLSL bytes. Seven explicit
   host/runtime index-range preconditions bound `offset + i`, `a_idx`, `b_idx`,
   `out_idx`, `out_idx++`, `idx.x`, and `idx.y` to signed 32-bit OpenGL index
   space; they are portability promises, not inferred or runtime-enforced
@@ -2582,7 +2600,7 @@ The current harness verifies:
   `contracts/reduce.opengl-translation.json` contract spans the same 39 exact
   ABI shapes, nine kernel templates, six operator families, 44 concrete
   operator types, and 13 input/output types. It pins 9,216 exact
-  materializations, 45,931,388 generated GLSL bytes, and 25,088
+  materializations, 45,932,130 generated GLSL bytes, and 25,088
   resources across scalar-layout-aware one- through twelve-resource target ABIs.
   Complete source comparisons and strict compiler checks cover every entry.
   The latest review reconstructs every previous source identity and verifies
@@ -2593,6 +2611,11 @@ The current harness verifies:
   64-bit integer extension when narrowing a wide literal.
   Resource declarations are unchanged. The 156 complex-buffer reference updates
   add explicit scalar-layout metadata rather than changing buffer storage.
+  A later review re-pins the 76 complex64 sum and product sources outside
+  `init` for Mesa 25.2's IEEE folds: MLX's free complex operators settle zero
+  operands with integer tests before a `precise` operation, because Mesa folds
+  `0 * x` to +0 and `x + 0` to `x` even under `precise`. All 76 compile and
+  validate, and every other source is unchanged.
   Twenty-one explicit host/runtime index-range preconditions bound the source
   pointer and output expressions required by wide-index shapes to signed 32-bit
   OpenGL index space; they are deployment promises rather than inferred or
@@ -2672,7 +2695,7 @@ The current harness verifies:
   materialization, workgroup metadata, and reflected ABI, and compile with
   checksum-pinned DXC using `-enable-16bit-types -WX -T cs_6_2 -E CSMain`,
   requiring 2,396 non-empty DXIL modules. The reviewed references total
-  37,811,091 HLSL bytes and 24,236,412 DXIL bytes. Source references preserve
+  37,727,715 HLSL bytes and 24,201,740 DXIL bytes. Source references preserve
   the original integer-product grouping. The subsequent half-selection review
   reproduces all 78 previous half minimum/maximum sources and DXIL identities,
   compares complete bodies and interfaces, and updates 76 changed references;
@@ -2694,6 +2717,11 @@ The current harness verifies:
   The other 2,292 sources are unchanged, and 71 fresh local translations
   independently reproduce the retained sources. All materialization and
   resource-interface identities are unchanged.
+  A further review updates the 76 complex64 sum and product sources outside
+  `init`: MLX's free complex operators return `precise` results, as in the
+  binary family, so DXC no longer folds the zero components of complex
+  constants. Checksum-pinned DXC recompiles all 76 with warnings fatal, and
+  their DXIL identities are re-pinned.
   This records complete
   translation, reflection and compiler coverage for this historical HLSL corpus,
   not numerical execution or MLX host runtime redirection. Other target reference
@@ -5298,7 +5326,7 @@ standalone OpenGL ``main`` artifacts. The schema-v2
 [`contracts/binary.opengl-translation.json`](contracts/binary.opengl-translation.json)
 contract preserves all 18 shapes, 11 templates, 24 operators, 25 type pairs,
 and 6,026 exact materializations while pinning
-18,629,638 generated GLSL bytes and 19,106 reflected
+18,740,485 generated GLSL bytes and 19,106 reflected
 resources. Scalar artifacts expose three storage buffers; size-bounded vector
 forms add an entry-scoped uniform block. One-dimensional generalized forms add
 entry-scoped stride blocks, fixed two- and three-dimensional forms expose stride
@@ -5324,7 +5352,13 @@ be non-empty. All known changed binary references have been reviewed against
 their exact accepted predecessors. Of the sources, 3,999 remain unchanged and
 123 incorporate power-domain, complex magnitude or source-width rounding
 corrections. All 4,122 compile and validate; complete source comparisons and
-reflection checks preserve every materialization and resource binding. The
+reflection checks preserve every materialization and resource binding. A
+later review re-pins 159 sources for Mesa 25.2's IEEE folds: the 105 complex64
+Add, Subtract, Multiply, Divide, Remainder, Power and LogAddExp sources route
+MLX's free complex operators through helpers that settle zero operands with
+integer tests before a `precise` operation, and the 54 float32, float16 and
+bfloat16 LogAddExp sources keep `log1p`'s `1 + x` local `precise` because it
+feeds an equality test. All 159 compile and validate. The
 math corrections are not numerical-equivalence claims. Whole-family numerical
 parity and MLX runtime redirection remain outside this reference review.
 
@@ -5670,7 +5704,7 @@ These compiler-only shards do not require a Windows runner. Direct3D 12
 execution and readback checks remain on Windows; compiling DXIL on Linux is
 not a substitute for those runtime tests.
 
-The current HLSL references total 16,593,273 bytes. Complete comparisons cover
+The current HLSL references total 16,599,843 bytes. Complete comparisons cover
 all 4,122 predecessor and generated bodies, all 21,248 reflected resources,
 and strict compilation of both sets. Adding legal empty-record padding leaves
 4,053 DXIL modules byte-identical. The remaining 69 artifacts incorporate
@@ -5689,7 +5723,11 @@ for an infinite divisor, and for binary16 it keeps -0 where Metal's fmod,
 computed as x - trunc(x / y) * y in binary32, gives +0. The 15 complex64
 Remainder entries round their 64-bit integer quotient lanes to binary32 once,
 because WARP's native conversion rounds twice. All 69 compile with warnings
-fatal. These checks do not establish numerical execution of the complete
+fatal. A further review updates the 90 complex64 Add, Subtract, Multiply,
+Divide, Remainder and LogAddExp sources: MLX's free complex operators now
+return `precise` results, so DXC no longer folds the zero components of
+complex constants out of their products. All 90 compile with warnings fatal.
+These checks do not establish numerical execution of the complete
 binary family.
 
 The complete historical reduction gate covers all 2,396 host-named entries

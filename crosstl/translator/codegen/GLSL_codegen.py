@@ -79,7 +79,10 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
-from ..math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION
+from ..math_namespaces import (
+    METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
+    METAL_MATH_NAMESPACE_ANNOTATION,
+)
 from ..metadata_preconditions import (
     MAX_METADATA_PRECONDITIONS,
     checked_metadata_preconditions,
@@ -2619,6 +2622,8 @@ class GLSLCodeGen:
         self.vertex_input_member_names = set()
         self.current_function_return_type = None
         self.current_glsl_precise_return_type = None
+        self.current_glsl_ieee_operator_arithmetic = False
+        self.current_glsl_exactness_test_local_ids = frozenset()
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         self.glsl_atomic_fence_stage = None
@@ -3754,6 +3759,14 @@ class GLSLCodeGen:
 
     def glsl_version_is_es(self, version_line):
         return "es" in str(version_line or "").strip().split()[2:]
+
+    def glsl_version_supports_bit_casts(self):
+        """Return whether floatBitsToUint exists: GLSL 3.30 or GLSL ES 3.00."""
+        version_line = getattr(self, "current_glsl_version_line", None)
+        version_number = self.glsl_version_number(version_line)
+        if version_number is None:
+            return True
+        return version_number >= (300 if self.glsl_version_is_es(version_line) else 330)
 
     def ensure_glsl_int64_support(self, code):
         # Narrowing can retain a wide literal without any wide declarations.
@@ -8315,6 +8328,8 @@ class GLSLCodeGen:
         self.fragment_blend_support_layout_parts = []
         self.current_function_return_type = None
         self.current_glsl_precise_return_type = None
+        self.current_glsl_ieee_operator_arithmetic = False
+        self.current_glsl_exactness_test_local_ids = frozenset()
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         fence_stage_names = self.glsl_stage_names(ast, target_stage) - {None}
@@ -19861,6 +19876,8 @@ class GLSLCodeGen:
         )
         previous_function_return_type = self.current_function_return_type
         previous_precise_return_type = self.current_glsl_precise_return_type
+        previous_ieee_operator_arithmetic = self.current_glsl_ieee_operator_arithmetic
+        previous_exactness_test_local_ids = self.current_glsl_exactness_test_local_ids
         previous_local_variable_types = self.local_variable_types
         previous_local_variable_source_types = self.local_variable_source_types
         previous_identifier_aliases = self.current_identifier_aliases
@@ -19896,6 +19913,12 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.local_variable_source_types = {}
         self.current_glsl_precise_return_type = None
+        self.current_glsl_ieee_operator_arithmetic = (
+            self.glsl_is_metal_free_arithmetic_operator(func)
+        )
+        self.current_glsl_exactness_test_local_ids = self.glsl_exactness_test_local_ids(
+            func
+        )
         self.current_identifier_aliases = dict(self.current_identifier_aliases)
         self.prepare_glsl_local_identifier_names(func)
         self.current_glsl_synthetic_local_names = set(
@@ -20112,6 +20135,12 @@ class GLSLCodeGen:
             )
             self.current_function_return_type = previous_function_return_type
             self.current_glsl_precise_return_type = previous_precise_return_type
+            self.current_glsl_ieee_operator_arithmetic = (
+                previous_ieee_operator_arithmetic
+            )
+            self.current_glsl_exactness_test_local_ids = (
+                previous_exactness_test_local_ids
+            )
             self.local_variable_types = previous_local_variable_types
             self.local_variable_source_types = previous_local_variable_source_types
             self.current_identifier_aliases = previous_identifier_aliases
@@ -20428,6 +20457,8 @@ class GLSLCodeGen:
         )
         self.current_function_return_type = previous_function_return_type
         self.current_glsl_precise_return_type = previous_precise_return_type
+        self.current_glsl_ieee_operator_arithmetic = previous_ieee_operator_arithmetic
+        self.current_glsl_exactness_test_local_ids = previous_exactness_test_local_ids
         self.local_variable_types = previous_local_variable_types
         self.local_variable_source_types = previous_local_variable_source_types
         self.current_generic_function_substitutions = (
@@ -29934,7 +29965,9 @@ class GLSLCodeGen:
         parts = []
         if "const" in qualifiers:
             parts.append("const")
-        if "precise" in qualifiers:
+        if "precise" in qualifiers or id(node) in getattr(
+            self, "current_glsl_exactness_test_local_ids", ()
+        ):
             parts.append("precise")
         parts.extend(
             qualifier
@@ -33256,6 +33289,10 @@ float {name}(int64_t value) {{
                 f"    precise {value_type} result = left - right;\n"
                 "    return result;\n}\n"
             )
+        if operation.startswith("ieee-"):
+            return self.generate_glsl_ieee_operator_helper(name, operation)
+        if operation == "atan2":
+            return self.generate_glsl_atan2_helper(name, value_type, width)
         # str.removeprefix needs Python 3.9; the library still supports 3.8.
         builtin = (
             operation[len("precise-") :]
@@ -33276,12 +33313,100 @@ float {name}(int64_t value) {{
             f"    return {nan};\n}}\n"
         )
 
+    def generate_glsl_ieee_operator_helper(self, name, operation):
+        """Binary32 arithmetic whose zero operands survive Mesa's folding."""
+        operator = {
+            "ieee-sum": "+",
+            "ieee-difference": "-",
+            "ieee-product": "*",
+            "ieee-quotient": "/",
+        }[operation]
+        if operation in {"ieee-sum", "ieee-difference"}:
+            # Two zeros sum to -0 only when both are -0 (round to nearest).
+            right_sign = (
+                "rightBits" if operation == "ieee-sum" else "(rightBits ^ 0x80000000u)"
+            )
+            zero = (
+                "    if (((leftBits | rightBits) & 0x7fffffffu) == 0u) {\n"
+                f"        return uintBitsToFloat(leftBits & {right_sign});\n"
+                "    }\n"
+            )
+        elif operation == "ieee-product":
+            zero = (
+                "    uint leftMagnitude = leftBits & 0x7fffffffu;\n"
+                "    uint rightMagnitude = rightBits & 0x7fffffffu;\n"
+                "    if (leftMagnitude == 0u || rightMagnitude == 0u) {\n"
+                "        uint other = leftMagnitude == 0u ? rightMagnitude : leftMagnitude;\n"
+                "        return uintBitsToFloat(other >= 0x7f800000u\n"
+                "            ? 0x7fc00000u : (leftBits ^ rightBits) & 0x80000000u);\n"
+                "    }\n"
+            )
+        else:
+            zero = (
+                "    uint rightMagnitude = rightBits & 0x7fffffffu;\n"
+                "    if ((leftBits & 0x7fffffffu) == 0u) {\n"
+                "        return uintBitsToFloat(\n"
+                "            rightMagnitude == 0u || rightMagnitude > 0x7f800000u\n"
+                "            ? 0x7fc00000u : (leftBits ^ rightBits) & 0x80000000u);\n"
+                "    }\n"
+            )
+        return (
+            f"float {name}(float left, float right) {{\n"
+            "    uint leftBits = floatBitsToUint(left);\n"
+            "    uint rightBits = floatBitsToUint(right);\n"
+            f"{zero}"
+            f"    precise float result = left {operator} right;\n"
+            "    return result;\n}\n"
+        )
+
+    def generate_glsl_atan2_helper(self, name, value_type, width):
+        """``atan2`` with C99 Annex F zeros, infinities and NaN on binary32."""
+        if width != 1:
+            scalar = self.glsl_ieee_helper_name("atan2", "float")
+            lanes = ", ".join(f"{scalar}(y.{c}, x.{c})" for c in "xyzw"[:width])
+            return (
+                f"{value_type} {name}({value_type} y, {value_type} x) {{\n"
+                f"    return {value_type}({lanes});\n}}\n"
+            )
+        # GLSL leaves atan(y, x) undefined at y = x = 0, and Mesa drops the
+        # sign of a zero y; integer tests settle every exactly defined case
+        # and leave the others to the builtin.
+        return f"""float {name}(float y, float x) {{
+    uint yBits = floatBitsToUint(y);
+    uint xBits = floatBitsToUint(x);
+    uint yMagnitude = yBits & 0x7fffffffu;
+    uint xMagnitude = xBits & 0x7fffffffu;
+    uint sign = yBits & 0x80000000u;
+    bool negativeX = (xBits & 0x80000000u) != 0u;
+    if (yMagnitude > 0x7f800000u || xMagnitude > 0x7f800000u) {{
+        return uintBitsToFloat(0x7fc00000u);
+    }}
+    if (yMagnitude == 0u) {{
+        return uintBitsToFloat(sign | (negativeX ? 0x40490fdbu : 0u));
+    }}
+    if (xMagnitude == 0u) {{
+        return uintBitsToFloat(sign | 0x3fc90fdbu);
+    }}
+    if (yMagnitude == 0x7f800000u) {{
+        uint angle = xMagnitude == 0x7f800000u
+            ? (negativeX ? 0x4016cbe4u : 0x3f490fdbu) : 0x3fc90fdbu;
+        return uintBitsToFloat(sign | angle);
+    }}
+    if (xMagnitude == 0x7f800000u) {{
+        return uintBitsToFloat(sign | (negativeX ? 0x40490fdbu : 0u));
+    }}
+    return atan(y, x);
+}}
+"""
+
     def generate_glsl_metal_math_helpers(self):
         helpers = []
         for name, operation, value_type, condition_type, width in sorted(
             self.required_glsl_metal_math_helpers
         ):
-            if operation in {"fma", "difference"} or operation.startswith("precise-"):
+            if operation in {"fma", "difference", "atan2"} or operation.startswith(
+                ("precise-", "ieee-")
+            ):
                 helpers.append(
                     self.generate_glsl_ieee_math_helper(
                         name, operation, value_type, width
@@ -38403,6 +38528,12 @@ complex64_t crossgl_complex64_mod_assign(
                     return self.glsl_apply_narrow_float_contract(
                         difference, self.glsl_source_expression_type(expr), expr
                     )
+            if self.current_glsl_ieee_operator_arithmetic:
+                ieee_arithmetic = self.generate_glsl_ieee_operator_arithmetic(
+                    expr, op, left, right
+                )
+                if ieee_arithmetic is not None:
+                    return ieee_arithmetic
             return self.glsl_apply_narrow_float_contract(
                 f"({left} {op} {right})", self.glsl_source_expression_type(expr), expr
             )
@@ -39932,10 +40063,20 @@ complex64_t crossgl_complex64_mod_assign(
             if len(args) != 1:
                 return None
             operation = f"precise-{func_name}"
+        elif func_name == "atan2":
+            if len(args) != 2 or not self.glsl_version_supports_bit_casts():
+                return None
+            operation = "atan2"
         else:
             return None
         info = self.glsl_ieee_value_info(args)
         if info is None or (operation != "fma" and info["bits"] != 32):
+            return None
+        if operation == "atan2" and any(
+            self.glsl_narrow_float_width(self.glsl_source_expression_type(arg))
+            is not None
+            for arg in args
+        ):
             return None
         value_type = info["mapped"]
         rendered = [
@@ -39945,6 +40086,14 @@ complex64_t crossgl_complex64_mod_assign(
         self.required_glsl_metal_math_helpers.add(
             (helper_name, operation, value_type, "", info["width"])
         )
+        if operation == "atan2":
+            if info["width"] != 1:
+                # Vector lanes call the scalar helper.
+                scalar_name = self.glsl_ieee_helper_name("atan2", "float")
+                self.required_glsl_metal_math_helpers.add(
+                    (scalar_name, "atan2", "float", "", 1)
+                )
+            return f"{helper_name}({', '.join(rendered)})"
         # Like the builtin it replaces, a helper computes in the physical float
         # type, so a unary call's logical half or bfloat16 result is rounded.
         return self.glsl_apply_narrow_float_contract(
@@ -39970,6 +40119,136 @@ complex64_t crossgl_complex64_mod_assign(
             (helper_name, "difference", info["mapped"], "", info["width"])
         )
         return f"{helper_name}({left}, {right})"
+
+    # Mesa folds a product with a constant zero factor to +0, 0.0 / x to +0,
+    # x + 0.0 to x and 0.0 - x to -x, also when the operation is precise.
+    # IEEE 754 keeps signed zeros and gives NaN for 0 * inf and 0 / 0, and
+    # Metal's -fno-fast-math build computes MLX's complex operators that way,
+    # also for ArcTan's i * x and (1 / 2i) * log.  Integer tests of the
+    # operand bits survive constant folding, so these helpers settle zero
+    # operands themselves and leave every other operand to the operation.
+    GLSL_IEEE_OPERATOR_HELPERS = {
+        "+": "ieee-sum",
+        "-": "ieee-difference",
+        "*": "ieee-product",
+        "/": "ieee-quotient",
+    }
+
+    def glsl_is_metal_free_arithmetic_operator(self, func):
+        """Return whether ``func`` is a Metal free arithmetic operator on floats."""
+        name = str(getattr(func, "name", "") or "")
+        if not name.startswith(METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES):
+            return False
+        return_type = self.type_name_string(getattr(func, "return_type", None))
+        member_types = list(self.glsl_struct_member_types(return_type).values()) or [
+            return_type
+        ]
+        for member_type in member_types:
+            info = self.glsl_value_type_info(member_type)
+            if (
+                info is None
+                or info["family"] != "float"
+                or self.glsl_narrow_float_width(member_type) is not None
+            ):
+                return False
+        return True
+
+    def generate_glsl_ieee_operator_arithmetic(self, expr, op, left, right):
+        """Keep a Metal free operator's binary32 scalar arithmetic IEEE-exact."""
+        operation = self.GLSL_IEEE_OPERATOR_HELPERS.get(op)
+        if operation is None:
+            return None
+        operands = [expr.left, expr.right]
+        info = self.glsl_ieee_value_info(operands)
+        if (
+            info is None
+            or info["bits"] != 32
+            or info["width"] != 1
+            or any(
+                self.glsl_narrow_float_width(self.glsl_source_expression_type(value))
+                is not None
+                for value in operands
+            )
+        ):
+            return None
+        value_type = info["mapped"]
+        helper_name = self.glsl_ieee_helper_name(operation, value_type)
+        self.required_glsl_metal_math_helpers.add(
+            (helper_name, operation, value_type, "", 1)
+        )
+        return f"{helper_name}({left}, {right})"
+
+    def glsl_exactness_test_local_ids(self, function):
+        """Ids of binary32 locals whose only value is a sum tested for equality.
+
+        MLX's ``log1p`` tests whether rounding absorbed ``x`` with ``float
+        xp1 = 1.0f + x; if (xp1 == 1.0f)`` and divides by ``xp1 - 1.0f``.
+        Mesa rewrites a non-precise ``(a + b) == a`` into ``b == 0`` and
+        ``(1.0f + x) - 1.0f`` into ``x``.  Both NIR rules are inexact-only, so
+        declaring the local ``precise`` keeps its sum, and everything the sum
+        depends on, IEEE-exact.  Only a local assigned once, by its
+        initializer, compares that sum itself; accumulators that are later
+        reassigned, such as an attention kernel's running sum, stay as they
+        are.
+        """
+        body = getattr(function, "body", None)
+        if body is None:
+            return frozenset()
+        declarations = {}
+        compared = set()
+        assignments = {}
+
+        def has_sum(value):
+            return value is not None and any(
+                isinstance(node, BinaryOpNode)
+                and self.map_operator(getattr(node, "op", None)) in {"+", "-"}
+                for node in self.walk_ast(value)
+            )
+
+        for node in self.walk_ast(body):
+            if isinstance(node, VariableNode):
+                declarations.setdefault(node.name, []).append(node)
+                value = getattr(node, "initial_value", None)
+                if value is not None:
+                    assignments.setdefault(node.name, []).append(value)
+            elif isinstance(node, AssignmentNode):
+                target = getattr(node, "target", None)
+                if isinstance(target, IdentifierNode):
+                    # Compound assignments read the local they rewrite.
+                    operator = self.map_operator(getattr(node, "operator", None))
+                    assignments.setdefault(target.name, []).append(
+                        getattr(node, "value", None) if operator == "=" else None
+                    )
+            elif isinstance(node, UnaryOpNode):
+                operand = getattr(node, "operand", None)
+                if isinstance(operand, IdentifierNode) and str(
+                    getattr(node, "operator", "")
+                ) in {"++", "--", "INCREMENT", "DECREMENT"}:
+                    assignments.setdefault(operand.name, []).append(None)
+            elif isinstance(node, BinaryOpNode) and self.map_operator(
+                getattr(node, "op", None)
+            ) in {"==", "!="}:
+                compared.update(
+                    value.name
+                    for value in (node.left, node.right)
+                    if isinstance(value, IdentifierNode)
+                )
+        result = set()
+        for name in compared:
+            found = declarations.get(name, ())
+            values = assignments.get(name, ())
+            if len(found) != 1 or len(values) != 1 or not has_sum(values[0]):
+                continue
+            declared = getattr(found[0], "var_type", None)
+            info = self.glsl_value_type_info(declared)
+            if (
+                info is not None
+                and info["family"] == "float"
+                and info["bits"] == 32
+                and self.glsl_narrow_float_width(declared) is None
+            ):
+                result.add(id(found[0]))
+        return frozenset(result)
 
     def glsl_floating_remainder_helper(self, value_type):
         existing = self.glsl_floating_remainder_helper_names.get(value_type)

@@ -12089,8 +12089,8 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
         "schema_version": 2,
-        "sha256": "c81ca4955c5c8963c9004af0e24365cfc357601ccd5e8397f917b8f57e596ce4",
-        "size_bytes": 317687,
+        "sha256": "aa34ec66b8e2b49680e18c1fbd892ce6f2f2c3aa749d261d6c510e703b65c233",
+        "size_bytes": 317694,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12197,12 +12197,12 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 5256586,
+        "generated_size_bytes_total": 5316552,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3566},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 19002,
+                "sizeBytes": 21355,
             },
         },
     }
@@ -12248,7 +12248,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "all 877 discovered `unary.metal` entries at the same legacy reference revision to OpenGL"
     ) in readme
     assert f"`{CURRENT_MLX_COMMIT}`" in readme
-    assert "5,256,586 generated GLSL bytes" in readme
+    assert "5,316,552 generated GLSL bytes" in readme
     assert "three explicit host/runtime index-range preconditions" in readme
     assert "requires 877 non-empty SPIR-V 1.3 modules" in readme
     guide = " ".join(
@@ -12257,7 +12257,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         .split()
     )
     assert "all 877 historical unary entries to standalone OpenGL" in guide
-    assert "5,256,586 generated GLSL bytes" in guide
+    assert "5,316,552 generated GLSL bytes" in guide
     assert "five disjoint Linux shards" in guide
 
 
@@ -12296,8 +12296,8 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
         "schema_version": 2,
-        "sha256": "95febabb5aaf38ae7f75ddae8a00cf14f07d1e0110124851ac7f037c5e414e1e",
-        "size_bytes": 321846,
+        "sha256": "2295da8b1f55f8f51790e17aee304ea41a72773b3e8ecf29e218343773956b1b",
+        "size_bytes": 322462,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12413,12 +12413,12 @@ def test_unary_directx_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 5303901,
+        "generated_size_bytes_total": 5335152,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
-                "sizeBytes": 18719,
+                "sizeBytes": 19084,
             },
         },
     }

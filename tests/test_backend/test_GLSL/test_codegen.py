@@ -812,8 +812,37 @@ def test_codegen_two_argument_atan_from_khronos_docs_maps_to_crossgl_atan2():
     assert "atan(input.direction.y, input.direction.x)" not in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "float angle = atan(direction.y, direction.x);" in glsl
+    # Binary32 atan2 settles C99 Annex F zeros, infinities and NaN with bit
+    # tests, as on DirectX, and leaves every other operand to atan(y, x).
+    assert "float angle = crossgl_atan2_float(direction.y, direction.x);" in glsl
+    assert "float crossgl_atan2_float(float y, float x) {" in glsl
+    assert "    return atan(y, x);\n}" in glsl
     assert "float slope = atan(direction.y);" in glsl
+
+
+def test_codegen_two_argument_atan_without_bit_casts_keeps_builtin():
+    # floatBitsToUint needs GLSL 3.30, so an older source profile keeps the
+    # builtin; stage I/O layouts may still raise the emitted #version later.
+    code = textwrap.dedent("""
+        #version 150
+
+        in vec2 direction;
+        out vec4 fragColor;
+
+        void main()
+        {
+            float angle = atan(direction.y, direction.x);
+            fragColor = vec4(angle, 0.0, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+    assert "float angle = atan2(input.direction.y, input.direction.x);" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "float angle = atan(direction.y, direction.x);" in glsl
+    assert "crossgl_atan2_float" not in glsl
+    assert "floatBitsToUint" not in glsl
 
 
 def test_codegen_user_defined_two_argument_atan_is_preserved():

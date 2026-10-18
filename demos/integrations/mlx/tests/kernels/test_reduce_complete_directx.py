@@ -54,13 +54,13 @@ REDUCE_DIRECTX_CONTRACT_PATH = (
     / "reduce.directx-translation.json"
 )
 REDUCE_DIRECTX_CONTRACT_SHA256 = (
-    "5eb613d148675271ab2382f031309d1ed02deb77a897976ec3ace88015125d16"
+    "80f420b646b84e90a4061ac04deda925a2846b4ba7c9803b6764d22b0de327d6"
 )
-REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1796236
+REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1796827
 REDUCE_DIRECTX_SPECIALIZATION_COUNT = 9216
 REDUCE_DIRECTX_REFLECTED_RESOURCE_COUNT = 27382
-REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37722167
-REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24198628
+REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37727715
+REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24201740
 REDUCE_DIRECTX_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1976)
 REDUCE_DIRECTX_GENERATED_SIZE_MAXIMUM = (
     "row_reduce_looped_large_5_reduce_mincomplex64",
@@ -325,6 +325,23 @@ def test_reduce_artifact_refresh_preserves_compiled_identities() -> None:
         "numericalReferencesUnchanged": True,
         "numericalExecution": False,
         "fullUpstreamSuite": False,
+        "followupReviews": [
+            {
+                "reason": "Keep precise free complex operators in HLSL.",
+                "previousContractSha256": (
+                    "5eb613d148675271ab2382f031309d1ed02deb77a897976ec3ace88015125d16"
+                ),
+                "changedEntryCount": 76,
+                "unaffectedEntryCount": 2320,
+                "reviewedBodyCount": 76,
+                "nativeCompiledChangedEntryCount": 76,
+                "changedDxilCompilerVersion": "1.9.0.5191",
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalReferencesUnchanged": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+        ],
     }
     complex_entries = [
         entry for entry in REDUCE_DIRECTX_ENTRIES if entry["inputType"] == "complex64_t"
@@ -340,6 +357,15 @@ def test_reduce_artifact_refresh_preserves_compiled_identities() -> None:
     ]
     assert len(unchanged) == 28
     assert len(complex_entries) - len(unchanged) == 128
+    # The follow-up review covers the reductions that apply MLX's free complex
+    # + and * operators; Min and Max compare, and init kernels only store.
+    operator_entries = [
+        entry
+        for entry in complex_entries
+        if entry["operator"] in {"Sum<complex64_t>", "Prod<complex64_t>"}
+        and entry["shape"] != "init"
+    ]
+    assert len(operator_entries) == 76
 
 
 def _shard_parameters():

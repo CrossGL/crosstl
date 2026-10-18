@@ -44,10 +44,10 @@ BINARY_DIRECTX_CONTRACT_PATH = (
     / "binary.directx-translation.json"
 )
 BINARY_DIRECTX_CONTRACT_SHA256 = (
-    "02bc4076db1abd8d68cb6dec457d1b197319c4b0bc47ffa7a891cb17da9e6f3b"
+    "29df27db6344475efa12d0a89acf20915824690c607ef7bb58e7f8a016922a7c"
 )
-BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1473335
-BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 16593273
+BINARY_DIRECTX_CONTRACT_SIZE_BYTES = 1473797
+BINARY_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 16599843
 BINARY_DIRECTX_GENERATED_SIZE_MINIMUM = ("ss_Addint32", 2784)
 BINARY_DIRECTX_GENERATED_SIZE_MAXIMUM = ("gn4large_Remainderfloat16", 21017)
 INDEX_RANGE_ASSERTIONS = (
@@ -543,6 +543,19 @@ def test_binary_atan2_artifact_refresh_preserves_corpus_scope():
                 "nativeCompiledChangedEntryCount": 69,
                 "remainderProfileChangedEntryCount": 54,
                 "wideIntegerConversionChangedEntryCount": 15,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+            {
+                "reason": "Keep precise free complex operators in HLSL.",
+                "previousContractSha256": (
+                    "02bc4076db1abd8d68cb6dec457d1b197319c4b0bc47ffa7a891cb17da9e6f3b"
+                ),
+                "changedEntryCount": 90,
+                "unaffectedEntryCount": 4032,
+                "reviewedBodyCount": 90,
+                "nativeCompiledChangedEntryCount": 90,
                 "unchangedSourceAndInterfaceContracts": True,
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,

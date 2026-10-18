@@ -1353,8 +1353,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "c81ca4955c5c8963c9004af0e24365cfc357601ccd5e8397f917b8f57e596ce4",
-      "size_bytes": 317687,
+      "sha256": "aa34ec66b8e2b49680e18c1fbd892ce6f2f2c3aa749d261d6c510e703b65c233",
+      "size_bytes": 317694,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1484,7 +1484,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 5256586,
+      "generated_size_bytes_total": 5316552,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint32int32",
@@ -1492,7 +1492,7 @@
         },
         "maximum": {
           "entryPoint": "gn4large_ArcTancomplex64complex64",
-          "sizeBytes": 19002
+          "sizeBytes": 21355
         }
       }
     },
@@ -1548,8 +1548,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
       "schema_version": 2,
-      "sha256": "95febabb5aaf38ae7f75ddae8a00cf14f07d1e0110124851ac7f037c5e414e1e",
-      "size_bytes": 321846,
+      "sha256": "2295da8b1f55f8f51790e17aee304ea41a72773b3e8ecf29e218343773956b1b",
+      "size_bytes": 322462,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -1718,7 +1718,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 5303901,
+      "generated_size_bytes_total": 5335152,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint32int32",
@@ -1726,7 +1726,7 @@
         },
         "maximum": {
           "entryPoint": "gn4large_ArcTancomplex64complex64",
-          "sizeBytes": 18719
+          "sizeBytes": 19084
         }
       }
     },
@@ -2121,8 +2121,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "1858abaf2456049ac894bdbbdf52940394b8a6dbdd889a0c1a98b1385e78d3cc",
-      "size_bytes": 1467888,
+      "sha256": "4a722a2e285899f6255117007e1f4c289a2a9e5c69ae75b59f025334f996dfff",
+      "size_bytes": 1467897,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2245,7 +2245,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 18629638,
+      "generated_size_bytes_total": 18740485,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addint32",
@@ -2308,8 +2308,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.directx-translation.json",
       "schema_version": 2,
-      "sha256": "02bc4076db1abd8d68cb6dec457d1b197319c4b0bc47ffa7a891cb17da9e6f3b",
-      "size_bytes": 1473335,
+      "sha256": "29df27db6344475efa12d0a89acf20915824690c607ef7bb58e7f8a016922a7c",
+      "size_bytes": 1473797,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2438,7 +2438,7 @@
       "dispatch_metadata_shape_count": 9
     },
     "artifacts": {
-      "generated_size_bytes_total": 16593273,
+      "generated_size_bytes_total": 16599843,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addint32",
@@ -3121,8 +3121,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "b8e512973227f2c815d685af4ed2ca17ce08e04df5a8587fb4f35090eace7310",
-      "size_bytes": 1500973,
+      "sha256": "178d5a67b52298bb397399fa79037985823254e324881ae7dd6bb256ba72fd6b",
+      "size_bytes": 1500974,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -3295,15 +3295,15 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 45865668,
+      "generated_size_bytes_total": 45932130,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_minbool_",
           "sizeBytes": 1331
         },
         "maximum": {
-          "entryPoint": "col_reduce_2pass_large_5_32_32_reduce_mincomplex64",
-          "sizeBytes": 44924
+          "entryPoint": "col_reduce_2pass_large_5_32_32_reduce_prodcomplex64",
+          "sizeBytes": 45499
         }
       }
     },

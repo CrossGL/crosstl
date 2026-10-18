@@ -16,6 +16,25 @@ operand's sign bit and pass NaN through.  Two further Mesa folds are kept out
 of OpenGL output: every float ``fma`` is computed into a ``precise`` result,
 so it stays one fused operation, and ``x - x`` of one float identifier is a
 ``precise`` difference, so infinities and NaN still give NaN.
+
+Mesa also folds ``0 * x`` to +0, ``0 / x`` to +0, ``x + 0`` to ``x`` and
+``0 - x`` to ``-x`` when the constant zero comes from an inlined complex
+operand (MLX's ArcTan multiplies by ``i``), even for ``precise`` operations.
+Inside Metal free arithmetic operators on binary32, OpenGL output therefore
+computes scalar ``+ - * /`` through helpers whose integer tests settle zero
+operands.  Binary32 ``atan2`` settles NaN, signed zeros and infinities the
+same way (Mesa drops the sign of a zero ``y``), and a binary32 local whose
+only value is a sum and that is an equality operand, such as MLX's ``log1p``
+``xp1``, is declared ``precise`` so ``(1 + x) == 1`` is not rewritten to
+``x == 0``.
+
+The DirectX backend reads the annotation for sinh and tanh, whose DXIL Hsin
+and Htan lose the sign of zero on WARP, which also returns NaN for tanh once
+exp(2|x|) overflows and 1 - 2^-24 for tanh(20).  Their helpers return NaN and
+operands below 2^-12 unchanged, saturate tanh at the first binary32 operand
+that rounds to one, and give the magnitude the operand's sign.  Optimized DXC
+folds ``x - x`` to zero as well, so DirectX also computes it as a ``precise``
+difference.
 """
 
 import json
@@ -211,7 +230,7 @@ def test_crossgl_parser_normalizes_precise_calls():
 
 @pytest.mark.parametrize(
     "target",
-    ["directx", "dx12", "vulkan", "cuda", "hip", "rust", "mojo", "slang", "webgpu"],
+    ["vulkan", "cuda", "hip", "rust", "mojo", "slang", "webgpu"],
 )
 def test_other_targets_ignore_the_precise_namespace(tmp_path, target):
     outputs = [
@@ -393,12 +412,364 @@ def test_opengl_identical_float_difference_is_precise(tmp_path):
     _compile(generated, "opengl", tmp_path)
 
 
-def test_directx_output_is_unchanged_by_the_ieee_rewrites(tmp_path):
-    generated = _translate_text(tmp_path, IEEE_SOURCE, "directx", "ieee.metal")
-    assert "crossgl_fma_" not in generated
-    assert "crossgl_difference_" not in generated
-    assert "(a - a)" in generated
+# MLX's complex_t operators (complex.h) and binary32 log1p (utils.h), applied
+# to the constants that MLX's ArcTan multiplies by: i and a zero imaginary part.
+FREE_OPERATOR_KERNEL = """#include <metal_stdlib>
+using namespace metal;
+
+template <typename T>
+struct pair_t {
+  T real;
+  T imag;
+  constexpr pair_t(T real, T imag) thread : real(real), imag(imag) {};
+};
+
+template <typename T>
+constexpr pair_t<T> operator+(pair_t<T> a, pair_t<T> b) {
+  return {a.real + b.real, a.imag + b.imag};
+}
+
+template <typename T>
+constexpr pair_t<T> operator-(T a, pair_t<T> b) {
+  return {a - b.real, -b.imag};
+}
+
+template <typename T>
+constexpr pair_t<T> operator*(pair_t<T> a, pair_t<T> b) {
+  return {a.real * b.real - a.imag * b.imag, a.real * b.imag + a.imag * b.real};
+}
+
+template <typename T>
+constexpr pair_t<T> operator/(pair_t<T> a, pair_t<T> b) {
+  auto denom = b.real * b.real + b.imag * b.imag;
+  auto x = a.real * b.real + a.imag * b.imag;
+  auto y = a.imag * b.real - a.real * b.imag;
+  return {x / denom, y / denom};
+}
+
+inline float mlx_log1p(float x) {
+  float xp1 = 1.0f + x;
+  if (xp1 == 1.0f) {
+    return x;
+  }
+  return x * (metal::log(xp1) / (xp1 - 1.0f));
+}
+
+kernel void ieee_zeros(device const uint* values [[buffer(0)]],
+                       device uint* results [[buffer(1)]],
+                       uint i [[thread_position_in_grid]]) {
+    float a = as_type<float>(values[2u * i]);
+    float b = as_type<float>(values[2u * i + 1u]);
+    pair_t<float> z = pair_t<float>(a, b);
+    pair_t<float> unit = pair_t<float>(0.0f, 1.0f);
+    pair_t<float> zero = pair_t<float>(0.0f, 0.0f);
+    pair_t<float> p = unit * z;
+    pair_t<float> q = z / unit;
+    pair_t<float> r = 0.0f - z;
+    pair_t<float> s = z + zero;
+    float t = metal::atan2(b, a);
+    float l = mlx_log1p(a);
+    float plain = a * 0.0f + b;
+    uint base = 11u * i;
+    results[base] = as_type<uint>(p.real);
+    results[base + 1u] = as_type<uint>(p.imag);
+    results[base + 2u] = as_type<uint>(q.real);
+    results[base + 3u] = as_type<uint>(q.imag);
+    results[base + 4u] = as_type<uint>(r.real);
+    results[base + 5u] = as_type<uint>(r.imag);
+    results[base + 6u] = as_type<uint>(s.real);
+    results[base + 7u] = as_type<uint>(s.imag);
+    results[base + 8u] = as_type<uint>(t);
+    results[base + 9u] = as_type<uint>(l);
+    results[base + 10u] = as_type<uint>(plain);
+}
+"""
+FREE_OPERATOR_OUTPUTS = 11
+
+
+def test_opengl_free_operators_settle_zero_operands_exactly(tmp_path):
+    generated = _translate_text(
+        tmp_path, FREE_OPERATOR_KERNEL, "opengl", "operators.metal"
+    )
+    for operation, operator in (
+        ("sum", "+"),
+        ("difference", "-"),
+        ("product", "*"),
+        ("quotient", "/"),
+    ):
+        helper = generated.split(
+            f"float crossgl_ieee_{operation}_float(float left, float right) {{\n", 1
+        )[1].split("\n}\n", 1)[0]
+        # Integer tests of the operand bits survive Mesa's constant folding;
+        # the remaining operands get the precise operation.
+        assert "uint leftBits = floatBitsToUint(left);" in helper
+        assert f"    precise float result = left {operator} right;" in helper
+    # Two zeros sum to -0 only when both are -0; x - y is x + (-y).
+    assert "return uintBitsToFloat(leftBits & rightBits);" in generated
+    assert "return uintBitsToFloat(leftBits & (rightBits ^ 0x80000000u));" in generated
+    # 0 * inf and 0 / 0 are NaN, other zero products and quotients are signed.
+    assert "? 0x7fc00000u : (leftBits ^ rightBits) & 0x80000000u);" in generated
+    assert (
+        "crossgl_ieee_difference_float(crossgl_ieee_product_float(a.real, b.real), "
+        "crossgl_ieee_product_float(a.imag, b.imag))"
+    ) in generated
+    assert "crossgl_ieee_difference_float(a, b.real), (-b.imag))" in generated
+    assert (
+        "float denom = crossgl_ieee_sum_float(crossgl_ieee_product_float(b.real, "
+        "b.real), crossgl_ieee_product_float(b.imag, b.imag));"
+    ) in generated
+    assert (
+        "crossgl_ieee_quotient_float(x, denom), crossgl_ieee_quotient_float(y, denom)"
+    ) in generated
+    body = generated.split("void main()", 1)[1]
+    # Arithmetic outside the operators keeps the plain GLSL operators.
+    assert "float plain = ((a * 0.0) + b);" in body
+    assert "crossgl_ieee_" not in body
+    _compile(generated, "opengl", tmp_path)
+
+
+def test_opengl_exactness_test_locals_are_precise(tmp_path):
+    generated = _translate_text(
+        tmp_path, FREE_OPERATOR_KERNEL, "opengl", "operators.metal"
+    )
+    # Mesa rewrites a non-precise (1 + x) == 1 into x == 0 and (1 + x) - 1
+    # into x; a precise local keeps MLX's log1p exact for tiny operands.
+    assert (
+        "float mlx_log1p(float x) {\n"
+        "    precise float xp1 = (1.0 + x);\n"
+        "    if ((xp1 == 1.0)) {\n"
+        "        return x;\n"
+        "    }\n"
+        "    return (x * (log(xp1) / (xp1 - 1.0)));\n"
+        "}\n"
+    ) in generated
+    source = _kernel("""    float scaled = x * 2.0f;
+    float shifted = 1.0f + x;
+    half narrow = half(1.0f) + half(x);
+    float u = scaled == 1.0f ? x : shifted - 1.0f;
+    float w = narrow == half(1.0f) ? x : 2.0f;
+    float total = 0.0f;
+    total = total * x + 1.0f;
+    total = metal::max(total, x);
+    float step = x - 1.0f;
+    step += x;
+    float v = total == 0.0f ? x : (step != 0.0f ? 1.0f / total : 2.0f);
+    data[i] = u + w + v;
+""")
+    scoped = _translate_text(tmp_path, source, "opengl", "scoped.metal")
+    body = scoped.split("void main()", 1)[1]
+    # Only binary32 locals whose single value is a sum tested for equality;
+    # a reassigned accumulator compares a later value, not the sum.
+    assert "    float scaled = (x * 2.0);\n" in body
+    assert "    float shifted = (1.0 + x);\n" in body
+    assert "    float total = 0.0;\n" in body
+    assert "    float step = (x - 1.0);\n" in body
+    assert "precise" not in body
+    _compile(scoped, "opengl", tmp_path)
+
+
+def test_opengl_binary32_atan2_is_canonical(tmp_path):
+    generated = _translate_text(
+        tmp_path, FREE_OPERATOR_KERNEL, "opengl", "operators.metal"
+    )
+    helper = generated.split("float crossgl_atan2_float(float y, float x) {\n", 1)[
+        1
+    ].split("\n}\n", 1)[0]
+    # NaN, signed zeros and infinities are settled by integer tests (GLSL
+    # leaves atan(0, 0) undefined and Mesa drops the sign of a zero y); the
+    # builtin computes every other quotient.
+    assert "return uintBitsToFloat(0x7fc00000u);" in helper
+    assert "return uintBitsToFloat(sign | (negativeX ? 0x40490fdbu : 0u));" in helper
+    assert "return uintBitsToFloat(sign | 0x3fc90fdbu);" in helper
+    assert "? (negativeX ? 0x4016cbe4u : 0x3f490fdbu) : 0x3fc90fdbu;" in helper
+    assert helper.endswith("    return atan(y, x);")
+    assert "float t = crossgl_atan2_float(b, a);" in generated
+    source = _kernel("""    float2 tv = atan2(float2(x, 1.0f), float2(1.0f, x));
+    half th = atan2(half(x), half(1.0f));
+    data[i] = tv.y + float(th);
+""")
+    lanes = _translate_text(tmp_path, source, "opengl", "lanes.metal")
+    assert (
+        "vec2 crossgl_atan2_vec2(vec2 y, vec2 x) {\n"
+        "    return vec2(crossgl_atan2_float(y.x, x.x), crossgl_atan2_float(y.y, x.y));\n"
+        "}\n"
+    ) in lanes
+    body = lanes.split("void main()", 1)[1]
+    assert "vec2 tv = crossgl_atan2_vec2(vec2(x, 1.0), vec2(1.0, x));" in body
+    # Binary16 operands keep the builtin and the half rounding contract.
+    assert "atan(crossgl_round_half1(float(x)), 1.0)" in body
+    _compile(lanes, "opengl", tmp_path)
+
+
+def test_atan2_helper_angles_are_the_rounded_binary32_angles():
+    for bits, angle in (
+        (0x40490FDB, math.pi),
+        (0x3FC90FDB, math.pi / 2),
+        (0x4016CBE4, 3 * math.pi / 4),
+        (0x3F490FDB, math.pi / 4),
+    ):
+        assert _bits(angle) == bits, hex(bits)
+    # C99 Annex F, which Python's atan2 follows, for every settled class.
+    special = (0.0, -0.0, 1.0, -1.0, math.inf, -math.inf)
+    for y in special:
+        for x in special:
+            if y in (1.0, -1.0) and x in (1.0, -1.0):
+                continue  # the builtin's case
+            expected = _bits(math.atan2(y, x))
+            assert _atan2_helper_model(y, x) == expected, (y, x)
+    assert _atan2_helper_model(math.nan, 0.0) == 0x7FC00000
+    assert _atan2_helper_model(0.0, -math.nan) == 0x7FC00000
+    assert _atan2_helper_model(2.0, 3.0) is None
+
+
+def _atan2_helper_model(y, x):
+    """crossgl_atan2_float's integer tests; None where the builtin decides."""
+    y_bits, x_bits = _bits(y), _bits(x)
+    y_magnitude, x_magnitude = y_bits & 0x7FFFFFFF, x_bits & 0x7FFFFFFF
+    sign = y_bits & 0x80000000
+    negative_x = bool(x_bits & 0x80000000)
+    if y_magnitude > 0x7F800000 or x_magnitude > 0x7F800000:
+        return 0x7FC00000
+    if y_magnitude == 0:
+        return sign | (0x40490FDB if negative_x else 0)
+    if x_magnitude == 0:
+        return sign | 0x3FC90FDB
+    if y_magnitude == 0x7F800000:
+        if x_magnitude == 0x7F800000:
+            return sign | (0x4016CBE4 if negative_x else 0x3F490FDB)
+        return sign | 0x3FC90FDB
+    if x_magnitude == 0x7F800000:
+        return sign | (0x40490FDB if negative_x else 0)
+    return None
+
+
+DIFFERENCE_KERNEL = """#include <metal_stdlib>
+using namespace metal;
+
+kernel void probe(device uint* data [[buffer(0)]],
+                  uint i [[thread_position_in_grid]]) {
+    float x = as_type<float>(data[5u * i]);
+    float y = x + 1.0f;
+    float2 v = float2(x, y);
+    half h = half(x);
+    int k = int(i);
+    float d = x - x;
+    float e = x - y;
+    float2 f = v - v;
+    half q = h - h;
+    int g = k - k;
+    // Each result is stored on its own: a fast-math consumer could still
+    // assume a finite operand and drop the difference.
+    data[5u * i] = as_type<uint>(d);
+    data[5u * i + 1u] = as_type<uint>(e);
+    data[5u * i + 2u] = as_type<uint>(f.y);
+    data[5u * i + 3u] = uint(as_type<ushort>(q));
+    data[5u * i + 4u] = uint(g);
+}
+"""
+
+
+def test_directx_identical_float_difference_is_precise(tmp_path):
+    generated = _translate_text(
+        tmp_path, DIFFERENCE_KERNEL, "directx", "difference.metal"
+    )
+    # Optimized DXC folds an unqualified x - x to 0 even for inf and NaN.
+    for value_type in ("float", "float2", "float16_t"):
+        assert (
+            f"{value_type} __crossgl_precise_difference_{value_type}("
+            f"{value_type} left, {value_type} right) {{\n"
+            f"    precise {value_type} result = left - right;\n"
+            "    return result;\n}\n"
+        ) in generated
+    body = generated.split("void CSMain(", 1)[1]
+    assert "__crossgl_precise_difference_float(x, x)" in body
+    assert "__crossgl_precise_difference_float2(v, v)" in body
+    assert "__crossgl_precise_difference_float16_t(h, h)" in body
+    assert "(x - y)" in body
+    assert "(k - k)" in body
+    # The OpenGL rewrites stay OpenGL-only.
+    ieee = _translate_text(tmp_path, IEEE_SOURCE, "directx", "ieee.metal")
+    assert "crossgl_fma_" not in ieee
+    assert "__crossgl_precise_difference_float(a, a)" in ieee
     _compile(generated, "directx", tmp_path)
+
+
+def test_directx_precise_sinh_and_tanh_use_exact_helpers(tmp_path):
+    generated = _translate_text(tmp_path, ODD_KERNEL, "directx", "odd.metal")
+    plain = _translate_text(
+        tmp_path,
+        ODD_KERNEL.replace("metal::precise::", "").replace("precise::", ""),
+        "directx",
+        "plain.metal",
+    )
+    body = generated.split("void CSMain(", 1)[1]
+    for operation in ("sinh", "tanh"):
+        helper = f"__crossgl_precise_{operation}_float"
+        assert f"float {helper}(float value) {{" in generated
+        assert f"float4 {helper}4(float4 value) {{" in generated
+        assert f"{helper}(x)" in body
+        assert f"{helper}4(v)" in body
+        assert helper not in plain
+    # NaN and |x| < 2^-12 return the operand itself, signed zeros included;
+    # the magnitude result takes the operand's sign bit.
+    assert (
+        "    if (magnitudeBits > 0x7f800000u || magnitudeBits < 0x39800000u) {\n"
+        "        return value;\n"
+        "    }\n"
+    ) in generated
+    assert "asuint(sinh(asfloat(magnitudeBits))) & 0x7fffffffu" in generated
+    assert "magnitudeBits >= 0x41102cb4u\n        ? 0x3f800000u\n" in generated
+    assert "return asfloat(resultBits | (bits & 0x80000000u));" in generated
+    # Unannotated calls keep the builtins; asinh and atanh keep their exact
+    # inverse-hyperbolic helpers, and the even and other functions stay plain.
+    assert "float p = (sinh(x) + tanh(x));" in body
+    for operation in ("asinh", "atanh"):
+        assert f"__crossgl_{operation}_float(" in body
+        assert f"__crossgl_{operation}_float(" in plain
+        assert f"__crossgl_precise_{operation}" not in generated
+    for operation in ("tan", "cosh", "log2", "log10"):
+        assert f"__crossgl_precise_{operation}_float" not in generated
+    _compile(generated, "directx", tmp_path)
+
+
+def test_directx_precise_helpers_apply_to_narrow_float_operands(tmp_path):
+    source = _kernel("""    half h = half(x);
+    half2 hv = half2(h, -h);
+    bfloat16_t b = bfloat16_t(x);
+    half t = precise::sinh(h);
+    half2 w = precise::tanh(hv);
+    bfloat16_t u = metal::precise::tanh(b);
+    bfloat16_t z = metal::precise::sinh(b);
+    data[i] = float(t) + float(w.y) + float(u) + float(z);
+""")
+    generated = _translate_text(tmp_path, source, "directx", "narrow.metal")
+    body = generated.split("void CSMain(", 1)[1]
+    # Metal's precise:: overloads are binary32: narrow operands widen.
+    assert (
+        "float16_t __crossgl_precise_sinh_float16_t(float16_t value) {\n"
+        "    return (float16_t)__crossgl_precise_sinh_float((float)value);\n}\n"
+    ) in generated
+    assert "(float16_t)__crossgl_precise_tanh_float((float)value.y)" in generated
+    assert "__crossgl_precise_sinh_float16_t(h)" in body
+    assert "__crossgl_precise_tanh_float16_t2(hv)" in body
+    assert "__crossgl_precise_tanh_float(__crossgl_bfloat16_to_float(" in body
+    assert "__crossgl_precise_sinh_float(__crossgl_bfloat16_to_float(" in body
+    _compile(generated, "directx", tmp_path)
+
+
+def test_directx_tanh_saturation_bound_is_the_first_binary32_one():
+    """From 0x41102cb4 on, round-to-nearest binary32 tanh is exactly one."""
+
+    def rounded_tanh(bits):
+        return _float(_bits(math.tanh(_float(bits))))
+
+    assert rounded_tanh(0x41102CB4) == 1.0
+    assert rounded_tanh(0x41102CB3) == _float(0x3F7FFFFF)
+    # |x| < 2^-12 rounds sinh and tanh to x itself.
+    for bits in range(0x397FF000, 0x39800000, 37):
+        value = _float(bits)
+        assert _float(_bits(math.sinh(value))) == value
+        assert _float(_bits(math.tanh(value))) == value
 
 
 # Every special class plus ordinary magnitudes, as (float32 word, half word).
@@ -628,6 +999,80 @@ def test_opengl_odd_functions_keep_sign_of_zero_and_nan_natively(tmp_path):
             )
 
 
+def test_directx_odd_functions_keep_sign_nan_and_saturation_natively(tmp_path):
+    _skip_without_native({"directx"})
+    inputs = _special_inputs()
+    rows = len(inputs) // 2
+    stride = 2 * len(ODD_OPERATIONS)
+    expected = [0] * (stride * rows) + GUARD
+    generated = _translate_text(tmp_path, _gl_odd_source(), "directx", "odd.metal")
+    for operation in ("sinh", "tanh"):
+        assert f"__crossgl_precise_{operation}_float(" in generated
+    actual = _execute(
+        tmp_path / "generated",
+        "directx",
+        generated,
+        inputs,
+        expected,
+        check_outputs=_words,
+        directx_compile_flags=("-enable-16bit-types",),
+        invocations=rows,
+    ).pop("maxUlpError")
+    tanh_index = ODD_OPERATIONS.index("tanh")
+    for row in range(rows):
+        float_operand = _float(inputs[2 * row])
+        half_operand = _half(inputs[2 * row + 1])
+        for index, operation in enumerate(ODD_OPERATIONS):
+            _check_odd_result(
+                operation,
+                half_operand,
+                _half(actual[row * stride + index]),
+                narrow=True,
+            )
+            _check_odd_result(
+                operation,
+                float_operand,
+                _float(actual[row * stride + len(ODD_OPERATIONS) + index]),
+                narrow=False,
+            )
+        # Binary32 tanh is exactly +-1 from |x| = 9.0109138 (WARP's Htan
+        # gives 1 - 2^-24 at 20 and NaN once exp(2|x|) overflows).
+        for operand, word, narrow in (
+            (half_operand, actual[row * stride + tanh_index], True),
+            (
+                float_operand,
+                actual[row * stride + len(ODD_OPERATIONS) + tanh_index],
+                False,
+            ),
+        ):
+            if not math.isnan(operand) and abs(operand) >= 9.0109138:
+                result = _half(word) if narrow else _float(word)
+                assert result == math.copysign(1.0, operand), (operand, result)
+
+
+def test_directx_identical_difference_stays_exact_natively(tmp_path):
+    _skip_without_native({"directx"})
+    inputs = [_bits(value) for row in FMA_ROWS for value in row]
+    expected = [0] * (4 * len(FMA_ROWS)) + GUARD
+    generated = _translate_text(tmp_path, IEEE_SOURCE, "directx", "ieee.metal")
+    assert "__crossgl_precise_difference_float(a, a)" in generated
+    actual = _execute(
+        tmp_path / "generated",
+        "directx",
+        generated,
+        inputs,
+        expected,
+        check_outputs=_words,
+        invocations=len(FMA_ROWS),
+    ).pop("maxUlpError")
+    difference = _fma_results(actual)["difference"]
+    # x - x is NaN for infinities and NaN, and +0 for finite operands.
+    assert math.isnan(difference[2]) and math.isnan(difference[3]), difference
+    for row in (0, 1, 4):
+        assert difference[row] == 0.0, difference
+        assert math.copysign(1.0, difference[row]) == 1.0, difference
+
+
 FMA_ROWS = (
     # A fused product keeps 2^-46, which a split multiply-add rounds away.
     (_float(0x3F800001), _float(0x3F800001), -_float(0x3F800002)),
@@ -730,6 +1175,131 @@ def test_opengl_fma_and_identical_difference_stay_exact_natively(tmp_path):
         encoding="utf-8",
     )
     assert _fma_contract_holds(records["generated"]), records
+
+
+# (a, b) rows for FREE_OPERATOR_KERNEL: signed zeros, infinities, NaN, and
+# operands below half an ulp of one, where MLX's log1p returns x itself.
+FREE_OPERATOR_ROWS = (
+    (0.0, 0.0),
+    (-0.0, 0.0),
+    (0.0, -0.0),
+    (-0.0, -0.0),
+    (-2.0, 3.0),
+    (2.0, -0.0),
+    (-0.0, -3.0),
+    (0.5, 0.25),
+    (-0.5, -0.75),
+    (math.inf, 1.0),
+    (-math.inf, 0.0),
+    (math.inf, math.inf),
+    (-math.inf, -math.inf),
+    (-math.inf, math.inf),
+    (3.0, -math.inf),
+    (math.nan, 1.0),
+    (1.0, math.nan),
+    (1.0e-10, -0.0),
+    (-1.0e-10, math.inf),
+    (_float(0x33800000), 1.0),
+)
+
+
+def _ieee_binary32(operator, left, right):
+    """One correctly rounded binary32 operation on binary32 operands."""
+    if operator == "/":
+        if right == 0.0:
+            if left == 0.0 or math.isnan(left):
+                return math.nan
+            return math.copysign(math.inf, left) * math.copysign(1.0, right)
+        value = left / right
+    else:
+        value = {"+": left + right, "-": left - right, "*": left * right}[operator]
+    return _float(_bits(value))
+
+
+def _free_operator_oracle(a, b):
+    """FREE_OPERATOR_KERNEL's operator results under Metal's -fno-fast-math."""
+
+    def product(x, y):
+        return _ieee_binary32("*", x, y)
+
+    def total(x, y):
+        return _ieee_binary32("+", x, y)
+
+    def difference(x, y):
+        return _ieee_binary32("-", x, y)
+
+    # unit * z, z / unit with unit = (0, 1), 0 - z and z + (0, 0).
+    p = (
+        difference(product(0.0, a), product(1.0, b)),
+        total(product(0.0, b), product(1.0, a)),
+    )
+    denom = total(product(0.0, 0.0), product(1.0, 1.0))
+    q = (
+        _ieee_binary32("/", total(product(a, 0.0), product(b, 1.0)), denom),
+        _ieee_binary32("/", difference(product(b, 0.0), product(a, 1.0)), denom),
+    )
+    r = (difference(0.0, a), -b)
+    s = (total(a, 0.0), total(b, 0.0))
+    return p + q + r + s
+
+
+def _same_binary32(actual_word, expected):
+    if math.isnan(expected):
+        return math.isnan(_float(actual_word))
+    return actual_word == _bits(expected)
+
+
+def test_free_operator_oracle_rejects_the_mesa_folds():
+    # Mesa folds 0 * x to +0, x + 0 to x and 0 - x to -x, even when precise.
+    assert _bits(_free_operator_oracle(-2.0, 0.0)[0]) == 0x80000000  # -0 - 0
+    assert _bits(_free_operator_oracle(-0.0, -3.0)[1]) == 0x80000000  # -0 + -0
+    assert _bits(_free_operator_oracle(-0.0, 0.0)[6]) == 0  # -0 + 0 is +0
+    assert _bits(_free_operator_oracle(0.0, 1.0)[4]) == 0  # 0 - 0 is +0
+    assert math.isnan(_free_operator_oracle(math.inf, 1.0)[0])  # 0 * inf
+    assert not _same_binary32(_bits(0.0), -0.0)
+    assert _same_binary32(0x7FC00001, math.nan)
+
+
+def test_opengl_free_operators_atan2_and_log1p_stay_ieee_natively(tmp_path):
+    _skip_without_native({"opengl"})
+    inputs = [_bits(value) for row in FREE_OPERATOR_ROWS for value in row]
+    rows = len(FREE_OPERATOR_ROWS)
+    expected = [0] * (FREE_OPERATOR_OUTPUTS * rows) + GUARD
+    generated = _translate_text(
+        tmp_path, FREE_OPERATOR_KERNEL, "opengl", "operators.metal"
+    )
+    assert "crossgl_ieee_product_float(" in generated
+    assert "precise float xp1" in generated
+    actual = _execute(
+        tmp_path / "generated",
+        "opengl",
+        generated,
+        inputs,
+        expected,
+        check_outputs=_words,
+        invocations=rows,
+    ).pop("maxUlpError")
+    mismatches = []
+    for row, (a, b) in enumerate(FREE_OPERATOR_ROWS):
+        words = actual[row * FREE_OPERATOR_OUTPUTS : (row + 1) * FREE_OPERATOR_OUTPUTS]
+        for slot, want in enumerate(_free_operator_oracle(a, b)):
+            if not _same_binary32(words[slot], want):
+                mismatches.append(("operator", slot, a, b, hex(words[slot])))
+        settled = _atan2_helper_model(b, a)
+        angle = _float(words[8])
+        if settled is not None:
+            if not _same_binary32(words[8], _float(settled)):
+                mismatches.append(("atan2", a, b, hex(words[8])))
+        elif abs(angle - math.atan2(b, a)) > 1.0e-5 * abs(math.atan2(b, a)):
+            mismatches.append(("atan2", a, b, angle))
+        if not math.isinf(a) and not math.isnan(a) and a > -1.0:
+            if _float(_bits(1.0 + a)) == 1.0:
+                # Rounding absorbed a: MLX returns the operand bit for bit.
+                if words[9] != _bits(a):
+                    mismatches.append(("log1p", a, hex(words[9])))
+            elif abs(_float(words[9]) - math.log1p(a)) > 1.0e-5 * abs(math.log1p(a)):
+                mismatches.append(("log1p", a, _float(words[9])))
+    assert not mismatches, mismatches
 
 
 def test_ci_requires_native_precise_namespace():

@@ -66,6 +66,10 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..math_namespaces import (
+    METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
+    METAL_MATH_NAMESPACE_ANNOTATION,
+)
 from ..metadata_preconditions import (
     checked_metadata_preconditions,
     validate_codegen_metadata_preconditions,
@@ -2305,6 +2309,10 @@ class HLSLCodeGen:
         self.hlsl_wide_integer_reserved_names = set()
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
+        self.required_hlsl_precise_hyperbolic_helpers = set()
+        self.hlsl_precise_hyperbolic_helper_names = {}
+        self.required_hlsl_precise_difference_helpers = set()
+        self.hlsl_precise_difference_helper_names = {}
         self.required_hlsl_atan2_helpers = set()
         self.hlsl_atan2_helper_names = {}
         self.required_hlsl_half_helpers = set()
@@ -3631,6 +3639,10 @@ class HLSLCodeGen:
         self.hlsl_wide_integer_reserved_names = set()
         self.required_hlsl_inverse_hyperbolic_helpers = set()
         self.hlsl_inverse_hyperbolic_helper_names = {}
+        self.required_hlsl_precise_hyperbolic_helpers = set()
+        self.hlsl_precise_hyperbolic_helper_names = {}
+        self.required_hlsl_precise_difference_helpers = set()
+        self.hlsl_precise_difference_helper_names = {}
         self.required_hlsl_atan2_helpers = set()
         self.hlsl_atan2_helper_names = {}
         self.required_hlsl_half_helpers = set()
@@ -4936,6 +4948,8 @@ class HLSLCodeGen:
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_wide_integer_compound_helpers()
         code += self.generate_hlsl_inverse_hyperbolic_helpers()
+        code += self.generate_hlsl_precise_hyperbolic_helpers()
+        code += self.generate_hlsl_precise_difference_helpers()
         code += self.generate_hlsl_atan2_helpers()
         code += self.generate_hlsl_complex64_helpers()
         code += self.generate_hlsl_software_subgroup_helpers()
@@ -8852,6 +8866,213 @@ uint {helper_name}(uint groupIndex) {{
             if value_type != "float"
         )
         return "".join(helpers) + "\n"
+
+    # Metal's precise:: sinh and tanh are odd, IEEE-exact at zeros, NaN and
+    # saturation.  DXIL Hsin and Htan are not on every driver: WARP returns +0
+    # for sinh(-0) and tanh(-0), NaN for tanh of operands whose exp(2|x|)
+    # overflows, and 1 - 2^-24 for tanh(20).
+    HLSL_PRECISE_HYPERBOLIC_NAMES = frozenset({"sinh", "tanh"})
+    HLSL_PRECISE_HYPERBOLIC_TYPE = re.compile(
+        r"(float16_t|float|half|min16float)([234]?)"
+    )
+
+    def hlsl_precise_helper_reserved_names(self):
+        used_names = set(getattr(self, "function_return_types", {}))
+        used_names.update(getattr(self, "global_variable_types", {}))
+        used_names.update(getattr(self, "local_variable_types", {}))
+        used_names.update(getattr(self, "structs_by_name", {}))
+        used_names.update(self.hlsl_trailing_zero_helper_names.values())
+        used_names.update(self.hlsl_inverse_hyperbolic_helper_names.values())
+        used_names.update(self.hlsl_precise_hyperbolic_helper_names.values())
+        used_names.update(self.hlsl_precise_difference_helper_names.values())
+        return used_names
+
+    def hlsl_precise_hyperbolic_helper_name(self, operation, value_type):
+        key = (operation, value_type)
+        helper_name = self.hlsl_precise_hyperbolic_helper_names.get(key)
+        if helper_name is None:
+            used_names = self.hlsl_precise_helper_reserved_names()
+            helper_name = f"__crossgl_precise_{operation}_{value_type}"
+            while helper_name in used_names:
+                helper_name += "_"
+            self.hlsl_precise_hyperbolic_helper_names[key] = helper_name
+        return helper_name
+
+    def generate_hlsl_precise_hyperbolic_call(self, func_name, args, *, call_node=None):
+        """Lower Metal ``precise::sinh``/``tanh`` to sign- and NaN-exact helpers."""
+        if func_name not in self.HLSL_PRECISE_HYPERBOLIC_NAMES or len(args) != 1:
+            return None
+        get_annotation = getattr(call_node, "get_annotation", None)
+        if not callable(get_annotation) or (
+            get_annotation(METAL_MATH_NAMESPACE_ANNOTATION) != "precise"
+        ):
+            return None
+        if func_name in self.global_variable_types or (
+            func_name in self.function_return_types
+            and func_name not in self.hlsl_function_name_aliases
+        ):
+            return None
+        if (
+            self.resolve_hlsl_function_overload(func_name, args, call_node=call_node)
+            is not None
+        ):
+            return None
+        source_type = self.hlsl_source_expression_type(args[0])
+        if source_type is None:
+            return None
+        if self.is_hlsl_bfloat16_type(source_type):
+            self.required_hlsl_precise_hyperbolic_helpers.add((func_name, "float"))
+            helper_name = self.hlsl_precise_hyperbolic_helper_name(func_name, "float")
+            decoded = self.hlsl_bfloat16_to_float_expression(
+                self.generate_expression(args[0])
+            )
+            return self.hlsl_float_to_bfloat16_expression(f"{helper_name}({decoded})")
+        mapped_type = self.map_type(source_type)
+        if self.HLSL_PRECISE_HYPERBOLIC_TYPE.fullmatch(mapped_type or "") is None:
+            return None
+        self.required_hlsl_precise_hyperbolic_helpers.add((func_name, mapped_type))
+        helper_name = self.hlsl_precise_hyperbolic_helper_name(func_name, mapped_type)
+        argument = self.generate_expression_with_expected(args[0], mapped_type)
+        return f"{helper_name}({argument})"
+
+    def hlsl_precise_hyperbolic_scalar_helper(self, operation):
+        helper_name = self.hlsl_precise_hyperbolic_helper_name(operation, "float")
+        if operation == "sinh":
+            magnitude = "asuint(sinh(asfloat(magnitudeBits))) & 0x7fffffffu"
+            comment = ""
+        else:
+            magnitude = (
+                "magnitudeBits >= 0x41102cb4u\n"
+                "        ? 0x3f800000u\n"
+                "        : asuint(tanh(asfloat(magnitudeBits))) & 0x7fffffffu"
+            )
+            comment = (
+                "    // Binary32 tanh rounds to one from |x| = 9.0109138; Htan's\n"
+                "    // exp(2|x|) can overflow first.\n"
+            )
+        # Integer tests are immune to DXC's fast-math folding. NaN keeps its
+        # payload; below 2^-12 both functions round to the operand itself.
+        return (
+            f"float {helper_name}(float value) {{\n"
+            "    uint bits = asuint(value);\n"
+            "    uint magnitudeBits = bits & 0x7fffffffu;\n"
+            "    if (magnitudeBits > 0x7f800000u || magnitudeBits < 0x39800000u) {\n"
+            "        return value;\n"
+            "    }\n"
+            f"{comment}"
+            f"    uint resultBits = {magnitude};\n"
+            "    return asfloat(resultBits | (bits & 0x80000000u));\n"
+            "}\n"
+        )
+
+    def hlsl_precise_hyperbolic_wrapper_helper(self, operation, value_type):
+        helper_name = self.hlsl_precise_hyperbolic_helper_name(operation, value_type)
+        scalar_helper = self.hlsl_precise_hyperbolic_helper_name(operation, "float")
+        scalar_type, lane_text = self.HLSL_PRECISE_HYPERBOLIC_TYPE.fullmatch(
+            value_type
+        ).groups()
+        # Metal's precise:: overloads are binary32: narrow operands widen.
+        if not lane_text:
+            return (
+                f"{value_type} {helper_name}({value_type} value) {{\n"
+                f"    return ({value_type}){scalar_helper}((float)value);\n"
+                "}\n"
+            )
+        arguments = ",\n        ".join(
+            f"({scalar_type}){scalar_helper}((float)value.{component})"
+            for component in "xyzw"[: int(lane_text)]
+        )
+        return (
+            f"{value_type} {helper_name}({value_type} value) {{\n"
+            f"    return {value_type}(\n        {arguments}\n    );\n"
+            "}\n"
+        )
+
+    def generate_hlsl_precise_hyperbolic_helpers(self):
+        required_helpers = getattr(
+            self, "required_hlsl_precise_hyperbolic_helpers", set()
+        )
+        if not required_helpers:
+            return ""
+        operations = sorted({operation for operation, _value_type in required_helpers})
+        helpers = [
+            self.hlsl_precise_hyperbolic_scalar_helper(operation)
+            for operation in operations
+        ]
+        helpers.extend(
+            self.hlsl_precise_hyperbolic_wrapper_helper(operation, value_type)
+            for operation, value_type in sorted(required_helpers)
+            if value_type != "float"
+        )
+        return "".join(helpers) + "\n"
+
+    def hlsl_precise_difference_call(self, expression, left, right):
+        """Keep ``x - x`` exact: optimized DXC folds it to 0, hiding inf and NaN."""
+        if not (
+            isinstance(expression.left, IdentifierNode)
+            and isinstance(expression.right, IdentifierNode)
+            and expression.left.name == expression.right.name
+            and left == right
+        ):
+            return None
+        source_type = self.hlsl_source_expression_type(expression.left)
+        if source_type is None or any(
+            marker in (self.type_name_string(source_type) or "")
+            for marker in ("*", "&")
+        ):
+            return None
+        info = self.hlsl_floating_arithmetic_type_info(source_type)
+        if info is None or info["base_type"] not in {"float", "float16_t"}:
+            return None
+        value_type = info["mapped_type"]
+        helper_name = self.hlsl_precise_difference_helper_names.get(value_type)
+        if helper_name is None:
+            used_names = self.hlsl_precise_helper_reserved_names()
+            helper_name = f"__crossgl_precise_difference_{value_type}"
+            while helper_name in used_names:
+                helper_name += "_"
+            self.hlsl_precise_difference_helper_names[value_type] = helper_name
+        self.required_hlsl_precise_difference_helpers.add(value_type)
+        return f"{helper_name}({left}, {right})"
+
+    def hlsl_is_metal_free_arithmetic_operator(self, func, return_type):
+        """Return whether ``func`` is a Metal free arithmetic operator on floats.
+
+        DXC compiles HLSL with fast-math.  Once such a helper is inlined it
+        folds the zero components of complex constants (ArcTan's ``i`` and
+        ``1 / 2i``) out of the products, so signed zeros differ from Metal's
+        ``-fno-fast-math`` build.  A precise result makes DXC compute it, and
+        every operation it depends on, with IEEE semantics.
+        """
+        name = str(getattr(func, "name", "") or "")
+        if not name.startswith(METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES):
+            return False
+        fields = self.hlsl_struct_constructor_fields(return_type)
+        member_types = (
+            [field_type for _field_name, field_type in fields]
+            if fields is not None
+            else [return_type]
+        )
+        return bool(member_types) and all(
+            (info := self.hlsl_floating_arithmetic_type_info(member_type)) is not None
+            and info["base_type"] in {"float", "float16_t", "half"}
+            for member_type in member_types
+        )
+
+    def generate_hlsl_precise_difference_helpers(self):
+        required_types = getattr(
+            self, "required_hlsl_precise_difference_helpers", set()
+        )
+        helpers = []
+        for value_type in sorted(required_types):
+            helper_name = self.hlsl_precise_difference_helper_names[value_type]
+            helpers.append(
+                f"{value_type} {helper_name}({value_type} left, {value_type} right) {{\n"
+                f"    precise {value_type} result = left - right;\n"
+                "    return result;\n"
+                "}\n"
+            )
+        return "".join(helpers) + ("\n" if helpers else "")
 
     def hlsl_defined_relative_wave_shuffle_helper_name(self, operation, value_type):
         mapped_value_type = self.map_type(value_type)
@@ -13152,7 +13373,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_function_return_type = raw_return_type
         self.current_hlsl_precise_return_type = (
             return_type
-            if return_type != "void" and self.hlsl_has_precise_modifier(func)
+            if return_type != "void"
+            and (
+                self.hlsl_has_precise_modifier(func)
+                or self.hlsl_is_metal_free_arithmetic_operator(func, return_type)
+            )
             else None
         )
         declaration_return_type = (
@@ -25984,6 +26209,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self_comparison = self.hlsl_floating_self_comparison(expr, left, mapped_op)
             if self_comparison is not None:
                 return self_comparison
+            if mapped_op == "-":
+                precise_difference = self.hlsl_precise_difference_call(
+                    expr, left, right
+                )
+                if precise_difference is not None:
+                    return precise_difference
             if self.hlsl_binary_multiply_uses_mul(expr):
                 return f"mul({left}, {right})"
             complex_binary = self.hlsl_complex64_binary_expression(
@@ -26377,6 +26608,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if inverse_hyperbolic_call is not None:
                 return inverse_hyperbolic_call
+
+            precise_hyperbolic_call = self.generate_hlsl_precise_hyperbolic_call(
+                func_name,
+                args,
+                call_node=expr,
+            )
+            if precise_hyperbolic_call is not None:
+                return precise_hyperbolic_call
 
             atan2_call = self.generate_hlsl_atan2_call(func_name, args, call_node=expr)
             if atan2_call is not None:

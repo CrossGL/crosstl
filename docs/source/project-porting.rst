@@ -1350,7 +1350,7 @@ standalone OpenGL ``main`` artifacts at revision
 ``846d176227a0ac13d2667e58d2bb68b322109ab0``. The schema-v2
 ``unary.opengl-translation.json`` contract preserves the same five-shape,
 37-operator, 20-type-pair classification and all 1,243 exact materializations,
-while pinning 5,256,586 generated GLSL bytes and all 3,363 target-reflected
+while pinning 5,316,552 generated GLSL bytes and all 3,363 target-reflected
 resources. Vector artifacts expose read-only input, read-write output, and an
 entry-scoped size uniform block. Gather artifacts expose input, output, shape,
 stride, and the read-only ``ndimBuffer`` storage resource; scalar uses of the
@@ -2811,7 +2811,7 @@ The same selected-entry pipeline translates all 4,122 binary entries to
 standalone OpenGL ``main`` artifacts. The schema-v2
 ``binary.opengl-translation.json`` contract preserves all 18 shapes, 11 kernel
 templates, 24 operators, 25 input/output type pairs, and 6,026 exact
-materializations. It pins 18,629,638 generated GLSL bytes
+materializations. It pins 18,740,485 generated GLSL bytes
 and 19,106 reflected resources across exact three-, four-, five-, and
 seven-resource target interfaces. Scalar forms expose three storage buffers;
 size-bounded forms add an entry-scoped size uniform block; fixed generalized
@@ -2912,7 +2912,7 @@ standalone OpenGL ``main`` artifacts. The compact schema-v2
 ``reduce.opengl-translation.json`` contract preserves the 39 shapes, nine
 kernel templates, six operator families, 44 concrete operator types, and 13
 input/output types while pinning 9,216 exact materializations,
-45,931,388 generated GLSL bytes, and 25,088 resources across
+45,932,130 generated GLSL bytes, and 25,088 resources across
 scalar-layout-aware one- through twelve-resource target ABIs.
 All source bodies and resource interfaces have complete reference comparisons;
 an earlier 85-entry pipeline review covers its edit patterns and ABI shapes.

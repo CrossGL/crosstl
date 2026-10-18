@@ -17389,6 +17389,10 @@ float {scalar}(float value) {{
                 if normalized_parameter in self.metal_source_bfloat_types:
                     value = f"float({value})"
                 arguments.append(value)
+            if metal_precise_math_operation(str(expression.name)) == function_name:
+                # The binary32 call keeps its precise:: annotation for the
+                # backends that honor it, as the float and half calls do.
+                function_name = f"precise::{function_name}"
             rendered = f"{function_name}({', '.join(arguments)})"
         return f"{self.map_type(return_type)}({rendered})"
 
