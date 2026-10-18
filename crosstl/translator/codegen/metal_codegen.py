@@ -11258,7 +11258,7 @@ class MetalCodeGen:
             ):
                 return self.expression_result_type(args[0])
             if (
-                func_name in {"inverseSqrt", "inversesqrt"}
+                func_name in {"inverseSqrt", "inversesqrt", "roundEven"}
                 and args
                 and func_name not in self.user_function_names
             ):
@@ -12887,6 +12887,20 @@ class MetalCodeGen:
                     else "rsqrt"
                 )
                 return f"{rsqrt_name}({arg})"
+            if (
+                func_name == "roundEven"
+                and len(expr.args) == 1
+                and func_name not in self.user_function_names
+            ):
+                # Metal's round() rounds halfway cases away from zero; rint()
+                # rounds them to even in the default rounding mode.
+                arg = self.generate_expression(expr.args[0])
+                rint_name = (
+                    "metal::rint"
+                    if self.metal_function_name_is_shadowed("rint")
+                    else "rint"
+                )
+                return f"{rint_name}({arg})"
             derivative_name = self.METAL_DERIVATIVE_FUNCTION_ALIASES.get(func_name)
             if (
                 derivative_name is not None

@@ -2659,6 +2659,7 @@ class HLSLCodeGen:
             "metal::rint": "round",
             "metal_u3a_u3arint": "round",
             "rint": "round",
+            "roundEven": "round",
             "uintBitsToFloat": "asfloat",
         }
 

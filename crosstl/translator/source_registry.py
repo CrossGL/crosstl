@@ -508,7 +508,10 @@ def _load_opencl():
 
 
 def _reverse_directx(
-    matrix_packing=None, trigonometric_reduction=None, floating_point_contraction=None
+    matrix_packing=None,
+    trigonometric_reduction=None,
+    floating_point_contraction=None,
+    unorm_store_rounding=None,
 ):
     from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
@@ -516,6 +519,7 @@ def _reverse_directx(
         matrix_packing=matrix_packing,
         trigonometric_reduction=trigonometric_reduction,
         floating_point_contraction=floating_point_contraction,
+        unorm_store_rounding=unorm_store_rounding,
     )
 
 

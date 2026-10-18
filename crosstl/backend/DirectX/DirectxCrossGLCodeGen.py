@@ -33,6 +33,7 @@ from .struct_methods import (
     collect_struct_methods,
     method_local_names,
 )
+from .unorm_store_rounding import HLSLUnormStoreRoundingMixin
 
 
 class HLSLSelectOverloadError(ValueError):
@@ -60,7 +61,7 @@ class HLSLIntegerConversionError(ValueError):
         super().__init__(f"Cannot preserve HLSL integer arithmetic: {reason}")
 
 
-class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
+class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin, HLSLUnormStoreRoundingMixin):
     """Serialize DirectX backend AST nodes back into CrossGL source."""
 
     crossgl_reserved_identifiers = frozenset(CROSSGL_KEYWORDS)
@@ -135,6 +136,7 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
         matrix_packing=None,
         trigonometric_reduction=None,
         floating_point_contraction=None,
+        unorm_store_rounding=None,
     ):
         """Create a converter.
 
@@ -167,6 +169,13 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
         matrix products expand into precise helpers in DXC's order of
         operations, since target intrinsics fuse internally. Integer
         operands and operands DXC folds at compile time keep the intrinsic.
+
+        ``unorm_store_rounding`` selects how values stored to storage
+        textures with a ``unorm`` element type become integers. ``"target"``
+        (the default) leaves the conversion to the target.
+        ``"single_precision"`` converts as Direct3D does, scaling in single
+        precision and rounding halfway cases to even, with channel scales the
+        host binds per view (see ``unorm_store_rounding``).
         """
         if matrix_packing is not None and matrix_packing not in self.MATRIX_PACKINGS:
             raise ValueError(
@@ -194,6 +203,16 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
         self.matrix_packing = matrix_packing
         self.trigonometric_reduction = trigonometric_reduction or "exact"
         self.floating_point_contraction = floating_point_contraction or "allowed"
+        if (
+            unorm_store_rounding is not None
+            and unorm_store_rounding not in self.UNORM_STORE_ROUNDINGS
+        ):
+            raise ValueError(
+                "unorm_store_rounding must be one of "
+                f"{', '.join(self.UNORM_STORE_ROUNDINGS)}, "
+                f"got {unorm_store_rounding!r}"
+            )
+        self.unorm_store_rounding = unorm_store_rounding or "target"
         self.reset_precise_arithmetic()
         self.revolution_reduction_types = set()
         self.warp_trigonometric_uses = set()
@@ -3208,6 +3227,9 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
         rendered_value = self.widen_storage_image_value(
             resource_type, value, rendered_value
         )
+        rendered_value = self.unorm_store_value(
+            access.array, resource_type, rendered_value
+        )
         return f"imageStore({image}, {coord}, {rendered_value})"
 
     def storage_image_component_assignment_access(self, expr):
@@ -3339,11 +3361,12 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
         temp = f"_texel{self.storage_image_texel_temp_count}"
         value = self.generate_expression(node.right, is_main)
         indent_text = "    " * indent
+        stored = self.unorm_store_value(access.array, resource_type, temp)
         return (
             f"{self.texel_vector_type(resource_type)} {temp} = "
             f"imageLoad({image}, {coord});\n"
             f"{indent_text}{temp}.{component} {node.operator} {value};\n"
-            f"{indent_text}imageStore({image}, {coord}, {temp});\n"
+            f"{indent_text}imageStore({image}, {coord}, {stored});\n"
         )
 
     def generate_storage_image_atomic_value(self, arg, component_type, is_main):
@@ -4120,6 +4143,7 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
         self.revolution_reduction_types = set()
         self.warp_trigonometric_uses = set()
         self.reset_precise_arithmetic()
+        self.collect_unorm_store_textures(ast)
         self.constant_initializer_depth = 0
         self.hlsl_static_const_initializers = self.collect_static_const_initializers(
             ast
@@ -4238,6 +4262,7 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
         reduction_helpers = (
             self.generate_trigonometric_helpers()
             + self.generate_precise_arithmetic_helpers()
+            + self.generate_unorm_store_declarations()
         )
         if reduction_helpers:
             code = (
