@@ -1078,6 +1078,26 @@ must be unchanged. Metal also runs the unchanged upstream kernels, which the
 translation must match byte for byte. This is a 2,396/17,832 increment; it
 does not run the upstream MLX test suite or redirect the MLX host runtime.
 
+``quantized.current-tree.translation.json`` pins 108 of the 2,052 entries of
+``quantized.metal``: ``affine_quantize`` and ``affine_dequantize`` for float,
+float16 and bfloat16, group sizes 128, 64 and 32 and 2, 3, 4, 5, 6 and 8 bits.
+Quantize's ``simd_min``, ``simd_max`` and ``simd_shuffle_down`` lower to
+32-lane software subgroups on OpenGL and DirectX, Metal's ``round`` keeps its
+halfway-away-from-zero rule, and ``uint8_t`` buffers widen to one 32-bit word
+per byte there. Each target executes 216 dispatches on 64-thread workgroups,
+a row of workgroups and a two-by-two grid that exercises the
+``threads_per_grid`` row stride. Quantize groups make every scale, edge and
+code exact, except an all-zero group (the ``eps`` scale), an all-negative
+group (``w_max`` starts at zero), a positive constant and free dyadic values
+that need correctly rounded float32 division. A lane-level model must write
+every byte once and reproduce MLX's least-significant-bit-first code stream;
+dequantize's power-of-two scales and biases ``-a * scale`` keep every output
+exact in the element type. Every word is compared exactly, guards and inputs
+must be unchanged, and Metal also runs the unchanged upstream kernels. The
+matrix-vector and matrix-matrix kernels are not gated yet. This is a
+108/17,832 increment; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,

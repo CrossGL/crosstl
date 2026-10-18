@@ -1540,6 +1540,45 @@ upstream kernels, which must produce the same bytes. This covers
 2,396/17,832 entries; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+`contracts/quantized.current-tree.translation.json` pins 108 of the 2,052
+entries of `quantized.metal` and their 324 artifacts: `affine_quantize` and
+`affine_dequantize` for float, float16 and bfloat16, group sizes 128, 64 and
+32 and 2, 3, 4, 5, 6 and 8 bits. `affine_quantize` reduces each group with
+`simd_min` and `simd_max` and packs neighbouring lanes' codes with
+`simd_shuffle_down`, which OpenGL and DirectX lower to 32-lane software
+subgroups whose out-of-range shuffles keep the lane's own value; Metal's
+`round` becomes an explicit halfway-away-from-zero helper on both. Narrow
+`uint8_t` buffers widen to one 32-bit word per byte on OpenGL and DirectX, and
+OpenGL widens float16 and bfloat16 storage to float32 while rounding each
+binary16 or bfloat16 operation. OpenGL is given 5 quantize and 18 dequantize
+index-range preconditions, each entry using those its packing reaches, among
+them the complete rebased subscripts `out_ + i` and `w + k`; the model shows
+each names an element inside its buffer. Required CI executes 216 dispatches
+and 131,208 checked elements per target on Metal, Mesa EGL and Direct3D 12
+WARP in the `quantized` leg, with 64-thread workgroups: a row of three
+(quantize) or two (dequantize) workgroups and a two-by-two grid, whose
+`threads_per_grid` row stride the flattened offset uses. `quantize_impl`
+launches up to `maxTotalThreadsPerThreadgroup` threads per group; any multiple
+of 32 keeps each quantization group inside one SIMD-group, as the kernel
+requires.
+Quantize groups hold `(k + d - a) * 2^e` for codes `k`, quarter offsets `d`
+and an `a` that puts the larger magnitude at either end, so each scale, edge
+and code is exact; others are all zero (the `eps` scale), all negative (the
+kernel's `w_max` starts at zero), a positive constant and free multiples of
+1/64, whose scales and codes need correctly rounded float32 division. A
+lane-level model of the reduction, rounding, shuffles and byte writes must
+write every output byte once and reproduce MLX's least-significant-bit-first
+code stream, and mutated models that drop the shuffled codes, truncate codes
+or always take the upper edge are rejected. Dequantize unpacks random codes
+that include 0 and the top code in every group, with power-of-two scales of
+either sign and biases `-a * scale`, so every output is exact in the element
+type whatever the evaluation order. Every word is compared exactly, eight
+trailing guards per output must keep their values and inputs must be
+unchanged; Metal also runs the unchanged upstream kernels, which must produce
+the same words. The matrix-vector and matrix-matrix kernels of
+`quantized.metal` are not gated yet. This covers 108/17,832 entries; it does
+not run the upstream MLX test suite or redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
