@@ -54,3 +54,20 @@ CROSSTL_CONFORMANCE_NATIVE=1 python -m pytest -q tests/conformance/test_native_r
 python -m tests.conformance.runner --output /tmp/conformance-run --configs strict,relaxed \
   --baseline tests/conformance/scoreboards/darwin-arm64.json
 ```
+
+## CI tiers
+
+`.github/workflows/conformance.yml` runs when translator, backend or harness files change, on every push to
+`main`, and nightly. Each job checks its results against `scoreboards/ci-<system>-<machine>.json`; a missing
+scoreboard, a missing cell, an unavailable required runtime or a worse outcome fails the job. Every run uploads
+its `results.jsonl`, `run.json`, toolchain table and a candidate scoreboard (the committed one merged with this
+run) as the `conformance-<profile>` artifact; commit that candidate to record a new profile or an improvement.
+
+| Job | Runner | Validators | Runtimes |
+|---|---|---|---|
+| Linux | `ubuntu-24.04` | DXC v1.9.2602.24 (pinned archive), glslang 16.6.0 (release archive), SPIRV-Tools v2026.4 (built at `ef96ed76` with SPIRV-Headers `49654312`) | `vulkan-lavapipe`, `opengl-llvmpipe` in the Mesa container |
+| macOS | `xcode-27` | Xcode 27.1 `metal` | `metal-apple` |
+| Windows | `windows-2022` | DXC v1.9.2602.24 (pinned archive) | `d3d12-warp` |
+
+Pull requests run the fixture cases under `strict` and `relaxed`; the nightly tier, `workflow_dispatch` and pull
+requests labelled `conformance-full` add six seeded held-out kernels per family and language.
