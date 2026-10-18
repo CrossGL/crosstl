@@ -443,10 +443,12 @@ all platforms behind one workflow-wide queue.
 Project demo checks run for changes to source, tests, demo inputs, support
 contracts and build/toolchain configuration. Root documentation-only changes do
 not launch the native demo matrices. The `ci-plan` job selects a tier from the
-event's complete Git diff: changes to `demos/integrations/mlx/**` or the demo
-workflow run the full MLX native, parity, corpus and host jobs, while other
-source, test and toolchain changes run only the short MLX translation and
-numerical smoke job. The full jobs also run nightly and on manual dispatch.
+event's complete Git diff. On a push to main, changes to
+`demos/integrations/mlx/**` or the demo workflow run the full MLX native, parity,
+corpus and host jobs. A pull request runs the full jobs only with the `ci:full`
+label; otherwise any relevant change runs the short MLX translation and
+numerical smoke job. The full jobs also run nightly and on manual dispatch
+(`gh workflow run demo-project-testing.yml --ref <branch>`).
 The Metal storage step has a 30-minute bound within an 80-minute job; the earlier
 15-minute bound expired during passing cases as the required suite grew.
 

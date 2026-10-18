@@ -39,10 +39,13 @@ source revision, required toolchains, numerical assertions and evidence uploads.
 Complete DirectX corpus compilation uses pinned DXC on Ubuntu; Direct3D runtime
 execution remains on Windows. Metal compilation and execution remain on macOS.
 See the [CI coverage policy](../../../.github/TESTING.md) for the platform split.
-Full native, parity, corpus and host jobs run nightly and on manual dispatch.
-Pull requests and main-branch pushes run those jobs when
-`demos/integrations/mlx/**` or this demo's workflow changes. Core, test and
-toolchain changes run a short Linux smoke job that translates pinned integer
+Full native, parity, corpus and host jobs run nightly, on manual dispatch, and
+for main-branch pushes that change `demos/integrations/mlx/**` or this demo's
+workflow. A pull request runs them only when it carries the `ci:full` label,
+because the full tier is several hundred jobs on runners every open pull
+request shares. Run `gh workflow run demo-project-testing.yml --ref <branch>`
+for a single full run of a branch. Pull requests that change the MLX demo,
+core, tests or toolchains run a short Linux smoke job that translates pinned integer
 and float32 `arange` entries to all three targets, checks their artifact hashes,
 validates HLSL/GLSL and executes their numerical cases with Mesa EGL, including
 input observations and output guards. The selector

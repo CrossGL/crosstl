@@ -37,7 +37,55 @@ WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
     ],
 )
 def test_changed_paths_select_required_tier(event, path, heavy, smoke):
-    assert validation_plan(event, [path]) == {"heavy": heavy, "smoke": smoke}
+    # A pull request never queues the full tier on its own; only a push to main does.
+    expected_heavy = heavy if event == "push" else False
+    assert validation_plan(event, [path]) == {"heavy": expected_heavy, "smoke": smoke}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/source/index.rst",
+        "crosstl/translator/codegen/directx_codegen.py",
+        "demos/integrations/mlx/portable_host/runtime.py",
+    ],
+)
+def test_pull_request_runs_full_tier_only_when_requested(path):
+    assert validation_plan("pull_request", [path], full_requested=True) == {
+        "heavy": True,
+        "smoke": True,
+    }
+    assert validation_plan("pull_request", [path])["heavy"] is False
+
+
+@pytest.mark.parametrize("full,heavy", [("true", "true"), ("false", "false")])
+def test_pull_request_label_reaches_the_plan(tmp_path, monkeypatch, full, heavy):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    (tmp_path / "README.md").write_text("start\n")
+    base = _commit("Start")
+    source = tmp_path / "demos/integrations/mlx/source.metal"
+    source.parent.mkdir(parents=True)
+    source.write_text("kernel void example() {}\n")
+    head = _commit("Corpus change")
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    monkeypatch.setenv("MLX_CI_FULL", full)
+    assert (
+        main(
+            [
+                "--event",
+                "pull_request",
+                "--base",
+                base,
+                "--head",
+                head,
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    assert output.read_text() == f"heavy={heavy}\nsmoke=true\n"
 
 
 @pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
@@ -90,7 +138,8 @@ def test_diff_includes_both_paths_of_renamed_mlx_source(tmp_path, monkeypatch):
         "demos/integrations/mlx/source.metal",
         "archived source.metal",
     }
-    assert validation_plan("pull_request", paths) == {"heavy": True, "smoke": True}
+    assert validation_plan("push", paths) == {"heavy": True, "smoke": True}
+    assert validation_plan("pull_request", paths) == {"heavy": False, "smoke": True}
 
 
 def _commit(message):
@@ -187,6 +236,10 @@ def test_every_heavy_job_obeys_the_full_tier():
             assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'", name
     assert workflow[True]["schedule"] == [{"cron": "31 4 * * *"}]
     plan = jobs["ci-plan"]
+    tier = next(step for step in plan["steps"] if step.get("id") == "plan")
+    assert tier["env"]["MLX_CI_FULL"] == (
+        "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}"
+    )
     assert plan["runs-on"] == "ubuntu-24.04"
     assert plan["outputs"].keys() == {"heavy", "smoke"}
     checkout = next(
