@@ -46,6 +46,16 @@ internal static class Program
         new("pow-2.2", "pow(abs(x), 2.2)", typeof(PowGammaProbe), static (d, i, o) => d.For(i.Length, new PowGammaProbe(i, o))),
         new("pow-0.4545", "pow(abs(x), 0.4545)", typeof(PowInverseGammaProbe), static (d, i, o) => d.For(i.Length, new PowInverseGammaProbe(i, o))),
         new("atan", "atan(x)", typeof(AtanProbe), static (d, i, o) => d.For(i.Length, new AtanProbe(i, o))),
+        new("dot2", "dot(float2(x, y), float2(27.619, 57.583))", typeof(Dot2Probe), static (d, i, o) => d.For(i.Length, new Dot2Probe(i, o))),
+        new("dot3", "dot(float3(x, y, z), float3(0.2126, 0.7152, 0.0722))", typeof(Dot3Probe), static (d, i, o) => d.For(i.Length, new Dot3Probe(i, o))),
+        new("multiply-add", "x * 27.619 + y", typeof(MultiplyAddProbe), static (d, i, o) => d.For(i.Length, new MultiplyAddProbe(i, o))),
+        new("mad", "mad(x, 27.619, y)", typeof(MadProbe), static (d, i, o) => d.For(i.Length, new MadProbe(i, o))),
+        new("lerp", "lerp(x, y, frac(z))", typeof(LerpProbe), static (d, i, o) => d.For(i.Length, new LerpProbe(i, o))),
+        new("atan2", "atan2(x, y)", typeof(Atan2Probe), static (d, i, o) => d.For(i.Length, new Atan2Probe(i, o))),
+        new("length2", "length(float2(x, y))", typeof(Length2Probe), static (d, i, o) => d.For(i.Length, new Length2Probe(i, o))),
+        new("normalize3", "normalize(float3(x, y, z)).x", typeof(Normalize3Probe), static (d, i, o) => d.For(i.Length, new Normalize3Probe(i, o))),
+        new("smoothstep", "smoothstep(0.0, 1.0, frac(x))", typeof(SmoothStepProbe), static (d, i, o) => d.For(i.Length, new SmoothStepProbe(i, o))),
+        new("pow", "pow(abs(x), frac(y) * 4.0)", typeof(PowProbe), static (d, i, o) => d.For(i.Length, new PowProbe(i, o))),
     ];
 
     public static int Main(string[] args)
@@ -197,11 +207,14 @@ internal static class Program
             return state;
         }
 
+        // Built from raw bits rather than MathF.Pow, whose rounding differs between C runtimes:
+        // a uniform exponent in [-10, 17), a uniform 23-bit mantissa and a sign bit.
         Add("log-uniform", Enumerable.Range(0, 32768).Select(_ =>
         {
             uint random = Next();
-            float magnitude = MathF.Pow(2f, ((random >> 8) / 16777216f * 27f) - 10f);
-            return (random & 1) == 0 ? magnitude : -magnitude;
+            uint exponent = (uint)(127 - 10 + (int)((random >> 24) % 27));
+            uint bits = ((random & 1) << 31) | (exponent << 23) | ((random >> 1) & 0x7FFFFF);
+            return BitConverter.UInt32BitsToSingle(bits);
         }).ToArray());
 
         sets = described;
@@ -337,4 +350,120 @@ internal readonly partial struct PowInverseGammaProbe(ReadOnlyBuffer<float> inpu
 internal readonly partial struct AtanProbe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
 {
     public void Execute() => output[ThreadIds.X] = Hlsl.Atan(input[ThreadIds.X]);
+}
+
+// The two- and three-operand probes read x = input[i], y = input[i + 1] and
+// z = input[i + 2] (wrapping), so neighbouring inputs of each set are combined.
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct Dot2Probe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        float2 p = new(input[i], input[(i + 1) % input.Length]);
+        output[i] = Hlsl.Dot(p, new float2(27.619f, 57.583f));
+    }
+}
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct Dot3Probe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        float3 p = new(input[i], input[(i + 1) % input.Length], input[(i + 2) % input.Length]);
+        output[i] = Hlsl.Dot(p, new float3(0.2126f, 0.7152f, 0.0722f));
+    }
+}
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct MultiplyAddProbe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        output[i] = (input[i] * 27.619f) + input[(i + 1) % input.Length];
+    }
+}
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct MadProbe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        output[i] = Hlsl.Mad(input[i], 27.619f, input[(i + 1) % input.Length]);
+    }
+}
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct LerpProbe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        output[i] = Hlsl.Lerp(input[i], input[(i + 1) % input.Length], Hlsl.Frac(input[(i + 2) % input.Length]));
+    }
+}
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct Atan2Probe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        output[i] = Hlsl.Atan2(input[i], input[(i + 1) % input.Length]);
+    }
+}
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct Length2Probe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        output[i] = Hlsl.Length(new float2(input[i], input[(i + 1) % input.Length]));
+    }
+}
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct Normalize3Probe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        float3 p = new(input[i], input[(i + 1) % input.Length], input[(i + 2) % input.Length]);
+        output[i] = Hlsl.Normalize(p).X;
+    }
+}
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct SmoothStepProbe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        output[i] = Hlsl.SmoothStep(0.0f, 1.0f, Hlsl.Frac(input[i]));
+    }
+}
+
+[ThreadGroupSize(DefaultThreadGroupSizes.X)]
+[GeneratedComputeShaderDescriptor]
+internal readonly partial struct PowProbe(ReadOnlyBuffer<float> input, ReadWriteBuffer<float> output) : IComputeShader
+{
+    public void Execute()
+    {
+        int i = ThreadIds.X;
+        output[i] = Hlsl.Pow(Hlsl.Abs(input[i]), Hlsl.Frac(input[(i + 1) % input.Length]) * 4.0f);
+    }
 }

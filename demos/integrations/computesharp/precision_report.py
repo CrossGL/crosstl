@@ -96,7 +96,9 @@ def compare(reference: Path, candidate: Path) -> dict[str, Any]:
             "nanMismatches": int(np.count_nonzero(~finite)),
         }
         if finite.any():
-            p50, p99, p999, largest = np.percentile(distance[finite], [50, 99, 99.9, 100])
+            p50, p99, p999, largest = np.percentile(
+                distance[finite], [50, 99, 99.9, 100]
+            )
             entry["ulpDistance"] = {
                 "p50": int(p50),
                 "p99": int(p99),

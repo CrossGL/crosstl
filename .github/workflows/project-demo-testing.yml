@@ -255,6 +255,13 @@ jobs:
           --adapted adapted-computesharp --discovery evidence/discovery
           --profile metal-apple-gpu --work evidence/run
           --prebuilt-tests --negative-controls
+      - name: Evaluate the HLSL intrinsics on Metal
+        if: ${{ !cancelled() }}
+        run: >-
+          python demos/integrations/computesharp/precision/run_probe.py
+          --adapted adapted-computesharp --target metal
+          --native-library evidence/run/native/libcsbackend_metal.dylib
+          --output evidence/precision
       - name: Compress dispatch evidence
         if: always()
         run: find evidence -name evidence.jsonl -exec gzip -9 {} \;
@@ -318,6 +325,15 @@ jobs:
           --adapted adapted-computesharp --discovery evidence/discovery
           --profile opengl-mesa-llvmpipe --work evidence/run
           --prebuilt-tests --negative-controls
+      - name: Evaluate the HLSL intrinsics on OpenGL
+        if: ${{ !cancelled() }}
+        env:
+          EGL_PLATFORM: surfaceless
+        run: >-
+          python demos/integrations/computesharp/precision/run_probe.py
+          --adapted adapted-computesharp --target opengl
+          --native-library evidence/run/native/libcsbackend_gl.so
+          --output evidence/precision
       - name: Compress dispatch evidence
         if: always()
         run: find evidence -name evidence.jsonl -exec gzip -9 {} \;
