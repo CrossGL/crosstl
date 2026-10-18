@@ -819,7 +819,38 @@ def matrix_values(workflow: str, key: str) -> list[str]:
     )
     if block:
         return parse_matrix_values(block.group(1))
+    declared = declared_matrix_values(workflow, key)
+    if declared is not None:
+        return declared
     raise CiCoverageError(f"Matrix key not found: {key}")
+
+
+RUN_TIME_MATRIX_VALUE = r"\$\{\{\s*fromJSON\(needs\.[\w-]+\.outputs\.[\w-]+\)\s*\}\}"
+
+
+def declared_matrix_values(workflow: str, key: str) -> list[str] | None:
+    """Resolve a matrix dimension that a planning job fills at run time.
+
+    Such a workflow declares every value the planning job can select as
+    ``FULL_<KEY>S``, for example ``FULL_PYTHON_VERSIONS`` for ``python-version``.
+    Coverage counts that complete list: pushes to main run all of it.
+    """
+    dynamic = re.search(
+        rf"^\s*{re.escape(key)}:\s*{RUN_TIME_MATRIX_VALUE}\s*$",
+        workflow,
+        flags=re.MULTILINE,
+    )
+    if not dynamic:
+        return None
+    name = "FULL_" + key.upper().replace("-", "_") + "S"
+    declared = re.search(
+        rf"^\s*{name}:\s*'(\[[^\n]+\])'\s*$", workflow, flags=re.MULTILINE
+    )
+    if not declared:
+        raise CiCoverageError(
+            f"Matrix key {key} is selected at run time but {name} is not declared"
+        )
+    return parse_matrix_values(declared.group(1))
 
 
 def backend_test_matrix_name(backend: dict[str, Any]) -> str:
