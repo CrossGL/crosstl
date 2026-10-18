@@ -29,12 +29,12 @@ static void cs_copy_text(char *destination, size_t capacity, NSString *text) {
 /*
  * Shader compile options and a description of the floating-point model they
  * select. Direct3D shaders keep IEEE NaN/Inf semantics and evaluation order,
- * while transcendental intrinsics (sin, cos, exp, log, pow...) run at the
- * reduced precision Direct3D permits and GPU drivers implement in hardware.
- * Metal's safe math mode keeps the former; its fast floating-point functions
- * provide the latter. Precise functions are correctly rounded and therefore
- * differ from Direct3D hardware results wherever a shader amplifies the
- * last bits of a transcendental (for example sin-based hash functions).
+ * which Metal's safe math mode keeps. The translation itself evaluates sin,
+ * cos, tan and contraction-free arithmetic the way WARP does, so the
+ * floating-point function setting only selects the native implementation of
+ * the remaining transcendentals (sqrt, exp, log, pow, atan...). Measured
+ * against WARP with the intrinsic probe, fast functions are closer for exp
+ * and pow and precise functions for sqrt and log.
  * Before macOS 15 the only way to keep IEEE semantics is to disable fast
  * math entirely, which also selects precise functions.
  */
