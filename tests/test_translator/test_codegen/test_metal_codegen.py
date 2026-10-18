@@ -188,6 +188,45 @@ def test_metal_unregistered_structure_lookalike_is_not_projected():
     assert "(value).real" not in generated
 
 
+def test_metal_bfloat_stored_arguments_are_passed_without_conversion():
+    # A stored bfloat value already has the bfloat parameter type; only a
+    # computed value, which Metal evaluates as float, needs construction.
+    shader = """
+    shader MetalBfloatArguments {
+        struct Pair {
+            bfloat16 value;
+        };
+        bfloat16 passThrough(bfloat16 value) {
+            return value;
+        }
+        compute {
+            void main(
+                RWStructuredBuffer<bfloat16> src @buffer(0),
+                RWStructuredBuffer<bfloat16> dst @buffer(1),
+                uint3 tid @ gl_GlobalInvocationID) {
+                bfloat16 local = src[tid.x];
+                Pair pair;
+                pair.value = local;
+                dst[0] = passThrough(src[tid.x]);
+                dst[1] = passThrough(local);
+                dst[2] = passThrough(pair.value);
+                dst[3] = passThrough(local * local);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "passThrough(src[tid.x])" in generated
+    assert "passThrough(local)" in generated
+    assert "passThrough(pair.value)" in generated
+    assert "passThrough(bfloat(local * local))" in generated
+    assert "passThrough(bfloat(src" not in generated
+    compile_with_metal_if_available(generated)
+
+
 def test_metal_bfloat_asuint_uses_native_width_and_compiles_warning_fatal():
     shader = """
     shader MetalNarrowBitcast {
@@ -1710,6 +1749,42 @@ def test_metal_integer_literals_beyond_int_keep_their_width():
     assert "as_type<float>(2139095040)" in generated_code
     assert "4290772992u * 2" in generated_code
     assert "4290772992u > 0" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_negated_integer_literals_beyond_int_stay_signed():
+    # -2147483648u is 2147483648 in a 64-bit context; the unsuffixed decimal
+    # is long in Metal, so its negation keeps the value in every width.
+    shader = """
+    shader MetalNegatedLiteralWidths {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID,
+                      RWStructuredBuffer<uint> bits @buffer(0)) {
+                int narrow = -2147483648;
+                int64_t wide = -2147483648;
+                int64_t wider = -5000000000;
+                int64_t positive = 5000000000;
+                uint explicitUnsigned = -4290772992u;
+                bits[0] = uint(narrow);
+                bits[1] = wide < 0 ? 1u : 0u;
+                bits[2] = wider < positive ? 1u : 0u;
+                bits[3] = explicitUnsigned;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "int narrow = -2147483648;" in generated_code
+    assert "int64_t wide = -2147483648;" in generated_code
+    assert "int64_t wider = -5000000000;" in generated_code
+    assert "int64_t positive = 5000000000;" in generated_code
+    assert "uint explicitUnsigned = -4290772992u;" in generated_code
+    assert "2147483648u" not in generated_code
+    assert "5000000000ul" not in generated_code
     compile_with_metal_if_available(generated_code)
 
 

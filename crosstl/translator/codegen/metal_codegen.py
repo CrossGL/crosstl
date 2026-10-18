@@ -30,6 +30,7 @@ from ..ast import (
     FunctionNode,
     IdentifierNode,
     IfNode,
+    LiteralNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
@@ -11908,6 +11909,9 @@ class MetalCodeGen:
                 and operand_value == 1 << 63
             ):
                 return "(-9223372036854775807L - 1L)"
+            negated_literal = self.metal_negated_wide_integer_literal(expr)
+            if negated_literal is not None:
+                return negated_literal
             local_reinterpret = self.generate_metal_local_reinterpret_read(expr)
             if local_reinterpret is not None:
                 return local_reinterpret
@@ -12672,9 +12676,9 @@ class MetalCodeGen:
                     # Unsuffixed decimal literals beyond int are long in
                     # Metal; the source type of such a literal is uint up to
                     # 2^32 - 1 (as in GLSL and HLSL) and 64-bit above it.
-                    if value > 0xFFFFFFFF:
+                    if value > 0x7FFFFFFFFFFFFFFF:
                         return f"{value}ul"
-                    if value > 0x7FFFFFFF:
+                    if 0x7FFFFFFF < value <= 0xFFFFFFFF:
                         return f"{value}u"
                     if value < -0x80000000:
                         return f"{value}l"
@@ -22017,7 +22021,55 @@ class MetalCodeGen:
             return self.generate_expression(arg)
         if self.metal_reference_parameter_qualifier_for(func_name, index) is not None:
             return self.generate_expression(arg)
+        if self.is_metal_bfloat_storage_read(arg) and (
+            self.map_type(self.type_name_string(param_type)) == "bfloat"
+        ):
+            # A stored bfloat value already has the parameter type; only
+            # computed values (native math yields float or half) need the
+            # explicit construction that expected-type boundaries apply.
+            return self.generate_expression(arg)
         return self.generate_expression_with_expected(arg, param_type)
+
+    def metal_negated_wide_integer_literal(self, expr):
+        """Spell the negation of an unsuffixed literal beyond int as signed.
+
+        A literal between 2^31 and 2^63 - 1 is emitted unsigned on its own, but
+        its negation is a signed value. Metal types the unsuffixed decimal as
+        long, so the negation keeps its value in every integer width.
+        """
+        if getattr(expr, "op", getattr(expr, "operator", None)) != "-":
+            return None
+        operand = getattr(expr, "operand", None)
+        if getattr(expr, "is_postfix", False) or not isinstance(operand, LiteralNode):
+            return None
+        value = operand.value
+        if not isinstance(value, int) or isinstance(value, bool):
+            return None
+        literal_type = getattr(getattr(operand, "literal_type", None), "name", None)
+        if literal_type == "uint" or not 0x7FFFFFFF < value <= 0x7FFFFFFFFFFFFFFF:
+            return None
+        return f"-{value}"
+
+    METAL_STORAGE_READ_NODES = (
+        IdentifierNode,
+        ArrayAccessNode,
+        MemberAccessNode,
+        PointerAccessNode,
+    )
+
+    def is_metal_bfloat_storage_read(self, expr):
+        """Whether ``expr`` reads a variable, element or member of type bfloat."""
+        if (
+            isinstance(expr, FunctionCallNode)
+            and self.function_call_name(expr) == "buffer_load"
+            and len(getattr(expr, "args", None) or []) == 2
+        ):
+            # buffer_load(buffer, index) is emitted as buffer[index].
+            expr = ArrayAccessNode(expr.args[0], expr.args[1])
+        if not isinstance(expr, self.METAL_STORAGE_READ_NODES):
+            return False
+        expr_type = self.expression_result_type(expr)
+        return expr_type is not None and self.map_type(expr_type) == "bfloat"
 
     def metal_reference_parameter_qualifier_for(self, func_name, index):
         overloads = self.function_overloads_by_name.get(func_name, [])

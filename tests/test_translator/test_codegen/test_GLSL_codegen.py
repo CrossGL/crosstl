@@ -15991,6 +15991,46 @@ def test_glsl_precise_function_returns_lower_through_precise_locals(tmp_path):
         assert "NoContraction" in disassembly.stdout
 
 
+def test_glsl_precise_function_qualifies_only_locals_with_float_operations(tmp_path):
+    # precise orders the floating-point operations that produce a value, so an
+    # integer local is precise only when a float operation can reach it.
+    code = """
+    shader PreciseIntegerLocals {
+        @precise
+        float stableBits(float value, float scale) {
+            uint bits = floatBitsToUint(value);
+            uint magnitude = bits & 2147483647u;
+            int rounded = int(value * scale + 0.5);
+            uint counter = 0u;
+            counter = counter + 1u;
+            bool large = magnitude > 1065353216u;
+            return large ? float(rounded + int(counter)) : value * scale;
+        }
+
+        compute {
+            void main() {
+                float stable = stableBits(2.0, 3.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "    uint bits = floatBitsToUint(value);" in generated_code
+    assert "    uint magnitude = (bits & 2147483647u);" in generated_code
+    assert "    bool large = (magnitude > 1065353216u);" in generated_code
+    assert "precise int rounded = " in generated_code
+    assert "precise uint counter = 0u;" in generated_code
+    assert "precise float crossglPreciseReturn = " in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "precise-integer-locals",
+        validate_spirv=True,
+    )
+
+
 def test_glsl_precise_function_multiple_returns_use_collision_safe_locals(tmp_path):
     code = """
     shader PreciseReturnNames {

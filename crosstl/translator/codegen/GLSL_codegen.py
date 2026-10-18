@@ -2561,6 +2561,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_glsl_precise_return_type = None
         self.current_glsl_precise_function = False
         self.current_glsl_precise_captures = None
+        self.current_glsl_precise_written_names = frozenset()
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         self.function_fragment_only_requirements = {}
@@ -6716,6 +6717,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_glsl_precise_return_type = None
         self.current_glsl_precise_function = False
         self.current_glsl_precise_captures = None
+        self.current_glsl_precise_written_names = frozenset()
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         self.function_fragment_only_requirements = {}
@@ -16842,13 +16844,14 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
 
     GLSL_PRECISE_ARITHMETIC_OPERATORS = {"+", "-", "*", "/"}
 
-    def glsl_expression_has_float_arithmetic(self, expression):
+    def glsl_expression_has_float_arithmetic(self, expression, unknown_is_float=False):
         """Return whether evaluating ``expression`` adds, subtracts, multiplies
         or divides floating-point values.
 
         Arguments of user function calls are not part of the scan: they are
         captured where the call is generated, so the call contributes only its
-        result.
+        result. With ``unknown_is_float``, an operation whose type cannot be
+        resolved counts as floating point.
         """
         pending = [expression]
         visited = set()
@@ -16878,6 +16881,8 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
                     info = self.glsl_value_type_info(
                         self.glsl_source_expression_type(node)
                     )
+                    if info is None and unknown_is_float:
+                        return True
                     if info is not None and info["family"] == "float":
                         return True
             pending.extend(
@@ -17122,6 +17127,9 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         previous_precise_return_type = self.current_glsl_precise_return_type
         previous_precise_function = self.current_glsl_precise_function
         previous_precise_captures = self.current_glsl_precise_captures
+        previous_precise_written_names = getattr(
+            self, "current_glsl_precise_written_names", frozenset()
+        )
         previous_local_variable_types = self.local_variable_types
         previous_local_variable_source_types = self.local_variable_source_types
         previous_identifier_aliases = self.current_identifier_aliases
@@ -17160,6 +17168,12 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_glsl_precise_function = self.glsl_has_precise_qualifier(func)
         self.current_glsl_precise_captures = (
             [] if self.current_glsl_precise_function else None
+        )
+        self.current_glsl_precise_written_names = (
+            self.glsl_written_value_names(getattr(func, "body", None))
+            if self.current_glsl_precise_function
+            and getattr(func, "body", None) is not None
+            else frozenset()
         )
         precise_parameter_copies = []
         written_value_names = (
@@ -17393,6 +17407,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
             self.current_glsl_precise_return_type = previous_precise_return_type
             self.current_glsl_precise_function = previous_precise_function
             self.current_glsl_precise_captures = previous_precise_captures
+            self.current_glsl_precise_written_names = previous_precise_written_names
             self.local_variable_types = previous_local_variable_types
             self.local_variable_source_types = previous_local_variable_source_types
             self.current_identifier_aliases = previous_identifier_aliases
@@ -17728,6 +17743,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_function_return_type = previous_function_return_type
         self.current_glsl_precise_return_type = previous_precise_return_type
         self.current_glsl_precise_function = previous_precise_function
+        self.current_glsl_precise_written_names = previous_precise_written_names
         self.local_variable_types = previous_local_variable_types
         self.local_variable_source_types = previous_local_variable_source_types
         self.current_generic_function_substitutions = (
@@ -26691,7 +26707,30 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         """
         if not getattr(self, "current_glsl_precise_function", False):
             return False
-        return self.glsl_precise_value_type(self.local_variable_declared_type(node))
+        declared_type = self.local_variable_declared_type(node)
+        if not self.glsl_precise_value_type(declared_type):
+            return False
+        return not self.glsl_precise_local_has_no_float_operation(node, declared_type)
+
+    def glsl_precise_local_has_no_float_operation(self, node, declared_type):
+        """Return whether ``precise`` cannot constrain a local's value.
+
+        ``precise`` orders the floating-point operations that produce a value.
+        A boolean or integer scalar or vector local that is never written after
+        an initializer without floating-point arithmetic has no such operation.
+        An arithmetic operation of unknown type counts as floating point.
+        """
+        info = self.glsl_value_type_info(declared_type)
+        if info is None or info["family"] == "float":
+            return False
+        name = getattr(node, "name", None)
+        if not isinstance(name, str) or name in getattr(
+            self, "current_glsl_precise_written_names", ()
+        ):
+            return False
+        return not self.glsl_expression_has_float_arithmetic(
+            getattr(node, "initial_value", None), unknown_is_float=True
+        )
 
     @staticmethod
     def glsl_has_precise_qualifier(node):
