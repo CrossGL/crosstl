@@ -685,7 +685,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
     triggers = workflow.get("on", workflow.get(True))
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            triggers[event]["paths"],
+            triggers[event].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_small_rows.py",
         )
     step = next(

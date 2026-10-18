@@ -595,7 +595,7 @@ def test_ci_requires_selection_and_absolute_execution_on_every_target():
     assert retained["with"]["if-no-files-found"] == "error"
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            workflow.get("on", workflow.get(True))[event]["paths"],
+            workflow.get("on", workflow.get(True))[event].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_selection.py",
         )
     assert any(

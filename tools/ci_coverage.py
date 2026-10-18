@@ -440,8 +440,22 @@ def yaml_list_values(section: list[str], key: str) -> list[str]:
 
 
 def workflow_event_path_filters(workflow: str, event_name: str) -> list[str]:
+    """Return an event's paths filter.
+
+    A trigger declared without a paths filter starts the workflow for every
+    change, which is reported as ``["**"]``. An absent trigger yields ``[]``.
+    """
     event = nested_yaml_section(workflow, event_name, 2)
-    return yaml_list_values(event, "paths")
+    paths = yaml_list_values(event, "paths")
+    if paths:
+        return paths
+    triggers = nested_yaml_section(workflow, "on", 0)
+    declared = any(
+        line.split("#", 1)[0].rstrip() == f"  {event_name}:" for line in triggers
+    )
+    if declared and not any(line.strip().startswith("paths-ignore:") for line in event):
+        return ["**"]
+    return []
 
 
 def pull_request_path_filters(workflow: str) -> list[str]:

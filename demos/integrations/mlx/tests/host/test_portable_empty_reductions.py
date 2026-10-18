@@ -339,7 +339,7 @@ def test_ci_requires_initialization_on_every_native_target():
     assert "--reductions .mlx-portable-small-rows/init-packages" in execute["run"]
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            workflow.get("on", workflow.get(True))[event]["paths"],
+            workflow.get("on", workflow.get(True))[event].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_empty_reductions.py",
         )
 

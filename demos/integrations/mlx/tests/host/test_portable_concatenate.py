@@ -184,7 +184,7 @@ def test_concatenate_ci_requires_all_native_targets():
     triggers = workflow.get("on", workflow.get(True))
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            triggers[event]["paths"],
+            triggers[event].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_concatenate.py",
         )
     assert any(

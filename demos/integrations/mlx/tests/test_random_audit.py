@@ -145,10 +145,11 @@ def test_native_random_audit_is_required_on_macos():
     events = workflow.get("on", workflow.get(True))
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            events[event]["paths"], "demos/integrations/mlx/random_audit.py"
+            events[event].get("paths", ["**"]), "demos/integrations/mlx/random_audit.py"
         )
         assert_paths_covered(
-            events[event]["paths"], "demos/integrations/mlx/tests/test_random_audit.py"
+            events[event].get("paths", ["**"]),
+            "demos/integrations/mlx/tests/test_random_audit.py",
         )
     job = workflow["jobs"]["metal"]
     assert job["runs-on"].startswith("macos-")
@@ -572,10 +573,11 @@ def test_contract_checks_run_on_all_platforms():
     events = workflow.get("on", workflow.get(True))
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            events[event]["paths"], "demos/integrations/mlx/tests/test_random_audit.py"
+            events[event].get("paths", ["**"]),
+            "demos/integrations/mlx/tests/test_random_audit.py",
         )
         assert_paths_covered(
-            events[event]["paths"], "demos/integrations/mlx/random_audit.py"
+            events[event].get("paths", ["**"]), "demos/integrations/mlx/random_audit.py"
         )
     (job,) = (
         job
@@ -622,7 +624,8 @@ def test_partial_random_profile_is_required_on_each_platform(target):
     events = workflow.get("on", workflow.get(True))
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            events[event]["paths"], "demos/integrations/mlx/portable_host/**"
+            events[event].get("paths", ["**"]),
+            "demos/integrations/mlx/portable_host/**",
         )
     (step,) = (
         step

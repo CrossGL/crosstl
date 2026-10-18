@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import math
+import random
 import sys
 import traceback
 import unittest
@@ -96,23 +98,55 @@ def capture_failure(test, error, source_root):
     }
 
 
+def seed_generators(seed):
+    """Reset every importable global generator the upstream tests draw from.
+
+    Returns the generator names that were reset, in a fixed order, so the
+    caller can prove that both runs of a paired comparison saw the same inputs.
+    """
+    seeded = []
+    random.seed(seed)
+    seeded.append("random")
+    for module, name in (("numpy", "numpy.random"), ("mlx.core", "mlx.core.random")):
+        try:
+            generator = importlib.import_module(module).random
+        except ImportError:
+            continue
+        generator.seed(seed)
+        seeded.append(name)
+    return seeded
+
+
 class EvidenceResult(unittest.TextTestResult):
-    def __init__(self, *args, output, source_root, **kwargs):
+    def __init__(self, *args, output, source_root, seed=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.output = output
         self.source_root = source_root
+        self.seed = seed
+        self.seeded_generators = None
         self.receipt_count = 0
         self.test_ids = []
 
     def startTest(self, test):
         super().startTest(test)
         self.test_ids.append(test.id())
+        if self.seed is not None:
+            # Seed before setUp so each test's inputs depend only on the seed,
+            # not on which tests ran before it in this process.
+            generators = seed_generators(self.seed)
+            if self.seeded_generators not in (None, generators):
+                raise RuntimeError("Seeded generators changed during the run")
+            self.seeded_generators = generators
 
     def summary(self):
+        seed = None
+        if self.seed is not None:
+            seed = {"value": self.seed, "generators": self.seeded_generators or []}
         return {
             "schemaVersion": 1,
             "successful": self.wasSuccessful(),
             "total": self.testsRun,
+            "seed": seed,
             "testIds": self.test_ids,
             "failures": [test.id() for test, _ in self.failures],
             "errors": [test.id() for test, _ in self.errors],
@@ -150,6 +184,11 @@ class EvidenceResult(unittest.TextTestResult):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, add_help=False)
     parser.add_argument("--evidence-dir", required=True, type=Path)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="reset the random, numpy and mlx generators to this seed before each test",
+    )
     args, tests = parser.parse_known_args(argv)
     if not tests:
         parser.error("an upstream unittest suite is required")
@@ -166,6 +205,7 @@ def main(argv=None):
                 self.verbosity,
                 output=output,
                 source_root=source_root,
+                seed=args.seed,
             )
 
     program = unittest.main(
