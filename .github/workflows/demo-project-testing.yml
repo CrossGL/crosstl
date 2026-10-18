@@ -756,6 +756,19 @@ jobs:
               tests/test_translator/test_metal_float_atomics.py \
               tests/test_translator/test_directx_float_atomics.py::test_original_metal_matches_atomic_oracle \
               2>&1 | tee .mlx-metal-host/float-atomics.log
+      - name: Validate multi-wave workgroup reductions
+        env:
+          CROSTL_REQUIRE_METAL_MULTIWAVE_REDUCTION: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/multiwave-reductions
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Multi-wave workgroup reductions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/multiwave-reductions/pytest \
+              --junitxml=.mlx-metal-host/multiwave-reductions/results.xml \
+              tests/test_translator/test_directx_multiwave_reduction.py \
+              2>&1 | tee .mlx-metal-host/multiwave-reductions.log
       - name: Checkout pinned upstream MLX
         run: |
           git init mlx-upstream
@@ -1893,6 +1906,7 @@ jobs:
               tests/test_translator/test_directx_subgroup_identity.py \
               tests/test_translator/test_directx_subgroup_uniformity.py \
               tests/test_translator/test_directx_subgroup_components.py \
+              tests/test_translator/test_directx_multiwave_reduction.py \
               2>&1 | tee .mlx-portable-host/software-reductions.log
       - name: Validate binary32 arithmetic
         if: >-
