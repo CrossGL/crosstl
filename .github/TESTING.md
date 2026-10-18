@@ -190,6 +190,17 @@ not repeat the failure-only resource comparison or suppress any failure.
 This is a bounded runtime investigation, not adoption of a new default or
 evidence that the complete upstream MLX suite already passes.
 
+The `WARP Conformance Controls` workflow runs one Windows job when the wave
+controls, the multi-wave reduction reproducer or the runtime-defect registry
+change. It executes fixed HLSL controls (half-active wave sums, 512-invocation
+workgroups with and without `[WaveSize(32)]`, and arrival-order wave numbering)
+and the translated reproducer on the system WARP library and every
+checksum-pinned release from 1.0.13 through 1.0.21, then publishes a
+per-library matrix. A failing control is recorded as a finding; the job fails
+only when a library's run times out, exits abnormally or omits a result. It
+does not gate any library: `tests/directx_runtime_defects.py` entries cite its
+evidence, and the native host jobs remain the gate.
+
 Metal corpus compilation stays on macOS because it requires Apple's toolchain.
 
 The complete unary, binary, copy, reduction and quantized Metal corpora separate portable translation
