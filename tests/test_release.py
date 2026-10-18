@@ -664,7 +664,9 @@ def test_native_release_gates_run_for_package_version_changes():
         )
         for event in ("push", "pull_request"):
             assert "main" in workflow["on"][event]["branches"]
-            assert "pyproject.toml" in workflow["on"][event]["paths"]
+            # A trigger without a paths filter runs for every change, version bumps included.
+            paths = workflow["on"][event].get("paths", ["**"])
+            assert "pyproject.toml" in paths or paths == ["**"]
 
 
 @pytest.mark.skipif(

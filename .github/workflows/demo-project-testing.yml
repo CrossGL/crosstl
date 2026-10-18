@@ -2,22 +2,10 @@ name: Project Demo Testing
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 on:
+  # Pull requests always run this workflow, so its result check can be required.
+  # The ci-plan job skips every MLX job for changes that do not affect MLX.
   pull_request:
     branches: [main]
-    paths:
-      - ".github/actions/**"
-      - ".github/workflows/demo-project-testing.yml"
-      - ".github/actionlint.yaml"
-      - ".pre-commit-config.yaml"
-      - "crosstl/**"
-      - "demos/integrations/**"
-      - "tests/**"
-      - "tools/**"
-      - "support/**"
-      - "conftest.py"
-      - "pyproject.toml"
-      - "requirements*.txt"
-      - "setup.cfg"
   push:
     branches: [main]
     paths:
