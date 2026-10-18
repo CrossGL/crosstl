@@ -2,6 +2,7 @@
 
 import re
 
+from ...translator.integer_literals import integer_literal_parts
 from ..common_ast import (
     ArrayAccessNode,
     AttributeNode,
@@ -37,7 +38,6 @@ from .DirectxAst import (
     VectorConstructorNode,
     WhileNode,
 )
-from ...translator.integer_literals import integer_literal_parts
 
 TYPE_TOKENS = {
     "FLOAT",

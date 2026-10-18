@@ -8448,9 +8448,8 @@ class MetalCodeGen:
                         if qualifier is None
                         else self.metal_reference_argument_parameter(expr, index)
                     )
-                    if (
-                        parameter is None
-                        or self.metal_argument_binds_thread_reference(argument)
+                    if parameter is None or self.metal_argument_binds_thread_reference(
+                        argument
                     ):
                         visit(argument, conditional)
                         continue
@@ -10429,6 +10428,7 @@ class MetalCodeGen:
         elif component_type == "half":
             return f"(({value}) * half({factor}))"
         return f"(({value}) * {factor})"
+
     METAL_STRUCTURE_PROMOTION_SCALAR_KINDS = {
         "bool": ScalarKind.BOOLEAN,
         "char": ScalarKind.SIGNED_INTEGER,
@@ -13428,6 +13428,7 @@ class MetalCodeGen:
                 if depth == 0 and index != len(text) - 1:
                     return False
         return depth == 0
+
     # Metal's fast:: overloads take float scalars and vectors; half and bfloat
     # scalars convert implicitly, exactly as in the source call.
     METAL_FAST_MATH_ARGUMENT_TYPES = frozenset(

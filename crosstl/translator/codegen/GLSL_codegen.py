@@ -3883,6 +3883,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
             break
         self.current_glsl_version_line = upgraded_version
         return "".join(lines)
+
     def glsl_version_supports_bit_casts(self):
         """Return whether floatBitsToUint exists: GLSL 3.30 or GLSL ES 3.00."""
         version_line = getattr(self, "current_glsl_version_line", None)

@@ -724,8 +724,7 @@ def test_nondecimal_literals_beyond_int_keep_the_c_type(tmp_path):
 
 
 def test_nondecimal_literals_beyond_uint_are_64_bit():
-    crossgl = generate_crossgl(
-        """
+    crossgl = generate_crossgl("""
         RWStructuredBuffer<uint64_t> wide : register(u0);
         [numthreads(1, 1, 1)]
         void Execute(uint3 tid : SV_DispatchThreadID)
@@ -733,7 +732,6 @@ def test_nondecimal_literals_beyond_uint_are_64_bit():
             wide[0] = 0x100000000;
             wide[1] = 0xFFFFFFFFFFFFFFFF;
         }
-        """
-    )
+        """)
     assert "int64(4294967296)" in crossgl
     assert "uint64(18446744073709551615)" in crossgl
