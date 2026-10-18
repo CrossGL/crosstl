@@ -7879,6 +7879,7 @@ class MetalCodeGen:
         self.metal_hlsl_structured_buffers = {}
         self.metal_hlsl_cbuffer_array_members = {}
         planner = MetalHlslBufferLayouts(self.metal_hlsl_layout_type_resolver)
+        self.metal_hlsl_layout_planner = planner
         for cbuffer in self.cbuffer_variables or []:
             layout = buffer_layout_from_attributes(getattr(cbuffer, "attributes", None))
             if layout != HLSL_CBUFFER_LAYOUT:
@@ -7931,7 +7932,8 @@ class MetalCodeGen:
 
         lines = plan.declaration_lines(padding_name)
         body = "".join(f"    {line}\n" for line in lines)
-        return f"struct {plan.name} {{\n{body}}};\n"
+        storage = self.metal_hlsl_layout_planner.storage_definitions(plan)
+        return f"{storage}struct {plan.name} {{\n{body}}};\n"
 
     def metal_hlsl_layout_member(self, expr):
         """The planned storage of a struct member access, if its struct has one."""
@@ -8010,6 +8012,18 @@ class MetalCodeGen:
 
     def metal_hlsl_layout_store_target(self, target):
         """``(lhs, write_conversion)`` for a store into HLSL layout storage."""
+        planner = getattr(self, "metal_hlsl_layout_planner", None)
+        node = target
+        while planner is not None and isinstance(
+            node, (MemberAccessNode, ArrayAccessNode)
+        ):
+            node = node.object if isinstance(node, MemberAccessNode) else node.array
+            member = self.metal_hlsl_layout_member(node)
+            if member is not None and member.storage_type in planner.matrix_storages:
+                raise ValueError(
+                    "Cannot store to part of HLSL constant-buffer matrix "
+                    f"'{node.member}' in Metal: it is held as register words"
+                )
         if isinstance(target, MemberAccessNode):
             member = self.metal_hlsl_layout_member(target)
             if (

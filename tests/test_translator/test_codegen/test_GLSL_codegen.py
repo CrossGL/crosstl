@@ -10519,7 +10519,7 @@ def test_glsl_storage_pointer_reinterpret_reads_float_vectors(tmp_path):
 
     generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
 
-    assert "vec4 packed = vec4(" in generated
+    assert "vec4 packed_ = vec4(" in generated
     assert generated.count("uintBitsToFloat(floatBitsToUint(values[int(") == 4
     assert "_Args_base * 4" in generated
     assert "* 16" in generated
@@ -42879,7 +42879,7 @@ def test_opengl_hlsl_bitcast_aliases_map_to_glsl_bit_functions():
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "uint packed = floatBitsToUint(value);" in generated_code
+    assert "uint packed_ = floatBitsToUint(value);" in generated_code
     assert "int signedBits = floatBitsToInt(value);" in generated_code
     assert "float restored = uintBitsToFloat(bits);" in generated_code
     assert "uvec2 pairBits = floatBitsToUint(pair);" in generated_code
@@ -45727,8 +45727,8 @@ def test_opengl_hlsl_bitcast_alias_renames_local_target_shadow():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "uint floatBitsToUint_ = 1u;" in generated_code
-    assert "uint packed = floatBitsToUint(value);" in generated_code
-    assert "float((floatBitsToUint_ + packed))" in generated_code
+    assert "uint packed_ = floatBitsToUint(value);" in generated_code
+    assert "float((floatBitsToUint_ + packed_))" in generated_code
     assert "uint floatBitsToUint = 1u;" not in generated_code
     assert "asuint(" not in generated_code
 
@@ -45752,7 +45752,7 @@ def test_opengl_user_defined_bitcast_alias_function_is_preserved():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "uint asuint(float value)" in generated_code
-    assert "uint packed = asuint(value);" in generated_code
+    assert "uint packed_ = asuint(value);" in generated_code
     assert "floatBitsToUint" not in generated_code
 
 

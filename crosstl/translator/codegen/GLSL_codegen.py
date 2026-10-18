@@ -183,6 +183,7 @@ from .generic_struct_utils import (
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_union_storage import UnionStorage
@@ -1423,7 +1424,9 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
     )
 
 
-class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
+class GLSLCodeGen(
+    GLSLEmulatedMatrices, GLSLHlslStructuredBuffers, GLSLHlslConstantBuffers
+):
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
@@ -1776,6 +1779,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
     # Words that GLSL 4.60 reserves for future use (section 3.6), qualifiers and
     # non-type keywords. Source languages such as HLSL accept them as ordinary
     # identifiers (``this``, ``resource``, ``filter``), so they are escaped.
+    # Mesa also lexes ``packed``, reserved up to GLSL 1.30, as a keyword.
     GLSL_RESERVED_IDENTIFIERS = GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES | {
         "active",
         "asm",
@@ -1814,6 +1818,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         "noinline",
         "noperspective",
         "output",
+        "packed",
         "partition",
         "patch",
         "precise",
@@ -2543,6 +2548,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.glsl_integer_dot_types = set()
         self.reset_glsl_emulated_matrices()
         self.reset_glsl_hlsl_structured_buffers()
+        self.reset_glsl_hlsl_cbuffers()
         self.glsl_image_usages = {}
         self.glsl_unknown_format_images = set()
         self.glsl_formatted_image_load_names = set()
@@ -8259,6 +8265,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.glsl_integer_dot_types = set()
         self.reset_glsl_emulated_matrices(ast)
         self.reset_glsl_hlsl_structured_buffers()
+        self.reset_glsl_hlsl_cbuffers()
         self.glsl_image_usages = self.collect_glsl_image_usages(ast)
         self.glsl_unknown_format_images = set()
         self.glsl_formatted_image_load_names = set()
@@ -18358,6 +18365,10 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
                 resource_binding,
             )
             code += resource_identity_marker(node, block_name)
+            register_block = self.glsl_hlsl_cbuffer_block(node, layout, block_name)
+            if register_block is not None:
+                code += register_block
+                continue
             if isinstance(node, StructNode):
                 code += f"{layout} uniform {block_name} {{\n"
                 members = getattr(node, "members", [])
@@ -20949,6 +20960,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         ):
             code += f"    {declaration}\n"
         if shader_type in stage_entry_types:
+            code += self.generate_glsl_hlsl_cbuffer_loads(1)
             code += self.generate_glsl_runtime_global_initializers(func, 1)
         simd_placeholder_body = (
             self.glsl_unsupported_metal_simd_placeholder_function_body(func, 1)
