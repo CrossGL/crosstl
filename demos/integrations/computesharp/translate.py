@@ -42,9 +42,19 @@ MAX_ERROR_CHARS = 4000
 # Shaders that hash sin values (frac(sin(x) * 43758.5) and similar) amplify
 # last-bit differences into different noise, so both targets request the
 # WARP evaluation from the HLSL frontend; precision/ measures the result.
+#
+# WARP also executes the DXIL as written: every product and sum is rounded,
+# and dot products add their terms from the first component on. Metal fuses
+# multiply-adds, including inside dot, mix, length, normalize, smoothstep,
+# cross, reflect and matrix products, and llvmpipe adds dot products in a
+# different order, so both targets also disable contraction.
 SOURCE_OPTIONS = {
-    "metal": {"matrix_packing": "row_major", "trigonometric_reduction": "warp"},
-    "opengl": {"matrix_packing": "row_major", "trigonometric_reduction": "warp"},
+    target: {
+        "matrix_packing": "row_major",
+        "trigonometric_reduction": "warp",
+        "floating_point_contraction": "off",
+    }
+    for target in ("metal", "opengl")
 }
 
 

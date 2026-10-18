@@ -37538,6 +37538,11 @@ complex64_t crossgl_complex64_mod_assign(
             vector_info = self.glsl_value_type_info(type_name)
             if vector_info is not None and vector_info["width"] > 1:
                 return self.vector_component_type(type_name) or type_name
+            matrix_dimensions = self.glsl_matrix_dimensions(self.map_type(type_name))
+            if matrix_dimensions is not None:
+                # A subscript selects a column; non-square columns have the
+                # row count, not the column count, of components.
+                return matrix_dimensions[3]
             return type_name
         if isinstance(expression, BinaryOpNode):
             operator = self.map_operator(

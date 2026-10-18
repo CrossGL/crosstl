@@ -48749,3 +48749,34 @@ def test_glsl_storage_byte_view_rejects_mismatched_private_array_layout(tmp_path
     diagnostic = exc_info.value
     assert diagnostic.reason == "unsupported-storage-aggregate-source-layout"
     assert "does not exactly match" in str(diagnostic)
+
+
+def test_glsl_non_square_matrix_subscripts_select_columns(tmp_path):
+    # CrossGL mat3x2 has three rows and two columns (GLSL mat2x3), so a
+    # subscript selects a three-component column.
+    shader = """
+    shader main {
+        vec3 column(mat3x2 m, int i) {
+            return m[i];
+        }
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                mat3x2 m = mat3x2(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0));
+                float e = m[1][2];
+                vec3 c = column(m, 1) + vec3(e);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "vec3 column(mat2x3 m, int i)" in generated_code
+    assert (
+        "mat2x3 m = mat2x3(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0));" in generated_code
+    )
+    assert "float e = m[1][2];" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code, tmp_path, "non_square_matrix_subscripts"
+    )

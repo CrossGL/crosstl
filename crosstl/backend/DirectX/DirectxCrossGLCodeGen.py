@@ -22,6 +22,7 @@ from ..common_ast import (
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
+from .precise_arithmetic import HLSLPreciseArithmeticMixin
 from .struct_methods import (
     RECEIVER_PARAMETER,
     analyze_receiver_mutations,
@@ -44,7 +45,7 @@ class HLSLSelectOverloadError(ValueError):
         self.reason = "select-overload-ownership-unresolved"
 
 
-class HLSLToCrossGLConverter:
+class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
     """Serialize DirectX backend AST nodes back into CrossGL source."""
 
     crossgl_reserved_identifiers = frozenset(CROSSGL_KEYWORDS)
@@ -114,7 +115,12 @@ class HLSLToCrossGLConverter:
         }
     )
 
-    def __init__(self, matrix_packing=None, trigonometric_reduction=None):
+    def __init__(
+        self,
+        matrix_packing=None,
+        trigonometric_reduction=None,
+        floating_point_contraction=None,
+    ):
         """Create a converter.
 
         ``matrix_packing`` mirrors the compiler's default matrix packing
@@ -136,6 +142,16 @@ class HLSLToCrossGLConverter:
         then match WARP bit for bit for normal operands; subnormal operands
         are not flushed to zero. Operands that DXC folds at compile time
         (literals and ``static const`` values) keep the exact intrinsic.
+
+        ``floating_point_contraction`` controls fused multiply-adds.
+        ``"allowed"`` (the default) lets the target contract arithmetic as
+        Direct3D drivers may. ``"off"`` evaluates arithmetic as DXC lowers it
+        and WARP executes it, rounding every product and sum: every function
+        is ``precise``, and ``dot``, ``length``, ``distance``, ``normalize``,
+        ``lerp``, ``smoothstep``, ``cross``, ``reflect``, ``faceforward`` and
+        matrix products expand into precise helpers in DXC's order of
+        operations, since target intrinsics fuse internally. Integer
+        operands and operands DXC folds at compile time keep the intrinsic.
         """
         if matrix_packing is not None and matrix_packing not in self.MATRIX_PACKINGS:
             raise ValueError(
@@ -151,13 +167,25 @@ class HLSLToCrossGLConverter:
                 f"{', '.join(self.TRIGONOMETRIC_REDUCTIONS)}, "
                 f"got {trigonometric_reduction!r}"
             )
+        if (
+            floating_point_contraction is not None
+            and floating_point_contraction not in self.FLOATING_POINT_CONTRACTIONS
+        ):
+            raise ValueError(
+                "floating_point_contraction must be one of "
+                f"{', '.join(self.FLOATING_POINT_CONTRACTIONS)}, "
+                f"got {floating_point_contraction!r}"
+            )
         self.matrix_packing = matrix_packing
         self.trigonometric_reduction = trigonometric_reduction or "exact"
+        self.floating_point_contraction = floating_point_contraction or "allowed"
+        self.reset_precise_arithmetic()
         self.revolution_reduction_types = set()
         self.warp_trigonometric_uses = set()
         self.hlsl_static_const_initializers = {}
         self.constant_initializer_depth = 0
         self.function_return_types = {}
+        self.function_overloads = {}
         self.source_function_names = set()
         self.structured_buffer_types = {
             "Buffer",
@@ -2617,6 +2645,22 @@ class HLSLToCrossGLConverter:
         scalar, _rows, cols = match.groups()
         return scalar if cols == "1" else f"{scalar}{cols}"
 
+    def overload_return_raw_type(self, expr):
+        """Return type of the one overload whose parameter widths match."""
+        overloads = getattr(self, "function_overloads", {}).get(expr.name)
+        if not overloads or len(overloads) < 2:
+            return None
+        widths = [self.hlsl_component_width(arg) for arg in expr.args]
+        if None in widths:
+            return None
+        matches = {
+            return_type
+            for parameter_types, return_type in overloads
+            if [self.raw_type_component_width(item) for item in parameter_types]
+            == widths
+        }
+        return next(iter(matches)) if len(matches) == 1 else None
+
     def byte_address_load_raw_type(self, member):
         templated_type = self.first_template_argument(member)
         if templated_type is not None:
@@ -2634,7 +2678,10 @@ class HLSLToCrossGLConverter:
                 type_name = self.canonical_composite_type(expr.name)
                 if self.map_type(type_name) != self.sanitize_type_name(type_name):
                     return type_name
-                return self.function_return_types.get(expr.name)
+                return_type = self.function_return_types.get(expr.name)
+                if return_type is None:
+                    return_type = self.overload_return_raw_type(expr)
+                return return_type
             return None
 
         member = self.templated_method_base(expr.name.member)
@@ -3708,9 +3755,19 @@ class HLSLToCrossGLConverter:
         self.current_struct_method_locals = set()
         self.source_function_names = {function.name for function in ast.functions}
         return_types = {}
+        self.function_overloads = {}
         for function in ast.functions:
             return_types.setdefault(function.name, set()).add(
                 str(getattr(function, "return_type", "") or "")
+            )
+            self.function_overloads.setdefault(function.name, []).append(
+                (
+                    [
+                        getattr(param, "vtype", None)
+                        for param in getattr(function, "params", []) or []
+                    ],
+                    str(getattr(function, "return_type", "") or ""),
+                )
             )
         self.function_return_types = {
             name: next(iter(types))
@@ -3771,6 +3828,7 @@ class HLSLToCrossGLConverter:
         self.integer_constant_values = self.collect_integer_constant_values(ast)
         self.revolution_reduction_types = set()
         self.warp_trigonometric_uses = set()
+        self.reset_precise_arithmetic()
         self.constant_initializer_depth = 0
         self.hlsl_static_const_initializers = self.collect_static_const_initializers(
             ast
@@ -3885,7 +3943,10 @@ class HLSLToCrossGLConverter:
             else:
                 code += self.generate_function(func)
 
-        reduction_helpers = self.generate_trigonometric_helpers()
+        reduction_helpers = (
+            self.generate_trigonometric_helpers()
+            + self.generate_precise_arithmetic_helpers()
+        )
         if reduction_helpers:
             code = (
                 code[:function_section_start]
@@ -4369,7 +4430,10 @@ class HLSLToCrossGLConverter:
         code = self.format_attributes(
             getattr(func, "attributes", []), indent, skip_attribute_names
         )
-        precise_as_attribute = self.function_precise_return_needs_attribute(func)
+        precise_as_attribute = (
+            self.function_precise_return_needs_attribute(func)
+            or self.precise_arithmetic_enabled()
+        )
         if precise_as_attribute:
             code += "    " * indent + "@ precise\n"
         code += "    " * indent
@@ -4799,10 +4863,19 @@ class HLSLToCrossGLConverter:
                 self.hlsl_component_width(expr.false_expr),
             ]
             return None if None in widths else max(widths)
+        if (
+            isinstance(expr, MemberAccessNode)
+            and isinstance(expr.member, str)
+            and re.fullmatch(r"[xyzw]{1,4}|[rgba]{1,4}", expr.member)
+            and self.is_swizzle_object(expr.object)
+        ):
+            return len(expr.member)
         if isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
             callee = self.normalize_hlsl_intrinsic_name(expr.name)
             if callee in self.source_function_names:
                 return None
+            if callee == "mul" and len(expr.args) == 2:
+                return self.mul_result_width(expr.args)
             if callee in self.HLSL_SCALAR_RESULT_INTRINSICS:
                 return 1
             if callee == "cross":
@@ -4810,6 +4883,49 @@ class HLSLToCrossGLConverter:
             if callee in self.HLSL_COMPONENTWISE_INTRINSICS and expr.args:
                 widths = [self.hlsl_component_width(arg) for arg in expr.args]
                 return None if None in widths else max(widths)
+        return None
+
+    def is_swizzle_object(self, expr):
+        """Whether a ``.xyzw``-style member of ``expr`` must be a swizzle.
+
+        Scalars, vectors, operator results and intrinsic results cannot be
+        structs, so the member selects components.
+        """
+        if self.hlsl_component_width(expr) is not None:
+            return True
+        if isinstance(expr, (BinaryOpNode, UnaryOpNode, TernaryOpNode)):
+            return True
+        return (
+            isinstance(expr, FunctionCallNode)
+            and isinstance(expr.name, str)
+            and self.normalize_hlsl_intrinsic_name(expr.name)
+            not in self.source_function_names
+            and self.raw_type_base(self.normalize_hlsl_intrinsic_name(expr.name))
+            not in getattr(self, "structs_by_name", {})
+        )
+
+    def mul_result_width(self, args):
+        """Component count of an HLSL ``mul`` result, or ``None``."""
+        shapes = [self.raw_value_shape(arg) for arg in args]
+        if shapes == ["vector", "vector"]:
+            return 1
+        if "matrix" in shapes:
+            matrix_index = shapes.index("matrix")
+            if shapes[1 - matrix_index] != "vector":
+                return None
+            raw_type = self.canonical_composite_type(
+                str(self.expression_value_raw_type(args[matrix_index]) or "")
+            )
+            dimensions = re.fullmatch(r"[a-z_0-9]*?([1-4])x([1-4])", raw_type)
+            if dimensions is None:
+                return None
+            rows, cols = (int(value) for value in dimensions.groups())
+            # mul(v, M) is a row vector times M; mul(M, v) a column vector.
+            return cols if matrix_index == 1 else rows
+        if "scalar" in shapes:
+            return self.hlsl_component_width(
+                args[1] if shapes[0] == "scalar" else args[0]
+            )
         return None
 
     def trigonometric_operand(self, operand_expr, rendered):
@@ -5533,16 +5649,26 @@ class HLSLToCrossGLConverter:
         left_shape = self.raw_value_shape(args[0])
         right_shape = self.raw_value_shape(args[1])
         if left_shape == "vector" and right_shape == "vector":
+            precise_dot = self.precise_intrinsic_call("dot", args, rendered_args)
+            if precise_dot is not None:
+                return precise_dot
             return f"dot({rendered_args[0]}, {rendered_args[1]})"
         left = self.maybe_parenthesize(args[0], rendered_args[0])
         right = self.maybe_parenthesize(args[1], rendered_args[1])
         if self.matrix_packing == "row_major" and "matrix" in (left_shape, right_shape):
+            precise_product = self.precise_matrix_product(args, rendered_args, 1, 0)
+            if precise_product is not None:
+                return precise_product
             return f"({right} * {left})"
         if self.matrix_packing == "row_major" and None in (left_shape, right_shape):
             raise ValueError(
                 "Cannot order HLSL mul operands with row-major matrix packing: "
                 f"unknown operand type in mul({rendered_args[0]}, {rendered_args[1]})"
             )
+        if "matrix" in (left_shape, right_shape):
+            precise_product = self.precise_matrix_product(args, rendered_args, 0, 1)
+            if precise_product is not None:
+                return precise_product
         return f"({left} * {right})"
 
     def maybe_parenthesize(self, expr, rendered: str) -> str:
@@ -5876,6 +6002,11 @@ class HLSLToCrossGLConverter:
                 return self.trigonometric_call(
                     func_name, expr.args[0], rendered_args[0]
                 )
+            precise_call = self.precise_intrinsic_call(
+                func_name, expr.args, rendered_args
+            )
+            if precise_call is not None:
+                return precise_call
             func_name = self.function_map.get(func_name, func_name)
             func_name = self.interlocked_map.get(func_name, func_name)
             func_name = self.render_function_identifier(func_name)
