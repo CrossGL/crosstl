@@ -490,6 +490,14 @@ WARP job, the adapted-source parity job, the macOS Metal job, the Linux Mesa
 llvmpipe job and then the qualification job, with bounded timeouts and seven
 to fourteen days of artifact retention.
 
+The workflow runs on pull requests and pushes to `main` only when this
+directory, the workflow, the packaging files or the CrossTL code that the HLSL
+translation imports changes: the top-level `crosstl/*.py` modules,
+`crosstl/backend/**` and `crosstl/translator/**`. `crosstl/project/**` and
+other demos do not trigger it. `tests/test_workflow.py` translates generated
+ComputeSharp HLSL in a fresh interpreter and fails if a loaded CrossTL module
+falls outside these paths.
+
 ## Licenses
 
 ComputeSharp is MIT-licensed; its `LICENSE` and `ThirdPartyNotices.txt` apply to
