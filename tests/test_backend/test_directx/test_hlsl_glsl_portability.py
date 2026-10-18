@@ -334,6 +334,32 @@ def test_reciprocal_square_root_uses_the_glsl_builtin(tmp_path):
     validate_glsl_if_available(code, tmp_path)
 
 
+def test_integer_dot_products_sum_the_component_products(tmp_path):
+    source = """
+        RWStructuredBuffer<int> output : register(u0);
+        RWStructuredBuffer<uint> unsigned_output : register(u1);
+        [NumThreads(1, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            int3 a = int3(ThreadIds.x, -2, 3);
+            uint2 b = uint2(ThreadIds.x, 3u);
+            float2 f = float2(1.5, 2.0);
+            output[0] = dot(a, a) + dot(a.xy, int2(3, 4)) + (int)dot(f, f);
+            unsigned_output[0] = dot(a.xy, b) + dot(ThreadIds.x, 2u);
+        }
+    """
+    code = translate_hlsl(source, tmp_path).code
+
+    assert "int crossgl_integer_dot(ivec3 a, ivec3 b) {" in code
+    assert "return a.x * b.x + a.y * b.y + a.z * b.z;" in code
+    assert "uint crossgl_integer_dot(uvec2 a, uvec2 b) {" in code
+    assert "crossgl_integer_dot(a, a)" in code
+    assert "crossgl_integer_dot(uvec2(a.xy), b)" in code
+    assert "dot(f, f)" in code
+    assert not re.search(r"(?<![\w])dot\((?:a|uvec2|ThreadIds|gl_)", code)
+    validate_glsl_if_available(code, tmp_path)
+
+
 def test_double_bit_casts_and_compare_exchange(tmp_path):
     source = """
         static const double Nan = asdouble(0x00000000, 0xFFF80000);

@@ -2388,6 +2388,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.glsl_combined_sampler_uses = []
         self.glsl_sampler_registers = {}
         self.glsl_float_remainder_types = set()
+        self.glsl_integer_dot_types = set()
         self.reset_glsl_emulated_matrices()
         self.reset_glsl_hlsl_structured_buffers()
         self.glsl_image_usages = {}
@@ -6435,6 +6436,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.glsl_combined_sampler_uses = []
         self.glsl_sampler_registers = {}
         self.glsl_float_remainder_types = set()
+        self.glsl_integer_dot_types = set()
         self.reset_glsl_emulated_matrices(ast)
         self.reset_glsl_hlsl_structured_buffers()
         self.glsl_image_usages = self.collect_glsl_image_usages(ast)
@@ -7950,6 +7952,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
             + self.generate_glsl_metal_math_helpers()
             + self.generate_glsl_complex64_helpers()
             + self.generate_glsl_float_remainder_helpers()
+            + self.generate_glsl_integer_dot_helpers()
             + self.generate_glsl_hlsl_structured_helpers()
         )
         if generated_helpers:
@@ -31028,6 +31031,9 @@ complex64_t crossgl_complex64_mod_assign(
             ):
                 return self.expression_result_type(args[0])
             if func_name == "dot" and args:
+                integer_dot = self.glsl_integer_dot_plan(list(args))
+                if integer_dot is not None:
+                    return integer_dot[0]
                 return (
                     self.vector_component_type(self.expression_result_type(args[0]))
                     or "float"
@@ -31252,6 +31258,66 @@ complex64_t crossgl_complex64_mod_assign(
             helpers += (
                 f"{value_type} crossgl_remainder({value_type} x, {value_type} y) {{\n"
                 "    return x - y * trunc(x / y);\n"
+                "}\n\n"
+            )
+        return helpers
+
+    def glsl_integer_dot_plan(self, arguments):
+        """Return ``(family, width, infos)`` for a ``dot`` of 32-bit integers.
+
+        CrossGL, HLSL and Metal define ``dot`` for integer vectors and return the
+        component type; operands of mixed signedness use ``uint`` like the other
+        usual arithmetic conversions. GLSL only defines ``dot`` for floating point.
+        """
+        if len(arguments) != 2:
+            return None
+        infos = []
+        for argument in arguments:
+            info = self.glsl_value_type_info(self.glsl_source_expression_type(argument))
+            if info is None or info["narrow"] is not None or info["bits"] != 32:
+                return None
+            infos.append(info)
+        families = {info["family"] for info in infos}
+        if families - {"int", "uint"}:
+            return None
+        widths = {info["width"] for info in infos}
+        if len(widths) != 1:
+            return None
+        family = "uint" if "uint" in families else "int"
+        return family, widths.pop(), infos
+
+    def generate_glsl_integer_dot(self, arguments):
+        """Sum the component products of an integer ``dot`` through a helper."""
+        plan = self.glsl_integer_dot_plan(arguments)
+        if plan is None:
+            return None
+        family, width, infos = plan
+        value_type = self.glsl_vector_type_name(family, width)
+        rendered = [
+            (
+                self.generate_expression(argument)
+                if info["family"] == family
+                else self.glsl_converted_operand(argument, value_type)
+            )
+            for argument, info in zip(arguments, infos)
+        ]
+        if width == 1:
+            return f"({rendered[0]} * {rendered[1]})"
+        self.glsl_integer_dot_types.add(value_type)
+        return f"crossgl_integer_dot({rendered[0]}, {rendered[1]})"
+
+    def generate_glsl_integer_dot_helpers(self):
+        helpers = ""
+        for value_type in sorted(getattr(self, "glsl_integer_dot_types", ())):
+            info = self.glsl_value_type_info(value_type)
+            if info is None:
+                continue
+            components = "xyzw"[: info["width"]]
+            products = " + ".join(f"a.{name} * b.{name}" for name in components)
+            helpers += (
+                f"{info['family']} crossgl_integer_dot({value_type} a, "
+                f"{value_type} b) {{\n"
+                f"    return {products};\n"
                 "}\n\n"
             )
         return helpers
@@ -40916,6 +40982,10 @@ complex64_t crossgl_complex64_mod_assign(
                 for argument in arguments
             )
             return f"packDouble2x32(uvec2({low}, {high}))"
+        if func_name == "dot" and len(arguments) == 2:
+            integer_dot = self.generate_glsl_integer_dot(arguments)
+            if integer_dot is not None:
+                return integer_dot
         if func_name == "atomicCompareExchange" and len(arguments) == 3:
             # Returns the original value, like GLSL atomicCompSwap.
             return self.generate_glsl_memory_atomic_call("atomicCompSwap", arguments)

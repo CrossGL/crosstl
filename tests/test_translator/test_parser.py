@@ -5725,6 +5725,38 @@ def test_precise_variable_attribute_parse():
     assert [attr.name for attr in statements[0].attributes] == ["precise"]
 
 
+def test_precise_function_qualifier_parses_as_function_attribute():
+    code = """
+    shader Precise {
+        precise float stable(float a, float b, float c) {
+            return a * b + c;
+        }
+        @precise precise float twice(float a) {
+            return a * a + a;
+        }
+        float precise_value(float precise) {
+            return precise;
+        }
+        compute {
+            void main() {
+                float x = stable(1.0, 2.0, 3.0) + twice(2.0) + precise_value(1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    functions = {function.name: function for function in ast.functions}
+
+    assert set(functions) == {"stable", "twice", "precise_value"}
+    assert [attr.name for attr in functions["stable"].attributes] == ["precise"]
+    assert functions["stable"].qualifiers == []
+    assert functions["stable"].return_type.name == "float"
+    assert [attr.name for attr in functions["twice"].attributes] == ["precise"]
+    assert functions["precise_value"].attributes == []
+    assert functions["precise_value"].parameters[0].name == "precise"
+
+
 def test_image_format_parameter_attributes_parse():
     code = """
     shader Resources {
