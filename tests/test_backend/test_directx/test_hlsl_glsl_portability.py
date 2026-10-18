@@ -352,3 +352,256 @@ def test_non_square_matrix_constructors_match_their_declarations(tmp_path):
 
     assert "mat2x3 m = mat2x3(" in code
     validate_glsl_if_available(code, tmp_path)
+
+
+def emulated(code, name):
+    """The body line of one generated helper function."""
+    lines = code.splitlines()
+    for index, line in enumerate(lines):
+        if f" {name}(" in line and line.rstrip().endswith("{"):
+            return lines[index + 1].strip()
+    raise AssertionError(f"helper {name} not generated")
+
+
+def test_integer_matrices_become_column_structs(tmp_path):
+    source = """
+        RWStructuredBuffer<int> results : register(u0);
+        [NumThreads(1, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            int2x3 c = int2x3(1, 2, 3, 4, 5, 6);
+            uint2x2 d = uint2x2((uint)1, (uint)2, (uint)3, (uint)4);
+            int2x3 shifted = c << 2;
+            int2x3 logical = (int2x3)((uint2x3)c >> 1u);
+            uint2x2 by_matrix = d >> (int2x2)d;
+            results[0] = shifted._m01;
+            results[1] = logical._m12;
+            results[2] = (int)by_matrix._m10;
+        }
+    """
+    code = translate_hlsl(source, tmp_path).code
+
+    # HLSL int2x3 has two rows of three: two ivec3 columns of the transpose.
+    assert "struct crossgl_imat2x3 {\n    ivec3 c[2];\n};" in code
+    assert (
+        "crossgl_imat2x3 c = crossgl_imat2x3(ivec3[2](ivec3(1, 2, 3), "
+        "ivec3(4, 5, 6)));" in code
+    )
+    assert emulated(code, "crossgl_shl_imat2x3_int") == (
+        "return crossgl_imat2x3(ivec3[2](a.c[0] << b, a.c[1] << b));"
+    )
+    assert emulated(code, "crossgl_cast_umat2x3_imat2x3") == (
+        "return crossgl_umat2x3(uvec3[2](uvec3(m.c[0]), uvec3(m.c[1])));"
+    )
+    assert "crossgl_shr_umat2x2_imat2x2(d, crossgl_cast_imat2x2_umat2x2(d))" in code
+    # _m01 is row 0, column 1: column 0 of the transpose, component 1.
+    assert "results[0] = shifted.c[0][1];" in code
+    assert "results[1] = logical.c[1][2];" in code
+    assert "int2x3" not in code
+    validate_glsl_if_available(code, tmp_path)
+
+
+def test_integer_matrix_products_and_casts(tmp_path):
+    source = """
+        StructuredBuffer<float> input : register(t0);
+        RWStructuredBuffer<int> results : register(u0);
+        [NumThreads(1, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            int2 v = int2(3, 4);
+            int2x3 m = int2x3(1, 2, 3, 4, 5, 6);
+            int3 product = mul(v, m);
+            float2x4 f = float2x4(input[0], 1, 2, 3, 4, 5, 6, 7);
+            int2x4 truncated = (int2x4)f;
+            results[0] = product.z + truncated._m13;
+        }
+    """
+    code = translate_hlsl(source, tmp_path).code
+
+    # mul(row vector, matrix) sums the rows of m weighted by v.
+    assert emulated(code, "crossgl_matmul_imat2x3_ivec2") == (
+        "return a.c[0] * b[0] + a.c[1] * b[1];"
+    )
+    assert "ivec3 product = crossgl_matmul_imat2x3_ivec2(m, v);" in code
+    assert emulated(code, "crossgl_cast_imat2x4_mat2x4") == (
+        "return crossgl_imat2x4(ivec4[2](ivec4(m[0]), ivec4(m[1])));"
+    )
+    validate_glsl_if_available(code, tmp_path)
+
+
+def test_boolean_matrices_select_and_combine(tmp_path):
+    source = """
+        RWStructuredBuffer<uint> results : register(u0);
+        [NumThreads(1, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            bool2x4 mask = bool2x4(true, true, false, true, false, false, false, true);
+            uint2x4 a = uint2x4(1, 2, 3, 4, 5, 6, 7, 8);
+            uint2x4 b = uint2x4(10, 20, 30, 40, 50, 60, 70, 80);
+            uint2x4 picked = select(mask, a, b);
+            bool2x4 both = and(mask, a == b);
+            bool4 lanes = or(bool4(true, false, false, true), bool4(false, false, true, true));
+            results[0] = picked._m12 + (both._m03 ? 1u : 0u) + (lanes.y ? 1u : 0u);
+        }
+    """
+    code = translate_hlsl(source, tmp_path).code
+
+    # HLSL select(mask, a, b) is mask ? a : b element by element.
+    assert "crossgl_select_umat2x4_umat2x4_bmat2x4(b, a, mask)" in code
+    assert emulated(code, "crossgl_select_umat2x4_umat2x4_bmat2x4") == (
+        "return crossgl_umat2x4(uvec4[2](mix(a.c[0], b.c[0], c.c[0]), "
+        "mix(a.c[1], b.c[1], c.c[1])));"
+    )
+    assert emulated(code, "crossgl_eq_umat2x4_umat2x4") == (
+        "return crossgl_bmat2x4(bvec4[2](equal(a.c[0], b.c[0]), "
+        "equal(a.c[1], b.c[1])));"
+    )
+    assert "bvec4(uvec4(bvec4(true, false, false, true)) | uvec4(" in code
+    validate_glsl_if_available(code, tmp_path)
+
+
+def test_integer_matrix_constants_stay_constant_expressions(tmp_path):
+    source = """
+        static const int2x2 Mat = int2x2((int)1, (int)2, (int)3, (int)4);
+        RWStructuredBuffer<float> results : register(u0);
+        [NumThreads(1, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            results[0] = Mat._m10;
+        }
+    """
+    code = translate_hlsl(source, tmp_path).code
+
+    assert (
+        "const crossgl_imat2x2 Mat = crossgl_imat2x2(ivec2[2](ivec2(int(1), "
+        "int(2)), ivec2(int(3), int(4))));" in code
+    )
+    assert "results[0] = float(Mat.c[1][0]);" in code
+    validate_glsl_if_available(code, tmp_path)
+
+
+def test_integer_matrix_floating_point_mixes_are_rejected(tmp_path):
+    source = """
+        RWStructuredBuffer<float> results : register(u0);
+        [NumThreads(1, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            int2x2 m = int2x2(1, 2, 3, 4);
+            int2x2 scaled = m * 0.5;
+            results[0] = scaled._m00;
+        }
+    """
+    with pytest.raises(ValueError, match="floating-point-mix"):
+        translate_hlsl(source, tmp_path)
+
+
+TRIGONOMETRY_HLSL = """
+    static const float Pi = 3.14159;
+    static const float SinPi = sin(Pi);
+    cbuffer _ : register(b0) { float time; int steps; }
+    RWStructuredBuffer<float> results : register(u0);
+    float Hash(float2 p)
+    {
+        return frac(sin(dot(p, float2(27.619, 57.583))) * 43758.547);
+    }
+    [NumThreads(1, 1, 1)]
+    void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+    {
+        float2 rotated = cos(float2(time, time * 2));
+        float s, c;
+        sincos(time, s, c);
+        results[0] = Hash(rotated) + SinPi + sin(Pi * 2) + tan(steps) + s + c;
+    }
+"""
+
+
+def translate_with_reduction(code: str, tmp_path, backend: str):
+    path = tmp_path / "trig.hlsl"
+    path.write_text(textwrap.dedent(code).strip() + "\n", encoding="utf-8")
+    return crosstl.translate(
+        str(path),
+        backend=backend,
+        format_output=False,
+        source_options={
+            "matrix_packing": "row_major",
+            "trigonometric_reduction": "revolutions",
+        },
+    )
+
+
+def test_revolution_reduction_matches_direct3d_argument_reduction(tmp_path):
+    code = translate_with_reduction(TRIGONOMETRY_HLSL, tmp_path, "opengl")
+
+    assert (
+        "float crosstl_hlsl_revolutions_float(float angle) {\n"
+        "    float turns = (angle * 0.15915494309189535);\n"
+        "    return ((turns - floor((turns + 0.5))) * 6.283185307179586);"
+    ) in code
+    assert "sin(crosstl_hlsl_revolutions_float(dot(p, vec2(27.619, 57.583))))" in code
+    assert "cos(crosstl_hlsl_revolutions_vec2(vec2(time, (time * 2))))" in code
+    assert "s = sin(crosstl_hlsl_revolutions_float(time));" in code
+    assert "c = cos(crosstl_hlsl_revolutions_float(time));" in code
+    assert "tan(crosstl_hlsl_revolutions_float(float(steps)))" in code
+    # DXC folds constant operands with exact math at compile time.
+    assert "const float SinPi = sin(Pi);" in code
+    assert "sin((Pi * 2))" in code
+    validate_glsl_if_available(code, tmp_path)
+
+
+def test_revolution_reduction_is_portable_and_opt_in(tmp_path):
+    metal = translate_with_reduction(TRIGONOMETRY_HLSL, tmp_path, "metal")
+    assert "crosstl_hlsl_revolutions_vec2(float2(" in metal
+
+    path = tmp_path / "exact.hlsl"
+    path.write_text(textwrap.dedent(TRIGONOMETRY_HLSL), encoding="utf-8")
+    exact = crosstl.translate(str(path), backend="opengl", format_output=False)
+    assert "crosstl_hlsl_revolutions" not in exact
+
+    with pytest.raises(ValueError, match="trigonometric_reduction"):
+        DirectxCrossGLCodeGen.HLSLToCrossGLConverter(trigonometric_reduction="fast")
+
+
+def test_structured_buffers_keep_the_hlsl_element_layout(tmp_path):
+    source = """
+        struct Inner { float2 uv; uint flags; };
+        struct Item { int2 P; bool B; Inner inner; float w; };
+        struct Plain { int a; float b; };
+        RWStructuredBuffer<Item> items : register(u0);
+        StructuredBuffer<Item> source : register(t0);
+        RWStructuredBuffer<Plain> plain : register(u1);
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            Item copy = source[ThreadIds.x];
+            items[ThreadIds.x].B = !copy.B;
+            items[ThreadIds.x].P = copy.P.yx;
+            items[ThreadIds.x].P.y += 2;
+            items[ThreadIds.x].w = (float)source[ThreadIds.x].P.x;
+            InterlockedAdd(items[0].inner.flags, 1u);
+            plain[ThreadIds.x].a = (int)source[ThreadIds.x].B;
+            if (ThreadIds.x == 0) { items[1] = copy; }
+        }
+    """
+    code = translate_hlsl(source, tmp_path).code
+
+    # std430 would align int2 to 8 bytes and pad Item to 32; HLSL packs it
+    # into 28 bytes with bool as a 32-bit 0 or 1.
+    assert (
+        "struct crossgl_hlsl_Item {\n    int P[2];\n    uint B;\n"
+        "    crossgl_hlsl_Inner inner;\n    float w;\n};"
+    ) in code
+    assert "buffer itemsBuffer { crossgl_hlsl_Item items[]; };" in code
+    assert (
+        "Item copy = crossgl_hlsl_load_source(uint(gl_GlobalInvocationID.x));" in code
+    )
+    assert "items[gl_GlobalInvocationID.x].B = uint((!copy.B));" in code
+    assert (
+        "crossgl_hlsl_store_items_P(uint(gl_GlobalInvocationID.x), copy.P.yx);" in code
+    )
+    assert "items[gl_GlobalInvocationID.x].P[1] += 2;" in code
+    assert "atomicAdd(items[0].inner.flags, 1u);" in code
+    assert "(source[gl_GlobalInvocationID.x].B != 0u)" in code
+    assert "crossgl_hlsl_store_items(uint(1), copy);" in code
+    # A struct whose std430 layout already matches keeps its declaration.
+    assert "buffer plainBuffer { Plain plain[]; };" in code
+    validate_glsl_if_available(code, tmp_path)

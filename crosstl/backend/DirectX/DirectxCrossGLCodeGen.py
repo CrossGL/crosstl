@@ -4056,37 +4056,6 @@ class HLSLToCrossGLConverter(
             f"{variable_name}{array_suffix}{initializer};\n"
         )
 
-    RUNTIME_FORMAT_STORAGE_TEXTURES = (
-        "RWTexture1D",
-        "RWTexture1DArray",
-        "RWTexture2D",
-        "RWTexture2DArray",
-        "RWTexture3D",
-        "RasterizerOrderedTexture1D",
-        "RasterizerOrderedTexture1DArray",
-        "RasterizerOrderedTexture2D",
-        "RasterizerOrderedTexture2DArray",
-        "RasterizerOrderedTexture3D",
-    )
-
-    def is_runtime_format_storage_texture(self, node):
-        """True for typed storage textures, whose format the runtime chooses.
-
-        HLSL declares only the element type of a typed UAV; the bound view
-        decides the storage format. Unless the source names a format (for
-        example ``[[vk::image_format]]``), the declaration carries
-        ``@ format(unknown)`` so targets that need a format do not guess one.
-        """
-        if self.raw_type_base(getattr(node, "vtype", None)) not in (
-            self.RUNTIME_FORMAT_STORAGE_TEXTURES
-        ):
-            return False
-        for attribute in getattr(node, "attributes", None) or []:
-            name = str(getattr(attribute, "name", "") or "").lower()
-            if name == "format" or "image_format" in name:
-                return False
-        return True
-
     def is_hlsl_program_constant_global(self, node):
         if getattr(node, "value", None) is not None:
             return False
