@@ -1,7 +1,8 @@
 """Lowering: discharge each rule-carrying hub intrinsic as the target's rule table entry says.
 
 ``native`` restores the original operation, ``polyfill`` instantiates the CrossGL template from ``POLYFILLS`` with
-the operands, and ``refuse`` raises :class:`RuleInexpressibleError`. Calls of the intrinsics written in CrossGL
+the operands or calls the helper function from ``HELPERS`` (injected into the program, see :mod:`.helpers`), and
+``refuse`` raises :class:`RuleInexpressibleError`. Calls of the intrinsics written in CrossGL
 source text are lowered the same way, without an original node to restore.
 """
 
@@ -11,12 +12,14 @@ import functools
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .helpers import HelperSet
 from .hub_types import call_name
 from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 from .rule_table import (
+    HELPERS,
     INTRINSIC_FAMILY,
+    INTRINSICS,
     POLYFILLS,
-    WRAP_INTRINSICS,
     target_entry,
 )
 
@@ -37,9 +40,11 @@ class Lowerer:
         self.program = program
         self.target = target
         self.report = report
+        self.helpers = HelperSet(program, target, RuleInexpressibleError)
 
     def run(self):
         self.visit(self.program, None, None)
+        self.helpers.inject()
 
     def visit(self, node, parent, field):
         for slot_field, key in list(child_slots(node)):
@@ -73,7 +78,7 @@ class Lowerer:
 
     def lower_call(self, node):
         intrinsic = call_name(node)
-        operator, arity = WRAP_INTRINSICS[intrinsic]
+        operator, arity = INTRINSICS[intrinsic]
         arguments = list(node.arguments or [])
         if len(arguments) != arity:
             raise RuleInexpressibleError(
@@ -85,34 +90,52 @@ class Lowerer:
             return _native(node, operator, arguments)
         conversions = node.annotations.get("cgl_rule_convert") or (None,) * arity
         operands = [_convert(a, c) for a, c in zip(arguments, conversions)]
-        return instantiate(intrinsic, operands)
+        return self.polyfill(intrinsic, operands, node.annotations.get("cgl_rule_type"))
+
+    def polyfill(self, intrinsic, operands, result_type):
+        """The polyfill of ``intrinsic`` over ``operands``: a template instance or a call of an injected helper."""
+        if intrinsic not in HELPERS:
+            return instantiate(intrinsic, operands)
+        if result_type is None:
+            raise RuleInexpressibleError(
+                f"the operand types of {intrinsic} could not be inferred, so its helper for {self.target} "
+                "cannot be chosen",
+                target=self.target,
+            )
+        return self.helpers.call(intrinsic, result_type.lanes, operands)
 
     def lower_statement(self, node, statement, parent, field):
-        intrinsic, conversion = statement
-        entry = self.entry(intrinsic)
+        entry = self.entry(statement.intrinsic)
         del node.annotations["cgl_rule_statement"]
         if entry.kind == "native":
             return node
         if isinstance(node, A.AssignmentNode):
-            return self.lower_compound(node, intrinsic, conversion)
-        return self.lower_step(node, intrinsic, parent, field)
+            return self.lower_compound(node, statement)
+        return self.lower_step(node, statement, parent, field)
 
-    def lower_compound(self, node, intrinsic, conversion):
+    def lower_compound(self, node, statement):
         if not is_pure(node.target):
             raise RuleInexpressibleError(
                 f"the compound assignment {node.operator} to an lvalue with side effects cannot be rewritten "
-                f"with wrapping arithmetic for {self.target}",
+                f"with the {INTRINSIC_FAMILY[statement.intrinsic]} polyfill for {self.target}",
                 target=self.target,
             )
-        value = instantiate(
-            intrinsic, [clone(node.target), _convert(node.value, conversion)]
+        target_conversion, value_conversion = statement.conversions
+        value = self.polyfill(
+            statement.intrinsic,
+            [
+                _convert(clone(node.target), target_conversion),
+                _convert(node.value, value_conversion),
+            ],
+            statement.result_type,
         )
+        value = _convert(value, statement.back_conversion)
         node.operator = "="
         node.value = value
         node.right = value
         return node
 
-    def lower_step(self, node, intrinsic, parent, field):
+    def lower_step(self, node, statement, parent, field):
         in_statement = isinstance(parent, A.ExpressionStatementNode) or (
             field == "update" and isinstance(parent, A.ForNode)
         )
@@ -126,9 +149,10 @@ class Lowerer:
                 target=self.target,
             )
         one = A.LiteralNode(1, A.PrimitiveType("int"))
-        assignment = A.AssignmentNode(
-            node.operand, instantiate(intrinsic, [clone(node.operand), one]), "="
+        value = self.polyfill(
+            statement.intrinsic, [clone(node.operand), one], statement.result_type
         )
+        assignment = A.AssignmentNode(node.operand, value, "=")
         assignment.source_location = node.source_location
         return assignment if in_statement else A.ExpressionStatementNode(assignment)
 
@@ -147,9 +171,11 @@ def _native(node, operator, arguments):
 
 
 def _convert(operand, conversion):
+    """``operand`` converted to the 32-bit integer type ``conversion`` (``None``: unchanged)."""
     if conversion is None:
         return operand
-    name = "int" if conversion.lanes == 1 else f"ivec{conversion.lanes}"
+    scalar, vector = ("uint", "uvec") if conversion.kind == "u" else ("int", "ivec")
+    name = scalar if conversion.lanes == 1 else f"{vector}{conversion.lanes}"
     return call(name, [operand])
 
 
@@ -159,7 +185,7 @@ def template(intrinsic):
     from ..source_registry import SOURCE_REGISTRY, register_default_sources
 
     register_default_sources()
-    arity = WRAP_INTRINSICS[intrinsic][1]
+    arity = INTRINSICS[intrinsic][1]
     parameters = ", ".join(f"int x{index}" for index in range(arity))
     text = (
         "shader __cgl_rule_template {\n"

@@ -4,7 +4,7 @@ import pytest
 
 z3 = pytest.importorskip("z3")
 
-from crosstl.translator.semantics import rule_table  # noqa: E402
+from crosstl.translator.semantics import helpers, rule_table  # noqa: E402
 from crosstl.translator.semantics.lower import template  # noqa: E402
 from crosstl.translator.semantics.rule_table import TargetEntry  # noqa: E402
 
@@ -48,7 +48,8 @@ def test_rust_native_entry_needs_its_recorded_configuration():
         ("x0 + x1", "unsound"),
         ("asint(asuint(x0) + asuint(x0))", "malformed"),
         ("asint(asuint(x0) + asuint(x1) + asuint(x1))", "malformed"),
-        ("asint(asuint(x0) / asuint(x1))", "unmodelled"),
+        ("asint(asuint(x0) << asuint(x1))", "unmodelled"),
+        ("asint(asuint(x0) / asuint(x1))", "unsound"),
         ("asint(asuint(x0) + asuint(x1) + 1u)", "unsound"),
     ],
 )
@@ -62,6 +63,49 @@ def test_checker_rejects_defective_polyfills(monkeypatch, polyfill, result):
     finally:
         monkeypatch.undo()
         template.cache_clear()
+    assert record["result"] == result
+
+
+def test_native_unsigned_division_misses_the_direct3d_zero_divisor_rule():
+    for target in ("metal", "directx", "vulkan", "opengl", "wgsl", "rust"):
+        for intrinsic in ("__cgl_udiv_ones", "__cgl_urem_ones"):
+            record = rule_table_smt.check_entry(
+                intrinsic, target, TargetEntry("native", "mutation")
+            )
+            assert record["result"] == "unsound", (intrinsic, target)
+            assert int(record["counterexample"]["x1"], 16) == 0
+
+
+@pytest.mark.parametrize(
+    "body, target, result",
+    [
+        # Selecting all ones does not guard the division: a target may evaluate both arms.
+        ("x1 == 0u ? 0xFFFFFFFFu : x0 / x1", "metal", "unsound"),
+        ("x1 == 0u ? 0xFFFFFFFFu : x0 / x1", "vulkan", "unsound"),
+        # WGSL defines e1 / 0 as e1, so the unguarded division is sound there.
+        ("x1 == 0u ? 0xFFFFFFFFu : x0 / x1", "wgsl", "sound"),
+        ("x1 == 0u ? 0u : x0 / (x1 == 0u ? 1u : x1)", "metal", "unsound"),
+        ("x1 != 0u ? x0 / (x1 == 0u ? 1u : x1) : 0xFFFFFFFFu", "metal", "sound"),
+        ("x1 == 0u ? 0xFFFFFFFFu : x0 % (x1 == 0u ? 1u : x1)", "metal", "unsound"),
+        ("x1 == 0u ? 0xFFFFFFFFu : x0 / (x1 + 1u)", "directx", "unsound"),
+        ("x1 == 0u ? 0xFFFFFFFFu : uint(asint(x0) / asint(x1))", "metal", "unmodelled"),
+    ],
+)
+def test_checker_rejects_defective_udiv_helpers(monkeypatch, body, target, result):
+    original = rule_table.HELPERS["__cgl_udiv_ones"]
+    monkeypatch.setitem(
+        rule_table.HELPERS,
+        "__cgl_udiv_ones",
+        rule_table.Helper(original.name, original.scalar, body),
+    )
+    helpers._parsed.cache_clear()
+    try:
+        record = rule_table_smt.check_entry(
+            "__cgl_udiv_ones", target, TargetEntry("polyfill", "mutation")
+        )
+    finally:
+        monkeypatch.undo()
+        helpers._parsed.cache_clear()
     assert record["result"] == result
 
 

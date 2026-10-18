@@ -1,18 +1,24 @@
 """Annotation: rewrite operations whose source rule is defined into rule-carrying hub intrinsics.
 
-Expression operations become calls (``a + b`` on ``int`` from GLSL becomes ``__cgl_wrap_add(a, b)``); the call keeps
-the original node in ``annotations["cgl_rule_origin"]`` so native lowering restores it exactly. Statement operations
-(``x += e``, ``++x``) keep their node and gain ``annotations["cgl_rule_statement"]``. Operations proved not to
-overflow are left alone: literal-only arithmetic whose exact result fits, and the update of a for-loop counter
-bounded by a strict comparison.
+Expression operations become calls (``a + b`` on ``int`` from GLSL becomes ``__cgl_wrap_add(a, b)``, and ``a / b``
+on ``uint`` from HLSL becomes ``__cgl_udiv_ones(a, b)``); the call keeps the original node in
+``annotations["cgl_rule_origin"]`` so native lowering restores it exactly. Statement operations (``x += e``, ``++x``,
+``x /= e``) keep their node and gain a :class:`RuleStatement` in ``annotations["cgl_rule_statement"]``. Operations
+proved not to need the rule are left alone: literal-only arithmetic whose exact result fits, the update of a for-loop
+counter bounded by a strict comparison, and division by a nonzero literal.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .. import ast as A
+from .helpers import is_helper
 from .hub_types import (
     BOOL,
     INT32,
+    UINT32,
+    HubType,
     TypeScope,
     arithmetic_result,
     call_name,
@@ -20,15 +26,48 @@ from .hub_types import (
     iter_functions,
 )
 from .rewrite import child_slots, get_child, set_child
-from .rule_table import BINARY_WRAP_INTRINSIC, WRAP, source_families
+from .rule_table import (
+    BINARY_UDIV_ZERO_INTRINSIC,
+    BINARY_WRAP_INTRINSIC,
+    INTRINSIC_FAMILY,
+    UDIV_ZERO,
+    WRAP,
+    source_families,
+)
 
 INT32_MIN = -(1 << 31)
 INT32_MAX = (1 << 31) - 1
 _COMPOUND = {"+=": "+", "-=": "-", "*=": "*"}
+_DIVISION_COMPOUND = {"/=": "/", "%=": "%"}
+
+
+@dataclass(frozen=True)
+class RuleStatement:
+    """A statement-shaped operation that carries a rule: ``x op= e``, ``++x`` or ``--x``.
+
+    ``conversions`` convert the target and the value to ``result_type`` before the polyfill; ``back_conversion``
+    converts the result to the target's type.
+    """
+
+    intrinsic: str
+    conversions: tuple[HubType | None, HubType | None] = (None, None)
+    result_type: HubType | None = None
+    back_conversion: HubType | None = None
 
 
 def is_int32(value) -> bool:
     return value is not None and value.kind == "i" and value.bits == 32
+
+
+def is_uint32(value) -> bool:
+    return value is not None and value.kind == "u" and value.bits == 32
+
+
+def _integer_operands(*operands) -> bool:
+    """Every operand is an integer or a boolean of at most 32 bits."""
+    return all(
+        operand.kind in ("i", "u", "b") and operand.bits <= 32 for operand in operands
+    )
 
 
 def wrap32(value: int) -> int:
@@ -47,15 +86,14 @@ class Annotator:
 
     # Program structure ----------------------------------------------------------------------------------------
     def run(self):
-        if WRAP not in self.families:
+        if not self.families and not _has_untyped_intrinsics(self.program):
             return
         program, scope = self.program, self.scope
         for constant in getattr(program, "constants", None) or []:
             scope.declare(constant.name, constant.const_type)
             value = self.constant_value(constant.value)
-            if value is not None and is_int32(
-                self.scope.infer(constant.value) or INT32
-            ):
+            value_type = self.scope.infer(constant.value) or INT32
+            if value is not None and (is_int32(value_type) or is_uint32(value_type)):
                 self.constants[constant.name] = value
         self._declare_variables(getattr(program, "global_variables", None) or [])
         for cbuffer in getattr(program, "cbuffers", None) or []:
@@ -81,6 +119,8 @@ class Annotator:
             self.scope.declare_block_members(variable)
 
     def function(self, function):
+        if is_helper(function):
+            return
         self.scope.push()
         for parameter in function.parameters or []:
             self.scope.declare(parameter.name, parameter.param_type)
@@ -134,15 +174,35 @@ class Annotator:
 
     # Rewrites -------------------------------------------------------------------------------------------------
     def rewrite(self, node):
-        if isinstance(node, A.BinaryOpNode) and node.op in BINARY_WRAP_INTRINSIC:
-            return self.rewrite_binary(node)
-        if isinstance(node, A.UnaryOpNode) and node.op == "-":
-            return self.rewrite_negate(node)
-        if isinstance(node, A.UnaryOpNode) and node.op in ("++", "--"):
-            self.annotate_step(node)
-        elif isinstance(node, A.AssignmentNode) and node.operator in _COMPOUND:
-            self.annotate_compound(node)
+        wrap, udiv_zero = WRAP in self.families, UDIV_ZERO in self.families
+        if isinstance(node, A.BinaryOpNode):
+            if wrap and node.op in BINARY_WRAP_INTRINSIC:
+                return self.rewrite_binary(node)
+            if udiv_zero and node.op in BINARY_UDIV_ZERO_INTRINSIC:
+                return self.rewrite_division(node)
+        elif isinstance(node, A.UnaryOpNode):
+            if wrap and node.op == "-":
+                return self.rewrite_negate(node)
+            if wrap and node.op in ("++", "--"):
+                self.annotate_step(node)
+        elif isinstance(node, A.AssignmentNode):
+            if wrap and node.operator in _COMPOUND:
+                self.annotate_compound(node)
+            elif udiv_zero and node.operator in _DIVISION_COMPOUND:
+                self.annotate_division_compound(node)
+        elif isinstance(node, A.FunctionCallNode):
+            self.type_intrinsic(node)
         return node
+
+    def type_intrinsic(self, node):
+        """A rule intrinsic written in the source text gets its result type, which helper lowering needs."""
+        if (
+            call_name(node) in INTRINSIC_FAMILY
+            and "cgl_rule_type" not in node.annotations
+        ):
+            result = self.scope.infer(node)
+            if result is not None:
+                node.annotations["cgl_rule_type"] = result
 
     def rewrite_binary(self, node):
         left, right = self.scope.infer(node.left), self.scope.infer(node.right)
@@ -196,7 +256,9 @@ class Annotator:
         elif is_int32(operand):
             self.report.count(WRAP)
             intrinsic = "__cgl_wrap_add" if node.op == "++" else "__cgl_wrap_sub"
-            node.annotations["cgl_rule_statement"] = (intrinsic, None)
+            node.annotations["cgl_rule_statement"] = RuleStatement(
+                intrinsic, result_type=operand
+            )
 
     def annotate_compound(self, node):
         if id(node) in self._proven:
@@ -212,7 +274,60 @@ class Annotator:
             return
         self.report.count(WRAP)
         intrinsic = BINARY_WRAP_INTRINSIC[_COMPOUND[node.operator]]
-        node.annotations["cgl_rule_statement"] = (intrinsic, _conversion(value))
+        node.annotations["cgl_rule_statement"] = RuleStatement(
+            intrinsic, (None, _conversion(value)), target
+        )
+
+    def rewrite_division(self, node):
+        """Unsigned 32-bit ``/`` and ``%`` whose divisor may be zero become ``__cgl_udiv_ones``/``__cgl_urem_ones``."""
+        left, right = self.scope.infer(node.left), self.scope.infer(node.right)
+        result = arithmetic_result(left, right)
+        if result is None:
+            if left is None or right is None:
+                self.report.unresolved += 1
+            return node
+        if not is_uint32(result) or not _integer_operands(left, right):
+            return node
+        if self.nonzero(node.right):
+            return node
+        self.report.count(UDIV_ZERO)
+        replacement = A.FunctionCallNode(
+            A.IdentifierNode(BINARY_UDIV_ZERO_INTRINSIC[node.op]),
+            [node.left, node.right],
+        )
+        replacement.annotations["cgl_rule_origin"] = node
+        replacement.annotations["cgl_rule_type"] = result
+        replacement.annotations["cgl_rule_convert"] = (
+            _converted(left, result),
+            _converted(right, result),
+        )
+        return replacement
+
+    def annotate_division_compound(self, node):
+        target, value = self.scope.infer(node.target), self.scope.infer(node.value)
+        if target is None or value is None:
+            self.report.unresolved += 1
+            return
+        result = arithmetic_result(target, value)
+        if not is_uint32(result) or not _integer_operands(target, value):
+            return
+        if target.bits != 32 or target.lanes != result.lanes:
+            return
+        if self.nonzero(node.value):
+            return
+        self.report.count(UDIV_ZERO)
+        intrinsic = BINARY_UDIV_ZERO_INTRINSIC[_DIVISION_COMPOUND[node.operator]]
+        node.annotations["cgl_rule_statement"] = RuleStatement(
+            intrinsic,
+            (_converted(target, result), _converted(value, result)),
+            result,
+            None if target == result else target,
+        )
+
+    def nonzero(self, divisor) -> bool:
+        """The divisor is a literal-only expression whose value is not zero modulo 2^32."""
+        value = self.constant_value(divisor)
+        return value is not None and value % (1 << 32) != 0
 
     @staticmethod
     def _wrap_operands(left, right) -> bool:
@@ -323,6 +438,22 @@ def _conversion(operand):
     if operand is not None and not is_int32(operand):
         return INT32.with_lanes(operand.lanes)
     return None
+
+
+def _converted(operand, result):
+    """The conversion of an operand to the operation's ``uint`` type: a scalar is also broadcast to its lanes."""
+    if operand == result:
+        return None
+    return UINT32.with_lanes(result.lanes)
+
+
+def _has_untyped_intrinsics(program) -> bool:
+    return any(
+        isinstance(node, A.FunctionCallNode)
+        and call_name(node) in INTRINSIC_FAMILY
+        and "cgl_rule_type" not in node.annotations
+        for node in program.walk()
+    )
 
 
 def _counter_step(update):

@@ -1,5 +1,7 @@
 """Rule carrying: source operation rules survive translation (docs/source/adr/0001-rule-carrying.md)."""
 
+import re
+
 import pytest
 
 import crosstl
@@ -290,3 +292,120 @@ def test_metal_bit_cast_operand_keeps_its_own_signedness(tmp_path):
     metal = translate(tmp_path, source, "metal", ".cgl")
     assert "int2 r = as_type<int2>(p + p);" in metal
     assert "int2 q = as_type<int2>(as_type<uint2>(v) * as_type<uint2>(v));" in metal
+
+
+HLSL_UNSIGNED_KERNEL = """RWStructuredBuffer<uint> o : register(u0);
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {{
+    uint a = o[0];
+    uint b = o[1];
+    int s = int(o[2]);
+{body}
+}}
+"""
+
+
+def hlsl(tmp_path, body, backend):
+    return translate(tmp_path, HLSL_UNSIGNED_KERNEL.format(body=body), backend, ".hlsl")
+
+
+@pytest.mark.parametrize("backend", ["metal", "directx", "opengl", "wgsl", "cuda"])
+def test_hlsl_unsigned_division_by_zero_gives_all_ones(tmp_path, backend):
+    out = hlsl(tmp_path, "    o[3] = a / b;\n    o[4] = a % 0u;", backend)
+    assert "cgl_rule_udiv_ones(a, b)" in out
+    assert "cgl_rule_urem_ones(a, 0" in out
+    # Each helper is defined once: one return of the all-ones constant per helper.
+    returns = [line for line in out.splitlines() if "return" in line]
+    assert sum("4294967295" in line for line in returns) == 2
+    assert "__cgl_" not in out
+
+
+def test_hlsl_division_by_a_nonzero_literal_and_signed_division_stay_native(tmp_path):
+    metal = hlsl(
+        tmp_path, "    o[3] = a / 4u + a % 3u;\n    o[4] = uint(s / 2);", "metal"
+    )
+    assert "cgl_rule" not in metal
+    assert "a / 4u" in metal and "a % 3u" in metal
+
+
+def test_hlsl_unsigned_vector_and_compound_division(tmp_path):
+    body = (
+        "    uint2 v = uint2(a, b);\n    v /= uint2(b, a);\n    a %= b;\n"
+        "    uint m = a / s;\n    o[3] = v.x + v.y + a + m;"
+    )
+    metal = hlsl(tmp_path, body, "metal")
+    assert "uint2 cgl_rule_udiv_ones2(uint2 x0, uint2 x1)" in metal
+    assert "v = cgl_rule_udiv_ones2(v, uint2(b, a));" in metal
+    assert "a = cgl_rule_urem_ones(a, b);" in metal
+    # A signed operand is converted to the operation's unsigned type first.
+    assert "cgl_rule_udiv_ones(a, uint(s))" in metal
+    for text in ("/=", "%="):
+        assert text not in metal
+
+
+def test_hlsl_unsigned_division_helper_reaches_spirv(tmp_path):
+    spirv = hlsl(tmp_path, "    o[3] = a / b;", "vulkan")
+    assert "OpFunctionCall" in spirv
+    assert spirv.count("OpUDiv") == 1
+    assert re.search(r"OpConstant %\S+ 4294967295\b", spirv)
+
+
+def test_glsl_unsigned_division_carries_no_obligation(tmp_path):
+    source = """#version 450
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Data { uint d[]; };
+void main() {
+    d[2] = d[0] / d[1];
+}
+"""
+    metal = translate(tmp_path, source, "metal")
+    assert "cgl_rule" not in metal
+
+
+def test_reserved_helper_name_in_the_program_is_refused():
+    program = parse_cgl("""shader W {
+    uint cgl_rule_udiv_ones(uint x0, uint x1) { return 0u; }
+    uint f(uint a, uint b) { return a / b; }
+}
+""")
+    with pytest.raises(RuleInexpressibleError) as refusal:
+        apply_rule_carrying(program, "directx", "metal")
+    assert "reserved" in str(refusal.value)
+
+
+def test_udiv_helpers_are_injected_once_and_carrying_is_idempotent():
+    program = parse_cgl("""shader W {
+    uint f(uint a, uint b) { return a / b + a % b; }
+    uvec3 g(uvec3 a, uvec3 b) { return a / b; }
+}
+""")
+    report = apply_rule_carrying(program, "directx", "metal")
+    names = [function.name for function in program.functions]
+    assert names == [
+        "cgl_rule_udiv_ones",
+        "cgl_rule_udiv_ones3",
+        "cgl_rule_urem_ones",
+        "f",
+        "g",
+    ]
+    assert report.discharged == {"polyfill": 3}
+    apply_rule_carrying(program, "directx", "metal")
+    assert [function.name for function in program.functions] == names
+
+
+def test_crossgl_udiv_intrinsic_lowers_to_the_helper(tmp_path):
+    source = """shader W {
+    compute {
+        layout(std430, binding = 0) buffer Data { uint values[]; };
+        [numthreads(1, 1, 1)]
+        void main() {
+            values[2] = __cgl_udiv_ones(values[0], values[1]);
+            values[3] = values[0] / values[1];
+        }
+    }
+}
+"""
+    for backend in ("metal", "opengl"):
+        out = translate(tmp_path, source, backend, ".cgl")
+        assert "cgl_rule_udiv_ones(values[0], values[1])" in out
+        assert "__cgl_" not in out

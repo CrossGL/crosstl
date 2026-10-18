@@ -1832,17 +1832,17 @@
     },
     "h_udiv_zero|hlsl|metal|relaxed|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "2180f01157f6cb8f8f03fdd4b274959338310168ec90dda7a2ec8cb863e55fa6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "9a1498237f878cb612b65777435b0eac801a8ff0eb64e79c9a9730fd7ea69630"
     },
     "h_udiv_zero|hlsl|metal|strict|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "2180f01157f6cb8f8f03fdd4b274959338310168ec90dda7a2ec8cb863e55fa6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "9a1498237f878cb612b65777435b0eac801a8ff0eb64e79c9a9730fd7ea69630"
     },
     "h_udiv_zero|hlsl|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "2180f01157f6cb8f8f03fdd4b274959338310168ec90dda7a2ec8cb863e55fa6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "9a1498237f878cb612b65777435b0eac801a8ff0eb64e79c9a9730fd7ea69630"
     },
     "h_udiv_zero|hlsl|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
@@ -1852,12 +1852,12 @@
     },
     "h_udiv_zero|hlsl|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "2180f01157f6cb8f8f03fdd4b274959338310168ec90dda7a2ec8cb863e55fa6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "9a1498237f878cb612b65777435b0eac801a8ff0eb64e79c9a9730fd7ea69630"
     },
     "h_udiv_zero|hlsl|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "2180f01157f6cb8f8f03fdd4b274959338310168ec90dda7a2ec8cb863e55fa6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "9a1498237f878cb612b65777435b0eac801a8ff0eb64e79c9a9730fd7ea69630"
     },
     "h_udiv_zero|hlsl|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
@@ -1867,7 +1867,7 @@
     },
     "h_udiv_zero|hlsl|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "2180f01157f6cb8f8f03fdd4b274959338310168ec90dda7a2ec8cb863e55fa6",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "9a1498237f878cb612b65777435b0eac801a8ff0eb64e79c9a9730fd7ea69630"
     },
     "h_wave_sum|hlsl|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
@@ -4463,11 +4463,11 @@
   },
   "counts": {
     "compiled-only": 138,
-    "diverged": 154,
+    "diverged": 148,
     "driver-rejected": 8,
     "invalid": 38,
     "observed": 40,
-    "preserved": 502,
+    "preserved": 508,
     "refused": 10,
     "runtime-error": 2
   },

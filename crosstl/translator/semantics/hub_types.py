@@ -399,7 +399,7 @@ class TypeScope:
             return carried
         name = call_name(expr)
         arguments = expr.arguments or []
-        if name.startswith("__cgl_wrap_"):
+        if name.startswith("__cgl_"):
             result = self.infer(arguments[0]) if arguments else None
             for argument in arguments[1:]:
                 result = arithmetic_result(result, self.infer(argument))
@@ -435,7 +435,7 @@ def is_pure_callee(name: str) -> bool:
     """Value constructors, bit casts, rule intrinsics and math built-ins that neither write nor read memory."""
     return (
         type_from_name(name) is not None
-        or name.startswith("__cgl_wrap_")
+        or name.startswith(("__cgl_", "cgl_rule_"))
         or name in ("asint", "asuint", "asfloat", "floatBitsToInt", "floatBitsToUint")
         or name in ("intBitsToFloat", "uintBitsToFloat", "dot", "length", "distance")
         or name in _SAME_AS_ARGUMENTS

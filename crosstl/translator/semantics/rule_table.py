@@ -3,7 +3,7 @@
 ``SOURCE_RULES`` lists, per source language, the rule families whose result the language defines. A family that a
 source leaves undefined carries no obligation. ``TARGET_ENTRIES`` maps every (family, target) pair to a
 ``TargetEntry``: ``native`` (the target's own operation refines the rule), ``polyfill`` (the templates in
-``POLYFILLS``, over the target's trusted base) or ``refuse``. ``tests/conformance/rule_table_smt.py`` proves every
+``POLYFILLS`` or the helper functions in ``HELPERS``, over the target's trusted base) or ``refuse``. ``tests/conformance/rule_table_smt.py`` proves every
 native and polyfill entry with Z3, and ``tests/test_translator/test_rule_carrying.py`` checks that the table is total
 over the registered backends.
 
@@ -15,7 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 WRAP = "wrap"
-FAMILIES = (WRAP,)
+UDIV_ZERO = "udiv_zero"
+FAMILIES = (WRAP, UDIV_ZERO)
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,8 @@ class TargetEntry:
 
 
 # Rule families each source language defines. Sources not listed (Metal, CUDA, HIP, OpenCL C, Slang, Rust, Mojo
-# and CrossGL itself) leave signed overflow undefined or unstated, so their operations carry no wrap obligation.
+# and CrossGL itself) leave signed overflow and division by zero undefined or unstated, so their operations carry
+# no obligation. GLSL and SPIR-V leave unsigned division by zero unspecified (GLSL 4.60 section 5.9, SPIR-V OpUDiv).
 SOURCE_RULES = {
     "opengl": (
         SourceRule(
@@ -48,6 +50,11 @@ SOURCE_RULES = {
             WRAP,
             "Direct3D 11 functional specification 22.12.1 iadd and 22.12.6 imul: no carry or borrow beyond "
             "the 32-bit values is performed",
+        ),
+        SourceRule(
+            UDIV_ZERO,
+            "Direct3D 11.3 functional specification 22.12.9 udiv: unsigned division by zero returns "
+            "0xFFFFFFFF for both the quotient and the remainder",
         ),
     ),
     "vulkan": (
@@ -107,6 +114,56 @@ TARGET_ENTRIES = {
     ),
 }
 
+_UDIV_ZERO_UNDEFINED = "unsigned division by zero is undefined"
+TARGET_ENTRIES.update(
+    {
+        (UDIV_ZERO, "opengl"): TargetEntry(
+            "polyfill",
+            "GLSL 4.60 section 5.9: integer division by zero results in an unspecified value",
+        ),
+        (UDIV_ZERO, "webgl"): TargetEntry(
+            "polyfill",
+            "ESSL 3.00 section 5.9: division by zero results in an unspecified value",
+        ),
+        (UDIV_ZERO, "wgsl"): TargetEntry(
+            "polyfill",
+            "WGSL section 8.7: an unsigned e1 / 0 is e1 and e1 % 0 is 0, not 0xFFFFFFFF",
+        ),
+        (UDIV_ZERO, "vulkan"): TargetEntry(
+            "polyfill",
+            "SPIR-V 1.6 section 3.3.13 OpUDiv and OpUMod: behavior is undefined if Operand 2 is 0",
+        ),
+        (UDIV_ZERO, "metal"): TargetEntry(
+            "polyfill",
+            "MSL 4.1 is based on C++17, whose [expr.mul]/4 leaves division by zero undefined; Apple GPUs do not "
+            "return 0xFFFFFFFF (conformance cell h_udiv_zero)",
+        ),
+        (UDIV_ZERO, "directx"): TargetEntry(
+            "polyfill",
+            "DXC 1.9 lowers HLSL unsigned / and % to LLVM udiv and urem, whose zero divisor is undefined "
+            "behaviour: a divisor known to be zero folds to undef and the validator rejects the store",
+        ),
+        (UDIV_ZERO, "cuda"): TargetEntry(
+            "polyfill", "CUDA C++ follows C++17 [expr.mul]/4: " + _UDIV_ZERO_UNDEFINED
+        ),
+        (UDIV_ZERO, "hip"): TargetEntry(
+            "polyfill", "HIP C++ follows C++17 [expr.mul]/4: " + _UDIV_ZERO_UNDEFINED
+        ),
+        (UDIV_ZERO, "slang"): TargetEntry(
+            "polyfill",
+            "Slang does not specify integer division by zero and lowers it to targets that leave it undefined",
+        ),
+        (UDIV_ZERO, "mojo"): TargetEntry(
+            "polyfill",
+            "the Mojo manual does not state the result of UInt32 division by zero",
+        ),
+        (UDIV_ZERO, "rust"): TargetEntry(
+            "polyfill",
+            "The Rust Reference, arithmetic operators: integer division and remainder by zero panic",
+        ),
+    }
+)
+
 # Hub intrinsics of the wrap family: name -> (operator, arity). Statement forms (compound assignment, increment
 # and decrement) reuse the binary templates; see annotate.py and lower.py.
 WRAP_INTRINSICS = {
@@ -115,7 +172,17 @@ WRAP_INTRINSICS = {
     "__cgl_wrap_mul": ("*", 2),
     "__cgl_wrap_neg": ("-", 1),
 }
-INTRINSIC_FAMILY = {name: WRAP for name in WRAP_INTRINSICS}
+# Hub intrinsics of the udiv_zero family: unsigned 32-bit division and remainder whose zero divisor gives all ones.
+UDIV_ZERO_INTRINSICS = {
+    "__cgl_udiv_ones": ("/", 2),
+    "__cgl_urem_ones": ("%", 2),
+}
+BINARY_UDIV_ZERO_INTRINSIC = {"/": "__cgl_udiv_ones", "%": "__cgl_urem_ones"}
+INTRINSICS = {**WRAP_INTRINSICS, **UDIV_ZERO_INTRINSICS}
+INTRINSIC_FAMILY = {
+    **{name: WRAP for name in WRAP_INTRINSICS},
+    **{name: UDIV_ZERO for name in UDIV_ZERO_INTRINSICS},
+}
 BINARY_WRAP_INTRINSIC = {
     "+": "__cgl_wrap_add",
     "-": "__cgl_wrap_sub",
@@ -129,6 +196,35 @@ POLYFILLS = {
     "__cgl_wrap_sub": "asint(asuint(x0) - asuint(x1))",
     "__cgl_wrap_mul": "asint(asuint(x0) * asuint(x1))",
     "__cgl_wrap_neg": "asint(0u - asuint(x0))",
+}
+
+
+@dataclass(frozen=True)
+class Helper:
+    """A polyfill that needs an operand more than once: a reserved helper function the lowering pass injects.
+
+    ``body`` is a CrossGL expression over the ``scalar``-typed parameters ``x0`` and ``x1``. Vector operations call
+    a per-lane lift of the scalar helper, named ``name`` followed by the lane count.
+    """
+
+    name: str
+    scalar: str
+    body: str
+
+
+# The divisor is made nonzero before the division, so the helper stays defined where a target evaluates both arms of
+# the conditional (SPIR-V OpSelect, WGSL select).
+HELPERS = {
+    "__cgl_udiv_ones": Helper(
+        "cgl_rule_udiv_ones",
+        "uint",
+        "x1 == 0u ? 0xFFFFFFFFu : x0 / (x1 == 0u ? 1u : x1)",
+    ),
+    "__cgl_urem_ones": Helper(
+        "cgl_rule_urem_ones",
+        "uint",
+        "x1 == 0u ? 0xFFFFFFFFu : x0 % (x1 == 0u ? 1u : x1)",
+    ),
 }
 
 

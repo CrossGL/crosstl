@@ -5,11 +5,12 @@ rule, in the style of Alive2:
 
     find x :  not ( defined_T(x) and result_T(x) == rule_S(x) )
 
-``rule_S`` is the carried rule; for ``wrap`` it is the low-order 32 bits of the exact result, defined for every
-input. The target construct is not modelled by hand: a native entry is the hub operation ``x0 op x1`` and a
-polyfill entry is the template the lowering pass instantiates, parsed by the CrossGL parser, and both are evaluated
-symbolically under the target's semantics of its trusted base (below). Satisfiable means unsound and comes with a
-counterexample; unsatisfiable means sound under the model.
+``rule_S`` is the carried rule. For ``wrap`` it is the low-order 32 bits of the exact result; for ``udiv_zero`` it is
+the unsigned quotient or remainder, and 0xFFFFFFFF for a zero divisor (Direct3D 11.3 section 22.12.9). Both are
+defined for every input. The target construct is not modelled by hand: a native entry is the hub operation
+``x0 op x1``, and a polyfill entry is the template the lowering pass instantiates or the body of the helper function
+it injects, parsed by the CrossGL parser. Each is evaluated symbolically under the target's semantics of its trusted
+base (below). Satisfiable means unsound and comes with a counterexample; unsatisfiable means sound under the model.
 
 Target model:
   - unsigned 32-bit ``+``, ``-``, ``*`` are modular on every target (MSL 4.1 section 3.1, C++17 [basic.fundamental]
@@ -19,10 +20,17 @@ Target model:
     Metal, DirectX (DXC marks them nsw), CUDA, HIP, Slang and Mojo, and on Vulkan, where the SPIR-V rule wraps but
     MoltenVK and KosmicKrisp hand the operation to MSL; on Rust they wrap under ``overflow-checks = false``, the
     configuration the entry records, and panic otherwise;
-  - ``asint`` and ``asuint`` reinterpret the 32 bits exactly, and integer literals are exact.
+  - ``asint`` and ``asuint`` reinterpret the 32 bits exactly, and integer literals are exact;
+  - unsigned ``/`` and ``%`` are exact for a nonzero divisor. A zero divisor gives an unspecified value on GLSL and
+    GLSL ES (GLSL 4.60 and ESSL 3.00 section 5.9), the dividend for ``/`` and 0 for ``%`` on WGSL (section 8.7), a
+    panic on Rust, and undefined behaviour everywhere else (MSL and CUDA/HIP C++17 [expr.mul]/4, SPIR-V OpUDiv and
+    OpUMod, DXC's LLVM udiv and urem, Slang, Mojo by reading);
+  - ``==`` and ``!=`` compare bits, and a conditional is evaluated eagerly: a target may compute both arms (SPIR-V
+    OpSelect, WGSL select), so an undefined operation in either arm makes the whole construct undefined.
 
 The check also fails when an entry is missing for a registered backend, when a template uses a parameter other than
-exactly once, or when a construct of a template has no model here. Run ``python -m tests.conformance.rule_table_smt``;
+exactly once (helper functions may repeat parameters, since a call evaluates each operand once), when an intrinsic
+has neither a template nor a helper, or when a construct of a template has no model here. Run ``python -m tests.conformance.rule_table_smt``;
 it exits with status 1 on any failure.
 """
 
@@ -37,13 +45,21 @@ import z3
 
 from crosstl.translator import ast as A
 from crosstl.translator.semantics import rule_table
+from crosstl.translator.semantics.helpers import helper_body
 from crosstl.translator.semantics.hub_types import call_name, type_from_node
 from crosstl.translator.semantics.lower import template
 
 BITS = 32
+ALL_ONES = (1 << BITS) - 1
 SIGNED_WRAPS = frozenset({"opengl", "webgl", "wgsl"})
 # A configuration under which a target's signed arithmetic wraps; the entry must record it.
 SIGNED_WRAPS_UNDER = {"rust": "overflow-checks = false"}
+# What an unsigned division or remainder by zero gives; every target not listed leaves it undefined (or panics).
+UNSIGNED_DIVISION_BY_ZERO = {
+    "opengl": "unspecified",
+    "webgl": "unspecified",
+    "wgsl": "wgsl",
+}
 
 
 class Unmodelled(Exception):
@@ -53,7 +69,7 @@ class Unmodelled(Exception):
 @dataclass(frozen=True)
 class Value:
     term: object
-    kind: str  # "i" or "u"
+    kind: str  # "i", "u" or "b"
 
 
 class Semantics:
@@ -93,6 +109,22 @@ class Semantics:
             return Value(operand.term, "i" if name in ("asint", "int") else "u")
         if isinstance(node, A.BinaryOpNode) and node.op in ("+", "-", "*"):
             return self.arithmetic(node.op, self.eval(node.left), self.eval(node.right))
+        if isinstance(node, A.BinaryOpNode) and node.op in ("/", "%"):
+            return self.division(node.op, self.eval(node.left), self.eval(node.right))
+        if isinstance(node, A.BinaryOpNode) and node.op in ("==", "!="):
+            left, right = self.eval(node.left), self.eval(node.right)
+            if "b" in (left.kind, right.kind):
+                raise Unmodelled(f"boolean operand of {node.op}")
+            equal = left.term == right.term
+            return Value(equal if node.op == "==" else z3.Not(equal), "b")
+        if isinstance(node, A.TernaryOpNode):
+            condition = self.eval(node.condition)
+            if condition.kind != "b":
+                raise Unmodelled("non-boolean condition")
+            chosen, other = self.eval(node.true_expr), self.eval(node.false_expr)
+            if chosen.kind != other.kind or chosen.kind == "b":
+                raise Unmodelled(f"conditional of {chosen.kind} and {other.kind}")
+            return Value(z3.If(condition.term, chosen.term, other.term), chosen.kind)
         if isinstance(node, A.UnaryOpNode) and node.op == "-":
             operand = self.eval(node.operand)
             if operand.kind == "i" and not self.signed_wraps:
@@ -108,6 +140,22 @@ class Semantics:
             self.defined.append(_no_signed_overflow(op, a, b))
         result = {"+": a + b, "-": a - b, "*": a * b}[op]
         return Value(result, kind)
+
+    def division(self, op, left, right) -> Value:
+        if "u" not in (left.kind, right.kind) or "b" in (left.kind, right.kind):
+            raise Unmodelled(f"signed {op}")
+        a, b = left.term, right.term
+        exact = z3.UDiv(a, b) if op == "/" else z3.URem(a, b)
+        zero = b == 0
+        behaviour = UNSIGNED_DIVISION_BY_ZERO.get(self.target, "undefined")
+        if behaviour == "undefined":
+            self.defined.append(z3.Not(zero))
+            return Value(exact, "u")
+        if behaviour == "unspecified":
+            unspecified = z3.FreshConst(z3.BitVecSort(BITS), "unspecified")
+            return Value(z3.If(zero, unspecified, exact), "u")
+        by_zero = a if op == "/" else z3.BitVecVal(0, BITS)
+        return Value(z3.If(zero, by_zero, exact), "u")
 
 
 def _no_signed_overflow(op, a, b):
@@ -126,8 +174,20 @@ def carried_wrap(op, operands):
     return {"+": a + b, "-": a - b, "*": a * b}[op]
 
 
+def carried_udiv_zero(op, operands):
+    """The Direct3D rule: the unsigned quotient or remainder, and all ones for a zero divisor."""
+    a, b = operands
+    exact = z3.UDiv(a, b) if op == "/" else z3.URem(a, b)
+    return z3.If(b == 0, z3.BitVecVal(ALL_ONES, BITS), exact)
+
+
+CARRIED = {rule_table.WRAP: carried_wrap, rule_table.UDIV_ZERO: carried_udiv_zero}
+# The operand and result kind of each family's operations.
+FAMILY_KIND = {rule_table.WRAP: "i", rule_table.UDIV_ZERO: "u"}
+
+
 def native_expression(intrinsic):
-    operator, arity = rule_table.WRAP_INTRINSICS[intrinsic]
+    operator, arity = rule_table.INTRINSICS[intrinsic]
     operands = [A.IdentifierNode(f"x{index}") for index in range(arity)]
     if arity == 1:
         return A.UnaryOpNode(operator, operands[0])
@@ -148,8 +208,12 @@ def check_entry(intrinsic, target, entry):
     if entry.kind == "refuse":
         record["result"] = "refused"
         return record
-    operator, arity = rule_table.WRAP_INTRINSICS[intrinsic]
-    if entry.kind == "polyfill":
+    operator, arity = rule_table.INTRINSICS[intrinsic]
+    family = rule_table.INTRINSIC_FAMILY[intrinsic]
+    kind = FAMILY_KIND[family]
+    if entry.kind == "polyfill" and intrinsic in rule_table.HELPERS:
+        expression = helper_body(intrinsic)
+    elif entry.kind == "polyfill":
         expression = template(intrinsic)
         uses = parameter_uses(expression)
         expected = {f"x{index}": 1 for index in range(arity)}
@@ -169,7 +233,7 @@ def check_entry(intrinsic, target, entry):
     semantics = Semantics(
         target,
         entry.configuration,
-        {f"x{i}": Value(term, "i") for i, term in enumerate(operands)},
+        {f"x{i}": Value(term, kind) for i, term in enumerate(operands)},
     )
     try:
         result = semantics.eval(expression)
@@ -177,14 +241,17 @@ def check_entry(intrinsic, target, entry):
         record["result"] = "unmodelled"
         record["detail"] = str(error)
         return record
-    if result.kind != "i":
+    if result.kind != kind:
         record["result"] = "malformed"
-        record["detail"] = "the construct does not produce a signed int"
+        record["detail"] = f"the construct produces {result.kind!r}, not {kind!r}"
         return record
-    solver = z3.Solver()
+    # Contextual simplification first: a guarded division such as ``b == 0 ? c : a / (b == 0 ? 1 : b)`` reduces to
+    # the carried rule's own ``a / b`` term, which plain bit-blasting of two 32-bit dividers cannot prove in time.
+    # Every tactic in the pipeline preserves equivalence, so unsat stays a proof and a model stays a counterexample.
+    solver = z3.Then("simplify", "ctx-simplify", "simplify", "smt").solver()
     solver.set("timeout", 60000)
     refines = z3.And(
-        *semantics.defined, result.term == carried_wrap(operator, operands)
+        *semantics.defined, result.term == CARRIED[family](operator, operands)
     )
     solver.add(z3.Not(refines))
     verdict = solver.check()
@@ -221,15 +288,18 @@ def check_table(entries=None, backends=None):
                 records.append(failure)
                 failures.append(failure)
                 continue
-            for intrinsic in sorted(rule_table.WRAP_INTRINSICS):
+            for intrinsic in sorted(rule_table.INTRINSICS):
                 if rule_table.INTRINSIC_FAMILY[intrinsic] != family:
                     continue
                 record = check_entry(intrinsic, target, entry)
                 records.append(record)
                 if record["result"] not in ("sound", "refused"):
                     failures.append(record)
-    for intrinsic in rule_table.WRAP_INTRINSICS:
-        if intrinsic not in rule_table.POLYFILLS:
+    for intrinsic in sorted(rule_table.INTRINSICS):
+        if (
+            intrinsic not in rule_table.POLYFILLS
+            and intrinsic not in rule_table.HELPERS
+        ):
             failure = {"intrinsic": intrinsic, "result": "missing-polyfill"}
             records.append(failure)
             failures.append(failure)

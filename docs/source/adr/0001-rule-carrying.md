@@ -80,8 +80,12 @@ The table is Python data in `crosstl/translator/semantics/rule_table.py`:
   defect. `configuration` names a build setting the native entry depends on, for example Rust's
   `overflow-checks = false`.
 - `POLYFILLS[intrinsic]`: CrossGL expression templates over the parameters `x0` and `x1`. Each parameter must occur
-  exactly once, so substitution never duplicates an operand with side effects. Templates that need repeated
-  operands will be injected as reserved helper functions.
+  exactly once, so substitution never duplicates an operand with side effects.
+- `HELPERS[intrinsic]`: a polyfill that needs an operand more than once, as a `Helper(name, scalar, body)`. The
+  lowering pass replaces the operation with a call of the reserved function `name` (`cgl_rule_` prefix), which
+  evaluates each operand once, and injects the function's definition ahead of the program's functions
+  (`crosstl/translator/semantics/helpers.py`). A vector operation calls a per-lane lift named `name` followed by the
+  lane count. A program that defines a reserved helper name itself is refused.
 
 Every (family, target) pair for every registered backend must have an entry; a missing entry is a test failure, not
 a default.
@@ -111,6 +115,13 @@ the trusted base. A native entry is evaluated with the target's own operator sem
 undefined on Metal, DirectX (DXC `nsw`), CUDA and HIP, defined on GLSL, GLSL ES, WGSL and SPIR-V, and a trap or a
 wrap on Rust depending on `overflow-checks`. Its results are 32-bit bit-vectors, quantified over all inputs.
 
+Unsigned `/` and `%` are exact for a nonzero divisor. A zero divisor is unspecified on GLSL and GLSL ES (a fresh
+value), gives the dividend and 0 on WGSL, and is undefined on every other target. A conditional is evaluated eagerly,
+because SPIR-V `OpSelect` and WGSL `select` compute both arms, so a division by zero in the arm not taken still makes
+the construct undefined. The solver runs `simplify`, `ctx-simplify`, `simplify` and then `smt`: contextual
+simplification reduces a guarded `x0 / (x1 == 0 ? 1 : x1)` under `x1 != 0` to the carried rule's own `x0 / x1`,
+which bit-blasting two 32-bit dividers does not prove within the timeout. Each tactic preserves equivalence.
+
 A CI job runs the checker on every pull request and fails on any satisfiable query (an unsound entry), on any entry
 it cannot model, and on any table pair without an entry.
 
@@ -127,8 +138,11 @@ switch.
    decrement on 32-bit signed scalars and vectors), the SMT gate, and a Metal emitter fix: the argument of `as_type`
    no longer inherits the expected type of the result, which had turned `asint(asuint(v) + asuint(w))` on vectors
    back into signed arithmetic.
-2. Families from the prototype, in this order, each with its conformance cells as the acceptance test: Direct3D
-   unsigned division by zero (`h_udiv_zero`), shift-count masking, truncated signed remainder (moved from the SPIR-V
+2. Families from the prototype, in this order, each with its conformance cells as the acceptance test. Done:
+   Direct3D unsigned division by zero (`udiv_zero`, cell `h_udiv_zero`). Unsigned 32-bit `/`, `%`, `/=` and `%=` from
+   HLSL whose divisor is not a nonzero literal become `__cgl_udiv_ones` and `__cgl_urem_ones`. Every target is a
+   helper polyfill `x1 == 0u ? 0xFFFFFFFFu : x0 / (x1 == 0u ? 1u : x1)`, Direct3D included, because DXC lowers the
+   operators to LLVM `udiv` and `urem`, which are undefined for a zero divisor. Remaining: shift-count masking, truncated signed remainder (moved from the SPIR-V
    emitter into the table), mixed-sign comparison, float-to-int with NaN and saturation, and `min`/`max`/`isnan` with
    NaN, including the configuration entries (Metal `math_mode(safe)`, HLSL `/Gis`, Vulkan float controls).
 3. Narrow integers (S6) and 64-bit integers, which need the typed IR's storage legalization.
