@@ -84,9 +84,7 @@ def test_release_build_and_publisher_support_current_metadata():
         "python -m pip install build==1.2.2.post1 twine==7.0.0"
     )
     publisher = _workflow()["jobs"]["publish-pypi"]["steps"][-1]
-    assert publisher["uses"] == (
-        "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
-    )
+    assert publisher["uses"] == "pypa/gh-action-pypi-publish@release/v1"
     assert _step("Set up minimum supported Python")["with"]["python-version"] == "3.8"
     smoke = _step("Test isolated wheel and source installations")["run"]
     assert "${{ steps.python-minimum.outputs.python-path }}" in smoke

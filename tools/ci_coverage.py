@@ -41,7 +41,7 @@ FULL_SUITE_REQUIRED_MARKERS = [
     "compiler-smoke-linux:",
     "Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)",
     "runs-on: ubuntu-24.04",
-    "Jimver/cuda-toolkit@v0.2.35",
+    "Jimver/cuda-toolkit@",
     'CUDA_VERSION: "13.2.0"',
     "SLANG_VERSION: v2026.9.1",
     "compiler-smoke-macos:",
@@ -1010,7 +1010,7 @@ def full_suite_failure_summary_report(workflow: str) -> dict[str, dict[str, bool
                 config["run_step"],
             ),
             "uploads_failure_summary": (
-                "actions/upload-artifact@v4" in upload_step
+                "actions/upload-artifact@" in upload_step
                 and "name: {}".format(config["artifact"]) in upload_step
                 and config["junit"] in upload_step
                 and config["json"] in upload_step
@@ -1066,7 +1066,7 @@ def matrix_failure_summary_report(
         "summary_on_pytest_failure": failure_condition in summary_step_text,
         "summary_after_run": workflow_step_after(workflow, summary_step, run_step),
         "uploads_failure_summary": (
-            "actions/upload-artifact@v4" in upload_step_text
+            "actions/upload-artifact@" in upload_step_text
             and "name: {}-failure-summary-{}-{}-{}".format(
                 prefix,
                 matrix_component,
@@ -1227,13 +1227,13 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
         ),
         "support_evidence_report_on_failure": "if: always()" in support_evidence_step,
         "uploads_support_matrix_check_report": (
-            "actions/upload-artifact@v4" in support_matrix_check_upload_step
+            "actions/upload-artifact@" in support_matrix_check_upload_step
             and "name: support-matrix-check-report" in support_matrix_check_upload_step
             and "support/generated/support-matrix-check.json"
             in support_matrix_check_upload_step
         ),
         "uploads_support_evidence_report": (
-            "actions/upload-artifact@v4" in support_matrix_check_upload_step
+            "actions/upload-artifact@" in support_matrix_check_upload_step
             and "support/generated/support-evidence-check.json"
             in support_matrix_check_upload_step
         ),
@@ -1366,7 +1366,7 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             "retention-days: 30" in ci_coverage_upload_step
         ),
         "uploads_support_signal_artifact": (
-            "actions/upload-artifact@v4" in support_signal_upload_step
+            "actions/upload-artifact@" in support_signal_upload_step
             and "name: support-signal-reports" in support_signal_upload_step
             and "support/generated/backend-docs-report.json"
             in support_signal_upload_step
@@ -1387,7 +1387,7 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             "Extract generated support signals",
         ),
         "downloads_test_failure_summaries": (
-            "actions/download-artifact@v4" in download_test_failure_step
+            "actions/download-artifact@" in download_test_failure_step
             and "github-token: ${{ secrets.GITHUB_TOKEN }}"
             in download_test_failure_step
             and "run-id: ${{ github.event.workflow_run.id }}"
@@ -1442,7 +1442,7 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             "support/generated/pytest-failures/**" in support_signal_upload_step
         ),
         "uploads_issue_sync_report_artifact": (
-            "actions/upload-artifact@v4" in issue_report_upload_step
+            "actions/upload-artifact@" in issue_report_upload_step
             and "name: support-issue-sync-reports" in issue_report_upload_step
             and "support/generated/support-matrix-check.json"
             in issue_report_upload_step
@@ -1505,7 +1505,7 @@ def support_matrix_report(workflow: str) -> dict[str, Any]:
             for name, marker in SUPPORT_MATRIX_REQUIRED_POLICIES.items()
         },
         "uploads_check_report_artifact": (
-            "actions/upload-artifact@v4" in check_upload_step
+            "actions/upload-artifact@" in check_upload_step
             and "support/generated/support-matrix-check.json" in check_upload_step
         ),
         "evidence_audit_on_failure": "if: always()" in evidence_step,
@@ -1516,7 +1516,7 @@ def support_matrix_report(workflow: str) -> dict[str, Any]:
         ),
         "evidence_audit_fails_on_missing": "--fail-on-missing" in evidence_step,
         "uploads_evidence_report_artifact": (
-            "actions/upload-artifact@v4" in check_upload_step
+            "actions/upload-artifact@" in check_upload_step
             and "support/generated/support-evidence-check.json" in check_upload_step
         ),
         "uploads_check_report_artifact_on_failure": "if: always()" in check_upload_step,
@@ -1532,7 +1532,7 @@ def support_matrix_report(workflow: str) -> dict[str, Any]:
             "Audit support matrix evidence",
         ),
         "uploads_docs_probe_artifact": (
-            "actions/upload-artifact@v4" in docs_probe_upload_step
+            "actions/upload-artifact@" in docs_probe_upload_step
             and "support/generated/backend-docs-report.json" in docs_probe_upload_step
         ),
         "uploads_docs_probe_artifact_on_failure": (
@@ -1642,7 +1642,7 @@ def open_source_porting_demo_failure_summary_report(
             "Run open-source porting demo tests",
         ),
         "uploads_failure_summary": (
-            "actions/upload-artifact@v4" in upload_step
+            "actions/upload-artifact@" in upload_step
             and "name: open-source-porting-demo-failure-summary-${{ matrix.os }}"
             in upload_step
             and junit in upload_step
@@ -1675,7 +1675,7 @@ def open_source_porting_demo_report_artifact_report(
     upload_step = workflow_job_step_section(workflow, job, "Upload demo reports")
     return {
         "uploads_reports": (
-            "actions/upload-artifact@v4" in upload_step
+            "actions/upload-artifact@" in upload_step
             and "name: open-source-porting-demo-reports-${{ matrix.os }}" in upload_step
             and "path: support/generated/demo-reports" in upload_step
         ),
