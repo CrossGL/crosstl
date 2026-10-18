@@ -87,12 +87,13 @@ Machine-readable results:
 2. **Translation.** `translate.py` translates each unique HLSL source with
    `crosstl.translate_with_metadata` and writes a manifest with the artifact
    hashes, entry points and the binding slot CrossTL assigned to every HLSL
-   register. Three HLSL source options select the semantics of the original
+   register. Four HLSL source options select the semantics of the original
    Direct3D execution for both targets (see [Floating-Point
    Evaluation](#floating-point-evaluation)): DXC's `-Zpr` row-major matrix
    packing (`matrix_packing=row_major`), WARP's sine and cosine evaluation
-   (`trigonometric_reduction=warp`) and contraction-free arithmetic
-   (`floating_point_contraction=off`). Metal artifacts are compiled and linked
+   (`trigonometric_reduction=warp`), contraction-free arithmetic
+   (`floating_point_contraction=off`) and Direct3D's float-to-UNORM store
+   conversion (`unorm_store_rounding=single_precision`). Metal artifacts are compiled and linked
    with `xcrun metal` during translation; OpenGL artifacts are compiled by the
    driver at pipeline creation. No shader is substituted by hand.
 3. **Portable runtime.** `runtime/ComputeSharp.Portable.csproj` builds an
@@ -312,9 +313,13 @@ and a control run after 4 minutes, so a hung dispatch fails the run instead of
 holding the job. `evidence.py` checks the evidence against the manifest, the
 artifact files, the discovery and the TRX: every pipeline uses a translated
 artifact, every descriptor range is bound to the slot CrossTL reported and to a
-device resource that was allocated and not yet released, readbacks read live
+device resource that was allocated and not yet released, every UNORM store
+scale buffer of the artifact holds the channel scales of the bound view's
+format (from an independent table of the DXGI formats), readbacks read live
 device resources, the thread groups cover the dispatch, dispatches come only
-from required GPU cases, and the device matches the profile.
+from required GPU cases, and the device matches the profile. The runtime also
+refuses to dispatch an artifact with a binding that no descriptor range
+supplies.
 
 Every executed required GPU case must leave evidence. `evidence_policy.json`
 lists the reviewed exceptions with their reasons: the `Allocate_Uninitialized_Fail`
@@ -328,10 +333,11 @@ method must record that query, and every answer must equal the capability the
 profile declares, so a gated case cannot be skipped by anything but the device
 query.
 
-`negative_controls.json` lists five faults injected through
+`negative_controls.json` lists six faults injected through
 `CROSSTL_COMPUTESHARP_FAULT` and the upstream methods that must fail under each:
-omitted dispatches, swapped bindings, perturbed constants, corrupted readbacks
-and an out-of-bounds device write into a buffer guard. Every case of every
+omitted dispatches, swapped bindings, perturbed constants, UNORM store scales
+of one level per channel, corrupted readbacks and an out-of-bounds device write
+into a buffer guard. Every case of every
 listed method must execute and fail (guard corruption must report the guard
 violation), must have passed in the unfaulted run, and the control evidence must
 carry the fault.
@@ -343,7 +349,7 @@ Several shaders hash coordinates with expressions such as
 so outputs depend on the last bits of single-precision results. The intrinsic
 probe in `precision/` measures the evaluation of 25 HLSL expressions over
 155,660 fixed inputs on WARP (Windows job) and on each translated target, from
-the same generated HLSL. Three general HLSL source options of CrossTL select
+the same generated HLSL. Four general HLSL source options of CrossTL select
 the original evaluation:
 
 - `trigonometric_reduction=warp`: WARP reduces sine and cosine arguments in
@@ -370,6 +376,18 @@ the original evaluation:
   buffers, images and shared memory, and computed values that a swizzle,
   member access or index selects from.
 - `matrix_packing=row_major`: ComputeSharp compiles with DXC's `-Zpr`.
+- `unorm_store_rounding=single_precision`: Direct3D stores a float to an
+  n-bit UNORM channel by clamping it, multiplying it by `2^n - 1` in single
+  precision and rounding to even. Apple GPUs round the exact product, so `0.3f`
+  is stored as 77 instead of 76 in an 8-bit channel, which
+  `DisableDynamicCompilation`'s `PixelShader_Test_Ok` asserts exactly. The
+  frontend quantizes every store to a texture declared `unorm` to
+  `round_even(saturate(v) * scale) / scale` in a precise helper, which every
+  target then converts to the same level. The scale belongs to the view
+  format, not to the shader, so each such texture gets a constant buffer
+  `crosstl_unorm_store_<register>` with per-channel scales that the runtime
+  binds from the format of the bound view (255 or 65535 for the channels the
+  format has).
 
 `exactness.py` checks that the target compiler keeps every translated
 artifact's arithmetic as written, using the runtime's compile options: the

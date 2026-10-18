@@ -68,7 +68,7 @@ internal static class BackendSelection
         string fault = value.Trim().ToLowerInvariant();
         return fault switch
         {
-            "omit-dispatch" or "swap-bindings" or "perturb-constants" or "corrupt-readback" or "corrupt-guard" => fault,
+            "omit-dispatch" or "swap-bindings" or "perturb-constants" or "perturb-unorm-scales" or "corrupt-readback" or "corrupt-guard" => fault,
             _ => throw new InvalidOperationException($"Unsupported CROSSTL_COMPUTESHARP_FAULT value '{value}'.")
         };
     }
