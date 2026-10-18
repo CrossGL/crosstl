@@ -371,3 +371,72 @@ def test_published_results_reject_incomplete_arithmetic_evidence(
     monkeypatch.setattr(sys.modules[__name__], "PUBLISHED", invalid)
     with pytest.raises(AssertionError):
         test_published_results_qualify_the_current_contract()
+
+
+def _readme_results_section():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    start = text.index("## Results\n")
+    end = text.index("\n## ", start + 1)
+    return text[start:end]
+
+
+def _table_rows(section, header):
+    """Return the cells of the rows of the Markdown table under ``header``."""
+    lines = section.splitlines()
+    index = next(i for i, line in enumerate(lines) if line.startswith(header))
+    rows = []
+    for line in lines[index + 2 :]:
+        if not line.startswith("|"):
+            break
+        rows.append([cell.strip() for cell in line.strip("|").split("|")])
+    return rows
+
+
+def test_readme_results_describe_the_published_run():
+    """The Results section of the README cites the run of ``results.json``."""
+    results = json.loads(PUBLISHED.read_text(encoding="utf-8"))
+    section = _readme_results_section()
+    provenance = results["provenance"]
+    run_id = provenance["workflowRun"].split("/runs/")[1].split("/")[0]
+    assert f"[{run_id}](https://github.com/CrossGL/crosstl/actions/runs/" in section
+    assert f"(commit `{provenance['sourceCommit']}`)" in section
+
+    profiles = results["profiles"]
+    for name in TRANSLATED:
+        exactness = profiles[name]["arithmeticExactness"]
+        sentence = (
+            f"{exactness['exactArtifacts']} "
+            f"{'Metal' if name.startswith('metal') else 'OpenGL'} artifacts with "
+            f"{exactness['floatOperations']:,} floating-point operations"
+        )
+        assert sentence in " ".join(section.split()), name
+
+    rows = {
+        row[0].split()[0].strip("`"): row
+        for row in _table_rows(section, "| Profile | Device |")
+    }
+    assert set(rows) == set(profiles)
+    for name, profile in profiles.items():
+        cases = profile["cases"]
+        row = rows[name]
+        assert row[2] == profile["execution"], name
+        assert f"{cases['requiredGpuCasesPassed']:,}" in row[3], name
+        assert f"({cases['requiredCasesPassed']:,} cases in total)" in row[3], name
+        assert row[4] == str(cases["capabilityGated"]), name
+
+    shaders = {
+        row[0].strip("`"): row
+        for row in _table_rows(section, "| Shader | WARP vs reference |")
+    }
+    metal = profiles["metal-apple-gpu"]["shaderImages"]["shaders"]
+    opengl = profiles["opengl-mesa-llvmpipe"]["shaderImages"]["shaders"]
+    assert set(shaders) == set(metal) == set(opengl)
+    for shader, row in shaders.items():
+        (metal_output,) = metal[shader]["outputs"]
+        (opengl_output,) = opengl[shader]["outputs"]
+        assert row[1:] == [
+            f"{metal[shader]['directxMeanAbsoluteErrorVsReference']:.3f}",
+            f"{metal_output['meanAbsoluteErrorVsDirectX']:.4f}",
+            f"{opengl_output['meanAbsoluteErrorVsDirectX']:.4f}",
+            f"{metal_output['meanAbsoluteErrorBound']:.3f}",
+        ], shader
