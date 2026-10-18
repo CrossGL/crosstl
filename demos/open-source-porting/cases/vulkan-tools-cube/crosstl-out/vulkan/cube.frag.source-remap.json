@@ -5,88 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 304,
+        "endLine": 157,
+        "endOffset": 4098,
         "file": "crosstl-out/vulkan/cube.frag.spvasm",
-        "length": 29,
-        "line": 11,
-        "offset": 275
+        "length": 4098,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 27,
-        "endOffset": 941,
+        "endLine": 55,
+        "endOffset": 1684,
         "file": "cube.frag",
-        "length": 40,
-        "line": 26,
-        "offset": 901
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 13,
-        "endOffset": 333,
-        "file": "crosstl-out/vulkan/cube.frag.spvasm",
-        "length": 29,
-        "line": 12,
-        "offset": 304
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 28,
-        "endOffset": 981,
-        "file": "cube.frag",
-        "length": 40,
-        "line": 27,
-        "offset": 941
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 29,
-        "endOffset": 746,
-        "file": "crosstl-out/vulkan/cube.frag.spvasm",
-        "length": 25,
-        "line": 28,
-        "offset": 721
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 25,
-        "endOffset": 900,
-        "file": "cube.frag",
-        "length": 44,
-        "line": 24,
-        "offset": 856
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 32,
-        "endOffset": 824,
-        "file": "crosstl-out/vulkan/cube.frag.spvasm",
-        "length": 26,
-        "line": 31,
-        "offset": 798
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 28,
-        "endOffset": 981,
-        "file": "cube.frag",
-        "length": 40,
-        "line": 27,
-        "offset": 941
+        "length": 1684,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

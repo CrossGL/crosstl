@@ -12024,14 +12024,12 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         primitive_name = self.normalize_primitive_name(function_name)
         if (
-            primitive_name
-            not in {
+            primitive_name not in {
                 "bool",
                 "float",
                 "double",
                 self.BFLOAT16_TYPE_NAME,
-            }
-            | self.INTEGER_TYPE_NAMES
+            } | self.INTEGER_TYPE_NAMES
         ):
             return None
 
@@ -12149,14 +12147,12 @@ class VulkanSPIRVCodeGen:
         component_type = self.scalar_or_vector_component_type(source_type.type)
         primitive_type = self.normalize_primitive_name(component_type)
         if (
-            primitive_type
-            in {
+            primitive_type in {
                 "float",
                 "double",
                 "bool",
                 self.BFLOAT16_TYPE_NAME,
-            }
-            | self.INTEGER_TYPE_NAMES
+            } | self.INTEGER_TYPE_NAMES
         ):
             return source_type
 
@@ -13679,6 +13675,7 @@ class VulkanSPIRVCodeGen:
             "max_vertices",
             "maxprimitives",
             "maxvertices",
+            "maybe_unused",
             "numthreads",
             "output",
             "output_control_points",
@@ -25839,6 +25836,28 @@ class VulkanSPIRVCodeGen:
 
         return None
 
+    def process_vector_list_constructor(self, expr, *, constant=False):
+        if not isinstance(expr, ConstructorNode) or not getattr(
+            expr, "is_braced_constructor", False
+        ):
+            return None
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        vector_info = self.vector_component_type_and_count(type_name)
+        if vector_info is None:
+            return None
+        if expr.named_arguments or len(expr.arguments) > vector_info[1]:
+            raise UnsupportedSPIRVFeatureError(
+                "vector-list-initialization",
+                f"Vector initializer for {type_name} requires at most "
+                f"{vector_info[1]} positional components",
+                source_location=getattr(expr, "source_location", None),
+            )
+        return self.process_array_literal(
+            ArrayLiteralNode(list(expr.arguments)),
+            self.map_crossgl_type(expr.constructor_type),
+            constant=constant,
+        )
+
     def process_constant_expression(
         self,
         expr,
@@ -25846,6 +25865,10 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         if isinstance(expr, ArrayLiteralNode):
             return self.process_array_literal(expr, target_type, constant=True)
+
+        vector_list = self.process_vector_list_constructor(expr, constant=True)
+        if vector_list is not None:
+            return vector_list
 
         converted_literal = self.constant_literal_for_type(expr, target_type)
         if converted_literal is not None:
@@ -28388,6 +28411,9 @@ class VulkanSPIRVCodeGen:
             return self.process_mesh_operation(expr)
 
         elif isinstance(expr, ConstructorNode):
+            vector_list = self.process_vector_list_constructor(expr)
+            if vector_list is not None:
+                return vector_list
             constructed = self.process_struct_constructor_node(expr)
             if constructed is not None:
                 return constructed
@@ -29115,8 +29141,11 @@ class VulkanSPIRVCodeGen:
                 return
         if (
             self.include_resource_interface_variables
-            and variable.type.storage_class
-            in {"StorageBuffer", "Uniform", "UniformConstant"}
+            and variable.type.storage_class in {
+                "StorageBuffer",
+                "Uniform",
+                "UniformConstant",
+            }
             and any(
                 global_variable.id == variable.id
                 for global_variable in self.global_variables.values()

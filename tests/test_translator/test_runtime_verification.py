@@ -2013,7 +2013,7 @@ def test_plan_runtime_test_manifest_rejects_invalid_artifact_contract_mode(tmp_p
 
 
 def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path):
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     artifact_path = tmp_path / "out" / "directx" / "arange" / "arangeuint32.hlsl"
     artifact_path.parent.mkdir(parents=True)
     artifact_path.write_text("// generated standalone entry", encoding="utf-8")
@@ -2548,7 +2548,7 @@ def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements():
 
 
 def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     artifact_report = fixture_dir / "reduced_binary_add.artifacts.json"
     fixture_metadata = fixture_dir / "reduced_binary_add.fixture-metadata.json"
 
@@ -2598,7 +2598,9 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
         "source": "mlx/backend/metal/kernels/binary.metal",
         "target": "metal",
         "variant": "reduced-add",
-        "path": "tests/fixtures/runtime_verification/mlx/reduced_binary_add.metal",
+        "path": (
+            "demos/integrations/mlx/fixtures/runtime_verification/reduced_binary_add.metal"
+        ),
     }
     assert test_case["runtimeAdapter"]["entryPoints"][0]["name"] == (
         "mlx_binary_add_f32"
@@ -2636,7 +2638,7 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
 
 
 def test_mlx_file_scope_immutable_lookup_fixture_is_value_sensitive():
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     source_path = fixture_dir / "file_scope_immutable_lookup.metal"
     artifact_report = fixture_dir / "file_scope_immutable_lookup.artifacts.json"
     fixture_metadata = fixture_dir / "file_scope_immutable_lookup.fixture-metadata.json"
@@ -2705,7 +2707,9 @@ def test_mlx_file_scope_immutable_lookup_fixture_is_value_sensitive():
 
 
 def test_mlx_workflow_requires_directx_lookup_numerical_execution():
-    workflow = (ROOT / ".github" / "workflows" / "mlx-project-porting.yml").read_text(
+    from tests.ci_helpers import assert_workflow_triggers
+
+    workflow = (ROOT / ".github" / "workflows" / "demo-project-testing.yml").read_text(
         encoding="utf-8"
     )
     for watched_path in (
@@ -2713,7 +2717,7 @@ def test_mlx_workflow_requires_directx_lookup_numerical_execution():
         "tests/test_translator/test_native_runtime_drivers.py",
         "tests/test_translator/test_runtime_verification.py",
     ):
-        assert workflow.count(f'- "{watched_path}"') == 2
+        assert_workflow_triggers(workflow, watched_path)
 
     compile_start = workflow.index("- name: Run MLX project-porting checks")
     runtime_start = workflow.index(
@@ -2844,7 +2848,7 @@ def test_build_runtime_test_manifest_records_runtime_metadata_readiness(tmp_path
 
 
 def test_project_cli_runtime_test_manifest_text_outputs_generated_tests():
-    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    fixture_dir = ROOT / "demos/integrations/mlx/fixtures/runtime_verification"
     artifact_report = fixture_dir / "reduced_binary_add.artifacts.json"
     fixture_metadata = fixture_dir / "reduced_binary_add.fixture-metadata.json"
 
@@ -3179,7 +3183,9 @@ def test_verify_runtime_test_manifest_reports_runtime_adapter_gap_as_unavailable
 def test_runtime_parity_native_factories_create_target_adapters():
     adapters = native_runtime_parity_adapters()
 
-    assert set(adapters) == {"directx", "opengl", "vulkan"}
+    assert set(adapters) == {"directx", "opengl", "vulkan", "metal"}
+    assert adapters["metal"].target == "metal"
+    assert adapters["metal"].runtime.name == "metal-compute-runtime"
     assert isinstance(adapters["directx"], DirectXRuntimeParityAdapter)
     assert adapters["directx"].runtime.name == "directx-compute-runtime"
     assert isinstance(adapters["opengl"], OpenGLRuntimeParityAdapter)
@@ -3189,7 +3195,7 @@ def test_runtime_parity_native_factories_create_target_adapters():
         native_runtime_parity_adapter("DirectX"), DirectXRuntimeParityAdapter
     )
     with pytest.raises(RuntimeVerificationError, match="not available"):
-        native_runtime_parity_adapter("metal")
+        native_runtime_parity_adapter("cuda")
 
 
 def test_runtime_parity_native_adapter_reports_unavailable_tooling(tmp_path):

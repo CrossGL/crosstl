@@ -67,7 +67,7 @@ PROJECT_FEATURE_TEST_PATHS = {
     "project.entry_point_discovery": (
         "tests/test_backend/test_metal/test_entry_discovery.py",
         "tests/test_translator/test_project_entry_discovery.py",
-        "tests/test_mlx_entry_discovery.py",
+        "demos/integrations/mlx/tests/test_entry_discovery.py",
     ),
     "project.host_dispatch_contract_import": (
         "tests/test_translator/test_dispatch_contracts.py",

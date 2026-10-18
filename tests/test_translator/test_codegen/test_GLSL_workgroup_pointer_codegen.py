@@ -469,6 +469,182 @@ def test_null_workgroup_recursive_forwarding_fails_closed():
     assert error.reason == "call-backing-unresolved"
 
 
+NULL_WORKGROUP_LOCAL_VIEW_SHADER = """
+shader NullWorkgroupLocalView {{
+    void merge_step(
+        threadgroup float* values,
+        threadgroup uint* indices,
+        device float* output,
+        device uint* order
+    ) {{
+        output[0] = values[0];
+        {indices_use}
+    }}
+
+    void run(
+        threadgroup float* tile,
+        threadgroup uint* index_tile,
+        device float* output,
+        device uint* order
+    ) {{
+        threadgroup float* values = tile + 1;
+        threadgroup uint* indices = {selection};
+        {before_call}
+        merge_step(values, indices, output, order);
+    }}
+
+    compute {{
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main(
+            RWStructuredBuffer<float> output @buffer(0),
+            RWStructuredBuffer<uint> order @buffer(1)
+        ) {{
+            threadgroup float tile[4];
+            tile[1] = 2.0;
+            run(tile, nullptr, output, order);
+        }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        pytest.param("false ? index_tile + 1 : nullptr", id="literal-conditional"),
+        pytest.param("nullptr", id="literal-null"),
+    ],
+)
+def test_statically_null_workgroup_pointer_local_is_folded(tmp_path, selection):
+    # MLX's merge sort selects `ARG_SORT ? tgp_idxs + A_st : nullptr`; the
+    # value sort passes `nullptr` for the index tile and never reads the view.
+    shader = NULL_WORKGROUP_LOCAL_VIEW_SHADER.format(
+        indices_use="if (false) { order[0] = indices[0]; }",
+        selection=selection,
+        before_call="",
+    )
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "nullptr" not in generated
+    assert "indices" not in generated.replace("_indices_unused_", "_")
+    assert "index_tile" not in generated.replace("_index_tile_unused_", "_")
+    assert re.search(r"\buint\s*\*", generated) is None, generated
+    assert "int values_offset = int((tile_offset + 1));" in generated
+    assert re.search(
+        r"\bmerge_step\w*\(int\(values_offset\), int\(output_offset\), "
+        r"int\(order_offset\)\);",
+        generated,
+    ), generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"null_workgroup_local_{selection.split()[0]}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("indices_use", "selection", "before_call", "reason"),
+    [
+        pytest.param(
+            "order[0] = indices[0];",
+            "false ? index_tile + 1 : nullptr",
+            "",
+            "backing-unresolved",
+            id="observed",
+        ),
+        pytest.param(
+            "if (false) { order[0] = indices[0]; }",
+            "false ? index_tile + 1 : nullptr",
+            "indices = nullptr;",
+            "backing-unresolved",
+            id="reassigned",
+        ),
+        pytest.param(
+            "if (false) { order[0] = indices[0]; }",
+            "true ? index_tile + 1 : nullptr",
+            "",
+            "call-backing-unresolved",
+            id="live-arm",
+        ),
+    ],
+)
+def test_null_workgroup_pointer_local_with_live_use_fails_closed(
+    indices_use, selection, before_call, reason
+):
+    shader = NULL_WORKGROUP_LOCAL_VIEW_SHADER.format(
+        indices_use=indices_use,
+        selection=selection,
+        before_call=before_call,
+    )
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == reason
+
+
+def test_null_workgroup_parameter_in_dead_literal_conditional_arm(tmp_path):
+    shader = """
+    shader NullWorkgroupLiteralConditional {
+        void route(threadgroup float* optionalValues, device float* output) {
+            output[0] = false ? optionalValues[0] : 0.5;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @buffer(0)) {
+                threadgroup float storage[1];
+                route(nullptr, output);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "nullptr" not in generated
+    assert "optionalValues[" not in generated
+    assert "output_[output_offset] = 0.5;" in generated
+    assert re.search(r"\broute\w*\(int\(0\)\);", generated), generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "null_workgroup_dead_literal_arm",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_null_workgroup_parameter_in_live_literal_conditional_arm_fails_closed():
+    shader = """
+    shader NullWorkgroupLiveLiteralConditional {
+        void route(threadgroup float* optionalValues, device float* output) {
+            output[0] = true ? optionalValues[0] : 0.5;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @buffer(0)) {
+                threadgroup float storage[1];
+                route(nullptr, output);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.function_name == "route"
+    assert exc_info.value.reason == "call-backing-unresolved"
+
+
 def test_bare_workgroup_pointer_expression_reports_structured_error():
     shader = """
     shader BareWorkgroupPointerExpression {
@@ -535,7 +711,7 @@ def test_workgroup_pointer_struct_member_access_materializes_pointee():
     assert codegen.expression_result_type(dot) == "int"
 
 
-def test_workgroup_atomic_rejects_non_integer_element_type():
+def test_workgroup_float_atomic_uses_word_backing():
     shader = """
     shader WorkgroupPointerFloatAtomic {
         compute {
@@ -550,11 +726,11 @@ def test_workgroup_atomic_rejects_non_integer_element_type():
     }
     """
 
-    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
-        GLSLCodeGen().generate(crosstl.translator.parse(shader))
-
-    assert exc_info.value.parameter_name == "p"
-    assert exc_info.value.reason == "atomic-element-type-unsupported"
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "shared uint main_values[8];" in generated
+    assert "atomicCompSwap(main_values[" in generated
+    assert "uintBitsToFloat(" in generated
+    assert "crossgl_pending_float_atomic" not in generated
 
 
 def test_generic_workgroup_pointer_helper_specializes_without_pointer(tmp_path):
@@ -2104,3 +2280,71 @@ def test_workgroup_pointer_nested_block_shadows_preserve_outer_bounds(
         spirv_target="spirv1.3",
         validate_spirv=True,
     )
+
+
+def test_shared_arrays_of_arrays_keep_every_subscript(tmp_path):
+    # MLX's Winograd transforms stage tiles in threadgroup T Ws[BO][R][R][BC];
+    # adding the subscripts as flat offsets would alias distinct rows.
+    shader = """
+    shader SharedArraysOfArrays {
+        compute {
+            layout(local_size_x = 32, local_size_y = 4, local_size_z = 1) in;
+
+            void main(uvec3 lid @gl_LocalInvocationID) {
+                threadgroup float rows[4][32];
+                threadgroup float cube[2][4][32];
+                threadgroup float tiles[4][3][3][32];
+                rows[lid.y][lid.x] = float(lid.x);
+                cube[1][lid.y][lid.x] = rows[3u - lid.y][lid.x];
+                tiles[lid.y][1][2][lid.x] = cube[1][lid.y][lid.x];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "shared float main_rows[4][32];" in generated
+    assert "shared float main_tiles[4][3][3][32];" in generated
+    assert (
+        "main_rows[gl_LocalInvocationID.y][gl_LocalInvocationID.x] = "
+        "float(gl_LocalInvocationID.x);"
+    ) in generated
+    assert (
+        "main_cube[1][gl_LocalInvocationID.y][gl_LocalInvocationID.x] = "
+        "main_rows[(3u - gl_LocalInvocationID.y)][gl_LocalInvocationID.x];"
+    ) in generated
+    assert (
+        "main_tiles[gl_LocalInvocationID.y][1][2][gl_LocalInvocationID.x] = "
+        "main_cube[1][gl_LocalInvocationID.y][gl_LocalInvocationID.x];"
+    ) in generated
+    # No subscript of these arrays is a sum of the source subscripts.
+    assert " + uint(" not in generated and " + int(" not in generated, generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "shared_arrays_of_arrays",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_pointer_to_a_shared_array_row_fails_closed():
+    # A row of an array of arrays has no flat workgroup-pointer backing.
+    shader = """
+    shader SharedRowPointer {
+        compute {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float rows[4][32];
+                threadgroup float* row = rows[1];
+                row[2] = 1.0;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as error:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert error.value.reason == "backing-unresolved"

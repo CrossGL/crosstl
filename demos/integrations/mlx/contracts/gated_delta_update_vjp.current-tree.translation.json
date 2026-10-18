@@ -1,0 +1,1150 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-gated-delta-vjp-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/gated_delta_update_vjp.metal",
+    "sourceSha256": "59590c0bc3dbeb6ce1c808660b43abdf462a3f43f16abcb484220605b8aa86e7",
+    "headers": {
+      "mlx/backend/metal/kernels/gated_delta_update_vjp.h": "717aa81794efca14c589371c83a16e86f2d0b5e0660778b0e09e34abe46e63c6",
+      "mlx/backend/metal/kernels/atomic.h": "4c35ea2798a2335502865247aee878149fc9ada0d7e84c05d771baef0c7fcc60"
+    }
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "seq_gated_delta_vjp_float_128_128_24_24_1",
+    "seq_gated_delta_vjp_float_128_128_24_24_4",
+    "seq_gated_delta_vjp_float_128_128_24_24_8",
+    "seq_gated_delta_vjp_float_128_128_24_24_16",
+    "seq_gated_delta_vjp_float_128_128_32_32_1",
+    "seq_gated_delta_vjp_float_128_128_32_32_4",
+    "seq_gated_delta_vjp_float_128_128_32_32_8",
+    "seq_gated_delta_vjp_float_128_128_32_32_16",
+    "seq_gated_delta_vjp_float_128_128_16_32_1",
+    "seq_gated_delta_vjp_float_128_128_16_32_4",
+    "seq_gated_delta_vjp_float_128_128_16_32_8",
+    "seq_gated_delta_vjp_float_128_128_16_32_16",
+    "seq_gated_delta_vjp_float_128_128_16_48_1",
+    "seq_gated_delta_vjp_float_128_128_16_48_4",
+    "seq_gated_delta_vjp_float_128_128_16_48_8",
+    "seq_gated_delta_vjp_float_128_128_16_48_16",
+    "seq_gated_delta_vjp_float_128_128_16_16_1",
+    "seq_gated_delta_vjp_float_128_128_16_16_4",
+    "seq_gated_delta_vjp_float_128_128_16_16_8",
+    "seq_gated_delta_vjp_float_128_128_16_16_16",
+    "seq_gated_delta_vjp_float_128_128_16_64_1",
+    "seq_gated_delta_vjp_float_128_128_16_64_4",
+    "seq_gated_delta_vjp_float_128_128_16_64_8",
+    "seq_gated_delta_vjp_float_128_128_16_64_16",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_1",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_4",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_8",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_16",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_1",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_4",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_8",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_16",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_1",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_4",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_8",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_16",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_1",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_4",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_8",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_16",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_1",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_4",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_8",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_16",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_1",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_4",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_8",
+    "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_16",
+    "seq_gated_delta_vjp_float16_t_128_128_24_24_1",
+    "seq_gated_delta_vjp_float16_t_128_128_24_24_4",
+    "seq_gated_delta_vjp_float16_t_128_128_24_24_8",
+    "seq_gated_delta_vjp_float16_t_128_128_24_24_16",
+    "seq_gated_delta_vjp_float16_t_128_128_32_32_1",
+    "seq_gated_delta_vjp_float16_t_128_128_32_32_4",
+    "seq_gated_delta_vjp_float16_t_128_128_32_32_8",
+    "seq_gated_delta_vjp_float16_t_128_128_32_32_16",
+    "seq_gated_delta_vjp_float16_t_128_128_16_32_1",
+    "seq_gated_delta_vjp_float16_t_128_128_16_32_4",
+    "seq_gated_delta_vjp_float16_t_128_128_16_32_8",
+    "seq_gated_delta_vjp_float16_t_128_128_16_32_16",
+    "seq_gated_delta_vjp_float16_t_128_128_16_48_1",
+    "seq_gated_delta_vjp_float16_t_128_128_16_48_4",
+    "seq_gated_delta_vjp_float16_t_128_128_16_48_8",
+    "seq_gated_delta_vjp_float16_t_128_128_16_48_16",
+    "seq_gated_delta_vjp_float16_t_128_128_16_16_1",
+    "seq_gated_delta_vjp_float16_t_128_128_16_16_4",
+    "seq_gated_delta_vjp_float16_t_128_128_16_16_8",
+    "seq_gated_delta_vjp_float16_t_128_128_16_16_16",
+    "seq_gated_delta_vjp_float16_t_128_128_16_64_1",
+    "seq_gated_delta_vjp_float16_t_128_128_16_64_4",
+    "seq_gated_delta_vjp_float16_t_128_128_16_64_8",
+    "seq_gated_delta_vjp_float16_t_128_128_16_64_16"
+  ],
+  "artifacts": {
+    "metal": {
+      "seq_gated_delta_vjp_float_128_128_24_24_1": {
+        "sha256": "c8f05e8cf95e1481ecb1b2fb5c1929eb5fa1f721dd7d5c2e9fd195c7082bd046",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_24_24_4": {
+        "sha256": "b2d6dfcadbe5bdcc5f14e165fd4fe2b80e2c9381a8c9b7ecdac03f0c381b1947",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_24_24_8": {
+        "sha256": "d193bea15e65cd7093c0ea3838f3422b674006bbced887452eebc8bc71a92f6a",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_24_24_16": {
+        "sha256": "4bdb3ba7e46df7e48a69d847482946be2b226577c797c957b30be5adfb02ae45",
+        "sizeBytes": 6538
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_1": {
+        "sha256": "f1d990188ac341ebdddaba455d27d5921d128f8b189f29cbe8b75376712f4c33",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_4": {
+        "sha256": "ca56ece0cdbdbf904b9fd54dade7807fc2e8de68c957dab360885f113996cf26",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_8": {
+        "sha256": "241487876f7aa9f39210edfefea6b22207eeff042a3a115e3f84fec8a3e219e4",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_16": {
+        "sha256": "ad522a5002b7adb3252922e04efd5aa88782a7673d31f8f3e4ef9dca9bb9866d",
+        "sizeBytes": 6538
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_1": {
+        "sha256": "55075d190f769be32c56e014df83dcf3965b211e77414cdae9a8c680239c6d75",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_4": {
+        "sha256": "f73fbc8b9b99dd28aac4a0d23246b548693542413bb32c45fa0533ecd404cd27",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_8": {
+        "sha256": "f34cda2fc4b6e8e7e5e28faa1b2ccce82ba3335c7e8e85f4507c90429ba6a5a0",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_16": {
+        "sha256": "8965cc945a613db95c1a9dcb62b50a1ad99a90b17a80990beb8e706bbca21856",
+        "sizeBytes": 6538
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_1": {
+        "sha256": "fd0ec0c5ab97a5ab961dc359657043c882b21a0500ce169f4ffa6a39f2dc10ea",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_4": {
+        "sha256": "9e4bb0727d3fc9904a114481273849f231ffe485d462d231e86f17019245d8c8",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_8": {
+        "sha256": "aed40499138d3fbc822e0971e813d712f594bbfd829d9098539190b8aa4df56b",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_16": {
+        "sha256": "e8f9fb02bf6b14c593077107b21b7d6aaa5e15f3dd4b0ca02f2c7a0e6ff08024",
+        "sizeBytes": 6538
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_1": {
+        "sha256": "61077a338984b791d442c0aa65baa195745afb503cac9436065a34625655020b",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_4": {
+        "sha256": "ee5805d38e6376864e457e35f9c83c2e9afa441f529ab9891097d65b48b37850",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_8": {
+        "sha256": "b5d835e933c8d5a6e4dd78cfb191083ae69150e0280b0511cff7bd0797b4655f",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_16": {
+        "sha256": "73ee2058a760819c6633309806e8775d695ad9c47f3ebda68a8a5ce4e3293939",
+        "sizeBytes": 6538
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_1": {
+        "sha256": "7efb61c4b5ccc40a88a6b200554c69b83d1d50f47ae2b894cc9ae1877b4c4471",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_4": {
+        "sha256": "cb5a756849ddb4fa4226b0475e008e2b594472923cb2d74ff8cffff28504e669",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_8": {
+        "sha256": "7814eb72e0d80049b7827e97984aac4fa69fd40a4dd1558f83e6e395116e5762",
+        "sizeBytes": 6532
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_16": {
+        "sha256": "bee29869aaae35e67768aba27bd77489224a88faa426eb24bef1378fca4562e7",
+        "sizeBytes": 6538
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_1": {
+        "sha256": "ae8690789b0127eafd405896ac069e9badb4b77b71beaf0aff95123b3485020f",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_4": {
+        "sha256": "bebbf528a642f39ce40b7f601c49e5197ec042064b96e7cb91a6f796c01ae366",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_8": {
+        "sha256": "0b53440b3f59d7d2cee9c552dfc7ee99ae331a295c21a955ff6267a29b31d5bd",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_16": {
+        "sha256": "72b98779e35b0cc8949648cc5a4a3fdfc057f79d72e68d6d618eb1ea1ada2062",
+        "sizeBytes": 6558
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_1": {
+        "sha256": "f3570f6d6e8503e850ed6734a9a77765921d6ad981b0afca1c0a0b4cca4d4965",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_4": {
+        "sha256": "a6c5151f7b9676406a5bddce8f80995bb0313c5cd0ee7dc057870319c283643b",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_8": {
+        "sha256": "388c1517e05a898ab1db2eee0d4931544c8fe66916b2ed524600596a7126534b",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_16": {
+        "sha256": "2a331ff5f6252e81be4379f550c9d7a25e64720fccfd36495dbe0ab734ac06ff",
+        "sizeBytes": 6558
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_1": {
+        "sha256": "30a6a62f9f2bfef3c166c9b3744b03acc35172ce3fe3a3c28e5522ef743ad9fb",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_4": {
+        "sha256": "bd5e56878bfb7151dff64715de7475bccba1087863475d3748d07a204f1c4d23",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_8": {
+        "sha256": "b46682e8b4f1bec93679ccc14802fd35c4ed40b7ac2bcd518d2ef0e0307d2f5b",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_16": {
+        "sha256": "a258069c58407f37caf6163229bb41a3edfe8fac1311b0b09291137dcd8ac157",
+        "sizeBytes": 6558
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_1": {
+        "sha256": "264a847b013e675c2c6387d9c91945b1ec274af130c68ba1b4ff49ae889f8c25",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_4": {
+        "sha256": "8282118774f26af8f45fce3cb42ce267cab6d7e04748f84f3feca80b37b4b83b",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_8": {
+        "sha256": "9287f43b7eca887e3e23f8df0f496cf2fcd2cddef7f5a4ab6abf65002585d8bc",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_16": {
+        "sha256": "dad6ba3cbef370f8b8e7d387d1891d6ddbf3e694b774ba48d224f1dd94222b30",
+        "sizeBytes": 6558
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_1": {
+        "sha256": "c69356e71bcd71693c71b959b3df5ea8db424a62c169bb644d6b06538f7c44bb",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_4": {
+        "sha256": "f775426d5f712f7472a6f2ef446f997bfcf5f13a9c6680241fc2c1649de33c25",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_8": {
+        "sha256": "30eabe39f7635e797375d7b5f1d93323e93a6c3822fde2e22839c945e14ef24d",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_16": {
+        "sha256": "e8829a5aafdb7223c8e3016a0201b08ed1ca7eb4b69251c97b5a190c2bb11419",
+        "sizeBytes": 6558
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_1": {
+        "sha256": "ffffdb2df9c4d7cd5197b4fb2095e378392de673195dd65d5529a981c59f2448",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_4": {
+        "sha256": "6d60a595957c1ac9c5d4dbbf5eec06132a459b2aa433ff0d630a65430be3f653",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_8": {
+        "sha256": "77b6e29b00b90039d4774cb2f5746ccb646f7a7313a2e573b954b178d284dd55",
+        "sizeBytes": 6552
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_16": {
+        "sha256": "cc728f24e029e6b28f8016826e73140069be608dfc84dadef3d0d734ff72a46f",
+        "sizeBytes": 6558
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_1": {
+        "sha256": "b34d032c4ea108e7dd33d7b1099668b41beb2c09b86201ade1b20cfaa036d0f7",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_4": {
+        "sha256": "028c2fcd58589171afe4675daed49375f6b18faadb3a77a306ad50429b2c44d8",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_8": {
+        "sha256": "bbf1780e501f1ff9619d5f41a8eef2fc852185ed033c9a842b03962f81cc0f8f",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_16": {
+        "sha256": "045ce32e5643f0c6f8ce0fc9b78a07c9db8fd5ae6c600c7cebf964b2de5293e4",
+        "sizeBytes": 6527
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_1": {
+        "sha256": "4c0bc01b2415c8dc5d4caef67b56ffc8243d0d470ab278e007b15e503ab59fee",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_4": {
+        "sha256": "a517358aadd0adb0228c9c4ea2658a0dbe9e8ed11b60b345903aca20dac6eb58",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_8": {
+        "sha256": "1c151b8c8d81bb89ebbeb84577b8b87d781e12f55f56da68d434372eed5b953c",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_16": {
+        "sha256": "e4e1e024944de222b93fdc50686a09c08392ee92097e91437bbfd6dedf404b69",
+        "sizeBytes": 6527
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_1": {
+        "sha256": "f27e5baf254e2ee991069cd355ac050d93450e1bbc0956459af0a5a21d2b97dc",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_4": {
+        "sha256": "63aa885c9236f57ad44c2a460eb9bfd86ef3dcdb30ba1d56f68908453610d2ae",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_8": {
+        "sha256": "ea2137e82c398dee552c5b04dc87e622def15d2bd92542a369fd115662a3eb2a",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_16": {
+        "sha256": "82ecda880cf99f4fc7e67adf345951d535e9d34aa6f65746104bd23fd74043cc",
+        "sizeBytes": 6527
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_1": {
+        "sha256": "f830204c0ca993bec0938cbb4e70a9e6f0274dc990fe1e1c434f891cc052766a",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_4": {
+        "sha256": "e65f6f58cbed7a1d2574ddb23a9fa8fb534456bc2fc222890b7e3a916d00ac08",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_8": {
+        "sha256": "75eb2f08cc9ed44558d40dcce14048823205ac5e6bf298caa5b5583ad7c55e5b",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_16": {
+        "sha256": "e13200354d12a55fb2298b57f4002e3fde83faa0f3c13b5acea699b5dd403fc6",
+        "sizeBytes": 6527
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_1": {
+        "sha256": "f52bbdee1b89cee881539d8bf5c219074cd5a893d4210acb4a9a83bbce8f8e96",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_4": {
+        "sha256": "70e0a2e132e6b71ec87f81aacc9e4e3d6c9c2208fa6a7c8c2cda98fa5e08a351",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_8": {
+        "sha256": "cd00748a5d13292bd2d819c2d180dbc2580088f3cbb6c8b0330956cdab146818",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_16": {
+        "sha256": "86d348da8833f42fa01986695dc879ad5bd5d25a2f2f02e36d02c6da5e7a1cf9",
+        "sizeBytes": 6527
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_1": {
+        "sha256": "b4f87b05a5d824f162c2a83ac786278802bf32e6210cc57cedc109ab9e9b662d",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_4": {
+        "sha256": "8ae94e4d6d75d162bda7bc4ffb4cb677d9dac9f29c543ef992bd279a0fb108fc",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_8": {
+        "sha256": "15696bfd10dffe045a97d3ce8b3fd51cf8a5b7c11202142f4160af7fbb7849ca",
+        "sizeBytes": 6521
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_16": {
+        "sha256": "b7b128c904cdc00f46e127cab83d4ca0434d7d2622ee6865843ea52f6e84b37a",
+        "sizeBytes": 6527
+      }
+    },
+    "opengl": {
+      "seq_gated_delta_vjp_float_128_128_24_24_1": {
+        "sha256": "3cb15af5f370696eb9925009036ebe8283f84c56e534babebc994adb5cbb2238",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_24_24_4": {
+        "sha256": "e602cc2948f5f40e088f1588a6dea4dacfd516a7f37a1376c9ef74c6ac980be7",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_24_24_8": {
+        "sha256": "50a206e2ee6f23130fde46da7aacfc6ed813b421c1b3ce060c03661ca22825fe",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_24_24_16": {
+        "sha256": "55b76d74eac27a1e13919f8e754a951f900ebe85d0693fef7df1f2e8bb2db0be",
+        "sizeBytes": 13716
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_1": {
+        "sha256": "90a83b023a356e0215da09100e88821e6842bb197147258c684fe08047c8c8b3",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_4": {
+        "sha256": "34887cc015c051b62fde1490b52b768331674ef176c510301b2842b249cd798a",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_8": {
+        "sha256": "28a3e536cebc740cc6f5381aa18d4cbc5f9312067a2fd973b8467d04f8127dff",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_16": {
+        "sha256": "c217046f547588f0a740fdc27c5dfadf925f2f0f476620258ade514b5a7c9e7a",
+        "sizeBytes": 13716
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_1": {
+        "sha256": "7761f06556fe548361519f954e249eb3c37ed65fc68fc25b1864510897df9688",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_4": {
+        "sha256": "44625ab5a3b47d4f1ebffcf5661e2fa22669c5b6a99b50a81211aefbc9db3094",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_8": {
+        "sha256": "cb1f4f87a0747f59cb6c544ddf18d11865de1d2073e02c81015500476ffccdd8",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_16": {
+        "sha256": "46a8d821f96740d578492d06cb9d16b098776ac0b6cd5798ff43e8e8923fbe54",
+        "sizeBytes": 13716
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_1": {
+        "sha256": "1076205cbf6079d82a54e6715addd3b942ad7b87201a8ff8ff3410345c43df5c",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_4": {
+        "sha256": "fb2dfa051c749b3eda1cbfe88bb2796795aa397cfb9645c7ce8a5fc53049ce4b",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_8": {
+        "sha256": "f8de9c30d2a8d505778450242a4aef87eb925554741116536c8cfe1e38fdb919",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_16": {
+        "sha256": "9c278b04b0175ab82ca5f34e28ed5f209608674d71e0ebb2c24ce14c39b4df57",
+        "sizeBytes": 13716
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_1": {
+        "sha256": "71f1a1b76fde95be54404e78876b23a26eadd5741933785b66a47c98be9713ef",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_4": {
+        "sha256": "a6c85e2b91d69a178c2d9d070a3edb8afa293ecb550e467137294d38119bb095",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_8": {
+        "sha256": "eab81480d1dc988bb1043993ad3b024acc9c52d5a2db8278191cd33ab9e27523",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_16": {
+        "sha256": "c4f96d88bcdf073c646d07089c0325c492cd16b258dffe959e05ec0e8e15397b",
+        "sizeBytes": 13716
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_1": {
+        "sha256": "e91dc99f18c8c1789cf260ae4c0ff9f46e4df1a641bfc3fb4389a2ec958ceeb0",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_4": {
+        "sha256": "68abfd86cce0d190f07bcf9c97270cc3ad24db49285a29ee0f4d2d8a26d66dab",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_8": {
+        "sha256": "3a257edace95aef509900c5f2a689813fdb3119aa1b763c731a67bc47fde1d4d",
+        "sizeBytes": 13710
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_16": {
+        "sha256": "1b584d212a7867819e4a4d8400721efaf16c2c3447814541caaaae4935f4b885",
+        "sizeBytes": 13716
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_1": {
+        "sha256": "ac982d81d71c658f81d48c5571fe0fa80af00b72b193edebca4b9e05cc28bb9e",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_4": {
+        "sha256": "16c505bc17aff390071ef3e9b11c984bcea4baa7c89a0c6dac747e87834cf56c",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_8": {
+        "sha256": "8b6e6db823a27668b4948984038306426fa3d807bb4b69de985e3b02a248777a",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_16": {
+        "sha256": "7d3f43d73a8c101ba622112f1ade1f81400b388081ffbc0748ca1d0d50e7707d",
+        "sizeBytes": 13721
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_1": {
+        "sha256": "c47d622dc0f2bf6b28183637b302c7b9d64ae3ce6183746c7f8c73ed5a39d704",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_4": {
+        "sha256": "2843d90c972bdcbe37694323d580365f0ef93fa8655b14ba7037bec5a6866722",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_8": {
+        "sha256": "00fc7b3affea3927ab402fb75da37a00eb0b324e8d6c06b7149ec3e4ee64a800",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_16": {
+        "sha256": "531feffdefc21bb1ffaced6403dd422b5242cddf67239a600a37c5b61841bd2d",
+        "sizeBytes": 13721
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_1": {
+        "sha256": "c9a55fc4b794c24e917237d7f4b9d9f1baa049d819bbdcf99c5013d5aae37bf6",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_4": {
+        "sha256": "05cb647549e835656e6199b2742895d1ad790cb108d101bf17a96f2eeb30e2ed",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_8": {
+        "sha256": "14abdf82b2715b0dad8bdaf613940e50bf6be8b7e74fdab07b7eb52e9ccec757",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_16": {
+        "sha256": "e74e92fe6564d1f3bf18b3ec421546438f800297adfa027671dca8d1b7ff657b",
+        "sizeBytes": 13721
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_1": {
+        "sha256": "4fb30219e9abaffd1f966ff17ab26b4edf6c13cb047abd9affe074e30e1335f2",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_4": {
+        "sha256": "5e17acc391e21f693b78090fea80bd2c7c1f7ec67f3312778d8fd8ecca1fbdc7",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_8": {
+        "sha256": "d7b0d064e3cd11db43933ee648082d0b50d17c3f4cd4eced642e6eda9231f6aa",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_16": {
+        "sha256": "d2b46f2152f3b75c23905202ca99aae5a5f01a7a79b8b2d5a37000bb0357850e",
+        "sizeBytes": 13721
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_1": {
+        "sha256": "1a53d5cd6850babacc21ff4adccdfe474e071cee3d8a14cc3ddb713264217b71",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_4": {
+        "sha256": "7afbebcb6ea988baf0966c96ac3df8bf3579e316295b9fd3566e21e1e5e4dc9a",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_8": {
+        "sha256": "3d484dc52d93bf726cf8bbfaf3f136e67c2347dd409e321c6afba74c4d2deb2a",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_16": {
+        "sha256": "5ce73623914bad53c453056388035f1e098825bdccd96f97ef4dadbf8f4c1e01",
+        "sizeBytes": 13721
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_1": {
+        "sha256": "58e7741975a4ed504faf7ab0bf7c3f2a2124f6051793fb7341ed47de6c75fa5a",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_4": {
+        "sha256": "356bb1ed1d7b5b394910737645de6e5f9c626ab8c462c493acca6b3a3bd27bc0",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_8": {
+        "sha256": "371490b4bcdc2a04b1fbf2b781ab0e1fdf209789ef7f94c848d30dadf86f8815",
+        "sizeBytes": 13715
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_16": {
+        "sha256": "4639ec7978a0a14089e3d250f9367647f110920096963a933e58b670203e6aff",
+        "sizeBytes": 13721
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_1": {
+        "sha256": "7e98b3aa3b3f26f7c70aa6ae09b150c5c2c5d5b5943fe5b33bec4b1793254bf4",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_4": {
+        "sha256": "603d0a300790b54e9e9ac63f6ac20d9281c00371d8cf6a3397e9ee4a50c262a2",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_8": {
+        "sha256": "3c6dddaa2a08d9a84d6d01bdda17ac58859f1d4af701cb9e968b1bd9f982c7de",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_16": {
+        "sha256": "162998b9608cc174bcd9c7566099c3d04ec7da5c48aa89760b1c1388a66d1fda",
+        "sizeBytes": 13720
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_1": {
+        "sha256": "d279e3a785775c119d70cb91a06add7c74c0e152636b751dcf758c3a7d708a1a",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_4": {
+        "sha256": "1ff0e40bb317d606db3de441750a915def4d73bb5f80a9048ac7d702945c0161",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_8": {
+        "sha256": "30bbd1071f9ecb0bb44896593a7f1be2a18a99dd86b002c5a8cfa9173f21b9df",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_16": {
+        "sha256": "3faa9153171625335f2a3b01c2037d424e9aaf07d44ba66af43c78ed4af6fa90",
+        "sizeBytes": 13720
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_1": {
+        "sha256": "f2bd9eadbd529509ee62bb7fe45a9266dbe69648605788e8800a89b92e9f30ae",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_4": {
+        "sha256": "d5c1837ac5a02aae96aa136c345ff7d60383929fdeaa7c70d4d85aad8a00835a",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_8": {
+        "sha256": "5f4c3ed8da2edf835c062ac2f60760bdc92e95f00f89d69c13c7624d580a93cf",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_16": {
+        "sha256": "6cb765655183539800a789be07ca0128b32b3aa053fbcd12b99df0f4495ac4e5",
+        "sizeBytes": 13720
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_1": {
+        "sha256": "c62ca2d7b3e1f1df5b80d0f18a51a32e97fdaf4c1719f3d43983d161534667b5",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_4": {
+        "sha256": "f3cba9df18c428263244a76ebc5ac0dd095d1306af7b18a2d10bea7112d81fb5",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_8": {
+        "sha256": "d216e7445ce11fe9e11e513b4e92ea896dd75fcc598e0c198d03fdc3fe13c9f3",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_16": {
+        "sha256": "4e34ada050212b498090ddcecf989e46f49833877b6cfd4834c6a21dc0cb51cd",
+        "sizeBytes": 13720
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_1": {
+        "sha256": "51a180b3a16079b0f781ecdde5a97614ba156d86e4e12a4b468059c3deb733ac",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_4": {
+        "sha256": "da02db00ce3285e9e09a95b6698cea286f69f650a8603f9b4d5da62a45908a96",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_8": {
+        "sha256": "62896c3c64ea3deda2b38625b655ee506d8850b873a5e20a2ab3d3494c4e1170",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_16": {
+        "sha256": "cce8375b729ff444ef97138d98f9454187e783340d7f041f25ee7241bb2838d2",
+        "sizeBytes": 13720
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_1": {
+        "sha256": "74de35ec307d557ce05f1dce976262e521449f3af0adea41ad86a826e1939aeb",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_4": {
+        "sha256": "147b800204ddb74f89ee230f201b78ddc04dd95ccbcad782ec17959cf3ed5918",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_8": {
+        "sha256": "c2628548145d69e0458e8e80f4217d47d211915bcea07fee383e6576a9e1c092",
+        "sizeBytes": 13714
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_16": {
+        "sha256": "54bc172131e0b90f3f4ab14f495704a7ac6c100eb2c56b78dec31ad529505290",
+        "sizeBytes": 13720
+      }
+    },
+    "directx": {
+      "seq_gated_delta_vjp_float_128_128_24_24_1": {
+        "sha256": "84768d24becc302f821bc7bf802ac44a43fe78749e20274eed24f7243aa076b9",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_24_24_4": {
+        "sha256": "f647999320ba336bdb07f958e80546157cff2ea4fb1b6c3bfcd26bc72e6adde5",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_24_24_8": {
+        "sha256": "12dc77de1efc41de4fb93d7a9f084c28b55ad82d9a07f5f823f8a1a4f1e39b52",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_24_24_16": {
+        "sha256": "23a05790decc83ec16fce4d26c565f33baa3f0b70967cad3442a8399e31a0080",
+        "sizeBytes": 10551
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_1": {
+        "sha256": "769ab8cba707d103d5bb1e0e95a9178166a0523163800dbafe4cdd3d6e5d0f3c",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_4": {
+        "sha256": "0f215f97efd386a7652bdc66d48ac7f84c886b6944be77c02f0d2370baae8d3e",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_8": {
+        "sha256": "83ef7313077aa5805e304491ea2a11c4e3b4966f8d38db8c9817c69ac145a70b",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_32_32_16": {
+        "sha256": "a3cee83ab257aa880faabc99763168ace8ee90523c8b77b0a9acfce84d9d820e",
+        "sizeBytes": 10551
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_1": {
+        "sha256": "e7f4b107aeb2ab79607cff2cdc909d753e0d06a49efdf515319412b2e25c4b5e",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_4": {
+        "sha256": "9f102cc7f7e7a1114212c60d6137d53755554fc6d55a1d65c030497ed9e0b7a4",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_8": {
+        "sha256": "4cf451edb8c3e4df26689b177076844b0f5efcb80c7260b6feff917947aeeb41",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_32_16": {
+        "sha256": "fc5c99f2517ab3b064852228fed0a850386fc8e9700da929984e90267c52126e",
+        "sizeBytes": 10551
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_1": {
+        "sha256": "4dda02e47c65b137b2974b893aefb574d77005a98d35a5fb3b4614057a23014f",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_4": {
+        "sha256": "f239196277c648ae3e96af9afa68cf681773cbaa20853799596af75f9e912749",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_8": {
+        "sha256": "22372d9c2778b09e67607790792cbe90c691f25e8673eaccb5111c296c5f1089",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_48_16": {
+        "sha256": "5bf415d079540fd929dbf37e06c416e066c06fe8a7fecf7f3ef19aee9690f6b9",
+        "sizeBytes": 10551
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_1": {
+        "sha256": "5a6e5fb57c673a28c75bddc37ec9612830df57d1b1120bd5b4d8c5ef4e04558a",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_4": {
+        "sha256": "43cc8a76d8d6da331b507507c12e5af916b8c7cd31bb29af203d4d504995dd73",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_8": {
+        "sha256": "30f77de1c32318c2cb9bbb50d47f5cd01a5eeb4d821d74bf79f87888ba8318ed",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_16_16": {
+        "sha256": "8370bffd05b78a6350fd5f081ae9ab7c46f84a6a0088904c8254450f4ca6edb6",
+        "sizeBytes": 10551
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_1": {
+        "sha256": "104dda68aacd4d72cc4c808eea09e9ea6f1e0a75e5f3ad4f036445e73f7025d2",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_4": {
+        "sha256": "cf6742318351819504eb4f966c5acc4326350d054a8c9ee8bd95b7dc4621c6e3",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_8": {
+        "sha256": "8f5b46288b9378458bafdffdd0425c667f5168ae9f6dd5a39f53dff71a4fdca3",
+        "sizeBytes": 10531
+      },
+      "seq_gated_delta_vjp_float_128_128_16_64_16": {
+        "sha256": "a31ed4f187b189900d247652986575c8415bdba51eb31b2de009d9380752dbe4",
+        "sizeBytes": 10551
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_1": {
+        "sha256": "536d38aeb4e1dad50452af02cd3f591f18a2d6e9e9752196e0444ed4a6835e82",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_4": {
+        "sha256": "b3e18cd94b24eecf91ed0ac0eae0a361bdcf63b0185de988fe54180451c5a73c",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_8": {
+        "sha256": "788f2ba4cd67ed0eb9acf0f2649dd4303379cab96bdee58dccf7168efcdf278d",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_16": {
+        "sha256": "4e03f3d943104bdf6310897bd912ca2681bd5666612ca0de75daffd3f211c0b8",
+        "sizeBytes": 11284
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_1": {
+        "sha256": "228b3272fa7d4079c294aba2361fd3873079493055429ea6665060e4f6c9bacc",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_4": {
+        "sha256": "17406f1116e029c297e7e70879693fc1896c3406c87b551713a5d6cde5debcea",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_8": {
+        "sha256": "4d491ed5ccb256638db28414facea850ee49242a6355047595f965f096f29da0",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_16": {
+        "sha256": "bec6a3a649bb9248f23857e9405b113d338237ae46682de94ed4abfff3d691ab",
+        "sizeBytes": 11284
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_1": {
+        "sha256": "23082f3bc56e79fc823e924bee6006ae74d25437ec31ad025c8271c1d682ba5f",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_4": {
+        "sha256": "9930c09ce9a5b4a228ab1d0e583421fe9d8f665fdc989d2b7a8d54a663dc1473",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_8": {
+        "sha256": "8e7219297381d1ba7fff8d5eceae436a4c7034baf2ccd3894f5c1fee688a1458",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_16": {
+        "sha256": "aa212af90f3ce9da0d759285564191486d34e0beec4bded8620612d515068d98",
+        "sizeBytes": 11284
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_1": {
+        "sha256": "eb824738d8650e65e044b06180af20a6f2b6deefe321e998d42159fc88103a8b",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_4": {
+        "sha256": "f75f38e6fc24e4bb6cd15f2c88bc26d1cd079ef96aa1335755a6d946f4fb67d3",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_8": {
+        "sha256": "79c6e1f3c1a4a38575805ed5e51e9666f73774befda301cf6edc93da9a8cc534",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_16": {
+        "sha256": "205285b7c8ae50568b07719161fd8c73a6220122d2fe6e50d689ad13dedc0596",
+        "sizeBytes": 11284
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_1": {
+        "sha256": "0652136df51d8ae302907e975639181fdcc9c92d20812cd5b3437dca88d74e1f",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_4": {
+        "sha256": "aec6f41c0e8d76d84f301de5015088651bba1cbd9fbc422b290e27f9e3a673c1",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_8": {
+        "sha256": "f76c733eb8d93f6bba75adf17a40a267dc9c7d68b2ea4825031f264404cb3beb",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_16": {
+        "sha256": "4e9ff6007f0ab3d795c4026fd1b0dbb341e7abc42185395db3a28d20c1b84307",
+        "sizeBytes": 11284
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_1": {
+        "sha256": "648637aa21384cd15662851c46430e1be04a899779c41ad0554bc356d1d45934",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_4": {
+        "sha256": "e2ef76429ffcce33c4d381df48288d3be1ad897aa48540152c0984b1741ed73a",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_8": {
+        "sha256": "d848c8ee1f9a5e4e1324fca7b4578df33951761ae4bb01a71641d4041ad7e9ab",
+        "sizeBytes": 11264
+      },
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_16": {
+        "sha256": "b692e511d5901434685cf6f8aefd50fb8424b4f273525377e5caba79df8ca76b",
+        "sizeBytes": 11284
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_1": {
+        "sha256": "2340c59cedd9f60808489691f306c9b2833b1e71fc423723d9df487872f4929f",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_4": {
+        "sha256": "2731e35f26c5eb015b238ab62724798cdfb4b48a80d9338ce768096d615e0c8a",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_8": {
+        "sha256": "e25f4c6bcd5c0908353e487e2fea94ecb0811031a8893215fc25b98a7da59643",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_16": {
+        "sha256": "8b68a4760826f5b8f3d91d63a430e73605487d37824f929ef954519940390ef4",
+        "sizeBytes": 13077
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_1": {
+        "sha256": "3b82f0eeefa62f16c4fabeaf243ffd7eb0ad4dea12ec9c347c9eb7551cb8e6c2",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_4": {
+        "sha256": "c74580cb1ebbe8cb4506618252847973c62d154d1713ae658ddc46ca6f3a54d4",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_8": {
+        "sha256": "1eb825e5da9dcc01de93e20b67bfc84fa347f42d30a8998bd84d9d20db39db6c",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_16": {
+        "sha256": "083c89e8f907bc8cbf35c9c3d124b0787d2c3ca54474a5560bdde4bd77beb419",
+        "sizeBytes": 13077
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_1": {
+        "sha256": "089b580cc767def86095ed6b369a5a92824fbf06913d19e7f22241e1ef820b76",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_4": {
+        "sha256": "acae198248b35cba35e9842bf00e041dfce02b72d257160a15a152c7063f03b5",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_8": {
+        "sha256": "92f0fc02b3810a5a072aad7d54ee75225ba07ea15c77e0f97b39871f239a1a4e",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_16": {
+        "sha256": "d2e111d4337e765227f1445be596fccfe591e8c2802d9a518026bbd19f27edc6",
+        "sizeBytes": 13077
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_1": {
+        "sha256": "6cda17eccd3dc72b4f5bd657efe71056d5946eee5a988dcadcc2ad79ca5351b3",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_4": {
+        "sha256": "e8d8a5e2c90c073b1add66b6514c3ca33978dee83dc30f53b7233e775544d20a",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_8": {
+        "sha256": "99e7c538ce4eb41d496f1b907008bfe46ab40927ae6e4da768828dc5a2ced9db",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_16": {
+        "sha256": "273c35bfab75ff71572bfa9bc7a1162158e43a15532399365170f3333f71f351",
+        "sizeBytes": 13077
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_1": {
+        "sha256": "baca62682b89498131b4d0c437f4e91106a4cf33fa71a0f51280b9138a44947c",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_4": {
+        "sha256": "9cc3d60b61b569f88f873569146c31ccd1d64468feb57cc09283e7565ee5c38a",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_8": {
+        "sha256": "a775c36a2cfe4f6e7e0cb4af871da23480463263622734490bc971153002de01",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_16": {
+        "sha256": "12241694e605702208c19070080efedaa9c1dcfdefb959b0698590bea9c162de",
+        "sizeBytes": 13077
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_1": {
+        "sha256": "8bf485817f873aaab9eb2285ee22360fd5983b73de622a178de27719ddab6f5d",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_4": {
+        "sha256": "74b00f4a03b90f5ea82c1dd97164d8d54e6751fc30bbf2a3da66e6510ccff25a",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_8": {
+        "sha256": "ecc34b9b329764fe2e4f1574c82fbebfc5dcf3c67b209e9a5449922057b2e791",
+        "sizeBytes": 13057
+      },
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_16": {
+        "sha256": "f1e389a6a93c6f57be5eaf81784edf7ef08f94a2c50a572d9ef8a6cb4348abe7",
+        "sizeBytes": 13077
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSize": [
+      32,
+      4,
+      1
+    ],
+    "grid": "[32, Dv, B * Hv]",
+    "stateElementsPerThread": 4,
+    "subgroups": {
+      "metal": "native-simdgroup-32",
+      "opengl": "software-subgroup-32",
+      "directx": "software-subgroup-32"
+    },
+    "specializationConstants": {},
+    "hostCheckpointIntervals": [
+      1
+    ],
+    "atomicOutputs": {
+      "outputs": [
+        "dq",
+        "dk",
+        "dg",
+        "db"
+      ],
+      "initialValue": 0.0,
+      "summationOrder": "unspecified",
+      "lowering": {
+        "metal": "atomic_fetch_add_explicit on atomic_float",
+        "opengl": "atomicCompSwap loop on uint words",
+        "directx": "InterlockedCompareExchangeFloatBitwise loop"
+      }
+    },
+    "storedOutputs": [
+      "dv",
+      "dh"
+    ],
+    "indexRangeAssertions": {
+      "metal": [],
+      "opengl": [
+        {
+          "expression": "object + offset",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      ],
+      "directx": []
+    },
+    "cases": {
+      "single": {
+        "batch": 1,
+        "steps": 1
+      },
+      "batched": {
+        "batch": 2,
+        "steps": 3
+      },
+      "segments": {
+        "batch": 1,
+        "steps": "2 * Ckpt + 1"
+      }
+    },
+    "inputs": {
+      "queriesAndKeys": "unit-norm-rows-rounded-to-storage",
+      "values": "uniform(-1, 1)",
+      "decay": "uniform(0.5, 1)",
+      "beta": "uniform(0, 1)",
+      "outputCotangent": "uniform(-1, 1)",
+      "stateCotangent": "uniform(-0.5, 0.5)",
+      "stateCache": "exact-forward-states-every-Ckpt-steps-from-uniform(-0.5, 0.5)-rounded-to-float"
+    },
+    "errorModel": {
+      "unitRoundoff": 5.960464477539063e-08,
+      "flushAllowancePerOperation": 1.1754943508222875e-38,
+      "reductionRoundings": 36,
+      "replayError": "row-2-norm-through-g-(I-beta-k-kT)-from-each-slot",
+      "cotangentStateError": "row-2-norm-through-g-(I-beta-k-kT)",
+      "atomicAccumulation": "recursive-summation-in-any-order",
+      "boundSafety": 1.0009765625,
+      "tiny": 7.174648137343064e-43
+    },
+    "results": "correct-rounding-of-a-value-within-the-error-bound",
+    "inputGuardCount": 16,
+    "outputGuardCount": 16,
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ],
+    "upstreamBitIdenticalOutputs": [
+      "dv",
+      "dh"
+    ]
+  },
+  "scope": {
+    "instantiatedEntryCount": 72,
+    "coveredEntryCount": 72,
+    "runtimeCoveredEntryCount": 72,
+    "artifactCountByTarget": 72,
+    "dispatchCountByTarget": 216,
+    "checkedElementCountByEntry": {
+      "seq_gated_delta_vjp_float_128_128_24_24_1": 1665504,
+      "seq_gated_delta_vjp_float_128_128_24_24_4": 1721088,
+      "seq_gated_delta_vjp_float_128_128_24_24_8": 1795200,
+      "seq_gated_delta_vjp_float_128_128_24_24_16": 1943424,
+      "seq_gated_delta_vjp_float_128_128_32_32_1": 2220672,
+      "seq_gated_delta_vjp_float_128_128_32_32_4": 2294784,
+      "seq_gated_delta_vjp_float_128_128_32_32_8": 2393600,
+      "seq_gated_delta_vjp_float_128_128_32_32_16": 2591232,
+      "seq_gated_delta_vjp_float_128_128_16_32_1": 2179712,
+      "seq_gated_delta_vjp_float_128_128_16_32_4": 2229248,
+      "seq_gated_delta_vjp_float_128_128_16_32_8": 2295296,
+      "seq_gated_delta_vjp_float_128_128_16_32_16": 2427392,
+      "seq_gated_delta_vjp_float_128_128_16_48_1": 3249088,
+      "seq_gated_delta_vjp_float_128_128_16_48_4": 3311104,
+      "seq_gated_delta_vjp_float_128_128_16_48_8": 3393792,
+      "seq_gated_delta_vjp_float_128_128_16_48_16": 3559168,
+      "seq_gated_delta_vjp_float_128_128_16_16_1": 1110336,
+      "seq_gated_delta_vjp_float_128_128_16_16_4": 1147392,
+      "seq_gated_delta_vjp_float_128_128_16_16_8": 1196800,
+      "seq_gated_delta_vjp_float_128_128_16_16_16": 1295616,
+      "seq_gated_delta_vjp_float_128_128_16_64_1": 4318464,
+      "seq_gated_delta_vjp_float_128_128_16_64_4": 4392960,
+      "seq_gated_delta_vjp_float_128_128_16_64_8": 4492288,
+      "seq_gated_delta_vjp_float_128_128_16_64_16": 4690944,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_1": 1665504,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_4": 1721088,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_8": 1795200,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_24_24_16": 1943424,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_1": 2220672,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_4": 2294784,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_8": 2393600,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_32_32_16": 2591232,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_1": 2179712,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_4": 2229248,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_8": 2295296,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_32_16": 2427392,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_1": 3249088,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_4": 3311104,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_8": 3393792,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_48_16": 3559168,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_1": 1110336,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_4": 1147392,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_8": 1196800,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_16_16": 1295616,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_1": 4318464,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_4": 4392960,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_8": 4492288,
+      "seq_gated_delta_vjp_bfloat16_t_128_128_16_64_16": 4690944,
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_1": 1665504,
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_4": 1721088,
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_8": 1795200,
+      "seq_gated_delta_vjp_float16_t_128_128_24_24_16": 1943424,
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_1": 2220672,
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_4": 2294784,
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_8": 2393600,
+      "seq_gated_delta_vjp_float16_t_128_128_32_32_16": 2591232,
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_1": 2179712,
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_4": 2229248,
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_8": 2295296,
+      "seq_gated_delta_vjp_float16_t_128_128_16_32_16": 2427392,
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_1": 3249088,
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_4": 3311104,
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_8": 3393792,
+      "seq_gated_delta_vjp_float16_t_128_128_16_48_16": 3559168,
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_1": 1110336,
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_4": 1147392,
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_8": 1196800,
+      "seq_gated_delta_vjp_float16_t_128_128_16_16_16": 1295616,
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_1": 4318464,
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_4": 4392960,
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_8": 4492288,
+      "seq_gated_delta_vjp_float16_t_128_128_16_64_16": 4690944
+    },
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

@@ -10469,8 +10469,12 @@ class RustCodeGen:
 
     def is_type_node(self, value):
         return (
-            value.__class__.__name__
-            in {"ReferenceType", "PointerType", "FunctionType", "ArrayType"}
+            value.__class__.__name__ in {
+                "ReferenceType",
+                "PointerType",
+                "FunctionType",
+                "ArrayType",
+            }
             or hasattr(value, "name")
             or hasattr(value, "element_type")
         )
@@ -12738,8 +12742,7 @@ class RustCodeGen:
                 return arg_types[0]
 
         if (
-            mapped_name
-            in {
+            mapped_name in {
                 "sqrt",
                 "rcp",
                 "rsqrt",
@@ -12858,8 +12861,7 @@ class RustCodeGen:
             return self.promoted_argument_type(arg_types[:2])
 
         if (
-            mapped_name
-            in {
+            mapped_name in {
                 "dfdx",
                 "dfdy",
                 "dfdx_fine",

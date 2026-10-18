@@ -1,0 +1,490 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-random-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/random.metal",
+    "sourceSha256": "f1a19b3f11b7b10203824890f13debc6d627959b4e7f17c219e2e9da553c1bd7",
+    "knownAnswers": "tests/random_tests.cpp",
+    "knownAnswersSha256": "3fc4e7fb0481fff61dbe6b3776b152ef018e142db89bdc7b9bedbcc9c2374e9d"
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "rbitsc",
+    "rbits"
+  ],
+  "artifacts": {
+    "directx": {
+      "rbitsc": {
+        "sha256": "f4d2f9ba44de251451e3e88192b74dfb394ab25b262c8a56c013d6352317963b",
+        "sizeBytes": 5834
+      },
+      "rbits": {
+        "sha256": "9fcde80e243a67055cba7332c43ce31b9b38af5a69ea7cffe6948c9120bd9e6d",
+        "sizeBytes": 6775
+      }
+    },
+    "opengl": {
+      "rbitsc": {
+        "sha256": "af9c63fc014f0abad7e27a722ef38886fed521150c734d257e3dc99c2657149e",
+        "sizeBytes": 5453
+      },
+      "rbits": {
+        "sha256": "0000fdb2cf05d6e333019db604e36352d3de7e9a1d62c50daa3050a4338103e2",
+        "sizeBytes": 6481
+      }
+    },
+    "metal": {
+      "rbitsc": {
+        "sha256": "33f6d77ffb19af0ccd93da63edc6f5789f440055d5fb32eabde292cfc49bc26a",
+        "sizeBytes": 2779
+      },
+      "rbits": {
+        "sha256": "d267da8492458301bfed30757920197bd49a9e837e16feea414e91f6d0b25210",
+        "sizeBytes": 3344
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSize": [
+      1,
+      1,
+      1
+    ],
+    "indexRangeAssertions": {
+      "metal": {
+        "rbitsc": [],
+        "rbits": []
+      },
+      "opengl": {
+        "rbitsc": [
+          [
+            "index.x * bytes_per_key",
+            0,
+            2147483647
+          ],
+          [
+            "idx + i",
+            0,
+            2147483647
+          ],
+          [
+            "out_ + idx + i",
+            0,
+            2147483647
+          ]
+        ],
+        "rbits": [
+          [
+            "uint64(index.x) * bytes_per_key",
+            0,
+            2147483647
+          ],
+          [
+            "idx + i",
+            0,
+            2147483647
+          ],
+          [
+            "out_ + idx + i",
+            0,
+            2147483647
+          ]
+        ]
+      },
+      "directx": {
+        "rbitsc": [],
+        "rbits": []
+      }
+    },
+    "cases": {
+      "rbitsc": {
+        "seed0": {
+          "keyCount": 1,
+          "bytesPerKey": 4,
+          "storageWords": 2,
+          "grid": [
+            1,
+            1,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed1": {
+          "keyCount": 1,
+          "bytesPerKey": 4,
+          "storageWords": 2,
+          "grid": [
+            1,
+            1,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed0-width2": {
+          "keyCount": 1,
+          "bytesPerKey": 2,
+          "storageWords": 2,
+          "grid": [
+            1,
+            1,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed1-width2": {
+          "keyCount": 1,
+          "bytesPerKey": 2,
+          "storageWords": 2,
+          "grid": [
+            1,
+            1,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed0-width1": {
+          "keyCount": 1,
+          "bytesPerKey": 1,
+          "storageWords": 2,
+          "grid": [
+            1,
+            1,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed1-width1": {
+          "keyCount": 1,
+          "bytesPerKey": 1,
+          "storageWords": 2,
+          "grid": [
+            1,
+            1,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed0-shape3x1": {
+          "keyCount": 1,
+          "bytesPerKey": 12,
+          "storageWords": 2,
+          "grid": [
+            1,
+            2,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed0-uint16x5": {
+          "keyCount": 1,
+          "bytesPerKey": 10,
+          "storageWords": 2,
+          "grid": [
+            1,
+            2,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed0-uint16x6": {
+          "keyCount": 1,
+          "bytesPerKey": 12,
+          "storageWords": 2,
+          "grid": [
+            1,
+            2,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed0-uint16x7": {
+          "keyCount": 1,
+          "bytesPerKey": 14,
+          "storageWords": 2,
+          "grid": [
+            1,
+            2,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "seed0-uint16x8": {
+          "keyCount": 1,
+          "bytesPerKey": 16,
+          "storageWords": 2,
+          "grid": [
+            1,
+            2,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "vmap-rows": {
+          "keyCount": 2,
+          "bytesPerKey": 12,
+          "storageWords": 4,
+          "grid": [
+            2,
+            2,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "vmap-twice": {
+          "keyCount": 6,
+          "bytesPerKey": 8,
+          "storageWords": 12,
+          "grid": [
+            6,
+            1,
+            1
+          ],
+          "knownAnswer": true
+        },
+        "wide-keys-even": {
+          "keyCount": 3,
+          "bytesPerKey": 13,
+          "storageWords": 6,
+          "grid": [
+            3,
+            2,
+            1
+          ],
+          "knownAnswer": false
+        },
+        "wide-keys-odd": {
+          "keyCount": 4,
+          "bytesPerKey": 19,
+          "storageWords": 8,
+          "grid": [
+            4,
+            3,
+            1
+          ],
+          "knownAnswer": false
+        },
+        "odd-words": {
+          "keyCount": 5,
+          "bytesPerKey": 28,
+          "storageWords": 10,
+          "grid": [
+            5,
+            4,
+            1
+          ],
+          "knownAnswer": false
+        },
+        "edge2": {
+          "keyCount": 5,
+          "bytesPerKey": 22,
+          "storageWords": 10,
+          "grid": [
+            5,
+            3,
+            1
+          ],
+          "knownAnswer": false
+        },
+        "large": {
+          "keyCount": 17,
+          "bytesPerKey": 1031,
+          "storageWords": 34,
+          "grid": [
+            17,
+            129,
+            1
+          ],
+          "knownAnswer": false
+        }
+      },
+      "rbits": {
+        "vmap-columns": {
+          "keyCount": 2,
+          "bytesPerKey": 12,
+          "storageWords": 4,
+          "grid": [
+            2,
+            2,
+            1
+          ],
+          "knownAnswer": true,
+          "keyShape": [
+            2,
+            2
+          ],
+          "keyStrides": [
+            1,
+            2
+          ]
+        },
+        "vmap-twice-columns": {
+          "keyCount": 6,
+          "bytesPerKey": 8,
+          "storageWords": 12,
+          "grid": [
+            6,
+            1,
+            1
+          ],
+          "knownAnswer": true,
+          "keyShape": [
+            3,
+            2,
+            2
+          ],
+          "keyStrides": [
+            4,
+            1,
+            2
+          ]
+        },
+        "broadcast": {
+          "keyCount": 3,
+          "bytesPerKey": 9,
+          "storageWords": 2,
+          "grid": [
+            3,
+            2,
+            1
+          ],
+          "knownAnswer": false,
+          "keyShape": [
+            3,
+            2
+          ],
+          "keyStrides": [
+            0,
+            1
+          ]
+        },
+        "row-gaps": {
+          "keyCount": 4,
+          "bytesPerKey": 22,
+          "storageWords": 12,
+          "grid": [
+            4,
+            3,
+            1
+          ],
+          "knownAnswer": false,
+          "keyShape": [
+            4,
+            2
+          ],
+          "keyStrides": [
+            3,
+            1
+          ]
+        },
+        "permuted": {
+          "keyCount": 6,
+          "bytesPerKey": 15,
+          "storageWords": 12,
+          "grid": [
+            6,
+            2,
+            1
+          ],
+          "knownAnswer": false,
+          "keyShape": [
+            2,
+            3,
+            2
+          ],
+          "keyStrides": [
+            1,
+            4,
+            2
+          ]
+        },
+        "large": {
+          "keyCount": 12,
+          "bytesPerKey": 257,
+          "storageWords": 60,
+          "grid": [
+            12,
+            33,
+            1
+          ],
+          "knownAnswer": false,
+          "keyShape": [
+            12,
+            2
+          ],
+          "keyStrides": [
+            5,
+            2
+          ]
+        }
+      }
+    },
+    "knownAnswerSource": {
+      "path": "tests/random_tests.cpp",
+      "sha256": "3fc4e7fb0481fff61dbe6b3776b152ef018e142db89bdc7b9bedbcc9c2374e9d",
+      "caseCount": 15
+    },
+    "outputGuardCount": 16,
+    "outputGuards": {
+      "metal": [
+        -91,
+        90
+      ],
+      "opengl": [
+        610839776
+      ],
+      "directx": [
+        610839776
+      ]
+    },
+    "elementTypes": {
+      "metal": {
+        "out_": "int8",
+        "odd": "bool"
+      },
+      "opengl": {
+        "out_": "int32",
+        "odd": "uint32"
+      },
+      "directx": {
+        "out_": "int32",
+        "odd": "uint32"
+      }
+    },
+    "observedInputCount": {
+      "rbitsc": 3,
+      "rbits": 6
+    },
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ]
+  },
+  "scope": {
+    "coveredEntryCount": 2,
+    "runtimeCoveredEntryCount": 2,
+    "caseCount": 24,
+    "byteCountByTarget": {
+      "metal": 21403,
+      "opengl": 21403,
+      "directx": 21403
+    },
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

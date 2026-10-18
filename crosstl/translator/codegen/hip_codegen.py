@@ -1825,9 +1825,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if stage_name in self.hip_ray_stage_names() and name == "main":
             return f"{stage_name}_{name}"
         if (
-            stage_name
-            in {"geometry", "tessellation_control", "tessellation_evaluation"}
-            | self.hip_mesh_task_stage_names()
+            stage_name in {
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+            } | self.hip_mesh_task_stage_names()
             and name == "main"
         ):
             return f"{stage_name}_{name}"
@@ -6770,8 +6772,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 )
 
         if (
-            func_name
-            in {
+            func_name in {
                 "texture",
                 "textureLod",
                 "textureGrad",
@@ -6807,8 +6808,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return texture_gather
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureGather",
                 "textureGatherOffset",
                 "textureGatherOffsets",
@@ -6824,8 +6824,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 )
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureProj",
                 "textureProjLod",
                 "textureProjGrad",
@@ -6844,8 +6843,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return texel_fetch_offset
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureOffset",
                 "textureLodOffset",
                 "textureGradOffset",
@@ -9790,8 +9788,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         base_name, args = parts
         if (
-            base_name
-            not in {
+            base_name not in {
                 "StructuredBuffer",
                 "RWStructuredBuffer",
                 "AppendStructuredBuffer",

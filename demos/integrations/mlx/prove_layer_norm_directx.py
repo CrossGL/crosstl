@@ -812,8 +812,9 @@ def _validate_project_report(
     )
     _require(
         project.get("targets") == ["directx"]
-        and project.get("entryPointSelections")
-        == {MLX_LAYER_NORM_SOURCE: case["entryPoint"]}
+        and project.get("entryPointSelections") == {
+            MLX_LAYER_NORM_SOURCE: case["entryPoint"]
+        }
         and project.get("entryPointSelectionCount") == 1
         and project.get("variants") == expected_variant
         and project.get("variantCount") == 1
@@ -873,8 +874,7 @@ def _selected_materialization(
     )
     selected = matches[0]
     _require(
-        selected
-        == {
+        selected == {
             "name": case["templateName"],
             "materializedName": entry_point,
             "parameters": {"N_READS": "8", "T": "float"},
@@ -933,8 +933,7 @@ def _validate_specialization(
         f"{case['name']} function-constant metadata changed",
     )
     _require(
-        artifact.get("specializationMaterialization")
-        == {
+        artifact.get("specializationMaterialization") == {
             "status": "concrete",
             "mode": "concrete-crossgl-variant",
             "targetSupportsDeferredSpecialization": False,
@@ -1013,8 +1012,11 @@ def _validate_execution(
         ],
     }
     _require(
-        artifact.get("entryPoint")
-        == {"source": entry_point, "target": "CSMain", "stage": "compute"},
+        artifact.get("entryPoint") == {
+            "source": entry_point,
+            "target": "CSMain",
+            "stage": "compute",
+        },
         f"{case['name']} artifact entry-point identity changed",
     )
     _require(
@@ -1141,15 +1143,19 @@ def _validate_artifact(
     )
     _require(
         artifact.get("sourceHash") == projection.get("sourceHash")
-        and artifact.get("provenance")
-        == {"pipeline": "entry-scoped-translate", "intermediate": "crossgl"},
+        and artifact.get("provenance") == {
+            "pipeline": "entry-scoped-translate",
+            "intermediate": "crossgl",
+        },
         f"{name} artifact provenance changed",
     )
     artifact_path = _artifact_path(artifact, project_root)
     generated = artifact_path.read_text(encoding="utf-8")
     _require(
-        artifact.get("generatedHash")
-        == {"algorithm": "sha256", "value": _sha256(artifact_path)}
+        artifact.get("generatedHash") == {
+            "algorithm": "sha256",
+            "value": _sha256(artifact_path),
+        }
         and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size
         and artifact_path.suffix == ".hlsl",
         f"{name} generated artifact identity is stale",

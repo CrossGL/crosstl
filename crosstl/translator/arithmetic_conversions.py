@@ -222,8 +222,7 @@ def arithmetic_type(source_type: str, target_type: str) -> Optional[ArithmeticTy
     source_integer = source_integer_shape(source_type)
     if (
         source_integer is not None
-        and target.kind
-        in {
+        and target.kind in {
             ArithmeticScalarKind.SIGNED_INTEGER,
             ArithmeticScalarKind.UNSIGNED_INTEGER,
         }

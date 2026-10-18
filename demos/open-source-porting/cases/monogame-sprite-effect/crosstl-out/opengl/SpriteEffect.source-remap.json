@@ -5,44 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 447,
+        "endLine": 40,
+        "endOffset": 844,
         "file": "crosstl-out/opengl/SpriteEffect.glsl",
-        "length": 47,
-        "line": 19,
-        "offset": 400
+        "length": 844,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 338,
+        "endLine": 47,
+        "endOffset": 1100,
         "file": "SpriteEffect.fx",
-        "length": 29,
-        "line": 11,
-        "offset": 309
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 36,
-        "endOffset": 822,
-        "file": "crosstl-out/opengl/SpriteEffect.glsl",
-        "length": 68,
-        "line": 35,
-        "offset": 754
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 44,
-        "endOffset": 1032,
-        "file": "SpriteEffect.fx",
-        "length": 66,
-        "line": 43,
-        "offset": 966
+        "length": 1100,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

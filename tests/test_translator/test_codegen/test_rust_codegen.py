@@ -6556,8 +6556,7 @@ def test_non_copy_ternary_and_match_returns_move_selected_branch_and_compile(
     assert "true => {\n        left\n    }" in generated_code
     assert "false => {\n        right\n    }" in generated_code
     assert (
-        "left.clone()"
-        not in generated_code.split(
+        "left.clone()" not in generated_code.split(
             "pub fn choose_match",
             maxsplit=1,
         )[1]
@@ -18077,8 +18076,9 @@ def test_resource_arrays_map_to_rust_arrays_and_compile(tmp_path):
         in (generated_code)
     )
     assert (
-        "buffer_store(BINDLESS_RAW_OUT[index as usize], offset, bindlessRawValue)"
-        in (generated_code)
+        "buffer_store(BINDLESS_RAW_OUT[index as usize], offset, bindlessRawValue)" in (
+            generated_code
+        )
     )
     assert "texture(fixedTextures" not in generated_code
     assert "imageLoad(fixedImages" not in generated_code
@@ -18985,12 +18985,14 @@ def test_multisample_storage_image_helpers_map_to_rust_and_compile(tmp_path):
         generated_code
     )
     assert (
-        "static MS_SIGNED_LAYERS: std::sync::LazyLock<Image2DMSArray<Vec4<i32>>>"
-        in (generated_code)
+        "static MS_SIGNED_LAYERS: std::sync::LazyLock<Image2DMSArray<Vec4<i32>>>" in (
+            generated_code
+        )
     )
     assert (
-        "let color: Vec4<f32> = image_load_sample(*MS_IMAGE, pixel, sampleIndex);"
-        in (generated_code)
+        "let color: Vec4<f32> = image_load_sample(*MS_IMAGE, pixel, sampleIndex);" in (
+            generated_code
+        )
     )
     assert (
         "image_store_sample(*MS_IMAGE, pixel, sampleIndex, "

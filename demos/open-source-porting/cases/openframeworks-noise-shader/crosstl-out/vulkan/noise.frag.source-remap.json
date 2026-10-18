@@ -5,22 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 346,
+        "endLine": 85,
+        "endOffset": 2086,
         "file": "crosstl-out/vulkan/noise.frag.spvasm",
-        "length": 27,
-        "line": 13,
-        "offset": 319
+        "length": 2086,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 4,
-        "endOffset": 47,
+        "endLine": 24,
+        "endOffset": 604,
         "file": "noise.frag",
-        "length": 33,
-        "line": 3,
-        "offset": 14
+        "length": 604,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

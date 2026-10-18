@@ -84,6 +84,43 @@ class ProjectTranslationCheckpointError(ValueError):
         return payload
 
 
+def project_translation_implementation_identity() -> dict[str, Any]:
+    """Fingerprint installed sources without depending on Git or install paths."""
+    root = Path(__file__).resolve().parents[1]
+    try:
+        sources = [
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix in {".py", ".cpp", ".swift"}
+            and not any(
+                part == "__pycache__" or part.startswith(".")
+                for part in path.relative_to(root).parts
+            )
+        ]
+        if root / "__init__.py" not in sources:
+            raise OSError("Installed Python package sources are missing.")
+        digest = hashlib.sha256(b"crosstl-package-source-v1\0")
+        for path in sorted(sources, key=lambda item: item.relative_to(root).as_posix()):
+            # Source newlines and bytecode caches differ between installations.
+            source = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            digest.update(path.relative_to(root).as_posix().encode("utf-8") + b"\0")
+            digest.update(hashlib.sha256(source).digest())
+    except (OSError, UnicodeError) as exc:
+        raise ProjectTranslationCheckpointError(
+            "implementation-unavailable",
+            "Cannot identify the installed translator sources. Reinstall a "
+            "source-backed CrossTL distribution before using checkpoints.",
+            path="$.projectIdentity.implementation",
+        ) from exc
+    return {
+        "kind": "crosstl-package-source-v1",
+        "algorithm": "sha256",
+        "value": digest.hexdigest(),
+        "fileCount": len(sources),
+    }
+
+
 class ProjectTranslationCheckpointRecorder:
     """Atomically persist translation progress for one deterministic job plan."""
 
@@ -158,6 +195,20 @@ class ProjectTranslationCheckpointRecorder:
             _coordinate(job, path=f"$.plan.jobs[{index}]")
             for index, job in enumerate(jobs)
         ]
+        if "implementation" in normalized_identity and (
+            checkpoint["projectIdentity"].get("implementation")
+            != normalized_identity["implementation"]
+        ):
+            raise ProjectTranslationCheckpointError(
+                "implementation-mismatch",
+                "Checkpoint translator implementation is different or unknown. "
+                "Restart without --resume and use a new checkpoint path.",
+                path="$.projectIdentity.implementation",
+                details={
+                    "expected": normalized_identity["implementation"],
+                    "actual": checkpoint["projectIdentity"].get("implementation"),
+                },
+            )
         if checkpoint["projectIdentity"] != normalized_identity:
             raise ProjectTranslationCheckpointError(
                 "project-identity-mismatch",

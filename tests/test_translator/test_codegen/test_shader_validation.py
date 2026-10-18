@@ -12,7 +12,10 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
-from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_codegen import (
+    MetalCodeGen,
+    UnsupportedMetalFeatureError,
+)
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 
@@ -8733,16 +8736,20 @@ def test_generated_metal_mesh_payload_address_space_diagnostics_compile_with_met
 
     source = tmp_path / "mesh_payload_address_space.metal"
     output = tmp_path / "mesh_payload_address_space.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_MESH_PAYLOAD_ADDRESS_SPACE_SHADER)
+    with pytest.raises(UnsupportedMetalFeatureError, match="address-space call"):
+        MetalCodeGen().generate(
+            crosstl.translator.parse(METAL_MESH_PAYLOAD_ADDRESS_SPACE_SHADER)
+        )
+    valid_shader = METAL_MESH_PAYLOAD_ADDRESS_SPACE_SHADER.replace(
+        "mutate(payload);", ""
     )
-    source.write_text(code, encoding="utf-8")
-
+    code = MetalCodeGen().generate(crosstl.translator.parse(valid_shader))
     assert "object_data Payload& payload [[payload]]" in code
     assert "const object_data Payload& payload [[payload]]" in code
-    assert "unsupported Metal address-space call" in code
     assert "unsupported Metal mesh payload store" in code
     assert "mutate(payload)" not in code
+    assert "unsupported Metal address-space call" not in code
+    source.write_text(code, encoding="utf-8")
 
     run_validator(
         [
@@ -9403,17 +9410,18 @@ def test_generated_metal_ray_payload_helper_address_spaces_compile_with_metal3(
 
     source = tmp_path / "ray_payload_helper_address_spaces.metal"
     output = tmp_path / "ray_payload_helper_address_spaces.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_PAYLOAD_HELPER_ADDRESS_SPACE_SHADER)
+    with pytest.raises(UnsupportedMetalFeatureError, match="address-space call"):
+        MetalCodeGen().generate(
+            crosstl.translator.parse(METAL_RAY_PAYLOAD_HELPER_ADDRESS_SPACE_SHADER)
+        )
+    valid_shader = METAL_RAY_PAYLOAD_HELPER_ADDRESS_SPACE_SHADER.replace(
+        "rejectThreadPayload(payload);", ""
     )
+    code = MetalCodeGen().generate(crosstl.translator.parse(valid_shader))
     assert "void tint(ray_data Payload& payload)" in code
     assert "tint(payload);" in code
-    assert (
-        "unsupported Metal address-space call: argument 'payload' uses ray_data "
-        "address space but parameter 'payload' of 'rejectThreadPayload' "
-        "requires thread"
-    ) in code
     assert "rejectThreadPayload(payload);" not in code
+    assert "unsupported Metal address-space call" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -10349,8 +10357,16 @@ def test_generated_metal_threadgroup_atomic_pointer_alias_compile_with_metal(tmp
 
     source = tmp_path / "threadgroup_atomic_pointer_alias.metal"
     output = tmp_path / "threadgroup_atomic_pointer_alias.air"
+    with pytest.raises(UnsupportedMetalFeatureError, match="address-space call"):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(METAL_THREADGROUP_ATOMIC_POINTER_ALIAS_SHADER),
+            "compute",
+        )
+    valid_shader = METAL_THREADGROUP_ATOMIC_POINTER_ALIAS_SHADER.replace(
+        "bumpDevice(alias + 2, nextValue)", "bumpThreadgroup(alias + 2, nextValue)"
+    )
     code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(METAL_THREADGROUP_ATOMIC_POINTER_ALIAS_SHADER),
+        crosstl.translator.parse(valid_shader),
         "compute",
     )
     assert "threadgroup atomic_int* alias = scratch + index;" in code
@@ -10360,12 +10376,8 @@ def test_generated_metal_threadgroup_atomic_pointer_alias_compile_with_metal(tmp
         "int nextValue = atomic_fetch_add_explicit(alias + 1, oldValue, memory_order_relaxed);"
         in code
     )
-    assert (
-        "int rejected = 0 /* unsupported Metal address-space call: argument "
-        "'alias' uses threadgroup address space but parameter 'counters' of "
-        "'bumpDevice' requires device */;"
-    ) in code
-    assert "bumpDevice(alias + 2" not in code
+    assert "int rejected = bumpThreadgroup(alias + 2, nextValue);" in code
+    assert "unsupported Metal address-space call" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -10382,8 +10394,16 @@ def test_generated_metal_threadgroup_atomic_ternary_alias_compile_with_metal(
 
     source = tmp_path / "threadgroup_atomic_ternary_alias.metal"
     output = tmp_path / "threadgroup_atomic_ternary_alias.air"
+    with pytest.raises(UnsupportedMetalFeatureError, match="address-space call"):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(METAL_THREADGROUP_ATOMIC_TERNARY_ALIAS_SHADER),
+            "compute",
+        )
+    valid_shader = METAL_THREADGROUP_ATOMIC_TERNARY_ALIAS_SHADER.replace(
+        ": counters + index", ": scratchB + index"
+    )
     code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(METAL_THREADGROUP_ATOMIC_TERNARY_ALIAS_SHADER),
+        crosstl.translator.parse(valid_shader),
         "compute",
     )
     assert (
@@ -10392,24 +10412,11 @@ def test_generated_metal_threadgroup_atomic_ternary_alias_compile_with_metal(
     )
     assert "thread atomic_int* alias = useA" not in code
     assert (
-        "/* unsupported Metal address-space local alias: initializer branches "
-        "'scratchA' (threadgroup) and 'counters' (device) use different address "
-        "spaces; using uninitialized thread alias */"
-    ) in code
-    assert "thread atomic_int* mixedAlias;" in code
-    assert "thread atomic_int* mixedAlias = useShared" not in code
-    assert (
-        "int rejected = 0 /* unsupported Metal address-space call: argument "
-        "'mixedAlias' uses thread address space but parameter 'counters' of "
-        "'bumpThreadgroup' requires threadgroup */;"
-    ) in code
-    assert (
-        "int directRejected = 0 /* unsupported Metal address-space call: "
-        "argument '<expr>' mixes branches 'scratchA' (threadgroup) and "
-        "'counters' (device) but parameter 'counters' of 'bumpThreadgroup' "
-        "requires threadgroup */;"
-    ) in code
-    assert "bumpThreadgroup(useShared ? scratchA" not in code
+        "threadgroup atomic_int* mixedAlias = useShared ? scratchA + index : scratchB + index;"
+        in code
+    )
+    assert "int rejected = bumpThreadgroup(mixedAlias, oldValue);" in code
+    assert "unsupported Metal address-space call" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -10460,32 +10467,27 @@ def test_generated_metal_threadgroup_reference_ternary_alias_compile_with_metal(
 
     source = tmp_path / "threadgroup_reference_ternary_alias.metal"
     output = tmp_path / "threadgroup_reference_ternary_alias.air"
+    with pytest.raises(UnsupportedMetalFeatureError, match="address-space call"):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(METAL_THREADGROUP_REFERENCE_TERNARY_ALIAS_SHADER),
+            "compute",
+        )
+    valid_shader = METAL_THREADGROUP_REFERENCE_TERNARY_ALIAS_SHADER.replace(
+        ": payloads[index]", ": scratchB[index]"
+    )
     code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(METAL_THREADGROUP_REFERENCE_TERNARY_ALIAS_SHADER),
+        crosstl.translator.parse(valid_shader),
         "compute",
     )
     assert (
         "threadgroup Payload& alias = useA ? scratchA[index] : scratchB[index];" in code
     )
     assert (
-        "/* unsupported Metal address-space local alias: initializer branches "
-        "'scratchA' (threadgroup) and 'payloads' (device) use different address "
-        "spaces; using uninitialized thread value */"
-    ) in code
-    assert "thread Payload mixedAlias;" in code
-    assert "thread Payload& mixedAlias = useShared" not in code
-    assert (
-        "/* unsupported Metal address-space call: argument 'mixedAlias' uses "
-        "thread address space but parameter 'payload' of 'useThreadgroup' "
-        "requires threadgroup */"
-    ) in code
-    assert (
-        "/* unsupported Metal address-space call: argument '<expr>' mixes "
-        "branches 'scratchA' (threadgroup) and 'payloads' (device) but "
-        "parameter 'payload' of 'useThreadgroup' requires threadgroup */"
-    ) in code
-    assert "useThreadgroup(mixedAlias, 2.0);" not in code
-    assert "useThreadgroup(useShared ? scratchA" not in code
+        "threadgroup Payload& mixedAlias = useShared ? scratchA[index] : scratchB[index];"
+        in code
+    )
+    assert "useThreadgroup(mixedAlias, 2.0);" in code
+    assert "unsupported Metal address-space call" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -10502,8 +10504,17 @@ def test_generated_metal_pointer_member_atomic_address_spaces_compile_with_metal
 
     source = tmp_path / "pointer_member_atomic_address_spaces.metal"
     output = tmp_path / "pointer_member_atomic_address_spaces.air"
+    with pytest.raises(UnsupportedMetalFeatureError, match="address-space call"):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(METAL_POINTER_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER),
+            "compute",
+        )
+    valid_shader = METAL_POINTER_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER.replace(
+        "bumpThreadgroup(\n                bank.deviceCounters",
+        "bumpDevice(\n                bank.deviceCounters",
+    )
     code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(METAL_POINTER_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER),
+        crosstl.translator.parse(valid_shader),
         "compute",
     )
     assert "device atomic_int* deviceCounters;" in code
@@ -10512,14 +10523,10 @@ def test_generated_metal_pointer_member_atomic_address_spaces_compile_with_metal
     assert "sharedCounters [[threadgroup]]" not in code
     assert "int deviceOld = bumpDevice(bank.deviceCounters + index, 1);" in code
     assert (
-        "int rejectedThread = 0 /* unsupported Metal address-space call: "
-        "argument 'bank.deviceCounters' uses device address space but parameter "
-        "'counters' of 'bumpThreadgroup' requires threadgroup */;"
-    ) in code
-    assert (
         "int sharedOld = bumpThreadgroup(bank.sharedCounters + index, rejectedThread);"
         in code
     )
+    assert "unsupported Metal address-space call" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -10536,8 +10543,16 @@ def test_generated_metal_nested_pointer_member_atomic_alias_compile_with_metal(
 
     source = tmp_path / "nested_pointer_member_atomic_alias.metal"
     output = tmp_path / "nested_pointer_member_atomic_alias.air"
+    with pytest.raises(UnsupportedMetalFeatureError, match="address-space call"):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(METAL_NESTED_POINTER_MEMBER_ATOMIC_ALIAS_SHADER),
+            "compute",
+        )
+    valid_shader = METAL_NESTED_POINTER_MEMBER_ATOMIC_ALIAS_SHADER.replace(
+        "bumpDevice(sharedAlias + 1", "bumpThreadgroup(sharedAlias + 1"
+    ).replace("bumpThreadgroup(deviceAlias + 1", "bumpDevice(deviceAlias + 1")
     code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(METAL_NESTED_POINTER_MEMBER_ATOMIC_ALIAS_SHADER),
+        crosstl.translator.parse(valid_shader),
         "compute",
     )
     assert "thread OuterBank* bankPtr = &bank;" in code
@@ -10549,18 +10564,9 @@ def test_generated_metal_nested_pointer_member_atomic_alias_compile_with_metal(
         "device atomic_int* deviceAlias = bankPtr->inner.deviceCounters + index;"
         in code
     )
-    assert (
-        "int rejectedShared = 0 /* unsupported Metal address-space call: "
-        "argument 'sharedAlias' uses threadgroup address space but parameter "
-        "'counters' of 'bumpDevice' requires device */;"
-    ) in code
-    assert (
-        "int rejectedDevice = 0 /* unsupported Metal address-space call: "
-        "argument 'deviceAlias' uses device address space but parameter "
-        "'counters' of 'bumpThreadgroup' requires threadgroup */;"
-    ) in code
-    assert "bumpDevice(sharedAlias + 1" not in code
-    assert "bumpThreadgroup(deviceAlias + 1" not in code
+    assert "bumpThreadgroup(sharedAlias + 1" in code
+    assert "bumpDevice(deviceAlias + 1" in code
+    assert "unsupported Metal address-space call" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -10577,20 +10583,27 @@ def test_generated_metal_reference_member_atomic_address_spaces_compile_with_met
 
     source = tmp_path / "reference_member_atomic_address_spaces.metal"
     output = tmp_path / "reference_member_atomic_address_spaces.air"
+    with pytest.raises(UnsupportedMetalFeatureError, match="address-space call"):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(
+                METAL_REFERENCE_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER
+            ),
+            "compute",
+        )
+    valid_shader = METAL_REFERENCE_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER.replace(
+        "bumpDevice(ref.sharedCounters + index",
+        "bumpThreadgroup(ref.sharedCounters + index",
+    )
     code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(METAL_REFERENCE_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER),
+        crosstl.translator.parse(valid_shader),
         "compute",
     )
     assert "thread Bank& ref = bank;" in code
     assert "Bank & ref = bank;" not in code
     assert "int sharedOld = bumpThreadgroup(ref.sharedCounters + index, 1);" in code
     assert "int deviceOld = bumpDevice(ref.deviceCounters + index, sharedOld);" in code
-    assert (
-        "int rejected = 0 /* unsupported Metal address-space call: argument "
-        "'ref.sharedCounters' uses threadgroup address space but parameter "
-        "'counters' of 'bumpDevice' requires device */;"
-    ) in code
     assert "bumpDevice(ref.sharedCounters + index" not in code
+    assert "unsupported Metal address-space call" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -11128,10 +11141,19 @@ def test_generated_metal_address_space_mismatch_calls_compile_with_metal(tmp_pat
 
     source = tmp_path / "address_space_mismatch_calls.metal"
     output = tmp_path / "address_space_mismatch_calls.air"
+    with pytest.raises(UnsupportedMetalFeatureError, match="address-space call"):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(METAL_ADDRESS_SPACE_MISMATCH_CALL_SHADER),
+            "compute",
+        )
+    valid_shader = METAL_ADDRESS_SPACE_MISMATCH_CALL_SHADER.replace(
+        "useThreadgroup(payload[0]);", "useThreadgroup(scratch);"
+    ).replace("useDevice(scratch);", "useDevice(payload[0]);")
     code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(METAL_ADDRESS_SPACE_MISMATCH_CALL_SHADER),
+        crosstl.translator.parse(valid_shader),
         "compute",
     )
+    assert "unsupported Metal address-space call" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

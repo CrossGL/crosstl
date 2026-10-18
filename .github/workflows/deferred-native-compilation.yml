@@ -20,7 +20,9 @@ on:
       - "crosstl/project/runtime_variant_dispatch.py"
       - "crosstl/project/runtime_verification.py"
       - "crosstl/project/__init__.py"
-      - "setup.py"
+      - "pyproject.toml"
+      - "conftest.py"
+      - "tests/test_toolchain_discovery.py"
       - "tests/test_translator/test_native_deferred_compilation*.py"
       - "tests/test_translator/test_native_loader_dispatch.py"
       - "tests/test_translator/test_native_runtime_drivers.py"
@@ -28,6 +30,7 @@ on:
       - "tests/test_translator/test_runtime_variant_dispatch.py"
       - "tests/test_translator/test_runtime_verification.py"
       - "tests/test_ci_workflows.py"
+      - "tests/ci_helpers.py"
   pull_request:
     branches: [main]
     paths:
@@ -42,7 +45,9 @@ on:
       - "crosstl/project/runtime_variant_dispatch.py"
       - "crosstl/project/runtime_verification.py"
       - "crosstl/project/__init__.py"
-      - "setup.py"
+      - "pyproject.toml"
+      - "conftest.py"
+      - "tests/test_toolchain_discovery.py"
       - "tests/test_translator/test_native_deferred_compilation*.py"
       - "tests/test_translator/test_native_loader_dispatch.py"
       - "tests/test_translator/test_native_runtime_drivers.py"
@@ -50,6 +55,7 @@ on:
       - "tests/test_translator/test_runtime_variant_dispatch.py"
       - "tests/test_translator/test_runtime_verification.py"
       - "tests/test_ci_workflows.py"
+      - "tests/ci_helpers.py"
   workflow_dispatch:
 
 permissions:
@@ -83,11 +89,12 @@ jobs:
       - name: Install project and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e . pytest-xdist
+          python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
 
       - name: Verify deterministic request, package, cache, and loader contracts
         run: >-
           python -m pytest -q -n auto
+          tests/test_toolchain_discovery.py
           tests/test_translator/test_native_deferred_compilation.py
           tests/test_translator/test_native_deferred_compilation_package.py
           tests/test_translator/test_native_deferred_compilation_cache.py
@@ -150,7 +157,7 @@ jobs:
       - name: Install Direct3D runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[directx-runtime]" pytest-xdist
+          python -m pip install -e ".[directx-runtime]" pytest-xdist "PyYAML>=6,<7"
 
       - name: Compile, inspect, dispatch, and read back DXIL
         env:
@@ -182,7 +189,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-utils spirv-tools
           python -m pip install --upgrade pip
-          python -m pip install -e . moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist
+          python -m pip install -e . moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
           spirv-val --version
 

@@ -1,0 +1,961 @@
+"""Resource identities and offsets survive private aggregate operations."""
+
+import os
+import pickle
+import shutil
+import sys
+from pathlib import Path
+
+import pytest
+
+from crosstl._crosstl import translate
+from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalSizeofResolutionError
+from crosstl.project import (
+    ProjectConfig,
+    build_native_loader_dispatch_request,
+    translate_project,
+)
+from crosstl.translator import parse
+from crosstl.translator.ast import (
+    CastNode,
+    FunctionCallNode,
+    IdentifierNode,
+    NamedType,
+    PointerReinterpretNode,
+    PointerType,
+    PrimitiveType,
+    ReferenceType,
+    UnaryOpNode,
+    VariableNode,
+    VectorType,
+)
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.resource_aggregates import (
+    ResourceAggregateError,
+    _pointer_type,
+    lower_resource_aggregates,
+)
+from tests.ci_helpers import assert_paths_covered
+from tests.test_translator.test_boolean_buffer_runtime import _bound_values
+from tests.test_translator.test_loop_updates import _execute
+from tests.test_translator.test_metal_builtin_ownership import _compile
+from tests.test_translator.test_metal_member_pointer_provenance import (
+    _source as _member_source,
+)
+from tests.test_translator.test_software_subgroup_product import _package
+
+REQUIRE_ENV = "CROSTL_REQUIRE_RESOURCE_AGGREGATES"
+VECTOR_CASES = tuple(
+    f"vector-{kind}-{lanes}" for kind in ("float", "int", "uint") for lanes in (2, 4)
+)
+ORDER_CASES = (
+    "effects-read-before",
+    "effects-read-after",
+    "effects-nested",
+    "effects-array",
+    "effects-call",
+    "effects-return",
+    "effects-conditional",
+    "effects-loop-update",
+    "effects-shadow",
+)
+POINTER_PARAMETER_CASES = (
+    "helper-offset",
+    "helper-constant-offset",
+    "helper-nested-offset",
+    "helper-rebase",
+    "helper-returned-offset",
+)
+CASES = (
+    (
+        "cursor",
+        "copy",
+        "nested",
+        "array",
+        "helper",
+        "rebase",
+        "constant",
+        "reference",
+        "returned",
+        "shadow",
+        "effects",
+        "selection",
+        "piecewise",
+        "template",
+        "multidimensional",
+        "const-slot",
+        "entry-rebase",
+        "alias-writeback",
+        "typedef",
+        "unused-null",
+        "forwarded-null",
+        "literal-null",
+        "unused-null-vector",
+    )
+    + VECTOR_CASES
+    + ORDER_CASES
+    + POINTER_PARAMETER_CASES
+)
+
+
+def _source(case):
+    declarations = (
+        "struct Cursor { const device int* input; device int* output; uint count; };"
+    )
+    setup = "Cursor cursor{left + 1, first + 2, 4};"
+    read, write = "cursor.input[tid]", "cursor.output[tid]"
+    if case == "copy":
+        setup += "Cursor snapshot = cursor; cursor.input += 2; cursor.output += 1;"
+        read = "snapshot.input[tid] + cursor.input[tid]"
+    elif case == "nested":
+        declarations += "struct Envelope { Cursor cursor; uint tag; };"
+        setup = (
+            "Envelope envelope{{left + 1, first + 2, 4}, 19}; Envelope copy = envelope;"
+        )
+        read, write = (
+            "copy.cursor.input[tid] + int(copy.tag)",
+            "copy.cursor.output[tid]",
+        )
+    elif case == "array":
+        declarations = """struct Cursor {
+            array<const device int*, 2> inputs;
+            array<device int*, 2> outputs;
+        };"""
+        setup = "Cursor cursor{{left + 1, right + 2}, {first + 2, second + 3}};"
+        read, write = "cursor.inputs[tid & 1][tid]", "cursor.outputs[tid & 1][tid]"
+    elif case == "helper":
+        declarations += """int load(const device int* values, uint index) { return values[index]; }
+        int read_cursor(Cursor cursor, uint index) { return load(&cursor.input[index], 1); }"""
+        read = "read_cursor(cursor, tid)"
+    elif case == "rebase":
+        setup += "cursor.input = right + 4; cursor.input -= 2; cursor.output = second + 5; cursor.output -= 2;"
+    elif case in POINTER_PARAMETER_CASES:
+        declarations += """int shifted(const device int* values, uint index) {
+            values -= 1;
+            values += 2;
+            return values[index];
+        }
+        int nested(const device int* values, uint index) {
+            values += 1;
+            return shifted(values, index) + values[index];
+        }
+        int rebased(const device int* values, const device int* other, uint index) {
+            values = other + 2;
+            return shifted(values, index);
+        }
+        Cursor advance(const device int* values, device int* output) {
+            values += 1;
+            return Cursor{values, output, 4};
+        }"""
+        expression = {
+            "helper-offset": "shifted(cursor.input, tid)",
+            "helper-constant-offset": "shifted(cursor.input, tid)",
+            "helper-nested-offset": "nested(cursor.input, tid)",
+            "helper-rebase": "rebased(cursor.input, right, tid)",
+            "helper-returned-offset": "advance(cursor.input, first).input[tid]",
+        }[case]
+        read = f"{expression} + cursor.input[tid]"
+        if case == "helper-constant-offset":
+            declarations = declarations.replace("const device", "const constant")
+            setup = "Cursor cursor{right + 2, first + 2, 4};"
+    elif case == "constant":
+        declarations = declarations.replace("const device", "const constant")
+        setup = "Cursor cursor{right + 2, first + 2, 4};"
+    elif case == "reference":
+        declarations += "void advance(thread Cursor& cursor) { cursor.input += 2; cursor.output += 1; }"
+        setup += "advance(cursor);"
+    elif case == "returned":
+        declarations += "Cursor make_cursor(const device int* input, device int* output) { Cursor result{input + 1, output + 2, 4}; return result; }"
+        setup = "Cursor cursor = make_cursor(left, first);"
+    elif case == "shadow":
+        setup = (
+            "const device int* left = right + 2; Cursor cursor{left, second + 3, 4};"
+        )
+    elif case == "effects":
+        setup = "uint offset = 1; Cursor cursor{left + offset++, first + offset++, 4};"
+    elif case == "effects-read-before":
+        setup = "uint offset = 1; Cursor cursor{left + offset, first + offset++, 4};"
+    elif case == "effects-read-after":
+        setup = "uint offset = 1; Cursor cursor{left + offset++, first + offset, 4};"
+    elif case == "effects-nested":
+        declarations += "struct Envelope { Cursor cursor; uint tag; };"
+        setup = "uint offset = 1; Envelope envelope{{left + offset++, first + offset++, 4}, offset++};"
+        read, write = (
+            "envelope.cursor.input[tid] + int(envelope.tag)",
+            "envelope.cursor.output[tid]",
+        )
+    elif case == "effects-array":
+        declarations = declarations.replace("uint count;", "uint count; uint order[2];")
+        setup = "uint offset = 1; Cursor cursor{left + offset++, first + offset++, 4, {offset++, offset++}};"
+        read += " + int(cursor.order[0] * 10u + cursor.order[1])"
+    elif case == "effects-call":
+        declarations += "uint next_offset(thread uint& offset) { return offset++; }"
+        setup = "uint offset = 1; Cursor cursor{left + next_offset(offset), first + next_offset(offset), 4};"
+    elif case == "effects-return":
+        declarations += "Cursor make_cursor(const device int* input, device int* output, thread uint& offset) { return {input + offset++, output + offset++, 4}; }"
+        setup = "uint offset = 1; Cursor cursor = make_cursor(left, first, offset);"
+    elif case == "effects-conditional":
+        setup = "uint offset = 1; Cursor cursor = (tid & 1u) != 0u ? Cursor{left + offset++, first + offset++, 4} : Cursor{left + 1, first + 2, offset++};"
+    elif case == "effects-loop-update":
+        setup = "uint offset = 0; Cursor cursor{left, first, 4}; for (uint round = 0; round < 2; cursor = Cursor{left + offset++, first + offset++, 4}) { ++round; }"
+    elif case == "effects-shadow":
+        setup = "uint crosstl_initializer = 9; uint offset = 1; Cursor cursor{left + offset++, first + offset++, 4}; offset += crosstl_initializer;"
+    elif case == "selection":
+        setup += "if ((tid & 1) != 0) { cursor.input = right + 2; cursor.output = second + 3; }"
+    elif case == "piecewise":
+        setup = "Cursor cursor; cursor.input = left + 1; cursor.output = first + 2; cursor.count = 4;"
+    elif case == "template":
+        declarations += "template<typename Pointer> struct Holder { Pointer value; };"
+        setup = "Holder<const device int*> holder{left + 1}; Cursor cursor{holder.value, first + 2, 4};"
+    elif case == "multidimensional":
+        declarations = "struct Cursor { const device int* inputs[2][2]; device int* outputs[2][2]; };"
+        setup = """Cursor cursor;
+        cursor.inputs[0][0] = left + 1; cursor.inputs[0][1] = right + 2;
+        cursor.inputs[1][0] = right + 1; cursor.inputs[1][1] = left + 2;
+        cursor.outputs[0][0] = first + 1; cursor.outputs[0][1] = second + 1;
+        cursor.outputs[1][0] = second + 2; cursor.outputs[1][1] = first + 2;"""
+        read, write = (
+            "cursor.inputs[tid / 2][tid & 1][tid]",
+            "cursor.outputs[tid / 2][tid & 1][tid]",
+        )
+    elif case == "const-slot":
+        declarations = declarations.replace(
+            "device int* output;", "device int* const output;"
+        )
+    elif case == "entry-rebase":
+        setup = "left += 1; first += 2; Cursor cursor{left, first, 4};"
+    elif case == "alias-writeback":
+        setup = "Cursor cursor{first + 2, first + 2, 4};"
+        read = "left[tid + 1]"
+    elif case == "typedef":
+        declarations = (
+            "typedef const device int* Input; typedef Input ReadPointer; "
+            + declarations.replace("const device int* input;", "ReadPointer input;")
+        )
+    elif case in {
+        "unused-null",
+        "forwarded-null",
+        "literal-null",
+        "unused-null-vector",
+    }:
+        declarations += """
+        uint ignore(const device int* unused, uint value) { return value; }
+        uint forward(const device int* unused, uint value) {
+            return ignore(unused, value);
+        }
+        uint specialized(const device int* unused, uint value) {
+            if (true) { return value; } else { return uint(unused[0]); }
+        }
+        """
+        helper = {
+            "unused-null": "ignore",
+            "forwarded-null": "forward",
+            "literal-null": "specialized",
+            "unused-null-vector": "forward",
+        }[case]
+        if case == "unused-null-vector":
+            declarations = declarations.replace(
+                "int* unused", "float2* unused"
+            ).replace("uint(unused[0])", "uint(unused[0].x)")
+        setup += f"uint index = tid; uint result = {helper}(nullptr, index++);"
+        read = "cursor.input[result] + int(index - tid - 1)"
+    body = f"{setup}\n    {write} = {read};"
+    if case == "alias-writeback":
+        body += "second[tid + 3] = cursor.input[tid] + 5;"
+    if case == "effects" or case in ORDER_CASES:
+        body += "second[tid + 4] = int(offset);"
+    if case == "shadow":
+        body = f"if (tid < 4) {{ {body} }}"
+    right_space = (
+        "constant" if case in {"constant", "helper-constant-offset"} else "device"
+    )
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+{declarations}
+kernel void aggregate_resources(const device int* left [[buffer(0)]],
+                                const {right_space} int* right [[buffer(1)]],
+                                device int* first [[buffer(2)]],
+                                device int* second [[buffer(3)]],
+                                uint tid [[thread_position_in_grid]]) {{
+    {body}
+}}
+"""
+    if case in VECTOR_CASES:
+        _, kind, lanes = case.split("-")
+        source = source.replace("int*", f"{kind}{lanes}*")
+    return source
+
+
+def _workload(case):
+    if case in VECTOR_CASES:
+        _, kind, width = case.split("-")
+        lanes = int(width)
+        offset = 0.25 if kind == "float" else 0
+        sign = 1 if kind == "uint" else -1
+        left = [
+            sign * (11 * index + lane + 1) + offset
+            for index in range(10)
+            for lane in range(lanes)
+        ]
+        right = [
+            53 * index + lane + offset for index in range(10) for lane in range(lanes)
+        ]
+        guard = 999 if kind == "uint" else -999
+        first = [guard] * (12 * lanes)
+        first[2 * lanes : 6 * lanes] = left[lanes : 5 * lanes]
+
+        def typed(values):
+            return {
+                "dtype": {"float": "float32", "int": "int32", "uint": "uint32"}[kind],
+                "shape": [len(values) // lanes, lanes],
+                "values": values,
+            }
+
+        return (
+            {
+                "left": typed(left),
+                "right": typed(right),
+                "first": typed([guard] * (12 * lanes)),
+                "second": typed([guard] * (12 * lanes)),
+            },
+            {"first": typed(first), "second": typed([guard] * (12 * lanes))},
+        )
+    left = [11, -3, 47, -91, 5, 107, -23, 53, 29, 71]
+    right = [-113, 17, 61, 79, -31, 13, -43, 97, 109, -127]
+    first, second = [-999] * 12, [-999] * 12
+    for tid in range(4):
+        value, output, offset = left[tid + 1], first, 2
+        if case == "copy":
+            value, offset = value + left[tid + 3], 3
+        elif case == "nested":
+            value += 19
+        elif case in {"array", "selection"} and tid & 1:
+            value, output, offset = right[tid + 2], second, 3
+        elif case == "helper":
+            value = left[tid + 2]
+        elif case in {"helper-offset", "helper-returned-offset"}:
+            value = left[tid + 2] + left[tid + 1]
+        elif case == "helper-constant-offset":
+            value = right[tid + 3] + right[tid + 2]
+        elif case == "helper-nested-offset":
+            value = left[tid + 3] + left[tid + 2] + left[tid + 1]
+        elif case == "helper-rebase":
+            value = right[tid + 3] + left[tid + 1]
+        elif case in {"rebase", "shadow"}:
+            value, output, offset = right[tid + 2], second, 3
+        elif case == "constant":
+            value = right[tid + 2]
+        elif case == "reference":
+            value, offset = left[tid + 3], 3
+        elif case == "effects":
+            second[tid + 4] = 3
+        elif case in ORDER_CASES:
+            second[tid + 4] = {
+                "effects-read-before": 2,
+                "effects-read-after": 2,
+                "effects-nested": 4,
+                "effects-array": 5,
+                "effects-call": 3,
+                "effects-return": 3,
+                "effects-conditional": 3 if tid & 1 else 2,
+                "effects-loop-update": 4,
+                "effects-shadow": 12,
+            }[case]
+            if case == "effects-read-before":
+                offset = 1
+            elif case == "effects-nested":
+                value += 3
+            elif case == "effects-array":
+                value += 34
+            elif case == "effects-loop-update":
+                value, offset = left[tid + 2], 3
+        elif case == "alias-writeback":
+            second[tid + 3] = value + 5
+        elif case == "multidimensional":
+            buffers, targets, offsets = (
+                (left, right, right, left),
+                (first, second, second, first),
+                (1, 2, 1, 2),
+            )
+            value, output, offset = (
+                buffers[tid][tid + offsets[tid]],
+                targets[tid],
+                (1, 1, 2, 2)[tid],
+            )
+        output[tid + offset] = value
+
+    def typed(values):
+        return {"dtype": "int32", "shape": [len(values)], "values": values}
+
+    return (
+        {
+            "left": typed(left),
+            "right": typed(right),
+            "first": typed([-999] * 12),
+            "second": typed([-999] * 12),
+        },
+        {"first": typed(first), "second": typed(second)},
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,prefix", [("float", "vec"), ("int", "ivec"), ("uint", "uvec")]
+)
+@pytest.mark.parametrize("lanes", [2, 4])
+def test_resource_vector_pointee_retains_component_type_and_width(kind, prefix, lanes):
+    value = VectorType(PrimitiveType(kind), lanes)
+    pointer = _pointer_type(PointerType(value, address_space="device"))
+    resource = _pointer_type(NamedType("RWStructuredBuffer", generic_args=[value]))
+    assert pointer == resource
+    assert pointer.element == f"{prefix}{lanes}"
+
+
+@pytest.mark.parametrize(
+    "kind,lanes,bits",
+    [
+        ("float", 3, None),
+        ("half", 2, None),
+        ("bfloat", 4, None),
+        ("bool", 2, None),
+        ("float", 2, 16),
+        ("double", 2, None),
+        ("int64_t", 4, None),
+    ],
+)
+def test_resource_vector_pointee_rejects_unproven_storage(kind, lanes, bits):
+    value = VectorType(PrimitiveType(kind, size_bits=bits), lanes)
+    with pytest.raises(ResourceAggregateError) as error:
+        _pointer_type(PointerType(value, address_space="device"))
+    assert error.value.reason == "unsupported-vector-pointee"
+
+
+@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("target", ("directx", "metal"))
+def test_resource_aggregate_compiles(tmp_path, case, target):
+    if not shutil.which("dxc" if target == "directx" else "xcrun"):
+        pytest.skip(f"the optional {target} compiler is unavailable")
+    source, _descriptor, package = _package(
+        tmp_path,
+        target,
+        "int",
+        (1, 1, 1),
+        source=_source(case),
+        software_subgroups=False,
+    )
+    (artifact,) = package.rglob("*.hlsl" if target == "directx" else "*.metal")
+    validation = tmp_path / "validation"
+    validation.mkdir()
+    _, module = _compile(artifact.read_text(), target, validation)
+    assert module.is_file() and module.stat().st_size
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_resource_aggregate_executes_natively(tmp_path, case):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required resource-aggregate execution")
+    target = {"darwin": "metal", "win32": "directx"}[sys.platform]
+    source, descriptor, package = _package(
+        tmp_path,
+        target,
+        "int",
+        (1, 1, 1),
+        source=_source(case),
+        software_subgroups=False,
+    )
+    inputs, outputs = _workload(case)
+    expected = _bound_values(descriptor, outputs)
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        _bound_values(descriptor, inputs),
+        expected,
+        {"workgroupCount": [4, 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source,
+        original_entry="aggregate_resources",
+    )
+
+
+@pytest.mark.parametrize(
+    "body,reason",
+    [
+        ("cursor.input[tid] = 4;", "write-through-readonly-pointer"),
+        ("cursor.input++;", "pointer-unary-operator"),
+        ("first[tid] = int(cursor.input - cursor.input);", "pointer-binary-operator"),
+        ("cursor.output = cursor.input;", "pointer-contract-mismatch"),
+        ("cursor.input = 0;", "pointer-contract-mismatch"),
+        ("first[tid] = sizeof(Cursor);", "resource-reference-escape"),
+        ("first[tid] = sizeof(cursor);", "resource-reference-escape"),
+        ("first[tid] = unknown(cursor);", "resource-reference-escape"),
+        ("first[tid] = unknown(cursor.input);", "resource-reference-escape"),
+        ("cursor.output[tid] += 4;", "compound-resource-write"),
+    ],
+)
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_resource_aggregate_rejects_unproven_operations(tmp_path, body, reason, target):
+    source = _source("cursor").replace("cursor.output[tid] = cursor.input[tid];", body)
+    path = tmp_path / "unsupported.metal"
+    path.write_text(source)
+    if "sizeof(" in body:
+        with pytest.raises(
+            MetalSizeofResolutionError, match="aggregate object layout is not available"
+        ):
+            translate(str(path), backend=target, format_output=False)
+        return
+    with pytest.raises(ResourceAggregateError) as error:
+        translate(str(path), backend=target, format_output=False)
+    assert error.value.reason == reason
+
+
+def test_resource_aggregate_failure_is_reported_without_an_artifact(tmp_path):
+    (tmp_path / "source.metal").write_text(
+        _source("cursor").replace(
+            "cursor.output[tid] = cursor.input[tid];", "cursor.input[tid] = 4;"
+        )
+    )
+    report = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("source.metal",),
+            targets=("directx",),
+            output_dir="out",
+            workgroup_size=(1, 1, 1),
+        ),
+        format_output=False,
+    ).to_json()
+    assert report["summary"]["failedCount"] == 1
+    assert report["summary"]["translatedCount"] == 0
+    assert [item["code"] for item in report["diagnostics"]] == [
+        "project.translate.resource-aggregate-unsupported"
+    ]
+    assert "write-through-readonly-pointer" in report["diagnostics"][0]["message"]
+    assert not list((tmp_path / "out").rglob("*.hlsl"))
+
+
+@pytest.mark.parametrize("case", ["helper-offset", "helper-constant-offset"])
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_rebased_readonly_parameter_still_rejects_pointee_writes(
+    tmp_path, case, target
+):
+    source = _source(case).replace(
+        "return values[index];", "values[index] = 9; return values[index];"
+    )
+    path = tmp_path / "invalid.metal"
+    path.write_text(source)
+    with pytest.raises(ResourceAggregateError) as error:
+        translate(str(path), backend=target, format_output=False)
+    assert error.value.reason == "write-through-readonly-pointer"
+
+
+def test_constant_pointer_offset_is_not_a_store_through_the_pointer(tmp_path):
+    path = tmp_path / "constant.metal"
+    source = _source("helper-constant-offset")
+    path.write_text(source)
+    generated = translate(str(path), backend="metal", format_output=False)
+    assert "values -= 1;" in generated and "values += 2;" in generated
+    assert "unsupported Metal raw buffer store" not in generated
+    path.write_text(
+        source.replace(
+            "return values[index];", "values[index] = 9; return values[index];"
+        )
+    )
+    rejected = translate(str(path), backend="metal", format_output=False)
+    assert "readonly buffer 'values' cannot be written" in rejected
+
+
+def test_pointer_parameter_lowering_keeps_value_parameter_qualifiers(tmp_path):
+    path = tmp_path / "qualifiers.metal"
+    path.write_text(
+        _source("helper-offset").replace("uint index)", "const uint index)")
+    )
+    ast = parse(translate(str(path), backend="cgl", format_output=False))
+    source_function = next(
+        function for function in ast.functions if function.name == "shifted"
+    )
+    source_function.parameters[1].qualifiers = ["const", "in"]
+    lowered = lower_resource_aggregates(ast)
+    shifted = next(
+        function for function in lowered.functions if function.name == "shifted"
+    )
+    assert "const" not in shifted.parameters[0].qualifiers
+    assert shifted.parameters[1].qualifiers == ["const", "in"]
+
+
+@pytest.mark.parametrize(
+    "case", ("array", "effects", *ORDER_CASES, *POINTER_PARAMETER_CASES)
+)
+def test_resource_lowering_retains_source_ast_and_is_deterministic(tmp_path, case):
+    path = tmp_path / "source.metal"
+    path.write_text(_source(case))
+    ast = parse(translate(str(path), backend="cgl", format_output=False))
+    original = pickle.dumps(ast)
+    lowered = lower_resource_aggregates(ast)
+    assert lowered is not ast
+    assert pickle.dumps(ast) == original
+    generator = HLSLCodeGen()
+    first = generator.generate(ast)
+    assert generator.generate(ast) == first
+    assert pickle.dumps(ast) == original
+
+
+def _unused_pointer_ast(body="return int(value);", extra="", call="relay(nullptr, 7u)"):
+    return parse(f"""shader UnusedResource {{
+        struct Cursor {{ device int* data; }}
+        int leaf(device int* unused, uint value) {{ {body} }}
+        int relay(device int* unused, uint value) {{ return leaf(unused, value); }}
+        {extra}
+        compute {{ void main(RWStructuredBuffer<int> output @buffer(0)) {{
+            Cursor cursor = Cursor(output);
+            cursor.data[0] = {call};
+        }} }}
+    }}""")
+
+
+@pytest.mark.parametrize("stage_local", (False, True))
+@pytest.mark.parametrize(
+    "call", ("relay(nullptr, 7u)", "relay(nullptr, 7u) + relay(output, 8u)")
+)
+def test_unused_pointer_elision_preserves_entry_bindings_and_source(stage_local, call):
+    ast = _unused_pointer_ast(call=call)
+    if stage_local:
+        next(iter(ast.stages.values())).local_functions.extend(ast.functions)
+        ast.functions = []
+    before = pickle.dumps(ast)
+    lowered = lower_resource_aggregates(ast)
+    assert pickle.dumps(ast) == before
+    functions = [node for node in lowered.walk() if hasattr(node, "parameters")]
+    for function in functions:
+        if function.name in {"leaf", "relay"}:
+            assert [p.name for p in function.parameters] == [
+                "value",
+                "crosstl_resource",
+            ]
+            assert not any(
+                isinstance(n, IdentifierNode) and n.name in {"unused", "nullptr"}
+                for n in function.body.walk()
+            )
+    entry = next(iter(lowered.stages.values())).entry_point
+    assert [p.name for p in entry.parameters] == ["output"]
+    assert str(entry.parameters[0].param_type) == str(
+        next(iter(ast.stages.values())).entry_point.parameters[0].param_type
+    )
+    calls = [
+        node
+        for node in entry.body.walk()
+        if isinstance(node, FunctionCallNode) and node.function.name == "relay"
+    ]
+    assert len(calls) == (2 if " + " in call else 1)
+    assert all(len(node.arguments) == 2 for node in calls)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "return unused[value];",
+        "unused[value] = 9; return int(value);",
+        "return unused == nullptr ? 1 : 2;",
+        "return unknown(unused, value);",
+        "return relay(unused, value);",
+        "if (value != 0u) { return unused[0]; } return 1;",
+        "if (true) { return unused[0]; } else { return 1; }",
+        "if (false) { return 1; } else { return unused[0]; }",
+        "if (false) { return 1; } else if (value != 0u) { return unused[0]; } else { return 1; }",
+        "int unused = 1; return unused;",
+    ],
+)
+def test_unused_pointer_elision_rejects_observable_or_unproven_uses(body):
+    with pytest.raises(ResourceAggregateError) as error:
+        lower_resource_aggregates(_unused_pointer_ast(body))
+    assert error.value.reason == "pointer-contract-mismatch"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "relay(nullptr, 7u) + relay(output++, 8u)",
+        "relay(nullptr, 7u) + relay(output + 1, 8u)",
+        "relay(nullptr, 7u) + relay(7u, 8u)",
+    ],
+)
+def test_unused_pointer_elision_requires_pure_compatible_arguments_at_every_call(call):
+    with pytest.raises(ResourceAggregateError) as error:
+        lower_resource_aggregates(_unused_pointer_ast(call=call))
+    assert error.value.reason == "pointer-contract-mismatch"
+
+
+def test_unused_pointer_elision_does_not_change_non_null_signatures():
+    lowered = lower_resource_aggregates(_unused_pointer_ast(call="relay(output, 7u)"))
+    leaf = next(f for f in lowered.functions if f.name == "leaf")
+    assert [p.name for p in leaf.parameters] == ["unused", "value", "crosstl_resource"]
+
+
+def test_unused_pointer_elision_rejects_overloaded_helper():
+    ast = _unused_pointer_ast(extra="int leaf(uint value) { return int(value); }")
+    with pytest.raises(ResourceAggregateError) as error:
+        lower_resource_aggregates(ast)
+    assert error.value.reason == "pointer-contract-mismatch"
+
+
+@pytest.mark.parametrize("extra_call", ("leaf(8u)", "unknown(leaf)"))
+def test_unused_pointer_elision_preserves_unresolved_call_and_function_escape(
+    extra_call,
+):
+    ast = _unused_pointer_ast(call=f"relay(nullptr, 7u) + {extra_call}")
+    with pytest.raises(ResourceAggregateError) as error:
+        lower_resource_aggregates(ast)
+    assert error.value.reason == "pointer-contract-mismatch"
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_used_null_pointer_is_reported_without_an_artifact(tmp_path, target):
+    source = _source("unused-null").replace(
+        "return value;", "return uint(unused[value]);", 1
+    )
+    (tmp_path / "source.metal").write_text(source)
+    report = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("source.metal",),
+            targets=(target,),
+            output_dir="out",
+            workgroup_size=(1, 1, 1),
+        ),
+        format_output=False,
+    ).to_json()
+    assert report["summary"]["failedCount"] == 1
+    assert report["summary"]["translatedCount"] == 0
+    assert [item["code"] for item in report["diagnostics"]] == [
+        "project.translate.resource-aggregate-unsupported"
+    ]
+    assert "pointer-contract-mismatch" in report["diagnostics"][0]["message"]
+    assert not list((tmp_path / "out").rglob("*.hlsl"))
+    assert not list((tmp_path / "out").rglob("*.glsl"))
+
+
+@pytest.mark.parametrize("stage_local", (False, True))
+def test_resource_lowering_removes_only_unreachable_resource_signatures(stage_local):
+    ast = parse("""shader ResourceHelpers {
+        struct Cursor { device int* data; }
+        int read(Cursor cursor, uint index) { return cursor.data[index]; }
+        void unused(Cursor cursor, uint index) { cursor.data[index] = 0; }
+        int ordinary(int value) { return value + 1; }
+        compute { void main(RWStructuredBuffer<int> values @buffer(0),
+                            RWStructuredBuffer<int> results @buffer(1)) {
+            Cursor cursor = Cursor(values);
+            results[0] = read(cursor, 0u);
+        } }
+    }""")
+    stage = next(iter(ast.stages.values()))
+    if stage_local:
+        stage.local_functions.extend(ast.functions)
+        ast.functions = []
+    before = pickle.dumps(ast)
+    lowered = lower_resource_aggregates(ast)
+    names = {f.name for f in lowered.functions}
+    names.update(f.name for s in lowered.stages.values() for f in s.local_functions)
+    assert "unused" not in names
+    assert {"read", "ordinary"} <= names
+    assert pickle.dumps(ast) == before
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["local-reference", "reference-return", "address", "cast", "reinterpret"],
+)
+def test_resource_aggregate_alias_and_layout_escapes_are_diagnostic(operation):
+    ast = parse("""shader T {
+        struct Cursor { device int* data; }
+        Cursor identity(Cursor value) { return value; }
+        compute { void main(RWStructuredBuffer<int> output @buffer(0)) {
+            Cursor cursor = identity(Cursor(output));
+        } }
+    }""")
+    entry = next(iter(ast.stages.values())).entry_point
+    if operation == "local-reference":
+        entry.body.statements.append(
+            VariableNode(
+                "alias", ReferenceType(NamedType("Cursor")), IdentifierNode("cursor")
+            )
+        )
+        reason = "local-reference-alias"
+    elif operation == "reference-return":
+        ast.functions[0].return_type = ReferenceType(NamedType("Cursor"))
+        reason = "reference-return"
+    elif operation == "address":
+        entry.body.statements.append(UnaryOpNode("&", IdentifierNode("cursor")))
+        reason = "aggregate-address-escape"
+    else:
+        node_type = CastNode if operation == "cast" else PointerReinterpretNode
+        entry.body.statements.append(
+            node_type(IdentifierNode("cursor"), PointerType(PrimitiveType("int")))
+        )
+        reason = "resource-reference-cast"
+    with pytest.raises(ResourceAggregateError, match=reason):
+        lower_resource_aggregates(ast)
+
+
+def test_resource_aggregate_member_address_executes_natively(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required resource-aggregate execution")
+    target = {"darwin": "metal", "win32": "directx"}[sys.platform]
+    source, descriptor, package = _package(
+        tmp_path,
+        target,
+        "int",
+        (1, 1, 1),
+        source=_member_source("constant", "direct"),
+        software_subgroups=False,
+    )
+    values = [-13, 4, 71, -19, 103, 53, 27, -6]
+    result = [-123456] * 4
+    for tid in range(3):
+        result.extend(
+            (values[tid + 2] + 11, values[tid + 4] + 11, values[tid + 1] + 101, tid + 3)
+        )
+    result.extend([-123456] * 4)
+    expected = _bound_values(
+        descriptor, {"results": {"dtype": "int32", "shape": [20], "values": result}}
+    )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        _bound_values(
+            descriptor,
+            {
+                "src": {"dtype": "int32", "shape": [8], "values": values},
+                "results": {"dtype": "int32", "shape": [20], "values": [-123456] * 20},
+            },
+        ),
+        expected,
+        {"workgroupCount": [3, 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source,
+        original_entry="member_pointer",
+    )
+
+
+@pytest.mark.parametrize("member", ["cursor", "Cursor"])
+def test_canonical_resource_aggregate_layout_is_not_reinterpreted(member):
+    source = f"""shader T {{
+        struct Cursor {{ device int* data; }}
+        compute {{ void main(RWStructuredBuffer<int> output @buffer(0)) {{
+            Cursor cursor = Cursor(output);
+            output[0] = sizeof({member});
+        }} }}
+    }}"""
+    with pytest.raises(ResourceAggregateError, match="resource-reference-escape"):
+        lower_resource_aggregates(parse(source))
+
+
+def test_pointer_array_partial_initialization_is_not_a_buffer_reference(tmp_path):
+    path = tmp_path / "partial.metal"
+    path.write_text(_source("array").replace("{left + 1, right + 2}", "{left + 1}"))
+    with pytest.raises(
+        ResourceAggregateError, match="pointer-array-initialization-arity"
+    ):
+        translate(str(path), backend="directx", format_output=False)
+
+
+def test_aggregate_reference_cannot_change_an_external_buffer_layout():
+    source = """shader T {
+        struct Cursor { device int* data; }
+        compute { void main(StructuredBuffer<Cursor> input @buffer(0)) {} }
+    }"""
+    with pytest.raises(ResourceAggregateError, match="aggregate-buffer-abi"):
+        lower_resource_aggregates(parse(source))
+
+
+def test_resource_read_proof_retains_effectful_argument_checks(tmp_path):
+    path = tmp_path / "source.metal"
+    path.write_text(_source("helper"))
+    ast = lower_resource_aggregates(
+        parse(translate(str(path), backend="cgl", format_output=False))
+    )
+    generator = HLSLCodeGen()
+    generator.current_hlsl_available_functions = {
+        function.name: function for function in ast.functions
+    }
+    reader = generator.current_hlsl_available_functions["load"]
+    assert reader.resource_aggregate_nonmutating
+    assert not generator.hlsl_expression_has_observable_side_effects(
+        FunctionCallNode(IdentifierNode("load"), [])
+    )
+    assert generator.hlsl_expression_has_observable_side_effects(
+        FunctionCallNode(
+            IdentifierNode("load"),
+            [UnaryOpNode("++", IdentifierNode("index"), is_postfix=True)],
+        )
+    )
+    assert generator.hlsl_expression_has_observable_side_effects(
+        FunctionCallNode(IdentifierNode("unresolved"), [])
+    )
+    assert all(
+        not function.resource_aggregate_nonmutating
+        for function in ast.functions
+        if function.name.startswith("crosstl_resource_store_")
+    )
+
+
+@pytest.mark.parametrize("qualifier", ["static", "volatile", "threadgroup"])
+def test_resource_read_proof_excludes_observable_local_storage(qualifier):
+    ast = parse("""shader T {
+        struct Cursor { device int* data; }
+        int advance() { int count = 0; count += 1; return count; }
+        compute { void main(RWStructuredBuffer<int> output @buffer(0)) {
+            Cursor cursor = Cursor(output); cursor.data[0] = advance();
+        } }
+    }""")
+    ast.functions[0].body.statements[0].qualifiers.append(qualifier)
+    lowered = lower_resource_aggregates(ast)
+    helper = next(f for f in lowered.functions if f.name == "advance")
+    assert not getattr(helper, "resource_aggregate_nonmutating", False)
+
+
+def test_resource_aggregate_gate_requires_native_execution():
+    from tools import ci_coverage
+
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/demo-project-testing.yml"
+    ).read_text()
+    step = ci_coverage.workflow_step_section(
+        workflow, "Validate indexed DirectX gather and resource aggregates"
+    )
+    assert f'{REQUIRE_ENV}: "1"' in step
+    assert 'CROSTL_REQUIRE_MLX_DIRECTX_GENERAL_GATHER: "1"' in step
+    assert (
+        "test_general_gather_directx.py" in step
+        and "test_resource_aggregates.py" in step
+    )
+    assert "--timeout-seconds 1200" in step and "--junitxml=" in step
+    assert "--basetemp=" in step and "-n auto --dist loadgroup" in step
+    assert "if:" not in step and "continue-on-error" not in workflow
+    assert "runs-on: windows-2025" in workflow
+    assert "Get-FileHash" in workflow and "d3d10warp.dll" in workflow
+    directx_job = workflow.split("  directx:", 1)[1]
+    assert 'python-version: "3.12"' in directx_job
+    assert directx_job.index(
+        "Initialize DirectX execution evidence"
+    ) < directx_job.index("Install CrossTL and runtime dependencies")
+    install = ci_coverage.workflow_step_section(
+        workflow, "Install CrossTL and runtime dependencies"
+    )
+    assert "set -euo pipefail" in install
+    assert "tee .mlx-gather-directx/dependencies.log" in install
+    for event in ("push", "pull_request"):
+        assert_paths_covered(
+            ci_coverage.workflow_event_path_filters(workflow, event),
+            "tests/test_translator/**",
+        )

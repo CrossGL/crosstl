@@ -5,198 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 149,
+        "endLine": 32,
+        "endOffset": 631,
         "file": "crosstl-out/cgl/shaders.cgl",
-        "length": 19,
-        "line": 7,
-        "offset": 130
+        "length": 631,
+        "line": 1,
+        "offset": 0
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 13,
-        "endOffset": 480,
+        "endLine": 38,
+        "endOffset": 858,
         "file": "shaders.hlsl",
-        "length": 43,
-        "line": 12,
-        "offset": 437
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 238,
-        "file": "crosstl-out/cgl/shaders.cgl",
-        "length": 21,
-        "line": 10,
-        "offset": 217
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 501,
-        "file": "shaders.hlsl",
-        "length": 19,
-        "line": 14,
-        "offset": 482
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 264,
-        "file": "crosstl-out/cgl/shaders.cgl",
-        "length": 26,
-        "line": 11,
-        "offset": 238
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 16,
-        "endOffset": 525,
-        "file": "shaders.hlsl",
-        "length": 24,
-        "line": 15,
-        "offset": 501
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 16,
-        "endOffset": 385,
-        "file": "crosstl-out/cgl/shaders.cgl",
-        "length": 81,
-        "line": 15,
-        "offset": 304
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 25,
-        "endOffset": 676,
-        "file": "shaders.hlsl",
-        "length": 65,
-        "line": 24,
-        "offset": 611
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 409,
-        "file": "crosstl-out/cgl/shaders.cgl",
-        "length": 24,
-        "line": 16,
-        "offset": 385
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 27,
-        "endOffset": 698,
-        "file": "shaders.hlsl",
-        "length": 20,
-        "line": 26,
-        "offset": 678
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 18,
-        "endOffset": 454,
-        "file": "crosstl-out/cgl/shaders.cgl",
-        "length": 45,
-        "line": 17,
-        "offset": 409
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 29,
-        "endOffset": 740,
-        "file": "shaders.hlsl",
-        "length": 41,
-        "line": 28,
-        "offset": 699
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 19,
-        "endOffset": 484,
-        "file": "crosstl-out/cgl/shaders.cgl",
-        "length": 30,
-        "line": 18,
-        "offset": 454
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 30,
-        "endOffset": 766,
-        "file": "shaders.hlsl",
-        "length": 26,
-        "line": 29,
-        "offset": 740
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 27,
-        "endOffset": 621,
-        "file": "crosstl-out/cgl/shaders.cgl",
-        "length": 62,
-        "line": 26,
-        "offset": 559
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 35,
-        "endOffset": 830,
-        "file": "shaders.hlsl",
-        "length": 41,
-        "line": 34,
-        "offset": 789
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 28,
-        "endOffset": 649,
-        "file": "crosstl-out/cgl/shaders.cgl",
-        "length": 28,
-        "line": 27,
-        "offset": 621
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 37,
-        "endOffset": 856,
-        "file": "shaders.hlsl",
-        "length": 24,
-        "line": 36,
-        "offset": 832
+        "length": 858,
+        "line": 1,
+        "offset": 0
       }
     }
   ],

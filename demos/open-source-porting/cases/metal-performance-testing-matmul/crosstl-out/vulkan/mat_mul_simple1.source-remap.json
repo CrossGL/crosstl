@@ -4,11 +4,11 @@
     {
       "generated": {
         "column": 1,
-        "endColumn": 14,
-        "endLine": 210,
-        "endOffset": 5339,
+        "endColumn": 1,
+        "endLine": 211,
+        "endOffset": 5340,
         "file": "crosstl-out/vulkan/mat_mul_simple1.spvasm",
-        "length": 5339,
+        "length": 5340,
         "line": 1,
         "offset": 0
       },

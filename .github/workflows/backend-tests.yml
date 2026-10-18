@@ -14,10 +14,39 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  python-versions:
+    name: Select Python versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.select.outputs.versions }}
+    steps:
+      - name: Select Python versions
+        id: select
+        env:
+          # Pushes to main and pull requests labelled ci:full test every supported
+          # version; other pull requests test the oldest and the newest.
+          FULL_PYTHON_VERSIONS: '["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]'
+          PULL_REQUEST_PYTHON_VERSIONS: '["3.8", "3.13"]'
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: |
+          if [ "$FULL" = "true" ]; then
+            echo "versions=$FULL_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
+          else
+            echo "versions=$PULL_REQUEST_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
-    runs-on: ${{ matrix.runner || matrix.OS }}
+    needs: python-versions
+    runs-on: ${{ matrix.OS }}
     timeout-minutes: 45
+    env:
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
     strategy:
       matrix:
         backend:
@@ -32,15 +61,19 @@ jobs:
             "CUDA",
             "HIP",
           ]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
         OS: [ubuntu-latest, windows-latest, macOS-latest]
         exclude:
-          - python-version: "3.8"
-            OS: windows-latest
+          - OS: windows-latest
+          - OS: macOS-latest
         include:
-          - python-version: "3.9"
+          - backend: all
+            python-version: "3.13"
             OS: windows-latest
-            runner: windows-2022
+          - backend: all
+            python-version: "3.13"
+            OS: macOS-latest
+
       fail-fast: false
 
     steps:
@@ -74,15 +107,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install -r requirements.txt
+          pip install -r requirements.txt pytest-xdist
 
       - name: Run backend tests
         id: run_backend_tests
         shell: bash
         run: |
           mkdir -p support/generated
-          python -m pytest tests/test_backend/test_${{ matrix.backend }} \
-            --junitxml support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+          if [ "${{ matrix.backend }}" == "all" ]; then
+            python -m pytest tests/test_backend -n auto \
+              --junitxml support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+          else
+            python -m pytest tests/test_backend/test_${{ matrix.backend }} -n auto \
+              --junitxml support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+          fi
 
       - name: Write backend test failure summary
         if: failure() && steps.run_backend_tests.outcome == 'failure'

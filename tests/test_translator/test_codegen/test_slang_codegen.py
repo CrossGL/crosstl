@@ -11079,8 +11079,9 @@ def test_slang_sampler_descriptor_arrays_remap_overlapping_target_registers():
         ": register(s7, space0);" in generated_code
     )
     assert (
-        "shadowMaps[descriptor].SampleCmp(shadowSamplers[descriptor], uv, depth)"
-        in (generated_code)
+        "shadowMaps[descriptor].SampleCmp(shadowSamplers[descriptor], uv, depth)" in (
+            generated_code
+        )
     )
 
 

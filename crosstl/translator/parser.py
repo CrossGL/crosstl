@@ -75,6 +75,9 @@ from .ast import (
     WildcardPatternNode,
     create_legacy_shader_node,
 )
+from .integer_literals import integer_literal_parts
+from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespace
+from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
 from .validation import validate_shader_cbuffers
 
@@ -123,6 +126,7 @@ WAVE_INTRINSICS = {
 
 COOPERATIVE_MATRIX_INTRINSICS = {
     "cooperative_matrix_element": "element",
+    "cooperative_matrix_fill": "fill",
     "cooperative_matrix_load": "load",
     "cooperative_matrix_store": "store",
     "cooperative_matrix_multiply": "multiply",
@@ -533,7 +537,9 @@ class Parser:
                 enums.append(self.parse_enum())
             elif self.is_cbuffer_declaration():
                 cbuffers.append(self.parse_cbuffer_as_struct())
-            elif self.current_token[0] == "CONST":
+            elif (
+                self.current_token[0] == "CONST" and not self.is_function_declaration()
+            ):
                 constants.append(self.parse_constant())
             elif self.current_token[0] == "LET":
                 global_variables.append(self.parse_let_declaration())
@@ -651,7 +657,9 @@ class Parser:
                 )
             elif self.is_cbuffer_declaration():
                 cbuffers.append(self.parse_cbuffer_as_struct())
-            elif self.current_token[0] == "CONST":
+            elif (
+                self.current_token[0] == "CONST" and not self.is_function_declaration()
+            ):
                 constants.append(self.parse_constant())
             elif self.current_token[0] == "LET":
                 global_variables.append(self.parse_let_declaration())
@@ -1660,7 +1668,7 @@ class Parser:
         if saw_function_keyword and self.current_token_starts_bare_function_name():
             return_type = PrimitiveType("void")
         else:
-            return_type = self.parse_type()
+            return_type = self.parse_function_return_type()
 
         if not (
             self.current_token[0] == "KERNEL"
@@ -1682,7 +1690,7 @@ class Parser:
             if self.is_arrow_token():
                 self.eat_arrow()
                 attributes.extend(self.parse_return_type_attributes())
-                return_type = self.parse_type()
+                return_type = self.parse_function_return_type()
 
             post_attributes = self.parse_post_declaration_attributes()
 
@@ -1718,21 +1726,65 @@ class Parser:
         finally:
             self.restore_generic_parameter_scope(previous_scope)
 
+        function_attributes = []
+        linkage_qualifiers = set()
+        source_licenses = set()
+        for attribute in attributes + post_attributes:
+            if attribute.name == "source_license":
+                arguments = attribute.arguments
+                license_name = (
+                    getattr(arguments[0], "name", None) if len(arguments) == 1 else None
+                )
+                if license_name not in SOURCE_LICENSES:
+                    raise SyntaxError(
+                        "@source_license requires one registered license identifier"
+                    )
+                source_licenses.add(license_name)
+            elif attribute.name in {"metal_static", "metal_inline"}:
+                if attribute.arguments:
+                    raise SyntaxError(f"@{attribute.name} does not accept arguments")
+                qualifier = attribute.name[len("metal_") :]
+                linkage_qualifiers.add(qualifier)
+            else:
+                function_attributes.append(attribute)
+
         return FunctionNode(
             name=name,
             return_type=return_type,
             parameters=parameters,
             body=body,
             generic_params=generic_params,
-            attributes=attributes + post_attributes,
+            attributes=function_attributes,
             qualifiers=qualifiers,
             is_async="async" in qualifiers,
             is_unsafe="unsafe" in qualifiers,
+            linkage="internal" if "static" in linkage_qualifiers else "external",
+            is_inline="inline" in linkage_qualifiers,
+            annotations=(
+                {"source_licenses": tuple(sorted(source_licenses))}
+                if source_licenses
+                else None
+            ),
         )
 
     def parse_return_type_attributes(self):
         """Parse WGSL-style metadata between ``->`` and the return type."""
         return self.parse_attribute_annotations(allow_single_square=False)
+
+    def parse_function_return_type(self):
+        """Keep pointer return address spaces and pointee access in the type."""
+        qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
+            self.parse_parameter_qualifiers()
+        )
+        return_type = self.parse_type()
+        self.apply_pointer_resource_contract(
+            return_type, qualifiers, resource_qualifiers
+        )
+        if isinstance(return_type, PointerType):
+            return_type.is_mutable = not set(qualifiers).intersection(
+                {"const", "constant", "readonly", "in"}
+            )
+        return return_type
 
     def parse_parameter_list(self):
         """Parse a comma-separated function parameter list."""
@@ -2866,6 +2918,15 @@ class Parser:
             return self.lookup_value_type(expression.name)
         if isinstance(expression, CooperativeMatrixOpNode):
             return expression.expression_type
+        if isinstance(expression, ArrayAccessNode):
+            # One element of an array of matrices, such as ``tiles[i]``.
+            array_type = self.cooperative_matrix_expression_type(expression.array)
+            while isinstance(array_type, ReferenceType):
+                array_type = array_type.referenced_type
+            if isinstance(array_type, ArrayType) and isinstance(
+                array_type.element_type, CooperativeMatrixType
+            ):
+                return array_type.element_type
         return getattr(expression, "expression_type", None)
 
     def cooperative_matrix_operand_contract(self, expression, operation, label):
@@ -3122,6 +3183,15 @@ class Parser:
         arguments = operation_node.arguments
         if operation in {"load", "store"}:
             return operation_node
+        if operation == "fill":
+            # A fill names only its value; the declaration, assignment or
+            # return it initializes supplies the matrix contract.
+            if len(arguments) != 1:
+                raise SyntaxError(
+                    "Cooperative matrix fill expects 1 argument, got "
+                    f"{len(arguments)}"
+                )
+            return operation_node
 
         if operation == "element":
             if not arguments:
@@ -3267,6 +3337,8 @@ class Parser:
                 f"{self.format_cooperative_matrix_contract_value(expected_type)}"
             )
         if expression.result_type is None:
+            if expression.operation == "fill":
+                expression.set_result_contract(deepcopy(expected_contract))
             return
         result = self.merge_cooperative_matrix_contracts(
             expression.operation,
@@ -3624,7 +3696,24 @@ class Parser:
         argument = None
 
         try:
-            if self.current_token_starts_qualified_identifier():
+            if self.current_token_is_parameter_qualifier() and self.peek()[0] not in {
+                "COMMA",
+                "GREATER_THAN",
+                "BITWISE_SHIFT_RIGHT",
+            }:
+                qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
+                    self.parse_parameter_qualifiers()
+                )
+                if not self.current_token_starts_type():
+                    raise SyntaxError(
+                        "Expected a type after generic argument qualifiers"
+                    )
+                argument = self.parse_type()
+                self.apply_pointer_resource_contract(
+                    argument, qualifiers, resource_qualifiers
+                )
+                argument.qualifiers = qualifiers
+            elif self.current_token_starts_qualified_identifier():
                 argument = IdentifierNode(self.parse_qualified_identifier())
             elif self.current_token_starts_type():
                 argument = self.parse_type()
@@ -4162,6 +4251,12 @@ class Parser:
         """Parse a ``for pattern in iterable`` loop after ``for`` is consumed."""
         pattern = self.current_token[1]
         self.eat("IDENTIFIER")
+        binding_type = None
+        binding_qualifiers = []
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            binding_qualifiers = self.parse_variable_qualifiers()
+            binding_type = self.parse_type()
         self.eat("IN")
         previous_suppression = getattr(self, "suppress_braced_constructor", False)
         self.suppress_braced_constructor = True
@@ -4170,13 +4265,19 @@ class Parser:
         finally:
             self.suppress_braced_constructor = previous_suppression
 
-        self.enter_value_type_scope({pattern: None})
+        self.enter_value_type_scope({pattern: binding_type})
         try:
             body = self.parse_statement()
         finally:
             self.restore_value_type_scope()
 
-        return ForInNode(pattern=pattern, iterable=iterable, body=body)
+        return ForInNode(
+            pattern=pattern,
+            iterable=iterable,
+            body=body,
+            binding_type=binding_type,
+            binding_qualifiers=binding_qualifiers,
+        )
 
     def parse_for_loop_variable_declaration(self):
         """Parse variable declarations in for loops (without consuming semicolon)."""
@@ -4927,6 +5028,16 @@ class Parser:
                         left = RayTracingOpNode(left.name, arguments)
                     elif left.name in MESH_INTRINSICS:
                         left = MeshOpNode(left.name, arguments)
+                    elif metal_math_namespace(left.name) is not None:
+                        # Other backends see the plain builtin they always
+                        # saw; backends that honor the namespace read it from
+                        # the annotation.
+                        namespace, operation = metal_math_namespace(left.name)
+                        left = FunctionCallNode(
+                            IdentifierNode(operation),
+                            arguments,
+                            annotations={METAL_MATH_NAMESPACE_ANNOTATION: namespace},
+                        )
                     else:
                         left = FunctionCallNode(left, arguments)
                 elif (
@@ -5157,7 +5268,9 @@ class Parser:
             break
 
         self.eat("RBRACE")
-        return ConstructorNode(NamedType(type_name), arguments, named_arguments)
+        node = ConstructorNode(NamedType(type_name), arguments, named_arguments)
+        node.is_braced_constructor = True
+        return node
 
     def is_constructor_shorthand_field(self):
         """Return whether the current token is a braced-constructor field shorthand."""
@@ -5511,11 +5624,9 @@ class Parser:
             return LiteralNode(value, PrimitiveType("unknown"))
 
     def parse_integer_literal_parts(self, value):
-        """Return integer digits and signedness for an integer literal."""
-        value = str(value)
-        if value.endswith(("u", "U")):
-            return value[:-1], PrimitiveType("uint")
-        return value, PrimitiveType("int")
+        """Retain an integer literal's source width and signedness."""
+        digits, type_name = integer_literal_parts(value)
+        return digits, PrimitiveType(type_name)
 
     # Legacy compatibility methods
     def parse_legacy_shader(self):
@@ -5681,8 +5792,10 @@ class Parser:
                 if self.current_token_starts_bare_function_name():
                     return True
 
+            self.parse_parameter_qualifiers()
             if self.is_type_token():
                 self.advance_over_type()
+                self.advance_over_pointer_suffix()
                 if (
                     self.current_token[0] == "KERNEL"
                     or self.current_token_is_binding_identifier()
@@ -6046,7 +6159,7 @@ class Parser:
         if self.current_token[0] == "STRUCT":
             return self.parse_struct()
 
-        if self.current_token[0] == "CONST":
+        if self.current_token[0] == "CONST" and not self.is_function_declaration():
             return self.parse_constant()
 
         if self.current_token[0] == "LET":

@@ -65,8 +65,9 @@ def test_language_spec_covers_frontend_basics():
     )
     assert "image2d" in spec["language"]["resources"]["storageImageTypeNames"]
     assert (
-        "rwstructuredbuffer"
-        in spec["language"]["resources"]["uavResourceBufferTypeNames"]
+        "rwstructuredbuffer" in spec["language"]["resources"][
+            "uavResourceBufferTypeNames"
+        ]
     )
     assert "samplerstate" in spec["language"]["resources"]["samplerStateTypeNames"]
 

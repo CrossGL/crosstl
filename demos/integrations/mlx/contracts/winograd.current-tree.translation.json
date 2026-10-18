@@ -1,0 +1,765 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-winograd-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/conv.metal",
+    "sourceSha256": "d0604f69e144ffb65dcfc99e6383880b6d2d61645fa73147f35230034a1cd874",
+    "headers": {
+      "mlx/backend/metal/kernels/steel/conv/params.h": "354a832c5bf37791f4ad42ddc3ca9456a9c1ebbf3216650bb4a10c18110e03a8",
+      "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
+    }
+  },
+  "entries": [
+    "winograd_conv_2d_weight_transform_float32_bc32",
+    "winograd_conv_2d_input_transform_float32_bc32",
+    "winograd_conv_2d_output_transform_float32_bo32",
+    "winograd_conv_2d_weight_transform_bfloat16_bc32",
+    "winograd_conv_2d_input_transform_bfloat16_bc32",
+    "winograd_conv_2d_output_transform_bfloat16_bo32",
+    "winograd_conv_2d_weight_transform_float16_bc32",
+    "winograd_conv_2d_input_transform_float16_bc32",
+    "winograd_conv_2d_output_transform_float16_bo32"
+  ],
+  "artifacts": {
+    "metal": {
+      "winograd_conv_2d_weight_transform_float32_bc32": {
+        "sha256": "7b744b8e0a722f9d36f62c9185f300fb616bc00e4c669fecc1a7fad87f3277c2",
+        "sizeBytes": 3922
+      },
+      "winograd_conv_2d_input_transform_float32_bc32": {
+        "sha256": "69fedd5bff9652f855d4f8cef12e9fdf70c034a3e68bda10ed57560e99a0ddb1",
+        "sizeBytes": 4819
+      },
+      "winograd_conv_2d_output_transform_float32_bo32": {
+        "sha256": "0f8c65c03bd09484e55f5dee2a4c7b09da4c0f81515e4012ada98f2bb13e0262",
+        "sizeBytes": 5028
+      },
+      "winograd_conv_2d_weight_transform_bfloat16_bc32": {
+        "sha256": "ec14329cd267a9d399120b482dc2cf3331014a985cd2749500418cc1daca5d83",
+        "sizeBytes": 3948
+      },
+      "winograd_conv_2d_input_transform_bfloat16_bc32": {
+        "sha256": "785765e821573329a752df783440378f0dca2c9d2d29400d41043d4e521f4511",
+        "sizeBytes": 4842
+      },
+      "winograd_conv_2d_output_transform_bfloat16_bo32": {
+        "sha256": "11cacf72227e778d58eb5da696c6bb2ea1b2aaeeba89ac640c915b71dc49a26a",
+        "sizeBytes": 5051
+      },
+      "winograd_conv_2d_weight_transform_float16_bc32": {
+        "sha256": "9396077e7425deafc326cae3262600dcbe7914ba054fb6791a8a19c3e16ac7bf",
+        "sizeBytes": 3913
+      },
+      "winograd_conv_2d_input_transform_float16_bc32": {
+        "sha256": "29a71ed031e85cbb3fc9a2624aa94dcd48770359e043f5589bc105d538c13460",
+        "sizeBytes": 4811
+      },
+      "winograd_conv_2d_output_transform_float16_bo32": {
+        "sha256": "2c2619dd31f4aac528e2df4c38befe3f56fc6dcf6ec24c4ea52a9de5773235ba",
+        "sizeBytes": 5020
+      }
+    },
+    "opengl": {
+      "winograd_conv_2d_weight_transform_float32_bc32": {
+        "sha256": "5833140b18c0b9a2068b5b392698534d1ad06cac318381490ac1f0e8223b8cb5",
+        "sizeBytes": 29010
+      },
+      "winograd_conv_2d_input_transform_float32_bc32": {
+        "sha256": "567d6421d09949dca528a7b5d7565de976b25176b738a776793ff5b98191e248",
+        "sizeBytes": 29499
+      },
+      "winograd_conv_2d_output_transform_float32_bo32": {
+        "sha256": "b04424fa0ea49362d83421aab77396c634f7ff14474703c8590b1c3497533900",
+        "sizeBytes": 29804
+      },
+      "winograd_conv_2d_weight_transform_bfloat16_bc32": {
+        "sha256": "c34d4e070288d75a4c852ca49759fbfdf63c370fdae3ae1859022579f0b1a02e",
+        "sizeBytes": 29370
+      },
+      "winograd_conv_2d_input_transform_bfloat16_bc32": {
+        "sha256": "2430273e55decf19b8ecaf6a1aa3cf7d498021364a94a670761eb106406d38c4",
+        "sizeBytes": 29864
+      },
+      "winograd_conv_2d_output_transform_bfloat16_bo32": {
+        "sha256": "93487d6888109c4dae355c3b7dfe265a649b8d56d513c0c17c4a4bf89b327683",
+        "sizeBytes": 30169
+      },
+      "winograd_conv_2d_weight_transform_float16_bc32": {
+        "sha256": "7865f32c03354060e8fd3725f0d5262173355ce3bc48929f358b4aeeec07a95e",
+        "sizeBytes": 30371
+      },
+      "winograd_conv_2d_input_transform_float16_bc32": {
+        "sha256": "cbbe228923df08e863a69b4bebeac34f465d2bbaf7d99839e82240d9eb07eeeb",
+        "sizeBytes": 30870
+      },
+      "winograd_conv_2d_output_transform_float16_bo32": {
+        "sha256": "dc1b5a73d760a35a5f323b72ccd70047636cad4cce08ff34ccc29bc4d7ca95ca",
+        "sizeBytes": 31175
+      }
+    },
+    "directx": {
+      "winograd_conv_2d_weight_transform_float32_bc32": {
+        "sha256": "d95a492dcb143b8a161e2dbfc3395206081bb2e689a6c0bb190639eba50f7d91",
+        "sizeBytes": 20525
+      },
+      "winograd_conv_2d_input_transform_float32_bc32": {
+        "sha256": "714f3319a08de14f8dd276e27f377136caa8ade083263dfe28037dc2acb7a88c",
+        "sizeBytes": 20250
+      },
+      "winograd_conv_2d_output_transform_float32_bo32": {
+        "sha256": "57f1b92225aa6d7074d8256b9e019a596dd0b0f6342f6318f4546e46e20c3ffa",
+        "sizeBytes": 20667
+      },
+      "winograd_conv_2d_weight_transform_bfloat16_bc32": {
+        "sha256": "7efab2fbcf165f1bfbb36b64fd3c45b979866a3dc052a6e1f491cf2ffba8d53a",
+        "sizeBytes": 22103
+      },
+      "winograd_conv_2d_input_transform_bfloat16_bc32": {
+        "sha256": "6fb928e380b9a0c14ddedc88b4a01890ff3b11e9017b1aa134396df95538c404",
+        "sizeBytes": 21034
+      },
+      "winograd_conv_2d_output_transform_bfloat16_bo32": {
+        "sha256": "4df144f085b351cc8198e5b33e17e5239f3d7f9fb4305deefc78d24a6d9d74a4",
+        "sizeBytes": 21451
+      },
+      "winograd_conv_2d_weight_transform_float16_bc32": {
+        "sha256": "8df09ca93ae756b1a0ca56bf658765c6589df1dd6f4eff0ef1d510f0b94726f5",
+        "sizeBytes": 23271
+      },
+      "winograd_conv_2d_input_transform_float16_bc32": {
+        "sha256": "01418067ffcac67850d1dd7c64eeb79e3a848a2d4973fbf1e6fbda7bad007341",
+        "sizeBytes": 22995
+      },
+      "winograd_conv_2d_output_transform_float16_bo32": {
+        "sha256": "fb0de98394fd6f397a795d12bc1de47ae137f94769fb8276ea6c5d898aee9841",
+        "sizeBytes": 23413
+      }
+    }
+  },
+  "validationContract": {
+    "comparison": "exact words",
+    "matrixProducts": {
+      "profile": "fma-rne-gradual",
+      "definition": "each element is a chain of fused binary32 multiply-adds from +0.0 in increasing k, ties to even, with gradual underflow",
+      "softwareTargets": [
+        "opengl",
+        "directx"
+      ]
+    },
+    "fragmentMapping": {
+      "mapping": "tile_4x4_row_pair",
+      "provenance": "mlx_conv_winograd_lane_coordinates"
+    },
+    "softwareSubgroupWidth": {
+      "targets": [
+        "opengl",
+        "directx"
+      ],
+      "width": 32
+    },
+    "stages": {
+      "weight": {
+        "products": "(G * g) * Gt",
+        "table": "wt_transform",
+        "workgroupSize": [
+          32,
+          4,
+          1
+        ],
+        "grid": "[O / 4, 1, 1] groups",
+        "buffers": [
+          "wt_in",
+          "wt_out",
+          "C",
+          "O"
+        ],
+        "metadataPreconditions": {
+          "metal": [],
+          "opengl": [
+            {
+              "parameter": "C",
+              "minimum": 0,
+              "maximum": 2147483616
+            }
+          ],
+          "directx": [
+            {
+              "parameter": "C",
+              "minimum": 0,
+              "maximum": 2147483616
+            }
+          ]
+        },
+        "indexRangeAssertions": {
+          "metal": [],
+          "opengl": [
+            {
+              "expression": "ko * 3 * 3 * C",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "ohw_0 * C * O + ko",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "ohw_1 * C * O + ko",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "wt_in + kh * 3 * C + kw * C + kc",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "wt_out_0 + c * O",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "wt_out_1 + c * O",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          ],
+          "directx": []
+        },
+        "specialSlices": {
+          "negativeZero": [
+            1,
+            3
+          ],
+          "impulse": {
+            "slice": [
+              2,
+              5
+            ],
+            "tap": [
+              1,
+              2
+            ]
+          }
+        }
+      },
+      "input": {
+        "products": "(Bt * I) * B",
+        "table": "in_transform",
+        "workgroupSize": [
+          32,
+          2,
+          2
+        ],
+        "grid": "[tiles_w, tiles_h, N] groups",
+        "buffers": [
+          "inp_in",
+          "inp_out",
+          "params"
+        ],
+        "metadataPreconditions": {
+          "metal": [],
+          "opengl": [
+            {
+              "parameter": "params",
+              "member": "C",
+              "minimum": 0,
+              "maximum": 2147483616
+            }
+          ],
+          "directx": [
+            {
+              "parameter": "params",
+              "member": "C",
+              "minimum": 0,
+              "maximum": 2147483616
+            }
+          ]
+        },
+        "indexRangeAssertions": {
+          "metal": [],
+          "opengl": [
+            {
+              "expression": "tid.z * params.in_strides[0] + bh * params.in_strides[1] + bw * params.in_strides[2]",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "ohw_0 * N_TILES * params.C + tile_id * params.C",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "ohw_1 * N_TILES * params.C + tile_id * params.C",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "in_ptr + c",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "inp_out_0 + c",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "inp_out_1 + c",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          ],
+          "directx": []
+        },
+        "specialSlices": {
+          "negativeZero": [
+            0,
+            3
+          ],
+          "impulse": {
+            "slice": [
+              1,
+              5
+            ],
+            "tap": [
+              2,
+              3
+            ]
+          }
+        }
+      },
+      "output": {
+        "products": "At * (O * A)",
+        "table": "out_transform",
+        "workgroupSize": [
+          32,
+          2,
+          2
+        ],
+        "grid": "[tiles_w, tiles_h, N] groups",
+        "buffers": [
+          "out_in",
+          "out_out",
+          "params"
+        ],
+        "metadataPreconditions": {
+          "metal": [],
+          "opengl": [
+            {
+              "parameter": "params",
+              "member": "O",
+              "minimum": 0,
+              "maximum": 2147483616
+            }
+          ],
+          "directx": [
+            {
+              "parameter": "params",
+              "member": "O",
+              "minimum": 0,
+              "maximum": 2147483616
+            }
+          ]
+        },
+        "indexRangeAssertions": {
+          "metal": [],
+          "opengl": [
+            {
+              "expression": "tid.z * params.out_strides[0] + bh * params.out_strides[1] + bw * params.out_strides[2]",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "ohw_0 * N_TILES * params.O + tile_id * params.O",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "ohw_1 * N_TILES * params.O + tile_id * params.O",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "out_in_0 + c",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "out_in_1 + c",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "expression": "out_ptr + c",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          ],
+          "directx": []
+        },
+        "specialSlices": {
+          "negativeZero": [
+            0,
+            3
+          ],
+          "impulse": {
+            "slice": [
+              0,
+              5
+            ],
+            "tap": [
+              3,
+              4
+            ]
+          }
+        }
+      }
+    },
+    "cases": {
+      "whole-tiles": {
+        "N": 1,
+        "oS": [
+          12,
+          18
+        ],
+        "C": 32,
+        "O": 64,
+        "tiles": [
+          2,
+          3
+        ],
+        "paddedInput": [
+          14,
+          20
+        ],
+        "grids": {
+          "weight": [
+            16,
+            1,
+            1
+          ],
+          "input": [
+            3,
+            2,
+            1
+          ],
+          "output": [
+            3,
+            2,
+            1
+          ]
+        },
+        "checkedValues": {
+          "weight": 131072,
+          "input": 12288,
+          "output": 13824
+        }
+      },
+      "partial-tiles": {
+        "N": 2,
+        "oS": [
+          10,
+          15
+        ],
+        "C": 96,
+        "O": 32,
+        "tiles": [
+          2,
+          3
+        ],
+        "paddedInput": [
+          14,
+          20
+        ],
+        "grids": {
+          "weight": [
+            8,
+            1,
+            1
+          ],
+          "input": [
+            3,
+            2,
+            2
+          ],
+          "output": [
+            3,
+            2,
+            2
+          ]
+        },
+        "checkedValues": {
+          "weight": 196608,
+          "input": 73728,
+          "output": 9600
+        }
+      }
+    },
+    "channelRule": "C % 32 == 0, O % 32 == 0",
+    "transformWords": {
+      "wt_transform": [
+        [
+          "0x3f800000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        [
+          "0xbe638e39",
+          "0xbe638e39",
+          "0xbe638e39"
+        ],
+        [
+          "0xbe638e39",
+          "0x3e638e39",
+          "0xbe638e39"
+        ],
+        [
+          "0x3c360b61",
+          "0x3cb60b61",
+          "0x3d360b61"
+        ],
+        [
+          "0x3c360b61",
+          "0xbcb60b61",
+          "0x3d360b61"
+        ],
+        [
+          "0x3f360b61",
+          "0x3eb60b61",
+          "0x3e360b61"
+        ],
+        [
+          "0x3f360b61",
+          "0xbeb60b61",
+          "0x3e360b61"
+        ],
+        [
+          "0x00000000",
+          "0x00000000",
+          "0x3f800000"
+        ]
+      ],
+      "in_transform": [
+        [
+          "0x3f800000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        [
+          "0x00000000",
+          "0x3f800000",
+          "0xbf800000",
+          "0x3f000000",
+          "0xbf000000",
+          "0x40000000",
+          "0xc0000000",
+          "0xbf800000"
+        ],
+        [
+          "0xc0a80000",
+          "0x3f800000",
+          "0x3f800000",
+          "0x3e800000",
+          "0x3e800000",
+          "0x40800000",
+          "0x40800000",
+          "0x00000000"
+        ],
+        [
+          "0x00000000",
+          "0xc0880000",
+          "0x40880000",
+          "0xc0200000",
+          "0x40200000",
+          "0xc0200000",
+          "0x40200000",
+          "0x40a80000"
+        ],
+        [
+          "0x40a80000",
+          "0xc0880000",
+          "0xc0880000",
+          "0xbfa00000",
+          "0xbfa00000",
+          "0xc0a00000",
+          "0xc0a00000",
+          "0x00000000"
+        ],
+        [
+          "0x00000000",
+          "0x3f800000",
+          "0xbf800000",
+          "0x40000000",
+          "0xc0000000",
+          "0x3f000000",
+          "0xbf000000",
+          "0xc0a80000"
+        ],
+        [
+          "0xbf800000",
+          "0x3f800000",
+          "0x3f800000",
+          "0x3f800000",
+          "0x3f800000",
+          "0x3f800000",
+          "0x3f800000",
+          "0x00000000"
+        ],
+        [
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x3f800000"
+        ]
+      ],
+      "out_transform": [
+        [
+          "0x3f800000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000"
+        ],
+        [
+          "0x3f800000",
+          "0x3f800000",
+          "0x3f800000",
+          "0x3f800000",
+          "0x3f800000",
+          "0x3f800000"
+        ],
+        [
+          "0x3f800000",
+          "0xbf800000",
+          "0x3f800000",
+          "0xbf800000",
+          "0x3f800000",
+          "0xbf800000"
+        ],
+        [
+          "0x3f800000",
+          "0x40000000",
+          "0x40800000",
+          "0x41000000",
+          "0x41800000",
+          "0x42000000"
+        ],
+        [
+          "0x3f800000",
+          "0xc0000000",
+          "0x40800000",
+          "0xc1000000",
+          "0x41800000",
+          "0xc2000000"
+        ],
+        [
+          "0x3f800000",
+          "0x3f000000",
+          "0x3e800000",
+          "0x3e000000",
+          "0x3d800000",
+          "0x3d000000"
+        ],
+        [
+          "0x3f800000",
+          "0xbf000000",
+          "0x3e800000",
+          "0xbe000000",
+          "0x3d800000",
+          "0xbd000000"
+        ],
+        [
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x00000000",
+          "0x3f800000"
+        ]
+      ]
+    },
+    "paramsBindings": {
+      "record": 176,
+      "block": {
+        "opengl": 448,
+        "directx": 432
+      },
+      "memberOffsets": {
+        "N": 0,
+        "C": 4,
+        "O": 8
+      }
+    },
+    "outputGuard": -32768.0,
+    "outputGuardCount": 16,
+    "inputGuard": "nan",
+    "inputGuardCount": 16,
+    "elementTypes": {
+      "metal": {
+        "float32": "float32",
+        "bfloat16": "bfloat16",
+        "float16": "float16"
+      },
+      "opengl": {
+        "float32": "float32",
+        "bfloat16": "float32",
+        "float16": "float32"
+      },
+      "directx": {
+        "float32": "float32",
+        "bfloat16": "uint16",
+        "float16": "uint16"
+      }
+    },
+    "dispatchCountByTarget": 18,
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ]
+  },
+  "scope": {
+    "instantiatedEntryCount": 9,
+    "coveredEntryCount": 9,
+    "runtimeCoveredEntryCount": 9,
+    "artifactCountByTarget": 9,
+    "dispatchCountByTarget": 18,
+    "checkedElementCountByEntry": {
+      "winograd_conv_2d_weight_transform_float32_bc32": 327680,
+      "winograd_conv_2d_input_transform_float32_bc32": 86016,
+      "winograd_conv_2d_output_transform_float32_bo32": 23424,
+      "winograd_conv_2d_weight_transform_bfloat16_bc32": 327680,
+      "winograd_conv_2d_input_transform_bfloat16_bc32": 86016,
+      "winograd_conv_2d_output_transform_bfloat16_bo32": 23424,
+      "winograd_conv_2d_weight_transform_float16_bc32": 327680,
+      "winograd_conv_2d_input_transform_float16_bc32": 86016,
+      "winograd_conv_2d_output_transform_float16_bo32": 23424
+    },
+    "completeCorpusEntryCount": 17832,
+    "partialOutputTilesExercised": true,
+    "partialThreadgroupsExercised": false,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

@@ -227,6 +227,119 @@ def test_metal_bfloat_stored_arguments_are_passed_without_conversion():
     compile_with_metal_if_available(generated)
 
 
+def test_metal_registered_complex_assignments_lower_implicit_conversions():
+    # MLX's complex_t converts implicitly from scalars (imag = 0) and to
+    # scalars (the real part); the plain translated struct needs both spelled.
+    shader = """
+    shader MetalComplexAssignments {
+        struct complex_t_float {
+            float real;
+            float imag;
+        }
+        compute {
+            void main(
+                uint3 tid @ gl_GlobalInvocationID,
+                device complex_t_float* values,
+                device uint* indices,
+                threadgroup uint* scratch
+            ) {
+                values[tid.x] = indices[tid.x];
+                indices[tid.x] = values[tid.x];
+                values[1] = 2.5;
+                scratch[0] = values[0];
+                values[2] = values[3];
+                indices[2] = scratch[1];
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "values[tid.x] = complex_t_float{float(indices[tid.x]), float(0)};" in generated
+    )
+    assert "indices[tid.x] = uint((values[tid.x]).real);" in generated
+    assert "values[1] = complex_t_float{float(2.5), float(0)};" in generated
+    assert "scratch[0] = uint((values[0]).real);" in generated
+    assert "values[2] = values[3];" in generated
+    assert "indices[2] = scratch[1];" in generated
+
+
+def test_metal_registered_complex_assignment_rejects_wrong_shape():
+    shader = """
+    shader MetalInvalidComplexAssignment {
+        struct complex_t_float {
+            float real;
+            int imag;
+        }
+        compute {
+            void main(device complex_t_float* values, device uint* indices) {
+                values[0] = indices[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(MetalStructConversionError) as exc_info:
+        MetalCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+    error = exc_info.value
+    assert error.destination_type == "complex_t_float"
+    assert error.source_type == "uint"
+    assert error.conversion_kind == "scalar-promotion"
+    assert error.reason == "destination-shape-mismatch"
+
+
+def test_metal_unregistered_structure_assignment_is_not_converted():
+    shader = """
+    shader MetalUnregisteredAssignment {
+        struct Pair {
+            float real;
+            float imag;
+        }
+        compute {
+            void main(device Pair* values, device uint* indices) {
+                values[0] = indices[0];
+                indices[1] = values[1];
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "values[0] = indices[0];" in generated
+    assert "indices[1] = values[1];" in generated
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    [
+        ("bfloat16(value)", "bfloat(value)"),
+        ("bfloat16(1.0) + value", "bfloat(bfloat(1.0) + value)"),
+        ("bfloat16(1.0) / (1.0 + value)", "bfloat(bfloat(1.0) / (1.0 + value))"),
+        (
+            "value > 0.0 ? bfloat16(1.0) : value",
+            "bfloat(value > 0.0 ? bfloat(1.0) : value)",
+        ),
+    ],
+)
+def test_metal_bfloat_expected_conversion_covers_the_whole_expression(
+    expression, expected
+):
+    shader = f"""shader NarrowResult {{
+        bfloat16 evaluate(float value) {{ return {expression}; }}
+    }}"""
+    generated = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert f"return {expected};" in generated
+    compile_with_metal_if_available(generated)
+
+
 def test_metal_bfloat_asuint_uses_native_width_and_compiles_warning_fatal():
     shader = """
     shader MetalNarrowBitcast {
@@ -412,22 +525,28 @@ def test_metal_explicit_as_type_preserves_native_narrow_vector_widths():
 
     assert (
         "uint4 unsignedWords = "
-        "uint4(as_type<ushort4>(short3(signedWords)));" in generated
+        "uint4(ushort4(uint4(as_type<ushort4>(short3(signedWords)))));" in generated
     )
     assert (
-        "uint4 unsignedBytes = uint4(as_type<uchar4>(char3(signedBytes)));" in generated
+        "uint4 unsignedBytes = uint4(uchar4(uint4(as_type<uchar4>(char3(signedBytes)))));"
+        in generated
     )
     assert (
         "uint4 unsignedByteAliases = "
-        "uint4(as_type<uchar4>(char3(signedByteAliases)));" in generated
+        "uint4(uchar4(uint4(as_type<uchar4>(char3(signedByteAliases)))));" in generated
     )
     assert (
         "uint4 unsignedWordAliases = "
-        "uint4(as_type<ushort4>(short3(signedWordAliases)));" in generated
+        "uint4(ushort4(uint4(as_type<ushort4>(short3(signedWordAliases)))));"
+        in generated
     )
-    assert "uint4 halfAliasBits = uint4(as_type<ushort4>(halfAliases));" in generated
     assert (
-        "uint4 bfloatAliasBits = uint4(as_type<ushort4>(bfloatAliases));" in generated
+        "uint4 halfAliasBits = uint4(ushort4(uint4(as_type<ushort4>(halfAliases))));"
+        in generated
+    )
+    assert (
+        "uint4 bfloatAliasBits = uint4(ushort4(uint4(as_type<ushort4>(bfloatAliases))));"
+        in generated
     )
     assert "int8_t3" not in generated
     assert "uint8_t4" not in generated
@@ -975,6 +1094,25 @@ def test_binary_expression_precedence_preserves_grouping_in_metal():
     ) in generated_code
     assert "float t = -nearPoint.y / farPoint.y - nearPoint.y;" not in generated_code
     assert "float3(t) * farPoint - nearPoint" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    [
+        ("(left + right).y", "(left + right).y"),
+        ("(choose ? left : right).y", "(choose ? left : right).y"),
+        ("(-left).y", "(-left).y"),
+    ],
+)
+def test_metal_member_selection_preserves_expression_grouping(expression, expected):
+    shader = f"""shader MemberGrouping {{
+        float select_member(vec2 left, vec2 right, bool choose) {{
+            return {expression};
+        }}
+    }}"""
+    generated = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert f"return {expected};" in generated
+    compile_with_metal_if_available(generated)
 
 
 def test_metal_reconstructs_retained_source_union_layout_and_compiles():
@@ -1723,19 +1861,22 @@ def test_metal_glsl_bitcast_builtins_lower_to_as_type():
 
 
 def test_metal_integer_literals_beyond_int_keep_their_width():
-    # HLSL asfloat(0xFFC00000) reaches CrossGL as a decimal literal beyond the
-    # int range. Unsuffixed, Metal types it long, which as_type cannot
-    # reinterpret as float and which widens uint arithmetic and comparisons.
+    # HLSL asfloat(0xFFC00000) reaches CrossGL as a uint literal; an
+    # unsuffixed decimal beyond int is 64-bit, as in C++. Each keeps its width:
+    # as_type cannot reinterpret a long as float, and a long would widen uint
+    # arithmetic and comparisons.
     shader = """
     shader MetalLiteralWidths {
         compute {
             void main(uint3 tid @ gl_GlobalInvocationID,
                       RWStructuredBuffer<float> results @buffer(0),
                       RWStructuredBuffer<uint> bits @buffer(1)) {
-                results[0] = intBitsToFloat(4290772992);
+                results[0] = uintBitsToFloat(4290772992u);
                 results[1] = intBitsToFloat(2139095040);
-                bits[0] = 4290772992 * 2;
-                bits[1] = 4290772992 > 0 ? 1u : 0u;
+                bits[0] = 4290772992u * 2;
+                bits[1] = 4290772992u > 0 ? 1u : 0u;
+                int64_t wide = 4290772992;
+                bits[2] = wide > 0 ? 1u : 0u;
             }
         }
     }
@@ -1749,6 +1890,7 @@ def test_metal_integer_literals_beyond_int_keep_their_width():
     assert "as_type<float>(2139095040)" in generated_code
     assert "4290772992u * 2" in generated_code
     assert "4290772992u > 0" in generated_code
+    assert "int64_t wide = 4290772992l;" in generated_code
     compile_with_metal_if_available(generated_code)
 
 
@@ -1778,10 +1920,11 @@ def test_metal_negated_integer_literals_beyond_int_stay_signed():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "int narrow = -2147483648;" in generated_code
-    assert "int64_t wide = -2147483648;" in generated_code
-    assert "int64_t wider = -5000000000;" in generated_code
-    assert "int64_t positive = 5000000000;" in generated_code
+    # Unsuffixed decimals beyond int are 64-bit, so each negation is signed.
+    assert "int narrow = -2147483648l;" in generated_code
+    assert "int64_t wide = -2147483648l;" in generated_code
+    assert "int64_t wider = -5000000000l;" in generated_code
+    assert "int64_t positive = 5000000000l;" in generated_code
     assert "uint explicitUnsigned = -4290772992u;" in generated_code
     assert "2147483648u" not in generated_code
     assert "5000000000ul" not in generated_code
@@ -2764,6 +2907,46 @@ def test_metal_relative_shuffle_intrinsics_round_trip_to_simd_shuffle():
     assert "WaveShuffle" not in generated_code
 
 
+def test_metal_bfloat_lane_moves_preserve_bits_through_ushort():
+    # Metal's SIMD-group shuffles reject bfloat operands; MLX's bf16 overloads
+    # move the ushort representation instead, which keeps NaN payloads intact.
+    shader = """
+    shader MetalBfloatShuffle {
+        compute {
+            void main(uint lane @gl_SubgroupInvocationID) {
+                bfloat16 value = bfloat16(float(lane));
+                bfloat16 filled = WaveShuffleAndFillUp(value, -bfloat16(1.0), 1u);
+                bfloat16 read = WaveReadLaneAt(filled, 31u);
+                bfloat16 shuffled = WaveReadLaneAt(read, lane);
+                bfloat16 down = WaveShuffleDown(shuffled, 2u);
+                bfloat16 first = WaveReadLaneFirst(down);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "as_type<bfloat>(simd_shuffle_and_fill_up(as_type<ushort>(value), "
+        "as_type<ushort>(" in generated_code
+    )
+    assert "as_type<bfloat>(simd_broadcast(as_type<ushort>(filled), ushort(31u)))" in (
+        generated_code
+    )
+    assert "as_type<bfloat>(simd_shuffle(as_type<ushort>(read), ushort(lane)))" in (
+        generated_code
+    )
+    assert "as_type<bfloat>(simd_shuffle_down(as_type<ushort>(shuffled)" in (
+        generated_code
+    )
+    assert "as_type<bfloat>(simd_broadcast_first(as_type<ushort>(down)))" in (
+        generated_code
+    )
+    assert "unsupported Metal wave intrinsic" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_relative_shuffle_result_type_supports_nested_bitcast():
     shader = """
     shader MetalRelativeShuffleBitcast {
@@ -3177,8 +3360,9 @@ def test_metal_wave_match_threads_lane_count_and_diagnoses_unavailable_contexts(
     )
     assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
     assert (
-        "uint4 direct = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
-        in (generated_code)
+        "uint4 direct = __crossgl_metal_wave_match(value, crossglWaveLaneCount);" in (
+            generated_code
+        )
     )
     assert "uint4 helper = helperMatch(value, crossglWaveLaneCount);" in generated_code
     assert "unsupported Metal wave intrinsic: WaveMatch" not in generated_code
@@ -3521,7 +3705,7 @@ def test_metal_wave_prefix_ops_lower_to_simd_prefix_exclusive():
     assert "WaveActiveCountBits(" not in generated_code
 
 
-def test_metal_wave_read_lane_at_lowers_to_simd_broadcast():
+def test_metal_wave_read_lane_at_preserves_dynamic_lane_indices():
     shader = """
     shader MetalWaveReadLaneAt {
         compute {
@@ -3540,9 +3724,7 @@ def test_metal_wave_read_lane_at_lowers_to_simd_broadcast():
 
     assert "uint fromLane3 = simd_broadcast(value, ushort(3u));" in generated_code
     assert "uint fromFirst = simd_broadcast_first(value);" in generated_code
-    assert (
-        "uint fromDynamic = simd_broadcast(value, ushort(laneIdx));" in generated_code
-    )
+    assert "uint fromDynamic = simd_shuffle(value, ushort(laneIdx));" in generated_code
     assert "WaveReadLaneAt(" not in generated_code
     assert "WaveReadLaneFirst(" not in generated_code
 
@@ -4682,6 +4864,44 @@ def test_metal_readonly_call_preserves_same_arity_const_overload():
     compile_with_metal_if_available(generated_code)
 
 
+@pytest.mark.parametrize("readonly", [False, True])
+def test_metal_const_owner_pointer_call_uses_pointee_access(readonly):
+    shader = """
+    shader MemberPointerAccess {
+        struct Cursor { QUALIFIER device int* values; };
+        void mutate(device int* values) { values[0] += 3; }
+        void inspect(const Cursor& cursor) {
+            mutate(cursor.values);
+            mutate(&cursor.values[1]);
+        }
+        compute { void main() {} }
+    }
+    """.replace("QUALIFIER", "const" if readonly else "")
+    generated = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+    if readonly:
+        assert generated.count("unsupported Metal parameter call") == 2
+    else:
+        assert "unsupported Metal parameter call" not in generated
+        compile_with_metal_if_available(generated)
+
+
+def test_metal_const_owner_pointer_slot_remains_readonly():
+    shader = """
+    shader MemberPointerSlot {
+        struct Cursor { device int* values; };
+        void rebind(device int* * values) {}
+        void inspect(const Cursor& cursor) { rebind(&cursor.values); }
+        compute { void main() {} }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+    assert "unsupported Metal parameter call" in generated
+
+
 def test_metal_const_reference_helper_parameters_are_readonly():
     shader = """
     shader MetalConstReferenceHelpers {
@@ -5184,25 +5404,15 @@ def test_metal_incompatible_helper_address_spaces_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="requires threadgroup"
+    ) as error:
+        MetalCodeGen().generate_stage(parse_code(tokenize_code(shader)), "compute")
+    assert error.value.operation == "useThreadgroup"
+    assert error.value.reason == "incompatible-pointer-address-space"
+    assert (
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-
-    assert "void useThreadgroup(threadgroup Payload& scratch)" in generated_code
-    assert "void useDevice(device Payload& payload)" in generated_code
-    assert "threadgroup Payload scratch;" in generated_code
-    assert (
-        "/* unsupported Metal address-space call: argument 'payload' uses device "
-        "address space but parameter 'scratch' of 'useThreadgroup' requires "
-        "threadgroup */"
-    ) in generated_code
-    assert (
-        "/* unsupported Metal address-space call: argument 'scratch' uses "
-        "threadgroup address space but parameter 'payload' of 'useDevice' "
-        "requires device */"
-    ) in generated_code
-    assert "useThreadgroup(payload[0]);" not in generated_code
-    assert "useDevice(scratch);" not in generated_code
 
 
 def test_metal_parameter_address_space_qualifiers_reject_conflicts():
@@ -5297,21 +5507,52 @@ def test_metal_precise_functions_and_locals_disable_contraction():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert generated_code.count("#pragma clang fp contract(off)") == 2
-    assert generated_code.count("#pragma clang fp contract(fast)") == 2
+    assert "#pragma clang fp contract(fast)" not in generated_code
+    assert "\n#pragma clang fp contract(" not in generated_code
+    assert generated_code.count("#pragma clang fp reassociate(off)") == 2
+    assert "#pragma clang fp reassociate(on)" not in generated_code
+    directives = (
+        "{\n    #pragma clang fp contract(off)\n"
+        "    #pragma clang fp reassociate(off)\n"
+    )
     assert (
-        "#pragma clang fp contract(off)\n"
-        "float stableProduct(float left, float right)"
+        "float stableProduct(float left, float right) " + directives
     ) in generated_code
     assert (
-        "#pragma clang fp contract(off)\n"
-        "float scopedProduct(float left, float right)"
+        "float scopedProduct(float left, float right) " + directives
     ) in generated_code
     assert (
-        "#pragma clang fp contract(off)\n"
-        "float relaxedProduct(float left, float right)"
+        "float relaxedProduct(float left, float right) " + directives
     ) not in generated_code
     assert "[[precise]]" not in generated_code
     compile_with_metal_if_available(generated_code)
+
+
+@pytest.mark.parametrize("annotation", ("function", "local"))
+def test_metal_precise_entry_point_directives_stay_inside_body(annotation):
+    function_annotation = "@precise" if annotation == "function" else ""
+    local_annotation = "@precise" if annotation == "local" else ""
+    shader = f"""
+    shader PreciseEntry {{
+        compute {{
+            {function_annotation}
+            void main(uint3 tid @ gl_GlobalInvocationID) {{
+                float value {local_annotation} = float(tid.x) * 1.25;
+            }}
+        }}
+    }}
+    """
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+    assert generated.count("    #pragma clang fp contract(off)") == 1
+    assert "\n#pragma clang fp contract(" not in generated
+    assert "contract(fast)" not in generated
+    assert (
+        "{\n    #pragma clang fp contract(off)\n"
+        "    #pragma clang fp reassociate(off)\n"
+    ) in generated
+    compile_with_metal_if_available(generated)
 
 
 def test_metal_float16_matrix_ir_aliases_map_to_half_matrices():
@@ -5388,30 +5629,33 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int signedScalar(int input)" in generated_code
-    assert "int one = int(1);" in generated_code
+    assert "int one = int(char(int(char(int(1)))));" in generated_code
     assert "uint unsignedScalar(uint input)" in generated_code
-    assert "uint one = uint(1u);" in generated_code
+    assert "uint one = uint(uchar(uint(uchar(uint(1u)))));" in generated_code
     assert "int2 signedPair(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
     assert "uint3 unsignedTriple(uint3 input)" in generated_code
-    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert (
+        "uint3 inc = uint3(uchar3(uint3(uchar3(uint3(1u, 2u, 3u)))));" in generated_code
+    )
     assert "int2 signedShort(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "int2 inc = int2(short2(int2(short2(int2(1, 2)))));" in generated_code
+    assert "return int2(short2(input + inc));" in generated_code
     assert "uint3 unsignedShort(uint3 input)" in generated_code
-    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert (
+        "uint3 inc = uint3(ushort3(uint3(ushort3(uint3(1u, 2u, 3u)))));"
+        in generated_code
+    )
+    assert "return uint3(ushort3(input + inc));" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
-    assert "int4 inc = int4(1, 2, 3, 4);" in generated_code
+    assert "int4 inc = int4(char4(int4(char4(int4(1, 2, 3, 4)))));" in generated_code
     assert "uint2 unsignedChar(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert "uint2 inc = uint2(uchar2(uint2(uchar2(uint2(1u, 2u)))));" in generated_code
     for invalid_token in (
         "int8",
         "uint8",
         "i8vec2",
         "u8vec3",
-        "short2",
-        "ushort3",
-        "char4",
-        "uchar2",
     ):
         assert invalid_token not in generated_code
 
@@ -5473,13 +5717,20 @@ def test_metal_generic_vector_constructors_emit_metal_names():
     assert "double2 precisePair(double2 input)" in generated_code
     assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert (
+        "uint4 inc = uint4(uchar4(uint4(uchar4(uint4(1u, 2u, 3u, 4u)))));"
+        in generated_code
+    )
     assert "int3 signedShorts(int3 input)" in generated_code
-    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "int3 inc = int3(short3(int3(short3(int3(1, 2, 3)))));" in generated_code
+    assert "return int3(short3(input + inc));" in generated_code
     assert "uint2 unsignedShorts(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert (
+        "uint2 inc = uint2(ushort2(uint2(ushort2(uint2(1u, 2u)))));" in generated_code
+    )
+    assert "return uint2(ushort2(input + inc));" in generated_code
     assert "int3 signedInts(int3 input)" in generated_code
     assert "int3 inc = int3(1, 2, 3);" in generated_code
     assert "uint4 unsignedInts(uint4 input)" in generated_code
@@ -5678,7 +5929,7 @@ def test_metal_signed_int64_minimum_literal_compiles_warning_fatal():
     shader SignedInt64Minimum {
         compute {
             void main(RWStructuredBuffer<int64_t> output @buffer(0)) {
-                output[0] = int64_t(-9223372036854775808);
+                output[0] = int64_t(-9223372036854775807l - 1l);
             }
         }
     }
@@ -5688,7 +5939,8 @@ def test_metal_signed_int64_minimum_literal_compiles_warning_fatal():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "int64_t((-9223372036854775807L - 1L))" in generated_code
+    assert "-9223372036854775807l" in generated_code
+    assert "- 1l" in generated_code
     assert "-9223372036854775808" not in generated_code
     compile_with_metal_if_available(generated_code)
 
@@ -5909,8 +6161,8 @@ def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "int bytes[2];" in generated_code
-    assert "uint words[3];" in generated_code
+    assert "char bytes[2];" in generated_code
+    assert "ushort words[3];" in generated_code
     assert "int64_t signedValue;" in generated_code
     assert "uint64_t offsets[2];" in generated_code
     assert "constant int globalBytes[2] = {};" in generated_code
@@ -5995,7 +6247,7 @@ def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "int bytes[2][3];" in generated_code
+    assert "char bytes[2][3];" in generated_code
     assert "uint64_t offsets[2][3];" in generated_code
     assert "uint bumpNested(uint values[2][3], int row, int col)" in generated_code
     assert "uint grid[2][3];" in generated_code
@@ -6018,20 +6270,98 @@ def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():
         assert invalid_token not in generated_code
 
 
-def test_metal_array_return_aliases_are_rejected_with_clear_diagnostic():
+def test_metal_array_returns_use_value_arrays_and_compile():
+    # MLX binary_two.metal returns metal::array<T, 2> from DivMod; Metal
+    # cannot return C arrays, so array results travel as array<T, N>.
     shader = """
     shader AliasReturnArraySmoke {
-        uint64_t[2] makeCounters() {
+        uint64_t[2] makeCounters(uint64_t first) {
             uint64_t counters[2];
+            counters[0] = first;
+            counters[1] = first + 1;
             return counters;
+        }
+        int[2][3] makeGrid(int seed) {
+            return makeGridCopy(seed);
+        }
+        int[2][3] makeGridCopy(int seed) {
+            int[2][3] grid;
+            for (int row = 0; row < 2; row++) {
+                for (int col = 0; col < 3; col++) {
+                    grid[row][col] = seed + row * 3 + col;
+                }
+            }
+            return grid;
+        }
+        compute {
+            void main(
+                RWStructuredBuffer<uint64_t> output @buffer(0),
+                uint3 tid @ gl_GlobalInvocationID) {
+                uint64_t[2] values = makeCounters(uint64_t(tid.x));
+                int[2][3] grid = makeGrid(int(tid.x));
+                int scratch[2];
+                scratch[0] = grid[1][2];
+                scratch[1] = grid[0][1];
+                output[tid.x] = values[0] + values[1] + uint64_t(scratch[0] + scratch[1]);
+            }
         }
     }
     """
 
-    with pytest.raises(
-        ValueError, match="Metal output does not support C-style array return"
-    ):
-        generate_code(parse_code(tokenize_code(shader)))
+    generated = generate_code(parse_code(tokenize_code(shader)))
+    compact = re.sub(r"\s+", " ", generated)
+    assert "array<uint64_t, 2> makeCounters(uint64_t first) {" in compact
+    assert "array<uint64_t, 2> counters;" in compact
+    assert "array<array<int, 3>, 2> makeGrid(int seed) {" in compact
+    assert "array<array<int, 3>, 2> grid;" in compact
+    assert "array<uint64_t, 2> values = makeCounters(" in compact
+    assert "array<array<int, 3>, 2> grid = makeGrid(" in compact
+    # Locals that never hold an array result keep their C-array spelling.
+    assert "int scratch[2];" in compact
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"], capture_output=True, check=False, text=True
+    )
+    if lookup.returncode != 0:
+        pytest.skip("Metal compiler is not available")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(generated, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(source_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if result.returncode != 0 and _missing_metal_toolchain(result):
+            pytest.skip("Metal toolchain is not installed")
+        assert result.returncode == 0, result.stderr
+        assert output_path.stat().st_size > 0
+
+
+def test_metal_unsized_array_returns_are_rejected_with_clear_diagnostic():
+    codegen = MetalCodeGen()
+    assert codegen.metal_value_array_type("float[4]") == "array<float, 4>"
+    assert codegen.metal_value_array_type("float[2][3]") == (
+        "array<array<float, 3>, 2>"
+    )
+    assert codegen.metal_value_array_type("float[]") is None
+    assert codegen.metal_value_array_type("float[4][]") is None
+    assert codegen.metal_value_array_type("float") is None
 
 
 def test_metal_fixed_width_nested_cbuffer_array_aliases_map_to_valid_types():
@@ -6091,8 +6421,8 @@ def test_metal_structured_buffer_fixed_width_aliases_map_to_device_pointers():
     assert "device ushort* counts" in generated_code
     assert "const device int64_t* signedValues" in generated_code
     assert "device uint64_t* offsets" in generated_code
-    assert "uint count = counts[index];" in generated_code
-    assert "counts[index] = count + uint(1u);" in generated_code
+    assert "uint count = uint(ushort(counts[index]));" in generated_code
+    assert "counts[index] = count + uint(ushort(uint(1u)));" in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
 
@@ -6134,8 +6464,8 @@ def test_metal_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
         "uint64_t combine(uint which, uint index, array<device ushort*, 2> counts, array<const device uint64_t*, 2> offsets)"
         in generated_code
     )
-    assert "return localCounts[which][index];" in generated_code
-    assert "counts[which][index] = count + uint(1u);" in generated_code
+    assert "return uint(ushort(localCounts[which][index]));" in generated_code
+    assert "counts[which][index] = count + uint(ushort(uint(1u)));" in generated_code
     assert "device ushort* localCounts" not in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
@@ -6177,9 +6507,9 @@ def test_metal_unsized_structured_buffer_arrays_infer_helper_size():
         "uint64_t readOffset(array<const device uint64_t*, 2> localOffsets, uint index)"
         in generated_code
     )
-    assert "return localCounts[2][index];" in generated_code
+    assert "return uint(ushort(localCounts[2][index]));" in generated_code
     assert "return localOffsets[1][index];" in generated_code
-    assert "uint count = readCount(counts, index);" in generated_code
+    assert "uint count = uint(ushort(readCount(counts, index)));" in generated_code
     assert "uint64_t offset = readOffset(offsets, index);" in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
@@ -6301,9 +6631,12 @@ def test_metal_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
     assert (
         "uint readMid(array<device ushort*, 3> midCounts, uint index)" in generated_code
     )
-    assert "return leafCounts[2][index];" in generated_code
-    assert "return readLeaf(midCounts, index);" in generated_code
-    assert "return readMid(counts, index) + afterCounts[index];" in generated_code
+    assert "return uint(ushort(leafCounts[2][index]));" in generated_code
+    assert "return uint(ushort(readLeaf(midCounts, index)));" in generated_code
+    assert (
+        "return uint(ushort(readMid(counts, index) + afterCounts[index]));"
+        in generated_code
+    )
     assert "array<device ushort*, 1> counts" not in generated_code
     assert "uint16_t" not in generated_code
 
@@ -6361,7 +6694,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
 
     assert "device uchar* aliasBlock" in generated_code
     assert (
-        "uint word = (*reinterpret_cast<const device uint*>(aliasBlock + 4));"
+        "uint word = uint(ushort((*reinterpret_cast<const device uint*>(aliasBlock + 4))));"
         in generated_code
     )
     assert (
@@ -6370,7 +6703,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
     )
     assert "void writeAlias(uint index, uint word, uint64_t offset" in generated_code
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(word);"
+        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(uint(ushort(word)));"
         in generated_code
     )
     assert (
@@ -6378,7 +6711,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(1u)));"
+        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(ushort(uint(1u)))))));"
         in generated_code
     )
     assert "unsupported Metal GLSL buffer block" not in generated_code
@@ -9166,14 +9499,13 @@ def test_metal_ray_payload_helper_rejects_thread_reference_parameter():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "void tint(thread Payload& payload)" in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires thread") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "tint"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "unsupported Metal address-space call: argument 'payload' uses ray_data "
-        "address space but parameter 'payload' of 'tint' requires thread"
-    ) in generated
-    assert "tint(payload);" not in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
+    )
 
 
 def test_metal_ray_payload_helper_accepts_ray_data_reference_parameter():
@@ -11695,26 +12027,13 @@ def test_metal_mesh_object_payload_helper_address_space_and_const_writes():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "object_data Payload& payload [[payload]]" in generated
-    assert "const object_data Payload& payload [[payload]]" in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires thread") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "mutate"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        generated.count(
-            "/* unsupported Metal address-space call: argument 'payload' uses "
-            "object_data address space but parameter 'localPayload' of 'mutate' "
-            "requires thread */"
-        )
-        == 2
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert "payload.color = float4(1.0, 0.0, 0.0, 1.0);" in generated
-    assert (
-        "/* unsupported Metal mesh payload store: mesh payload 'payload' is const "
-        "object_data in mesh stages */"
-    ) in generated
-    assert "payload.color = float4(0.0, 1.0, 0.0, 1.0);" not in generated
-    assert "mutate(payload);" not in generated
-    assert "float4 color = payload.color;" in generated
 
 
 def test_metal_mesh_object_payload_local_reference_aliases_use_object_data():
@@ -14723,22 +15042,13 @@ def test_metal_threadgroup_atomic_pointer_aliases_preserve_address_space():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "threadgroup atomic_int* alias = scratch + index;" in generated
-    assert "thread atomic_int* alias = scratch + index;" not in generated
-    assert "int oldValue = bumpThreadgroup(alias, 1);" in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires device") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpDevice"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "int nextValue = atomic_fetch_add_explicit(alias + 1, oldValue, memory_order_relaxed);"
-        in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert (
-        "int rejected = 0 /* unsupported Metal address-space call: argument "
-        "'alias' uses threadgroup address space but parameter 'counters' of "
-        "'bumpDevice' requires device */;"
-    ) in generated
-    assert "atomic_store_explicit(alias, rejected, memory_order_relaxed);" in generated
-    assert "bumpDevice(alias + 2" not in generated
 
 
 def test_metal_threadgroup_atomic_ternary_pointer_aliases_preserve_address_space():
@@ -14810,27 +15120,15 @@ def test_metal_mixed_address_space_ternary_pointer_alias_emits_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="requires threadgroup"
+    ) as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpThreadgroup"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "/* unsupported Metal address-space local alias: initializer branches "
-        "'scratch' (threadgroup) and 'counters' (device) use different address "
-        "spaces; using uninitialized thread alias */"
-    ) in generated
-    assert "thread atomic_int* alias;" in generated
-    assert "thread atomic_int* alias = useShared" not in generated
-    assert (
-        "int rejected = 0 /* unsupported Metal address-space call: argument "
-        "'alias' uses thread address space but parameter 'counters' of "
-        "'bumpThreadgroup' requires threadgroup */;"
-    ) in generated
-    assert (
-        "int directRejected = 0 /* unsupported Metal address-space call: "
-        "argument '<expr>' mixes branches 'scratch' (threadgroup) and "
-        "'counters' (device) but parameter 'counters' of 'bumpThreadgroup' "
-        "requires threadgroup */;"
-    ) in generated
-    assert "bumpThreadgroup(useShared ? scratch" not in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
+    )
 
 
 @pytest.mark.parametrize("stride_type", ["int", "uint", "int64", "uint64"])
@@ -14962,32 +15260,15 @@ def test_metal_mixed_address_space_ternary_reference_alias_emits_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="requires threadgroup"
+    ) as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "useThreadgroup"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "threadgroup Payload& alias = useA ? scratchA[index] : scratchB[index];"
-        in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert "useThreadgroup(alias, 1.0);" in generated
-    assert (
-        "/* unsupported Metal address-space local alias: initializer branches "
-        "'scratchA' (threadgroup) and 'payloads' (device) use different address "
-        "spaces; using uninitialized thread value */"
-    ) in generated
-    assert "thread Payload mixedAlias;" in generated
-    assert "thread Payload& mixedAlias = useShared" not in generated
-    assert (
-        "/* unsupported Metal address-space call: argument 'mixedAlias' uses "
-        "thread address space but parameter 'payload' of 'useThreadgroup' "
-        "requires threadgroup */"
-    ) in generated
-    assert (
-        "/* unsupported Metal address-space call: argument '<expr>' mixes "
-        "branches 'scratchA' (threadgroup) and 'payloads' (device) but "
-        "parameter 'payload' of 'useThreadgroup' requires threadgroup */"
-    ) in generated
-    assert "useThreadgroup(mixedAlias, 2.0);" not in generated
-    assert "useThreadgroup(useShared ? scratchA" not in generated
 
 
 def test_metal_struct_pointer_member_atomics_preserve_member_address_space():
@@ -15046,29 +15327,14 @@ def test_metal_struct_pointer_member_atomics_preserve_member_address_space():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "device atomic_int* deviceCounters;" in generated
-    assert "threadgroup atomic_int* sharedCounters;" in generated
-    assert "deviceCounters [[device]]" not in generated
-    assert "sharedCounters [[threadgroup]]" not in generated
-    assert "int deviceOld = bumpDevice(bank.deviceCounters + index, 1);" in generated
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="requires threadgroup"
+    ) as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpThreadgroup"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "int rejectedThread = 0 /* unsupported Metal address-space call: "
-        "argument 'bank.deviceCounters' uses device address space but parameter "
-        "'counters' of 'bumpThreadgroup' requires threadgroup */;"
-    ) in generated
-    assert (
-        "int sharedOld = bumpThreadgroup(bank.sharedCounters + index, rejectedThread);"
-        in generated
-    )
-    assert (
-        "atomic_store_explicit(&bank.deviceCounters[index], sharedOld, memory_order_relaxed);"
-        in generated
-    )
-    assert (
-        "atomic_store_explicit(&bank.sharedCounters[index], deviceOld, memory_order_relaxed);"
-        in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
 
 
@@ -15130,41 +15396,13 @@ def test_metal_nested_pointer_member_atomic_aliases_preserve_address_space():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "threadgroup atomic_int* sharedCounters;" in generated
-    assert "device atomic_int* deviceCounters;" in generated
-    assert "thread OuterBank* bankPtr = &bank;" in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires device") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpDevice"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "threadgroup atomic_int* sharedAlias = bankPtr->inner.sharedCounters + index;"
-        in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert (
-        "device atomic_int* deviceAlias = bankPtr->inner.deviceCounters + index;"
-        in generated
-    )
-    assert "int sharedOld = bumpThreadgroup(sharedAlias, 1);" in generated
-    assert (
-        "int rejectedShared = 0 /* unsupported Metal address-space call: "
-        "argument 'sharedAlias' uses threadgroup address space but parameter "
-        "'counters' of 'bumpDevice' requires device */;"
-    ) in generated
-    assert "int deviceOld = bumpDevice(deviceAlias, rejectedShared);" in generated
-    assert (
-        "int rejectedDevice = 0 /* unsupported Metal address-space call: "
-        "argument 'deviceAlias' uses device address space but parameter "
-        "'counters' of 'bumpThreadgroup' requires threadgroup */;"
-    ) in generated
-    assert (
-        "atomic_store_explicit(sharedAlias, rejectedDevice, memory_order_relaxed);"
-        in generated
-    )
-    assert (
-        "atomic_store_explicit(deviceAlias, sharedOld + deviceOld, memory_order_relaxed);"
-        in generated
-    )
-    assert "bumpDevice(sharedAlias + 1" not in generated
-    assert "bumpThreadgroup(deviceAlias + 1" not in generated
 
 
 def test_metal_reference_member_pointer_address_spaces_preserve_diagnostics():
@@ -15208,23 +15446,13 @@ def test_metal_reference_member_pointer_address_spaces_preserve_diagnostics():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "thread Bank& ref = bank;" in generated
-    assert "Bank & ref = bank;" not in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires device") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpDevice"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "int sharedOld = bumpThreadgroup(ref.sharedCounters + index, 1);" in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert (
-        "int deviceOld = bumpDevice(ref.deviceCounters + index, sharedOld);"
-        in generated
-    )
-    assert (
-        "int rejected = 0 /* unsupported Metal address-space call: argument "
-        "'ref.sharedCounters' uses threadgroup address space but parameter "
-        "'counters' of 'bumpDevice' requires device */;"
-    ) in generated
-    assert "bumpDevice(ref.sharedCounters + index" not in generated
 
 
 def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values():
@@ -31019,8 +31247,9 @@ def test_metal_struct_member_resource_array_alias_texture_ops_preserve_metadata(
     assert "texture2d<float> texAlias = pack.textures[layer];" in generated_code
     assert "sampler sampAlias = pack.texturesSampler[layer];" in generated_code
     assert (
-        "float4 implicitColor = texAlias.sample(pack.texturesSampler[layer], uv);"
-        in (generated_code)
+        "float4 implicitColor = texAlias.sample(pack.texturesSampler[layer], uv);" in (
+            generated_code
+        )
     )
     assert (
         "int2 dims = int2(texAlias.get_width(uint(1)), "

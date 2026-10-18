@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-cross-entropy-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/cross_entropy.metal",
+    "sourceSha256": "18e62f5a1ea339a58858b77a4666f9dbcccac70f64c38b7f6bc9b49ff1571646",
+    "header": "mlx/backend/metal/kernels/cross_entropy.h",
+    "headerSha256": "1e53903b9a713faafd55932f0c039552f18f6108e223dadba0a3ec2245ecab39"
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "cross_entropy_float32",
+    "cross_entropy_vjp_float32",
+    "cross_entropy_float16",
+    "cross_entropy_vjp_float16",
+    "cross_entropy_bfloat16",
+    "cross_entropy_vjp_bfloat16"
+  ],
+  "artifacts": {
+    "directx": {
+      "cross_entropy_float32": {
+        "sha256": "fc205c173613bf02b751d0524eb47e9df36d444f91f43ee04b170b1dd530e012",
+        "sizeBytes": 6535
+      },
+      "cross_entropy_vjp_float32": {
+        "sha256": "c1bb5954aa983172db6dd80ba82c4ad0f8aebf6dfdf2a553a289224779703d10",
+        "sizeBytes": 3171
+      },
+      "cross_entropy_float16": {
+        "sha256": "261c4a77f7dc78b061fe8751d7f3e0d4cd310e469dabf30247db14d070a8405c",
+        "sizeBytes": 8095
+      },
+      "cross_entropy_vjp_float16": {
+        "sha256": "4e295c5ebcad956fd7bb5644bf2187c76c7497c91add0368dbfde9f895a71dbd",
+        "sizeBytes": 5937
+      },
+      "cross_entropy_bfloat16": {
+        "sha256": "4ff9b8599fbb929756b11778117e58fd04102136d4cf0ce56275d82908a2e6a6",
+        "sizeBytes": 6883
+      },
+      "cross_entropy_vjp_bfloat16": {
+        "sha256": "a06bb3117f50a418a93500e421f02f15c2ca2b79b2f810a3c7564d8e47995b1f",
+        "sizeBytes": 3955
+      }
+    },
+    "opengl": {
+      "cross_entropy_float32": {
+        "sha256": "44363c9a65a828fd117ef49dee982d856714f42c21ba3e1e689aa38f8502eb7a",
+        "sizeBytes": 6459
+      },
+      "cross_entropy_vjp_float32": {
+        "sha256": "655668a707ca4015f6559140a65e27ae98d5ec1791579075d31ced6255c2d3df",
+        "sizeBytes": 3286
+      },
+      "cross_entropy_float16": {
+        "sha256": "c130a4a4397a2526f0cfdbc8f629baddca59c19ed0e0ee3587b732ee09bb5a1f",
+        "sizeBytes": 6459
+      },
+      "cross_entropy_vjp_float16": {
+        "sha256": "3d33f1a2193e131cd733c98977f60dc892791f1dc1e0d6a63a180fcf05be5025",
+        "sizeBytes": 4657
+      },
+      "cross_entropy_bfloat16": {
+        "sha256": "5de3fcccee2a8be2c07cce63e66fa87cac9d6295829e7a161a278dcebc077905",
+        "sizeBytes": 6466
+      },
+      "cross_entropy_vjp_bfloat16": {
+        "sha256": "62e8d5e1cdf2efca31d087c525b40a6d1c979adfe76602bef1b9a7d53da81462",
+        "sizeBytes": 3644
+      }
+    },
+    "metal": {
+      "cross_entropy_float32": {
+        "sha256": "1ed8a2b1b2c7fcc84df4d84c0ce9f68d360b930475421c528ed25ae38fb40577",
+        "sizeBytes": 3060
+      },
+      "cross_entropy_vjp_float32": {
+        "sha256": "85f2c36ab628a0a0fa1fa1809938bc0f0559aa2852558749d12e702cda1d4694",
+        "sizeBytes": 1898
+      },
+      "cross_entropy_float16": {
+        "sha256": "91569e4f79bdc79e0a020ae1d228a72e905b167ff6a0df68c782d642ff5f3fdf",
+        "sizeBytes": 3059
+      },
+      "cross_entropy_vjp_float16": {
+        "sha256": "91e8bd5e138d51b839b244e21f21d11006f73e7d707598aafb2e2996a70dc547",
+        "sizeBytes": 1894
+      },
+      "cross_entropy_bfloat16": {
+        "sha256": "212846540589530d9076dc032d0e1f641dfb8425ccffd81920115db584d728d8",
+        "sizeBytes": 3062
+      },
+      "cross_entropy_vjp_bfloat16": {
+        "sha256": "b6b34468ffb3ee4df63624c3a2cd7bab2b87b2b4da405ff5264cef6d6bcd4413",
+        "sizeBytes": 1903
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSize": [
+      128,
+      1,
+      1
+    ],
+    "softwareSubgroupWidth": {
+      "metal": {
+        "cross_entropy_float32": null,
+        "cross_entropy_vjp_float32": null,
+        "cross_entropy_float16": null,
+        "cross_entropy_vjp_float16": null,
+        "cross_entropy_bfloat16": null,
+        "cross_entropy_vjp_bfloat16": null
+      },
+      "opengl": {
+        "cross_entropy_float32": 32,
+        "cross_entropy_vjp_float32": null,
+        "cross_entropy_float16": 32,
+        "cross_entropy_vjp_float16": null,
+        "cross_entropy_bfloat16": 32,
+        "cross_entropy_vjp_bfloat16": null
+      },
+      "directx": {
+        "cross_entropy_float32": 32,
+        "cross_entropy_vjp_float32": null,
+        "cross_entropy_float16": 32,
+        "cross_entropy_vjp_float16": null,
+        "cross_entropy_bfloat16": 32,
+        "cross_entropy_vjp_bfloat16": null
+      }
+    },
+    "indexRangeAssertions": {
+      "opengl": {
+        "forward": [
+          {
+            "expression": "gid * uint64(axis_size)",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "y_n",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "in_ + y_n",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "offset + i",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "in_ + offset + i",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        ],
+        "vjp": [
+          {
+            "expression": "row_offset",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "y_n",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "in_ + y_n",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "col",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "in_ + col",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          {
+            "expression": "out_ + col",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        ]
+      },
+      "metal": {},
+      "directx": {}
+    },
+    "cases": {
+      "tiny": {
+        "rows": 3,
+        "axisSize": 7,
+        "targets": [
+          0,
+          6,
+          -1
+        ],
+        "cotangents": [
+          0.75,
+          -1.25,
+          2.0
+        ],
+        "vjp": true
+      },
+      "exact": {
+        "rows": 2,
+        "axisSize": 512,
+        "targets": [
+          100,
+          -512
+        ],
+        "cotangents": [
+          -0.5,
+          1.5
+        ],
+        "vjp": true
+      },
+      "multi": {
+        "rows": 3,
+        "axisSize": 1300,
+        "targets": [
+          1299,
+          -7,
+          640
+        ],
+        "cotangents": [
+          1.0,
+          -2.0,
+          0.25
+        ],
+        "vjp": true
+      },
+      "infinite": {
+        "rows": 1,
+        "axisSize": 40,
+        "targets": [
+          3
+        ],
+        "cotangents": [
+          1.0
+        ],
+        "vjp": false
+      }
+    },
+    "outputGuardCount": 16,
+    "observedInputCount": {
+      "forward": 3,
+      "vjp": 5
+    },
+    "float32Tolerance": {
+      "absolute": 5e-05,
+      "relative": 5e-05
+    },
+    "narrowVjpTolerance": {
+      "ulp": 1,
+      "minimumExactFraction": 0.99
+    },
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ]
+  },
+  "scope": {
+    "coveredEntryCount": 6,
+    "runtimeCoveredEntryCount": 6,
+    "checkedValueCountByEntry": {
+      "cross_entropy_float32": 9,
+      "cross_entropy_vjp_float32": 4945,
+      "cross_entropy_float16": 9,
+      "cross_entropy_vjp_float16": 4945,
+      "cross_entropy_bfloat16": 9,
+      "cross_entropy_vjp_bfloat16": 4945
+    },
+    "completeCorpusEntryCount": 17832,
+    "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
+    "donatedInputAliasingCovered": false,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}
