@@ -1,0 +1,141 @@
+id	name	category	kind	reference	note
+metal.type.bool	bool	type	scalar	Scalar Data Types
+metal.type.char	char / int8_t	type	scalar	Scalar Data Types
+metal.type.uchar	uchar / uint8_t	type	scalar	Scalar Data Types
+metal.type.short	short / int16_t	type	scalar	Scalar Data Types
+metal.type.ushort	ushort / uint16_t	type	scalar	Scalar Data Types
+metal.type.int	int / int32_t	type	scalar	Scalar Data Types
+metal.type.uint	uint / uint32_t	type	scalar	Scalar Data Types
+metal.type.long	long / int64_t	type	scalar	Scalar Data Types
+metal.type.ulong	ulong / uint64_t	type	scalar	Scalar Data Types
+metal.type.half	half	type	scalar	Scalar Data Types
+metal.type.bfloat	bfloat	type	scalar	Scalar Data Types
+metal.type.float	float	type	scalar	Scalar Data Types
+metal.type.size_t	size_t / ptrdiff_t	type	scalar	Scalar Data Types
+metal.type.void	void	type	scalar	Scalar Data Types
+metal.type.vector	vec<T, n> / Tn	type	vector	Vector Data Types
+metal.type.packed-vector	packed_Tn	type	vector	Packed Vector Types
+metal.type.matrix	matrix<T, c, r> / Tcxr	type	matrix	Matrix Data Types
+metal.type.simdgroup-matrix	simdgroup_matrix<T, c, r>	type	matrix	SIMD-group Matrix Data Types
+metal.type.atomic	atomic<T> / atomic_int / atomic_uint / atomic_float	type	atomic	Atomic Data Types
+metal.type.pixel	r8unorm<T> and other pixel data types	type	pixel	Pixel Data Types
+metal.type.packed-numeric	packed numeric types	type	packed	Packed Numeric Type
+metal.type.array	array<T, N> and C arrays	type	aggregate	Arrays of Textures, Texture Buffers, and Samplers
+metal.type.struct	struct	type	aggregate	Aggregate Types
+metal.type.uniform	uniform<T>	type	uniform	Uniform Type
+metal.type.interpolant	interpolant<T, P>	type	interpolant	Interpolant Type
+metal.type.vertex-value	vertex_value<T>	type	per-vertex	Per-Vertex Values
+metal.type.tensor	tensor<...>	type	tensor	Tensor Type
+metal.type.cooperative-tensor	cooperative_tensor<...>	type	tensor	Cooperative Tensor Type
+metal.type.extents	extents<...>	type	tensor	Extents Type
+metal.operator.conversion	static_cast and conversion constructors	operator	conversion	Type Conversions and Reinterpreting Data
+metal.operator.as_type	as_type<T>	operator	conversion	Type Conversions and Reinterpreting Data
+metal.operator.implicit-conversion	implicit conversions	operator	conversion	Implicit Type Conversions
+metal.resource.device	device address space	resource	address-space	Device Address Space
+metal.resource.constant	constant address space	resource	address-space	Constant Address Space
+metal.resource.thread	thread address space	resource	address-space	Thread Address Space
+metal.resource.threadgroup	threadgroup address space	resource	address-space	Threadgroup Address Space
+metal.resource.threadgroup_imageblock	threadgroup_imageblock address space	resource	address-space	Threadgroup Imageblock Address Space
+metal.resource.ray_data	ray_data address space	resource	address-space	Ray Data Address Space
+metal.resource.object_data	object_data address space	resource	address-space	Object Data Address Space
+metal.resource.coherent	coherent(device)	resource	coherency	Memory Coherency
+metal.resource.buffer	device / constant buffers	resource	buffer	Buffers
+metal.resource.texture	texture1d ... texturecube_array, depth textures	resource	texture	Textures
+metal.resource.texture-buffer	texture_buffer<T, access>	resource	texture	Texture Buffers
+metal.resource.sampler	sampler	resource	sampler	Samplers
+metal.resource.imageblock	imageblock<T, layout>	resource	imageblock	Imageblocks
+metal.resource.argument-buffer	argument buffers	resource	argument-buffer	Argument Buffers
+metal.resource.argument-buffer-tier2	tier 2 argument buffers	resource	argument-buffer	Tier 2 Hardware Support for Argument Buffers
+metal.resource.visible-function-table	visible_function_table<T>	resource	function-table	Visible Function Table
+metal.resource.intersection-function-table	intersection_function_table<...>	resource	function-table	Intersection Function Table
+metal.resource.acceleration-structure	acceleration_structure<...>	resource	ray-tracing	Acceleration Structure Type
+metal.resource.binding	[[buffer(n)]] [[texture(n)]] [[sampler(n)]]	resource	binding	Locating Buffer, Texture, and Sampler Arguments
+metal.resource.raster-order-group	[[raster_order_group(n)]]	resource	binding	Raster Order Groups
+metal.resource.global-bindings	program scope bindings	resource	binding	Program Scope Global Built-ins and Bindings
+metal.resource.alignment	alignment of data types	resource	layout	Alignment of Data Types
+metal.type.ray	ray	type	ray-tracing	Ray Type
+metal.type.intersector	intersector<...>	type	ray-tracing	Intersector Type
+metal.type.intersection-result	intersection_result<...>	type	ray-tracing	Intersection Result Type
+metal.type.intersection-query	intersection_query<...>	type	ray-tracing	Intersection Query Type
+metal.type.intersection-tags	intersection tags	type	ray-tracing	Ray-Tracing Intersection Tags
+metal.type.mesh	mesh<V, P, NV, NP, t>	type	mesh	Mesh Type
+metal.type.mesh-grid-properties	mesh_grid_properties	type	mesh	Mesh Grid Property Type
+metal.stage.vertex	vertex	stage	function-qualifier	Vertex Functions
+metal.stage.post-tessellation-vertex	[[patch(...)]] vertex	stage	function-qualifier	Post-Tessellation Vertex Functions
+metal.stage.fragment	fragment	stage	function-qualifier	Fragment Functions
+metal.stage.kernel	kernel	stage	function-qualifier	Compute Functions (Kernels)
+metal.stage.visible	[[visible]]	stage	function-qualifier	Visible Functions
+metal.stage.stitchable	[[stitchable]]	stage	function-qualifier	Stitchable Functions
+metal.stage.intersection	[[intersection(...)]]	stage	function-qualifier	Intersection Functions
+metal.stage.object	[[object]]	stage	function-qualifier	Object Functions
+metal.stage.mesh	[[mesh]]	stage	function-qualifier	Mesh Functions
+metal.stage.tile	tile functions	stage	function-qualifier	Tile Functions
+metal.qualifier.host_name	[[host_name(name)]]	qualifier	attribute	Host Name Attribute
+metal.qualifier.user_annotation	[[user_annotation(...)]]	qualifier	attribute	User Annotation Attribute
+metal.qualifier.function_groups	[[function_groups(...)]]	qualifier	attribute	Function Groups Attribute
+metal.qualifier.attribute	[[attribute(n)]]	qualifier	attribute	Attributes to Locate Per-Vertex Inputs
+metal.qualifier.stage_in	[[stage_in]]	qualifier	attribute	Input Assembly Attribute
+metal.qualifier.storage-class	static / extern	qualifier	storage-class	Storage Class Specifiers
+metal.qualifier.interpolation	[[center_perspective]] [[flat]] [[sample_no_perspective]] ...	qualifier	attribute	Sampling and Interpolation Attributes
+metal.qualifier.per-sample	per-sample fragment function	qualifier	attribute	Per-Fragment Function Versus Per-Sample Function
+metal.qualifier.imageblock	[[imageblock_data]]	qualifier	attribute	Imageblock Attributes
+metal.qualifier.function_constant	[[function_constant(n)]]	qualifier	attribute	Specifying Program Scope Function Constants
+metal.qualifier.viewport-scissor	[[viewport_array_index]] per-primitive selection	qualifier	attribute	Per-Primitive Viewport and Scissor Rectangle Index Selection
+metal.variable.vertex-input	[[vertex_id]] [[instance_id]] [[base_vertex]] ...	builtin-variable	attribute	Vertex Function Input Attributes
+metal.variable.post-tessellation-input	[[patch_id]] [[position_in_patch]]	builtin-variable	attribute	Post-Tessellation Vertex Function Input Attributes
+metal.variable.vertex-output	[[position]] [[point_size]] [[clip_distance]] ...	builtin-variable	attribute	Vertex Function Output Attributes
+metal.variable.fragment-input	[[front_facing]] [[sample_id]] [[position]] ...	builtin-variable	attribute	Fragment Function Input Attributes
+metal.variable.fragment-output	[[color(m)]] [[depth(...)]] [[sample_mask]] [[stencil]]	builtin-variable	attribute	Fragment Function Output Attributes
+metal.variable.kernel-input	[[thread_position_in_grid]] [[threads_per_simdgroup]] ...	builtin-variable	attribute	Kernel Function Input Attributes
+metal.variable.intersection-input	intersection function input attributes	builtin-variable	attribute	Intersection Function Input Attributes
+metal.variable.intersection-output	[[accept_intersection]] ...	builtin-variable	attribute	Intersection Function Output Attributes
+metal.variable.object-input	object function input attributes	builtin-variable	attribute	Object Function Input Attributes
+metal.variable.mesh-input	mesh function input attributes	builtin-variable	attribute	Mesh Function Input Attributes
+metal.declaration.function	function declaration	declaration	function	Functions
+metal.declaration.templated-qualified-function	templated qualified functions	declaration	function	Templated Qualified Functions
+metal.declaration.arguments	function arguments and variables	declaration	variable	Function Arguments and Variables
+metal.declaration.signature-matching	vertex-fragment signature matching	declaration	interface	Vertex — Fragment Signature Matching
+metal.declaration.function-constants	program scope function constants	declaration	specialization	Program Scope Function Constants
+metal.declaration.overloading	function overloading	declaration	function	Overloading
+metal.declaration.templates	templates	declaration	template	Templates
+metal.declaration.placement-new	placement new	declaration	allocation	Placement New
+metal.declaration.restrictions	C++17 features Metal excludes	declaration	restriction	Restrictions
+metal.statement.cxx17	C++17 statements (if, switch, for, while, do, break, continue, return)	statement	c++	Metal and C++17
+metal.statement.discard_fragment	discard_fragment()	statement	jump	Fragment Functions — Flow Control
+metal.statement.uniform-control-flow	uniform control flow	statement	control-flow	Uniform Control Flow
+metal.operator.scalar-vector	arithmetic, bitwise, relational and logical operators	operator	operator	Scalar and Vector Operators
+metal.operator.matrix	matrix operators	operator	operator	Matrix Operators
+metal.operator.vector-components	vector component access and swizzles	operator	selection	Accessing Vector Components
+metal.operator.vector-constructors	vector constructors	operator	constructor	Vector Constructors
+metal.operator.matrix-components	matrix component access	operator	selection	Accessing Matrix Components
+metal.operator.matrix-constructors	matrix constructors	operator	constructor	Matrix Constructors
+metal.function.common	clamp, mix, saturate, sign, smoothstep, step	builtin-function	library	Common Functions
+metal.function.integer	abs, absdiff, addsat, clz, ctz, mulhi, popcount, rotate, ...	builtin-function	library	Integer Functions
+metal.function.relational	all, any, isfinite, isinf, isnan, select, ...	builtin-function	library	Relational Functions
+metal.function.math	acos ... trunc, fma, fmax, fmin, fmod, ...	builtin-function	library	Math Functions
+metal.function.matrix	determinant, transpose	builtin-function	library	Matrix Functions
+metal.function.simdgroup-matrix	simdgroup_load, simdgroup_store, simdgroup_multiply_accumulate	builtin-function	library	SIMD-Group Matrix Functions
+metal.function.geometric	cross, distance, dot, length, normalize, reflect, refract	builtin-function	library	Geometric Functions
+metal.function.barriers	threadgroup_barrier, simdgroup_barrier	builtin-function	library	Threadgroup and SIMD-Group Synchronization Functions
+metal.function.simdgroup	simd_sum, simd_shuffle, simd_ballot, ...	builtin-function	library	SIMD-Group Functions
+metal.function.quadgroup	quad_sum, quad_shuffle, ...	builtin-function	library	Quad-Group Functions
+metal.function.derivatives	dfdx, dfdy, fwidth	builtin-function	library	Fragment Functions – Derivatives
+metal.function.samples	get_num_samples, get_sample_position	builtin-function	library	Fragment Functions — Samples
+metal.function.texture-buffer	texture buffer read and write	builtin-function	library	Texture Buffer Functions
+metal.function.texture-synchronization	fence	builtin-function	library	Texture Synchronization Functions
+metal.function.null-texture	is_null_texture	builtin-function	library	Null Texture Functions
+metal.function.pack-unpack	unpack_unorm4x8_to_float, pack_float_to_unorm4x8, ...	builtin-function	library	Unpack and Convert Integers to a Floating-Point Vector
+metal.function.memory-order	memory_order_relaxed / acquire / release / seq_cst	builtin-function	library	Memory Order
+metal.function.thread-scope	thread_scope	builtin-function	library	Thread Scope
+metal.function.fences	atomic_thread_fence	builtin-function	library	Fence Functions
+metal.function.atomics	atomic_load/store/exchange/fetch_op/compare_exchange	builtin-function	library	Atomic Functions
+metal.preprocessor.directives	C++17 preprocessing directives	preprocessor	directive	Preprocessing Directives
+metal.preprocessor.definitions	__METAL_VERSION__ and other predefined macros	preprocessor	macro	Preprocessor Definitions
+metal.preprocessor.options	-D / -I preprocessor compiler options	preprocessor	option	Preprocessor Compiler Options
+metal.preprocessor.target-conditionals	target conditionals	preprocessor	macro	Target Conditionals
+metal.extension.language-version	-std=metal3.x / metal4.x	extension	compiler-option	Compiler Options Controlling the Language Version
+metal.extension.math-mode	-fmetal-math-mode / -fmetal-math-fp32-functions	extension	compiler-option	Math Intrinsics Compiler Options
+metal.extension.invariance	-fpreserve-invariance	extension	compiler-option	Invariance Compiler Options
+metal.extension.texture-write-rounding	-ftexture-write-rounding-mode	extension	compiler-option	Texture Write Rounding Mode
+metal.extension.logging	-fmetal-enable-logging	extension	compiler-option	Compiler Options to Enable Logging
+metal.extension.modules	-fmodules	extension	compiler-option	Compiler Options to Enable Modules

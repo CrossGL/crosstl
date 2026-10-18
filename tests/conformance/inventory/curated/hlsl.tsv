@@ -1,0 +1,149 @@
+id	name	category	kind	reference	note
+hlsl.type.bool	bool	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.int	int	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.uint	uint	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.dword	dword	type	scalar	hlsl-docs dx-graphics-hlsl-scalar
+hlsl.type.half	half	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.float	float	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.double	double	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.int16_t	int16_t	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.uint16_t	uint16_t	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.int64_t	int64_t	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.uint64_t	uint64_t	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.float16_t	float16_t	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.float32_t	float32_t	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.float64_t	float64_t	type	scalar	hlsl-spec [Basic.types.arithmetic]
+hlsl.type.min16float	min16float	type	minimum-precision	hlsl-docs dx-graphics-hlsl-scalar
+hlsl.type.min10float	min10float	type	minimum-precision	hlsl-docs dx-graphics-hlsl-scalar
+hlsl.type.min16int	min16int	type	minimum-precision	hlsl-docs dx-graphics-hlsl-scalar
+hlsl.type.min12int	min12int	type	minimum-precision	hlsl-docs dx-graphics-hlsl-scalar
+hlsl.type.min16uint	min16uint	type	minimum-precision	hlsl-docs dx-graphics-hlsl-scalar
+hlsl.type.vector	vector<T, N>	type	vector	hlsl-docs dx-graphics-hlsl-vector
+hlsl.type.matrix	matrix<T, R, C>	type	matrix	hlsl-docs dx-graphics-hlsl-matrix
+hlsl.type.struct	struct	type	aggregate	hlsl-docs dx-graphics-hlsl-struct
+hlsl.type.array	array	type	aggregate	hlsl-docs dx-graphics-hlsl-variable-syntax
+hlsl.type.bitfield	bit-field	type	aggregate	hlsl-spec [Basic.types.scalarized]
+hlsl.type.typedef	typedef	declaration	alias	hlsl-docs dx-graphics-hlsl-user-defined
+hlsl.type.enum	enum	type	enumeration	hlsl-spec [Basic.Decl]
+hlsl.type.SamplerState	SamplerState	resource	object	hlsl-spec [Resources.samp]
+hlsl.type.SamplerComparisonState	SamplerComparisonState	resource	object	hlsl-spec [Resources.samp]
+hlsl.type.ConstantBuffer	ConstantBuffer<T>	resource	object	hlsl-spec [Resources.cnbuf.cbclass]
+hlsl.type.RaytracingAccelerationStructure	RaytracingAccelerationStructure	resource	object	dxc gen_intrin_main.txt#RayQueryMethods
+hlsl.type.InputPatch	InputPatch<T, N>	resource	object	hlsl-docs sm5-object-inputpatch
+hlsl.type.OutputPatch	OutputPatch<T, N>	resource	object	hlsl-docs sm5-object-outputpatch
+hlsl.qualifier.extern	extern	qualifier	storage	hlsl-docs dx-graphics-hlsl-variable-syntax
+hlsl.qualifier.static	static	qualifier	storage	hlsl-spec [Basic.Storage.Static]
+hlsl.qualifier.groupshared	groupshared	resource	storage	hlsl-spec [Basic.Storage.Groupshared]
+hlsl.qualifier.uniform	uniform	qualifier	storage	hlsl-docs dx-graphics-hlsl-variable-syntax
+hlsl.qualifier.volatile	volatile	qualifier	storage	hlsl-docs dx-graphics-hlsl-variable-syntax
+hlsl.qualifier.precise	precise	qualifier	storage	hlsl-docs dx-graphics-hlsl-variable-syntax
+hlsl.qualifier.shared	shared	qualifier	storage	hlsl-docs dx-graphics-hlsl-variable-syntax
+hlsl.qualifier.const	const	qualifier	modifier	hlsl-docs dx-graphics-hlsl-variable-syntax
+hlsl.qualifier.row_major	row_major	qualifier	modifier	hlsl-docs dx-graphics-hlsl-variable-syntax
+hlsl.qualifier.column_major	column_major	qualifier	modifier	hlsl-docs dx-graphics-hlsl-variable-syntax
+hlsl.qualifier.snorm	snorm	qualifier	modifier	hlsl-docs dx-graphics-hlsl-to-type
+hlsl.qualifier.unorm	unorm	qualifier	modifier	hlsl-docs dx-graphics-hlsl-to-type
+hlsl.qualifier.globallycoherent	globallycoherent	qualifier	modifier	hlsl-docs sm5-object-rwbuffer
+hlsl.qualifier.linear	linear	qualifier	interpolation	hlsl-docs dx-graphics-hlsl-struct
+hlsl.qualifier.centroid	centroid	qualifier	interpolation	hlsl-docs dx-graphics-hlsl-struct
+hlsl.qualifier.nointerpolation	nointerpolation	qualifier	interpolation	hlsl-docs dx-graphics-hlsl-struct
+hlsl.qualifier.noperspective	noperspective	qualifier	interpolation	hlsl-docs dx-graphics-hlsl-struct
+hlsl.qualifier.sample	sample	qualifier	interpolation	hlsl-docs dx-graphics-hlsl-struct
+hlsl.qualifier.in	in	qualifier	parameter	hlsl-docs dx-graphics-hlsl-function-parameters
+hlsl.qualifier.out	out	qualifier	parameter	hlsl-docs dx-graphics-hlsl-function-parameters
+hlsl.qualifier.inout	inout	qualifier	parameter	hlsl-docs dx-graphics-hlsl-function-parameters
+hlsl.qualifier.semantic	user semantic	qualifier	semantic	hlsl-spec [Decl.Attr.Semantic]
+hlsl.resource.register	register(...)	resource	binding	hlsl-spec [Resources.binding]
+hlsl.resource.space	register(..., spaceN)	resource	binding	hlsl-spec [Resources.binding]
+hlsl.resource.packoffset	packoffset(...)	resource	layout	hlsl-spec [Resources.cnbuf.po]
+hlsl.resource.cbuffer-layout	constant buffer packing	resource	layout	hlsl-spec [Resources.cnbuf.lay]
+hlsl.resource.default-cbuffer	$Globals constant buffer	resource	layout	hlsl-spec [Resources.cnbuf.defcb]
+hlsl.resource.descriptor-heap	ResourceDescriptorHeap / SamplerDescriptorHeap	resource	binding	directx-specs HLSL_SM_6_6_DynamicResources
+hlsl.qualifier.pack_matrix	#pragma pack_matrix	qualifier	layout	hlsl-docs dx-graphics-hlsl-appendix-pre-pragma-pack-matrix
+hlsl.attribute.numthreads	[numthreads(x, y, z)]	qualifier	attribute	hlsl-docs sm5-attributes-numthreads
+hlsl.attribute.shader	[shader("stage")]	qualifier	attribute	hlsl-spec [Decl.Attr.Entry]
+hlsl.attribute.unroll	[unroll]	statement	attribute	hlsl-spec [Stmt.Attr.Unroll]
+hlsl.attribute.loop	[loop]	statement	attribute	hlsl-spec [Stmt.Attr.Loop]
+hlsl.attribute.fastopt	[fastopt]	statement	attribute	hlsl-docs dx-graphics-hlsl-for
+hlsl.attribute.allow_uav_condition	[allow_uav_condition]	statement	attribute	hlsl-docs dx-graphics-hlsl-for
+hlsl.attribute.branch	[branch]	statement	attribute	hlsl-docs dx-graphics-hlsl-if
+hlsl.attribute.flatten	[flatten]	statement	attribute	hlsl-docs dx-graphics-hlsl-if
+hlsl.attribute.forcecase	[forcecase]	statement	attribute	hlsl-docs dx-graphics-hlsl-switch
+hlsl.attribute.call	[call]	statement	attribute	hlsl-docs dx-graphics-hlsl-switch
+hlsl.attribute.earlydepthstencil	[earlydepthstencil]	qualifier	attribute	hlsl-docs sm5-attributes-earlydepthstencil
+hlsl.attribute.domain	[domain("...")]	qualifier	attribute	hlsl-docs sm5-attributes-domain
+hlsl.attribute.partitioning	[partitioning("...")]	qualifier	attribute	hlsl-docs sm5-attributes-partitioning
+hlsl.attribute.outputtopology	[outputtopology("...")]	qualifier	attribute	hlsl-docs sm5-attributes-outputtopology
+hlsl.attribute.outputcontrolpoints	[outputcontrolpoints(n)]	qualifier	attribute	hlsl-docs sm5-attributes-outputcontrolpoints
+hlsl.attribute.patchconstantfunc	[patchconstantfunc("...")]	qualifier	attribute	hlsl-docs sm5-attributes-patchconstantfunc
+hlsl.attribute.maxtessfactor	[maxtessfactor(f)]	qualifier	attribute	hlsl-docs sm5-attributes-maxtessfactor
+hlsl.attribute.instance	[instance(n)]	qualifier	attribute	hlsl-docs sm5-attributes-instance
+hlsl.attribute.maxvertexcount	[maxvertexcount(n)]	qualifier	attribute	hlsl-docs dx-graphics-hlsl-geometry-shader
+hlsl.attribute.WaveSize	[WaveSize(...)]	qualifier	attribute	directx-specs HLSL_SM_6_6_WaveSize
+hlsl.declaration.function	function definition	declaration	function	hlsl-spec [Decl.Function]
+hlsl.declaration.entry-point	entry function	declaration	function	hlsl-spec [Decl.Attr.Entry]
+hlsl.declaration.export	export	declaration	linkage	hlsl-spec [Decl.Export]
+hlsl.declaration.cbuffer	cbuffer	resource	block	hlsl-spec [Decl.cbuffer]
+hlsl.declaration.tbuffer	tbuffer	resource	block	hlsl-docs dx-graphics-hlsl-constants
+hlsl.declaration.initializer	initializer	declaration	initializer	hlsl-spec [Decl.Init]
+hlsl.declaration.aggregate-initializer	aggregate initializer	declaration	initializer	hlsl-spec [Decl.Init.Agg]
+hlsl.declaration.namespace	namespace	declaration	scope	hlsl-spec [Expr.Primary.ID.Qual]
+hlsl.declaration.overload	function overloading	declaration	function	hlsl-spec [Overload.Decl]
+hlsl.declaration.template	template	declaration	template	hlsl-spec [Overload.Res.Sets]
+hlsl.declaration.member-function	member function	declaration	function	hlsl-docs dx-graphics-hlsl-struct
+hlsl.declaration.static-const	static const	declaration	constant	hlsl-spec [Basic.Storage.Static]
+hlsl.statement.if	if / else	statement	selection	hlsl-docs dx-graphics-hlsl-if
+hlsl.statement.switch	switch / case / default	statement	selection	hlsl-docs dx-graphics-hlsl-switch
+hlsl.statement.for	for	statement	iteration	hlsl-docs dx-graphics-hlsl-for
+hlsl.statement.while	while	statement	iteration	hlsl-docs dx-graphics-hlsl-while
+hlsl.statement.do	do / while	statement	iteration	hlsl-docs dx-graphics-hlsl-do
+hlsl.statement.break	break	statement	jump	hlsl-docs dx-graphics-hlsl-break
+hlsl.statement.continue	continue	statement	jump	hlsl-docs dx-graphics-hlsl-continue
+hlsl.statement.return	return	statement	jump	hlsl-docs dx-graphics-hlsl-return
+hlsl.statement.discard	discard	statement	jump	hlsl-docs dx-graphics-hlsl-discard
+hlsl.statement.label	labeled statement	statement	label	hlsl-spec [Stmt.Label]
+hlsl.operator.arithmetic	+ - * / %	operator	arithmetic	hlsl-docs dx-graphics-hlsl-operators
+hlsl.operator.bitwise	~ & | ^ << >>	operator	bitwise	hlsl-docs dx-graphics-hlsl-operators
+hlsl.operator.logical	&& || !	operator	logical	hlsl-docs dx-graphics-hlsl-operators
+hlsl.operator.comparison	< > <= >= == !=	operator	comparison	hlsl-docs dx-graphics-hlsl-operators
+hlsl.operator.assignment	= += -= *= /= %= &= |= ^= <<= >>=	operator	assignment	hlsl-docs dx-graphics-hlsl-operators
+hlsl.operator.increment	++ --	operator	arithmetic	hlsl-docs dx-graphics-hlsl-operators
+hlsl.operator.conditional	?:	operator	selection	hlsl-docs dx-graphics-hlsl-operators
+hlsl.operator.comma	,	operator	sequence	hlsl-docs dx-graphics-hlsl-operators
+hlsl.operator.cast	(T)x	operator	conversion	hlsl-docs dx-graphics-hlsl-operators
+hlsl.operator.subscript	a[i]	operator	selection	hlsl-spec [Expr.Post.Subscript]
+hlsl.operator.vector-swizzle	v.xyzw	operator	selection	hlsl-spec [Expr.Post.Swizzle.Vector]
+hlsl.operator.matrix-swizzle	m._m00_m11	operator	selection	hlsl-spec [Expr.Post.Swizzle.Matrix]
+hlsl.operator.call	f(...)	operator	call	hlsl-spec [Expr.Post.Call]
+hlsl.operator.usual-arithmetic-conversions	usual arithmetic conversions	operator	conversion	hlsl-spec [Expr.conv]
+hlsl.operator.integral-promotion	integral promotion	operator	conversion	hlsl-spec [Conv.ipromote]
+hlsl.operator.integral-conversion	integral conversion	operator	conversion	hlsl-spec [Conv.iconv]
+hlsl.operator.floating-conversion	floating point conversion	operator	conversion	hlsl-spec [Conv.fconv]
+hlsl.operator.floating-integral-conversion	floating point-integral conversion	operator	conversion	hlsl-spec [Conv.fpint]
+hlsl.operator.boolean-conversion	boolean conversion	operator	conversion	hlsl-spec [Conv.bool]
+hlsl.operator.vector-splat	vector splat	operator	conversion	hlsl-spec [Conv.vsplat]
+hlsl.operator.matrix-splat	matrix splat	operator	conversion	hlsl-spec [Conv.msplat]
+hlsl.operator.truncation	vector and matrix truncation	operator	conversion	hlsl-spec [Conv.vtrunc]
+hlsl.operator.elementwise-conversion	elementwise conversion	operator	conversion	hlsl-spec [Conv.flat]
+hlsl.operator.literal-vector	vector literal	operator	literal	hlsl-spec [Lex.Literal.Vector]
+hlsl.operator.literal-integer	integer literal	operator	literal	hlsl-spec [Lex.Literal.Int]
+hlsl.operator.literal-float	floating-point literal	operator	literal	hlsl-spec [Lex.Literal.Float]
+hlsl.preprocessor.define	#define	preprocessor	directive	hlsl-docs dx-graphics-hlsl-appendix-pre-define
+hlsl.preprocessor.undef	#undef	preprocessor	directive	hlsl-docs dx-graphics-hlsl-appendix-pre-undef
+hlsl.preprocessor.if	#if / #elif / #else / #endif	preprocessor	directive	hlsl-docs dx-graphics-hlsl-appendix-pre-if
+hlsl.preprocessor.ifdef	#ifdef / #ifndef	preprocessor	directive	hlsl-docs dx-graphics-hlsl-appendix-pre-ifdef
+hlsl.preprocessor.include	#include	preprocessor	directive	hlsl-docs dx-graphics-hlsl-appendix-pre-include
+hlsl.preprocessor.line	#line	preprocessor	directive	hlsl-docs dx-graphics-hlsl-appendix-pre-line
+hlsl.preprocessor.error	#error	preprocessor	directive	hlsl-docs dx-graphics-hlsl-appendix-pre-error
+hlsl.preprocessor.pragma	#pragma	preprocessor	directive	hlsl-docs dx-graphics-hlsl-appendix-pre-pragma
+hlsl.preprocessor.pragma-warning	#pragma warning	preprocessor	directive	hlsl-docs dx-graphics-hlsl-appendix-pre-pragma-warning
+hlsl.preprocessor.tokens	preprocessing tokens and ## / #	preprocessor	operator	hlsl-spec [Lex.PPTokens]
+hlsl.preprocessor.header-names	header names	preprocessor	directive	hlsl-spec [Lex.Headers]
+hlsl.vk.binding	[[vk::binding(b, s)]]	extension	vk-attribute	dxc docs/SPIR-V.rst
+hlsl.vk.location	[[vk::location(n)]]	extension	vk-attribute	dxc docs/SPIR-V.rst
+hlsl.vk.push_constant	[[vk::push_constant]]	extension	vk-attribute	dxc docs/SPIR-V.rst
+hlsl.vk.constant_id	[[vk::constant_id(n)]]	extension	vk-attribute	dxc docs/SPIR-V.rst
+hlsl.vk.input_attachment_index	[[vk::input_attachment_index(n)]]	extension	vk-attribute	dxc docs/SPIR-V.rst
+hlsl.vk.builtin	[[vk::builtin("...")]]	extension	vk-attribute	dxc docs/SPIR-V.rst
+hlsl.vk.offset	[[vk::offset(n)]]	extension	vk-attribute	dxc docs/SPIR-V.rst
+hlsl.vk.ext_instruction	[[vk::ext_instruction(...)]]	extension	vk-attribute	dxc docs/SPIR-V.rst
