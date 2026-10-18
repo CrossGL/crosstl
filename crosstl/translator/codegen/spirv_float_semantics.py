@@ -27,7 +27,6 @@ The mixin relies on the host class's SPIR-V value helpers (``get_id``, ``emit``,
 
 from __future__ import annotations
 
-
 FLOAT32_SIGN_MASK = 0x80000000
 FLOAT32_MAGNITUDE_MASK = 0x7FFFFFFF
 FLOAT32_EXPONENT_MASK = 0x7F800000
