@@ -839,6 +839,6 @@ def test_axis_scatter_ci_requires_native_execution_on_all_targets():
     assert steps["Retain slice update execution evidence"]["if"] == "always()"
     for trigger in ("pull_request", "push"):
         assert_paths_covered(
-            workflow.get("on", workflow.get(True))[trigger]["paths"],
+            workflow.get("on", workflow.get(True))[trigger].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_scatter_axis.py",
         )

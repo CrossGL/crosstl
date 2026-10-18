@@ -115,7 +115,7 @@ def test_float_scatter_requires_distinct_native_ci_profiles():
     assert upload["if"] == "always()"
     for trigger in ("pull_request", "push"):
         assert_paths_covered(
-            workflow.get("on", workflow.get(True))[trigger]["paths"],
+            workflow.get("on", workflow.get(True))[trigger].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_float_scatter.py",
         )
 

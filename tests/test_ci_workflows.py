@@ -2449,6 +2449,25 @@ def test_ci_coverage_reads_support_path_filters_only_from_pull_request_paths():
     assert report["required_path_filters"]["crosstl/backend/**"] is False
 
 
+@pytest.mark.parametrize(
+    ("trigger", "expected"),
+    [
+        ('  pull_request:\n    paths:\n      - "crosstl/**"\n', ["crosstl/**"]),
+        ("  pull_request:\n    branches: [main]\n", ["**"]),
+        ("  pull_request:\n", ["**"]),
+        ("  pull_request:  # every change\n", ["**"]),
+        ('  pull_request:\n    paths-ignore:\n      - "docs/**"\n', []),
+        ("  workflow_dispatch:\n", []),
+    ],
+)
+def test_ci_coverage_reports_unfiltered_triggers_as_every_path(trigger, expected):
+    module = _load_ci_coverage_module()
+    workflow = "name: Example\non:\n" + trigger + "jobs:\n  test:\n    runs-on: x\n"
+
+    assert module.workflow_event_path_filters(workflow, "pull_request") == expected
+    assert module.pull_request_path_filters(workflow) == expected
+
+
 def test_ci_coverage_reads_support_issue_sync_guards_from_their_steps():
     module = _load_ci_coverage_module()
     workflow = (WORKFLOW_DIR / "support-issue-sync.yml").read_text(encoding="utf-8")

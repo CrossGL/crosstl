@@ -555,7 +555,7 @@ def test_integer64_ci_requires_all_three_native_targets():
     triggers = workflow.get("on", workflow.get(True))
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            triggers[event]["paths"],
+            triggers[event].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_integer64.py",
         )
 
