@@ -49,7 +49,7 @@ jobs:
         id: python-minimum
         uses: actions/setup-python@v7
         with:
-          python-version: "3.8"
+          python-version: "3.11"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v7

@@ -25,7 +25,7 @@ WORKFLOW_DIR = ROOT / ".github" / "workflows"
 ACTIONS_DIR = ROOT / ".github" / "actions"
 CI_COVERAGE_SCRIPT = ROOT / "tools" / "ci_coverage.py"
 DEMO_CI_METADATA_PATH = ROOT / "support" / "demo-ci-metadata.json"
-PYTHON_VERSIONS = {"3.8", "3.9", "3.10", "3.11", "3.12", "3.13"}
+PYTHON_VERSIONS = {"3.11", "3.12", "3.13", "3.14", "3.15"}
 RUNNER_OSES = {"ubuntu-latest", "windows-latest", "macOS-latest"}
 BACKEND_TEST_MATRIX_NAMES = {
     "cuda": "CUDA",
@@ -419,7 +419,7 @@ def _assert_windows_python_policy(workflow_text, os_key="OS"):
     assert _matrix_values(workflow_text, os_key) == RUNNER_OSES
     assert "exclude:" in workflow_text
     for runner in ("windows-latest", "macOS-latest"):
-        for version in ("3.8", "3.9", "3.10", "3.11", "3.12"):
+        for version in sorted(PYTHON_VERSIONS - {"3.13"}):
             assert (
                 f'python-version: "{version}"\n            {os_key}: {runner}'
                 in workflow_text
@@ -427,20 +427,10 @@ def _assert_windows_python_policy(workflow_text, os_key="OS"):
     exclusions = workflow_text.split("        exclude:\n", 1)[1].split(
         "\n    steps:", 1
     )[0]
-    assert exclusions.count("- python-version:") == 10
+    assert exclusions.count("- python-version:") == 2 * (len(PYTHON_VERSIONS) - 1)
     assert "ubuntu-latest" not in exclusions
     assert 'python-version: "3.13"' not in exclusions
     assert "include:" not in exclusions
-
-
-def _assert_windows_legacy_python_is_excluded(workflow_text, os_key="OS"):
-    assert "exclude:" in workflow_text
-    for python_version in ("3.8", "3.9"):
-        excluded = (
-            f'python-version: "{python_version}"\n'
-            f"            {os_key}: windows-latest"
-        )
-        assert excluded in workflow_text
 
 
 def _assert_grouped_native_python_policy(workflow_text, component_key):
@@ -456,7 +446,7 @@ def _assert_grouped_native_python_policy(workflow_text, component_key):
     )
     select = workflow["jobs"]["python-versions"]["steps"][0]
     assert set(json.loads(select["env"]["FULL_PYTHON_VERSIONS"])) == PYTHON_VERSIONS
-    assert json.loads(select["env"]["PULL_REQUEST_PYTHON_VERSIONS"]) == ["3.8", "3.13"]
+    assert json.loads(select["env"]["PULL_REQUEST_PYTHON_VERSIONS"]) == ["3.11", "3.15"]
     assert select["env"]["FULL"] == (
         "${{ github.event_name != 'pull_request' || "
         "contains(github.event.pull_request.labels.*.name, 'ci:full') }}"
@@ -2971,6 +2961,32 @@ def test_ci_coverage_comparison_reports_full_suite_download_retry_shrink():
         "removed": ["dxc_linux"],
         "added": [],
     } in comparison["shrinks"]
+
+
+def test_ci_coverage_comparison_retires_pythons_below_the_declared_minimum():
+    module = _load_ci_coverage_module()
+    current = module.build_report()
+    assert current["package"]["minimum_python"] == min(
+        PYTHON_VERSIONS, key=module.python_version_key
+    )
+    baseline = copy.deepcopy(current)
+    for workflow in ("backend_tests", "translator_tests", "examples"):
+        baseline["workflows"][workflow]["python_versions"]["actual"] += ["3.9", "3.10"]
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+    assert comparison["summary"]["ok"] is True
+    assert comparison["retired_python_versions"] == ["3.9", "3.10"]
+
+    current["workflows"]["translator_tests"]["python_versions"]["actual"].remove("3.12")
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+    assert comparison["shrinks"] == [
+        {
+            "scope": "translator-tests.yml",
+            "dimension": "python_versions",
+            "removed": ["3.12"],
+            "added": [],
+        }
+    ]
 
 
 def test_ci_coverage_comparison_reports_added_coverage_without_shrink():

@@ -32,8 +32,8 @@ jobs:
         env:
           # Pushes to main and pull requests labelled ci:full test every supported
           # version; other pull requests test the oldest and the newest.
-          FULL_PYTHON_VERSIONS: '["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]'
-          PULL_REQUEST_PYTHON_VERSIONS: '["3.8", "3.13"]'
+          FULL_PYTHON_VERSIONS: '["3.11", "3.12", "3.13", "3.14", "3.15"]'
+          PULL_REQUEST_PYTHON_VERSIONS: '["3.11", "3.15"]'
           FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: |
           if [ "$FULL" = "true" ]; then

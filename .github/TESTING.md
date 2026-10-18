@@ -9,8 +9,8 @@ Every pull request, including one from a contributor without a Mac or a
 Windows machine, gets Linux, macOS and Windows coverage without asking:
 
 - **Pull request tier.** Runs on every push.
-  - Translator and backend tests for every component on Python 3.8 and 3.13
-    on Ubuntu, plus one job each on macOS and Windows that runs every
+  - Translator and backend tests for every component on Python 3.11 and
+    3.15 on Ubuntu, plus one job each on macOS and Windows that runs every
     component on Python 3.13.
   - The complete core suite.
   - Shader validators and runtime parity on all three platforms.
@@ -20,10 +20,17 @@ Windows machine, gets Linux, macOS and Windows coverage without asking:
   - Path-filtered demo workflows for the files they cover.
 - **Merge queue tier.** The `merge_group` event runs each gating workflow once
   more on the exact commit that will land on main. That run covers every
-  supported Python version (3.8 through 3.13) and the full MLX native, parity,
+  supported Python version (3.11 through 3.15) and the full MLX native, parity,
   corpus and host tier. A pull request merges only when this run passes.
 - **Main and nightly.** Pushes to main repeat the full Python sweep. The MLX
   tier runs nightly and on manual dispatch.
+
+CrossTL supports every released Python version that has not reached end of
+life. When a version reaches end of life, raise `requires-python` in
+`pyproject.toml` and remove the version from the workflow matrices; the
+coverage comparison treats versions below that minimum as retired rather
+than lost. Add a new version once it is released. Pull requests test the
+oldest and newest supported versions.
 
 A maintainer can request the merge-queue tier on a pull request before
 queueing it. The `ci:full` label applies from the next push, and
@@ -62,7 +69,7 @@ satisfy the same checks. This follows
 
 | Workload | Ubuntu | Windows | macOS |
 | --- | --- | --- | --- |
-| Backend, translator and example tests | Python 3.8 through 3.13 (pull requests: 3.8 and 3.13) | Python 3.13 | Python 3.13 |
+| Backend, translator and example tests | Python 3.11 through 3.15 (pull requests: 3.11 and 3.15) | Python 3.13 | Python 3.13 |
 | Complete core and demo unit suite | Required | Covered by focused platform jobs | Covered by focused platform jobs |
 | Complete DirectX demo corpus compilation | Pinned Linux DXC | Native execution remains below | Not required |
 | Direct3D execution and host integration | Not applicable | Required WARP and dispatch checks | Not applicable |

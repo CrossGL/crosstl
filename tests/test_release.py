@@ -52,8 +52,8 @@ def test_package_build_contract_retains_supported_python_and_resources():
     }
     metadata = package_metadata(ROOT)
     assert metadata["name"] == "crosstl"
-    assert metadata["requires-python"] == ">=3.8"
-    assert metadata["dependencies"] == ["gast", "tomli; python_version<'3.11'"]
+    assert metadata["requires-python"] == ">=3.11"
+    assert metadata["dependencies"] == ["gast"]
     assert metadata["scripts"] == {"crosstl": "crosstl._crosstl:main"}
     assert metadata["license"] == "Apache-2.0"
     assert metadata["license-files"] == ["LICENSE"]
@@ -85,7 +85,7 @@ def test_release_build_and_publisher_support_current_metadata():
     )
     publisher = _workflow()["jobs"]["publish-pypi"]["steps"][-1]
     assert publisher["uses"] == "pypa/gh-action-pypi-publish@release/v1"
-    assert _step("Set up minimum supported Python")["with"]["python-version"] == "3.8"
+    assert _step("Set up minimum supported Python")["with"]["python-version"] == "3.11"
     smoke = _step("Test isolated wheel and source installations")["run"]
     assert "${{ steps.python-minimum.outputs.python-path }}" in smoke
     assert '"$(command -v python)"' in smoke
@@ -229,7 +229,7 @@ def _archives(root, directory, mutation=None):
         if p.is_file()
     }
     metadata = (
-        b"Name: crosstl\nVersion: 1.2.3\nRequires-Python: >=3.8\n"
+        b"Name: crosstl\nVersion: 1.2.3\nRequires-Python: >=3.11\n"
         b"License-Expression: Apache-2.0\nLicense-File: LICENSE\n\n"
     )
     wheel = {name: data for name, data in files.items() if name.startswith("crosstl/")}
@@ -522,7 +522,7 @@ def test_published_archives_check_local_payload_before_network(
         (
             "wheel",
             "crosstl-1.2.3.dist-info/METADATA",
-            b"Name: crosstl\nVersion: 1.2.2\nRequires-Python: >=3.8\n",
+            b"Name: crosstl\nVersion: 1.2.2\nRequires-Python: >=3.11\n",
         ),
         (
             "wheel",
@@ -535,7 +535,7 @@ def test_published_archives_check_local_payload_before_network(
         (
             "source",
             "PKG-INFO",
-            b"Name: other\nVersion: 1.2.3\nRequires-Python: >=3.8\n",
+            b"Name: other\nVersion: 1.2.3\nRequires-Python: >=3.11\n",
         ),
     ],
 )

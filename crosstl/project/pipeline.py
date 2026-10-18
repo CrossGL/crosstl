@@ -3366,15 +3366,8 @@ REPORT_PATH_BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
-    try:
-        import tomllib
-    except ImportError:  # pragma: no cover - exercised only on Python < 3.11
-        try:
-            import tomli as tomllib
-        except ImportError as exc:  # pragma: no cover
-            raise RuntimeError(
-                "Reading crosstl.toml on Python < 3.11 requires tomli"
-            ) from exc
+    import tomllib
+
     with path.open("rb") as handle:
         return tomllib.load(handle)
 

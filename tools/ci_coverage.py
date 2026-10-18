@@ -23,7 +23,7 @@ ACTIONS_DIR = ROOT / ".github" / "actions"
 BACKENDS_PATH = ROOT / "support" / "backends.json"
 NODE24_ACTION_RUNTIME_ENV = "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24"
 
-PYTHON_VERSIONS = ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+PYTHON_VERSIONS = ["3.11", "3.12", "3.13", "3.14", "3.15"]
 RUNNER_OSES = ["ubuntu-latest", "windows-latest", "macOS-latest"]
 EXAMPLES_PYTHON_VERSIONS = PYTHON_VERSIONS
 TRANSLATOR_GENERAL_FRONTEND_TEST_COMMAND = (
@@ -778,6 +778,20 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
 
 def load_backends() -> list[dict[str, Any]]:
     return json.loads(read_text(BACKENDS_PATH))["backends"]
+
+
+def minimum_supported_python() -> str | None:
+    path = ROOT / "pyproject.toml"
+    if not path.exists():
+        return None
+    match = re.search(
+        r'^requires-python\s*=\s*">=\s*(\d+\.\d+)', read_text(path), re.MULTILINE
+    )
+    return match.group(1) if match else None
+
+
+def python_version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
 
 
 def workflow_text(name: str) -> str:
@@ -1819,6 +1833,7 @@ def build_report() -> dict[str, Any]:
             "backend_count": len(backends),
             "backend_ids": backend_ids,
         },
+        "package": {"minimum_python": minimum_supported_python()},
         "workflows": {
             "runtime": workflow_runtime_report(workflow_texts),
             "permissions": workflow_permissions_report(workflow_texts),
@@ -2382,9 +2397,20 @@ def build_ci_coverage_comparison(
 ) -> dict[str, Any]:
     shrinks = []
     growth = []
+    retired_pythons = set()
     migrations = active_workflow_migrations(
         baseline, current, {} if workflow_migrations is None else workflow_migrations
     )
+    minimum_python = current.get("package", {}).get("minimum_python")
+
+    def supported_pythons(versions: list[str]) -> list[str]:
+        # Dropping a version below the package's declared minimum retires it
+        # rather than shrinking coverage.
+        if minimum_python is None:
+            return versions
+        floor = python_version_key(minimum_python)
+        retired_pythons.update(v for v in versions if python_version_key(v) < floor)
+        return [v for v in versions if python_version_key(v) >= floor]
 
     def add_set_change(
         scope: str,
@@ -2502,10 +2528,13 @@ def build_ci_coverage_comparison(
         current_workflow = current["workflows"][workflow_key]
         scope = current_workflow["workflow"]
         for dimension in ("components", "python_versions", "oses"):
+            baseline_values = baseline_workflow[dimension]["actual"]
+            if dimension == "python_versions":
+                baseline_values = supported_pythons(baseline_values)
             add_set_change(
                 scope,
                 dimension,
-                baseline_workflow[dimension]["actual"],
+                baseline_values,
                 current_workflow[dimension]["actual"],
             )
         add_bool_change(
@@ -2543,10 +2572,13 @@ def build_ci_coverage_comparison(
     baseline_examples = baseline["workflows"]["examples"]
     current_examples = current["workflows"]["examples"]
     for dimension in ("python_versions", "oses", "backend_coverage"):
+        baseline_values = baseline_examples[dimension]["actual"]
+        if dimension == "python_versions":
+            baseline_values = supported_pythons(baseline_values)
         add_set_change(
             "examples-test.yml",
             dimension,
-            baseline_examples[dimension]["actual"],
+            baseline_values,
             current_examples[dimension]["actual"],
         )
     add_bool_map_change(
@@ -2858,6 +2890,7 @@ def build_ci_coverage_comparison(
         "shrinks": shrinks,
         "growth": growth,
         "workflow_migrations": migrations,
+        "retired_python_versions": sorted(retired_pythons, key=python_version_key),
     }
 
 
