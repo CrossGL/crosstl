@@ -5,12 +5,16 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/project-demo-testing.yml"
+      - "crosstl/**"
       - "demos/integrations/computesharp/**"
+      - "setup.py"
   push:
     branches: [main]
     paths:
       - ".github/workflows/project-demo-testing.yml"
+      - "crosstl/**"
       - "demos/integrations/computesharp/**"
+      - "setup.py"
   workflow_dispatch:
 
 permissions:
@@ -39,7 +43,7 @@ jobs:
         with:
           dotnet-version: "10.0.400"
       - name: Install test dependencies
-        run: python -m pip install pytest pytest-xdist
+        run: python -m pip install pytest pytest-xdist numpy==2.5.4 pillow==13.0.0
       - name: Verify compiled discovery and original-result accounting
         env:
           CROSSTL_REQUIRE_DOTNET: "1"
@@ -108,6 +112,13 @@ jobs:
           -c Release -p:Platform=x64 --no-build
           --logger "trx;LogFileName=baseline.trx"
           --results-directory ../evidence/trx
+      - name: Collect the original output images
+        if: always()
+        shell: pwsh
+        run: |
+          $output = Split-Path -Parent $env:COMPUTESHARP_BASELINE_ASSEMBLY
+          python demos/integrations/computesharp/collect_outputs.py --test-output $output --output evidence/outputs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify complete baseline case accounting
         shell: pwsh
         run: |
@@ -180,3 +191,167 @@ jobs:
           name: adapted-source-parity
           path: evidence/
           retention-days: 7
+
+  translated-metal:
+    name: Translated compute tests (macOS Metal)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Install CrossTL
+        run: python -m pip install -e .
+      - name: Install the Metal toolchain
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version
+      - name: Report the Metal device
+        run: system_profiler SPDisplaysDataType
+      - name: Apply the documented non-Windows upstream patches
+        run: >-
+          python demos/integrations/computesharp/prepare_upstream.py
+          --source upstream-computesharp --output adapted-computesharp
+          --receipt evidence/adapted-source.json
+      - name: Build the upstream tests against the portable runtime
+        run: >-
+          dotnet build adapted-computesharp/tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
+          -c Release -p:CrossTLTrustedCorpusBaseline=true
+          -p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets
+      - name: Export the test cases and generated HLSL
+        run: >-
+          dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
+          adapted-computesharp/tests/ComputeSharp.Tests/bin/Release/net10.0/ComputeSharp.Tests.dll
+          evidence/discovery
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/discovery
+      - name: Run every required case on Metal with negative controls
+        run: >-
+          python demos/integrations/computesharp/run_tests.py
+          --adapted adapted-computesharp --discovery evidence/discovery
+          --profile metal-apple-gpu --work evidence/run
+          --prebuilt-tests --negative-controls
+      - name: Compress dispatch evidence
+        if: always()
+        run: find evidence -name evidence.jsonl -exec gzip -9 {} \;
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: translated-metal
+          path: evidence/
+          retention-days: 7
+
+  translated-opengl:
+    name: Translated compute tests (Linux OpenGL, Mesa llvmpipe)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Install Mesa EGL and OpenGL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl-dev libgl-dev libegl1 libegl-mesa0 libgl1-mesa-dri libgbm1
+          dpkg-query -W libegl-mesa0 libgl1-mesa-dri
+      - name: Install CrossTL
+        run: python -m pip install -e .
+      - name: Apply the documented non-Windows upstream patches
+        run: >-
+          python demos/integrations/computesharp/prepare_upstream.py
+          --source upstream-computesharp --output adapted-computesharp
+          --receipt evidence/adapted-source.json
+      - name: Build the upstream tests against the portable runtime
+        run: >-
+          dotnet build adapted-computesharp/tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
+          -c Release -p:CrossTLTrustedCorpusBaseline=true
+          -p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets
+      - name: Export the test cases and generated HLSL
+        run: >-
+          dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
+          adapted-computesharp/tests/ComputeSharp.Tests/bin/Release/net10.0/ComputeSharp.Tests.dll
+          evidence/discovery
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/discovery
+      - name: Run every required case on OpenGL with negative controls
+        env:
+          EGL_PLATFORM: surfaceless
+        run: >-
+          python demos/integrations/computesharp/run_tests.py
+          --adapted adapted-computesharp --discovery evidence/discovery
+          --profile opengl-mesa-llvmpipe --work evidence/run
+          --prebuilt-tests --negative-controls
+      - name: Compress dispatch evidence
+        if: always()
+        run: find evidence -name evidence.jsonl -exec gzip -9 {} \;
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: translated-opengl
+          path: evidence/
+          retention-days: 7
+
+  qualification:
+    name: ComputeSharp port qualification (Linux)
+    needs: [original-directx, adapted-source-parity, translated-metal, translated-opengl]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install image comparison dependencies
+        run: python -m pip install numpy==2.5.4 pillow==13.0.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-compute-directx-baseline
+          path: profiles/directx
+      - uses: actions/download-artifact@v4
+        with:
+          name: translated-metal
+          path: profiles/metal
+      - uses: actions/download-artifact@v4
+        with:
+          name: translated-opengl
+          path: profiles/opengl
+      - name: Qualify every profile against the frozen contract
+        run: >-
+          python demos/integrations/computesharp/qualify.py
+          --directx profiles/directx --metal profiles/metal --opengl profiles/opengl
+          --output qualification
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: computesharp-qualification
+          path: qualification/
+          retention-days: 14

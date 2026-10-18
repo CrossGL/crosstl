@@ -58,8 +58,10 @@ public sealed unsafe partial class GraphicsDevice : IReferenceTrackedObject
             json.WriteNumber("computeUnits", ComputeUnits);
             json.WriteNumber("wavefrontSize", WavefrontSize);
             json.WriteString("manifest", ShaderLibrary.ManifestPath);
+            json.WriteString("manifestSha256", ShaderLibrary.ManifestSha256);
             json.WriteString("translatorCommit", ShaderLibrary.TranslatorCommit);
             json.WriteNumber("translatedShaders", ShaderLibrary.Count);
+            json.WriteNumber("bufferGuardBytes", BufferGuards.Bytes);
         });
     }
 

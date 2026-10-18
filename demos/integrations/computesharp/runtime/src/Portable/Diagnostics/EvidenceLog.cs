@@ -108,6 +108,35 @@ internal static class EvidenceLog
         });
     }
 
+    /// <summary>Records a texture readback with its region and, when selected, captures its pixels.</summary>
+    public static unsafe void TextureReadback(string resource, long resourceId, IntPtr data, long bytes, uint format, int width, int height, int depth, long rowPitch)
+    {
+        if (Writer is null)
+        {
+            return;
+        }
+
+        ReadOnlySpan<byte> span = new((void*)data, checked((int)bytes));
+        string hash = Sha256(span);
+        string? capture = ReadbackCapture.TryWrite(CurrentCase(), hash, span, format, width, height, depth, rowPitch);
+        Write("readback", json =>
+        {
+            json.WriteString("resource", resource);
+            json.WriteNumber("resourceId", resourceId);
+            json.WriteNumber("bytes", bytes);
+            json.WriteString("sha256", hash);
+            json.WriteNumber("format", format);
+            json.WriteNumber("width", width);
+            json.WriteNumber("height", height);
+            json.WriteNumber("depth", depth);
+            json.WriteNumber("rowPitch", rowPitch);
+            if (capture is not null)
+            {
+                json.WriteString("capture", capture);
+            }
+        });
+    }
+
     private static StreamWriter? Open()
     {
         string? path = BackendSelection.EvidencePath;

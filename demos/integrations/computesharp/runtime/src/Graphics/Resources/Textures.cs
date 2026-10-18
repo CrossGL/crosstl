@@ -45,7 +45,7 @@ namespace ComputeSharp.Portable
             if (EvidenceLog.Enabled)
             {
                 long bytes = (slicePitch * (depth - 1)) + (rowPitch * (height - 1)) + ((long)width * ElementSize);
-                EvidenceLog.Readback(description, ResourceId, (IntPtr)destination, bytes);
+                EvidenceLog.TextureReadback(description, ResourceId, (IntPtr)destination, bytes, Format, width, height, depth, rowPitch);
             }
         }
 
