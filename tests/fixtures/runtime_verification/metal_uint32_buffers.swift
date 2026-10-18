@@ -5,6 +5,9 @@ struct Request: Decodable {
     let inputs: [[UInt32]]
     let outputCount: Int
     let threadCount: Int
+    // Optional width of each one-dimensional threadgroup; threadCount then
+    // counts threadgroups. Existing requests dispatch one thread per group.
+    let threadsPerThreadgroup: Int?
 }
 
 enum ExecutionError: Error {
@@ -28,6 +31,12 @@ func run() throws {
         throw ExecutionError.unavailable("Kernel entry point is missing")
     }
     let pipeline = try device.makeComputePipelineState(function: function)
+    let groupWidth = request.threadsPerThreadgroup ?? 1
+    guard groupWidth > 0, groupWidth <= pipeline.maxTotalThreadsPerThreadgroup else {
+        throw ExecutionError.unavailable(
+            "Threadgroup width \(groupWidth) exceeds the pipeline limit " +
+            "\(pipeline.maxTotalThreadsPerThreadgroup)")
+    }
     func buffer(_ values: [UInt32]) throws -> MTLBuffer {
         let result = values.withUnsafeBytes {
             device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
@@ -46,7 +55,7 @@ func run() throws {
         encoder.setBuffer(allocation, offset: 0, index: index)
     }
     encoder.dispatchThreadgroups(MTLSize(width: request.threadCount, height: 1, depth: 1),
-                                threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+                                threadsPerThreadgroup: MTLSize(width: groupWidth, height: 1, depth: 1))
     encoder.endEncoding()
     command.commit()
     command.waitUntilCompleted()
@@ -59,7 +68,8 @@ func run() throws {
             count: allocation.length / MemoryLayout<UInt32>.stride))
     }
     let output = try JSONSerialization.data(withJSONObject: ["values": readbacks.last!,
-        "buffers": readbacks, "device": device.name],
+        "buffers": readbacks, "device": device.name,
+        "threadExecutionWidth": pipeline.threadExecutionWidth],
                                             options: [.sortedKeys])
     FileHandle.standardOutput.write(output)
 }

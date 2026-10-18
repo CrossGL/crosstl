@@ -4326,15 +4326,8 @@ def _missing_platform_requirements(
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
-    try:
-        import tomllib
-    except ImportError:  # pragma: no cover - Python < 3.11 only
-        try:
-            import tomli as tomllib
-        except ImportError as exc:  # pragma: no cover
-            raise RuntimeVerificationError(
-                "Reading runtime fixture TOML on Python < 3.11 requires tomli."
-            ) from exc
+    import tomllib
+
     with path.open("rb") as handle:
         return tomllib.load(handle)
 

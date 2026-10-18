@@ -25,7 +25,7 @@ WORKFLOW_DIR = ROOT / ".github" / "workflows"
 ACTIONS_DIR = ROOT / ".github" / "actions"
 CI_COVERAGE_SCRIPT = ROOT / "tools" / "ci_coverage.py"
 DEMO_CI_METADATA_PATH = ROOT / "support" / "demo-ci-metadata.json"
-PYTHON_VERSIONS = {"3.8", "3.9", "3.10", "3.11", "3.12", "3.13"}
+PYTHON_VERSIONS = {"3.11", "3.12", "3.13", "3.14", "3.15"}
 RUNNER_OSES = {"ubuntu-latest", "windows-latest", "macOS-latest"}
 BACKEND_TEST_MATRIX_NAMES = {
     "cuda": "CUDA",
@@ -179,6 +179,27 @@ def test_pip_cache_is_only_enabled_for_jobs_that_install_with_pip():
             commands = "\n".join(str(step.get("run", "")) for step in steps)
             assert "pip install" in commands, (path.name, name)
             assert "--no-cache-dir" not in commands, (path.name, name)
+
+
+def test_actions_are_referenced_by_release_tag():
+    # Release tags keep workflows readable and let Dependabot propose upgrades.
+    # pypa/gh-action-pypi-publish publishes only its release/v1 branch.
+    release_tag = re.compile(r"^[\w.-]+/[\w.-]+@(?:v\d+(?:\.\d+){0,2}|release/v\d+)$")
+    paths = sorted(WORKFLOW_DIR.glob("*.yml")) + sorted(
+        ACTIONS_DIR.glob("*/action.yml")
+    )
+    for path in paths:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        steps = [
+            step
+            for job in (document.get("jobs") or {}).values()
+            for step in job.get("steps") or []
+        ]
+        steps += (document.get("runs") or {}).get("steps") or []
+        for step in steps:
+            ref = str(step.get("uses", ""))
+            if ref and not ref.startswith("./"):
+                assert release_tag.match(ref), (path.name, ref)
 
 
 def _workflow_job_section(workflow, job_id):
@@ -398,7 +419,7 @@ def _assert_windows_python_policy(workflow_text, os_key="OS"):
     assert _matrix_values(workflow_text, os_key) == RUNNER_OSES
     assert "exclude:" in workflow_text
     for runner in ("windows-latest", "macOS-latest"):
-        for version in ("3.8", "3.9", "3.10", "3.11", "3.12"):
+        for version in sorted(PYTHON_VERSIONS - {"3.13"}):
             assert (
                 f'python-version: "{version}"\n            {os_key}: {runner}'
                 in workflow_text
@@ -406,20 +427,10 @@ def _assert_windows_python_policy(workflow_text, os_key="OS"):
     exclusions = workflow_text.split("        exclude:\n", 1)[1].split(
         "\n    steps:", 1
     )[0]
-    assert exclusions.count("- python-version:") == 10
+    assert exclusions.count("- python-version:") == 2 * (len(PYTHON_VERSIONS) - 1)
     assert "ubuntu-latest" not in exclusions
     assert 'python-version: "3.13"' not in exclusions
     assert "include:" not in exclusions
-
-
-def _assert_windows_legacy_python_is_excluded(workflow_text, os_key="OS"):
-    assert "exclude:" in workflow_text
-    for python_version in ("3.8", "3.9"):
-        excluded = (
-            f'python-version: "{python_version}"\n'
-            f"            {os_key}: windows-latest"
-        )
-        assert excluded in workflow_text
 
 
 def _assert_grouped_native_python_policy(workflow_text, component_key):
@@ -435,7 +446,7 @@ def _assert_grouped_native_python_policy(workflow_text, component_key):
     )
     select = workflow["jobs"]["python-versions"]["steps"][0]
     assert set(json.loads(select["env"]["FULL_PYTHON_VERSIONS"])) == PYTHON_VERSIONS
-    assert json.loads(select["env"]["PULL_REQUEST_PYTHON_VERSIONS"]) == ["3.8", "3.13"]
+    assert json.loads(select["env"]["PULL_REQUEST_PYTHON_VERSIONS"]) == ["3.11", "3.15"]
     assert select["env"]["FULL"] == (
         "${{ github.event_name != 'pull_request' || "
         "contains(github.event.pull_request.labels.*.name, 'ci:full') }}"
@@ -805,7 +816,7 @@ def test_full_suite_keeps_required_compiler_smoke_coverage():
     assert "runs-on: ubuntu-24.04" in full_suite
     for tool in ("glslangValidator", "spirv-as", "spirv-val", "dxc", "slangc", "nvcc"):
         assert tool in full_suite
-    assert "Jimver/cuda-toolkit@v0.2.35" in full_suite
+    assert "Jimver/cuda-toolkit@" in full_suite
     assert 'CUDA_VERSION: "13.2.0"' in full_suite
     assert "id: install_cuda" in full_suite
     assert "steps.install_cuda.outcome == 'failure'" in full_suite
@@ -965,20 +976,8 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
         "group: native-host-loader-${{ github.workflow }}-${{ github.ref }}" in workflow
     )
     assert "cancel-in-progress: true" in workflow
-    assert (
-        workflow.count(
-            "uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
-        )
-        == 3
-    )
-    assert (
-        workflow.count(
-            "uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
-        )
-        == 3
-    )
-    assert "uses: actions/checkout@v" not in workflow
-    assert "uses: actions/setup-python@v" not in workflow
+    assert workflow.count("uses: actions/checkout@") == 3
+    assert workflow.count("uses: actions/setup-python@") == 3
     assert workflow.count("persist-credentials: false") == 3
 
     job = _workflow_job_section(workflow, "generated-native-loader-abi")
@@ -989,7 +988,7 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     assert "python -m pip install -e . pytest-xdist" in job
     assert "CC: ${{ matrix.cc }}" in job
     assert "CXX: ${{ matrix.cxx }}" in job
-    assert "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756" in job
+    assert "uses: ilammy/msvc-dev-cmd@" in job
     assert "Compile and test generated C11 and C++17 loader artifacts" in job
     assert "python -m pytest -q -n auto" in job
     assert "tests/test_translator/test_native_loader_abi.py" in job
@@ -1013,9 +1012,7 @@ def test_native_host_loader_workflow_compiles_generated_abi_across_platforms():
     assert "name: Direct3D 12 native target adapter" in directx
     assert "runs-on: windows-latest" in directx
     assert "timeout-minutes: 30" in directx
-    assert (
-        "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756" in directx
-    )
+    assert "uses: ilammy/msvc-dev-cmd@" in directx
     assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in directx
     assert "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4" in (
         directx
@@ -1089,18 +1086,8 @@ def test_deferred_native_compilation_workflow_proves_contracts_and_device_dispat
         in workflow
     )
     assert "cancel-in-progress: true" in workflow
-    assert (
-        workflow.count(
-            "uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
-        )
-        == 3
-    )
-    assert (
-        workflow.count(
-            "uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
-        )
-        == 3
-    )
+    assert workflow.count("uses: actions/checkout@") == 3
+    assert workflow.count("uses: actions/setup-python@") == 3
     assert workflow.count("persist-credentials: false") == 3
     assert workflow.count("python -m pytest -q -n auto") == 3
     assert "continue-on-error" not in workflow
@@ -1734,7 +1721,7 @@ env:
 jobs:
   check:
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 """
         ),
         "missing.yml": (
@@ -1744,7 +1731,7 @@ name: Missing
 jobs:
   check:
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 """
         ),
         "no-actions.yml": (
@@ -2472,6 +2459,25 @@ def test_ci_coverage_reads_support_path_filters_only_from_pull_request_paths():
     assert report["required_path_filters"]["crosstl/backend/**"] is False
 
 
+@pytest.mark.parametrize(
+    ("trigger", "expected"),
+    [
+        ('  pull_request:\n    paths:\n      - "crosstl/**"\n', ["crosstl/**"]),
+        ("  pull_request:\n    branches: [main]\n", ["**"]),
+        ("  pull_request:\n", ["**"]),
+        ("  pull_request:  # every change\n", ["**"]),
+        ('  pull_request:\n    paths-ignore:\n      - "docs/**"\n', []),
+        ("  workflow_dispatch:\n", []),
+    ],
+)
+def test_ci_coverage_reports_unfiltered_triggers_as_every_path(trigger, expected):
+    module = _load_ci_coverage_module()
+    workflow = "name: Example\non:\n" + trigger + "jobs:\n  test:\n    runs-on: x\n"
+
+    assert module.workflow_event_path_filters(workflow, "pull_request") == expected
+    assert module.pull_request_path_filters(workflow) == expected
+
+
 def test_ci_coverage_reads_support_issue_sync_guards_from_their_steps():
     module = _load_ci_coverage_module()
     workflow = (WORKFLOW_DIR / "support-issue-sync.yml").read_text(encoding="utf-8")
@@ -2980,6 +2986,32 @@ def test_ci_coverage_comparison_reports_full_suite_download_retry_shrink():
     } in comparison["shrinks"]
 
 
+def test_ci_coverage_comparison_retires_pythons_below_the_declared_minimum():
+    module = _load_ci_coverage_module()
+    current = module.build_report()
+    assert current["package"]["minimum_python"] == min(
+        PYTHON_VERSIONS, key=module.python_version_key
+    )
+    baseline = copy.deepcopy(current)
+    for workflow in ("backend_tests", "translator_tests", "examples"):
+        baseline["workflows"][workflow]["python_versions"]["actual"] += ["3.9", "3.10"]
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+    assert comparison["summary"]["ok"] is True
+    assert comparison["retired_python_versions"] == ["3.9", "3.10"]
+
+    current["workflows"]["translator_tests"]["python_versions"]["actual"].remove("3.12")
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+    assert comparison["shrinks"] == [
+        {
+            "scope": "translator-tests.yml",
+            "dimension": "python_versions",
+            "removed": ["3.12"],
+            "added": [],
+        }
+    ]
+
+
 def test_ci_coverage_comparison_reports_added_coverage_without_shrink():
     module = _load_ci_coverage_module()
     baseline = module.build_report()
@@ -3329,7 +3361,7 @@ def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
         "python tools/support_signals.py docs --output "
         "support/generated/backend-docs-report.json"
     ) in support_matrix
-    assert "actions/upload-artifact@v4" in support_matrix
+    assert "actions/upload-artifact@" in support_matrix
     assert "if: always()" in support_matrix
     assert "retention-days: 30" in support_matrix
 
@@ -3478,7 +3510,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert '".github/ci-coverage-migrations.json"' in issue_sync
     assert "--output support/generated/ci-coverage-comparison.json" in issue_sync
     assert "--fail-on-shrink" in issue_sync
-    assert "actions/upload-artifact@v4" in issue_sync
+    assert "actions/upload-artifact@" in issue_sync
     assert "if: always()" in issue_sync
     assert "name: ci-coverage-report" in issue_sync
     assert "path: |" in issue_sync
@@ -3496,7 +3528,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "Open-Source Porting Demo" in issue_sync
     assert "Translator Tests" in issue_sync
     assert "name: Download test failure summaries" in issue_sync
-    assert "actions/download-artifact@v4" in issue_sync
+    assert "actions/download-artifact@" in issue_sync
     assert "run-id: ${{ github.event.workflow_run.id }}" in issue_sync
     assert 'pattern: "*failure-summary*"' in issue_sync
     assert "support/generated/pytest-failures" in issue_sync

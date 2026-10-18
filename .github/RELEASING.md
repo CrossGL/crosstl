@@ -10,12 +10,12 @@ workflows; the package check does not add Windows or macOS runners.
 
 `pyproject.toml` is the single source of package metadata and distribution
 contents. The pinned Flit backend supports source builds, wheels and editable
-installs on Python 3.8 and later without setuptools or wheel as build
+installs on Python 3.11 and later without setuptools or wheel as build
 dependencies. Use `python -m pip install .` or `python -m pip install -e .`;
 there is no separate `setup.py` build path.
 
 Release automation runs on Python 3.12 and checks isolated wheel and source
-installs on both Python 3.8 and 3.12 within the same Ubuntu job. Ordinary test
+installs on both Python 3.11 and 3.12 within the same Ubuntu job. Ordinary test
 matrices also exercise editable installs. Keep the metadata validator and PyPI
 upload action compatible with the backend's metadata format; an older upload
 tool can reject an otherwise valid archive. The current backend produces

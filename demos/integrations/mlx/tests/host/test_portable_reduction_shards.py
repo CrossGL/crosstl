@@ -475,7 +475,7 @@ def test_ci_requires_shards_and_complete_native_gates():
             assert variant["verification_timeout"] > 2 * 3600
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            workflow.get("on", workflow.get(True))[event]["paths"],
+            workflow.get("on", workflow.get(True))[event].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_reduction_shards.py",
         )
 

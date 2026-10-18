@@ -34042,12 +34042,7 @@ float {name}(int64_t value) {{
             return self.generate_glsl_ieee_operator_helper(name, operation)
         if operation == "atan2":
             return self.generate_glsl_atan2_helper(name, value_type, width)
-        # str.removeprefix needs Python 3.9; the library still supports 3.8.
-        builtin = (
-            operation[len("precise-") :]
-            if operation.startswith("precise-")
-            else operation
-        )
+        builtin = operation.removeprefix("precise-")
         unsigned = "uint" if width == 1 else f"uvec{width}"
         nan = (
             "isnan(value) ? value : result"

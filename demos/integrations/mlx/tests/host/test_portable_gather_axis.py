@@ -224,7 +224,7 @@ def test_axis_gather_ci_requires_native_unchanged_upstream_test():
     )
     for trigger in ("pull_request", "push"):
         assert_paths_covered(
-            workflow.get("on", workflow.get(True))[trigger]["paths"],
+            workflow.get("on", workflow.get(True))[trigger].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_gather_axis.py",
         )
 

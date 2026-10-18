@@ -685,7 +685,7 @@ def test_ci_requires_bitwise_execution_on_every_target():
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            workflow.get("on", workflow.get(True))[event]["paths"],
+            workflow.get("on", workflow.get(True))[event].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_bitwise.py",
         )
     assert any(

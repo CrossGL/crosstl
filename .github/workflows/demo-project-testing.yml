@@ -42,11 +42,11 @@ jobs:
       heavy: ${{ steps.plan.outputs.heavy }}
       smoke: ${{ steps.plan.outputs.smoke }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Select validation tier
@@ -75,10 +75,10 @@ jobs:
       EGL_PLATFORM: surfaceless
       PYOPENGL_PLATFORM: egl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install smoke prerequisites
@@ -118,7 +118,7 @@ jobs:
               2>&1 | tee mlx-smoke-results/execution.log
       - name: Upload smoke diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-smoke
           path: mlx-smoke-results
@@ -140,10 +140,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install OpenGL runtime and validation tools
@@ -279,7 +279,7 @@ jobs:
               2>&1 | tee .mlx-gather-opengl/random-byte-tails.log
       - name: Retain OpenGL execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-gather-opengl-${{ github.run_attempt }}
           path: .mlx-gather-opengl
@@ -302,10 +302,10 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 80
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: Install CrossTL and test dependencies
@@ -414,7 +414,7 @@ jobs:
               2>&1 | tee .mlx-gather/random-byte-tails.log
       - name: Retain original and translated execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-gather-metal-${{ github.run_attempt }}
           path: .mlx-gather
@@ -438,10 +438,10 @@ jobs:
     runs-on: xcode-27
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: Record floating atomic toolchain
@@ -478,7 +478,7 @@ jobs:
               2>&1 | tee .mlx-float-metal/execution.log
       - name: Retain floating atomic execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-float-metal-${{ github.run_attempt }}
           path: .mlx-float-metal
@@ -504,10 +504,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Initialize DirectX execution evidence
@@ -638,7 +638,7 @@ jobs:
               2>&1 | tee .mlx-gather-directx/random-byte-tails.log
       - name: Retain DirectX execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-gather-directx-${{ github.run_attempt }}
           path: .mlx-gather-directx
@@ -662,10 +662,10 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 185
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: Install CrossTL and test dependencies
@@ -756,6 +756,19 @@ jobs:
               tests/test_translator/test_metal_float_atomics.py \
               tests/test_translator/test_directx_float_atomics.py::test_original_metal_matches_atomic_oracle \
               2>&1 | tee .mlx-metal-host/float-atomics.log
+      - name: Validate multi-wave workgroup reductions
+        env:
+          CROSTL_REQUIRE_METAL_MULTIWAVE_REDUCTION: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-metal-host/multiwave-reductions
+          python tools/run_bounded_command.py --timeout-seconds 180 --label "Multi-wave workgroup reductions" -- \
+            python -m pytest -q -n auto \
+              --basetemp=.mlx-metal-host/multiwave-reductions/pytest \
+              --junitxml=.mlx-metal-host/multiwave-reductions/results.xml \
+              tests/test_translator/test_directx_multiwave_reduction.py \
+              2>&1 | tee .mlx-metal-host/multiwave-reductions.log
       - name: Checkout pinned upstream MLX
         run: |
           git init mlx-upstream
@@ -931,7 +944,7 @@ jobs:
               2>&1 | tee .mlx-metal-host/verification.log
       - name: Retain native host execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-metal-host-${{ github.run_attempt }}
           path: |
@@ -959,12 +972,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -1016,7 +1029,7 @@ jobs:
 
       - name: Upload native Metal evidence and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-native-metal-evidence-${{ github.run_attempt }}
           path: |
@@ -1043,12 +1056,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -1132,12 +1145,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -1209,10 +1222,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Initialize execution evidence
@@ -1893,6 +1906,7 @@ jobs:
               tests/test_translator/test_directx_subgroup_identity.py \
               tests/test_translator/test_directx_subgroup_uniformity.py \
               tests/test_translator/test_directx_subgroup_components.py \
+              tests/test_translator/test_directx_multiwave_reduction.py \
               2>&1 | tee .mlx-portable-host/software-reductions.log
       - name: Validate binary32 arithmetic
         if: >-
@@ -2299,7 +2313,7 @@ jobs:
               --packages .mlx-portable-host/packages --cast-batches --large-copies --binary-batches --unary-batches --scans --output-dir .mlx-portable-host/evidence 2>&1 | tee .mlx-portable-host/verification.log
       - name: Retain native execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-portable-host-${{ matrix.target }}${{ matrix.warp_qualification && format('-warp-{0}-qualification', matrix.warp_qualification) || '' }}-${{ github.run_attempt }}
           path: .mlx-portable-host
@@ -2338,10 +2352,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Initialize small-row evidence
@@ -2392,7 +2406,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Select same-run host packages
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         id: host-artifact
         env:
           MLX_TARGET: ${{ matrix.target }}
@@ -2407,7 +2421,7 @@ jobs:
             candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
             if (!candidates.length) throw new Error("The required host proof artifact is missing.");
             core.setOutput("id", candidates[0].id);
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-small-rows/base
@@ -2546,7 +2560,7 @@ jobs:
               2>&1 | tee .mlx-portable-small-rows/random-verification.log
       - name: Retain small-row execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-portable-small-rows-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-small-rows
@@ -2585,10 +2599,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Initialize half evidence
@@ -2642,7 +2656,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Select same-run host packages
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         id: host-artifact
         env:
           MLX_TARGET: ${{ matrix.target }}
@@ -2657,7 +2671,7 @@ jobs:
             candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
             if (!candidates.length) throw new Error("The required host proof artifact is missing.");
             core.setOutput("id", candidates[0].id);
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-half/base
@@ -2813,7 +2827,7 @@ jobs:
               2>&1 | tee .mlx-portable-half/upstream-blocks.log
       - name: Retain half execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-portable-half-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-half
@@ -2852,10 +2866,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Initialize integer64 evidence
@@ -2906,7 +2920,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Select same-run host packages
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         id: host-artifact
         env:
           MLX_TARGET: ${{ matrix.target }}
@@ -2921,7 +2935,7 @@ jobs:
             candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
             if (!candidates.length) throw new Error("The required host proof artifact is missing.");
             core.setOutput("id", candidates[0].id);
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-integer64/base
@@ -2998,7 +3012,7 @@ jobs:
               2>&1 | tee .mlx-portable-integer64/padding-verification.log
       - name: Retain integer64 execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-portable-integer64-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-integer64
@@ -3037,10 +3051,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Initialize slice update evidence
@@ -3091,7 +3105,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Select same-run integer64 packages
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         id: host-artifact
         env:
           MLX_TARGET: ${{ matrix.target }}
@@ -3106,7 +3120,7 @@ jobs:
             candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
             if (!candidates.length) throw new Error("The required host proof artifact is missing.");
             core.setOutput("id", candidates[0].id);
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-slice-update/base
@@ -3186,7 +3200,7 @@ jobs:
               2>&1 | tee .mlx-portable-slice-update/scatter-axis-verification.log
       - name: Retain slice update execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-portable-slice-update-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-slice-update
@@ -3237,10 +3251,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Initialize general scatter evidence
@@ -3294,7 +3308,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Select same-run integer64 packages
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         id: host-artifact
         env:
           MLX_TARGET: ${{ matrix.target }}
@@ -3309,7 +3323,7 @@ jobs:
             candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
             if (!candidates.length) throw new Error("The required host proof artifact is missing.");
             core.setOutput("id", candidates[0].id);
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-scatter/base
@@ -3343,7 +3357,7 @@ jobs:
               2>&1 | tee .mlx-portable-scatter/scatter-verification.log
       - name: Retain general scatter execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-portable-scatter-${{ matrix.target }}-${{ matrix.profile }}-${{ github.run_attempt }}
           path: .mlx-portable-scatter
@@ -3378,10 +3392,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Initialize row translation evidence
@@ -3407,7 +3421,7 @@ jobs:
               --output-dir .mlx-row-shard/packages 2>&1 | tee .mlx-row-shard/translation.log
       - name: Retain row translation evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-row-packages-${{ matrix.target }}-s${{ matrix.shard }}-${{ github.run_attempt }}
           path: .mlx-row-shard
@@ -3485,10 +3499,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Initialize reduction evidence
@@ -3539,7 +3553,7 @@ jobs:
           Expand-Archive $warpArchive -DestinationPath $warpRoot
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Select same-run host packages
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         id: host-artifact
         env:
           MLX_TARGET: ${{ matrix.target }}
@@ -3554,7 +3568,7 @@ jobs:
             candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
             if (!candidates.length) throw new Error("The required host proof artifact is missing.");
             core.setOutput("id", candidates[0].id);
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-reductions/base
@@ -3582,7 +3596,7 @@ jobs:
               --target ${{ matrix.target }} --family ${{ matrix.family }} --jobs 2 --output-dir .mlx-portable-reductions/packages 2>&1 | tee .mlx-portable-reductions/translation.log
       - name: Select same-run row shards
         if: matrix.family == 'row'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         id: row-artifacts
         env:
           MLX_TARGET: ${{ matrix.target }}
@@ -3603,7 +3617,7 @@ jobs:
             core.setOutput("ids", ids.join(","));
       - name: Download row shards
         if: matrix.family == 'row'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.row-artifacts.outputs.ids }}
           path: .mlx-portable-reductions/packages/shards
@@ -3644,7 +3658,7 @@ jobs:
               ${{ matrix.companion_args }} --output-dir .mlx-portable-reductions/evidence 2>&1 | tee .mlx-portable-reductions/verification.log
       - name: Retain reduction execution evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-portable-${{ matrix.family }}-reductions-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-reductions
@@ -3674,12 +3688,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -3762,7 +3776,7 @@ jobs:
 
       - name: Upload native artifact refresh evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: artifact-refresh-native-${{ runner.os }}
           path: |
@@ -3833,7 +3847,7 @@ jobs:
 
       - name: Upload Direct3D Metal math evidence
         if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: directx-metal-math
           path: directx-math-results
@@ -3867,7 +3881,7 @@ jobs:
 
       - name: Upload Direct3D reduction primitive diagnostics
         if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: directx-reduction-primitives
           path: mlx-current-results
@@ -3893,7 +3907,7 @@ jobs:
 
       - name: Upload atan2 signed-zero evidence
         if: always() && (runner.os == 'Windows' || runner.os == 'macOS')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: atan2-signed-zero-${{ runner.os }}
           path: atan2-results
@@ -3926,7 +3940,7 @@ jobs:
 
       - name: Upload OpenGL Metal math evidence
         if: always() && runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: opengl-metal-math
           path: opengl-math-results
@@ -3953,7 +3967,7 @@ jobs:
 
       - name: Upload native Metal package evidence
         if: always() && runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: metal-native-package
           path: metal-package-results
@@ -3977,7 +3991,7 @@ jobs:
 
       - name: Upload DirectX compiler path evidence
         if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: directx-compiler-paths
           path: directx-path-results
@@ -4021,7 +4035,7 @@ jobs:
 
       - name: Upload Metal builtin ownership evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: metal-builtin-ownership-${{ runner.os }}
           path: metal-ownership-results
@@ -4052,7 +4066,7 @@ jobs:
 
       - name: Upload scalar alias evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scalar-alias-resolution-${{ runner.os }}
           path: scalar-alias-results
@@ -4076,7 +4090,7 @@ jobs:
 
       - name: Upload DirectX allocation view evidence
         if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: directx-buffer-views-Windows
           path: directx-buffer-view-results
@@ -4127,7 +4141,7 @@ jobs:
 
       - name: Upload binary32 arithmetic evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary32-fused-arithmetic-${{ runner.os }}
           path: fused-math-results
@@ -4197,7 +4211,7 @@ jobs:
 
       - name: Upload complete scan evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-scan-${{ runner.os }}
           path: mlx-scan-results
@@ -4233,7 +4247,7 @@ jobs:
 
       - name: Upload extrema scan evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-extrema-scan-${{ runner.os }}
           path: mlx-extrema-scan-results
@@ -4269,7 +4283,7 @@ jobs:
 
       - name: Upload complex scan evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-complex-scan-${{ runner.os }}
           path: mlx-complex-scan-results
@@ -4311,7 +4325,7 @@ jobs:
 
       - name: Upload pinned unary fused arithmetic evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-unary-fma-${{ runner.os }}
           path: mlx-unary-fma-results
@@ -4339,7 +4353,7 @@ jobs:
 
       - name: Upload complex inverse trigonometry evidence
         if: always() && runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-complex-inverse-trig-${{ runner.os }}
           path: mlx-complex-inverse-trig-results
@@ -4376,7 +4390,7 @@ jobs:
 
       - name: Upload pinned unary roots and logarithms evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-unary-roots-logarithms-${{ runner.os }}
           path: mlx-unary-roots-logarithms-results
@@ -4411,7 +4425,7 @@ jobs:
 
       - name: Upload inverse hyperbolic cosine evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-acosh-${{ runner.os }}
           path: mlx-acosh-results
@@ -4445,7 +4459,7 @@ jobs:
 
       - name: Upload arctangent evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-atan-${{ runner.os }}
           path: mlx-atan-results
@@ -4483,7 +4497,7 @@ jobs:
 
       - name: Upload comparison arithmetic evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-boolean-promotion-${{ runner.os }}
           path: mlx-boolean-promotion-results
@@ -4517,7 +4531,7 @@ jobs:
 
       - name: Upload pinned copy evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-copy-${{ runner.os }}
           path: mlx-copy-results
@@ -4545,7 +4559,7 @@ jobs:
 
       - name: Upload current MLX GEMM native evidence
         if: always() && (runner.os == 'macOS' || runner.os == 'Windows')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-gemm-${{ runner.os }}
           path: mlx-gemm-results
@@ -4583,7 +4597,7 @@ jobs:
 
       - name: Upload current MLX complex-power evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-complex-power-${{ runner.os }}
           path: mlx-complex-power-results
@@ -4619,7 +4633,7 @@ jobs:
 
       - name: Upload current MLX binary shape evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-binary-shapes-${{ runner.os }}
           path: |
@@ -4921,7 +4935,7 @@ jobs:
 
       - name: Upload current MLX runtime diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-current-runtime-${{ matrix.os }}
           path: mlx-current-results
@@ -5072,7 +5086,7 @@ jobs:
 
       - name: Upload dot Direct3D evidence
         if: always() && runner.os == 'Windows' && steps.dot-directx.outcome != 'skipped'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-dot-directx
           path: |
@@ -5155,7 +5169,7 @@ jobs:
           always() && runner.os == 'Windows' &&
           (contains(fromJSON('["success","failure","cancelled"]'), steps.fft_pinned_directx.outcome) ||
           contains(fromJSON('["success","failure","cancelled"]'), steps.fft_current_directx.outcome))
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-fft-directx
           path: |
@@ -5638,7 +5652,7 @@ jobs:
         if: >-
           always() && runner.os == 'Linux' &&
           contains(fromJSON('["success","failure","cancelled"]'), steps.fft_current_opengl.outcome)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-fft-opengl
           path: |
@@ -6547,7 +6561,7 @@ jobs:
 
       - name: Upload MLX project-porting reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-project-porting-${{ matrix.os }}
           path: |
@@ -6592,12 +6606,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8185,7 +8199,7 @@ jobs:
 
       - name: Upload current MLX native parity evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-current-parity-${{ matrix.os }}-${{ matrix.group }}
           path: mlx-current-results
@@ -8214,12 +8228,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8253,7 +8267,7 @@ jobs:
 
       - name: Retain unary Metal source bundle
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unary-metal-sources-${{ matrix.shard_index }}
           path: .unary-metal-sources
@@ -8263,7 +8277,7 @@ jobs:
 
       - name: Retain unary Metal source evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unary-metal-evidence-${{ matrix.shard_index }}
           path: |
@@ -8286,12 +8300,12 @@ jobs:
     timeout-minutes: 75
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8303,7 +8317,7 @@ jobs:
           xcrun --sdk macosx metal --version
 
       - name: Download all unary Metal source shards
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: unary-metal-sources-*
           path: .unary-metal-sources
@@ -8320,7 +8334,7 @@ jobs:
 
       - name: Retain unary Metal native compilation evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unary-metal-native-compilation
           path: .unary-metal-native
@@ -8350,12 +8364,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8395,7 +8409,7 @@ jobs:
 
       - name: Upload unary OpenGL corpus evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-unary-opengl-corpus-${{ matrix.shard_index }}
           path: |
@@ -8427,12 +8441,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8471,7 +8485,7 @@ jobs:
 
       - name: Upload unary DirectX corpus evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-unary-directx-corpus-${{ matrix.shard_index }}
           path: |
@@ -8503,12 +8517,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8542,7 +8556,7 @@ jobs:
 
       - name: Retain binary Metal source bundle
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-metal-sources-${{ matrix.shard_index }}
           path: .binary-metal-sources
@@ -8552,7 +8566,7 @@ jobs:
 
       - name: Retain binary Metal source evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-metal-evidence-${{ matrix.shard_index }}
           path: |
@@ -8575,12 +8589,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8592,7 +8606,7 @@ jobs:
           xcrun --sdk macosx metal --version
 
       - name: Download all binary Metal source shards
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: binary-metal-sources-*
           path: .binary-metal-sources
@@ -8609,7 +8623,7 @@ jobs:
 
       - name: Retain binary Metal native compilation evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-metal-native-compilation
           path: .binary-metal-native
@@ -8639,12 +8653,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8678,7 +8692,7 @@ jobs:
 
       - name: Retain copy Metal source bundle
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: copy-metal-sources-${{ matrix.shard_index }}
           path: .copy-metal-sources
@@ -8688,7 +8702,7 @@ jobs:
 
       - name: Retain copy Metal source evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: copy-metal-evidence-${{ matrix.shard_index }}
           path: |
@@ -8711,12 +8725,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8728,7 +8742,7 @@ jobs:
           xcrun --sdk macosx metal --version
 
       - name: Download all copy Metal source shards
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: copy-metal-sources-*
           path: .copy-metal-sources
@@ -8745,7 +8759,7 @@ jobs:
 
       - name: Retain copy Metal native compilation evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: copy-metal-native-compilation
           path: .copy-metal-native
@@ -8775,12 +8789,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8814,7 +8828,7 @@ jobs:
 
       - name: Retain reduce Metal source bundle
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reduce-metal-sources-${{ matrix.shard_index }}
           path: .reduce-metal-sources
@@ -8824,7 +8838,7 @@ jobs:
 
       - name: Retain reduce Metal source evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reduce-metal-evidence-${{ matrix.shard_index }}
           path: |
@@ -8847,12 +8861,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8864,7 +8878,7 @@ jobs:
           xcrun --sdk macosx metal --version
 
       - name: Download all reduce Metal source shards
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: reduce-metal-sources-*
           path: .reduce-metal-sources
@@ -8881,7 +8895,7 @@ jobs:
 
       - name: Retain reduce Metal native compilation evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reduce-metal-native-compilation
           path: .reduce-metal-native
@@ -8911,12 +8925,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -8951,7 +8965,7 @@ jobs:
 
       - name: Retain quantized Metal source bundle
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quantized-metal-sources-${{ matrix.shard_index }}
           path: .quantized-metal-sources
@@ -8961,7 +8975,7 @@ jobs:
 
       - name: Retain quantized Metal source evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quantized-metal-evidence-${{ matrix.shard_index }}
           path: |
@@ -8985,12 +8999,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -9013,7 +9027,7 @@ jobs:
           test "$(git -C mlx-affine-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
 
       - name: Download all quantized Metal source shards
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: quantized-metal-sources-*
           path: .quantized-metal-sources
@@ -9040,7 +9054,7 @@ jobs:
 
       - name: Retain quantized Metal native compilation evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quantized-metal-native-compilation
           path: .quantized-metal-native
@@ -9065,12 +9079,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -9108,7 +9122,7 @@ jobs:
 
       - name: Upload quantized wide compiler results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-quantized-wide-opengl
           path: |
@@ -9139,12 +9153,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -9184,7 +9198,7 @@ jobs:
 
       - name: Upload reduce OpenGL corpus evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-reduce-opengl-corpus-${{ matrix.shard_index }}
           path: |
@@ -9216,12 +9230,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -9261,7 +9275,7 @@ jobs:
 
       - name: Upload copy OpenGL corpus evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-copy-opengl-corpus-${{ matrix.shard_index }}
           path: |
@@ -9293,12 +9307,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -9337,7 +9351,7 @@ jobs:
 
       - name: Upload copy DirectX corpus evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-copy-directx-corpus-${{ matrix.shard_index }}
           path: |
@@ -9369,12 +9383,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -9413,7 +9427,7 @@ jobs:
 
       - name: Upload reduce DirectX corpus evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-reduce-directx-corpus-${{ matrix.shard_index }}
           path: |
@@ -9445,12 +9459,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -9490,7 +9504,7 @@ jobs:
 
       - name: Upload binary OpenGL corpus evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-binary-opengl-corpus-${{ matrix.shard_index }}
           path: |
@@ -9522,12 +9536,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -9566,7 +9580,7 @@ jobs:
 
       - name: Upload binary DirectX corpus evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-binary-directx-corpus-${{ matrix.shard_index }}
           path: |
@@ -9594,12 +9608,12 @@ jobs:
 
     steps:
       - name: Checkout CrossTL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -9636,7 +9650,7 @@ jobs:
 
       - name: Upload MLX full-corpus scout reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mlx-full-corpus-scout
           path: |

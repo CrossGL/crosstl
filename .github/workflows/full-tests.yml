@@ -28,10 +28,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -64,7 +64,7 @@ jobs:
       - name: Upload complete test failure summary
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: full-test-failure-summary
           path: |
@@ -85,10 +85,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -225,7 +225,7 @@ jobs:
       - name: Upload shader validator failure summary
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: shader-validator-failure-summary-${{ matrix.os }}
           path: |
@@ -262,10 +262,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -403,10 +403,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -461,10 +461,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -516,7 +516,7 @@ jobs:
       - name: Install CUDA compiler
         id: install_cuda
         continue-on-error: true
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: ${{ env.CUDA_VERSION }}
           method: network
@@ -534,7 +534,7 @@ jobs:
 
       - name: Retry CUDA compiler install after repository sync
         if: steps.install_cuda.outcome == 'failure'
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: ${{ env.CUDA_VERSION }}
           method: network
@@ -638,7 +638,7 @@ jobs:
       - name: Upload compiler smoke failure summary
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compiler-smoke-linux-failure-summary
           path: |
@@ -655,10 +655,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           cache: pip
           cache-dependency-path: |
@@ -707,7 +707,7 @@ jobs:
       - name: Upload Metal compiler smoke failure summary
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compiler-smoke-macos-failure-summary
           path: |

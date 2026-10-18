@@ -261,7 +261,9 @@ def test_every_heavy_job_obeys_the_full_tier():
     assert plan["runs-on"] == "ubuntu-24.04"
     assert plan["outputs"].keys() == {"heavy", "smoke"}
     checkout = next(
-        step for step in plan["steps"] if step.get("uses") == "actions/checkout@v4"
+        step
+        for step in plan["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
     )
     assert checkout["with"]["fetch-depth"] == 0
     assert checkout["with"]["persist-credentials"] is False

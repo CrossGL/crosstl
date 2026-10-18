@@ -777,7 +777,7 @@ def test_scatter_ci_requires_separate_three_os_host_execution():
     assert steps["Retain general scatter execution evidence"]["if"] == "always()"
     for trigger in ("pull_request", "push"):
         assert_paths_covered(
-            workflow.get("on", workflow.get(True))[trigger]["paths"],
+            workflow.get("on", workflow.get(True))[trigger].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_scatter.py",
         )
 

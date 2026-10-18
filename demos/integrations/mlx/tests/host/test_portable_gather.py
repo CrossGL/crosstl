@@ -305,7 +305,7 @@ def test_gather_ci_requires_unchanged_tests_on_all_three_targets():
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60
     for trigger in ("pull_request", "push"):
         assert_paths_covered(
-            workflow.get("on", workflow.get(True))[trigger]["paths"],
+            workflow.get("on", workflow.get(True))[trigger].get("paths", ["**"]),
             "demos/integrations/mlx/tests/host/test_portable_gather.py",
         )
 
