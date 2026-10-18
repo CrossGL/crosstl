@@ -126,14 +126,27 @@
       },
       "evidence": {
         "casesWithDispatch": 434,
-        "casesWithEvidence": 1953,
+        "casesWithEvidence": 3468,
         "dispatchedShaders": 113,
+        "gatedCaseNamesWithCapabilityQuery": 28,
+        "hostOnlyCaseNames": 138,
         "pipelines": 134,
+        "policySha256": "c1e3f7bf5c0dfc1caea8bdde8a130de6888b905611c48d50eeca397617da802c",
         "records": {
+          "capability": 214,
           "device": 1,
           "dispatch": 169678,
           "pipeline": 134,
-          "readback": 58430
+          "readback": 58430,
+          "release": 62144,
+          "resource": 62144
+        },
+        "releasedResources": 62144,
+        "requiredCaseNamesExecuted": 3606,
+        "requiredCaseNamesWithEvidence": 3468,
+        "resources": {
+          "device": 61780,
+          "host": 364
         },
         "status": "passed",
         "translatedShaders": 144
@@ -155,145 +168,270 @@
           "atan": {
             "expression": "atan(x)",
             "identical": 50143,
-            "ulpMax": 2247
+            "ulpDistance": {
+              "max": 2247,
+              "p50": 1,
+              "p99": 1990,
+              "p99.9": 2210
+            }
           },
           "atan2": {
             "expression": "atan2(x, y)",
             "identical": 6490,
-            "ulpMax": 3294247
+            "ulpDistance": {
+              "max": 3294247,
+              "p50": 49,
+              "p99": 1886,
+              "p99.9": 2200
+            }
           },
           "cos": {
             "expression": "cos(x)",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "div": {
             "expression": "1.0 / x",
             "identical": 155660,
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "dot2": {
             "expression": "dot(float2(x, y), float2(27.619, 57.583))",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "dot3": {
             "expression": "dot(float3(x, y, z), float3(0.2126, 0.7152, 0.0722))",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "exp": {
             "expression": "exp(x)",
             "identical": 124880,
-            "ulpMax": 2
+            "ulpDistance": {
+              "max": 2,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 2
+            }
           },
           "exp2": {
             "expression": "exp2(x)",
             "identical": 124948,
-            "ulpMax": 8388608
+            "ulpDistance": {
+              "max": 8388608,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 2
+            }
           },
           "frac": {
             "expression": "frac(x)",
             "identical": 155658,
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "length2": {
             "expression": "length(float2(x, y))",
             "identical": 108282,
-            "ulpMax": 2
+            "ulpDistance": {
+              "max": 2,
+              "p50": 0,
+              "p99": 1,
+              "p99.9": 2
+            }
           },
           "lerp": {
             "expression": "lerp(x, y, frac(z))",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "log": {
             "expression": "log(x)",
             "identical": 117786,
-            "ulpMax": 3240472
+            "ulpDistance": {
+              "max": 3240472,
+              "p50": 0,
+              "p99": 6,
+              "p99.9": 14345
+            }
           },
           "log2": {
             "expression": "log2(x)",
             "identical": 108217,
-            "ulpMax": 4675013
+            "ulpDistance": {
+              "max": 4675013,
+              "p50": 0,
+              "p99": 5,
+              "p99.9": 14480
+            }
           },
           "mad": {
             "expression": "mad(x, 27.619, y)",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "multiply-add": {
             "expression": "x * 27.619 + y",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "normalize3": {
             "expression": "normalize(float3(x, y, z)).x",
             "identical": 116030,
-            "ulpMax": 3
+            "ulpDistance": {
+              "max": 3,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 2
+            }
           },
           "pow": {
             "expression": "pow(abs(x), frac(y) * 4.0)",
             "identical": 99526,
-            "ulpMax": 89
+            "ulpDistance": {
+              "max": 89,
+              "p50": 0,
+              "p99": 31,
+              "p99.9": 46
+            }
           },
           "pow-0.4545": {
             "expression": "pow(abs(x), 0.4545)",
             "identical": 61842,
-            "ulpMax": 25
+            "ulpDistance": {
+              "max": 25,
+              "p50": 1,
+              "p99": 6,
+              "p99.9": 8
+            }
           },
           "pow-2.2": {
             "expression": "pow(abs(x), 2.2)",
             "identical": 57885,
-            "ulpMax": 88
+            "ulpDistance": {
+              "max": 88,
+              "p50": 1,
+              "p99": 42,
+              "p99.9": 44
+            }
           },
           "rcp": {
             "expression": "rcp(x)",
             "identical": 155660,
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "rsqrt": {
             "expression": "rsqrt(x)",
             "identical": 128984,
-            "ulpMax": 2
+            "ulpDistance": {
+              "max": 2,
+              "p50": 0,
+              "p99": 1,
+              "p99.9": 1
+            }
           },
           "sin": {
             "expression": "sin(x)",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "smoothstep": {
             "expression": "smoothstep(0.0, 1.0, frac(x))",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "sqrt": {
             "expression": "sqrt(x)",
             "identical": 131672,
-            "ulpMax": 2
+            "ulpDistance": {
+              "max": 2,
+              "p50": 0,
+              "p99": 1,
+              "p99.9": 2
+            }
           },
           "tan": {
             "expression": "tan(x)",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           }
         },
         "inputs": 155660,
@@ -658,7 +796,7 @@
         "translated": 144
       },
       "translator": {
-        "commit": "8daf6aa431ccdff80857a70a0e413c40ec364362",
+        "commit": "636098e5a9c8b7435b3e228d60512a20e24afdc1",
         "package": "crosstl",
         "translatorTreeClean": true
       }
@@ -723,14 +861,27 @@
       },
       "evidence": {
         "casesWithDispatch": 440,
-        "casesWithEvidence": 1959,
+        "casesWithEvidence": 3468,
         "dispatchedShaders": 116,
+        "gatedCaseNamesWithCapabilityQuery": 28,
+        "hostOnlyCaseNames": 138,
         "pipelines": 137,
+        "policySha256": "c1e3f7bf5c0dfc1caea8bdde8a130de6888b905611c48d50eeca397617da802c",
         "records": {
+          "capability": 210,
           "device": 1,
           "dispatch": 169684,
           "pipeline": 137,
-          "readback": 58440
+          "readback": 58440,
+          "release": 62154,
+          "resource": 62154
+        },
+        "releasedResources": 62154,
+        "requiredCaseNamesExecuted": 3606,
+        "requiredCaseNamesWithEvidence": 3468,
+        "resources": {
+          "device": 61790,
+          "host": 364
         },
         "status": "passed",
         "translatedShaders": 148
@@ -752,145 +903,270 @@
           "atan": {
             "expression": "atan(x)",
             "identical": 50455,
-            "ulpMax": 8388434
+            "ulpDistance": {
+              "max": 8388434,
+              "p50": 1,
+              "p99": 1687,
+              "p99.9": 1871
+            }
           },
           "atan2": {
             "expression": "atan2(x, y)",
             "identical": 6038,
-            "ulpMax": 872414885
+            "ulpDistance": {
+              "max": 872414885,
+              "p50": 62,
+              "p99": 1597,
+              "p99.9": 1862
+            }
           },
           "cos": {
             "expression": "cos(x)",
             "identical": 155660,
             "mismatches": 0,
             "required": "bit-identical to WARP",
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "div": {
             "expression": "1.0 / x",
             "identical": 155658,
-            "ulpMax": 2097152
+            "ulpDistance": {
+              "max": 2097152,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "dot2": {
             "expression": "dot(float2(x, y), float2(27.619, 57.583))",
             "identical": 155657,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 58
+            "ulpDistance": {
+              "max": 58,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "dot3": {
             "expression": "dot(float3(x, y, z), float3(0.2126, 0.7152, 0.0722))",
             "identical": 155658,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 605657
+            "ulpDistance": {
+              "max": 605657,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "exp": {
             "expression": "exp(x)",
             "identical": 118771,
-            "ulpMax": 3
+            "ulpDistance": {
+              "max": 3,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 3
+            }
           },
           "exp2": {
             "expression": "exp2(x)",
             "identical": 120142,
-            "ulpMax": 3
+            "ulpDistance": {
+              "max": 3,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 3
+            }
           },
           "frac": {
             "expression": "frac(x)",
             "identical": 155658,
-            "ulpMax": 1065353216
+            "ulpDistance": {
+              "max": 1065353216,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "length2": {
             "expression": "length(float2(x, y))",
             "identical": 155660,
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "lerp": {
             "expression": "lerp(x, y, frac(z))",
             "identical": 155657,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 1
+            "ulpDistance": {
+              "max": 1,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "log": {
             "expression": "log(x)",
             "identical": 144061,
-            "ulpMax": 1020260556
+            "ulpDistance": {
+              "max": 1020260556,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 6
+            }
           },
           "log2": {
             "expression": "log2(x)",
             "identical": 141383,
-            "ulpMax": 1015152640
+            "ulpDistance": {
+              "max": 1015152640,
+              "p50": 0,
+              "p99": 1,
+              "p99.9": 6
+            }
           },
           "mad": {
             "expression": "mad(x, 27.619, y)",
             "identical": 155657,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 28
+            "ulpDistance": {
+              "max": 28,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "multiply-add": {
             "expression": "x * 27.619 + y",
             "identical": 155657,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 28
+            "ulpDistance": {
+              "max": 28,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "normalize3": {
             "expression": "normalize(float3(x, y, z)).x",
             "identical": 155659,
-            "ulpMax": 0
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "pow": {
             "expression": "pow(abs(x), frac(y) * 4.0)",
             "identical": 94974,
-            "ulpMax": 1065353215
+            "ulpDistance": {
+              "max": 1065353215,
+              "p50": 0,
+              "p99": 16,
+              "p99.9": 39
+            }
           },
           "pow-0.4545": {
             "expression": "pow(abs(x), 0.4545)",
             "identical": 51406,
-            "ulpMax": 580600162
+            "ulpDistance": {
+              "max": 580600162,
+              "p50": 1,
+              "p99": 5,
+              "p99.9": 8
+            }
           },
           "pow-2.2": {
             "expression": "pow(abs(x), 2.2)",
             "identical": 47787,
-            "ulpMax": 84
+            "ulpDistance": {
+              "max": 84,
+              "p50": 1,
+              "p99": 28,
+              "p99.9": 42
+            }
           },
           "rcp": {
             "expression": "rcp(x)",
             "identical": 155658,
-            "ulpMax": 2097152
+            "ulpDistance": {
+              "max": 2097152,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "rsqrt": {
             "expression": "rsqrt(x)",
             "identical": 155658,
-            "ulpMax": 449510157
+            "ulpDistance": {
+              "max": 449510157,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "sin": {
             "expression": "sin(x)",
             "identical": 155659,
             "mismatches": 0,
             "required": "bit-identical to WARP",
-            "ulpMax": 8388606
+            "ulpDistance": {
+              "max": 8388606,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "smoothstep": {
             "expression": "smoothstep(0.0, 1.0, frac(x))",
             "identical": 155659,
             "mismatches": 0,
             "required": "bit-identical to WARP; subnormal flushing may differ",
-            "ulpMax": 1065353216
+            "ulpDistance": {
+              "max": 1065353216,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "sqrt": {
             "expression": "sqrt(x)",
             "identical": 155658,
-            "ulpMax": 439682291
+            "ulpDistance": {
+              "max": 439682291,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           },
           "tan": {
             "expression": "tan(x)",
             "identical": 155659,
             "mismatches": 0,
             "required": "bit-identical to WARP",
-            "ulpMax": 8388606
+            "ulpDistance": {
+              "max": 8388606,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
           }
         },
         "inputs": 155660,
@@ -1254,15 +1530,15 @@
         "translated": 148
       },
       "translator": {
-        "commit": "8daf6aa431ccdff80857a70a0e413c40ec364362",
+        "commit": "636098e5a9c8b7435b3e228d60512a20e24afdc1",
         "package": "crosstl",
         "translatorTreeClean": true
       }
     }
   },
   "provenance": {
-    "sourceCommit": "0583b807e31ef8ea98e029093c60340a42338df8",
-    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39099713804/attempts/1"
+    "sourceCommit": "3a2de27370336852276bc67bea59d86cf9c692d3",
+    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39105438960/attempts/1"
   },
   "schemaVersion": 1,
   "status": "passed",
