@@ -11972,7 +11972,9 @@ class MetalCodeGen:
                 f"{source_info['type']}: total widths are "
                 f"{target_info['totalWidth']} and {source_info['totalWidth']} bits"
             )
-        rendered = self.generate_expression(argument)
+        # A bit cast's operand has its own type; the expected type of the result
+        # must not convert the operand's arithmetic to the result's signedness.
+        rendered = self.generate_expression_with_expected(argument, None)
         storage_type = self.metal_native_narrow_bitcast_storage_type(source_value_type)
         if storage_type is not None:
             rendered = f"{storage_type}({rendered})"
@@ -12010,7 +12012,8 @@ class MetalCodeGen:
         if target_type is None:
             return None
 
-        arg = self.generate_expression(args[0])
+        # The operand keeps its own type (see generate_metal_explicit_as_type_call).
+        arg = self.generate_expression_with_expected(args[0], None)
         return f"as_type<{target_type}>({arg})"
 
     def metal_integer_bit_result_type(self, func_name, args):

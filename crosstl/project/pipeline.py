@@ -137,6 +137,7 @@ from crosstl.translator.metadata_preconditions import (
 )
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.resource_identity import source_resource_identity
+from crosstl.translator.semantics import apply_rule_carrying
 from crosstl.translator.source_registry import (
     SOURCE_REGISTRY,
     SourceSpec,
@@ -27237,7 +27238,9 @@ def _crossgl_ast_for_project_target(
     ast.annotations["dispatch_region_intermediate_hash"] = hashlib.sha256(
         intermediate.encode("utf-8")
     ).hexdigest()
-    return fold_frozen_specialization_branches(ast, frozen_constants)
+    ast = fold_frozen_specialization_branches(ast, frozen_constants)
+    apply_rule_carrying(ast, original_source_backend, target)
+    return ast
 
 
 def _project_workgroup_execution_metadata(
