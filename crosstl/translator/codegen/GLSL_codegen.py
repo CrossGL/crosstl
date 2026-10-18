@@ -2561,7 +2561,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_glsl_precise_return_type = None
         self.current_glsl_precise_function = False
         self.current_glsl_precise_captures = None
-        self.current_glsl_precise_written_names = frozenset()
+        self.current_glsl_precise_value_writes = {}
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         self.function_fragment_only_requirements = {}
@@ -6717,7 +6717,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_glsl_precise_return_type = None
         self.current_glsl_precise_function = False
         self.current_glsl_precise_captures = None
-        self.current_glsl_precise_written_names = frozenset()
+        self.current_glsl_precise_value_writes = {}
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         self.function_fragment_only_requirements = {}
@@ -17127,8 +17127,8 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         previous_precise_return_type = self.current_glsl_precise_return_type
         previous_precise_function = self.current_glsl_precise_function
         previous_precise_captures = self.current_glsl_precise_captures
-        previous_precise_written_names = getattr(
-            self, "current_glsl_precise_written_names", frozenset()
+        previous_precise_value_writes = getattr(
+            self, "current_glsl_precise_value_writes", {}
         )
         previous_local_variable_types = self.local_variable_types
         previous_local_variable_source_types = self.local_variable_source_types
@@ -17169,11 +17169,11 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_glsl_precise_captures = (
             [] if self.current_glsl_precise_function else None
         )
-        self.current_glsl_precise_written_names = (
-            self.glsl_written_value_names(getattr(func, "body", None))
+        self.current_glsl_precise_value_writes = (
+            self.glsl_precise_value_writes(getattr(func, "body", None))
             if self.current_glsl_precise_function
             and getattr(func, "body", None) is not None
-            else frozenset()
+            else {}
         )
         precise_parameter_copies = []
         written_value_names = (
@@ -17407,7 +17407,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
             self.current_glsl_precise_return_type = previous_precise_return_type
             self.current_glsl_precise_function = previous_precise_function
             self.current_glsl_precise_captures = previous_precise_captures
-            self.current_glsl_precise_written_names = previous_precise_written_names
+            self.current_glsl_precise_value_writes = previous_precise_value_writes
             self.local_variable_types = previous_local_variable_types
             self.local_variable_source_types = previous_local_variable_source_types
             self.current_identifier_aliases = previous_identifier_aliases
@@ -17743,7 +17743,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_function_return_type = previous_function_return_type
         self.current_glsl_precise_return_type = previous_precise_return_type
         self.current_glsl_precise_function = previous_precise_function
-        self.current_glsl_precise_written_names = previous_precise_written_names
+        self.current_glsl_precise_value_writes = previous_precise_value_writes
         self.local_variable_types = previous_local_variable_types
         self.local_variable_source_types = previous_local_variable_source_types
         self.current_generic_function_substitutions = (
@@ -26716,21 +26716,84 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         """Return whether ``precise`` cannot constrain a local's value.
 
         ``precise`` orders the floating-point operations that produce a value.
-        A boolean or integer scalar or vector local that is never written after
-        an initializer without floating-point arithmetic has no such operation.
-        An arithmetic operation of unknown type counts as floating point.
+        A boolean or integer scalar or vector local has none when neither its
+        initializer nor any write to it has floating-point arithmetic. A
+        floating-point local has none when it is never written and its
+        initializer only reinterprets the bits of such a value. An arithmetic
+        operation of unknown type counts as floating point.
         """
         info = self.glsl_value_type_info(declared_type)
-        if info is None or info["family"] == "float":
-            return False
         name = getattr(node, "name", None)
-        if not isinstance(name, str) or name in getattr(
-            self, "current_glsl_precise_written_names", ()
-        ):
+        if info is None or not isinstance(name, str):
+            return False
+        writes = getattr(self, "current_glsl_precise_value_writes", None) or {}
+        initial_value = getattr(node, "initial_value", None)
+        if info["family"] == "float":
+            if name in writes or not self.glsl_is_bit_reinterpretation(initial_value):
+                return False
+            return not self.glsl_expression_has_float_arithmetic(
+                initial_value.args, unknown_is_float=True
+            )
+        if writes.get(name, False):
             return False
         return not self.glsl_expression_has_float_arithmetic(
-            getattr(node, "initial_value", None), unknown_is_float=True
+            initial_value, unknown_is_float=True
         )
+
+    def glsl_is_bit_reinterpretation(self, expression):
+        """Return whether ``expression`` calls a builtin bit reinterpretation."""
+        if not isinstance(expression, FunctionCallNode):
+            return False
+        name = self.function_call_name(expression)
+        if not isinstance(name, str) or name in self.function_definitions:
+            return False
+        native_aliases = {
+            "floatBitsToInt": "asint",
+            "floatBitsToUint": "asuint",
+            "intBitsToFloat": "asfloat",
+            "uintBitsToFloat": "asfloat",
+        }
+        return (
+            native_aliases.get(name, name) in self.GLSL_BITCAST_FUNCTIONS
+            or self.metal_as_type_target(name) is not None
+        )
+
+    def glsl_precise_value_writes(self, body):
+        """Map each root name written in ``body`` to whether a write to it may
+        evaluate floating-point arithmetic.
+
+        A compound arithmetic assignment adds its own operation, which counts
+        as floating point when its operand is floating point or of unknown
+        type. Increments and decrements of floating-point values belong to
+        floating-point locals, which every write keeps precise.
+        """
+        writes = {}
+        for node in self.walk_ast(body):
+            target = None
+            float_write = False
+            if isinstance(node, AssignmentNode):
+                target = getattr(node, "target", getattr(node, "left", None))
+                value = getattr(node, "value", getattr(node, "right", None))
+                float_write = self.glsl_expression_has_float_arithmetic(
+                    value, unknown_is_float=True
+                )
+                operator = self.map_operator(getattr(node, "operator", "=") or "=")
+                if not float_write and str(operator)[:-1] in (
+                    self.GLSL_PRECISE_ARITHMETIC_OPERATORS
+                ):
+                    info = self.glsl_value_type_info(
+                        self.glsl_source_expression_type(value)
+                    )
+                    float_write = info is None or info["family"] == "float"
+            elif isinstance(node, UnaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"++", "--"}:
+                target = getattr(node, "operand", None)
+            if target is None:
+                continue
+            for name in self.glsl_mutation_target_names(target):
+                writes[name] = writes.get(name, False) or float_write
+        return writes
 
     @staticmethod
     def glsl_has_precise_qualifier(node):

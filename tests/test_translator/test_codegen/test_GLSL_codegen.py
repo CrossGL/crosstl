@@ -15992,8 +15992,8 @@ def test_glsl_precise_function_returns_lower_through_precise_locals(tmp_path):
 
 
 def test_glsl_precise_function_qualifies_only_locals_with_float_operations(tmp_path):
-    # precise orders the floating-point operations that produce a value, so an
-    # integer local is precise only when a float operation can reach it.
+    # precise orders the floating-point operations that produce a value, so a
+    # local is precise only when a float operation can reach it.
     code = """
     shader PreciseIntegerLocals {
         @precise
@@ -16003,8 +16003,17 @@ def test_glsl_precise_function_qualifies_only_locals_with_float_operations(tmp_p
             int rounded = int(value * scale + 0.5);
             uint counter = 0u;
             counter = counter + 1u;
+            uint masked = bits;
+            masked &= 2147483648u;
+            int accumulated = 0;
+            accumulated = accumulated + int(value * scale);
+            float positive = uintBitsToFloat(magnitude);
+            float rebuilt = uintBitsToFloat(floatBitsToUint(value * scale));
+            float adjusted = uintBitsToFloat(masked);
+            adjusted = adjusted * scale;
             bool large = magnitude > 1065353216u;
-            return large ? float(rounded + int(counter)) : value * scale;
+            float total = positive + rebuilt + adjusted;
+            return large ? float(rounded + int(counter) + accumulated) : total;
         }
 
         compute {
@@ -16021,7 +16030,15 @@ def test_glsl_precise_function_qualifies_only_locals_with_float_operations(tmp_p
     assert "    uint magnitude = (bits & 2147483647u);" in generated_code
     assert "    bool large = (magnitude > 1065353216u);" in generated_code
     assert "precise int rounded = " in generated_code
-    assert "precise uint counter = 0u;" in generated_code
+    # Integer-only writes add no floating-point operation.
+    assert "    uint counter = 0u;" in generated_code
+    assert "    uint masked = bits;" in generated_code
+    assert "precise int accumulated = 0;" in generated_code
+    # A bit reinterpretation is exact unless its operand has float arithmetic.
+    assert "    float positive = uintBitsToFloat(magnitude);" in generated_code
+    assert "precise float rebuilt = " in generated_code
+    assert "precise float adjusted = " in generated_code
+    assert "precise float total = " in generated_code
     assert "precise float crossglPreciseReturn = " in generated_code
     assert_glsl_compute_validates_if_available(
         generated_code,
