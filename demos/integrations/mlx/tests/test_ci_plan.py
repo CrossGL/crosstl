@@ -219,6 +219,13 @@ def test_invalid_diff_revisions_fail_instead_of_skipping(base, head):
         changed_paths(base, head)
 
 
+def test_documentation_only_pull_request_skips_every_mlx_job():
+    assert validation_plan("pull_request", ["docs/source/index.rst", "README.md"]) == {
+        "heavy": False,
+        "smoke": False,
+    }
+
+
 def test_merge_queue_runs_every_tier(tmp_path, capsys):
     assert validation_plan("merge_group", ["docs/source/index.rst"]) == {
         "heavy": True,

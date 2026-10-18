@@ -337,7 +337,8 @@ def _workflow_event_paths(workflow_text, event_name):
             if item:
                 paths.append(item.group(1).strip("\"'"))
         return paths
-    raise AssertionError(f"workflow event has no paths filter: {event_name}")
+    # An event without a paths filter runs the workflow for every change.
+    return ["**"]
 
 
 def _matrix_values(workflow_text, key):
