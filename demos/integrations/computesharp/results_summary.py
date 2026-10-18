@@ -5,7 +5,8 @@
 per-case image comparisons and the evidence details. This module reduces it to
 ``results.json``: for each profile the device and its hardware or software
 execution, the case outcomes per contract category, the evidence counts, every
-negative control, the intrinsic precision against WARP and the image metrics
+negative control, the arithmetic exactness of the translated artifacts on the
+target compiler, the intrinsic precision against WARP and the image metrics
 of every shader against the original WARP output with their bounds. The
 summary is a pure function of the report and the workflow provenance, so the
 results of a workflow run can be regenerated from its qualification artifact:
@@ -107,6 +108,19 @@ def _precision(section: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _exactness(section: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "tool",
+        "exactArtifacts",
+        "notCompiled",
+        "floatOperations",
+        "contractible",
+    )
+    return {"status": section.get("status")} | {
+        key: section[key] for key in keys if key in section
+    }
+
+
 def _shader_images(section: dict[str, Any]) -> dict[str, Any]:
     references = section.get("references") or {}
     shaders: dict[str, Any] = {}
@@ -185,6 +199,10 @@ def summarize_profile(profile: dict[str, Any]) -> dict[str, Any]:
         summary["evidence"] = _evidence(_section(profile, "evidence"))
     if "negativeControls" in profile:
         summary["negativeControls"] = _controls(_section(profile, "negativeControls"))
+    if "arithmeticExactness" in profile:
+        summary["arithmeticExactness"] = _exactness(
+            _section(profile, "arithmeticExactness")
+        )
     if "intrinsicPrecision" in profile:
         summary["intrinsicPrecision"] = _precision(
             _section(profile, "intrinsicPrecision")
