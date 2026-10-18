@@ -388,10 +388,11 @@ NIR_INSTRUCTION = re.compile(r"^\s*\d+(?:x\d+)?\s+%\d+ = (\w+)(!?) ")
 def test_opengl_evaluates_precise_functions_as_written(tmp_path):
     code = translate(CONTRACTION_PROBE_HLSL, tmp_path, "opengl")
 
-    # Locals are precise; a written value parameter is copied into one and an
-    # output parameter is qualified.
+    # Float locals are precise; an integer local that no float arithmetic
+    # reaches is not. A written value parameter is copied into a precise local
+    # and an output parameter is qualified.
     assert "precise vec4 p = results[gl_GlobalInvocationID.x];" in code
-    assert "for (precise int i = 0; " in code
+    assert "for (int i = 0; " in code
     assert re.search(
         r"float Weighted\(float (\w+), float y\) \{\n    precise float x = \1;", code
     )
@@ -399,7 +400,7 @@ def test_opengl_evaluates_precise_functions_as_written(tmp_path):
     # Conditions, user-function arguments and values stored outside the
     # function's locals go through precise locals declared at entry.
     for pattern in (
-        r"for \(precise int i = 0; \((\w+) = \(\(i < count\) && ",
+        r"for \(int i = 0; \((\w+) = \(\(i < count\) && ",
         r"if \(\((\w+) = \(\(\(p\.y \* scale\) \+ bias\) > 0\.5\)\)\)",
         r"precise float t = \(\((\w+) = \(\(\(p\.z \* p\.w\) \+ bias\) > 0\.25\)\)",
         r"Accumulate\(total, \((\w+) = \(\(shared_\[i\] \* p\.w\) \+ bias\)\)\)",
