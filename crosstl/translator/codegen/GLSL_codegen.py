@@ -33229,7 +33229,12 @@ float {name}(int64_t value) {{
                 f"    precise {value_type} result = left - right;\n"
                 "    return result;\n}\n"
             )
-        builtin = operation.removeprefix("precise-")
+        # str.removeprefix needs Python 3.9; the library still supports 3.8.
+        builtin = (
+            operation[len("precise-") :]
+            if operation.startswith("precise-")
+            else operation
+        )
         unsigned = "uint" if width == 1 else f"uvec{width}"
         nan = (
             "isnan(value) ? value : result"
