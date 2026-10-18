@@ -27658,15 +27658,21 @@ class MetalCodeGen:
     def image_load_component_suffix(self, image_type, image_format):
         if self.suppress_image_load_component_suffix:
             return ""
+        expected_scalar = self.is_scalar_value_type(
+            self.current_expression_expected_type
+        )
+        scalar_integer_resource = (
+            self.is_scalar_integer_image_resource(image_type, image_format)
+            and self.expected_component_count() != 4
+        )
+        if image_format is None and not expected_scalar:
+            # Unformatted loads yield four channels; only a scalar context
+            # selects the first one.
+            scalar_integer_resource = False
         return storage_image_load_component_suffix(
             image_format,
-            expected_scalar=self.is_scalar_value_type(
-                self.current_expression_expected_type
-            ),
-            scalar_integer_resource=self.is_scalar_integer_image_resource(
-                image_type, image_format
-            )
-            and self.expected_component_count() != 4,
+            expected_scalar=expected_scalar,
+            scalar_integer_resource=scalar_integer_resource,
             float_resource=self.is_float_image_resource(image_type),
         )
 
@@ -27747,7 +27753,10 @@ class MetalCodeGen:
         if image_format:
             return image_format_result_type(image_format)
         image_type = self.texture_argument_resource_type(image_arg)
-        return metal_storage_image_component_type(image_type)
+        component_type = metal_storage_image_component_type(image_type)
+        # Without a format qualifier, imageLoad yields all four channels, as
+        # Metal's read() does; callers select components explicitly.
+        return f"{component_type}4" if component_type else None
 
     def image_load_component_kind(self, image_type, image_format):
         if image_format:
