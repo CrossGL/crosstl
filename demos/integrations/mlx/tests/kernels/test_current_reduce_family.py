@@ -2097,9 +2097,20 @@ def _request(descriptor, package, target, entry, data):
         values["in"] = _runtime_value(target, info["itype"], data["storage"])
     for name, (dtype, items) in data["metadata"].items():
         values[name] = _metadata_value(dtype, items)
-    inputs, observed, output = {}, [], None
+    inputs, observed, output, generated = {}, [], None, 0
     for binding in descriptor["bindings"]:
-        source = binding.get("provenance", {}).get("sourceResource")
+        provenance = binding.get("provenance", {})
+        if "executionInput" in provenance:
+            # HLSL has no threadgroups_per_grid builtin: the column kernels
+            # that read it get a constant buffer the loader fills from the
+            # dispatch.
+            assert target == "directx", binding
+            assert provenance["executionInput"]["valueSource"] == (
+                "dispatch.workgroupCount"
+            ), binding
+            generated += 1
+            continue
+        source = provenance.get("sourceResource")
         assert source is not None, binding
         name = source["parameter"]
         value = values[name]
@@ -2131,6 +2142,12 @@ def _request(descriptor, package, target, entry, data):
     )
     assert request.execution_plan is not None
     assert request.execution_plan.diagnostics == ()
+    derived = [
+        item.value.values
+        for item in request.execution_plan.resource_bindings
+        if item.value is not None and "executionInput" in item.value.metadata
+    ]
+    assert derived == [list(data["grid"])] * generated
     return request, {"out": output}, len(observed)
 
 
