@@ -32,6 +32,8 @@ RELEVANT_PATHS = (
     "demos/integrations/computesharp/**",
     "pyproject.toml",
     "setup.py",
+    # The translated target jobs dispatch these general layout checks.
+    "tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py",
 )
 # Events without a meaningful change set validate everything.
 UNCONDITIONAL_EVENTS = frozenset({"schedule", "workflow_dispatch"})

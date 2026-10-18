@@ -277,7 +277,7 @@ jobs:
         with:
           dotnet-version: "10.0.400"
       - name: Install CrossTL
-        run: python -m pip install -e .
+        run: python -m pip install -e . pytest==9.1.1
       - name: Install the Metal toolchain
         run: |
           set -euo pipefail
@@ -325,6 +325,14 @@ jobs:
           --adapted adapted-computesharp --target metal
           --native-library evidence/run/native/libcsbackend_metal.dylib
           --output evidence/precision
+      - name: Dispatch the HLSL constant-buffer layout checks on Metal
+        if: ${{ !cancelled() }}
+        env:
+          CROSSTL_REQUIRE_HLSL_CBUFFER_EXECUTION: "1"
+        run: >-
+          python -m pytest -q -rs
+          tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py
+          --junitxml=evidence/hlsl-cbuffer-layouts.xml
       - name: Compress dispatch evidence
         if: always()
         run: find evidence -name evidence.jsonl -exec gzip -9 {} \;
@@ -367,7 +375,7 @@ jobs:
             libegl-dev libgl-dev libegl1 libegl-mesa0 libgl1-mesa-dri libgbm1
           dpkg-query -W libegl-mesa0 libgl1-mesa-dri
       - name: Install CrossTL
-        run: python -m pip install -e .
+        run: python -m pip install -e . pytest==9.1.1 moderngl==5.12.0
       - name: Apply the documented non-Windows upstream patches
         run: >-
           python demos/integrations/computesharp/prepare_upstream.py
@@ -412,6 +420,15 @@ jobs:
           --adapted adapted-computesharp --target opengl
           --native-library evidence/run/native/libcsbackend_gl.so
           --output evidence/precision
+      - name: Dispatch the HLSL constant-buffer layout checks on OpenGL
+        if: ${{ !cancelled() }}
+        env:
+          CROSSTL_REQUIRE_HLSL_CBUFFER_EXECUTION: "1"
+          EGL_PLATFORM: surfaceless
+        run: >-
+          python -m pytest -q -rs
+          tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py
+          --junitxml=evidence/hlsl-cbuffer-layouts.xml
       - name: Compress dispatch evidence
         if: always()
         run: find evidence -name evidence.jsonl -exec gzip -9 {} \;

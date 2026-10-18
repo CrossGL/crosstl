@@ -35,6 +35,7 @@ RELEVANT_PATHS = {
     "demos/integrations/computesharp/**",
     "pyproject.toml",
     "setup.py",
+    "tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py",
 }
 RESULT_CHECK = "ComputeSharp validation result"
 MAX_RETENTION_DAYS = 14
@@ -278,6 +279,32 @@ def test_plan_reads_the_diff_from_the_merge_base(tmp_path, monkeypatch):
         == 0
     )
     assert output.read_text(encoding="utf-8") == "run=false\n"
+
+
+def test_target_jobs_require_the_hlsl_cbuffer_layout_dispatches():
+    """Each translated target job dispatches the general layout checks natively."""
+    jobs = load_workflow()["jobs"]
+    for name, extra in (
+        ("translated-metal", ()),
+        ("translated-opengl", ("moderngl==",)),
+    ):
+        steps = jobs[name]["steps"]
+        install = next(step for step in steps if step.get("name") == "Install CrossTL")
+        for package in ("pytest==", *extra):
+            assert package in install["run"], (name, package)
+        checks = [
+            step
+            for step in steps
+            if "tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py"
+            in step.get("run", "")
+        ]
+        assert len(checks) == 1, name
+        assert checks[0]["env"]["CROSSTL_REQUIRE_HLSL_CBUFFER_EXECUTION"] == "1"
+        assert checks[0]["if"] == "${{ !cancelled() }}"
+        assert "--junitxml=evidence/" in checks[0]["run"]
+    assert PLAN.is_relevant(
+        "tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py"
+    )
 
 
 def test_relevant_paths_exclude_other_projects():
