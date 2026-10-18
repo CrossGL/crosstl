@@ -3,6 +3,49 @@
 The CI suite separates portable Python compatibility from native GPU toolchain
 and runtime checks.
 
+## Tiers
+
+Every pull request, including one from a contributor without a Mac or a
+Windows machine, gets Linux, macOS and Windows coverage without asking:
+
+- **Pull request tier.** Runs on every push.
+  - Translator and backend tests for every component on Python 3.8 and 3.13
+    on Ubuntu, plus one job each on macOS and Windows that runs every
+    component on Python 3.13.
+  - The complete core suite.
+  - Shader validators and runtime parity on all three platforms.
+  - Native Direct3D and Metal smoke checks.
+  - The example matrix.
+  - The MLX translation and numerical smoke job.
+  - Path-filtered demo workflows for the files they cover.
+- **Merge queue tier.** The `merge_group` event runs each gating workflow once
+  more on the exact commit that will land on main. That run covers every
+  supported Python version (3.8 through 3.13) and the full MLX native, parity,
+  corpus and host tier. A pull request merges only when this run passes.
+- **Main and nightly.** Pushes to main repeat the full Python sweep. The MLX
+  tier runs nightly and on manual dispatch.
+
+A maintainer can request the merge-queue tier on a pull request before
+queueing it. The `ci:full` label applies from the next push, and
+`gh workflow run demo-project-testing.yml --ref <branch>` starts one full MLX
+run at once.
+
+Each gating workflow ends in a single `result` job that fails when any job it
+waits for fails or is cancelled. Jobs the selected tier skips do not fail it.
+Branch protection and the merge queue require these checks:
+
+- `Translator Tests result`
+- `Backend Tests result`
+- `Complete Test Suite result`
+- `Examples Test result`
+- `Support Matrix result`
+- `MLX validation result`
+
+Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
+The translator and backend jobs size `pytest-xdist` to match. The Python
+setup steps cache pip downloads, keyed on `requirements.txt`, `pyproject.toml`
+and `setup.cfg`.
+
 Backend, translator, complete-suite, example and open-source demo workflows replace a
 superseded pull-request run when a new revision arrives. The concurrency key
 includes the workflow name, event and PR number, so unrelated workflows and PRs
@@ -19,7 +62,7 @@ satisfy the same checks. This follows
 
 | Workload | Ubuntu | Windows | macOS |
 | --- | --- | --- | --- |
-| Backend, translator and example tests | Python 3.8 through 3.13 | Python 3.13 | Python 3.13 |
+| Backend, translator and example tests | Python 3.8 through 3.13 (pull requests: 3.8 and 3.13) | Python 3.13 | Python 3.13 |
 | Complete core and demo unit suite | Required | Covered by focused platform jobs | Covered by focused platform jobs |
 | Complete DirectX demo corpus compilation | Pinned Linux DXC | Native execution remains below | Not required |
 | Direct3D execution and host integration | Not applicable | Required WARP and dispatch checks | Not applicable |

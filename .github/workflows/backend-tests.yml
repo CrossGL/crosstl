@@ -10,6 +10,7 @@ on:
   pull_request:
     branches:
       - main
+  merge_group:
 
 permissions:
   contents: read
@@ -46,7 +47,8 @@ jobs:
     runs-on: ${{ matrix.OS }}
     timeout-minutes: 45
     env:
-      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+      # Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
+      PYTEST_XDIST_AUTO_NUM_WORKERS: ${{ matrix.OS == 'macOS-latest' && '3' || '4' }}
     strategy:
       matrix:
         backend:
@@ -85,6 +87,11 @@ jobs:
         uses: actions/setup-python@v5
         continue-on-error: true
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: ${{ matrix.python-version }}
 
       - name: Classify Python setup failure
@@ -143,3 +150,23 @@ jobs:
             support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
+
+  result:
+    # The one check per workflow that branch protection and the merge queue require.
+    name: Backend Tests result
+    if: always()
+    needs: [python-versions, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done

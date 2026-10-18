@@ -219,6 +219,17 @@ def test_invalid_diff_revisions_fail_instead_of_skipping(base, head):
         changed_paths(base, head)
 
 
+def test_merge_queue_runs_every_tier(tmp_path, capsys):
+    assert validation_plan("merge_group", ["docs/source/index.rst"]) == {
+        "heavy": True,
+        "smoke": True,
+    }
+    output = tmp_path / "output"
+    assert main(["--event", "merge_group", "--output", str(output)]) == 0
+    assert output.read_text() == "heavy=true\nsmoke=true\n"
+    assert json.loads(capsys.readouterr().out) == {"heavy": True, "smoke": True}
+
+
 def test_unsupported_event_fails():
     with pytest.raises(ValueError, match="Unsupported workflow event"):
         validation_plan("unknown", [])
@@ -228,7 +239,7 @@ def test_every_heavy_job_obeys_the_full_tier():
     workflow = yaml.safe_load(WORKFLOW.read_text())
     jobs = workflow["jobs"]
     for name, job in jobs.items():
-        if name in {"ci-plan", "mlx-smoke"}:
+        if name in {"ci-plan", "mlx-smoke", "result"}:
             continue
         needs = job["needs"]
         assert "ci-plan" in (needs if isinstance(needs, list) else [needs]), name

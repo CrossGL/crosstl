@@ -30,14 +30,17 @@ SMOKE_PATHS = (
 def validation_plan(event, paths, full_requested=False):
     """Select the MLX validation tier for an event and the files it changes.
 
-    Nightly runs, dispatches and pushes that change the MLX corpus or this workflow
-    get full validation. A pull request gets the smoke tier for any relevant change
+    Nightly runs, dispatches, merge-queue groups and pushes that change the MLX
+    corpus or this workflow get full validation. A pull request gets the smoke tier for any relevant change
     and full validation only when it carries the ``ci:full`` label. The full tier is
     several hundred jobs on macOS, Windows and Linux runners that every open pull
     request shares, so a routine push must not queue it.
     """
     if event in {"schedule", "workflow_dispatch"}:
         return {"heavy": True, "smoke": False}
+    if event == "merge_group":
+        # The queue is the last gate before main: run everything, smoke included.
+        return {"heavy": True, "smoke": True}
     if event not in {"pull_request", "push"}:
         raise ValueError(f"Unsupported workflow event: {event}")
     paths = tuple(paths)
@@ -102,7 +105,7 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     full_requested = args.full_requested == "true"
-    if args.event in {"schedule", "workflow_dispatch"}:
+    if args.event in {"schedule", "workflow_dispatch", "merge_group"}:
         plan = validation_plan(args.event, ())
     elif args.event == "push" and (args.base == "0" * 40 or not has_commit(args.base)):
         # A new branch has no old tip, and a rewritten one may not be fetched.

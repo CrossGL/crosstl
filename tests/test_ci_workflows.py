@@ -134,6 +134,34 @@ def test_test_workflows_replace_only_superseded_pull_request_runs(filename):
         assert job.get("concurrency", {}).get("group") != policy["group"]
 
 
+@pytest.mark.parametrize(
+    "filename,check",
+    [
+        ("translator-tests.yml", "Translator Tests result"),
+        ("backend-tests.yml", "Backend Tests result"),
+        ("full-tests.yml", "Complete Test Suite result"),
+        ("examples-test.yml", "Examples Test result"),
+        ("support-matrix.yml", "Support Matrix result"),
+        ("demo-project-testing.yml", "MLX validation result"),
+    ],
+)
+def test_gating_workflows_report_one_result_for_pull_requests_and_the_merge_queue(
+    filename, check
+):
+    workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
+    assert "merge_group" in workflow[True]
+    jobs = workflow["jobs"]
+    result = jobs["result"]
+    assert result["name"] == check
+    assert result["if"] == "always()"
+    assert set(result["needs"]) == set(jobs) - {"result"}
+    assert result["timeout-minutes"] <= 5
+    step = result["steps"][0]
+    assert step["env"]["RESULTS"] == "${{ join(needs.*.result, ' ') }}"
+    assert "success|skipped) ;;" in step["run"]
+    assert "exit 1" in step["run"]
+
+
 def _workflow_job_section(workflow, job_id):
     match = re.search(
         rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
@@ -408,7 +436,10 @@ def _assert_grouped_native_python_policy(workflow_text, component_key):
         else "${{ matrix.OS }}"
     )
     assert job["runs-on"] == expected_runner
-    assert job["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
+    # Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
+    assert job["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == (
+        "${{ matrix.OS == 'macOS-latest' && '3' || '4' }}"
+    )
     assert job["strategy"]["fail-fast"] is False
     assert "continue-on-error" not in job and "if" not in job
     install = next(

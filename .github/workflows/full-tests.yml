@@ -11,6 +11,7 @@ on:
     branches:
       - main
   workflow_dispatch:
+  merge_group:
 
 permissions:
   contents: read
@@ -32,6 +33,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install dependencies
@@ -84,6 +90,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install optional shader validators
@@ -256,6 +267,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install adapter toolchain
@@ -379,6 +395,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install DirectX Shader Compiler
@@ -432,6 +453,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install GLSL and SPIR-V tools
@@ -621,6 +647,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install GLSL validator
@@ -672,3 +703,23 @@ jobs:
             support/generated/compiler-smoke-macos-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
+
+  result:
+    # The one check per workflow that branch protection and the merge queue require.
+    name: Complete Test Suite result
+    if: always()
+    needs: [pytest, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done
