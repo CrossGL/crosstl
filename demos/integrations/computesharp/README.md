@@ -12,11 +12,17 @@ on Windows (WARP) is the independent baseline.
 ## Results
 
 The qualification job of workflow run
-[39105438960](https://github.com/CrossGL/crosstl/actions/runs/39105438960)
-(commit `3a2de27370336852276bc67bea59d86cf9c692d3`) recomputed every check from
+[39125235522](https://github.com/CrossGL/crosstl/actions/runs/39125235522)
+(commit `7cb6ed975bf9da345f23e51051fbe35d10af3cd6`) recomputed every check from
 the fresh artifacts of the three profile jobs and passed. `results.json` is the
 machine-readable summary that job wrote; `results_summary.py` regenerates it
 byte for byte from the job's `qualification.json`.
+
+This run also verified arithmetic exactness on the target compilers: 144 Metal
+artifacts with 10,766 floating-point operations and 148 OpenGL artifacts with
+32,072 floating-point operations had no contractible operations. Four Metal
+artifacts require fp64 and are not compiled on that profile, as declared by the
+frozen capability contract.
 
 | Profile | Device | Execution | Required GPU passed | Capability-gated | Windows-specific | Negative controls |
 | --- | --- | --- | ---: | ---: | ---: | --- |
@@ -40,15 +46,15 @@ from WARP and the reference image only, see [Image Checks](#image-checks)):
 | Shader | WARP vs reference | Metal vs WARP | OpenGL vs WARP | Bound |
 | --- | ---: | ---: | ---: | ---: |
 | `ColorfulInfinity` | 0.000 | 0.0000 | 0.0000 | 0.500 |
-| `ContouredLayers` | 7.437 | 0.0477 | 0.0354 | 15.373 |
+| `ContouredLayers` | 7.437 | 0.0477 | 0.0418 | 15.373 |
 | `ExtrudedTruchetPattern` | 0.002 | 0.1216 | 0.1221 | 0.505 |
 | `FourColorGradient` | 9.003 | 0.0000 | 0.0000 | 18.507 |
 | `FractalTiling` | 0.000 | 0.0000 | 0.0000 | 0.501 |
 | `HelloWorld` | 0.000 | 0.0000 | 0.0000 | 0.500 |
 | `MengerJourney` | 0.010 | 0.0042 | 0.0042 | 0.520 |
-| `Octagrams` | 0.000 | 0.0088 | 0.0019 | 0.500 |
+| `Octagrams` | 0.000 | 0.0088 | 0.0026 | 0.500 |
 | `ProteanClouds` | 0.000 | 0.0000 | 0.0000 | 0.500 |
-| `PyramidPattern` | 0.046 | 0.1294 | 0.1300 | 0.592 |
+| `PyramidPattern` | 0.046 | 0.1294 | 0.1294 | 0.592 |
 | `TerracedHills` | 0.020 | 0.0139 | 0.0139 | 0.540 |
 | `TriangleGridContouring` | 0.001 | 0.0001 | 0.0001 | 0.501 |
 | `TwoTiledTruchet` | 0.000 | 0.0008 | 0.0009 | 0.500 |
