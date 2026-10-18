@@ -14,8 +14,10 @@ from the job reports:
 - the dispatch evidence of each translated run verifies against its manifest,
   translated artifacts, discovery and TRX, and every negative control failed;
 - the intrinsic probe of each translated target evaluated the same generated
-  HLSL over the same inputs as WARP, and its sin, cos and tan results are
-  bit-identical to WARP (see ``precision_report.py``);
+  HLSL over the same inputs as WARP; its sin, cos and tan results are
+  bit-identical to WARP, and its contraction-free arithmetic (dot products,
+  multiply-adds, lerp and smoothstep) matches WARP and an independent CPU
+  model except for subnormal flushing (see ``precision_report.py``);
 - every ShadersTests case of each translated target has exactly one captured
   readback whose pixels hash to the recorded readback, reproduce the upstream
   assertion and stay within the per-case bounds derived from the WARP output;

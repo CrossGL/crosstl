@@ -45,12 +45,14 @@ Machine-readable results:
 2. **Translation.** `translate.py` translates each unique HLSL source with
    `crosstl.translate_with_metadata` and writes a manifest with the artifact
    hashes, entry points and the binding slot CrossTL assigned to every HLSL
-   register. Two source options select documented HLSL semantics: DXC's
-   `-Zpr` row-major matrix packing (`matrix_packing=row_major`, all targets) and
-   Direct3D-class trigonometric range reduction
-   (`trigonometric_reduction=revolutions`, OpenGL). Metal artifacts are compiled
-   and linked with `xcrun metal` during translation; OpenGL artifacts are
-   compiled by the driver at pipeline creation. No shader is substituted by hand.
+   register. Three HLSL source options select the semantics of the original
+   Direct3D execution for both targets (see [Floating-Point
+   Evaluation](#floating-point-evaluation)): DXC's `-Zpr` row-major matrix
+   packing (`matrix_packing=row_major`), WARP's sine and cosine evaluation
+   (`trigonometric_reduction=warp`) and contraction-free arithmetic
+   (`floating_point_contraction=off`). Metal artifacts are compiled and linked
+   with `xcrun metal` during translation; OpenGL artifacts are compiled by the
+   driver at pipeline creation. No shader is substituted by hand.
 3. **Portable runtime.** `runtime/ComputeSharp.Portable.csproj` builds an
    assembly named `ComputeSharp` with the upstream public API. The pure upstream
    sources (attributes, dispatch intrinsics, pixel types, extension methods,
@@ -134,8 +136,19 @@ artifacts with their manifest, the collected outputs, content-addressed image
 captures and logs under `--work`. `--filter` runs a subset for diagnosis only
 and never qualifies.
 
+Evaluate the intrinsic probe on a translated backend with the native library
+of a run (the Windows job runs the same probe against the original runtime on
+WARP with `dotnet run --project precision/IntrinsicProbe.csproj -- run warp`):
+
+```sh
+python demos/integrations/computesharp/precision/run_probe.py \
+  --adapted /path/to/adapted --target metal \
+  --native-library /path/to/metal-run/native/libcsbackend_metal.dylib \
+  --output /path/to/metal-precision
+```
+
 Qualify downloaded workflow artifacts (or local directories with the same
-layout: `discovery/` and `run/` for each target):
+layout: `discovery/`, `run/` and `precision/` for each target):
 
 ```sh
 python demos/integrations/computesharp/qualify.py \
@@ -240,6 +253,46 @@ listed method must execute and fail (guard corruption must report the guard
 violation), must have passed in the unfaulted run, and the control evidence must
 carry the fault.
 
+## Floating-Point Evaluation
+
+Several shaders hash coordinates with expressions such as
+`frac(sin(x) * 43758.5453)`, and the reference images were rendered by WARP,
+so outputs depend on the last bits of single-precision results. The intrinsic
+probe in `precision/` measures the evaluation of 25 HLSL expressions over
+155,660 fixed inputs on WARP (Windows job) and on each translated target, from
+the same generated HLSL. Three general HLSL source options of CrossTL select
+the original evaluation:
+
+- `trigonometric_reduction=warp`: WARP reduces sine and cosine arguments in
+  revolutions (`t = x * (1 / 2pi)`, `f = t - floor(t)`), looks up one of 32
+  table entries and evaluates short polynomials, rounding every step and
+  flushing subnormal intermediates; `tan` is `sin / cos`. The frontend emits
+  the same sequence as precise helper functions with the tables. Arguments
+  that DXC folds to constants keep the exact intrinsic.
+- `floating_point_contraction=off`: WARP executes the DXIL as written, so
+  every product and sum is rounded, `dot` adds the component products from the
+  first component on, `lerp(a, b, s)` is `a + s * (b - a)` and matrix products
+  accumulate in DXC's order. Metal fuses multiply-adds, including inside
+  `dot`, `mix`, `length`, `normalize`, `smoothstep`, `cross`, `reflect` and
+  matrix products, and llvmpipe adds three-component dot products in another
+  order. The frontend marks every function precise (Metal
+  `#pragma clang fp contract(off)`, GLSL `precise`) and replaces these
+  intrinsics with precise helpers that evaluate the DXC lowering one operation
+  at a time.
+- `matrix_packing=row_major`: ComputeSharp compiles with DXC's `-Zpr`.
+
+`qualify.py` requires the translated `sin`, `cos` and `tan` to be
+bit-identical to WARP (except for operands whose revolution is subnormal) and
+the contraction-free probes (`dot2`, `dot3`, `multiply-add`, `mad`, `lerp`,
+`smoothstep`) to equal WARP and an independent single-precision CPU model in
+DXC's operation order, where only subnormal flushing may differ. The Metal
+results of the earlier translation with contraction allowed (macOS CI) fail
+this check for five of the six probes, on 9,443 to 33,556 of the 155,660
+inputs each. The remaining
+functions (`sqrt`, `rsqrt`, `exp`, `log`, `pow`, `atan`) use the native
+implementation of each target, and the report gives their distance from WARP
+in ulps.
+
 ## Image Checks
 
 The upstream `TolerantImageComparer` assertions are kept unchanged. The comparer
@@ -251,7 +304,11 @@ all-black output of the 1D sampling test scored only 0.00115. Several shaders
 `TriangleGridContouring`, `TwoTiledTruchet`) derive patterns from hashes such as
 `frac(sin(x) * 43758.5453)` with large arguments, so their images depend on the
 transcendental precision of each implementation, and the upstream reference
-images are one implementation's rendering.
+images are one implementation's rendering (WARP's, except for
+`ContouredLayers` and `FourColorGradient`). With correctly rounded or fused
+evaluation, these shaders rendered different hash patterns that the upstream
+thresholds still accepted; the [floating-point
+evaluation](#floating-point-evaluation) above removes those differences.
 
 `image_checks.json` adds differential checks that `qualify.py` applies without
 loosening any upstream threshold:
@@ -280,10 +337,18 @@ loosening any upstream threshold:
 - Windows-specific tests (DXIL reflection, D3D12/DXGI interop, COM) run only in
   the original baseline.
 - The Metal backend requires a unified-memory device and compiles with
-  `MTLMathModeSafe` and fast fp32 transcendental functions, which matches the
-  Direct3D precision class of the hash-based shaders; correctly rounded sine
-  differs more from the Direct3D references. The OpenGL translation reduces
-  trigonometric arguments in revolutions for the same reason.
+  `MTLMathModeSafe` (IEEE NaN and infinity semantics) and fast fp32 functions.
+  Native `sqrt`, `rsqrt`, `exp`, `log`, `pow` and `atan` differ from WARP by a
+  few ulps on both targets (OpenGL's `sqrt` and `log` are closer), and these
+  account for the remaining image differences against WARP, which are of the
+  same size on both targets. Metal's precise functions bring `sqrt` and `log`
+  closer to WARP but `exp` and `pow` further away.
+- WARP flushes subnormal operands and results to zero; llvmpipe keeps them,
+  so results that involve subnormals can differ from WARP.
+- In GLSL, `precise` covers the helper functions and function results; other
+  arithmetic in entry points relies on the driver not contracting, which holds
+  for llvmpipe (the probe measures it) but is not required by the GLSL
+  specification.
 - Evidence records dispatches, pipelines and readbacks. Cases that only allocate
   resources or validate arguments (for example `*_Fail` transfer tests) leave no
   records; their results come from the upstream assertions alone.
