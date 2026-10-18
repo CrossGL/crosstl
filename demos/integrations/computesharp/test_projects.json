@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.test-projects",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "workflow": ".github/workflows/dotnet.yml",
+  "scopes": {
+    "ported": "Compute test project of the port. A frozen coverage contract classifies each of its cases; the cases run on the original Windows WARP baseline and through the live host adapter on every translated target profile.",
+    "windows-specific": "Direct3D 12 device-lifetime, COM or native-library packaging test project. It depends on Windows-only interfaces with no translated-target equivalent and stays with the upstream Windows CI.",
+    "cpu-only": "Host-side test project that never creates a device. It verifies the unchanged C# source generators and analyzers, which the port consumes as they are.",
+    "out-of-scope": "Direct2D, WinUI or NuGet package project. The port covers the compute runtime only, not Direct2D effects, WinUI or package publishing."
+  },
+  "projects": {
+    "ComputeSharp.D2D1.Tests": {
+      "scope": "out-of-scope",
+      "kind": "mstest",
+      "reason": "Direct2D pixel-shader effects through ID2D1Effect (ComputeSharp.D2D1), not the compute runtime.",
+      "upstreamSteps": [
+        "run-tests: Run ComputeSharp.D2D1.Tests"
+      ]
+    },
+    "ComputeSharp.D2D1.Tests.AssemblyLevelAttributes": {
+      "scope": "out-of-scope",
+      "kind": "mstest",
+      "reason": "Assembly-level options of the Direct2D shader generator (ComputeSharp.D2D1).",
+      "upstreamSteps": [
+        "run-tests: Run ComputeSharp.D2D1.Tests.AssemblyLevelAttributes"
+      ]
+    },
+    "ComputeSharp.D2D1.Tests.SourceGenerators": {
+      "scope": "out-of-scope",
+      "kind": "mstest",
+      "reason": "Diagnostics of the Direct2D shader generator (ComputeSharp.D2D1.SourceGenerators).",
+      "upstreamSteps": [
+        "run-tests: Run ComputeSharp.D2D1.Tests.SourceGenerators"
+      ]
+    },
+    "ComputeSharp.D2D1.WinUI.Tests": {
+      "scope": "out-of-scope",
+      "kind": "mstest",
+      "reason": "Win2D and WinUI integration of Direct2D effects; runs as a packaged WinAppSDK application under VS Test.",
+      "upstreamSteps": [
+        "run-tests-win2d: Build ComputeSharp.D2D1.WinUI.Tests",
+        "run-tests-win2d: Run ComputeSharp.D2D1.WinUI.Tests"
+      ]
+    },
+    "ComputeSharp.D2D1.WinUI.Tests.SourceGenerators": {
+      "scope": "out-of-scope",
+      "kind": "mstest",
+      "reason": "Diagnostics of the WinUI Direct2D effect generator; runs as a WinAppSDK test under VS Test.",
+      "upstreamSteps": [
+        "run-tests-win2d: Build ComputeSharp.D2D1.WinUI.Tests.SourceGenerators",
+        "run-tests-win2d: Run ComputeSharp.D2D1.WinUI.Tests.SourceGenerators"
+      ]
+    },
+    "ComputeSharp.Dxc.NuGet": {
+      "scope": "out-of-scope",
+      "kind": "program",
+      "reason": "Consumes the published ComputeSharp.Dxc package with win-x64 native DXC binaries to verify packaging, including NativeAOT publishing.",
+      "upstreamSteps": [
+        "verify-packages: Build and run ComputeSharp.Dxc.NuGet",
+        "verify-packages: Publish and run ComputeSharp.Dxc.NuGet with NativeAOT"
+      ]
+    },
+    "ComputeSharp.NuGet": {
+      "scope": "out-of-scope",
+      "kind": "program",
+      "reason": "Consumes the published ComputeSharp package on win-x64 to verify packaging, including NativeAOT publishing.",
+      "upstreamSteps": [
+        "verify-packages: Build and run ComputeSharp.NuGet",
+        "verify-packages: Publish and run ComputeSharp.NuGet with NativeAOT"
+      ]
+    },
+    "ComputeSharp.Pix.NuGet": {
+      "scope": "out-of-scope",
+      "kind": "program",
+      "reason": "Consumes the published ComputeSharp.Pix package, which loads the Windows PIX capture library, to verify packaging.",
+      "upstreamSteps": [
+        "verify-packages: Build and run ComputeSharp.Pix.NuGet",
+        "verify-packages: Publish and run ComputeSharp.Pix.NuGet with NativeAOT"
+      ]
+    },
+    "ComputeSharp.Tests": {
+      "scope": "ported",
+      "kind": "mstest",
+      "reason": "The upstream compute functional tests: buffers, textures, dispatch, shader features, resource ordering and image processing.",
+      "suite": {
+        "contract": "coverage.json",
+        "lock": "coverage.lock.json",
+        "evidencePolicy": "evidence_policy.json",
+        "negativeControls": "negative_controls.json",
+        "imageChecks": "image_checks.json"
+      },
+      "upstreamSteps": [
+        "run-tests: Run ComputeSharp.Tests",
+        "run-tests-d3d12ma: Run ComputeSharp.Tests"
+      ],
+      "variants": {
+        "run-tests-d3d12ma: Run ComputeSharp.Tests": "Reruns the same cases with UseD3D12MemoryAllocator=true, which only selects the Direct3D 12 Memory Allocator inside the Direct3D 12 runtime. The baseline runs the default allocator; translated targets have their own allocators."
+      }
+    },
+    "ComputeSharp.Tests.DeviceLost": {
+      "scope": "windows-specific",
+      "kind": "mstest",
+      "reason": "Removes the device through ID3D12Device5::RemoveDevice and checks ID3D12Device COM reference counts and DXGI device-lost notifications.",
+      "upstreamSteps": [
+        "run-tests: Run ComputeSharp.Tests.DeviceLost \"DeviceDisposal\"",
+        "run-tests: Run ComputeSharp.Tests.DeviceLost \"DeviceLost\"",
+        "run-tests: Run ComputeSharp.Tests.DeviceLost \"GetDefaultDevice\"",
+        "run-tests-d3d12ma: Run ComputeSharp.Tests.DeviceLost \"DeviceDisposal\"",
+        "run-tests-d3d12ma: Run ComputeSharp.Tests.DeviceLost \"DeviceLost\"",
+        "run-tests-d3d12ma: Run ComputeSharp.Tests.DeviceLost \"GetDefaultDevice\""
+      ]
+    },
+    "ComputeSharp.Tests.DisableDynamicCompilation": {
+      "scope": "ported",
+      "kind": "mstest",
+      "reason": "References only the precompiled shader runtime, without ComputeSharp.Dynamic, and dispatches a compute shader over a float buffer and a pixel shader (IComputeShader<float4>) over an RGBA8 UNORM texture.",
+      "suite": {
+        "contract": "suites/DisableDynamicCompilation/coverage.json",
+        "lock": "suites/DisableDynamicCompilation/coverage.lock.json",
+        "evidencePolicy": "suites/DisableDynamicCompilation/evidence_policy.json",
+        "negativeControls": "suites/DisableDynamicCompilation/negative_controls.json"
+      },
+      "upstreamSteps": [
+        "run-tests: Run ComputeSharp.Tests.DisableDynamicCompilation"
+      ]
+    },
+    "ComputeSharp.Tests.GlobalStatements": {
+      "scope": "ported",
+      "kind": "program",
+      "reason": "Top-level program that dispatches a compute shader declared next to global statements and compares the buffer with the same function evaluated on the CPU.",
+      "suite": {
+        "contract": "suites/GlobalStatements/coverage.json",
+        "lock": "suites/GlobalStatements/coverage.lock.json",
+        "evidencePolicy": "suites/GlobalStatements/evidence_policy.json",
+        "negativeControls": "suites/GlobalStatements/negative_controls.json"
+      },
+      "upstreamSteps": [
+        "run-tests: Run ComputeSharp.Tests.GlobalStatements"
+      ]
+    },
+    "ComputeSharp.Tests.Internals": {
+      "scope": "ported",
+      "kind": "mstest",
+      "reason": "Debugger views of device buffers and textures, generated dispatch-data loaders over device resources, and host-side helpers of the runtime that it reaches through InternalsVisibleTo.",
+      "suite": {
+        "contract": "suites/Internals/coverage.json",
+        "lock": "suites/Internals/coverage.lock.json",
+        "evidencePolicy": "suites/Internals/evidence_policy.json",
+        "negativeControls": "suites/Internals/negative_controls.json",
+        "noFloatArithmeticReason": "The Internals shaders exist to exercise generated dispatch-data loaders; their bodies only compare the thread ids with the dispatch size, so no artifact does float arithmetic."
+      },
+      "upstreamSteps": [
+        "run-tests: Run ComputeSharp.Tests.Internals"
+      ]
+    },
+    "ComputeSharp.Tests.NativeLibrariesResolver": {
+      "scope": "windows-specific",
+      "kind": "mstest",
+      "reason": "Publishes apps against the NuGet packages and checks that the win-x64 native DXC and PIX libraries resolve for each publishing mode.",
+      "upstreamSteps": [
+        "verify-packages: Run ComputeSharp.Tests.NativeLibrariesResolver"
+      ]
+    },
+    "ComputeSharp.Tests.SourceGenerators": {
+      "scope": "cpu-only",
+      "kind": "mstest",
+      "reason": "Roslyn tests of the compute shader descriptor generator and analyzers: generated sources, diagnostics and incrementality, with no device.",
+      "upstreamSteps": [
+        "run-tests: Run ComputeSharp.Tests.SourceGenerators"
+      ]
+    }
+  }
+}

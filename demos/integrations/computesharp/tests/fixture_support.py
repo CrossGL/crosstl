@@ -4,6 +4,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,50 +12,74 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CONTRACT = ROOT / "tests" / "fixture" / "coverage.json"
 FIXTURE_POLICY = ROOT / "tests" / "fixture" / "evidence_policy.json"
+PROGRAM_CONTRACT = ROOT / "tests" / "program_fixture" / "coverage.json"
 
 
 def load_module(name, path):
     """Import one of the demo scripts, which are not an installed package."""
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    # Dataclasses resolve their annotations through the registered module.
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
-def build_tools(tmp_path_factory):
-    """Build the discovery exporter and the fixture assembly with the .NET SDK."""
+def _dotnet():
     dotnet = shutil.which("dotnet")
     if dotnet is None:
         if os.environ.get("CROSSTL_REQUIRE_DOTNET") == "1":
             pytest.fail("The discovery contract requires the .NET 10 SDK")
         pytest.skip("The discovery contract requires the .NET 10 SDK")
+    return dotnet
+
+
+def _build(dotnet, project, output, name):
+    subprocess.run(
+        [
+            dotnet,
+            "build",
+            str(project),
+            "-c",
+            "Release",
+            "-o",
+            str(output / name),
+            "--artifacts-path",
+            str(output / (name + "-artifacts")),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+
+def build_tools(tmp_path_factory):
+    """Build the discovery exporter and the fixture assembly with the .NET SDK."""
+    dotnet = _dotnet()
     output = tmp_path_factory.mktemp("discovery-build")
     for name, project in (
         ("tool", ROOT / "discovery" / "Discovery.csproj"),
         ("fixture", ROOT / "tests" / "fixture" / "Fixture.csproj"),
     ):
-        subprocess.run(
-            [
-                dotnet,
-                "build",
-                str(project),
-                "-c",
-                "Release",
-                "-o",
-                str(output / name),
-                "--artifacts-path",
-                str(output / (name + "-artifacts")),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
+        _build(dotnet, project, output, name)
     return [
         dotnet,
         str(output / "tool" / "Discovery.dll"),
         str(output / "fixture" / "Fixture.dll"),
     ]
+
+
+def build_program(tools, tmp_path_factory):
+    """Build the top-level program fixture; return the discovery tools for it."""
+    output = tmp_path_factory.mktemp("program-build")
+    _build(
+        tools[0],
+        ROOT / "tests" / "program_fixture" / "ProgramFixture.csproj",
+        output,
+        "program",
+    )
+    return [tools[0], tools[1], str(output / "program" / "ProgramFixture.dll")]
 
 
 def export(tools, output, mode=None):

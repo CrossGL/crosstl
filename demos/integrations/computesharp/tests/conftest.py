@@ -19,6 +19,11 @@ def discovery_tools(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def program_tools(discovery_tools, tmp_path_factory):
+    return SUPPORT.build_program(discovery_tools, tmp_path_factory)
+
+
+@pytest.fixture(scope="session")
 def baseline_fixture(discovery_tools, tmp_path_factory):
     return SUPPORT.run_fixture(
         discovery_tools, tmp_path_factory.mktemp("baseline-proof")

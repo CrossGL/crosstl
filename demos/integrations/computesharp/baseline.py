@@ -234,7 +234,14 @@ def verify_results(
                 )
     if counts["passed"] == 0:
         errors.append("No cases passed")
-    if settings["deviceRows"]["Warp"] == "execute" and counts["warpPassed"] == 0:
+    # A suite whose cases take a device row must run its WARP rows; a suite
+    # without device rows (a program on the default device) has none to run.
+    warp_rows = any(device_of(case) == "Warp" for case in discovery["tests"])
+    if (
+        settings["deviceRows"]["Warp"] == "execute"
+        and warp_rows
+        and counts["warpPassed"] == 0
+    ):
         errors.append("No WARP-row cases passed")
     if run_outcome == "Failed" and not errors:
         errors.append("MSTest reported a failed run without a failing case")

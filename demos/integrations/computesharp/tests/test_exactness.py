@@ -208,6 +208,32 @@ def test_inconsistent_reports_are_rejected(tmp_path, mutate, message):
     ), exc_info.value.errors
 
 
+def test_a_suite_without_float_arithmetic_states_it(tmp_path):
+    report, manifest, manifest_path = synthetic(tmp_path)
+    no_float_operations(report)
+    summary = EXACTNESS.verify(
+        report,
+        manifest,
+        manifest_sha256=report["manifestSha256"],
+        require_float_operations=False,
+    )
+    assert summary["status"] == "passed"
+    assert summary["floatOperations"] == 0
+    report_path = tmp_path / "exactness.json"
+    report_path.write_text(json.dumps(report))
+    with pytest.raises(EXACTNESS.ExactnessError, match="no floating-point"):
+        EXACTNESS.verify_file(report_path, manifest_path, target="opengl")
+    # Contraction is still rejected when float arithmetic is not required.
+    contractible(report)
+    with pytest.raises(EXACTNESS.ExactnessError, match="contractible"):
+        EXACTNESS.verify(
+            report,
+            manifest,
+            manifest_sha256=report["manifestSha256"],
+            require_float_operations=False,
+        )
+
+
 def test_reports_of_another_manifest_or_target_are_rejected(tmp_path):
     report, manifest, manifest_path = synthetic(tmp_path)
     with pytest.raises(EXACTNESS.ExactnessError, match="different manifest"):

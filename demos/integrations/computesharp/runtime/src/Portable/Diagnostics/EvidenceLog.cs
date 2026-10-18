@@ -22,6 +22,11 @@ internal static class EvidenceLog
     private static readonly object Gate = new();
     private static readonly StreamWriter? Writer = Open();
     private static readonly ConcurrentDictionary<MethodBase, string?> TestMethods = new();
+
+    // A test project that is a program (no MSTest methods) is one case: its entry point.
+    // The host names the program assembly in CROSSTL_COMPUTESHARP_PROGRAM, so work issued
+    // by a test host's own entry point is never attributed to a case.
+    private static readonly MethodInfo? ProgramEntryPoint = ResolveProgramEntryPoint();
     private static long sequence;
     private static long resourceIds;
 
@@ -240,6 +245,18 @@ internal static class EvidenceLog
         return new StreamWriter(stream, new UTF8Encoding(false));
     }
 
+    private static MethodInfo? ResolveProgramEntryPoint()
+    {
+        string? program = Environment.GetEnvironmentVariable("CROSSTL_COMPUTESHARP_PROGRAM");
+        Assembly? entry = Assembly.GetEntryAssembly();
+        if (string.IsNullOrEmpty(program) || entry is null || entry.GetName().Name != program)
+        {
+            return null;
+        }
+
+        return entry.EntryPoint;
+    }
+
     private static string? CurrentTestMethod()
     {
         StackTrace trace = new(false);
@@ -262,6 +279,13 @@ internal static class EvidenceLog
                             return $"{method.DeclaringType?.FullName}.{method.Name}";
                         }
                     }
+                }
+
+                if (ProgramEntryPoint is { } entry &&
+                    method.MetadataToken == entry.MetadataToken &&
+                    method.Module == entry.Module)
+                {
+                    return $"{method.DeclaringType?.FullName}.{method.Name}";
                 }
 
                 return null;
