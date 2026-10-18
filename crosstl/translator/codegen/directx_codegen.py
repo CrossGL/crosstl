@@ -351,6 +351,7 @@ from .loop_induction import (
     loop_constant_bindings,
     metadata_bound_key,
     metadata_loop_bindings,
+    modular_stride_loops,
     offset_counter_loop_terminates,
     static_loop_trip_count,
     subgroup_strided_trips,
@@ -5372,6 +5373,7 @@ class HLSLCodeGen:
         halving_update = False
         additive_update = False
         geometric_update = False
+        modular_update = False
         if isinstance(update, UnaryOpNode):
             update_operator = self.map_operator(
                 getattr(update, "op", getattr(update, "operator", None))
@@ -5396,8 +5398,24 @@ class HLSLCodeGen:
                 update_value, constants
             )
             if concrete_update_value is None:
-                return False
-            if update_operator in {"+=", "-="}:
+                # A modular update visits the same values in every invocation
+                # for any uniform operand, so it needs no operand range.
+                if (
+                    update_operator != "+="
+                    or id(node)
+                    not in getattr(
+                        self, "hlsl_software_subgroup_modular_stride_loops", ()
+                    )
+                    or not self.hlsl_software_subgroup_uniform_expression(
+                        update_value,
+                        set(uniform_names) - {loop_name},
+                        uniform_components,
+                    )
+                ):
+                    return False
+                increasing = True
+                modular_update = True
+            elif update_operator in {"+=", "-="}:
                 step = concrete_update_value * (1 if update_operator == "+=" else -1)
                 increasing = step > 0
                 additive_update = True
@@ -5430,7 +5448,7 @@ class HLSLCodeGen:
                 return False
         elif increasing != (normalized_operator in {"<", "<="}):
             return False
-        checked_stride = (
+        checked_stride = not modular_update and (
             additive_update
             or geometric_update
             or metadata_bound_key(bound) in (metadata_bounds or {})
@@ -5454,7 +5472,7 @@ class HLSLCodeGen:
         bound_names = self.hlsl_software_subgroup_expression_identifier_names(bound)
         stride_names = (
             self.hlsl_software_subgroup_expression_identifier_names(update.value)
-            if additive_update or geometric_update
+            if additive_update or geometric_update or modular_update
             else set()
         )
         return self.hlsl_software_subgroup_loop_controls_preserved(
@@ -6734,6 +6752,9 @@ class HLSLCodeGen:
             mutable_names,
             self.walk_ast,
         )
+        self.hlsl_software_subgroup_modular_stride_loops.update(
+            modular_stride_loops(function, self.type_name_string, self.walk_ast)
+        )
         reassigned_names = self.hlsl_software_subgroup_reassigned_candidates(
             function, mutable_names, call_mutations
         )
@@ -7103,6 +7124,7 @@ class HLSLCodeGen:
         self.hlsl_software_subgroup_guard_constant_names = set()
         self.hlsl_software_subgroup_counter_loops = {}
         self.hlsl_software_subgroup_proven_counter_loops = set()
+        self.hlsl_software_subgroup_modular_stride_loops = set()
         if self.software_subgroup_width is None:
             return
 

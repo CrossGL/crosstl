@@ -354,6 +354,7 @@ from .loop_induction import (
     metadata_bound_key,
     metadata_loop_bindings,
     metadata_parameter_bindings,
+    modular_stride_loops,
     offset_counter_loop_terminates,
     static_loop_trip_count,
     subgroup_strided_trips,
@@ -4607,8 +4608,13 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_omitted_helper_function_ids = set()
         self.glsl_software_subgroup_loop_constants = {}
         self.glsl_software_subgroup_loop_metadata = {}
+        self.glsl_software_subgroup_modular_stride_loops = set()
 
         functions = self.glsl_software_subgroup_functions(ast)
+        for function in functions:
+            self.glsl_software_subgroup_modular_stride_loops.update(
+                modular_stride_loops(function, self.type_name_string, self.walk_ast)
+            )
         functions_by_id = {id(function): function for function in functions}
         functions_by_name = {}
         for function in functions:
@@ -5633,6 +5639,7 @@ class GLSLCodeGen:
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_loop_constants = {}
         self.glsl_software_subgroup_loop_metadata = {}
+        self.glsl_software_subgroup_modular_stride_loops = set()
         self.glsl_software_subgroup_call_mutations = {}
         self.glsl_software_subgroup_uniform_call_ids = set()
         self.glsl_software_subgroup_uniform_returns = UniformReturnAnalysis({}, set())
@@ -5661,6 +5668,10 @@ class GLSLCodeGen:
         self.glsl_software_subgroup_result_overrides = {}
         if self.software_subgroup_width is None:
             return
+        for function in self.glsl_software_subgroup_functions(ast):
+            self.glsl_software_subgroup_modular_stride_loops.update(
+                modular_stride_loops(function, self.type_name_string, self.walk_ast)
+            )
 
         entries = self.glsl_software_subgroup_stage_entries(ast, target_stage)
         if len(entries) != 1 or entries[0][0] != "compute":
@@ -6760,6 +6771,7 @@ class GLSLCodeGen:
         halving_update = False
         additive_update = False
         geometric_update = False
+        modular_update = False
         if isinstance(update, UnaryOpNode):
             update_operator = self.map_operator(
                 getattr(update, "op", getattr(update, "operator", None))
@@ -6785,8 +6797,23 @@ class GLSLCodeGen:
                 constants,
             )
             if concrete_update_value is None:
-                return False
-            if update_operator in {"+=", "-="}:
+                # A modular update visits the same values in every invocation
+                # for any uniform operand, so it needs no operand range.
+                if (
+                    update_operator != "+="
+                    or uniform_names is None
+                    or id(node)
+                    not in getattr(
+                        self, "glsl_software_subgroup_modular_stride_loops", ()
+                    )
+                    or not self.glsl_software_subgroup_uniform_expression(
+                        update_value, set(uniform_names) - {loop_name}
+                    )
+                ):
+                    return False
+                increasing = True
+                modular_update = True
+            elif update_operator in {"+=", "-="}:
                 step = concrete_update_value * (1 if update_operator == "+=" else -1)
                 increasing = step > 0
                 additive_update = True
@@ -6831,7 +6858,7 @@ class GLSLCodeGen:
                 return False
         elif increasing != (normalized_operator in {"<", "<="}):
             return False
-        if (
+        if not modular_update and (
             additive_update
             or geometric_update
             or metadata_bound_key(bound) in metadata_bounds
@@ -6872,7 +6899,7 @@ class GLSLCodeGen:
         bound_names = self.glsl_software_subgroup_expression_identifier_names(bound)
         stride_names = (
             self.glsl_software_subgroup_expression_identifier_names(update.value)
-            if additive_update or geometric_update
+            if additive_update or geometric_update or modular_update
             else set()
         )
         return self.glsl_software_subgroup_loop_controls_preserved(

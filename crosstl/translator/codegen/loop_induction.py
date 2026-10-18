@@ -16,6 +16,7 @@ from ..ast import (
     ReturnNode,
     UnaryOpNode,
     VariableNode,
+    VectorType,
 )
 from ..resource_identity import source_resource_identity
 from .array_utils import _UnsignedLiteralInt, evaluate_literal_int_expression
@@ -552,6 +553,119 @@ def init_less_counter_loops(function, walk_ast, writes=None):
                 break
         if not writes_elsewhere:
             result[loop_id] = (name, declaration, loop)
+    return result
+
+
+_VECTOR_COMPONENTS = {
+    letter: index
+    for alphabet in ("xyzw", "rgba")
+    for index, letter in enumerate(alphabet)
+}
+
+
+def modular_stride_loops(function, type_name, walk_ast):
+    """Ids of ``for`` loops whose ``counter += operand`` wraps modulo 2**32.
+
+    MLX's wide GEMV runs ``for (int chunk = tid.x; chunk < n_chunks; chunk
+    += tgpg.x)``: it adds a ``uint`` grid dimension to an ``int`` counter.
+    The usual arithmetic conversions make that a 32-bit unsigned addition,
+    which wraps instead of overflowing, and storing the sum converts it back
+    modulo 2**32, so the update is defined for every operand value and every
+    target performs the same one. Callers that prove the start, bound and
+    operand uniform then know that every invocation visits the same counter
+    values in the same order, wrapped or not, without any range for the
+    operand.
+
+    A loop qualifies when it declares a non-volatile 32-bit integer counter
+    and updates it with ``+=`` by one name, or one component of a vector
+    name, that ``function`` declares exactly once, as a non-volatile 32-bit
+    integer value rather than a pointer or reference, and when the counter or
+    the operand is unsigned. Narrow counters do not qualify: their
+    promotions differ between targets. Neither do ``const`` locals: their
+    values belong to the checked literal-stride proof.
+    """
+    declarations = {}
+    for parameter in getattr(function, "parameters", None) or []:
+        declarations.setdefault(parameter.name, []).append(parameter)
+    for node in walk_ast(getattr(function, "body", None)):
+        if isinstance(node, VariableNode):
+            declarations.setdefault(node.name, []).append(node)
+
+    def shape(declaration):
+        declared = getattr(declaration, "param_type", None)
+        if declared is None:
+            declared = getattr(declaration, "var_type", None)
+        if isinstance(declared, (PointerType, ReferenceType)) or any(
+            "volatile" in (getattr(value, "qualifiers", None) or ())
+            for value in (declaration, declared)
+        ):
+            return None
+        lanes = None
+        if isinstance(declared, VectorType):
+            # Target type names spell vectors differently (uint3, uvec3).
+            lanes = declared.size
+            declared = declared.element_type
+        name = type_name(declared)
+        if not isinstance(name, str):
+            return None
+        result = source_integer_shape(name)
+        if result is None or result[1] != 32:
+            return None
+        if lanes is None:
+            return result
+        if result[2] != 1 or type(lanes) is not int:
+            return None
+        return result[0], result[1], lanes
+
+    result = set()
+    for loop in walk_ast(getattr(function, "body", None)):
+        if not isinstance(loop, ForNode):
+            continue
+        counter = loop.init
+        update = loop.update
+        if (
+            not isinstance(counter, VariableNode)
+            or not isinstance(update, AssignmentNode)
+            or update.operator != "+="
+            or not isinstance(update.target, IdentifierNode)
+            or update.target.name != counter.name
+        ):
+            continue
+        counter_shape = shape(counter)
+        if counter_shape is None or counter_shape[2] != 1:
+            continue
+        operand = update.value
+        component = None
+        if (
+            isinstance(operand, MemberAccessNode)
+            and isinstance(operand.object_expr, IdentifierNode)
+            and operand.member in _VECTOR_COMPONENTS
+        ):
+            component = _VECTOR_COMPONENTS[operand.member]
+            operand = operand.object_expr
+        if not isinstance(operand, IdentifierNode) or operand.name == counter.name:
+            continue
+        found = declarations.get(operand.name, ())
+        operand_shape = shape(found[0]) if len(found) == 1 else None
+        if operand_shape is None or (
+            # A constant's value belongs to the literal-stride proof.
+            isinstance(found[0], VariableNode)
+            and {"const", "constant"}
+            & {
+                *(found[0].qualifiers or ()),
+                *(getattr(found[0].var_type, "qualifiers", None) or ()),
+            }
+        ):
+            continue
+        if (operand_shape[2] == 1) != (component is None) or (
+            component is not None and component >= operand_shape[2]
+        ):
+            continue
+        if ArithmeticScalarKind.UNSIGNED_INTEGER in (
+            counter_shape[0],
+            operand_shape[0],
+        ):
+            result.add(id(loop))
     return result
 
 

@@ -15,7 +15,10 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLPrivatePointerParameterError,
     OpenGLSoftwareSubgroupError,
 )
-from crosstl.translator.codegen.loop_induction import loop_constant_bindings
+from crosstl.translator.codegen.loop_induction import (
+    loop_constant_bindings,
+    modular_stride_loops,
+)
 from crosstl.translator.codegen.subgroup_control_flow import (
     converge_subgroup_bounded_loops,
 )
@@ -976,4 +979,258 @@ def test_bounded_ranges_execute(tmp_path, count):
         tmp_path,
         original_source=source if target == "metal" else None,
         original_entry="ranges",
+    )
+
+
+# MLX's wide GEMV strides its vector chunks by the workgroup count:
+# ``for (int chunk = tid.x; chunk < n_chunks; chunk += tgpg.x)``. Adding the
+# ``uint`` operand to the ``int`` counter is a modular 32-bit addition, so with
+# a uniform start, bound and operand every invocation visits the same counter
+# values, wrapped or not, and the operand needs no range.
+def _modular_source(header, body="", declarations=""):
+    return f"""shader ModularStrides {{
+        StructuredBuffer<uint> inputWords @register(t0);
+        RWStructuredBuffer<uint> outputWords @register(u1);
+        compute {{
+            @numthreads(32, 4, 1)
+            void main(uint invocation @gl_LocalInvocationIndex,
+                      uvec3 group @gl_WorkGroupID,
+                      uvec3 groups @gl_NumWorkGroups) {{
+                uint index = group.x * 128u + invocation;
+                {declarations}
+                uint result = 0u;
+                for ({header}) {{ {body} result += WaveActiveSum(invocation + uint(step)); }}
+                outputWords[index] = result;
+            }}
+        }}
+    }}"""
+
+
+MODULAR_CASES = {
+    # target -> the emitted modular update
+    "grid-stride": (
+        "int step = int(group.x); step < 7; step += groups.x",
+        "",
+        {
+            "directx": "step += groups.x)",
+            "opengl": "step = int((uint(step) + gl_NumWorkGroups.x)))",
+        },
+    ),
+    "inclusive": (
+        "int step = 0; step <= 6; step += groups.y",
+        "",
+        {
+            "directx": "step += groups.y)",
+            "opengl": "step = int((uint(step) + gl_NumWorkGroups.y)))",
+        },
+    ),
+    "unsigned-counter": (
+        "uint step = group.x; step < 7u; step += span",
+        "int span = int(groups.x);",
+        {"directx": "step += span)", "opengl": "step = (step + uint(span)))"},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", MODULAR_CASES)
+def test_modular_uniform_strides_compile(tmp_path, case, stride_target):
+    header, declarations, update = MODULAR_CASES[case]
+    generator = _generator(stride_target)
+    ast = parse(_modular_source(header, declarations=declarations))
+    generated = generator.generate_stage(ast, "compute")
+    assert generated == generator.generate_stage(ast, "compute")
+    assert (
+        "GroupMemoryBarrierWithGroupSync"
+        if stride_target == "directx"
+        else "barrier();"
+    ) in generated
+    assert "WaveActiveSum(" not in generated
+    assert update[stride_target] in generated
+    _compile(generated, stride_target, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "header,body,declarations",
+    [
+        # Signed plus signed may overflow, so it still needs a range.
+        (
+            "int step = int(group.x); step < 7; step += span",
+            "",
+            "int span = int(groups.x);",
+        ),
+        ("int step = int(group.x); step < 7; step += invocation", "", ""),
+        ("short step = 0; step < 7; step += groups.x", "", ""),
+        ("int step = 0; step < 7; step -= groups.x", "", ""),
+        ("int step = 0; step < 7; step += groups.x * 2u", "", ""),
+        ("int step = 0; step > -7; step += groups.x", "", ""),
+        ("int step = 0; step < 7; step += span", "span = 1u;", "uint span = groups.x;"),
+        (
+            "int step = 0; step < 7; step += span",
+            "",
+            "uint span = groups.x; { uint span = 2u; outputWords[0] = span; }",
+        ),
+        ("int step = 0; step < 7; step += span", "", "volatile uint span = groups.x;"),
+        ("uint step = group.x; step < 7u; step += step", "", ""),
+        (
+            "int step = 0; step < 7; step += groups.x",
+            "if (invocation == 0u) { break; }",
+            "",
+        ),
+    ],
+)
+def test_unproved_modular_strides_are_rejected(
+    header, body, declarations, stride_target
+):
+    with pytest.raises(STRIDE_ERRORS):
+        _generator(stride_target).generate_stage(
+            parse(_modular_source(header, body, declarations)), "compute"
+        )
+
+
+def _modular_loops(header, declarations=""):
+    ast = parse(_modular_source(header, declarations=declarations))
+    generator = GLSLCodeGen(software_subgroup_width=32)
+    (function,) = generator.glsl_software_subgroup_functions(ast)
+    (loop,) = (
+        node for node in generator.walk_ast(function) if isinstance(node, ForNode)
+    )
+    return id(loop) in modular_stride_loops(
+        function, generator.type_name_string, generator.walk_ast
+    )
+
+
+@pytest.mark.parametrize(
+    "header,declarations,modular",
+    [
+        ("int step = 0; step < 7; step += groups.x", "", True),
+        ("int step = 0; step < 7; step += groups.z", "", True),
+        ("uint step = 0u; step < 7u; step += span", "int span = 3;", True),
+        ("uint step = 0u; step < 7u; step += span", "uint span = 3u;", True),
+        ("int step = 0; step < 7; step += span", "uint span = groups.x;", True),
+        ("int step = 0; step < 7; step += span", "int span = 3;", False),
+        ("int step = 0; step < 7; step += span", "ushort span = 3;", False),
+        ("short step = 0; step < 7; step += groups.x", "", False),
+        ("int step = 0; step < 7; step += groups.w", "", False),
+        ("int step = 0; step < 7; step += groups", "", False),
+        ("int step = 0; step < 7; step -= groups.x", "", False),
+        ("int step = 0; step < 7; step += groups.x + 1u", "", False),
+        ("int step = 0; step < 7; step++", "", False),
+        (
+            "int step = 0; step < 7; step += span",
+            "uint span = 1u; { uint span = 2u; outputWords[0] = span; }",
+            False,
+        ),
+        ("int step = 0; step < 7; step += span", "volatile uint span = 1u;", False),
+        # Constants stay with the checked literal-stride proof.
+        ("int step = 0; step < 7; step += span", "const uint span = 3u;", False),
+        ("uint step = 0u; step < 7u; step += span", "const int span = 3;", False),
+    ],
+)
+def test_modular_stride_loops_require_word_operands(header, declarations, modular):
+    assert _modular_loops(header, declarations) is modular
+
+
+MODULAR_SOURCES = {
+    "direct": (
+        """#include <metal_stdlib>
+using namespace metal;
+kernel void accumulate(device uint* output [[buffer(0)]],
+                       uint lane [[thread_index_in_threadgroup]],
+                       uint3 group [[threadgroup_position_in_grid]],
+                       uint3 groups [[threadgroups_per_grid]]) {
+    uint result = 0u;
+    for (int step = int(group.x); step < 7; step += groups.x) {
+        result += simd_sum(lane + uint(step));
+    }
+    output[4u + group.x * 64u + lane] = result;
+}
+"""
+    ),
+    # As in MLX, the operand reaches the loop as a helper parameter.
+    "helper": (
+        """#include <metal_stdlib>
+using namespace metal;
+uint collect(uint lane, uint3 group, uint3 groups) {
+    uint result = 0u;
+    for (int step = int(group.x); step < 7; step += groups.x) {
+        result += simd_sum(lane + uint(step));
+    }
+    return result;
+}
+kernel void accumulate(device uint* output [[buffer(0)]],
+                       uint lane [[thread_index_in_threadgroup]],
+                       uint3 group [[threadgroup_position_in_grid]],
+                       uint3 groups [[threadgroups_per_grid]]) {
+    output[4u + group.x * 64u + lane] = collect(lane, group, groups);
+}
+"""
+    ),
+}
+MODULAR_GROUPS = 3
+
+
+def _modular_request(root, target, case):
+    source, descriptor, package = _package(
+        root, target, "uint", (32, 2, 1), source=MODULAR_SOURCES[case]
+    )
+    guard = 0xDEADBEEF
+    expected = [guard] * 201
+    for group in range(MODULAR_GROUPS):
+        for lane in range(64):
+            first = lane // 32 * 32
+            expected[4 + group * 64 + lane] = (
+                sum(
+                    neighbor + step
+                    for step in range(group, 7, MODULAR_GROUPS)
+                    for neighbor in range(first, first + 32)
+                )
+                & 0xFFFFFFFF
+            )
+    # DirectX also binds the workgroup count, derived from the dispatch.
+    (binding,) = (
+        item for item in descriptor["bindings"] if item["name"] != "CrossGLDispatchInfo"
+    )
+    inputs = {
+        binding["name"]: {"dtype": "uint32", "shape": [201], "values": [guard] * 201}
+    }
+    outputs = {binding["name"]: {"dtype": "uint32", "shape": [201], "values": expected}}
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        {"workgroupCount": [MODULAR_GROUPS, 1, 1], "workgroupSize": [32, 2, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    return source, request, outputs
+
+
+def test_modular_reference_gives_each_workgroup_its_own_chunks():
+    # Three workgroups split the seven chunks 3, 2 and 2 ways.
+    assert [len(range(group, 7, MODULAR_GROUPS)) for group in range(3)] == [3, 2, 2]
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize("case", MODULAR_SOURCES)
+def test_modular_strides_translate_and_compile(tmp_path, target, case):
+    _, request, _ = _modular_request(tmp_path, target, case)
+    generated = request.artifact_path.read_text()
+    if target != "metal":
+        assert "simd_sum" not in generated and "WaveActiveSum" not in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("case", MODULAR_SOURCES)
+def test_modular_strides_execute(tmp_path, case):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required fixed-stride execution")
+    target = {"darwin": "metal", "win32": "directx"}.get(sys.platform, "opengl")
+    source, request, outputs = _modular_request(tmp_path, target, case)
+    _execute(
+        request,
+        outputs,
+        tmp_path,
+        original_source=source if target == "metal" else None,
+        original_entry="accumulate",
     )
