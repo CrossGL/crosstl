@@ -113,8 +113,13 @@ Unset both override variables to run the original path. This baseline defect
 does not establish a translated scan regression or successful scan coverage.
 The required host gate retains the original test and tolerances and still fails
 on any unsuccessful run; no retry, skip or known-failure allowance is built into
-the verifier. Its ordinary upstream invocations are not seeded, so their random
-inputs need not match between processes.
+the verifier. Both upstream invocations pass `--seed 0`, which resets Python's
+`random`, NumPy's global generator and `mx.random` to seed 0 before every test.
+Each test therefore sees the same inputs in the original and translated runs,
+independent of test order, and the hosted original run no longer draws seeds
+such as 14 or 55 at random. Seed 0 is among the 64 replayed seeds that pass.
+The verifier fails if either run's summary lacks the seed or the full generator
+list.
 
 Both upstream invocations use `unittest_evidence.py`, which preserves the full
 module, unittest outcomes, skips and existing deadlines. On a failure or error,
@@ -124,8 +129,9 @@ Each record includes the test identity, source hash, line, array dtype and shape
 Capture is limited to 16,384 elements per array and 65,536 elements per failure;
 larger arrays and unavailable values are explicitly marked. Complex values and
 non-finite floats have JSON-safe representations, preserving signed zeros.
-No seed, test input, assertion, tolerance or expected result is changed. Evidence
-capture errors cannot convert an upstream failure into a passing test.
+Apart from the shared seed, no test input, assertion, tolerance or expected
+result is changed. Evidence capture errors cannot convert an upstream failure
+into a passing test.
 
 ### Captured Scan Replay
 

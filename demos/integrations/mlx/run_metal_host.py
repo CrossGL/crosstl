@@ -17,6 +17,10 @@ from pathlib import Path
 
 MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 HERE = Path(__file__).resolve().parent
+# Both upstream runs reset these generators to the same seed before every test,
+# so the original and translated runs see identical random inputs.
+UPSTREAM_SEED = 0
+SEEDED_GENERATORS = ("random", "numpy.random", "mlx.core.random")
 SOURCE = "mlx/backend/metal/kernels/binary.metal"
 SHAPES = (
     "ss",
@@ -415,10 +419,11 @@ def verify(root, python, output):
     cwd = root / "python/tests"
     evidence = {
         "kind": "mlx-selected-metal-host-redirection",
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "status": "running",
         "commit": MLX_COMMIT,
         "upstreamModule": "test_ops",
+        "upstreamSeed": {"value": UPSTREAM_SEED, "generators": list(SEEDED_GENERATORS)},
         "runtime": identity,
         "upstreamTestSourceSha256": digest(cwd / "test_ops.py"),
         "original": None,
@@ -454,6 +459,8 @@ def verify(root, python, output):
                 HERE / "unittest_evidence.py",
                 "--evidence-dir",
                 failures,
+                "--seed",
+                str(UPSTREAM_SEED),
                 "test_ops",
             ],
             output,
@@ -465,6 +472,8 @@ def verify(root, python, output):
         )
         result = unittest_result(failures / "summary.json", command)
         evidence[name] = result
+        if result.get("seed") != evidence["upstreamSeed"]:
+            raise ValueError(f"The {name} run did not reset every generator per test")
         if not result["successful"]:
             raise ValueError(f"Original upstream assertions failed in the {name} run")
 

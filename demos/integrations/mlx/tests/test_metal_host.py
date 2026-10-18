@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import subprocess
 import sys
 import textwrap
@@ -142,6 +143,69 @@ def test_upstream_failure_evidence_preserves_unittest_results(tmp_path, mode, re
         assert values["actual"]["values"] == [{"real": 1.0, "imag": 2.0}]
         assert values["oversized"]["omitted"] == "array-size"
         assert "values" not in values["oversized"]
+
+
+@pytest.mark.parametrize("seed", [None, 0, 14])
+def test_upstream_seed_resets_generators_before_every_test(tmp_path, seed):
+    (tmp_path / "upstream.py").write_text(textwrap.dedent("""
+        import json
+        import os
+        import random
+        import unittest
+        import numpy as np
+
+        def draw(name):
+            values = [random.random(), float(np.random.uniform())]
+            with open(os.environ["DRAWS"], "a") as stream:
+                stream.write(json.dumps([name, values]) + "\\n")
+
+        class Upstream(unittest.TestCase):
+            def test_first(self):
+                random.random()
+                np.random.uniform(size=7)
+                draw("first")
+
+            def test_second(self):
+                draw("second")
+    """))
+    draws = tmp_path / "draws.jsonl"
+    output = tmp_path / "evidence"
+    seed_arguments = [] if seed is None else ["--seed", str(seed)]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(host.HERE / "unittest_evidence.py"),
+            "--evidence-dir",
+            str(output),
+            *seed_arguments,
+            "upstream",
+        ],
+        cwd=tmp_path,
+        env=dict(os.environ, DRAWS=str(draws)),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    summary = host.unittest_result(
+        output / "summary.json", {"returncode": result.returncode}
+    )
+    values = dict(json.loads(line) for line in draws.read_text().splitlines())
+    if seed is None:
+        assert summary["seed"] is None
+        assert values["first"] != values["second"]
+        return
+    generators = summary["seed"].pop("generators")
+    assert summary["seed"] == {"value": seed}
+    assert generators[:2] == ["random", "numpy.random"]
+    assert set(generators) <= set(host.SEEDED_GENERATORS)
+    # Draws made earlier in the process do not leak into the next test.
+    import numpy as np
+
+    assert values["first"] != values["second"]
+    random.seed(seed)
+    np.random.seed(seed)
+    assert values["second"] == [random.random(), float(np.random.uniform())]
 
 
 def test_upstream_failure_capture_bounds_values_and_preserves_inputs():
@@ -815,6 +879,8 @@ def test_checkout_rejects_wrong_pin_or_unrelated_edits(
         "skipped",
         "summary-missing",
         "exit-code",
+        "unseeded",
+        "seed-mismatch",
         "timeout",
         "missing-library",
         "library-integrity",
@@ -873,6 +939,8 @@ def test_host_evidence_requires_complete_command_and_numerical_records(
                 str(host.HERE / "unittest_evidence.py"),
                 "--evidence-dir",
                 str(directory / f"{name}-failures"),
+                "--seed",
+                str(host.UPSTREAM_SEED),
                 "test_ops",
             ]
             assert kwargs["timeout"] == 1800
@@ -881,6 +949,14 @@ def test_host_evidence_requires_complete_command_and_numerical_records(
                 raise KeyboardInterrupt
             (directory / f"{name}.stderr").write_text("Ran 163 tests in 1.0s\nOK\n")
             summary = upstream_summary(163)
+            summary["seed"] = {
+                "value": host.UPSTREAM_SEED,
+                "generators": list(host.SEEDED_GENERATORS),
+            }
+            if name == "upstream-translated" and corruption == "unseeded":
+                summary["seed"] = None
+            if name == "upstream-translated" and corruption == "seed-mismatch":
+                summary["seed"]["generators"].remove("mlx.core.random")
             if corruption == "both" or name == f"upstream-{corruption}":
                 summary["failures"] = summary["testIds"][:1]
                 summary["successful"] = False
@@ -949,7 +1025,11 @@ def test_host_evidence_requires_complete_command_and_numerical_records(
     else:
         host.verify(root, Path(sys.executable), output)
     evidence = json.loads((output / "evidence.json").read_text())
-    assert evidence["schemaVersion"] == 3
+    assert evidence["schemaVersion"] == 4
+    assert evidence["upstreamSeed"] == {
+        "value": host.UPSTREAM_SEED,
+        "generators": ["random", "numpy.random", "mlx.core.random"],
+    }
     assert evidence["status"] == ("failed" if corruption else "passed")
     checks = {record["name"]: record for record in evidence["checks"]}
     assert len(checks) == 10
@@ -971,6 +1051,10 @@ def test_host_evidence_requires_complete_command_and_numerical_records(
             )
             assert evidence[name]["successful"] is not failed
         assert checks["upstream-inventory"]["status"] == "passed"
+    if corruption in {"unseeded", "seed-mismatch"}:
+        assert checks["upstream-original"]["status"] == "passed"
+        assert checks["upstream-translated"]["status"] == "failed"
+        assert "reset every generator" in checks["upstream-translated"]["error"]
     if corruption not in {"readback", "trace"}:
         assert len(evidence["hostWorkloads"]) == 24
         assert sum(item["outputs"] for item in evidence["hostWorkloads"]) == 402
