@@ -21,7 +21,6 @@ from ..ast import (
     FunctionCallNode,
     IdentifierNode,
     MemberAccessNode,
-    TernaryOpNode,
     UnaryOpNode,
     VariableNode,
 )
@@ -508,7 +507,7 @@ class GLSLEmulatedMatrices:
             _s, rows, inner = left["shape"]
             columns = right["shape"][2]
             result_shape = (scalar, rows, columns)
-            column_type = vector_type_name(scalar, rows)
+            vector_type_name(scalar, rows)
             parts = []
             for j in range(columns):
                 terms = [
