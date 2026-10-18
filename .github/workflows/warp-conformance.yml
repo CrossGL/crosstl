@@ -1,0 +1,139 @@
+name: WARP Conformance Controls
+
+# Records which Direct3D WARP libraries execute the repository-independent
+# HLSL wave controls and the multi-wave reduction reproducer correctly. The
+# Windows native host jobs in demo-project-testing.yml remain the gate for the
+# pinned libraries; this matrix is the evidence that tests/directx_runtime_defects.py
+# entries cite when a library is classified as defective or conformant.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/warp-conformance.yml"
+      - "tests/directx_runtime_defects.py"
+      - "tests/test_translator/test_directx_partial_wave_controls.py"
+      - "tests/test_translator/test_directx_multiwave_reduction.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warp-conformance-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  warp-matrix:
+    name: WARP conformance matrix (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CrossTL and the Direct3D runtime
+        run: python -m pip install -e ".[directx-runtime]" pytest pytest-xdist "PyYAML>=6,<7"
+      - name: Install pinned DXC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Execute the controls on every WARP library
+        shell: pwsh
+        timeout-minutes: 30
+        env:
+          CROSTL_REQUIRE_DIRECTX_SOFTWARE_REDUCTIONS: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "4"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $evidence = "warp-conformance"
+          New-Item -ItemType Directory -Force $evidence | Out-Null
+          $installed = Join-Path $env:pythonLocation "d3d10warp.dll"
+          if (Test-Path $installed) { throw "A WARP library is already installed beside Python." }
+          $cases = @(
+            @{ version = "system" },
+            @{ version = "1.0.13"; archiveSHA256 = "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b"; dllSHA256 = "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638" },
+            @{ version = "1.0.14.1"; archiveSHA256 = "d593b5d09d4d3115e7ab1c1b5880365672616f04f2e9bb3095307f5795f3b5fb"; dllSHA256 = "801d460575c5c3e041ae496aea035380872bf7147f189c0bcdc3d188314dcd6b" },
+            @{ version = "1.0.14.2"; archiveSHA256 = "e688a64b2fcc6f17fadb338a0fa29841c9743c5513baeccaf2b88b95e5d66b22"; dllSHA256 = "610c8ec96c00aa7037f010f70a467576cc51296c4d6372526b1ebb8db54dc0ec" },
+            @{ version = "1.0.15"; archiveSHA256 = "98c645f20af5b43bf4c9cc5f9158a7091673190e19aedff6e67e2b1f4490dd52"; dllSHA256 = "25dac4debec9a162ede99f50df3c8933277da3a7a8b565ea299c6d0431c4c05c" },
+            @{ version = "1.0.15.1"; archiveSHA256 = "40bd68dad23bfdd933e67e34b65f2d036432cf211941d328c4b5d1f62183f3d7"; dllSHA256 = "b4db7d0d8d2e66e2347d1c0eeb67febec6dd246eabcf07588b782037ac88ac63" },
+            @{ version = "1.0.16"; archiveSHA256 = "aaa2c8994aa4758cbe36b494c107799c9609076e14b0ad46da393a339a1a381b"; dllSHA256 = "b97f164acb9149f7b2177047036ba535103891351187a950adba8dd9886e3698" },
+            @{ version = "1.0.16.1"; archiveSHA256 = "4c702c5e40d4e7dcdd2a03809967b32eab6b80e333e73170674ca13cedaba27b"; dllSHA256 = "f49af8c7209bca45ca6a663bc359c4ddc5c7f681b1a28d285c51128e83538de8" },
+            @{ version = "1.0.17"; archiveSHA256 = "4a579c67fd72a48634bc4d6a68c43a637c5258bc960910f11f0c0655ecd9360a"; dllSHA256 = "5cfdb809906ea6e7e44876dc9755ed9290ea21d7b982fba414fc758a3b1470a8" },
+            @{ version = "1.0.18"; archiveSHA256 = "9e4574bd125a146d2da880f023ec4e9da017ced1c913085ad2261340a4f5ee48"; dllSHA256 = "c07e702c754e4f70798376d8e690137f80a467f541748b6951a3c07da87f8c74" },
+            @{ version = "1.0.19"; archiveSHA256 = "332b1b70602e6ceec0531bb352508e42ec4948acd3f576bfb46434c165d073f7"; dllSHA256 = "1fd2f9d991f00d890d06c00f791a756446f5f29da508b12fdeb8ffd1b5696add" },
+            @{ version = "1.0.21"; archiveSHA256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"; dllSHA256 = "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3" }
+          )
+          $runs = @()
+          foreach ($case in $cases) {
+            $version = $case.version
+            if ($version -eq "system") {
+              $library = Join-Path $env:SystemRoot "System32/d3d10warp.dll"
+              if (-not (Test-Path $library -PathType Leaf)) { throw "System WARP library is missing." }
+              $digest = (Get-FileHash $library -Algorithm SHA256).Hash.ToLowerInvariant()
+            } else {
+              $archive = Join-Path $env:RUNNER_TEMP "warp-$version.zip"
+              $root = Join-Path $env:RUNNER_TEMP "warp-$version"
+              Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/$version/microsoft.direct3d.warp.$version.nupkg" -OutFile $archive -TimeoutSec 60
+              if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $case.archiveSHA256) {
+                throw "WARP archive checksum mismatch: $version"
+              }
+              Expand-Archive $archive -DestinationPath $root -Force
+              $library = Join-Path $root "build/native/bin/x64/d3d10warp.dll"
+              $digest = (Get-FileHash $library -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($digest -ne $case.dllSHA256) { throw "WARP library checksum mismatch: $version" }
+              Copy-Item $library $installed -Force
+            }
+            $output = Join-Path $evidence $version
+            New-Item -ItemType Directory -Force $output | Out-Null
+            python tools/run_bounded_command.py --timeout-seconds 300 --label "WARP $version controls" -- `
+              python -m pytest -q -n auto -p no:cacheprovider `
+                --basetemp="$output/pytest" --junitxml="$output/results.xml" `
+                tests/test_translator/test_directx_partial_wave_controls.py `
+                tests/test_translator/test_directx_multiwave_reduction.py 2>&1 |
+              Tee-Object -FilePath "$output/pytest.log"
+            $runs += @{ version = $version; dllSHA256 = $digest; exitCode = $LASTEXITCODE }
+          }
+          if (Test-Path $installed) { Remove-Item $installed -Force }
+          $runs | ConvertTo-Json | Set-Content (Join-Path $evidence "runs.json")
+      - name: Summarize the conformance matrix
+        if: ${{ !cancelled() }}
+        run: python tools/warp_conformance_matrix.py warp-conformance --summary "$GITHUB_STEP_SUMMARY"
+        shell: bash
+      - name: Retain conformance evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: warp-conformance-matrix
+          path: |
+            warp-conformance/matrix.json
+            warp-conformance/runs.json
+            warp-conformance/*/results.xml
+            warp-conformance/*/pytest.log
+            warp-conformance/*/pytest/**/failures.json
+            warp-conformance/*/pytest/**/readback.json
+            warp-conformance/*/pytest/**/evidence.json
+          retention-days: 14
+          if-no-files-found: warn

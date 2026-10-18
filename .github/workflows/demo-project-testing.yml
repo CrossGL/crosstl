@@ -1929,8 +1929,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .mlx-portable-host/fused-math
+          # A test still running after 180 seconds dumps every thread's stack, so
+          # a stalled dispatch names itself before the step deadline ends it.
           python tools/run_bounded_command.py --timeout-seconds 240 --label "Native binary32 arithmetic" -- \
-            python -m pytest -q -n auto \
+            python -m pytest -q -n auto -o faulthandler_timeout=180 \
               -k "execute or original_metal or modules_link_together" \
               -m "not extended_power" \
               --basetemp=.mlx-portable-host/fused-math/pytest \
