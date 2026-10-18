@@ -87,3 +87,26 @@ def test_reference_kernel_reproduces_its_oracle(name, tmp_path):
         (name, "preserved")
     ], json.dumps(reasons, indent=2, default=str)
     assert runtime.expect in records[0]["execution"]["device"]
+
+
+D3D12_MODELS = tuple(f"cs_6_{minor}" for minor in range(10))
+
+
+def test_d3d12_device_runs_the_harness_shader_model(tmp_path):
+    """The HLSL profile the harness validates with must also create pipelines on the D3D12 device."""
+    runtime = RUNTIMES["d3d12-warp"]
+    provided = provision(runtime)
+    if not provided.available:
+        if "d3d12-warp" in REQUIRED:
+            pytest.fail(f"d3d12-warp is required but unavailable: {provided.reason}")
+        pytest.skip(provided.reason)
+    from .native import d3d12_pipeline_models
+    from .toolchains import tool
+    from .validators import HLSL_PROFILE
+
+    dxc = tool("dxc")
+    assert dxc.available, dxc.reason
+    device, models = d3d12_pipeline_models(dxc.command, tmp_path, D3D12_MODELS)
+    report = "\n".join(f"{model}: {result}" for model, result in models.items())
+    print(f"{device}\n{report}")
+    assert models[HLSL_PROFILE] == "ok", f"{device}\n{report}"

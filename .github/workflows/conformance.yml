@@ -238,7 +238,7 @@ jobs:
         env:
           CROSSTL_CONFORMANCE_NATIVE: "1"
           CROSSTL_CONFORMANCE_REQUIRE: ${{ matrix.runtimes }}
-        run: python -m pytest -q --no-header -p no:warnings --tb=short -rfE tests/conformance/test_native_runtimes.py
+        run: python -m pytest -q --no-header -p no:warnings --tb=short -rfEP tests/conformance/test_native_runtimes.py
 
       # Later steps still run after a reference failure, so the uploaded artifact explains it.
       - name: Translated route against the scoreboard

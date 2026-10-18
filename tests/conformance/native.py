@@ -218,7 +218,7 @@ def _warp_identity(job, name):
     return _expect(job, f"{name}; d3d10warp {version or 'unknown'}")
 
 
-def execute_d3d12(job):
+def _d3d12_software_device():
     import compushady
     from compushady import config
 
@@ -230,7 +230,43 @@ def execute_d3d12(job):
     ]
     if len(devices) != 1:
         raise RuntimeError(f"Expected one D3D12 software device, found {len(devices)}")
-    device = devices[0]
+    return compushady, devices[0]
+
+
+PROBE_HLSL = """RWStructuredBuffer<uint> o : register(u0);
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) { o[id.x] = 7u; }
+"""
+
+
+def d3d12_pipeline_models(dxc, directory, models):
+    """Map each ``cs_6_x`` profile to ``"ok"`` or the reason DXC or pipeline creation rejected a trivial kernel.
+
+    A device whose runtime or driver lacks a shader model refuses the pipeline with E_INVALIDARG, which is
+    indistinguishable from a binding error unless the same one-UAV kernel is tried at each model in turn.
+    """
+    compushady, device = _d3d12_software_device()
+    source = Path(directory) / "probe.hlsl"
+    source.write_text(PROBE_HLSL)
+    results = {}
+    for model in models:
+        binary = Path(directory) / f"probe_{model}.dxil"
+        compiled = run([*dxc, source, "-T", model, "-E", "main", "-Fo", binary])
+        if compiled.status != "accepted" or not binary.is_file():
+            results[model] = f"dxc {compiled.status}: {compiled.log.strip()[-200:]}"
+            continue
+        buffer = compushady.Buffer(16, stride=4, device=device)
+        try:
+            compushady.Compute(binary.read_bytes(), uav=[buffer], device=device)
+        except Exception as error:  # noqa: BLE001 - the driver's message is the result
+            results[model] = f"{type(error).__name__}: {str(error).strip()}"
+        else:
+            results[model] = "ok"
+    return device.name, results
+
+
+def execute_d3d12(job):
+    compushady, device = _d3d12_software_device()
     _expect(job, device.name)
     views = []
     for resource, filename in zip(job["resources"], FILES):
