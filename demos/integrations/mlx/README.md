@@ -1572,7 +1572,11 @@ and an `a` that puts the larger magnitude at either end, so each scale, edge
 and code is exact; others are all zero (the `eps` scale), all negative (the
 kernel's `w_max` starts at zero), a positive constant and free multiples of
 1/64, whose scales and codes need correctly rounded float32 division. A
-lane-level model of the reduction, rounding, shuffles and byte writes must
+DirectX target option selects `binary32_division_profile = "rne-flush"`
+for quantization so DXC cannot replace a division by a constant with a rounded
+reciprocal multiplication. Dequantization and the Metal/OpenGL configurations
+retain their existing arithmetic. A lane-level model of the reduction,
+rounding, shuffles and byte writes must
 write every output byte once and reproduce MLX's least-significant-bit-first
 code stream, and mutated models that drop the shuffled codes, truncate codes
 or always take the upper edge are rejected. Dequantize unpacks random codes

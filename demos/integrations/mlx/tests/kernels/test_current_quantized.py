@@ -235,6 +235,7 @@ def _config(directory, target, entry):
             "directx": {
                 "software_subgroup_width": SIMD_SIZE,
                 "relative_wave_shuffle_out_of_range": "self",
+                "binary32_division_profile": "rne-flush",
             },
             "opengl": {"software_subgroup_width": SIMD_SIZE},
         }
@@ -683,6 +684,10 @@ def _expected_validation_contract():
             "width": SIMD_SIZE,
             "directxShuffleOutOfRange": "self",
         },
+        "directxDivision": {
+            "kernels": ["affine_quantize"],
+            "binary32_division_profile": "rne-flush",
+        },
         "openglIndexRangeAssertions": {
             kind: {
                 "expressions": list(OPENGL_INDEX_RANGE_ASSERTIONS[kind]),
@@ -905,18 +910,21 @@ def test_quantized_opengl_assertions_name_buffer_elements(entry):
 
 @pytest.mark.parametrize("target", TARGETS)
 def test_quantized_configs_scope_target_options(tmp_path, target):
-    for entry in (
-        "affine_quantize_float_gs_64_b_4",
-        "affine_dequantize_float_gs_64_b_4",
-    ):
+    for entry in ENTRIES:
         config = _config(tmp_path / "work", target, entry)
         assert config.entry_points == {SOURCE: (entry,)}
         (rule,) = config.entry_workgroup_size_rules[SOURCE].values()
         assert tuple(int(value) for value in rule) == WORKGROUP
         options = config.source_options["metal"]["target_options"]
         if INFO[entry]["kind"] == "affine_quantize":
-            assert options["directx"]["software_subgroup_width"] == SIMD_SIZE
-            assert options["opengl"]["software_subgroup_width"] == SIMD_SIZE
+            assert options == {
+                "directx": {
+                    "software_subgroup_width": SIMD_SIZE,
+                    "relative_wave_shuffle_out_of_range": "self",
+                    "binary32_division_profile": "rne-flush",
+                },
+                "opengl": {"software_subgroup_width": SIMD_SIZE},
+            }
         else:
             assert options == {}
         expressions = [item.expression for item in config.index_range_assertions]
