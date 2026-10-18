@@ -57,6 +57,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLIndexTypeError,
     OpenGLIsFiniteError,
     OpenGLMappedOverloadError,
+    OpenGLPreciseQualifierError,
     OpenGLPrivatePointerParameterError,
     OpenGLRecursiveFunctionError,
     OpenGLReferenceParameterError,
@@ -16032,6 +16033,63 @@ def test_glsl_precise_function_multiple_returns_use_collision_safe_locals(tmp_pa
         "precise-return-names",
         validate_spirv=True,
     )
+
+
+PRECISE_PROFILE_SHADER = """
+#version {version}
+shader PreciseProfile {{
+    @precise
+    float stable(float a, float b, float c) {{
+        // A comment that mentions precise does not need the qualifier.
+        return a * b + c;
+    }}
+    compute {{
+        layout(std430, binding = 0) buffer Data {{ float values[]; }} data;
+        @numthreads(1, 1, 1)
+        void main() {{
+            data.values[0] = stable(data.values[1], data.values[2], data.values[3]);
+        }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("330 core", "#version 400 core"),
+        ("430 core", "#version 430 core"),
+        ("320 es", "#version 320 es"),
+    ],
+)
+def test_glsl_precise_output_selects_a_profile_with_the_qualifier(version, expected):
+    generated_code = GLSLCodeGen().generate(
+        crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version=version))
+    )
+
+    assert generated_code.splitlines()[0] == expected
+    assert "precise float crossglPreciseReturn = ((a * b) + c);" in generated_code
+
+
+def test_glsl_profile_is_unchanged_without_precise_output():
+    source = PRECISE_PROFILE_SHADER.format(version="330 core").replace("@precise\n", "")
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert generated_code.splitlines()[0] == "#version 330 core"
+    assert "precise" not in generated_code.replace("mentions precise", "")
+
+
+def test_glsl_es_profile_without_precise_is_rejected():
+    with pytest.raises(OpenGLPreciseQualifierError) as exc_info:
+        GLSLCodeGen().generate(
+            crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version="310 es"))
+        )
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.opengl-precise-unsupported"
+    )
+    assert exc_info.value.version_line == "#version 310 es"
+    assert "GLSL ES 3.20 or desktop GLSL 4.00" in str(exc_info.value)
 
 
 def test_glsl_global_fragment_integer_input_adds_required_flat_qualifier():

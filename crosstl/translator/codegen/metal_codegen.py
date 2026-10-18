@@ -12668,6 +12668,16 @@ class MetalCodeGen:
                     return f"{value}u"
                 if isinstance(value, bool):
                     return "true" if value else "false"
+                if isinstance(value, int):
+                    # Unsuffixed decimal literals beyond int are long in
+                    # Metal; the source type of such a literal is uint up to
+                    # 2^32 - 1 (as in GLSL and HLSL) and 64-bit above it.
+                    if value > 0xFFFFFFFF:
+                        return f"{value}ul"
+                    if value > 0x7FFFFFFF:
+                        return f"{value}u"
+                    if value < -0x80000000:
+                        return f"{value}l"
                 if isinstance(value, str) and not (
                     value.startswith('"') and value.endswith('"')
                 ):

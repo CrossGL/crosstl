@@ -1683,6 +1683,36 @@ def test_metal_glsl_bitcast_builtins_lower_to_as_type():
     assert "uintBitsToFloat(" not in generated_code
 
 
+def test_metal_integer_literals_beyond_int_keep_their_width():
+    # HLSL asfloat(0xFFC00000) reaches CrossGL as a decimal literal beyond the
+    # int range. Unsuffixed, Metal types it long, which as_type cannot
+    # reinterpret as float and which widens uint arithmetic and comparisons.
+    shader = """
+    shader MetalLiteralWidths {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID,
+                      RWStructuredBuffer<float> results @buffer(0),
+                      RWStructuredBuffer<uint> bits @buffer(1)) {
+                results[0] = intBitsToFloat(4290772992);
+                results[1] = intBitsToFloat(2139095040);
+                bits[0] = 4290772992 * 2;
+                bits[1] = 4290772992 > 0 ? 1u : 0u;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "as_type<float>(4290772992u)" in generated_code
+    assert "as_type<float>(2139095040)" in generated_code
+    assert "4290772992u * 2" in generated_code
+    assert "4290772992u > 0" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_hlsl_as_bitcast_aliases_lower_to_as_type():
     shader = """
     shader MetalHlslAsBitcasts {

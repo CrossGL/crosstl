@@ -6077,6 +6077,11 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
             if texel_access is not None:
                 return texel_access
             array = self.generate_expression(expr.array, is_main)
+            if isinstance(
+                expr.array, (BinaryOpNode, TernaryOpNode, UnaryOpNode, AssignmentNode)
+            ):
+                # A subscript binds tighter than any operator.
+                array = f"({array})"
             index = self.generate_expression(expr.index, is_main)
             return f"{array}[{index}]"
         elif isinstance(expr, CastNode):

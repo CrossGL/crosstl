@@ -811,6 +811,21 @@ class OpenGLStructConstructionError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLPreciseQualifierError(ValueError):
+    """Raised when a GLSL target profile has no ``precise`` qualifier.
+
+    Source arithmetic that must be evaluated as written (precise functions and
+    values) needs desktop GLSL 4.00 or GLSL ES 3.20.
+    """
+
+    project_diagnostic_code = "project.translate.opengl-precise-unsupported"
+    missing_capabilities = ("opengl.precise-qualifier",)
+
+    def __init__(self, message, *, version_line=None):
+        super().__init__(message)
+        self.version_line = version_line
+
+
 class OpenGLIndexTypeError(ValueError):
     """Raised when a source subscript has no legal GLSL index representation."""
 
@@ -1334,6 +1349,8 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = OpenGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = OpenGLStructConstructionError
     GLSL_INDEX_RANGE_ERROR = OpenGLIndexTypeError
+    GLSL_PRECISE_QUALIFIER_ERROR = OpenGLPreciseQualifierError
+    GLSL_PRECISE_QUALIFIER_REMEDY = "select GLSL ES 3.20 or desktop GLSL 4.00"
     GLSL_INDEX_TARGET_PROFILE = OPENGL_INDEX_PROFILE
     GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32, 64})
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32, 64})
@@ -2388,6 +2405,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.glsl_combined_sampler_uses = []
         self.glsl_sampler_registers = {}
         self.glsl_float_remainder_types = set()
+        self.glsl_precise_float_remainder_types = set()
         self.glsl_integer_dot_types = set()
         self.reset_glsl_emulated_matrices()
         self.reset_glsl_hlsl_structured_buffers()
@@ -2541,6 +2559,8 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.vertex_input_member_names = set()
         self.current_function_return_type = None
         self.current_glsl_precise_return_type = None
+        self.current_glsl_precise_function = False
+        self.current_glsl_precise_captures = None
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         self.function_fragment_only_requirements = {}
@@ -3641,6 +3661,55 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
 
     def glsl_version_is_es(self, version_line):
         return "es" in str(version_line or "").strip().split()[2:]
+
+    GLSL_PRECISE_QUALIFIER_PATTERN = re.compile(r"\bprecise\b")
+    GLSL_COMMENT_PATTERN = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+
+    def glsl_code_uses_precise_qualifier(self, code):
+        """Return whether generated code, outside comments, uses ``precise``.
+
+        ``precise`` is a keyword from desktop GLSL 4.00 and GLSL ES 3.20, and
+        identifiers spelled ``precise`` are escaped, so every match outside a
+        comment is the qualifier.
+        """
+        code = self.GLSL_COMMENT_PATTERN.sub("", str(code))
+        return self.GLSL_PRECISE_QUALIFIER_PATTERN.search(code) is not None
+
+    def ensure_glsl_precise_support(self, code):
+        """Select a profile that has ``precise`` when the output uses it.
+
+        Desktop profiles below 4.00 are raised to 4.00. An ES profile below
+        3.20 cannot keep the source's evaluation order, so it is rejected
+        instead of silently relaxing it.
+        """
+        if not self.glsl_code_uses_precise_qualifier(code):
+            return code
+        version_line = self.current_glsl_version_line
+        version_number = self.glsl_version_number(version_line)
+        if self.glsl_version_is_es(version_line):
+            if (version_number or 0) >= 320:
+                return code
+            raise self.GLSL_PRECISE_QUALIFIER_ERROR(
+                f"{self.GLSL_TARGET_DISPLAY_NAME} target profile "
+                f"'{version_line}' has no precise qualifier to keep the "
+                "source's floating-point evaluation order; "
+                f"{self.GLSL_PRECISE_QUALIFIER_REMEDY}",
+                version_line=version_line,
+            )
+        if version_number is None or version_number >= 400:
+            return code
+        if self.glsl_extension_enabled("GL_ARB_gpu_shader5"):
+            return code
+        upgraded_version = self.glsl_version_line_with_minimum(version_line, 400)
+        lines = str(code).splitlines(keepends=True)
+        for index, line in enumerate(lines):
+            if not line.strip().startswith("#version"):
+                continue
+            line_end = "\n" if line.endswith("\n") else ""
+            lines[index] = f"{upgraded_version}{line_end}"
+            break
+        self.current_glsl_version_line = upgraded_version
+        return "".join(lines)
 
     def ensure_glsl_int64_support(self, code):
         uses_int64 = re.search(
@@ -6436,6 +6505,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.glsl_combined_sampler_uses = []
         self.glsl_sampler_registers = {}
         self.glsl_float_remainder_types = set()
+        self.glsl_precise_float_remainder_types = set()
         self.glsl_integer_dot_types = set()
         self.reset_glsl_emulated_matrices(ast)
         self.reset_glsl_hlsl_structured_buffers()
@@ -6644,6 +6714,8 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.fragment_blend_support_layout_parts = []
         self.current_function_return_type = None
         self.current_glsl_precise_return_type = None
+        self.current_glsl_precise_function = False
+        self.current_glsl_precise_captures = None
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
         self.function_fragment_only_requirements = {}
@@ -7974,6 +8046,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
         code = self.ensure_glsl_formatted_image_load_support(code)
+        code = self.ensure_glsl_precise_support(code)
         return self.ensure_glsl_int64_support(code)
 
     def collect_called_function_names(self, root):
@@ -16706,6 +16779,235 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
             qualifiers.append("inout")
         return qualifiers
 
+    def glsl_written_value_names(self, body):
+        """Return the root names that assignments and increments in ``body`` write."""
+        names = set()
+        for node in self.walk_ast(body):
+            target = None
+            if isinstance(node, AssignmentNode):
+                target = getattr(node, "target", getattr(node, "left", None))
+            elif isinstance(node, UnaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"++", "--"}:
+                target = getattr(node, "operand", None)
+            if target is not None:
+                names.update(self.glsl_mutation_target_names(target))
+        return names
+
+    def glsl_precise_parameter_form(
+        self,
+        parameter,
+        raw_param_type,
+        param_type,
+        parameter_qualifiers,
+        shader_type,
+        written_value_names,
+    ):
+        """Return how a parameter of a precise helper function stays precise.
+
+        ``"qualifier"`` marks an output parameter ``precise``, which makes the
+        assignments to it precise. A value parameter that the body writes is
+        received under another name and copied into a precise local with its
+        own name (``"copy"``): GLSL applies ``precise`` to the operations an
+        l-value consumes, and compilers do not apply it to input parameters.
+        """
+        if not self.current_glsl_precise_function or shader_type is not None:
+            return None
+        if is_private_pointer_parameter(parameter):
+            return None
+        if self.is_opaque_resource_type(param_type) or not self.glsl_precise_value_type(
+            raw_param_type
+        ):
+            return None
+        if parameter_qualifiers:
+            return "qualifier"
+        if getattr(parameter, "name", None) in written_value_names:
+            return "copy"
+        return None
+
+    def glsl_precise_parameter_input_name(self, parameter_name):
+        return self.glsl_precise_synthetic_name(f"{parameter_name}Input")
+
+    def glsl_precise_synthetic_name(self, base_name):
+        """Allocate a function-local name that no global or function shadows."""
+        used_names = set(self.current_glsl_synthetic_local_names)
+        used_names.update(
+            self.glsl_module_identifier_name(name)
+            for name in self.glsl_global_identifier_names
+        )
+        used_names.update(self.function_definitions)
+        name = self.glsl_synthetic_local_identifier(base_name, used_names=used_names)
+        self.current_glsl_synthetic_local_names.add(name)
+        return name
+
+    GLSL_PRECISE_ARITHMETIC_OPERATORS = {"+", "-", "*", "/"}
+
+    def glsl_expression_has_float_arithmetic(self, expression):
+        """Return whether evaluating ``expression`` adds, subtracts, multiplies
+        or divides floating-point values.
+
+        Arguments of user function calls are not part of the scan: they are
+        captured where the call is generated, so the call contributes only its
+        result.
+        """
+        pending = [expression]
+        visited = set()
+        while pending:
+            node = pending.pop()
+            if node is None or isinstance(node, (str, int, float, bool)):
+                continue
+            if isinstance(node, (list, tuple, set)):
+                pending.extend(node)
+                continue
+            if isinstance(node, dict):
+                pending.extend(node.values())
+                continue
+            if id(node) in visited or not hasattr(node, "__dict__"):
+                continue
+            visited.add(id(node))
+            if (
+                isinstance(node, FunctionCallNode)
+                and self.function_call_name(node) in self.function_definitions
+            ):
+                continue
+            if isinstance(node, BinaryOpNode):
+                operator = self.map_operator(
+                    getattr(node, "op", getattr(node, "operator", None))
+                )
+                if operator in self.GLSL_PRECISE_ARITHMETIC_OPERATORS:
+                    info = self.glsl_value_type_info(
+                        self.glsl_source_expression_type(node)
+                    )
+                    if info is not None and info["family"] == "float":
+                        return True
+            pending.extend(
+                value
+                for key, value in vars(node).items()
+                if key not in {"parent", "annotations", "source_location"}
+            )
+        return False
+
+    def glsl_precise_capture(self, generated, capture_type, base_name):
+        """Assign a generated value to a precise local where it is evaluated.
+
+        GLSL keeps the evaluation order of an expression only when a precise
+        l-value consumes its result, and controlling expressions are never
+        precise by themselves. Assigning the value to a precise local declared
+        at function entry keeps the order of evaluation and short-circuiting.
+        """
+        name = self.glsl_precise_synthetic_name(base_name)
+        self.current_glsl_precise_captures.append((capture_type, name))
+        return f"({name} = {generated})"
+
+    def glsl_precise_condition(self, expression, generated):
+        if self.current_glsl_precise_captures is None:
+            return generated
+        if not self.glsl_expression_has_float_arithmetic(expression):
+            return generated
+        return self.glsl_precise_capture(generated, "bool", "crossglPreciseCondition")
+
+    def glsl_precise_local_target(self, target):
+        """Return whether an assignment target is a local of the function.
+
+        Locals and output parameters of a precise function are precise, and a
+        written value parameter is copied into a precise local.
+        """
+        return any(
+            name in self.local_variable_types
+            for name in self.glsl_mutation_target_names(target)
+            if "." not in name
+        )
+
+    GLSL_PRECISE_COMPOUND_OPERATORS = {"+=", "-=", "*=", "/="}
+
+    def glsl_precise_compound_store(
+        self, target, generated_target, op, right, value_type
+    ):
+        """Evaluate a compound float store to non-local storage precisely.
+
+        ``target op= value`` becomes ``target = (capture = (target op value))``
+        when evaluating the target expression twice has no side effects.
+        """
+        if self.current_glsl_precise_captures is None:
+            return None
+        if op not in self.GLSL_PRECISE_COMPOUND_OPERATORS:
+            return None
+        if self.glsl_precise_local_target(target):
+            return None
+        info = self.glsl_value_type_info(value_type)
+        if info is None or info["family"] != "float":
+            return None
+        if not self.glsl_precise_value_type(value_type):
+            return None
+        mapped = self.map_type(value_type)
+        if "[" in mapped or not self.glsl_expression_is_side_effect_free(target):
+            return None
+        value = f"({generated_target} {op[:-1]} {right})"
+        captured = self.glsl_precise_capture(value, mapped, "crossglPreciseValue")
+        return f"{generated_target} = {captured}"
+
+    def glsl_expression_is_side_effect_free(self, expression):
+        for node in self.walk_ast(expression):
+            if isinstance(node, AssignmentNode):
+                return False
+            if isinstance(node, UnaryOpNode) and self.map_operator(
+                getattr(node, "op", getattr(node, "operator", None))
+            ) in {"++", "--"}:
+                return False
+            if isinstance(node, FunctionCallNode) and (
+                self.function_call_name(node) in self.function_definitions
+            ):
+                return False
+        return True
+
+    def glsl_precise_stored_value(self, target, value_node, generated, value_type):
+        """Capture a value stored to storage that is not a precise local."""
+        if self.current_glsl_precise_captures is None:
+            return generated
+        if target is not None and self.glsl_precise_local_target(target):
+            return generated
+        if not self.glsl_expression_has_float_arithmetic(value_node):
+            return generated
+        if not self.glsl_precise_value_type(value_type):
+            return generated
+        mapped = self.map_type(value_type)
+        if "[" in mapped:
+            return generated
+        return self.glsl_precise_capture(generated, mapped, "crossglPreciseValue")
+
+    @staticmethod
+    def glsl_expression_is_variable_access(expression):
+        """Return whether ``expression`` reads a variable or a part of one."""
+        while isinstance(expression, (MemberAccessNode, ArrayAccessNode)):
+            if isinstance(expression, MemberAccessNode):
+                expression = expression.object
+            else:
+                expression = expression.array
+        return isinstance(expression, (str, IdentifierNode, VariableNode))
+
+    def glsl_precise_selected_value(self, base, generated):
+        """Capture a computed value before a swizzle, member or index selects
+        part of it.
+
+        A precise l-value makes every operation that contributes to it
+        precise, but compilers that track precise through variables (glslang)
+        stop at a selection from a computed value such as ``(b - a).yx``, so
+        the arithmetic that computes it would lose its evaluation order.
+        """
+        if self.current_glsl_precise_captures is None:
+            return generated
+        if self.glsl_expression_is_variable_access(base):
+            return generated
+        if not self.glsl_expression_has_float_arithmetic(base):
+            return generated
+        base_type = self.expression_result_type(base)
+        if not self.glsl_precise_value_type(base_type):
+            return generated
+        mapped = self.map_type(base_type)
+        if "[" in mapped:
+            return generated
+        return self.glsl_precise_capture(generated, mapped, "crossglPreciseValue")
+
     def generate_function(
         self,
         func,
@@ -16818,6 +17120,8 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         )
         previous_function_return_type = self.current_function_return_type
         previous_precise_return_type = self.current_glsl_precise_return_type
+        previous_precise_function = self.current_glsl_precise_function
+        previous_precise_captures = self.current_glsl_precise_captures
         previous_local_variable_types = self.local_variable_types
         previous_local_variable_source_types = self.local_variable_source_types
         previous_identifier_aliases = self.current_identifier_aliases
@@ -16853,6 +17157,18 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.local_variable_types = {}
         self.local_variable_source_types = {}
         self.current_glsl_precise_return_type = None
+        self.current_glsl_precise_function = self.glsl_has_precise_qualifier(func)
+        self.current_glsl_precise_captures = (
+            [] if self.current_glsl_precise_function else None
+        )
+        precise_parameter_copies = []
+        written_value_names = (
+            self.glsl_written_value_names(getattr(func, "body", None))
+            if self.current_glsl_precise_function
+            and shader_type is None
+            and getattr(func, "body", None) is not None
+            else set()
+        )
         self.current_identifier_aliases = dict(self.current_identifier_aliases)
         self.prepare_glsl_local_identifier_names(func)
         self.current_glsl_synthetic_local_names = set(
@@ -17021,8 +17337,24 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
                 if memory_qualifiers:
                     declaration = f"{memory_qualifiers} {declaration}"
             parameter_qualifiers = self.glsl_parameter_qualifiers(p)
+            precise_parameter = self.glsl_precise_parameter_form(
+                p,
+                raw_param_type,
+                param_type,
+                parameter_qualifiers,
+                shader_type,
+                written_value_names,
+            )
+            if precise_parameter == "copy":
+                input_name = self.glsl_precise_parameter_input_name(parameter_name)
+                precise_parameter_copies.append(
+                    (param_type, parameter_name, input_name)
+                )
+                declaration = format_c_style_array_declaration(param_type, input_name)
             if parameter_qualifiers:
                 declaration = f"{' '.join(parameter_qualifiers)} {declaration}"
+            if precise_parameter == "qualifier":
+                declaration = f"precise {declaration}"
             params.append(declaration)
             if is_private_pointer_parameter(p):
                 private_pointer_shape = self.current_glsl_private_pointer_variant.get(
@@ -17059,6 +17391,8 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
             )
             self.current_function_return_type = previous_function_return_type
             self.current_glsl_precise_return_type = previous_precise_return_type
+            self.current_glsl_precise_function = previous_precise_function
+            self.current_glsl_precise_captures = previous_precise_captures
             self.local_variable_types = previous_local_variable_types
             self.local_variable_source_types = previous_local_variable_source_types
             self.current_identifier_aliases = previous_identifier_aliases
@@ -17245,6 +17579,9 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_glsl_synthetic_local_names.update(
             self.current_glsl_local_identifier_names.values()
         )
+        self.current_glsl_synthetic_local_names.update(
+            input_name for _, _, input_name in precise_parameter_copies
+        )
         self.glsl_workgroup_pointer_scope_depth = 0
         self.current_image_format_parameters = {
             **image_format_parameters,
@@ -17304,6 +17641,10 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         self.current_glsl_resource_function_call_semantic_locations = (
             self.glsl_resource_function_call_semantic_locations(func)
         )
+        for copy_type, copy_name, input_name in precise_parameter_copies:
+            declaration = format_c_style_array_declaration(copy_type, copy_name)
+            code += f"    precise {declaration} = {input_name};\n"
+        precise_capture_insertion_index = len(code)
         code += self.generate_glsl_mutable_storage_pointer_root_declarations(func, 1)
         for declaration in self.stage_builtin_parameter_local_alias_declarations(
             func, shader_type
@@ -17336,6 +17677,17 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         elif isinstance(body, list):
             for stmt in body:
                 code += self.generate_statement(stmt, 1)
+        if self.current_glsl_precise_captures:
+            declarations = "".join(
+                f"    precise {format_c_style_array_declaration(capture_type, name)};\n"
+                for capture_type, name in self.current_glsl_precise_captures
+            )
+            code = (
+                code[:precise_capture_insertion_index]
+                + declarations
+                + code[precise_capture_insertion_index:]
+            )
+        self.current_glsl_precise_captures = previous_precise_captures
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_resource_aliases = previous_resource_aliases
@@ -17375,6 +17727,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         )
         self.current_function_return_type = previous_function_return_type
         self.current_glsl_precise_return_type = previous_precise_return_type
+        self.current_glsl_precise_function = previous_precise_function
         self.local_variable_types = previous_local_variable_types
         self.local_variable_source_types = previous_local_variable_source_types
         self.current_generic_function_substitutions = (
@@ -21139,7 +21492,9 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
                         indent,
                     )
                 )
-                if dynamic_init is not None and not self.local_variable_qualifier(stmt):
+                if dynamic_init is not None and "const" not in (
+                    self.local_variable_qualifier(stmt).split()
+                ):
                     return f"{indent_str}{declaration};\n{dynamic_init}"
                 compile_time_initializer = (
                     self.glsl_narrow_compile_time_integer_initializer(stmt, var_type)
@@ -26301,7 +26656,9 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
         parts = []
         if "const" in qualifiers:
             parts.append("const")
-        if "precise" in qualifiers:
+        if "precise" in qualifiers or (
+            "const" not in qualifiers and self.glsl_precise_function_local(node)
+        ):
             parts.append("precise")
         parts.extend(
             qualifier
@@ -26309,6 +26666,32 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
             if qualifier in qualifiers
         )
         return f"{' '.join(parts)} " if parts else ""
+
+    def glsl_precise_value_type(self, vtype):
+        """Return whether a value of ``vtype`` can carry the precise qualifier."""
+        if vtype is None or isinstance(vtype, (PointerType, ReferenceType)):
+            return False
+        try:
+            mapped = self.map_type(vtype)
+        except (OpenGLTemplateTypeError, ValueError):
+            return False
+        if not mapped or mapped == "void" or self.is_opaque_resource_type(mapped):
+            return False
+        if self.is_structured_buffer_type(vtype):
+            return False
+        return not self.type_contains_opaque_resource(vtype)
+
+    def glsl_precise_function_local(self, node):
+        """Return whether a local of the current precise function becomes precise.
+
+        GLSL applies ``precise`` to the operations whose results are consumed by
+        a precise l-value in the same function. A source function marked
+        precise evaluates all of its arithmetic as written, so every local value
+        it computes is declared precise.
+        """
+        if not getattr(self, "current_glsl_precise_function", False):
+            return False
+        return self.glsl_precise_value_type(self.local_variable_declared_type(node))
 
     @staticmethod
     def glsl_has_precise_qualifier(node):
@@ -31250,11 +31633,25 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 operands.append(self.glsl_converted_operand(expression, value_type))
         self.glsl_float_remainder_types.add(value_type)
+        if self.current_glsl_precise_function:
+            self.glsl_precise_float_remainder_types.add(value_type)
         return f"crossgl_remainder({operands[0]}, {operands[1]})"
 
     def generate_glsl_float_remainder_helpers(self):
         helpers = ""
+        precise_types = getattr(self, "glsl_precise_float_remainder_types", set())
         for value_type in sorted(getattr(self, "glsl_float_remainder_types", ())):
+            if value_type in precise_types:
+                # A precise caller evaluates the remainder as written, so the
+                # product and difference must not be contracted either.
+                helpers += (
+                    f"{value_type} crossgl_remainder({value_type} x, {value_type} y) {{\n"
+                    f"    precise {value_type} crossglPreciseReturn = "
+                    "x - y * trunc(x / y);\n"
+                    "    return crossglPreciseReturn;\n"
+                    "}\n\n"
+                )
+                continue
             helpers += (
                 f"{value_type} crossgl_remainder({value_type} x, {value_type} y) {{\n"
                 "    return x - y * trunc(x / y);\n"
@@ -32570,6 +32967,21 @@ complex64_t crossgl_complex64_mod_assign(
         right = self.generate_expression_with_expected(
             right_node, expected_type if op == "=" else None
         )
+        precise_compound = self.glsl_precise_compound_store(
+            left_node, left, op, right, destination_type
+        )
+        if precise_compound is not None:
+            return precise_compound
+        right = self.glsl_precise_stored_value(
+            left_node,
+            right_node,
+            right,
+            (
+                expected_type
+                if op == "="
+                else self.glsl_source_expression_type(right_node)
+            ),
+        )
         return f"{left} {op} {right}"
 
     def generate_if(self, node, indent, is_main=False):
@@ -32587,8 +32999,11 @@ complex64_t crossgl_complex64_mod_assign(
             return self.generate_glsl_software_subgroup_masked_if(node, indent)
 
         self.reject_glsl_software_subgroup_control_flow(node)
-        condition = self.generate_glsl_boolean_context(
+        condition_node = (
             node.condition if hasattr(node, "condition") else node.if_condition
+        )
+        condition = self.glsl_precise_condition(
+            condition_node, self.generate_glsl_boolean_context(condition_node)
         )
         code = f"{indent_str}if ({condition}) {{\n"
 
@@ -32601,7 +33016,10 @@ complex64_t crossgl_complex64_mod_assign(
             for else_if_condition, else_if_body in zip(
                 node.else_if_conditions, node.else_if_bodies
             ):
-                condition = self.generate_glsl_boolean_context(else_if_condition)
+                condition = self.glsl_precise_condition(
+                    else_if_condition,
+                    self.generate_glsl_boolean_context(else_if_condition),
+                )
                 code += f" else if ({condition}) {{\n"
                 code += self.generate_scoped_statement_body(else_if_body, indent + 1)
                 code += f"{indent_str}}}"
@@ -32743,7 +33161,10 @@ complex64_t crossgl_complex64_mod_assign(
                 self.current_glsl_storage_pointer_aliases
             )
             condition = (
-                self.generate_glsl_boolean_context(node.condition)
+                self.glsl_precise_condition(
+                    node.condition,
+                    self.generate_glsl_boolean_context(node.condition),
+                )
                 if getattr(node, "condition", None)
                 else ""
             )
@@ -33148,7 +33569,10 @@ complex64_t crossgl_complex64_mod_assign(
     def generate_while(self, node, indent):
         self.reject_glsl_software_subgroup_control_flow(node)
         indent_str = "    " * indent
-        condition = self.generate_glsl_boolean_context(getattr(node, "condition", None))
+        condition_node = getattr(node, "condition", None)
+        condition = self.glsl_precise_condition(
+            condition_node, self.generate_glsl_boolean_context(condition_node)
+        )
 
         code = f"{indent_str}while ({condition}) {{\n"
         code += self.generate_scoped_statement_body(
@@ -33160,7 +33584,10 @@ complex64_t crossgl_complex64_mod_assign(
     def generate_do_while(self, node, indent):
         self.reject_glsl_software_subgroup_control_flow(node)
         indent_str = "    " * indent
-        condition = self.generate_glsl_boolean_context(getattr(node, "condition", None))
+        condition_node = getattr(node, "condition", None)
+        condition = self.glsl_precise_condition(
+            condition_node, self.generate_glsl_boolean_context(condition_node)
+        )
 
         code = f"{indent_str}do {{\n"
         code += self.generate_scoped_statement_body(
@@ -33828,6 +34255,7 @@ complex64_t crossgl_complex64_mod_assign(
                 if indexed_aggregate is not None:
                     return indexed_aggregate
                 array = self.generate_expression(expr.array)
+                array = self.glsl_precise_selected_value(expr.array, array)
                 index = self.glsl_resource_array_index_expression(expr)
                 return f"{array}[{index}]"
             else:
@@ -34271,6 +34699,7 @@ complex64_t crossgl_complex64_mod_assign(
             if not self.glsl_buffer_block_read_validation_suppression:
                 self.validate_glsl_buffer_block_member_access(expr, "read")
             obj = self.generate_expression_with_expected(expr.object, None)
+            obj = self.glsl_precise_selected_value(expr.object, obj)
             member_name = self.glsl_member_access_name(expr.object, str(expr.member))
             cast_member = self.signed_compute_builtin_member_cast(obj, member_name)
             if cast_member is not None:
@@ -34311,7 +34740,9 @@ complex64_t crossgl_complex64_mod_assign(
             return pointer_member
         elif hasattr(expr, "__class__") and "TernaryOpNode" in str(type(expr)):
             self.reject_glsl_software_subgroup_control_flow(expr)
-            condition = self.generate_glsl_boolean_context(expr.condition)
+            condition = self.glsl_precise_condition(
+                expr.condition, self.generate_glsl_boolean_context(expr.condition)
+            )
             true_type = self.glsl_source_expression_type(expr.true_expr)
             false_type = self.glsl_source_expression_type(expr.false_expr)
             plan = self.glsl_arithmetic_conversion_plan(
@@ -37988,7 +38419,25 @@ complex64_t crossgl_complex64_mod_assign(
                     source_location=getattr(arg, "source_location", None),
                 )
             return self.generate_expression(arg)
-        return self.generate_expression_with_expected(arg, param_type)
+        generated = self.generate_expression_with_expected(arg, param_type)
+        return self.glsl_precise_argument(arg, generated, param_type)
+
+    def glsl_precise_argument(self, argument, generated, param_type):
+        """Capture a value argument of a user function in a precise local.
+
+        The argument is evaluated in the caller but consumed by the callee's
+        parameter, so the caller's precise l-values do not reach it.
+        """
+        if self.current_glsl_precise_captures is None or param_type is None:
+            return generated
+        if not self.glsl_expression_has_float_arithmetic(argument):
+            return generated
+        if not self.glsl_precise_value_type(param_type):
+            return generated
+        mapped = self.map_type(param_type)
+        if "[" in mapped:
+            return generated
+        return self.glsl_precise_capture(generated, mapped, "crossglPreciseArgument")
 
     def glsl_reference_parameter_type_name(self, param_type):
         type_name = self.type_name_string(param_type)
@@ -41412,11 +41861,18 @@ complex64_t crossgl_complex64_mod_assign(
                 value_arg = args[2]
             image_format = self.image_resource_format(args[0])
             self.validate_image_store_value_type(texture_type, image_format, value_arg)
+            expected_value_type = self.image_store_expected_value_type(
+                texture_type, image_format, value_arg
+            )
             value = self.generate_expression_with_expected(
                 value_arg,
-                self.image_store_expected_value_type(
-                    texture_type, image_format, value_arg
-                ),
+                expected_value_type,
+            )
+            value = self.glsl_precise_stored_value(
+                None,
+                value_arg,
+                value,
+                expected_value_type or self.expression_result_type(value_arg),
             )
             value = self.image_store_value_expression(
                 texture_type,
@@ -50263,6 +50719,10 @@ complex64_t crossgl_complex64_mod_assign(
         indent_str = "    " * indent
         element_type = self.map_type(stmt.element_type)
         size = get_array_size_from_node(stmt)
+        if getattr(
+            self, "current_glsl_precise_function", False
+        ) and self.glsl_precise_value_type(stmt.element_type):
+            element_type = f"precise {element_type}"
 
         if size is None:
             # In GLSL, dynamic sized arrays need special handling

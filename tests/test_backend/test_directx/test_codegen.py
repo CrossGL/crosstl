@@ -7088,6 +7088,25 @@ def test_codegen_preserves_parentheses():
     assert "clamp((a - b) / c, 0.0, 1.0)" in output
 
 
+def test_codegen_subscripts_computed_values_as_a_whole():
+    output = generate_crossgl(textwrap.dedent("""
+        RWStructuredBuffer<float> results : register(u0);
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 id : SV_DispatchThreadID)
+        {
+            float4 p = float4(id, 1);
+            int2 n = int2(id.xy);
+            results[0] = (p * 2.0 + 1.0)[1] + (-p)[2] + (n.x > 0 ? p : p.wzyx)[3];
+        }
+        """).strip())
+
+    assert "((p * 2.0) + 1.0)[1]" in output
+    assert "(-p)[2]" in output
+    assert "(n.x > 0 ? p : p.wzyx)[3]" in output
+    glsl = GLSLCodeGen().generate(parse_crossgl(output))
+    assert "((((p * 2.0) + 1.0)[1] + (-p)[2]) + ((n.x > 0) ? p : p.wzyx)[3])" in glsl
+
+
 def test_codegen_multiview_and_viewport_semantics():
     code = textwrap.dedent("""
         struct GSInput {
