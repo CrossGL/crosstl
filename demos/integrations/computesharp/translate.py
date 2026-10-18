@@ -36,7 +36,16 @@ TARGETS = {
 MAX_ERROR_CHARS = 4000
 # ComputeSharp compiles its HLSL with DXC -Zpr (row-major matrix packing); the
 # HLSL frontend needs the same packing to order matrix products correctly.
-SOURCE_OPTIONS = {"matrix_packing": "row_major"}
+#
+# Direct3D GPUs reduce sin/cos/tan operands in single-precision revolutions
+# (x / 2pi rounded to float). The Metal runtime compiles with fast fp32
+# functions, which reduce the same way in hardware. OpenGL drivers such as
+# llvmpipe reduce exactly, which changes sin-based hashes, so the OpenGL
+# artifacts request the Direct3D reduction from the HLSL frontend.
+SOURCE_OPTIONS = {
+    "metal": {"matrix_packing": "row_major"},
+    "opengl": {"matrix_packing": "row_major", "trigonometric_reduction": "revolutions"},
+}
 
 
 def sha256_text(text: str) -> str:
@@ -87,7 +96,7 @@ def translate_one(job: tuple[str, str, str, str]) -> dict[str, Any]:
             source_path,
             backend=target,
             format_output=False,
-            source_options=SOURCE_OPTIONS,
+            source_options=SOURCE_OPTIONS[target],
         )
     except Exception as exc:  # noqa: BLE001 - each failure is recorded per shader
         record["status"] = "translation-failed"
@@ -219,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             "kind": "computesharp-translated-shaders",
             "target": target,
             "translator": revision,
+            "sourceOptions": SOURCE_OPTIONS[target],
             "validated": bool(metal_compiler) if target == "metal" else False,
             "counts": counts,
             "shaders": dict(sorted(entries.items())),

@@ -125,7 +125,7 @@
           "tests/test_translator/test_metal_builtin_ownership.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1593
+        "test_count": 1601
       },
       "translator_codegen": {
         "exists": true,

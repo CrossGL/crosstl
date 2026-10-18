@@ -155,6 +155,8 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
+from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -1323,7 +1325,7 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
     )
 
 
-class GLSLCodeGen:
+class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
@@ -2386,6 +2388,8 @@ class GLSLCodeGen:
         self.glsl_combined_sampler_uses = []
         self.glsl_sampler_registers = {}
         self.glsl_float_remainder_types = set()
+        self.reset_glsl_emulated_matrices()
+        self.reset_glsl_hlsl_structured_buffers()
         self.glsl_image_usages = {}
         self.glsl_unknown_format_images = set()
         self.glsl_formatted_image_load_names = set()
@@ -6430,6 +6434,8 @@ class GLSLCodeGen:
         self.glsl_combined_sampler_uses = []
         self.glsl_sampler_registers = {}
         self.glsl_float_remainder_types = set()
+        self.reset_glsl_emulated_matrices(ast)
+        self.reset_glsl_hlsl_structured_buffers()
         self.glsl_image_usages = self.collect_glsl_image_usages(ast)
         self.glsl_unknown_format_images = set()
         self.glsl_formatted_image_load_names = set()
@@ -7943,6 +7949,7 @@ class GLSLCodeGen:
             + self.generate_glsl_metal_math_helpers()
             + self.generate_glsl_complex64_helpers()
             + self.generate_glsl_float_remainder_helpers()
+            + self.generate_glsl_hlsl_structured_helpers()
         )
         if generated_helpers:
             code = (
@@ -7952,6 +7959,7 @@ class GLSLCodeGen:
             )
         cooperative_matrix_support = (
             self.generate_glsl_cooperative_matrix_software_support()
+            + self.generate_glsl_emulated_matrix_support()
         )
         if cooperative_matrix_support:
             code = (
@@ -30682,6 +30690,8 @@ complex64_t crossgl_complex64_mod_assign(
         return self.map_type(decoded)
 
     def glsl_constructor_type(self, func_name):
+        if emulated_matrix_shape(func_name) is not None:
+            return self.map_type(func_name)
         constructor = self.glsl_materialized_generic_vector_constructor_type(func_name)
         if constructor is None and isinstance(func_name, str):
             try:
@@ -30772,6 +30782,9 @@ complex64_t crossgl_complex64_mod_assign(
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        emulated_matrix_type = self.glsl_emulated_matrix_expression_type(expr)
+        if emulated_matrix_type is not None:
+            return emulated_matrix_type
         if isinstance(expr, PointerReinterpretNode):
             target_type = getattr(expr.target_type, "pointee_type", None)
             return self.map_type(self.type_name_string(target_type))
@@ -30889,6 +30902,8 @@ complex64_t crossgl_complex64_mod_assign(
             # to a diagnostic comment instead of real GLSL.
             if array_type and array_type.rstrip().endswith("*"):
                 return array_type.rstrip()[:-1].strip()
+            if array_type and self.is_vector_value_type(array_type):
+                return self.vector_component_type(array_type) or array_type
             return array_type
         if isinstance(expr, MemberAccessNode):
             object_type = self.expression_result_type(expr.object)
@@ -32378,6 +32393,18 @@ complex64_t crossgl_complex64_mod_assign(
         left_node = getattr(node, "target", getattr(node, "left", None))
         right_node = getattr(node, "value", getattr(node, "right", None))
         op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
+        emulated_matrix_assignment = (
+            self.generate_glsl_emulated_matrix_compound_assignment(
+                left_node, right_node, op
+            )
+        )
+        if emulated_matrix_assignment is not None:
+            return emulated_matrix_assignment
+        structured_assignment = self.generate_glsl_hlsl_structured_assignment(
+            left_node, right_node, op, statement_context=statement_context
+        )
+        if structured_assignment is not None:
+            return structured_assignment
         storage_to_workgroup_copy = self.glsl_storage_to_workgroup_byte_array_copy(
             left_node,
             right_node,
@@ -33528,6 +33555,9 @@ complex64_t crossgl_complex64_mod_assign(
             return str(expr.value)
         elif hasattr(expr, "__class__") and "BinaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
+            emulated_matrix = self.generate_glsl_emulated_matrix_binary(expr, op)
+            if emulated_matrix is not None:
+                return emulated_matrix
             if op in {"&&", "||"}:
                 self.reject_glsl_software_subgroup_control_flow(expr)
                 left = self.generate_glsl_boolean_context(expr.left)
@@ -33598,6 +33628,9 @@ complex64_t crossgl_complex64_mod_assign(
             return self.generate_assignment(expr)
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
+            emulated_matrix = self.generate_glsl_emulated_matrix_unary(expr, op)
+            if emulated_matrix is not None:
+                return emulated_matrix
             if op == "*":
                 aggregate = self.generate_glsl_private_scalar_struct_reinterpret_read(
                     expr
@@ -33702,6 +33735,12 @@ complex64_t crossgl_complex64_mod_assign(
             )
         elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
             if hasattr(expr, "array") and hasattr(expr, "index"):
+                emulated_matrix_column = self.generate_glsl_emulated_matrix_index(expr)
+                if emulated_matrix_column is not None:
+                    return emulated_matrix_column
+                structured_storage = self.generate_glsl_hlsl_structured_read(expr)
+                if structured_storage is not None:
+                    return structured_storage
                 fixed_vector_view_access = (
                     self.generate_glsl_fixed_array_vector_pointer_view_access(expr)
                 )
@@ -33761,6 +33800,17 @@ complex64_t crossgl_complex64_mod_assign(
             if original_func_name != func_name:
                 func_name = original_func_name
                 callee = original_func_name
+
+            emulated_matrix_call = self.generate_glsl_emulated_matrix_call(
+                expr, original_func_name, list(expr.args or [])
+            )
+            if emulated_matrix_call is not None:
+                return emulated_matrix_call
+            logical_intrinsic = self.generate_glsl_hlsl_logical_intrinsic(
+                original_func_name, list(expr.args or [])
+            )
+            if logical_intrinsic is not None:
+                return logical_intrinsic
 
             mesh_output_counts_call = self.generate_mesh_output_counts_call(
                 original_func_name, expr.args
@@ -34123,6 +34173,9 @@ complex64_t crossgl_complex64_mod_assign(
             )
             return f"{emitted_call_name}({args})"
         elif hasattr(expr, "__class__") and "MemberAccessNode" in str(type(expr)):
+            structured_storage = self.generate_glsl_hlsl_structured_read(expr)
+            if structured_storage is not None:
+                return structured_storage
             flattened_member = self.flattened_stage_member_name(expr)
             if flattened_member is not None:
                 return flattened_member
@@ -37411,6 +37464,9 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_source_expression_type(self, expression):
         if expression is None:
             return None
+        emulated_matrix_type = self.glsl_emulated_matrix_expression_type(expression)
+        if emulated_matrix_type is not None:
+            return emulated_matrix_type
         if isinstance(expression, VariableNode) or (
             hasattr(expression, "__class__")
             and "IdentifierNode" in str(expression.__class__)
@@ -47288,6 +47344,11 @@ complex64_t crossgl_complex64_mod_assign(
         self, vtype, name, binding, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
+        storage_declarations = ""
+        if array_size is None:
+            storage = self.glsl_hlsl_structured_storage_type(node, name, element_type)
+            if storage is not None:
+                element_type, storage_declarations = storage
         memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
         layout = self.glsl_resource_layout_prefix("std430", binding=binding)
@@ -47304,7 +47365,7 @@ complex64_t crossgl_complex64_mod_assign(
                 f"{block_name} {{ {element_type} {instance_member}[]; }} "
                 f"{name}{array_suffix};\n"
             )
-        return (
+        return storage_declarations + (
             f"{layout} {qualifier_prefix}buffer "
             f"{block_name} {{ {element_type} {name}[]; }};\n"
         )
@@ -48455,6 +48516,10 @@ complex64_t crossgl_complex64_mod_assign(
 
         if vtype_str in getattr(self, "enum_struct_type_names", set()):
             return self.glsl_type_identifier_name(vtype_str)
+
+        emulated_matrix_type = self.glsl_emulated_matrix_mapped_type(vtype_str)
+        if emulated_matrix_type is not None:
+            return emulated_matrix_type
 
         mapped_type = self.type_mapping.get(vtype_str, vtype_str)
         if mapped_type == vtype_str and vtype_str in self.glsl_type_identifier_names:

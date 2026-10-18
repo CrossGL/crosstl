@@ -48,21 +48,76 @@ class HLSLToCrossGLConverter:
 
     crossgl_reserved_identifiers = frozenset(CROSSGL_KEYWORDS)
     MATRIX_PACKINGS = ("column_major", "row_major")
+    TRIGONOMETRIC_REDUCTIONS = ("exact", "revolutions")
+    REVOLUTION_REDUCED_INTRINSICS = frozenset({"sin", "cos", "tan"})
+    REVOLUTION_REDUCTION_HELPER = "crosstl_hlsl_revolutions"
+    # Intrinsics DXC evaluates while folding constant operands.
+    HLSL_FOLDABLE_INTRINSICS = frozenset(
+        {
+            "abs",
+            "ceil",
+            "clamp",
+            "cos",
+            "degrees",
+            "exp",
+            "exp2",
+            "floor",
+            "frac",
+            "lerp",
+            "log",
+            "log2",
+            "max",
+            "min",
+            "pow",
+            "radians",
+            "round",
+            "rsqrt",
+            "saturate",
+            "sign",
+            "sin",
+            "sqrt",
+            "tan",
+            "trunc",
+        }
+    )
 
-    def __init__(self, matrix_packing=None):
+    def __init__(self, matrix_packing=None, trigonometric_reduction=None):
         """Create a converter.
 
         ``matrix_packing`` mirrors the compiler's default matrix packing
         (DXC ``-Zpr`` is ``"row_major"``). With row-major packing a matrix
         register holds a row, so CrossGL holds each HLSL row as a column and
         ``mul(a, b)`` becomes ``b * a``.
+
+        ``trigonometric_reduction`` selects how runtime ``sin``, ``cos`` and
+        ``tan`` operands are reduced. ``"exact"`` (the default) keeps the
+        target's own argument reduction. ``"revolutions"`` reproduces the
+        reduction of Direct3D GPUs, which scale the operand by ``1 / (2 * pi)``
+        in single precision and take the fractional revolution, so results of
+        large operands (for example ``frac(sin(x) * 43758.5)`` hashes) match
+        Direct3D instead of a correctly reduced operand. Operands that DXC
+        folds at compile time (literals and ``static const`` values) keep the
+        exact intrinsic.
         """
         if matrix_packing is not None and matrix_packing not in self.MATRIX_PACKINGS:
             raise ValueError(
                 "matrix_packing must be one of "
                 f"{', '.join(self.MATRIX_PACKINGS)}, got {matrix_packing!r}"
             )
+        if (
+            trigonometric_reduction is not None
+            and trigonometric_reduction not in self.TRIGONOMETRIC_REDUCTIONS
+        ):
+            raise ValueError(
+                "trigonometric_reduction must be one of "
+                f"{', '.join(self.TRIGONOMETRIC_REDUCTIONS)}, "
+                f"got {trigonometric_reduction!r}"
+            )
         self.matrix_packing = matrix_packing
+        self.trigonometric_reduction = trigonometric_reduction or "exact"
+        self.revolution_reduction_types = set()
+        self.hlsl_static_const_initializers = {}
+        self.constant_initializer_depth = 0
         self.function_return_types = {}
         self.source_function_names = set()
         self.structured_buffer_types = {
@@ -3675,6 +3730,11 @@ class HLSLToCrossGLConverter:
         self.current_variable_types = {}
         self.current_resource_array_dims = {}
         self.integer_constant_values = self.collect_integer_constant_values(ast)
+        self.revolution_reduction_types = set()
+        self.constant_initializer_depth = 0
+        self.hlsl_static_const_initializers = self.collect_static_const_initializers(
+            ast
+        )
         self.function_identifier_renames = self.collect_function_identifier_renames(
             ast.functions
         )
@@ -3758,6 +3818,7 @@ class HLSLToCrossGLConverter:
             for func in ast.functions
             if not getattr(func, "is_prototype", False)
         }
+        function_section_start = len(code)
         for func in ast.functions:
             if getattr(func, "is_prototype", False):
                 # CrossGL functions are visible throughout the module; targets that
@@ -3784,6 +3845,13 @@ class HLSLToCrossGLConverter:
             else:
                 code += self.generate_function(func)
 
+        reduction_helpers = self.generate_revolution_reduction_helpers()
+        if reduction_helpers:
+            code = (
+                code[:function_section_start]
+                + reduction_helpers
+                + code[function_section_start:]
+            )
         code += "}\n"
         return code
 
@@ -4069,9 +4137,12 @@ class HLSLToCrossGLConverter:
             array_suffix = ""
         initializer = ""
         if getattr(node, "value", None) is not None:
-            initializer = (
-                f" = {self.generate_expression(node.value, expected_type=node.vtype)}"
-            )
+            # DXC folds global initializers with exact math at compile time.
+            self.constant_initializer_depth += 1
+            try:
+                initializer = f" = {self.generate_expression(node.value, expected_type=node.vtype)}"
+            finally:
+                self.constant_initializer_depth -= 1
         if storage_prefix == "const " and precise_prefix:
             declaration_prefix = f"{precise_prefix}{storage_prefix}"
         else:
@@ -4510,6 +4581,238 @@ class HLSLToCrossGLConverter:
             f"{indent_text}}}\n"
         )
 
+    def collect_static_const_initializers(self, ast):
+        """Initializers of ``static const`` globals, which DXC folds."""
+        initializers = {}
+        for node in getattr(ast, "global_variables", []) or []:
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }
+            is_const = getattr(node, "is_const", False) or "const" in qualifiers
+            name = getattr(node, "name", None)
+            value = getattr(node, "value", None)
+            if is_const and isinstance(name, str) and value is not None:
+                initializers[name] = value
+        return initializers
+
+    HLSL_NUMERIC_LITERAL = re.compile(
+        r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhHlLuU]*"
+    )
+
+    def is_hlsl_constant_expression(self, expr, visiting=frozenset()):
+        """Whether DXC evaluates ``expr`` at compile time.
+
+        Literals, ``static const`` values with constant initializers and
+        operators, casts, constructors and foldable intrinsics over them.
+        """
+        if isinstance(expr, (bool, int, float)):
+            return True
+        name = None
+        if isinstance(expr, str):
+            if self.HLSL_NUMERIC_LITERAL.fullmatch(expr.strip()):
+                return True
+            name = expr
+        elif isinstance(expr, VariableNode) and not getattr(expr, "vtype", None):
+            name = getattr(expr, "name", None)
+        if name is not None:
+            if name in visiting:
+                return False
+            # Function scopes start from the global types; a different type
+            # means a local declaration shadows the global constant.
+            if self.current_variable_types.get(name) != self.global_variable_types.get(
+                name
+            ):
+                return False
+            initializer = self.hlsl_static_const_initializers.get(name)
+            return initializer is not None and self.is_hlsl_constant_expression(
+                initializer, visiting | {name}
+            )
+        if isinstance(expr, UnaryOpNode):
+            return self.is_hlsl_constant_expression(expr.operand, visiting)
+        if isinstance(expr, BinaryOpNode):
+            return self.is_hlsl_constant_expression(
+                expr.left, visiting
+            ) and self.is_hlsl_constant_expression(expr.right, visiting)
+        if isinstance(expr, TernaryOpNode):
+            return all(
+                self.is_hlsl_constant_expression(part, visiting)
+                for part in (expr.condition, expr.true_expr, expr.false_expr)
+            )
+        if isinstance(expr, CastNode):
+            return self.is_hlsl_constant_expression(expr.expression, visiting)
+        if isinstance(expr, MemberAccessNode):
+            return self.is_hlsl_constant_expression(expr.object, visiting)
+        if isinstance(expr, ArrayAccessNode):
+            return self.is_hlsl_constant_expression(
+                expr.array, visiting
+            ) and self.is_hlsl_constant_expression(expr.index, visiting)
+        if isinstance(expr, VectorConstructorNode):
+            return all(
+                self.is_hlsl_constant_expression(arg, visiting) for arg in expr.args
+            )
+        if isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
+            callee = self.normalize_hlsl_intrinsic_name(expr.name)
+            if callee in self.source_function_names:
+                return False
+            mapped = self.map_type(callee)
+            is_constructor = isinstance(mapped, str) and re.fullmatch(
+                r"(?:float|int|uint|bool|half|double|"
+                r"(?:[ibud]|f16)?vec[2-4]|(?:d|f16)?mat[2-4](?:x[2-4])?)",
+                mapped,
+            )
+            if is_constructor or callee in self.HLSL_FOLDABLE_INTRINSICS:
+                return all(
+                    self.is_hlsl_constant_expression(arg, visiting) for arg in expr.args
+                )
+        return False
+
+    # Intrinsics whose result is one component.
+    HLSL_SCALAR_RESULT_INTRINSICS = frozenset(
+        {"determinant", "distance", "dot", "length", "noise"}
+    )
+    # Intrinsics whose result has the shape of their widest operand.
+    HLSL_COMPONENTWISE_INTRINSICS = frozenset(
+        {
+            "abs",
+            "acos",
+            "asin",
+            "atan",
+            "atan2",
+            "ceil",
+            "clamp",
+            "cos",
+            "cosh",
+            "ddx",
+            "ddx_coarse",
+            "ddx_fine",
+            "ddy",
+            "ddy_coarse",
+            "ddy_fine",
+            "degrees",
+            "exp",
+            "exp2",
+            "faceforward",
+            "floor",
+            "fmod",
+            "frac",
+            "fwidth",
+            "ldexp",
+            "lerp",
+            "log",
+            "log10",
+            "log2",
+            "mad",
+            "max",
+            "min",
+            "normalize",
+            "pow",
+            "radians",
+            "rcp",
+            "reflect",
+            "refract",
+            "round",
+            "rsqrt",
+            "saturate",
+            "sign",
+            "sin",
+            "sinh",
+            "smoothstep",
+            "sqrt",
+            "step",
+            "tan",
+            "tanh",
+            "trunc",
+        }
+    )
+
+    def raw_type_component_width(self, raw_type):
+        """Component count of a scalar or vector type name, otherwise ``None``."""
+        if not raw_type:
+            return None
+        mapped = self.map_type(self.canonical_composite_type(str(raw_type)))
+        if not isinstance(mapped, str):
+            return None
+        if mapped in {"float", "int", "uint", "bool", "half", "double"}:
+            return 1
+        vector = re.fullmatch(r"(?:[ibud]|f16)?vec([2-4])", mapped)
+        return int(vector.group(1)) if vector else None
+
+    def hlsl_component_width(self, expr):
+        """Component count of a scalar or vector HLSL expression, or ``None``."""
+        width = self.raw_type_component_width(self.expression_value_raw_type(expr))
+        if width is not None:
+            return width
+        if isinstance(expr, (bool, int, float)):
+            return 1
+        if isinstance(expr, str) and self.HLSL_NUMERIC_LITERAL.fullmatch(expr.strip()):
+            return 1
+        if isinstance(expr, UnaryOpNode):
+            return self.hlsl_component_width(expr.operand)
+        if isinstance(expr, BinaryOpNode):
+            widths = [self.hlsl_component_width(expr.left)]
+            widths.append(self.hlsl_component_width(expr.right))
+            return None if None in widths else max(widths)
+        if isinstance(expr, TernaryOpNode):
+            widths = [
+                self.hlsl_component_width(expr.true_expr),
+                self.hlsl_component_width(expr.false_expr),
+            ]
+            return None if None in widths else max(widths)
+        if isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
+            callee = self.normalize_hlsl_intrinsic_name(expr.name)
+            if callee in self.source_function_names:
+                return None
+            if callee in self.HLSL_SCALAR_RESULT_INTRINSICS:
+                return 1
+            if callee == "cross":
+                return 3
+            if callee in self.HLSL_COMPONENTWISE_INTRINSICS and expr.args:
+                widths = [self.hlsl_component_width(arg) for arg in expr.args]
+                return None if None in widths else max(widths)
+        return None
+
+    def trigonometric_operand(self, operand_expr, rendered):
+        """Reduce a runtime ``sin``/``cos``/``tan`` operand like Direct3D GPUs."""
+        if self.trigonometric_reduction != "revolutions":
+            return rendered
+        if self.constant_initializer_depth or self.is_hlsl_constant_expression(
+            operand_expr
+        ):
+            return rendered
+        width = self.hlsl_component_width(operand_expr)
+        if width is None:
+            raise ValueError(
+                "Cannot apply revolution argument reduction to "
+                f"'{rendered}': the operand is not a known floating-point "
+                "scalar or vector"
+            )
+        value_type = "float" if width == 1 else f"vec{width}"
+        raw_type = self.expression_value_raw_type(operand_expr)
+        family = self.numeric_type_family(raw_type)
+        if family in {"int", "uint"} or self.raw_type_base(raw_type).startswith("bool"):
+            rendered = f"{value_type}({rendered})"
+        self.revolution_reduction_types.add(value_type)
+        return f"{self.REVOLUTION_REDUCTION_HELPER}_{value_type}({rendered})"
+
+    def generate_revolution_reduction_helpers(self):
+        """CrossGL helpers for :meth:`trigonometric_operand`.
+
+        ``turns`` is rounded to single precision before the integral
+        revolutions are removed, which is the reduction Direct3D hardware
+        applies; the remaining angle lies in ``[-pi, pi]``.
+        """
+        code = ""
+        for value_type in sorted(self.revolution_reduction_types):
+            code += (
+                f"    {value_type} {self.REVOLUTION_REDUCTION_HELPER}_{value_type}"
+                f"({value_type} angle) {{\n"
+                f"        {value_type} turns = angle * 0.15915494309189535;\n"
+                "        return (turns - floor(turns + 0.5)) * 6.283185307179586;\n"
+                "    }\n"
+            )
+        return code
+
     def generate_sincos_statement(self, stmt, indent=0, is_main=False):
         if (
             not isinstance(stmt.name, str)
@@ -4519,6 +4822,8 @@ class HLSLToCrossGLConverter:
         if len(stmt.args) != 3:
             return None
         value = self.generate_expression(stmt.args[0], is_main)
+        if "sincos" not in self.source_function_names:
+            value = self.trigonometric_operand(stmt.args[0], value)
         sine_target = self.generate_expression(stmt.args[1], is_main)
         cosine_target = self.generate_expression(stmt.args[2], is_main)
         indent_text = "    " * indent
@@ -5405,6 +5710,15 @@ class HLSLToCrossGLConverter:
             if func_name == "rcp" and len(expr.args) == 1:
                 value = self.maybe_parenthesize(expr.args[0], rendered_args[0])
                 return f"(1.0 / {value})"
+            if (
+                func_name in self.REVOLUTION_REDUCED_INTRINSICS
+                and len(expr.args) == 1
+                and func_name not in self.source_function_names
+            ):
+                rendered_args = [
+                    self.trigonometric_operand(expr.args[0], rendered_args[0])
+                ]
+                args = ", ".join(rendered_args)
             func_name = self.function_map.get(func_name, func_name)
             func_name = self.interlocked_map.get(func_name, func_name)
             func_name = self.render_function_identifier(func_name)
