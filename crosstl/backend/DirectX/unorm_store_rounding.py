@@ -44,7 +44,9 @@ class HLSLUnormStoreRoundingError(ValueError):
 
     def __init__(self, reason):
         self.reason = reason
-        super().__init__(f"Cannot apply single-precision UNORM store rounding: {reason}")
+        super().__init__(
+            f"Cannot apply single-precision UNORM store rounding: {reason}"
+        )
 
 
 def scale_buffer_suffix(register):
@@ -94,9 +96,7 @@ class HLSLUnormStoreRoundingMixin:
         reserved = getattr(self, "integer_helper_reserved_names", set())
         for name in (HELPER_NAME, CHANNEL_HELPER_NAME):
             if name in reserved:
-                raise HLSLUnormStoreRoundingError(
-                    f"the source already declares {name}"
-                )
+                raise HLSLUnormStoreRoundingError(f"the source already declares {name}")
         for node in getattr(ast, "global_variables", []) or []:
             vtype = getattr(node, "vtype", None)
             if not self.is_unorm_storage_texture_type(vtype):
@@ -142,9 +142,7 @@ class HLSLUnormStoreRoundingMixin:
             return rendered_value
         if not self.is_unorm_storage_texture_type(resource_type):
             return rendered_value
-        name, (_vtype, buffer_name, member_name) = self.unorm_store_texture(
-            image_expr
-        )
+        name, (_vtype, buffer_name, member_name) = self.unorm_store_texture(image_expr)
         self.unorm_store_used.setdefault(name, (buffer_name, member_name))
         return f"{HELPER_NAME}({rendered_value}, {member_name})"
 
@@ -181,9 +179,7 @@ class HLSLUnormStoreRoundingMixin:
             "    @ precise\n"
             f"    vec4 {HELPER_NAME}(vec4 value, vec4 scale) {{\n"
             "        return vec4("
-            + ", ".join(
-                f"{CHANNEL_HELPER_NAME}(value.{c}, scale.{c})" for c in "xyzw"
-            )
+            + ", ".join(f"{CHANNEL_HELPER_NAME}(value.{c}, scale.{c})" for c in "xyzw")
             + ");\n"
             "    }\n\n"
         )
