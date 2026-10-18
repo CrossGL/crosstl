@@ -58,12 +58,14 @@ Machine-readable results:
 - `coverage.json` and `coverage.lock.json`: the frozen inventory and the expected
   outcome counts of every profile.
 - `results.json`: the summary of the qualifying workflow run: devices, case
-  outcomes per category, evidence counts, negative controls, intrinsic
-  precision against WARP and the image metrics of every output with its bound.
+  outcomes per category, evidence counts, negative controls, arithmetic
+  exactness of the translated artifacts, intrinsic precision against WARP and
+  the image metrics of every output with its bound.
   `results_summary.py` regenerates it from the run's `qualification.json`.
 - `results.json` of each translated run (`run_tests.py`): translation counts,
-  device preflight, deadlines, accounting, evidence summary and negative
-  controls.
+  device preflight, deadlines, arithmetic exactness, accounting, evidence
+  summary and negative controls; `exactness.json` lists every artifact with
+  its hash and floating-point operation counts.
 - `qualification.json` and `results.json` of the `Project Demo Testing`
   workflow (`computesharp-qualification` artifact): every check recomputed from
   the raw artifacts of all three profiles, with per-case image metrics and
@@ -105,10 +107,12 @@ Machine-readable results:
    references to the Direct3D 12 runtime and DXC for the portable assemblies and
    defines `COMPUTESHARP_TRANSLATED_BACKEND` for patches 0005 and 0006.
 5. **Runner.** `run_tests.py` builds the native backend and the tests, checks
-   the device against the profile before any test runs, translates, runs
-   `dotnet test` without the Windows-specific methods, accounts the TRX with
-   `baseline.py`, verifies the dispatch evidence with `evidence.py`, collects
-   the output images and runs the negative controls.
+   the device against the profile before any test runs, translates, checks
+   with `exactness.py` that the target compiler keeps the translated
+   arithmetic as written, runs `dotnet test` without the Windows-specific
+   methods, accounts the TRX with `baseline.py`, verifies the dispatch evidence
+   with `evidence.py`, collects the output images and runs the negative
+   controls.
 6. **Qualification.** `qualify.py` recomputes every result from the uploaded
    artifacts of the three profiles (see [Qualification](#qualification)).
 
@@ -164,11 +168,20 @@ docker run --rm -v "$PWD:$PWD" -v /path/to/adapted-linux:/path/to/adapted-linux 
   --profile opengl-mesa-llvmpipe --work /path/to/gl-run --negative-controls
 ```
 
-Each run exits non-zero unless accounting, evidence and every control pass, and
-writes `results.json`, the TRX, the evidence (`evidence.jsonl`), the translated
-artifacts with their manifest, the collected outputs, content-addressed image
-captures and logs under `--work`. `--filter` runs a subset for diagnosis only
-and never qualifies.
+Each run exits non-zero unless accounting, evidence, arithmetic exactness and
+every control pass, and writes `results.json`, `exactness.json`, the TRX, the
+evidence (`evidence.jsonl`), the translated artifacts with their manifest, the
+collected outputs, content-addressed image captures and logs under `--work`.
+`--filter` runs a subset for diagnosis only and never qualifies.
+
+Check the arithmetic exactness of translated artifacts on their own (OpenGL
+needs the native library of a run):
+
+```sh
+python demos/integrations/computesharp/exactness.py --target opengl \
+  --artifacts /path/to/gl-run/artifacts \
+  --library /path/to/gl-run/native/libcsbackend_gl.so --output exactness.json
+```
 
 Evaluate the intrinsic probe on a translated backend with the native library
 of a run (the Windows job runs the same probe against the original runtime on
@@ -342,8 +355,29 @@ the original evaluation:
   order. The frontend marks every function precise (Metal
   `#pragma clang fp contract(off)`, GLSL `precise`) and replaces these
   intrinsics with precise helpers that evaluate the DXC lowering one operation
-  at a time.
+  at a time. GLSL compilers apply `precise` only to the operations whose
+  result an assignment to a precise variable consumes, so in a precise
+  function the GLSL backend declares every local and output parameter
+  precise, copies written value parameters into precise locals, and assigns
+  values to precise locals where they are evaluated when no precise variable
+  consumes them: control conditions, user-function arguments, stores to
+  buffers, images and shared memory, and computed values that a swizzle,
+  member access or index selects from.
 - `matrix_packing=row_major`: ComputeSharp compiles with DXC's `-Zpr`.
+
+`exactness.py` checks that the target compiler keeps every translated
+artifact's arithmetic as written, using the runtime's compile options: the
+Metal LLVM IR (`xcrun metal -S -emit-llvm`) may contain no fused multiply-add,
+`air.mix` or run-time `air.dot` and no contracting or reassociating
+floating-point instruction, and in the NIR that Mesa compiles each OpenGL
+artifact to (`MESA_GLSL=dump` through the native backend) every
+floating-point add, multiply, multiply-add, interpolation and dot product must
+be exact. `run_tests.py` fails a run with an inexact artifact and
+`qualify.py` re-verifies the report against the run's manifest. llvmpipe
+never fuses, so the earlier GLSL translation, which declared only function
+results precise, still matched WARP there, but 6,120 of its NIR
+floating-point operations in 57 artifacts were not exact and a driver that
+fuses could have contracted them.
 
 `qualify.py` requires the translated `sin`, `cos` and `tan` to be
 bit-identical to WARP (except for operands whose revolution is subnormal) and
@@ -409,10 +443,11 @@ loosening any upstream threshold:
   closer to WARP but `exp` and `pow` further away.
 - WARP flushes subnormal operands and results to zero; llvmpipe keeps them,
   so results that involve subnormals can differ from WARP.
-- In GLSL, `precise` covers the helper functions and function results; other
-  arithmetic in entry points relies on the driver not contracting, which holds
-  for llvmpipe (the probe measures it) but is not required by the GLSL
-  specification.
+- The exactness check inspects the compilers of the CI and local devices
+  (Apple's Metal compiler and Mesa); other OpenGL drivers must honor
+  `precise`, which GLSL 4.00 requires. Translations that need `precise`
+  raise desktop GLSL targets below 4.00 to 4.00 and reject GLSL ES targets
+  below 3.20, including WebGL 2, instead of silently relaxing the evaluation.
 - The cases of the 12 host-only methods in `evidence_policy.json` leave no
   device records; their results come from the upstream assertions alone.
   `InitializationTests.QueryDevices` passes without running its body on the
@@ -442,7 +477,8 @@ shipped application.
 `qualify.py` checks, for each profile: the coverage lock, discovery parity with
 the original Windows export, TRX accounting with per-category outcome counts,
 the dispatch evidence, every negative control, the job report (including the
-device preflight), the intrinsic precision and the image checks, and writes
+device preflight), the arithmetic exactness of the translated artifacts, the
+intrinsic precision and the image checks, and writes
 `qualification.json` with the summary `results.json` (`results_summary.py`). The workflow runs the original Windows
 WARP job, the adapted-source parity job, the macOS Metal job, the Linux Mesa
 llvmpipe job and then the qualification job, with bounded timeouts and seven

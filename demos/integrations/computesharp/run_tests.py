@@ -3,13 +3,16 @@
 
 The runner builds the native backend library, builds the adapted upstream test
 project against the portable runtime, translates the exported HLSL with CrossTL,
-runs ``dotnet test`` without the Windows-specific methods of the coverage contract
-and accounts the TRX results with ``baseline.py`` for the requested profile.
+checks with ``exactness.py`` that the target compiler keeps the translated
+arithmetic as written, runs ``dotnet test`` without the Windows-specific methods
+of the coverage contract and accounts the TRX results with ``baseline.py`` for
+the requested profile.
 
 Inputs are an adapted upstream checkout produced by ``prepare_upstream.py`` and a
 discovery export of the test assembly built from that checkout. Every step writes
 its log under ``--work``; the final report is ``results.json`` and the process
-exits non-zero unless accounting matches the frozen contract.
+exits non-zero unless accounting matches the frozen contract and every artifact
+is exact.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ sys.path.insert(0, str(HERE))
 import baseline  # noqa: E402
 import collect_outputs  # noqa: E402
 import evidence as evidence_module  # noqa: E402
+import exactness  # noqa: E402
 
 TEST_PROJECT = Path("tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj")
 TEST_ASSEMBLY = Path(
@@ -567,6 +571,21 @@ def main(argv: list[str] | None = None) -> int:
         "deadlines": DEADLINES,
     }
     status = 0
+    exactness_report = exactness.analyze(
+        target, artifacts, library=native_library, device=device_check.get("device")
+    )
+    (work / "exactness.json").write_text(
+        json.dumps(exactness_report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    report["arithmeticExactness"] = {
+        "status": exactness_report["status"],
+        "tool": exactness_report["tool"],
+        "totals": exactness_report["totals"],
+        "errors": exactness_report.get("errors", [])[:20],
+    }
+    if exactness_report["status"] != "passed":
+        status = 1
     passed: Counter[str] | None = None
     if not args.controls_only:
         evidence = None if args.no_evidence else work / "evidence.jsonl"
@@ -683,6 +702,7 @@ def main(argv: list[str] | None = None) -> int:
         }
     if isinstance(report.get("evidence"), dict):
         summary["evidence"] = report["evidence"].get("status")
+    summary["arithmeticExactness"] = report["arithmeticExactness"]["status"]
     if isinstance(report.get("negativeControls"), dict):
         summary["negativeControls"] = {
             item["fault"]: item["status"]
