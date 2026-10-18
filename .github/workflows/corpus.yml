@@ -3,9 +3,9 @@ name: Corpus
 # Third-party corpus tier (tests/conformance/corpus). Rebuilds the corpus from the projects and commits pinned in
 # its manifest, translates every unit to each target this runner checks natively, and compares every cell and the
 # p95 translation latency per source language with the committed scoreboard and budgets.json. A cell that gets
-# worse or cannot be checked, or a latency budget that is exceeded, fails the job. The tier is heavy, so it runs
-# nightly, on demand, and on a pull request only while it carries the "corpus" label; the runner's unit tests run
-# with the conformance tier on every pull request that touches it.
+# worse or cannot be checked, or a latency budget that is exceeded, fails the job. Pull requests that touch the
+# translator or the corpus tier run the Linux leg; the nightly schedule, manual runs and pull requests labelled
+# "ci:full" also run the macOS Metal leg. The runner's unit tests run with the conformance tier.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -16,7 +16,16 @@ on:
   schedule:
     - cron: "41 3 * * *"
   pull_request:
-    types: [opened, reopened, synchronize, labeled]
+    paths:
+      - "crosstl/**"
+      - "tests/conformance/*.py"
+      - "tests/conformance/corpus/**"
+      - ".github/workflows/corpus.yml"
+      - ".github/actions/install-linux-dxc/**"
+      - ".github/actions/install-shader-validators/**"
+      - "tools/ensure_metal_toolchain.py"
+      - "pyproject.toml"
+      - "requirements.txt"
   workflow_dispatch:
     inputs:
       slices:
@@ -31,22 +40,43 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  legs:
+    name: Select corpus legs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      legs: ${{ steps.select.outputs.legs }}
+    steps:
+      - name: Select legs
+        id: select
+        env:
+          # macOS runners are scarce, so a pull request runs the Metal leg only while it is labelled ci:full.
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          LINUX_LEGS: >-
+            [{"name": "Linux HLSL, GLSL, GLSL ES and SPIR-V", "os": "ubuntu-24.04", "targets": "hlsl,glsl,essl,spirv",
+            "developer_dir": ""}]
+          HOSTED_LEGS: >-
+            [{"name": "macOS Metal", "os": "xcode-27", "targets": "metal",
+            "developer_dir": "/Applications/Xcode_27.1.app/Contents/Developer"}]
+        run: |
+          set -euo pipefail
+          if [ "$FULL" = true ]; then
+            legs="$(jq -c -n --argjson linux "$LINUX_LEGS" --argjson hosted "$HOSTED_LEGS" '$linux + $hosted')"
+          else
+            legs="$(jq -c -n --argjson linux "$LINUX_LEGS" '$linux')"
+          fi
+          echo "legs=$legs" >> "$GITHUB_OUTPUT"
+          jq -r '.[].name' <<< "$legs"
+
   corpus:
     name: Corpus (${{ matrix.name }})
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'corpus')
+    needs: legs
     runs-on: ${{ matrix.os }}
     timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Linux HLSL, GLSL, GLSL ES and SPIR-V
-            os: ubuntu-24.04
-            targets: hlsl,glsl,essl,spirv
-          - name: macOS Metal
-            os: xcode-27
-            targets: metal
-            developer_dir: /Applications/Xcode_27.1.app/Contents/Developer
+        include: ${{ fromJSON(needs.legs.outputs.legs) }}
     env:
       DEVELOPER_DIR: ${{ matrix.developer_dir }}
       CROSSTL_CONFORMANCE_CACHE: ${{ github.workspace }}/../conformance-cache

@@ -69,8 +69,9 @@ run) as the `conformance-<profile>` artifact; commit that candidate to record a 
 | macOS | `xcode-27` | Xcode 27.1 `metal` | `metal-apple` |
 | Windows | `windows-2025` | DXC v1.9.2602.24 (pinned archive) | `d3d12-warp` (WARP 1.0.21; Server 2022's D3D12 runtime stops at cs_6_5) |
 
-Pull requests run the fixture cases under `strict` and `relaxed`; the nightly tier, `workflow_dispatch` and pull
-requests labelled `conformance-full` add six seeded held-out kernels per family and language.
+Pull requests run the fixture cases under `strict` and `relaxed` on the Linux job. Pushes to `main`, the nightly
+tier, `workflow_dispatch` and pull requests labelled `ci:full` also run the macOS and Windows jobs; the nightly tier
+and `ci:full` add six seeded held-out kernels per family and language, and `workflow_dispatch` takes their number.
 
 ## Corpus tier
 
@@ -93,5 +94,5 @@ usable share per (source, target) pair over feasible cells and the p50/p95/max l
 above `budgets.json` fails the run. Latency is wall time, and the worker's CPU time is recorded beside it, because
 a loaded runner inflates the first far more than the second. Translations are journalled in
 `translations.jsonl` as they finish, so `--resume` continues an interrupted run. `.github/workflows/corpus.yml`
-runs the tier nightly, on demand and on pull requests labelled `corpus`: Linux checks HLSL, GLSL, GLSL ES and
-SPIR-V outputs, macOS checks MSL outputs.
+runs the Linux job (HLSL, GLSL, GLSL ES and SPIR-V outputs) on pull requests that touch the translator or the
+tier, and adds the macOS job (MSL outputs) nightly, on demand and on pull requests labelled `ci:full`.

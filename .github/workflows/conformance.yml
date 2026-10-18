@@ -3,8 +3,9 @@ name: Conformance
 # Translation conformance and differential execution (tests/conformance). Every cell of the hazard suite is
 # translated, checked by the target's native validator and executed on the runtimes provisioned here, then
 # compared with the committed scoreboard for this CI profile; a cell that regresses, goes missing or loses its
-# runtime fails the job. Pull requests run the fixture cases; the nightly tier adds the seeded held-out kernels.
-# A pull request labelled "conformance-full" runs the nightly tier too.
+# runtime fails the job. Pull requests run the fixture cases on the Linux leg. Pushes to main, the nightly
+# schedule, manual runs and pull requests labelled "ci:full" also run the macOS and Windows legs; the nightly
+# schedule and "ci:full" add the seeded held-out kernels, and a manual run takes their number as an input.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -24,7 +25,6 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
     paths:
       - "crosstl/**"
       - "tests/conformance/**"
@@ -51,7 +51,6 @@ concurrency:
 jobs:
   harness:
     name: Conformance harness unit tests
-    if: github.event.action != 'labeled' || github.event.label.name == 'conformance-full'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -62,7 +61,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install CrossTL and harness dependencies
-        run: python -m pip install -e . numpy==2.5.4 pytest==9.1.1
+        run: python -m pip install -e . numpy==2.5.4 pytest==9.1.1 PyYAML==6.0.3
       - name: Harness and inventory unit tests
         run: python -m pytest -q --no-header -p no:warnings --tb=short -rfE tests/conformance
       - name: Inventories match their pinned specifications
@@ -75,33 +74,47 @@ jobs:
           python -m tests.conformance.inventory.hlsl --fetch --check
           python -m tests.conformance.inventory >> "$GITHUB_STEP_SUMMARY"
 
+  legs:
+    name: Select conformance legs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      legs: ${{ steps.select.outputs.legs }}
+    steps:
+      - name: Select legs
+        id: select
+        env:
+          # macOS and Windows runners are scarce, so a pull request runs them only while it is labelled ci:full.
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          LINUX_LEGS: >-
+            [{"name": "Linux Mesa lavapipe and llvmpipe", "os": "ubuntu-24.04", "targets": "glsl,spirv,hlsl",
+            "runtimes": "vulkan-lavapipe,opengl-llvmpipe", "extra": "", "developer_dir": ""}]
+          # Windows Server 2022's D3D12 runtime creates compute pipelines only up to cs_6_5 (shader models 6.6 and
+          # later need a newer runtime than the in-box one), so the Windows leg runs on Server 2025.
+          HOSTED_LEGS: >-
+            [{"name": "macOS Metal", "os": "xcode-27", "targets": "metal", "runtimes": "metal-apple",
+            "extra": "pyobjc-framework-Metal==12.2.2", "developer_dir": "/Applications/Xcode_27.1.app/Contents/Developer"},
+            {"name": "Windows Direct3D 12 WARP", "os": "windows-2025", "targets": "hlsl", "runtimes": "d3d12-warp",
+            "extra": "compushady==0.17.5", "developer_dir": ""}]
+        run: |
+          set -euo pipefail
+          if [ "$FULL" = true ]; then
+            legs="$(jq -c -n --argjson linux "$LINUX_LEGS" --argjson hosted "$HOSTED_LEGS" '$linux + $hosted')"
+          else
+            legs="$(jq -c -n --argjson linux "$LINUX_LEGS" '$linux')"
+          fi
+          echo "legs=$legs" >> "$GITHUB_OUTPUT"
+          jq -r '.[].name' <<< "$legs"
+
   native:
     name: Conformance (${{ matrix.name }})
-    if: github.event.action != 'labeled' || github.event.label.name == 'conformance-full'
+    needs: legs
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Linux Mesa lavapipe and llvmpipe
-            os: ubuntu-24.04
-            targets: glsl,spirv,hlsl
-            runtimes: vulkan-lavapipe,opengl-llvmpipe
-            extra: ""
-          - name: macOS Metal
-            os: xcode-27
-            targets: metal
-            runtimes: metal-apple
-            extra: pyobjc-framework-Metal==12.2.2
-            developer_dir: /Applications/Xcode_27.1.app/Contents/Developer
-          - name: Windows Direct3D 12 WARP
-            # Windows Server 2022's D3D12 runtime creates compute pipelines only up to cs_6_5 (shader models
-            # 6.6 and later need a newer runtime than the in-box one), so the job runs on Server 2025.
-            os: windows-2025
-            targets: hlsl
-            runtimes: d3d12-warp
-            extra: compushady==0.17.5
+        include: ${{ fromJSON(needs.legs.outputs.legs) }}
     env:
       CROSSTL_CONFORMANCE_MESA: container
       DEVELOPER_DIR: ${{ matrix.developer_dir }}
@@ -120,7 +133,7 @@ jobs:
       - name: Select tier and scoreboard profile
         env:
           HELDOUT_INPUT: ${{ github.event.inputs.heldout }}
-          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'conformance-full') }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: |
           set -euo pipefail
           heldout=0
