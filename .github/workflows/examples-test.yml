@@ -9,6 +9,7 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  merge_group:
 
 permissions:
   contents: read
@@ -55,6 +56,11 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: ${{ matrix.python-version }}
 
       - name: Install CrossTL
@@ -326,6 +332,11 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
@@ -376,6 +387,11 @@ jobs:
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.11"
 
       - name: Install dependencies
@@ -465,3 +481,23 @@ jobs:
           if len(successful_backends) != len(backends):
               raise SystemExit(1)
           "
+
+  result:
+    # The one check per workflow that branch protection and the merge queue require.
+    name: Examples Test result
+    if: always()
+    needs: [test-examples, backend-specific, stability-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done
