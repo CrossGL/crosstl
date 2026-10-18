@@ -30,7 +30,12 @@ from the job reports:
 - every companion suite of ``test_projects.json`` (the other ported upstream
   test projects, under ``suites/<project>`` of each profile) passes the same
   coverage, parity, accounting, evidence, control, job and exactness checks
-  with its own frozen contract, lock, evidence policy and controls.
+  with its own frozen contract, lock, evidence policy and controls;
+- every retained Windows-specific or CPU-only project (under ``retained/`` of
+  the Windows artifacts) passes its frozen coverage and accounting on the
+  original profile, its unaccounted upstream-step runs succeeded and its
+  merged TRX is exactly the merge of its accounted runs. These results are
+  reported under ``retained`` and never as translated execution.
 
 The report is ``qualification.json``, with amplified difference images under
 ``images/``, and its summary ``results.json`` (see ``results_summary.py``). The
@@ -44,6 +49,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -59,6 +65,7 @@ import evidence as evidence_module  # noqa: E402
 import exactness as exactness_module  # noqa: E402
 import precision_report  # noqa: E402
 import results_summary  # noqa: E402
+import retained as retained_module  # noqa: E402
 import suites as suites_module  # noqa: E402
 
 CONTROLS = HERE / "negative_controls.json"
@@ -67,6 +74,8 @@ DIRECTX_PROFILE = "directx-warp"
 TARGETS = {"metal": "metal-apple-gpu", "opengl": "opengl-mesa-llvmpipe"}
 # Directory of the companion suites inside each profile's artifacts.
 SUITES_DIRECTORY = "suites"
+# Directory of the retained projects inside the Windows artifacts.
+RETAINED_DIRECTORY = "retained"
 # DXGI_FORMAT_R8G8B8A8_UNORM and DXGI_FORMAT_B8G8R8A8_UNORM.
 CHANNEL_ORDERS = {28: (0, 1, 2, 3), 87: (2, 1, 0, 3)}
 DIFFERENCE_GAIN = 8
@@ -822,6 +831,67 @@ def qualify_suite(
     }
 
 
+def retained_runs(directory: Path, item: suites_module.Suite) -> dict[str, Any]:
+    """Recheck the recorded runs of one retained project against its inventory."""
+
+    report = json.loads(
+        (directory.parent / "retained.json").read_text(encoding="utf-8")
+    )
+    entry = (report.get("suites") or {}).get(item.name) or {}
+    if entry.get("status") != "passed":
+        return _failure(
+            [f"the Windows job reported {entry.get('status')!r}: {entry.get('error')}"]
+        )
+    errors = []
+    recorded = {run.get("name"): run for run in entry.get("runs") or []}
+    expected = (item.retention or {}).get("runs") or []
+    if sorted(recorded) != sorted(run["name"] for run in expected):
+        errors.append("the recorded runs differ from the inventory")
+    accounted, selected = [], {}
+    for run in expected:
+        found = recorded.get(run["name"]) or {}
+        for key in ("filter", "upstreamStep", "accounted"):
+            if found.get(key) != run.get(key):
+                errors.append(f"run {run['name']} recorded a different {key}")
+        selected[run["name"]] = found.get("selectedCases")
+        if not run["accounted"]:
+            if found.get("exitCode") != 0 or found.get("failedCases") != 0:
+                errors.append(f"upstream step run {run['name']} did not succeed")
+            continue
+        trx = directory / "trx" / "runs" / f"{run['name']}.trx"
+        if not trx.is_file() or _sha256(trx) != found.get("trxSHA256"):
+            errors.append(f"run {run['name']} has no TRX matching its record")
+        accounted.append(trx)
+    if errors:
+        return _failure(errors)
+    with tempfile.TemporaryDirectory() as scratch:
+        merged = Path(scratch) / "baseline.trx"
+        retained_module.merge_trx(accounted, merged)
+        same = merged.read_bytes() == (directory / "trx" / "baseline.trx").read_bytes()
+    if not same:
+        return _failure(["baseline.trx is not the merge of the accounted runs"])
+    return {"status": "passed", "selectedCases": selected}
+
+
+def qualify_retained(item: suites_module.Suite, *, directx: Path) -> dict[str, Any]:
+    """Qualify one retained project on the original profile alone."""
+
+    directory = directx / RETAINED_DIRECTORY / item.name
+    original = directx_accounting(
+        directory, contract_path=item.contract, lock_path=item.lock
+    )
+    _check(original, "runs", retained_runs, directory, item)
+    profiles = {DIRECTX_PROFILE: original}
+    return {
+        "kind": item.kind,
+        "scope": item.scope,
+        "countedAsTranslatedExecution": False,
+        "contractSHA256": _contract_sha256(item.contract),
+        "status": _settle(profiles),
+        "profiles": profiles,
+    }
+
+
 def qualify(
     *,
     directx: Path,
@@ -833,6 +903,7 @@ def qualify(
     image_checks_path: Path = IMAGE_CHECKS,
     provenance: dict[str, Any] | None = None,
     companion_suites: dict[str, suites_module.Suite] | None = None,
+    retained_suites: dict[str, suites_module.Suite] | None = None,
 ) -> dict[str, Any]:
     """Qualify the main suite and every companion suite on every profile.
 
@@ -868,8 +939,13 @@ def qualify(
         name: qualify_suite(item, directx=directx, targets=targets)
         for name, item in sorted((companion_suites or {}).items())
     }
+    retained = {
+        name: qualify_retained(item, directx=directx)
+        for name, item in sorted((retained_suites or {}).items())
+    }
     passed = main_status == "passed" and all(
-        suite["status"] == "passed" for suite in companions.values()
+        suite["status"] == "passed"
+        for suite in [*companions.values(), *retained.values()]
     )
     report = {
         "schemaVersion": 1,
@@ -882,6 +958,7 @@ def qualify(
         "status": "passed" if passed else "failed",
         "profiles": profiles,
         "suites": companions,
+        "retained": retained,
     }
     (output / "qualification.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -895,6 +972,9 @@ def summary_lines(report: dict[str, Any]) -> list[str]:
     lines += _profile_lines(report["profiles"])
     for name, suite in sorted((report.get("suites") or {}).items()):
         lines.append(f"  suite {name}: {suite['status']}")
+        lines += ["  " + line for line in _profile_lines(suite["profiles"])]
+    for name, suite in sorted((report.get("retained") or {}).items()):
+        lines.append(f"  retained {suite['scope']} {name}: {suite['status']}")
         lines += ["  " + line for line in _profile_lines(suite["profiles"])]
     return lines
 
@@ -962,6 +1042,7 @@ def main(argv: list[str] | None = None) -> int:
             for name, item in suites_module.ported_suites().items()
             if name != suites_module.MAIN_SUITE
         },
+        retained_suites=suites_module.retained_suites(),
     )
     print("\n".join(summary_lines(report)))
     return 0 if report["status"] == "passed" else 1

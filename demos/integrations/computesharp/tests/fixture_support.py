@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CONTRACT = ROOT / "tests" / "fixture" / "coverage.json"
 FIXTURE_POLICY = ROOT / "tests" / "fixture" / "evidence_policy.json"
 PROGRAM_CONTRACT = ROOT / "tests" / "program_fixture" / "coverage.json"
+HOST_CONTRACT = ROOT / "tests" / "host_fixture" / "coverage.json"
 
 
 def load_module(name, path):
@@ -82,14 +83,42 @@ def build_program(tools, tmp_path_factory):
     return [tools[0], tools[1], str(output / "program" / "ProgramFixture.dll")]
 
 
-def export(tools, output, mode=None):
+def build_host(tools, tmp_path_factory):
+    """Build the host-only MSTest fixture; return the discovery tools for it."""
+    output = tmp_path_factory.mktemp("host-build")
+    _build(
+        tools[0],
+        ROOT / "tests" / "host_fixture" / "HostFixture.csproj",
+        output,
+        "host",
+    )
+    return [tools[0], tools[1], str(output / "host" / "HostFixture.dll")]
+
+
+def vstest(tools, root, name, test_filter=None):
+    """Run the fixture assembly of ``tools`` with MSTest into ``root/name.trx``."""
+    command = [
+        tools[0],
+        "vstest",
+        tools[2],
+        f"--Logger:trx;LogFileName={name}.trx",
+        "--ResultsDirectory:" + str(root),
+    ]
+    if test_filter:
+        command.append("--TestCaseFilter:" + test_filter)
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return root / f"{name}.trx"
+
+
+def export(tools, output, mode=None, options=()):
     """Export the fixture inventory; ``mode`` selects a fixture failure."""
     environment = os.environ.copy()
     environment.pop("DISCOVERY_FIXTURE_MODE", None)
     if mode:
         environment["DISCOVERY_FIXTURE_MODE"] = mode
     return subprocess.run(
-        [*tools, str(output)],
+        [*tools, str(output), *options],
         env=environment,
         capture_output=True,
         text=True,

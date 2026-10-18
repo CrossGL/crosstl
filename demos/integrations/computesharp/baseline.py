@@ -79,9 +79,13 @@ def load_discovery(directory: Path) -> dict:
         method_names.add(entry["signature"])
     if {case.get("signature") for case in tests} != method_names:
         raise ValueError("Cases and test methods differ")
+    # Only a project exported as host-only has no generated shaders, and it has none.
+    host_only = report.get("hostOnly", False)
+    if host_only is not True and "hostOnly" in report:
+        raise ValueError("Invalid host-only marker")
     if (
         not isinstance(shaders, list)
-        or not shaders
+        or bool(shaders) == host_only
         or report.get("shaderCount") != len(shaders)
     ):
         raise ValueError("Missing or inconsistent shader inventory")

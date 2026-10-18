@@ -191,6 +191,14 @@ On Windows, `companions.py baseline --source /path/to/ComputeSharp --output
 /path/to/suites` runs the original projects on Direct3D 12 as the upstream
 workflow does and accounts them with `baseline.py`.
 
+Also on Windows, retain the original Windows-specific and CPU-only test
+projects (see [Retained projects](#retained-projects)):
+
+```sh
+python demos/integrations/computesharp/retained.py run \
+  --source /path/to/ComputeSharp --output /path/to/retained
+```
+
 Each run exits non-zero unless accounting, evidence, arithmetic exactness and
 every control pass, and writes `results.json`, `exactness.json`, the TRX, the
 evidence (`evidence.jsonl`), the translated artifacts with their manifest, the
@@ -218,8 +226,9 @@ python demos/integrations/computesharp/precision/run_probe.py \
 ```
 
 Qualify downloaded workflow artifacts (or local directories with the same
-layout: `discovery/`, `run/` and `precision/` for each target, and
-`suites/<project>/` for each companion suite):
+layout: `discovery/`, `run/` and `precision/` for each target,
+`suites/<project>/` for each companion suite and, in the Windows artifacts,
+`retained/<project>/` for each retained project):
 
 ```sh
 python demos/integrations/computesharp/qualify.py \
@@ -280,6 +289,45 @@ policy names the reason for each case without a dispatch, its one control
 corrupts readbacks, and the suite declares that its artifacts (whose bodies only
 compare thread ids with the dispatch size) do no float arithmetic instead of
 requiring float operations in the exactness check.
+
+#### Retained projects
+
+The Windows-specific and CPU-only projects test what the port does not
+translate, so they never run on a translated target and never count as
+translated GPU execution. `retained.py run` runs them on the original Windows
+job and accounts their results separately, on the `directx-warp` profile of
+their own frozen contract and lock under `suites/<project>/`, which classify
+every case in the project's scope:
+
+| Project | Scope | Cases | Runs |
+| --- | --- | ---: | --- |
+| `DeviceLost` | windows-specific | 43, of which 20 are optional discrete-device rows | the three upstream steps verbatim, then each test class on its own (`Release`) |
+| `SourceGenerators` | cpu-only | 110 | the upstream step (`Debug`, as upstream) |
+
+The upstream DeviceLost steps filter by `TestCategory`, but no DeviceLost test
+declares a category at the pinned commit, so those steps select no case; the
+retained run records the number each one selects and requires it to succeed.
+The accounted runs follow the intent the upstream workflow states, one test
+class per process, and together must report every discovered case once; their
+TRX files are merged into the `baseline.trx` that `baseline.py` accounts, and
+qualification recomputes the merge. The allocator variant of the steps
+(`run-tests-d3d12ma`) is not repeated, as for the main suite.
+`NativeLibrariesResolver` is not retained: it runs in the upstream
+`verify-packages` job against the published NuGet packages, which the port does
+not rebuild.
+
+`SourceGenerators` contains no generated shader; the discovery tool exports
+it with `--host-only`, which fails for a project with descriptors, and its lock
+records the host-only export. MSTest names `DataRow` cases with their string
+arguments in quotes, which the exporter reproduces. On a non-Windows host the
+adapted generator (patch 0002) leaves the DXIL bytecode empty, so 6 of these
+110 cases cannot pass there: the three generated-source comparisons, which
+embed the bytecode, and the DXC compilation and double-precision diagnostics
+(`RecursiveMembers`, `MissingRequiresDoublePrecisionSupportAttribute`,
+`UnnecessaryRequiresDoublePrecisionSupportAttribute`). A local macOS run of
+the adapted generator passed the other 104, and the generated-source
+differences were confined to the bytecode. The retained results therefore
+come from the pristine Windows build.
 
 ### Main test project
 
@@ -548,7 +596,11 @@ The identified fixed release, 4.1.2, requires a separate license key to build an
 is not substituted into the original baseline. `baseline-audit.props` keeps NuGet
 auditing enabled and adds advisory-specific exceptions only for
 `ComputeSharp.Tests`, its three ported companion test projects, the portable
-runtime and the intrinsic probe, enabled by `CrossTLTrustedCorpusBaseline=true`. This is
+runtime and the intrinsic probe, enabled by `CrossTLTrustedCorpusBaseline=true`.
+The retained `ComputeSharp.Tests.SourceGenerators` project reaches
+System.Security.Cryptography.Pkcs 9.0.6 through the Roslyn test packages and
+has one exception of its own,
+[GHSA-2fmv-rv2c-59x7](https://github.com/advisories/GHSA-2fmv-rv2c-59x7). This is
 restricted to the immutable, trusted upstream test code and its tracked assets;
 it must not be used to process external images or as a dependency policy for a
 shipped application.
@@ -562,6 +614,10 @@ device preflight), the arithmetic exactness of the translated artifacts, the
 intrinsic precision and the image checks. Every companion suite must pass the
 same checks, except the image checks and the intrinsic probe, with its own
 frozen files; the qualification fails if any suite is missing on any profile.
+Every retained project must pass its coverage lock and accounting on the
+original profile, and its recorded runs must match the inventory, with the
+merged TRX recomputed; its results are published under `retained`, separately
+from the translated suites.
 It writes
 `qualification.json` with the summary `results.json` (`results_summary.py`). The workflow runs the original Windows
 WARP job, the adapted-source parity job, the macOS Metal job, the Linux Mesa

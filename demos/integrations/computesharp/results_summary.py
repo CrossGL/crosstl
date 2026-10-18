@@ -8,7 +8,9 @@ execution, the case outcomes per contract category, the evidence counts, every
 negative control, the arithmetic exactness of the translated artifacts on the
 target compiler, the intrinsic precision against WARP and the image metrics
 of every shader against the original WARP output with their bounds, and the
-same per-profile results for every companion suite under ``suites``. The
+same per-profile results for every companion suite under ``suites``, and the
+original results of every retained Windows-specific or CPU-only project under
+``retained``, which never count as translated execution. The
 summary is a pure function of the report and the workflow provenance, so the
 results of a workflow run can be regenerated from its qualification artifact:
 
@@ -241,6 +243,23 @@ def summarize_suite(suite: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def summarize_retained(suite: dict[str, Any]) -> dict[str, Any]:
+    """Reduce the qualification of one retained project to its results."""
+
+    summary = {
+        key: suite.get(key) for key in ("kind", "scope", "status", "contractSHA256")
+    }
+    summary["countedAsTranslatedExecution"] = False
+    profiles = {}
+    for name, profile in sorted((suite.get("profiles") or {}).items()):
+        profiles[name] = summarize_profile(profile)
+        runs = _section(profile, "runs")
+        if "selectedCases" in runs:
+            profiles[name]["selectedCases"] = runs["selectedCases"]
+    summary["profiles"] = profiles
+    return summary
+
+
 def summarize(
     report: dict[str, Any], provenance: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -262,6 +281,10 @@ def summarize(
         "suites": {
             name: summarize_suite(suite)
             for name, suite in sorted((report.get("suites") or {}).items())
+        },
+        "retained": {
+            name: summarize_retained(suite)
+            for name, suite in sorted((report.get("retained") or {}).items())
         },
     }
 
