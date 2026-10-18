@@ -6,7 +6,10 @@ whose format the runtime chooses, unsigned resource coordinates, implicit
 operand conversions of builtins and static globals.
 """
 
+import math
+import re
 import shutil
+import struct
 import subprocess
 import textwrap
 
@@ -312,6 +315,25 @@ def test_floating_point_remainder_truncates_like_hlsl(tmp_path):
     validate_glsl_if_available(code, tmp_path)
 
 
+def test_reciprocal_square_root_uses_the_glsl_builtin(tmp_path):
+    source = """
+        StructuredBuffer<float> input : register(t0);
+        RWStructuredBuffer<float> output : register(u0);
+        [NumThreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            float2 v = float2(input[ThreadIds.x], 2.0);
+            output[ThreadIds.x] = rsqrt(input[ThreadIds.x]) + rsqrt(v).y;
+        }
+    """
+    code = translate_hlsl(source, tmp_path).code
+
+    assert "inversesqrt(input_[gl_GlobalInvocationID.x])" in code
+    assert "inversesqrt(v).y" in code
+    assert "inverseSqrt" not in code
+    validate_glsl_if_available(code, tmp_path)
+
+
 def test_double_bit_casts_and_compare_exchange(tmp_path):
     source = """
         static const double Nan = asdouble(0x00000000, 0xFFF80000);
@@ -559,6 +581,115 @@ def test_revolution_reduction_is_portable_and_opt_in(tmp_path):
 
     with pytest.raises(ValueError, match="trigonometric_reduction"):
         DirectxCrossGLCodeGen.HLSLToCrossGLConverter(trigonometric_reduction="fast")
+
+
+def translate_with_warp_trigonometry(code: str, tmp_path, backend: str):
+    path = tmp_path / "trig.hlsl"
+    path.write_text(textwrap.dedent(code).strip() + "\n", encoding="utf-8")
+    return crosstl.translate(
+        str(path),
+        backend=backend,
+        format_output=False,
+        source_options={
+            "matrix_packing": "row_major",
+            "trigonometric_reduction": "warp",
+        },
+    )
+
+
+def float32_bits(text: str) -> int:
+    return struct.unpack("<I", struct.pack("<f", float(text.strip("()"))))[0]
+
+
+def test_warp_trigonometry_reproduces_the_table_method(tmp_path):
+    code = translate_with_warp_trigonometry(TRIGONOMETRY_HLSL, tmp_path, "opengl")
+
+    assert "precise float turns = (angle * 0.159154937);" in code
+    assert "precise float fraction = (turns - floor(turns));" in code
+    assert "precise float offset = ((scaled - segment) * 0.196349546);" in code
+    assert (
+        "precise float sine = (offset + ((offset * offset2) * (-0.166666672)));"
+    ) in code
+    assert (
+        "precise float cosine = (1.0 + (offset2 * ((-0.5) + "
+        "(offset2 * 0.0416666679))));"
+    ) in code
+    assert "int index = (int(segment) & 31);" in code
+    assert (
+        "precise float result = ((crosstl_hlsl_warp_sine_table[index] * cosine) + "
+        "(crosstl_hlsl_warp_cosine_table[index] * sine));"
+    ) in code
+    assert (
+        "precise float result = ((crosstl_hlsl_warp_cosine_table[index] * cosine) - "
+        "(crosstl_hlsl_warp_sine_table[index] * sine));"
+    ) in code
+    assert (
+        "precise float result = (crosstl_hlsl_warp_sin_float(angle) / "
+        "crosstl_hlsl_warp_cos_float(angle));"
+    ) in code
+    assert (
+        "crosstl_hlsl_warp_sin_float(dot(p, vec2(27.619, 57.583)))" in code
+    ), "runtime operands use the table method"
+    assert "crosstl_hlsl_warp_cos_vec2(vec2(time, (time * 2)))" in code
+    assert (
+        "return vec2(crosstl_hlsl_warp_cos_float(angle.x), "
+        "crosstl_hlsl_warp_cos_float(angle.y));"
+    ) in code
+    assert "s = crosstl_hlsl_warp_sin_float(time);" in code
+    assert "c = crosstl_hlsl_warp_cos_float(time);" in code
+    assert "crosstl_hlsl_warp_tan_float(float(steps))" in code
+    # DXC folds constant operands with exact math at compile time.
+    assert "const float SinPi = sin(Pi);" in code
+    assert "sin((Pi * 2))" in code
+    validate_glsl_if_available(code, tmp_path)
+
+
+def test_warp_trigonometry_tables_hold_the_exact_float32_values(tmp_path):
+    code = translate_with_warp_trigonometry(TRIGONOMETRY_HLSL, tmp_path, "opengl")
+    converter = DirectxCrossGLCodeGen.HLSLToCrossGLConverter
+    for name, bits in (
+        ("sine", converter.WARP_SINE_TABLE_BITS),
+        ("cosine", converter.WARP_COSINE_TABLE_BITS),
+    ):
+        declaration = re.search(
+            rf"const float crosstl_hlsl_warp_{name}_table\[32\] = float\[32\]\((.*?)\);",
+            code,
+        )
+        assert declaration is not None
+        values = [item.strip() for item in declaration.group(1).split(",")]
+        assert [float32_bits(value) for value in values] == list(bits)
+    # The tables are fl(sin(fl(k * fl(2 * pi / 32)))) and fl(cos(...)).
+    step = struct.unpack("<f", struct.pack("<f", 2 * math.pi / 32))[0]
+    for index in (1, 7, 15, 17, 30):
+        angle = struct.unpack("<f", struct.pack("<f", index * step))[0]
+        assert converter.WARP_SINE_TABLE_BITS[index] == float32_bits(
+            repr(math.sin(angle))
+        )
+        assert converter.WARP_COSINE_TABLE_BITS[index] == float32_bits(
+            repr(math.cos(angle))
+        )
+
+
+def test_warp_trigonometry_disables_metal_contraction(tmp_path):
+    code = translate_with_warp_trigonometry(TRIGONOMETRY_HLSL, tmp_path, "metal")
+
+    helper = code[code.index("float crosstl_hlsl_warp_sin_float(float angle) {") :]
+    assert code.count("#pragma clang fp contract(off)") >= 3
+    assert (
+        "constant float crosstl_hlsl_warp_sine_table[32] = {0.0, 0.195090324," in code
+    )
+    assert "float sine = offset + offset * offset2 * -0.166666672;" in helper
+    assert "crosstl_hlsl_warp_cos_vec2(float2(" in code
+    assert "sin(Pi * 2)" in code
+
+
+def test_warp_trigonometry_is_opt_in(tmp_path):
+    path = tmp_path / "exact.hlsl"
+    path.write_text(textwrap.dedent(TRIGONOMETRY_HLSL), encoding="utf-8")
+    exact = crosstl.translate(str(path), backend="opengl", format_output=False)
+    assert "crosstl_hlsl_warp" not in exact
+    revolutions = translate_with_reduction(TRIGONOMETRY_HLSL, tmp_path, "opengl")
+    assert "crosstl_hlsl_warp" not in revolutions
 
 
 def test_structured_buffers_keep_the_hlsl_element_layout(tmp_path):

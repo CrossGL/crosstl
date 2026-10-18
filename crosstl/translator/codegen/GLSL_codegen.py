@@ -3031,6 +3031,7 @@ class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
             "fwidth_fine": "fwidthFine",
             "fwidth_coarse": "fwidthCoarse",
             "rsqrt": "inversesqrt",
+            "inverseSqrt": "inversesqrt",
             "metal::rint": "roundEven",
             "metal_u3a_u3arint": "roundEven",
             "rint": "roundEven",
