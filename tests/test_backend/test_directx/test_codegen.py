@@ -2327,7 +2327,7 @@ def test_codegen_hitobject_array_byval_parameter_modifier_macro_from_dxc():
     output = generate_crossgl(hlsl)
 
     assert "MOD" not in output
-    assert "void MakeNop(dx_HitObject obj[2])" in output
+    assert "void MakeNop(in dx_HitObject obj[2])" in output
     assert "dx_HitObject obj[2]" in output
     parse_crossgl(output)
 
@@ -2601,7 +2601,7 @@ def test_codegen_function_array_return_from_dxc_longvec_decls():
 
     output = generate_crossgl(hlsl)
 
-    assert "vec4[10] lv_param_arr_passthru(vec4 vec[10])" in output
+    assert "vec4[10] lv_param_arr_passthru(in vec4 vec[10])" in output
     assert "return vec;" in output
 
     shader_ast = parse_crossgl(output)

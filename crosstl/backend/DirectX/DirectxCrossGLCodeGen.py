@@ -2279,6 +2279,10 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
         qualifier_prefix = self.format_storage_qualifier_prefix(
             parameter, {"in", "out", "inout", "const", "precise"}
         ).strip()
+        if function_qualifier is None and self.is_implicit_value_array_parameter(
+            parameter
+        ):
+            qualifier_prefix = f"in {qualifier_prefix}".strip()
         if qualifier_prefix:
             prefixes.append(qualifier_prefix)
         primitive_qualifier = self.format_geometry_primitive_parameter_qualifier(
@@ -2311,6 +2315,33 @@ class HLSLToCrossGLConverter(HLSLPreciseArithmeticMixin):
             )
         prefixes.append(parameter_text)
         return " ".join(prefixes)
+
+    def is_implicit_value_array_parameter(self, parameter):
+        """Return whether a helper array parameter has HLSL copy-in semantics.
+
+        HLSL passes every parameter without ``out`` or ``inout`` by value, so a
+        helper that writes to such an array changes only its own copy. CrossGL
+        leaves an unqualified array parameter's mutation mode open because
+        pointer-like sources (Metal) alias the caller's array, so the importer
+        states the HLSL contract with an explicit ``in`` qualifier. A
+        ``groupshared`` parameter refers to the caller's workgroup array and is
+        not a copy.
+        """
+        if not getattr(parameter, "array_sizes", None):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return not qualifiers & {
+            "in",
+            "out",
+            "inout",
+            "const",
+            "uniform",
+            "groupshared",
+            "shared",
+        }
 
     def geometry_patch_parameter_shape(self, parameter, function_qualifier):
         """Lower HLSL geometry InputPatch<T, N> parameters to CrossGL arrays."""

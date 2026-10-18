@@ -4803,6 +4803,7 @@ class MetalCodeGen:
         vertex_stage_input_parameters = []
         fragment_stage_input_parameters = []
         stage_builtin_parameter_alias_declarations = []
+        value_array_parameter_copy_statements = []
         vertex_stage_input_alias_declarations = []
         fragment_stage_input_alias_declarations = []
         stage_output_parameters = []
@@ -4994,10 +4995,31 @@ class MetalCodeGen:
             )
             if address_space is not None:
                 self.current_address_space_variables[p.name] = address_space
-            if self.is_readonly_raw_buffer_parameter(raw_param_type, p, shader_type):
+            value_array_dimensions = None
+            if shader_type is None:
+                value_array_dimensions = self.metal_value_array_parameter_dimensions(
+                    raw_param_type,
+                    p,
+                    self.map_resource_type_with_format(raw_param_type, p),
+                )
+                if (
+                    value_array_dimensions is not None
+                    and not self.metal_value_array_parameter_is_mutated(func, p.name)
+                ):
+                    value_array_dimensions = None
+            if (
+                value_array_dimensions is None
+                and self.is_readonly_raw_buffer_parameter(
+                    raw_param_type, p, shader_type
+                )
+            ):
                 self.current_readonly_raw_buffer_parameters.add(p.name)
-            readonly_parameter_reason = self.readonly_metal_parameter_reason(
-                raw_param_type, p, shader_type
+            readonly_parameter_reason = (
+                None
+                if value_array_dimensions is not None
+                else self.readonly_metal_parameter_reason(
+                    raw_param_type, p, shader_type
+                )
             )
             if readonly_parameter_reason is not None:
                 self.current_readonly_metal_parameters.add(p.name)
@@ -5161,9 +5183,23 @@ class MetalCodeGen:
                 param_attr = self.parameter_attribute(
                     raw_param_type, semantic, shader_type, p
                 )
-            declaration = self.format_parameter_declaration(
-                raw_param_type, param_type, p.name, p, shader_type
-            )
+            if value_array_dimensions is not None:
+                input_name = self.metal_value_array_input_name(
+                    p.name,
+                    reserved_parameter_names
+                    | self.metal_function_local_variable_names(func),
+                )
+                reserved_parameter_names.add(input_name)
+                declaration = format_c_style_array_declaration(param_type, input_name)
+                value_array_parameter_copy_statements.extend(
+                    self.metal_value_array_copy_statements(
+                        param_type, p.name, input_name, value_array_dimensions
+                    )
+                )
+            else:
+                declaration = self.format_parameter_declaration(
+                    raw_param_type, param_type, p.name, p, shader_type
+                )
             if self.should_wrap_metal_vertex_stage_input_parameter(
                 raw_param_type, shader_type, p
             ):
@@ -5826,6 +5862,8 @@ class MetalCodeGen:
             code += f"    {diagnostic}\n"
         for declaration in stage_builtin_parameter_alias_declarations:
             code += f"    {declaration}\n"
+        for statement in value_array_parameter_copy_statements:
+            code += f"    {statement}\n"
         for declaration in vertex_stage_input_alias_declarations:
             code += f"    {declaration}\n"
         for declaration in fragment_stage_input_alias_declarations:
@@ -17049,6 +17087,102 @@ class MetalCodeGen:
         }:
             return False
         return self.readonly_metal_parameter_reason(raw_param_type, node) is None
+
+    # Builtins whose arguments are written through output references.
+    METAL_VALUE_ARRAY_WRITING_BUILTINS = frozenset({"frexp", "modf", "sincos"})
+
+    def metal_value_array_parameter_dimensions(self, raw_param_type, node, mapped):
+        """Return the dimension texts of a copyable ``in`` array parameter.
+
+        An ``in`` array parameter has value semantics: writes inside the
+        function must not reach the caller's array. Metal array parameters
+        decay to pointers, so such a parameter is received under another name
+        and copied into a local array that keeps the source name.
+        """
+        if not self.is_array_type_node(raw_param_type):
+            return None
+        if "in" not in self.parameter_qualifier_names(node):
+            return None
+        if self.resource_array_parameter(raw_param_type, node) is not None:
+            return None
+        if self.is_structured_buffer_type(raw_param_type):
+            return None
+        if self.array_indirect_element_type_node(raw_param_type) is not None:
+            return None
+        _base_type, suffix = split_array_type_suffix(mapped)
+        dimensions = re.findall(r"\[([^\[\]]*)\]", suffix)
+        if not dimensions or any(not dimension.strip() for dimension in dimensions):
+            return None
+        return [dimension.strip() for dimension in dimensions]
+
+    def metal_value_array_parameter_is_mutated(self, func, name):
+        """Return whether a function body may write to the array ``name``."""
+        for node in self.iter_ast_nodes(getattr(func, "body", None)):
+            if isinstance(node, AssignmentNode):
+                target = getattr(node, "target", getattr(node, "left", None))
+                if self.assignment_target_root_name(target) == name:
+                    return True
+            elif isinstance(node, UnaryOpNode):
+                if getattr(node, "operator", None) in {
+                    "++",
+                    "--",
+                    "&",
+                } and (self.assignment_target_root_name(node.operand) == name):
+                    return True
+            elif isinstance(node, FunctionCallNode):
+                if self.metal_call_may_write_argument_root(node, name):
+                    return True
+        return False
+
+    def metal_call_may_write_argument_root(self, call, name):
+        callee_name = self.function_call_name(call)
+        arguments = list(
+            getattr(call, "arguments", None) or getattr(call, "args", None) or []
+        )
+        overloads = (
+            self.function_overloads_by_name.get(callee_name, []) if callee_name else []
+        )
+        for index, argument in enumerate(arguments):
+            if self.assignment_target_root_name(argument) != name:
+                continue
+            if callee_name in self.METAL_VALUE_ARRAY_WRITING_BUILTINS:
+                return True
+            for callee in overloads:
+                parameters = list(
+                    getattr(callee, "parameters", getattr(callee, "params", [])) or []
+                )
+                if index >= len(parameters):
+                    continue
+                qualifiers = self.parameter_qualifier_names(parameters[index])
+                if qualifiers & {"out", "inout"}:
+                    return True
+                if self.is_array_type_node(
+                    self.parameter_raw_type(parameters[index])
+                ) and not qualifiers & {"in", "const", "constant"}:
+                    # A pointer-like array parameter may write the caller's
+                    # elements, which here are the elements of the copy.
+                    return True
+        return False
+
+    def metal_value_array_input_name(self, name, reserved_names):
+        candidate = f"{name}_crosstl_input"
+        suffix = 2
+        while candidate in reserved_names:
+            candidate = f"{name}_crosstl_input{suffix}"
+            suffix += 1
+        return candidate
+
+    def metal_value_array_copy_statements(self, mapped, name, input_name, dimensions):
+        indices = [f"crosstl_{name}_i{level}" for level in range(len(dimensions))]
+        subscript = "".join(f"[{index}]" for index in indices)
+        statement = f"{name}{subscript} = {input_name}{subscript};"
+        for level in reversed(range(len(dimensions))):
+            index = indices[level]
+            statement = (
+                f"for (int {index} = 0; {index} < int({dimensions[level]}); "
+                f"++{index}) {{ {statement} }}"
+            )
+        return [f"{format_c_style_array_declaration(mapped, name)};", statement]
 
     def is_readonly_raw_buffer_parameter(
         self, raw_param_type, node=None, shader_type=None
