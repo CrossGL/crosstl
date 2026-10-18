@@ -1575,9 +1575,46 @@ either sign and biases `-a * scale`, so every output is exact in the element
 type whatever the evaluation order. Every word is compared exactly, eight
 trailing guards per output must keep their values and inputs must be
 unchanged; Metal also runs the unchanged upstream kernels, which must produce
-the same words. The matrix-vector and matrix-matrix kernels of
-`quantized.metal` are not gated yet. This covers 108/17,832 entries; it does
+the same words. Its matrix-vector and matrix-matrix kernels are outside
+this gate. This covers 108/17,832 entries; it does
 not run the upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/quantized_qmv.current-tree.translation.json` pins a further 162
+entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with
+and without batching and `affine_gather_qmv_fast`, for the same three element
+types, three group sizes and six bit widths. Their `simd_sum` lowers to
+32-lane software subgroups on OpenGL and DirectX, and OpenGL is given 7
+batched and 9 gather index-range preconditions: the one-dimensional batch
+offsets of `adjust_matrix_offsets`, the `elem_to_loc_broadcast` offsets of
+its general branch and gather's index subscripts, each reached by some case
+and shown by the model to name an element inside its buffer. Required CI
+executes 378 dispatches and 20,736 checked elements per target on Metal, Mesa
+EGL and Direct3D 12 WARP in the `quantized-qmv-0` and `quantized-qmv-1`
+legs, following `quantized.cpp`'s `qmv` and `gather_qmv`: `(32, 2, 1)`
+threadgroups over a `(M, N / 8, B)` grid. Unbatched entries run one vector
+and a three-row matrix; the unchanged upstream kernel gets only the seven
+buffers MLX binds when `B <= 1`, and the translations, which reflect every
+parameter, also get the unbatched shapes and strides `add_strides_and_shapes`
+would bind. Batched entries run stacked batches, a two-dimensional
+batch with transposed activations and broadcast weights, and strided
+activations sharing one weight matrix (`w_batch_ndims` 0); gather entries
+pick activations and weights through a strided one-dimensional index batch
+and a two-dimensional one whose right-hand indices are broadcast. Inputs are
+quarters in `[-1, 1]`, codes that include 0 and the top code in every group,
+power-of-two scales of either sign and biases `-a * scale`, so every float32
+product, partial sum and `simd_sum` is a multiple of 2^-5 below 2^19 and
+exact in any order; only the final `static_cast<T>` rounds, to nearest even,
+which 5,977 float16 and bfloat16 results need, 1,416 of them halfway cases. A
+lane-level model of `load_vector`, `qdot`'s masked unpacking and the offsets
+must reach direct dequantized dot products and write every output once, and
+mutated models that drop the bias term, share one scale per block, reverse
+each pack, ignore the simdgroup row or the weight batch offset are rejected.
+Every word is compared exactly, eight trailing guards must keep their values
+and inputs must be unchanged; Metal also runs the unchanged upstream kernels,
+which must produce the same words. The other matrix-vector and
+matrix-matrix kernels of `quantized.metal` are not gated yet. This covers
+162/17,832 entries; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized

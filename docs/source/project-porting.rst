@@ -1093,10 +1093,28 @@ that need correctly rounded float32 division. A lane-level model must write
 every byte once and reproduce MLX's least-significant-bit-first code stream;
 dequantize's power-of-two scales and biases ``-a * scale`` keep every output
 exact in the element type. Every word is compared exactly, guards and inputs
-must be unchanged, and Metal also runs the unchanged upstream kernels. The
-matrix-vector and matrix-matrix kernels are not gated yet. This is a
+must be unchanged, and Metal also runs the unchanged upstream kernels. Its
+matrix-vector and matrix-matrix kernels are outside this gate. This is a
 108/17,832 increment; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
+
+``quantized_qmv.current-tree.translation.json`` pins a further 162 entries of
+``quantized.metal``: ``affine_qmv_fast`` with and without batching and
+``affine_gather_qmv_fast`` for the same types, group sizes and bit widths.
+``simd_sum`` lowers to 32-lane software subgroups on OpenGL and DirectX, and
+OpenGL is given the batch offsets, ``elem_to_loc_broadcast`` offsets and
+gather index subscripts as index-range preconditions the model justifies.
+Each target executes 378 dispatches on ``quantized.cpp``'s ``(32, 2, 1)``
+threadgroups and ``(M, N / 8, B)`` grids: unbatched vectors and matrices,
+stacked, broadcast two-dimensional and strided shared-weight batches, and
+one- and two-dimensional gather index batches. Quarter inputs, power-of-two
+scales and biases ``-a * scale`` keep every float32 intermediate exact in
+any order, so only the final ``static_cast<T>`` rounds, to nearest even and
+including halfway cases. A lane-level model of ``load_vector`` and ``qdot``
+must reach direct dequantized dot products; every word is compared exactly,
+guards and inputs must be unchanged, and Metal also runs the unchanged
+upstream kernels. This is a 162/17,832 increment; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
 
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read

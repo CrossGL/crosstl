@@ -1569,7 +1569,7 @@
         "affine_gather_qmm_rhs_nn"
       ],
       "count": 1944,
-      "reason": "the matrix-vector and matrix-matrix kernels are not gated yet"
+      "reason": "the matrix-vector and matrix-matrix kernels are outside this gate"
     },
     "runtimeCoveredEntryCount": 108,
     "artifactCountByTarget": 108,

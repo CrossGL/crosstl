@@ -702,7 +702,9 @@ def _expected_scope():
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
             "count": UNIT_ENTRY_COUNT - len(ENTRIES),
-            "reason": "the matrix-vector and matrix-matrix kernels are not gated yet",
+            "reason": (
+                "the matrix-vector and matrix-matrix kernels are outside this gate"
+            ),
         },
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
