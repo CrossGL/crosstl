@@ -326,3 +326,49 @@ def test_contraction_is_allowed_by_default(tmp_path):
 
     with pytest.raises(ValueError, match="floating_point_contraction"):
         DirectxCrossGLCodeGen.HLSLToCrossGLConverter(floating_point_contraction="on")
+
+
+PRECISE_FUNCTION_HLSL = """
+    RWStructuredBuffer<float> results : register(u0);
+    precise float Stable(float a, float b, float c) { return a * b + c; }
+    float Relaxed(float a, float b, float c) { return a * b + c; }
+    [NumThreads(1, 1, 1)]
+    void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+    {
+        results[0] = Stable(results[1], results[2], results[3])
+            + Relaxed(results[1], results[2], results[3]);
+    }
+"""
+
+
+def test_precise_functions_stay_precise_on_every_target(tmp_path):
+    options = {"matrix_packing": "row_major"}
+    metal = translate(PRECISE_FUNCTION_HLSL, tmp_path, "metal", options)
+    assert (
+        "#pragma clang fp contract(off)\nfloat Stable(float a, float b, float c)"
+    ) in metal
+    assert metal.count("#pragma clang fp contract(off)") == 1
+
+    glsl = translate(PRECISE_FUNCTION_HLSL, tmp_path, "opengl", options)
+    assert "float Stable(float a, float b, float c);" in glsl
+    assert "precise float crossglPreciseReturn = ((a * b) + c);" in glsl
+    assert glsl.count("precise float") == 1
+    validate_glsl_if_available(glsl, tmp_path)
+
+    hlsl = translate(PRECISE_FUNCTION_HLSL, tmp_path, "directx", options)
+    assert "precise float Stable(float a, float b, float c)" in hlsl
+    assert "precise float Relaxed" not in hlsl
+
+    slang = translate(PRECISE_FUNCTION_HLSL, tmp_path, "slang", options)
+    assert "precise float Stable(float a, float b, float c)\n" in slang
+    assert ": precise" not in slang
+
+    if metal_compiler() is not None:
+        path = tmp_path / "precise.metal"
+        path.write_text(metal, encoding="utf-8")
+        completed = subprocess.run(
+            ["xcrun", "-sdk", "macosx", "metal", "-c", str(path), "-o", "/dev/null"],
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
