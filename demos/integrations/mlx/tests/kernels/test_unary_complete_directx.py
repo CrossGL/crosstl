@@ -38,7 +38,7 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "2295da8b1f55f8f51790e17aee304ea41a72773b3e8ecf29e218343773956b1b"
+    "3c43ddb2bc5ea5749fad07201cc82c640b6dcf08c9ebb1e5af5396ab2e3a5977"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -259,7 +259,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5335152,
+        "generatedSizeBytesTotal": 5340547,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
@@ -298,7 +298,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 5335152
+    assert sum(entry["sizeBytes"] for entry in entries) == 5340547
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         3462,
         "v_Absint32int32",
@@ -639,6 +639,22 @@ def test_unary_artifact_refresh_preserves_corpus_scope():
                 "numericalExecution": False,
                 "fullUpstreamSuite": False,
             },
+            {
+                "reason": (
+                    "Round narrow precise sinh results to binary16 infinity in HLSL."
+                ),
+                "previousContractSha256": (
+                    "2295da8b1f55f8f51790e17aee304ea41a72773b3e8ecf29e218343773956b1b"
+                ),
+                "changedEntryCount": 5,
+                "unaffectedEntryCount": 872,
+                "reviewedBodyCount": 5,
+                "nativeCompiledChangedEntryCount": 5,
+                "narrowPreciseSinhChangedEntryCount": 5,
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
         ],
     }
 
@@ -679,6 +695,25 @@ def test_unary_precise_hyperbolic_refresh_scope_is_exact():
         or (workload.operator_type == "Sign" and workload.input_type == "uint32_t")
     ]
     assert len(complex_operators) == 61
+
+
+def test_unary_narrow_precise_sinh_refresh_scope_is_exact():
+    # Only float16 Sinh narrows a binary32 precise:: result that can exceed
+    # the binary16 range; bfloat16 keeps binary32's exponent range and
+    # |tanh| <= 1, so those bodies keep their native narrowing.
+    affected = [
+        workload
+        for workload in UNARY_DIRECTX_WORKLOADS
+        if workload.operator_type == "Sinh" and workload.input_type == "half"
+    ]
+    assert len(affected) == 5
+    assert {workload.shape for workload in affected} == {
+        "v",
+        "v2",
+        "vn",
+        "gn1",
+        "gn4large",
+    }
 
 
 def test_unary_unsigned_conversion_refresh_scope_is_exact():

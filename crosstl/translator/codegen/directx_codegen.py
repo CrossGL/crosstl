@@ -8971,16 +8971,25 @@ uint {helper_name}(uint groupIndex) {{
         scalar_type, lane_text = self.HLSL_PRECISE_HYPERBOLIC_TYPE.fullmatch(
             value_type
         ).groups()
+
+        def narrowed(operand):
+            result = f"{scalar_helper}((float){operand})"
+            # Metal rounds a binary32 sinh beyond 65520 to infinity, but a
+            # native float16_t conversion clamps it to 65504 on WARP.  tanh's
+            # magnitude never exceeds one, so its native narrowing is exact.
+            if operation == "sinh" and scalar_type == "float16_t":
+                return self.hlsl_half_conversion_expression(result, 1, ("float",))
+            return f"({scalar_type}){result}"
+
         # Metal's precise:: overloads are binary32: narrow operands widen.
         if not lane_text:
             return (
                 f"{value_type} {helper_name}({value_type} value) {{\n"
-                f"    return ({value_type}){scalar_helper}((float)value);\n"
+                f"    return {narrowed('value')};\n"
                 "}\n"
             )
         arguments = ",\n        ".join(
-            f"({scalar_type}){scalar_helper}((float)value.{component})"
-            for component in "xyzw"[: int(lane_text)]
+            narrowed(f"value.{component}") for component in "xyzw"[: int(lane_text)]
         )
         return (
             f"{value_type} {helper_name}({value_type} value) {{\n"

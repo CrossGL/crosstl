@@ -2359,6 +2359,11 @@ The current harness verifies:
   keep `cexpf.h`'s `y - y` as an exact difference, and complex bodies return
   MLX's free complex operators through `precise` results, so DXC no longer
   folds the zero components of complex constants.
+  The latest review updates the five float16 Sinh bodies, bringing the source
+  total to 5,340,547 bytes: Metal rounds a binary32 `sinh` beyond the binary16
+  range to infinity, while WARP's native `float16_t` conversion clamps it to
+  65504, so these bodies narrow through the round-to-nearest-even binary16
+  helper. Tanh cannot exceed one, so its narrow bodies are unchanged.
   All 877 current artifacts compile with warnings fatal.
   Source pins, classifications, materializations, resource bindings and dispatch
   contracts remain unchanged. The required Windows Square and ArcCos numerical tests retain

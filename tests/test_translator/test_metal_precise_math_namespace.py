@@ -738,20 +738,34 @@ def test_directx_precise_helpers_apply_to_narrow_float_operands(tmp_path):
     bfloat16_t b = bfloat16_t(x);
     half t = precise::sinh(h);
     half2 w = precise::tanh(hv);
+    half2 s = precise::sinh(hv);
     bfloat16_t u = metal::precise::tanh(b);
     bfloat16_t z = metal::precise::sinh(b);
-    data[i] = float(t) + float(w.y) + float(u) + float(z);
+    data[i] = float(t) + float(w.y) + float(s.x) + float(u) + float(z);
 """)
     generated = _translate_text(tmp_path, source, "directx", "narrow.metal")
     body = generated.split("void CSMain(", 1)[1]
-    # Metal's precise:: overloads are binary32: narrow operands widen.
+    # Metal's precise:: overloads are binary32: narrow operands widen.  Metal
+    # rounds a binary32 sinh past the binary16 range to infinity, but a native
+    # float16_t conversion clamps it to 65504 on WARP, so sinh narrows through
+    # the round-to-nearest-even helper.  |tanh| <= 1 cannot overflow.
     assert (
         "float16_t __crossgl_precise_sinh_float16_t(float16_t value) {\n"
-        "    return (float16_t)__crossgl_precise_sinh_float((float)value);\n}\n"
+        "    return __crossgl_round_half1("
+        "__crossgl_precise_sinh_float((float)value));\n}\n"
     ) in generated
+    assert (
+        "__crossgl_round_half1(__crossgl_precise_sinh_float((float)value.y))"
+        in generated
+    )
+    assert "(float16_t)__crossgl_precise_sinh_float(" not in generated
     assert "(float16_t)__crossgl_precise_tanh_float((float)value.y)" in generated
+    assert (
+        "    } else if (magnitude >= 0x477ff000u) {\n        result = 0x7c00u;\n"
+    ) in generated
     assert "__crossgl_precise_sinh_float16_t(h)" in body
     assert "__crossgl_precise_tanh_float16_t2(hv)" in body
+    assert "__crossgl_precise_sinh_float16_t2(hv)" in body
     assert "__crossgl_precise_tanh_float(__crossgl_bfloat16_to_float(" in body
     assert "__crossgl_precise_sinh_float(__crossgl_bfloat16_to_float(" in body
     _compile(generated, "directx", tmp_path)

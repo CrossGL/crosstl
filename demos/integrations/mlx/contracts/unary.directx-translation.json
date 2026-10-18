@@ -484,7 +484,7 @@
       1,
       1
     ],
-    "generatedSizeBytesTotal": 5335152,
+    "generatedSizeBytesTotal": 5340547,
     "generatedSizeRange": {
       "minimum": {
         "entryPoint": "v_Absint32int32",
@@ -2193,8 +2193,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "8e252eebc8f8752add58397009c89c8d4dfc3f6dda5469b6b5be25c5766f8f98",
-      "sizeBytes": 5403
+      "sha256": "73dd1b6d06cb658bf9087837b2f4546b6517a50a7dc46f62ef66ea58546b3353",
+      "sizeBytes": 6482
     },
     {
       "entryPoint": "gn1_Sinhfloat32float32",
@@ -4206,8 +4206,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "234b3342f8be841de28d0ad8b3177698d94f19db01ceee23fba571377e3da54d",
-      "sizeBytes": 5513
+      "sha256": "ac81f65343c0efd0ded57636d0d229a1ed02ac03102869811a20f1be10f583dd",
+      "sizeBytes": 6592
     },
     {
       "entryPoint": "gn4large_Sinhfloat32float32",
@@ -6219,8 +6219,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "e7768259b794fd5505fcca123995349debbc624ebdd76f278d717fe5c01e25c8",
-      "sizeBytes": 4920
+      "sha256": "a28588a303f7a8afd1e7e66ed1ec5dbcb1b99de7417eda34f6e0f174a1701f60",
+      "sizeBytes": 5999
     },
     {
       "entryPoint": "v2_Sinhfloat32float32",
@@ -8232,8 +8232,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "db1166776d4259c6a2ffa8900dfa6df699093582643c0f482ba58836dc662ed0",
-      "sizeBytes": 4272
+      "sha256": "fa565c2e526022314152ebc0d0048a1f186ed1bc669924109b96519d6e46eee0",
+      "sizeBytes": 5351
     },
     {
       "entryPoint": "v_Sinhfloat32float32",
@@ -9893,8 +9893,8 @@
       "inputType": "half",
       "outputType": "half",
       "family": "float16-same-type",
-      "sha256": "3256ebda8352c984c6e850aaee92df2c96fb53224b2e1ee7adf8650226561b27",
-      "sizeBytes": 4618
+      "sha256": "537b2235f8a68298d96ba4d815d616ad68ec52b612bab88e521a3ecfce9f8994",
+      "sizeBytes": 5697
     },
     {
       "entryPoint": "vn_Sinhfloat32float32",
@@ -10239,6 +10239,18 @@
         "nativeCompiledChangedEntryCount": 91,
         "preciseHyperbolicChangedEntryCount": 30,
         "freeComplexOperatorChangedEntryCount": 61,
+        "unchangedSourceAndInterfaceContracts": true,
+        "numericalExecution": false,
+        "fullUpstreamSuite": false
+      },
+      {
+        "reason": "Round narrow precise sinh results to binary16 infinity in HLSL.",
+        "previousContractSha256": "2295da8b1f55f8f51790e17aee304ea41a72773b3e8ecf29e218343773956b1b",
+        "changedEntryCount": 5,
+        "unaffectedEntryCount": 872,
+        "reviewedBodyCount": 5,
+        "nativeCompiledChangedEntryCount": 5,
+        "narrowPreciseSinhChangedEntryCount": 5,
         "unchangedSourceAndInterfaceContracts": true,
         "numericalExecution": false,
         "fullUpstreamSuite": false
