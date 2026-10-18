@@ -155,6 +155,8 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
+from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -1323,7 +1325,7 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
     )
 
 
-class GLSLCodeGen:
+class GLSLCodeGen(GLSLEmulatedMatrices, GLSLHlslStructuredBuffers):
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
@@ -1671,7 +1673,74 @@ class GLSLCodeGen:
     }
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
-    GLSL_RESERVED_IDENTIFIERS = {"active", "input", "output"}
+    # Words that GLSL 4.60 reserves for future use (section 3.6) together with
+    # non-type keywords. Source languages such as HLSL accept them as ordinary
+    # identifiers (``this``, ``resource``, ``filter``), so they are escaped.
+    GLSL_RESERVED_IDENTIFIERS = {
+        "active",
+        "asm",
+        "attribute",
+        "buffer",
+        "cast",
+        "centroid",
+        "class",
+        "coherent",
+        "common",
+        "enum",
+        "extern",
+        "external",
+        "filter",
+        "fixed",
+        "flat",
+        "fvec2",
+        "fvec3",
+        "fvec4",
+        "goto",
+        "half",
+        "highp",
+        "hvec2",
+        "hvec3",
+        "hvec4",
+        "inline",
+        "input",
+        "interface",
+        "invariant",
+        "layout",
+        "long",
+        "lowp",
+        "mediump",
+        "namespace",
+        "noinline",
+        "noperspective",
+        "output",
+        "partition",
+        "patch",
+        "precise",
+        "precision",
+        "public",
+        "readonly",
+        "resource",
+        "restrict",
+        "sample",
+        "sampler3DRect",
+        "shared",
+        "short",
+        "sizeof",
+        "smooth",
+        "static",
+        "subroutine",
+        "superp",
+        "template",
+        "this",
+        "typedef",
+        "uniform",
+        "union",
+        "unsigned",
+        "using",
+        "varying",
+        "volatile",
+        "writeonly",
+    }
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_",)
     GLSL_BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     COMPOUND_ASSIGNMENT_BINARY_OPERATORS = {
@@ -2315,6 +2384,16 @@ class GLSLCodeGen:
         self.current_glsl_exact_subgroup_width = None
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
+        self.glsl_resource_binding_records = []
+        self.glsl_combined_sampler_uses = []
+        self.glsl_sampler_registers = {}
+        self.glsl_float_remainder_types = set()
+        self.reset_glsl_emulated_matrices()
+        self.reset_glsl_hlsl_structured_buffers()
+        self.glsl_image_usages = {}
+        self.glsl_unknown_format_images = set()
+        self.glsl_formatted_image_load_names = set()
+        self.glsl_write_only_unknown_format_images = set()
         self.texture_variable_types = {}
         self.resource_variable_array_sizes = {}
         self.current_texture_parameters = {}
@@ -6351,6 +6430,16 @@ class GLSLCodeGen:
 
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
+        self.glsl_resource_binding_records = []
+        self.glsl_combined_sampler_uses = []
+        self.glsl_sampler_registers = {}
+        self.glsl_float_remainder_types = set()
+        self.reset_glsl_emulated_matrices(ast)
+        self.reset_glsl_hlsl_structured_buffers()
+        self.glsl_image_usages = self.collect_glsl_image_usages(ast)
+        self.glsl_unknown_format_images = set()
+        self.glsl_formatted_image_load_names = set()
+        self.glsl_write_only_unknown_format_images = set()
         self.texture_variable_types = {}
         self.resource_variable_array_sizes = {}
         self.current_texture_parameters = {}
@@ -6910,6 +6999,21 @@ class GLSLCodeGen:
             + stage_local_interface_vars
             + stage_resource_params
         )
+        for cbuffer in self.glsl_cbuffer_nodes(ast, target_stage):
+            for member in getattr(cbuffer, "members", []) or []:
+                member_name = getattr(member, "name", None)
+                member_type = getattr(
+                    member, "member_type", getattr(member, "vtype", None)
+                )
+                if not member_name or member_type is None:
+                    continue
+                type_name = self.type_name_string(member_type)
+                if isinstance(member, ArrayNode):
+                    element_type = getattr(member, "element_type", member_type)
+                    size = getattr(member, "size", None)
+                    type_name = f"{self.type_name_string(element_type)}[{size or ''}]"
+                if type_name:
+                    self.global_variable_types.setdefault(member_name, type_name)
         self.prepare_glsl_compile_time_globals(ast, global_vars)
         self.function_private_pointer_array_size_hints = (
             self.collect_private_pointer_array_size_hints(ast)
@@ -7215,6 +7319,15 @@ class GLSLCodeGen:
                         resource_count,
                         var_name,
                     )
+                    self.record_glsl_resource_binding(
+                        node,
+                        source_var_name,
+                        var_name,
+                        "buffer-block",
+                        binding_namespace,
+                        resource_binding,
+                        resource_count,
+                    )
                     code += declaration
                     self.advance_resource_binding(
                         resource_binding_cursors,
@@ -7228,6 +7341,10 @@ class GLSLCodeGen:
             if mapped_type == "sampler":
                 self.explicit_resource_binding_index(node)
                 self.sampler_variables.add(var_name)
+                self.glsl_sampler_registers[var_name] = (
+                    source_var_name,
+                    self.glsl_source_register(node),
+                )
                 if self.should_preserve_sampler_resource(source_var_name):
                     binding_namespace = "sampler binding"
                     resource_binding = self.opengl_resource_binding_for_declaration(
@@ -7244,6 +7361,15 @@ class GLSLCodeGen:
                         resource_binding,
                         resource_count,
                         var_name,
+                    )
+                    self.record_glsl_resource_binding(
+                        node,
+                        source_var_name,
+                        var_name,
+                        "sampler",
+                        binding_namespace,
+                        resource_binding,
+                        resource_count,
                     )
                     declaration = format_c_style_array_declaration(
                         f"{mapped_type}{array_suffix}", var_name
@@ -7283,6 +7409,15 @@ class GLSLCodeGen:
                 code += self.structured_buffer_block_declaration(
                     vtype, var_name, resource_binding, array_size, node
                 )
+                self.record_glsl_resource_binding(
+                    node,
+                    source_var_name,
+                    var_name,
+                    "structured-buffer",
+                    binding_namespace,
+                    resource_binding,
+                    resource_count,
+                )
                 self.advance_resource_binding(
                     resource_binding_cursors,
                     binding_namespace,
@@ -7309,6 +7444,22 @@ class GLSLCodeGen:
                     )
                     code += self.structured_buffer_counter_block_declaration(
                         var_name, counter_binding, array_size
+                    )
+                    self.glsl_resource_binding_records.append(
+                        {
+                            "name": counter_name,
+                            "glslName": counter_name,
+                            "kind": "structured-buffer-counter",
+                            "namespace": "shader-storage-buffer",
+                            "binding": int(counter_binding),
+                            "count": (
+                                max(resource_count, 1)
+                                if isinstance(resource_count, int)
+                                else 1
+                            ),
+                            "register": None,
+                            "of": source_var_name,
+                        }
                     )
                     self.advance_resource_binding(
                         resource_binding_cursors,
@@ -7346,6 +7497,15 @@ class GLSLCodeGen:
                     var_name,
                     resource_binding,
                     array_suffix,
+                )
+                self.record_glsl_resource_binding(
+                    node,
+                    source_var_name,
+                    var_name,
+                    "constant-buffer",
+                    binding_namespace,
+                    resource_binding,
+                    resource_count,
                 )
                 self.advance_resource_binding(
                     resource_binding_cursors,
@@ -7415,6 +7575,13 @@ class GLSLCodeGen:
                     mapped_type, resource_binding, node
                 )
                 memory_qualifiers = self.resource_memory_qualifiers(node)
+                if (
+                    var_name in self.glsl_write_only_unknown_format_images
+                    or source_var_name in self.glsl_write_only_unknown_format_images
+                ) and "writeonly" not in memory_qualifiers.split():
+                    memory_qualifiers = " ".join(
+                        part for part in (memory_qualifiers, "writeonly") if part
+                    )
                 precision_qualifiers = self.resource_precision_qualifiers(node)
                 qualifier_parts = []
                 if layout:
@@ -7425,6 +7592,15 @@ class GLSLCodeGen:
                 if precision_qualifiers:
                     qualifier_parts.append(precision_qualifiers)
                 code += f"{' '.join(qualifier_parts)} {declaration};\n"
+                self.record_glsl_resource_binding(
+                    node,
+                    source_var_name,
+                    var_name,
+                    ("image" if binding_namespace == "image binding" else "texture"),
+                    binding_namespace,
+                    resource_binding,
+                    resource_count,
+                )
                 self.advance_resource_binding(
                     resource_binding_cursors,
                     binding_namespace,
@@ -7460,6 +7636,15 @@ class GLSLCodeGen:
                     var_name,
                     resource_binding,
                     array_suffix,
+                )
+                self.record_glsl_resource_binding(
+                    node,
+                    source_var_name,
+                    var_name,
+                    "constant-buffer",
+                    binding_namespace,
+                    resource_binding,
+                    resource_count,
                 )
                 self.advance_resource_binding(
                     resource_binding_cursors,
@@ -7533,6 +7718,10 @@ class GLSLCodeGen:
                 continue
             if getattr(func, "name", None) not in called_function_names:
                 continue
+            if self.glsl_has_resource_function_specializations(
+                getattr(func, "name", None)
+            ) and self.glsl_function_has_structured_buffer_parameter(func):
+                continue
             top_level_prototype_sources.append(func)
         code += self.generate_glsl_resource_function_declarations()
         code += self.generate_glsl_function_declarations(
@@ -7589,6 +7778,12 @@ class GLSLCodeGen:
                         specialized_func,
                         stage_context=helper_stage_context,
                     )
+            if self.glsl_has_resource_function_specializations(
+                getattr(func, "name", None)
+            ) and self.glsl_function_has_structured_buffer_parameter(func):
+                # GLSL cannot pass storage blocks; every call uses a
+                # specialization bound to its global buffer.
+                continue
 
             if generic_function_parameters(func):
                 specialized_code = ""
@@ -7753,6 +7948,8 @@ class GLSLCodeGen:
             + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_metal_math_helpers()
             + self.generate_glsl_complex64_helpers()
+            + self.generate_glsl_float_remainder_helpers()
+            + self.generate_glsl_hlsl_structured_helpers()
         )
         if generated_helpers:
             code = (
@@ -7762,6 +7959,7 @@ class GLSLCodeGen:
             )
         cooperative_matrix_support = (
             self.generate_glsl_cooperative_matrix_software_support()
+            + self.generate_glsl_emulated_matrix_support()
         )
         if cooperative_matrix_support:
             code = (
@@ -7771,6 +7969,7 @@ class GLSLCodeGen:
             )
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
+        code = self.ensure_glsl_formatted_image_load_support(code)
         return self.ensure_glsl_int64_support(code)
 
     def collect_called_function_names(self, root):
@@ -9626,6 +9825,12 @@ class GLSLCodeGen:
                         visit(child, visible_aliases)
 
         visit_sequence(body, dict(aliases))
+
+    def glsl_has_resource_function_specializations(self, source_name):
+        return bool(source_name) and any(
+            getattr(func, "_glsl_resource_source_name", None) == source_name
+            for func in self.glsl_resource_function_specializations.values()
+        )
 
     def glsl_resource_function_emission_list(self, source_name):
         if not source_name:
@@ -14133,6 +14338,17 @@ class GLSLCodeGen:
 
         return f"{metadata}{layout}const {declaration} = {value_code};\n"
 
+    def glsl_value_contains_call(self, value, function_name):
+        if value is None:
+            return False
+        for node in self.walk_ast(value):
+            if (
+                isinstance(node, FunctionCallNode)
+                and self.function_call_name(node) == function_name
+            ):
+                return True
+        return False
+
     def glsl_builtin_specialization_constant_declaration(
         self,
         node,
@@ -14807,6 +15023,14 @@ class GLSLCodeGen:
                 "std140", binding=resource_binding
             )
             block_name = self.glsl_module_identifier_name(node.name)
+            self.record_glsl_resource_binding(
+                node,
+                node.name,
+                block_name,
+                "constant-buffer",
+                "uniform buffer binding",
+                resource_binding,
+            )
             if isinstance(node, StructNode):
                 code += f"{layout} uniform {block_name} {{\n"
                 members = getattr(node, "members", [])
@@ -26145,6 +26369,10 @@ class GLSLCodeGen:
             return "shared "
         if is_compile_time:
             return "const "
+        if "static" in qualifiers:
+            # Static globals are private to each invocation, which is what a
+            # GLSL global without a storage qualifier is.
+            return ""
         return "uniform "
 
     def opengl_compile_time_global_error(
@@ -27020,6 +27248,44 @@ class GLSLCodeGen:
                 return True
         return False
 
+    def glsl_matrix_constructor_name(self, name):
+        """GLSL spelling of a non-square CrossGL matrix constructor.
+
+        CrossGL ``matRxC`` has R rows and C columns, while GLSL ``matCxR`` names
+        columns first. Matrix type nodes are already emitted columns first; a
+        constructor call names its type as a string and is mapped the same way.
+        """
+        match = re.fullmatch(r"(d?mat)([234])x([234])", str(name or ""))
+        if match is None or match.group(2) == match.group(3):
+            return name
+        if name in self.function_return_types:
+            return name
+        return f"{match.group(1)}{match.group(3)}x{match.group(2)}"
+
+    def glsl_function_has_structured_buffer_parameter(self, func):
+        for parameter in getattr(func, "parameters", None) or []:
+            parameter_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            if parameter_type is not None and self.is_structured_buffer_type(
+                parameter_type
+            ):
+                return True
+        return False
+
+    def glsl_static_global_zero_value(self, vtype):
+        """Zero value of a static global: HLSL zero-initializes static storage."""
+        mapped_type = str(self.map_type(vtype) or "")
+        base_type, array_suffix = split_array_type_suffix(mapped_type)
+        if not array_suffix:
+            return self.zero_value_expression(base_type)
+        extents = re.findall(r"\[\s*(\d+)\s*\]", array_suffix)
+        if len(extents) != 1 or array_suffix.strip() != f"[{extents[0]}]":
+            return None
+        count = int(extents[0])
+        element = self.zero_value_expression(base_type)
+        return f"{base_type}[{count}]({', '.join([element] * count)})"
+
     def generate_global_variable_declaration(
         self, node, declaration, vtype, mapped_type_for_layout=None
     ):
@@ -27033,6 +27299,16 @@ class GLSLCodeGen:
 
         runtime_initializer = id(node) in self.glsl_runtime_global_initializer_node_ids
         qualifier = "" if runtime_initializer else self.global_variable_qualifier(node)
+        if qualifier.strip() == "const" and self.glsl_value_contains_call(
+            getattr(node, "initial_value", None), "asdouble"
+        ):
+            # packDouble2x32 is not a constant expression in GLSL, so the
+            # constant is substituted where it is used.
+            self.glsl_compile_time_bitcast_substitutions[name] = (
+                node.initial_value,
+                vtype,
+            )
+            return ""
         emitted_name = self.glsl_global_declaration_identifier_name(node, name)
         if emitted_name != name:
             declaration = format_c_style_array_declaration(
@@ -27049,6 +27325,18 @@ class GLSLCodeGen:
                 " = "
                 f"{self.generate_expression_with_expected(initial_value, initializer_type)}"
             )
+        elif (
+            initial_value is None
+            and qualifier == ""
+            and "static" in {
+                str(q).lower() for q in getattr(node, "qualifiers", []) or []
+            }
+        ):
+            zero_value = self.glsl_static_global_zero_value(
+                mapped_type_for_layout if mapped_type_for_layout is not None else vtype
+            )
+            if zero_value:
+                initializer = f" = {zero_value}"
         layout = self.glsl_variable_layout_prefix(node)
         mapped_type = (
             mapped_type_for_layout if mapped_type_for_layout is not None else vtype
@@ -30040,7 +30328,13 @@ complex64_t crossgl_complex64_mod_assign(
         return f"{mapped_type}({', '.join(rendered_columns)})"
 
     def glsl_vector_initializer_component_count(self, expression):
-        type_info = self.glsl_value_type_info(self.expression_result_type(expression))
+        type_info = self.glsl_value_type_info(
+            self.glsl_source_expression_type(expression)
+        )
+        if type_info is None:
+            type_info = self.glsl_value_type_info(
+                self.expression_result_type(expression)
+            )
         if type_info is not None:
             return type_info["width"]
         return self.expression_component_count(expression)
@@ -30396,11 +30690,17 @@ complex64_t crossgl_complex64_mod_assign(
         return self.map_type(decoded)
 
     def glsl_constructor_type(self, func_name):
+        if emulated_matrix_shape(func_name) is not None:
+            return self.map_type(func_name)
         constructor = self.glsl_materialized_generic_vector_constructor_type(func_name)
-        if constructor is None:
-            constructor = (
-                self.map_type(func_name) if isinstance(func_name, str) else None
-            )
+        if constructor is None and isinstance(func_name, str):
+            try:
+                constructor = self.map_type(func_name)
+            except OpenGLTemplateTypeError:
+                # Short capitalized callee names (``Foo``, ``DE``) look like
+                # template parameters to the type mapper, but a name that is
+                # not a concrete type cannot be a builtin constructor.
+                constructor = None
         if constructor in {
             "float",
             "double",
@@ -30482,6 +30782,9 @@ complex64_t crossgl_complex64_mod_assign(
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        emulated_matrix_type = self.glsl_emulated_matrix_expression_type(expr)
+        if emulated_matrix_type is not None:
+            return emulated_matrix_type
         if isinstance(expr, PointerReinterpretNode):
             target_type = getattr(expr.target_type, "pointee_type", None)
             return self.map_type(self.type_name_string(target_type))
@@ -30599,6 +30902,8 @@ complex64_t crossgl_complex64_mod_assign(
             # to a diagnostic comment instead of real GLSL.
             if array_type and array_type.rstrip().endswith("*"):
                 return array_type.rstrip()[:-1].strip()
+            if array_type and self.is_vector_value_type(array_type):
+                return self.vector_component_type(array_type) or array_type
             return array_type
         if isinstance(expr, MemberAccessNode):
             object_type = self.expression_result_type(expr.object)
@@ -30666,6 +30971,9 @@ complex64_t crossgl_complex64_mod_assign(
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            unified_type = self.glsl_unified_builtin_result_type(func_name, args)
+            if unified_type is not None:
+                return unified_type
             buffer_result_type = self.glsl_buffer_call_result_type(func_name, args)
             if buffer_result_type is not None:
                 return buffer_result_type
@@ -30901,6 +31209,91 @@ complex64_t crossgl_complex64_mod_assign(
         if is_scalar or is_literal:
             return f"{vector_type}({generated})"
         return generated
+
+    def generate_glsl_float_remainder(self, left_expr, operator, right_expr):
+        """Floating-point ``%``, which GLSL lacks, with truncated quotients.
+
+        CrossGL, HLSL and Metal define the floating-point remainder with the sign
+        of the dividend (``x - y * trunc(x / y)``); GLSL ``mod`` floors the
+        quotient instead, so a helper with the source semantics is emitted.
+        """
+        if operator != "%":
+            return None
+        left = self.glsl_value_type_info(self.glsl_source_expression_type(left_expr))
+        right = self.glsl_value_type_info(self.glsl_source_expression_type(right_expr))
+        if left is None or right is None:
+            return None
+        families = {left["family"], right["family"]}
+        if not families & {"float", "double"} or families - {
+            "float",
+            "double",
+            "int",
+            "uint",
+        }:
+            return None
+        family = "double" if "double" in families else "float"
+        width = max(left["width"], right["width"])
+        if {left["width"], right["width"]} - {1, width}:
+            return None
+        value_type = self.glsl_vector_type_name(family, width)
+        operands = []
+        for expression, info in ((left_expr, left), (right_expr, right)):
+            if info["family"] == family and info["width"] == width:
+                operands.append(self.generate_expression(expression))
+            else:
+                operands.append(self.glsl_converted_operand(expression, value_type))
+        self.glsl_float_remainder_types.add(value_type)
+        return f"crossgl_remainder({operands[0]}, {operands[1]})"
+
+    def generate_glsl_float_remainder_helpers(self):
+        helpers = ""
+        for value_type in sorted(getattr(self, "glsl_float_remainder_types", ())):
+            helpers += (
+                f"{value_type} crossgl_remainder({value_type} x, {value_type} y) {{\n"
+                "    return x - y * trunc(x / y);\n"
+                "}\n\n"
+            )
+        return helpers
+
+    def generate_glsl_componentwise_equality(self, left_expr, operator, right_expr):
+        """Componentwise ``==``/``!=`` where the context expects a bool vector.
+
+        GLSL ``==`` on vectors compares whole aggregates and yields one ``bool``;
+        CrossGL comparisons of vectors are componentwise. When the value is used
+        as a bool vector the comparison becomes ``equal``/``notEqual``.
+        """
+        function_name = {"==": "equal", "!=": "notEqual"}.get(operator)
+        if function_name is None:
+            return None
+        expected = self.glsl_value_type_info(self.current_expression_expected_type)
+        if expected is None or expected["family"] != "bool" or expected["width"] < 2:
+            return None
+        left_type = self.glsl_source_expression_type(left_expr)
+        right_type = self.glsl_source_expression_type(right_expr)
+        vector_type = self.glsl_relational_vector_type(left_type, right_type)
+        if vector_type is None:
+            return None
+        plan = self.glsl_arithmetic_conversion_plan(
+            left_type,
+            right_type,
+            operator,
+            fail_closed=False,
+        )
+        if plan is None:
+            left = self.glsl_vector_relational_operand(
+                left_expr, left_type, vector_type
+            )
+            right = self.glsl_vector_relational_operand(
+                right_expr, right_type, vector_type
+            )
+        else:
+            left = self.generate_expression_with_expected(
+                left_expr, plan.left_target_type
+            )
+            right = self.generate_expression_with_expected(
+                right_expr, plan.right_target_type
+            )
+        return f"{function_name}({left}, {right})"
 
     def generate_vector_relational_expression(
         self, left_expr, operator, right_expr, *, source_node=None
@@ -32000,6 +32393,18 @@ complex64_t crossgl_complex64_mod_assign(
         left_node = getattr(node, "target", getattr(node, "left", None))
         right_node = getattr(node, "value", getattr(node, "right", None))
         op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
+        emulated_matrix_assignment = (
+            self.generate_glsl_emulated_matrix_compound_assignment(
+                left_node, right_node, op
+            )
+        )
+        if emulated_matrix_assignment is not None:
+            return emulated_matrix_assignment
+        structured_assignment = self.generate_glsl_hlsl_structured_assignment(
+            left_node, right_node, op, statement_context=statement_context
+        )
+        if structured_assignment is not None:
+            return structured_assignment
         storage_to_workgroup_copy = self.glsl_storage_to_workgroup_byte_array_copy(
             left_node,
             right_node,
@@ -33077,13 +33482,13 @@ complex64_t crossgl_complex64_mod_assign(
                     return self.current_resource_aliases[expr.name]["expression"]
                 if expr.name in getattr(self, "enum_variant_constants", {}):
                     return self.glsl_enum_value_expression(expr.name)
-                if expr.name in self.current_identifier_aliases:
-                    return self.current_identifier_aliases[expr.name]
                 substitution = self.glsl_compile_time_bitcast_substitution_expression(
                     expr.name
                 )
                 if substitution is not None:
                     return substitution
+                if expr.name in self.current_identifier_aliases:
+                    return self.current_identifier_aliases[expr.name]
                 return self.generate_glsl_identifier_expression(expr.name)
             else:
                 return str(expr)
@@ -33103,13 +33508,13 @@ complex64_t crossgl_complex64_mod_assign(
                 return self.current_resource_aliases[expr.name]["expression"]
             if expr.name in getattr(self, "enum_variant_constants", {}):
                 return self.glsl_enum_value_expression(expr.name)
-            if expr.name in self.current_identifier_aliases:
-                return self.current_identifier_aliases[expr.name]
             substitution = self.glsl_compile_time_bitcast_substitution_expression(
                 expr.name
             )
             if substitution is not None:
                 return substitution
+            if expr.name in self.current_identifier_aliases:
+                return self.current_identifier_aliases[expr.name]
             return self.generate_glsl_identifier_expression(expr.name)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_glsl_aggregate_initializer(expr)
@@ -33150,6 +33555,9 @@ complex64_t crossgl_complex64_mod_assign(
             return str(expr.value)
         elif hasattr(expr, "__class__") and "BinaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
+            emulated_matrix = self.generate_glsl_emulated_matrix_binary(expr, op)
+            if emulated_matrix is not None:
+                return emulated_matrix
             if op in {"&&", "||"}:
                 self.reject_glsl_software_subgroup_control_flow(expr)
                 left = self.generate_glsl_boolean_context(expr.left)
@@ -33165,6 +33573,16 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if vector_relational is not None:
                 return vector_relational
+            vector_equality = self.generate_glsl_componentwise_equality(
+                expr.left, op, expr.right
+            )
+            if vector_equality is not None:
+                return vector_equality
+            float_remainder = self.generate_glsl_float_remainder(
+                expr.left, op, expr.right
+            )
+            if float_remainder is not None:
+                return float_remainder
             left_type = self.glsl_source_expression_type(expr.left)
             right_type = self.glsl_source_expression_type(expr.right)
             if self.is_glsl_registered_complex64_type(
@@ -33210,6 +33628,9 @@ complex64_t crossgl_complex64_mod_assign(
             return self.generate_assignment(expr)
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
+            emulated_matrix = self.generate_glsl_emulated_matrix_unary(expr, op)
+            if emulated_matrix is not None:
+                return emulated_matrix
             if op == "*":
                 aggregate = self.generate_glsl_private_scalar_struct_reinterpret_read(
                     expr
@@ -33314,6 +33735,12 @@ complex64_t crossgl_complex64_mod_assign(
             )
         elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
             if hasattr(expr, "array") and hasattr(expr, "index"):
+                emulated_matrix_column = self.generate_glsl_emulated_matrix_index(expr)
+                if emulated_matrix_column is not None:
+                    return emulated_matrix_column
+                structured_storage = self.generate_glsl_hlsl_structured_read(expr)
+                if structured_storage is not None:
+                    return structured_storage
                 fixed_vector_view_access = (
                     self.generate_glsl_fixed_array_vector_pointer_view_access(expr)
                 )
@@ -33374,6 +33801,17 @@ complex64_t crossgl_complex64_mod_assign(
                 func_name = original_func_name
                 callee = original_func_name
 
+            emulated_matrix_call = self.generate_glsl_emulated_matrix_call(
+                expr, original_func_name, list(expr.args or [])
+            )
+            if emulated_matrix_call is not None:
+                return emulated_matrix_call
+            logical_intrinsic = self.generate_glsl_hlsl_logical_intrinsic(
+                original_func_name, list(expr.args or [])
+            )
+            if logical_intrinsic is not None:
+                return logical_intrinsic
+
             mesh_output_counts_call = self.generate_mesh_output_counts_call(
                 original_func_name, expr.args
             )
@@ -33409,6 +33847,12 @@ complex64_t crossgl_complex64_mod_assign(
                 return self.glsl_wave_diagnostic_expression(
                     original_func_name, "has no OpenGL subgroup equivalent"
                 )
+
+            hlsl_converted_call = self.generate_glsl_converted_builtin_call(
+                original_func_name, expr.args
+            )
+            if hlsl_converted_call is not None:
+                return hlsl_converted_call
 
             glsl_memory_atomic_call = self.generate_glsl_memory_atomic_call(
                 original_func_name, expr.args
@@ -33586,6 +34030,8 @@ complex64_t crossgl_complex64_mod_assign(
                         resource_lookup_name = normalized_private_name
 
             constructor = self.glsl_constructor_type(func_name)
+            if constructor and constructor == func_name:
+                constructor = self.glsl_matrix_constructor_name(constructor)
             if constructor:
                 complex_scalar_constructor = (
                     self.glsl_explicit_complex64_scalar_constructor(
@@ -33614,6 +34060,10 @@ complex64_t crossgl_complex64_mod_assign(
                 constructor_fields = list(
                     self.glsl_struct_member_types(constructor).values()
                 )
+                if re.fullmatch(r"[biud]?vec[234]", str(constructor)):
+                    # Vector constructors take scalars and vectors of any width
+                    # and component type; GLSL converts their components.
+                    constructor_fields = []
                 args = ", ".join(
                     self.generate_expression_with_expected(
                         arg,
@@ -33723,6 +34173,9 @@ complex64_t crossgl_complex64_mod_assign(
             )
             return f"{emitted_call_name}({args})"
         elif hasattr(expr, "__class__") and "MemberAccessNode" in str(type(expr)):
+            structured_storage = self.generate_glsl_hlsl_structured_read(expr)
+            if structured_storage is not None:
+                return structured_storage
             flattened_member = self.flattened_stage_member_name(expr)
             if flattened_member is not None:
                 return flattened_member
@@ -37011,6 +37464,9 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_source_expression_type(self, expression):
         if expression is None:
             return None
+        emulated_matrix_type = self.glsl_emulated_matrix_expression_type(expression)
+        if emulated_matrix_type is not None:
+            return emulated_matrix_type
         if isinstance(expression, VariableNode) or (
             hasattr(expression, "__class__")
             and "IdentifierNode" in str(expression.__class__)
@@ -37074,6 +37530,13 @@ complex64_t crossgl_complex64_mod_assign(
                 return element_type
             if type_name.rstrip().endswith(("*", "&")):
                 return type_name.rstrip()[:-1].strip()
+            if self.is_structured_buffer_type(type_name):
+                element_type = self.structured_buffer_source_element_type(type_name)
+                if element_type is not None:
+                    return element_type
+            vector_info = self.glsl_value_type_info(type_name)
+            if vector_info is not None and vector_info["width"] > 1:
+                return self.vector_component_type(type_name) or type_name
             return type_name
         if isinstance(expression, BinaryOpNode):
             operator = self.map_operator(
@@ -37140,6 +37603,11 @@ complex64_t crossgl_complex64_mod_assign(
             function_name = self.function_call_name(expression)
             if self.glsl_constructor_type(function_name):
                 return function_name
+            unified_type = self.glsl_unified_builtin_result_type(
+                function_name, expression.arguments
+            )
+            if unified_type is not None:
+                return unified_type
             buffer_result_type = self.glsl_buffer_call_result_type(
                 function_name,
                 expression.arguments,
@@ -37908,6 +38376,10 @@ complex64_t crossgl_complex64_mod_assign(
             target_type = (
                 self.map_type(target_type) if target_type is not None else None
             )
+            if target_type not in {"int", "uint"}:
+                source_target = self.glsl_atomic_operand_family(args[0])
+                if source_target in {"int", "uint"}:
+                    target_type = source_target
             target_expression = self.generate_expression(args[0])
         rendered_args = [target_expression]
         value_arg_ids = {
@@ -37927,6 +38399,12 @@ complex64_t crossgl_complex64_mod_assign(
 
         return f"{func_name}({', '.join(rendered_args)})"
 
+    def glsl_atomic_operand_family(self, argument):
+        info = self.glsl_value_type_info(self.glsl_source_expression_type(argument))
+        if info is None or info["width"] != 1 or info["narrow"] is not None:
+            return None
+        return info["family"]
+
     def generate_glsl_memory_atomic_value_argument(self, arg, target_type):
         value_type = self.glsl_buffer_block_atomic_argument_type(arg)
         if value_type == target_type:
@@ -37937,6 +38415,10 @@ complex64_t crossgl_complex64_mod_assign(
             literal_value = self.literal_int_value(arg, self.literal_int_constants)
             if literal_value is not None:
                 return f"{literal_value}u"
+        if self.glsl_atomic_operand_family(arg) in ({"int", "uint"} - {target_type}):
+            # GLSL atomics take operands of the memory type; HLSL converts
+            # between int and uint implicitly.
+            return self.glsl_converted_operand(arg, target_type)
         return self.generate_expression(arg)
 
     def generate_glsl_buffer_block_mutation_target(self, expr):
@@ -40276,10 +40758,192 @@ complex64_t crossgl_complex64_mod_assign(
     def generate_image_atomic_call(self, func_name, args):
         if self.image_atomic_parameter_requires_diagnostic(args[0]):
             return self.image_atomic_parameter_fallback_call(func_name, args)
-        return "{}({})".format(
-            func_name,
-            ", ".join(self.generate_expression(arg) for arg in args),
+        rendered = [self.generate_expression(arg) for arg in args]
+        if len(args) >= 2:
+            rendered[1] = self.glsl_signed_coordinate_expression(args[1], rendered[1])
+        return "{}({})".format(func_name, ", ".join(rendered))
+
+    GLSL_UNIFIED_COMPONENT_RANKS = {
+        "bool": 0,
+        "int": 1,
+        "uint": 2,
+        "float": 3,
+        "double": 4,
+    }
+    # Builtins whose operands share one component type in GLSL, mapped to the
+    # operand positions that GLSL also accepts as scalars next to vectors.
+    GLSL_UNIFIED_BUILTIN_SCALAR_POSITIONS = {
+        "max": (frozenset(), frozenset({1})),
+        "min": (frozenset(), frozenset({1})),
+        "clamp": (frozenset(), frozenset({1, 2})),
+        "mix": (frozenset(), frozenset({2})),
+        "step": (frozenset(), frozenset({0})),
+        "smoothstep": (frozenset(), frozenset({0, 1})),
+        "pow": (frozenset(),),
+        "atan": (frozenset(),),
+        "fma": (frozenset(),),
+        "dot": (frozenset(),),
+        "distance": (frozenset(),),
+    }
+    GLSL_UNIFIED_FLOAT_BUILTINS = frozenset(
+        {"pow", "mix", "step", "smoothstep", "atan", "fma", "dot", "distance"}
+    )
+    GLSL_UNIFIED_SCALAR_RESULT_BUILTINS = frozenset({"dot", "distance"})
+    GLSL_FLOAT_BIT_CASTS = {
+        ("intBitsToFloat", "uint"): "uintBitsToFloat",
+        ("uintBitsToFloat", "int"): "intBitsToFloat",
+    }
+
+    def glsl_vector_type_name(self, family, width):
+        if width == 1:
+            return family
+        prefix = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
+        return f"{prefix[family]}vec{width}"
+
+    def glsl_unified_builtin_plan(self, func_name, args):
+        """Plan explicit operand conversions for a builtin GLSL does not resolve.
+
+        HLSL and CrossGL convert builtin operands with the usual arithmetic
+        conversions (``int`` to ``uint``, integers to floating point) and promote
+        scalars to the vector width of the other operands, so ``max(1, v)`` and
+        ``pow(color, 0.5)`` are valid. GLSL provides no such overloads. Returns
+        ``(family, width, operands)`` where ``operands`` are
+        ``(info, target type or None)`` pairs, or ``None`` when GLSL accepts the
+        call as written.
+        """
+        if not isinstance(func_name, str):
+            return None
+        shapes = self.GLSL_UNIFIED_BUILTIN_SCALAR_POSITIONS.get(func_name)
+        if shapes is None or func_name in self.function_return_types:
+            return None
+        arguments = list(args or [])
+        if not arguments:
+            return None
+        described = []
+        for argument in arguments:
+            info = self.glsl_value_type_info(self.glsl_source_expression_type(argument))
+            if info is None or info["narrow"] is not None:
+                return None
+            if info["family"] not in self.GLSL_UNIFIED_COMPONENT_RANKS:
+                return None
+            described.append(info)
+        families = {info["family"] for info in described}
+        common = max(families, key=self.GLSL_UNIFIED_COMPONENT_RANKS.get)
+        if func_name in self.GLSL_UNIFIED_FLOAT_BUILTINS and common in {
+            "bool",
+            "int",
+            "uint",
+        }:
+            if func_name in {"dot", "distance"}:
+                return None
+            common = "float"
+        if common == "bool":
+            return None
+        width = max(info["width"] for info in described)
+        if any(info["width"] not in {1, width} for info in described):
+            return None
+        scalar_positions = frozenset(
+            index for index, info in enumerate(described) if info["width"] == 1
         )
+        shape_supported = width == 1 or scalar_positions in shapes
+        operands = []
+        changed = False
+        for info in described:
+            target_width = info["width"]
+            if not shape_supported and info["width"] == 1:
+                target_width = width
+            if info["family"] == common and target_width == info["width"]:
+                operands.append((info, None))
+                continue
+            operands.append((info, self.glsl_vector_type_name(common, target_width)))
+            changed = True
+        if not changed:
+            return None
+        return common, width, operands
+
+    def glsl_unified_builtin_result_type(self, func_name, args):
+        plan = self.glsl_unified_builtin_plan(func_name, args)
+        if plan is None:
+            return None
+        common, width, _operands = plan
+        if func_name in self.GLSL_UNIFIED_SCALAR_RESULT_BUILTINS:
+            return common
+        return self.glsl_vector_type_name(common, width)
+
+    def glsl_converted_operand(self, argument, target_type):
+        value = getattr(argument, "value", None)
+        if (
+            target_type in {"float", "double", "uint"}
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+            and "Literal" in type(argument).__name__
+        ):
+            return f"{value}.0" if target_type != "uint" else f"{value}u"
+        return f"{target_type}({self.generate_expression(argument)})"
+
+    def generate_glsl_converted_builtin_call(self, func_name, args):
+        """Spell the operand conversions of builtins GLSL does not convert itself."""
+        arguments = list(args or [])
+        if not isinstance(func_name, str) or func_name in self.function_return_types:
+            return None
+        if func_name in {"intBitsToFloat", "uintBitsToFloat"} and len(arguments) == 1:
+            rendered_argument = self.generate_expression(arguments[0])
+            info = self.glsl_value_type_info(
+                self.glsl_source_expression_type(arguments[0])
+            )
+            family = info["family"] if info is not None else None
+            if re.fullmatch(r"\(?\d+u\)?", rendered_argument.strip()):
+                # Integer literals above INT_MAX are emitted as uint literals.
+                family = "uint"
+            replacement = self.GLSL_FLOAT_BIT_CASTS.get((func_name, family))
+            if replacement is None:
+                return None
+            return f"{replacement}({rendered_argument})"
+        if func_name == "asdouble" and len(arguments) == 2:
+            low, high = (
+                (
+                    self.glsl_converted_operand(argument, "uint")
+                    if self.glsl_atomic_operand_family(argument) != "uint"
+                    else self.generate_expression(argument)
+                )
+                for argument in arguments
+            )
+            return f"packDouble2x32(uvec2({low}, {high}))"
+        if func_name == "atomicCompareExchange" and len(arguments) == 3:
+            # Returns the original value, like GLSL atomicCompSwap.
+            return self.generate_glsl_memory_atomic_call("atomicCompSwap", arguments)
+        plan = self.glsl_unified_builtin_plan(func_name, arguments)
+        if plan is None:
+            return None
+        _common, _width, operands = plan
+        rendered = []
+        for argument, (_info, target_type) in zip(arguments, operands):
+            if target_type is None:
+                rendered.append(self.generate_expression(argument))
+            else:
+                rendered.append(self.glsl_converted_operand(argument, target_type))
+        return f"{func_name}({', '.join(rendered)})"
+
+    def glsl_expression_is_unsigned(self, expression):
+        info = self.glsl_value_type_info(self.glsl_source_expression_type(expression))
+        return info is not None and info["family"] == "uint"
+
+    def glsl_signed_coordinate_expression(self, expression, rendered=None):
+        """Render an image or texel-fetch coordinate with the signed type GLSL takes.
+
+        GLSL image and texel-fetch functions only accept ``int``/``ivecN``
+        coordinates and levels, while HLSL indexes resources with unsigned
+        values; unsigned operands are converted explicitly.
+        """
+        if rendered is None:
+            rendered = self.generate_expression(expression)
+        info = self.glsl_value_type_info(self.glsl_source_expression_type(expression))
+        if info is None or info["family"] != "uint" or info["bits"] != 32:
+            return rendered
+        width = info["width"]
+        target = "int" if width == 1 else f"ivec{width}"
+        return f"{target}({rendered})"
 
     def is_integer_image_type(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
@@ -40646,7 +41310,7 @@ complex64_t crossgl_complex64_mod_assign(
 
         if func_name == "imageLoad" and len(args) >= 2:
             image_name = self.generate_expression(args[0])
-            coord = self.generate_expression(args[1])
+            coord = self.glsl_signed_coordinate_expression(args[1])
             texture_type = self.texture_resource_type(args[0])
             if len(args) >= 3 and self.is_multisample_storage_image_type(texture_type):
                 sample = self.generate_expression(args[2])
@@ -40655,11 +41319,14 @@ complex64_t crossgl_complex64_mod_assign(
                 load_expr = f"imageLoad({image_name}, {coord})"
             image_format = self.image_resource_format(args[0])
             self.validate_image_load_result_type(texture_type, image_format)
+            if self.glsl_unknown_format_image(args[0]):
+                # The source selects the components of its element type itself.
+                return load_expr
             return f"{load_expr}{self.image_load_component_suffix(texture_type, image_format)}"
 
         if func_name == "imageStore" and len(args) >= 3:
             image_name = self.generate_expression(args[0])
-            coord = self.generate_expression(args[1])
+            coord = self.glsl_signed_coordinate_expression(args[1])
             texture_type = self.texture_resource_type(args[0])
             if len(args) >= 4 and self.is_multisample_storage_image_type(texture_type):
                 sample = self.generate_expression(args[2])
@@ -40740,6 +41407,16 @@ complex64_t crossgl_complex64_mod_assign(
             texture_type = self.texture_resource_type(args[0])
             if self.is_cube_texture_resource_type(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
+            if any(
+                self.glsl_expression_is_unsigned(argument) for argument in args[1:3]
+            ):
+                rendered = [self.generate_expression(args[0])]
+                rendered.extend(
+                    self.glsl_signed_coordinate_expression(argument)
+                    for argument in args[1:3]
+                )
+                rendered.extend(self.generate_expression(arg) for arg in args[3:])
+                return f"{func_name}({', '.join(rendered)})"
             return None
 
         if is_projected_texture_operation(func_name) and args:
@@ -40805,6 +41482,8 @@ complex64_t crossgl_complex64_mod_assign(
             sampled_type = self.sampled_image_type(declared_texture_type)
             sampled_type = self.resource_base_type(sampled_type)
             texture_name = f"{sampled_type}({texture_name}, {sampler_name})"
+        else:
+            self.record_glsl_combined_sampler_use(args[0], args[1])
         mapped_args = [texture_name, coord] + [
             self.generate_expression(arg) for arg in extra_args
         ]
@@ -46665,6 +47344,11 @@ complex64_t crossgl_complex64_mod_assign(
         self, vtype, name, binding, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
+        storage_declarations = ""
+        if array_size is None:
+            storage = self.glsl_hlsl_structured_storage_type(node, name, element_type)
+            if storage is not None:
+                element_type, storage_declarations = storage
         memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
         layout = self.glsl_resource_layout_prefix("std430", binding=binding)
@@ -46681,7 +47365,7 @@ complex64_t crossgl_complex64_mod_assign(
                 f"{block_name} {{ {element_type} {instance_member}[]; }} "
                 f"{name}{array_suffix};\n"
             )
-        return (
+        return storage_declarations + (
             f"{layout} {qualifier_prefix}buffer "
             f"{block_name} {{ {element_type} {name}[]; }};\n"
         )
@@ -47265,12 +47949,22 @@ complex64_t crossgl_complex64_mod_assign(
         return namespace, binding, resource_count, var_name
 
     def reserve_explicit_global_resource_bindings(self, global_vars, used_bindings):
+        self.glsl_register_target_bindings = {}
+        self.glsl_hlsl_register_by_id = {}
         used_source_bindings = {}
-        for node in global_vars:
+        deferred_registers = []
+        for order, node in enumerate(global_vars):
             metadata = self.global_resource_binding_metadata(node)
             if metadata is None:
                 continue
             namespace, binding, resource_count, var_name = metadata
+            register = self.hlsl_register_binding(node)
+            if register is not None:
+                deferred_registers.append(
+                    (node, namespace, register, max(resource_count or 1, 1), var_name)
+                    + (order,)
+                )
+                continue
             source_binding = self.source_descriptor_binding_index(node)
             if source_binding is not None:
                 self.reserve_resource_binding_range(
@@ -47305,6 +47999,81 @@ complex64_t crossgl_complex64_mod_assign(
                 binding,
                 resource_count,
                 var_name,
+            )
+        self.reserve_deferred_hlsl_register_bindings(deferred_registers, used_bindings)
+
+    HLSL_REGISTER_CLASS_ORDER = {"b": 0, "t": 1, "u": 2, "s": 3}
+
+    def hlsl_register_binding(self, node):
+        """Return ``(class, index)`` when ``node`` is bound only by an HLSL register.
+
+        HLSL register classes (``b``, ``t``, ``u`` and ``s``) are separate binding
+        namespaces, while OpenGL shares one shader-storage binding table between
+        read-only (``t``) and read-write (``u``) structured buffers. Register
+        numbers are therefore source bindings rather than OpenGL binding points;
+        explicit ``@binding``, descriptor sets and register spaces keep their
+        exact target meaning.
+        """
+        selected = None
+        for attr in getattr(node, "attributes", None) or []:
+            attr_name = str(getattr(attr, "name", "") or "").lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "texture", "sampler", "set", "space"}:
+                return None
+            if attr_name != "register":
+                continue
+            if len(arguments) > 1:
+                return None
+            raw_value = str(self.attribute_value_to_string(arguments[0]) or "")
+            raw_value = raw_value.strip().lower()
+            register_class, digits = raw_value[:1], raw_value[1:]
+            if register_class not in self.HLSL_REGISTER_CLASS_ORDER:
+                return None
+            if not digits.isdigit():
+                return None
+            selected = (register_class, int(digits))
+        return selected
+
+    def reserve_deferred_hlsl_register_bindings(self, deferred, used_bindings):
+        """Assign OpenGL binding points to resources bound only by HLSL registers.
+
+        Exact bindings are reserved first. Each register-bound resource then keeps
+        its register number when that binding point is free in its OpenGL table
+        and otherwise takes the next free one. Resources are visited in register
+        class order (b, t, u, s), then register number, so the mapping does not
+        depend on declaration order. Overlapping registers of one class remain
+        errors.
+        """
+        source_ranges = {}
+        ordered = sorted(
+            deferred,
+            key=lambda entry: (
+                self.HLSL_REGISTER_CLASS_ORDER[entry[2][0]],
+                entry[2][1],
+                entry[5],
+            ),
+        )
+        for node, namespace, register, count, name, _order in ordered:
+            register_class, register_index = register
+            self.reserve_resource_binding_range(
+                source_ranges,
+                "HLSL",
+                f"register {register_class}",
+                register_index,
+                count,
+                name,
+            )
+            target = self.next_available_resource_binding_from(
+                used_bindings, namespace, register_index, count
+            )
+            self.reserve_resource_binding_range(
+                used_bindings, "OpenGL", namespace, target, count, name
+            )
+            self.glsl_register_target_bindings[id(node)] = target
+            self.glsl_hlsl_register_by_id[id(node)] = (
+                f"{register_class}{register_index}"
             )
 
     def next_resource_binding(self, binding_cursors, namespace):
@@ -47455,6 +48224,125 @@ complex64_t crossgl_complex64_mod_assign(
         if start == end:
             return f"{namespace} {start}"
         return f"{namespace} {start}-{end}"
+
+    GLSL_BINDING_RECORD_NAMESPACES = {
+        "buffer binding": "shader-storage-buffer",
+        "uniform buffer binding": "uniform-buffer",
+        "texture binding": "texture",
+        "image binding": "image",
+        "sampler binding": "sampler",
+    }
+
+    def glsl_source_register(self, node):
+        """The HLSL register (``t0``) that bound ``node`` in the source, if any."""
+        planned = (getattr(self, "glsl_hlsl_register_by_id", None) or {}).get(id(node))
+        if planned is not None:
+            return planned
+        register = self.hlsl_register_binding(node)
+        if register is not None:
+            return f"{register[0]}{register[1]}"
+        return None
+
+    def record_glsl_resource_binding(
+        self,
+        node,
+        source_name,
+        glsl_name,
+        kind,
+        binding_namespace,
+        binding,
+        count=1,
+        of=None,
+    ):
+        if binding is None:
+            return
+        record = {
+            "name": source_name,
+            "glslName": glsl_name,
+            "kind": kind,
+            "namespace": self.GLSL_BINDING_RECORD_NAMESPACES.get(
+                binding_namespace, binding_namespace
+            ),
+            "binding": int(binding),
+            "count": max(count, 1) if isinstance(count, int) else 1,
+            "register": self.glsl_source_register(node),
+        }
+        if of is not None:
+            record["of"] = of
+        self.glsl_resource_binding_records.append(record)
+
+    def record_glsl_combined_sampler_use(self, texture_arg, sampler_arg):
+        texture_name = self.expression_name(texture_arg)
+        sampler_name = self.expression_name(sampler_arg)
+        if not texture_name or not sampler_name:
+            return
+        entry = (str(texture_name), str(sampler_name))
+        if entry not in self.glsl_combined_sampler_uses:
+            self.glsl_combined_sampler_uses.append(entry)
+
+    def resource_binding_records(self):
+        """Describe the OpenGL binding point assigned to each resource.
+
+        Valid after ``generate``. Each record names the source resource, its
+        GLSL identifier, its OpenGL binding table (``shader-storage-buffer``,
+        ``uniform-buffer``, ``texture``, ``image`` or ``sampler``) and binding
+        point, the binding count for arrays and the HLSL register that bound it
+        when the source used one. OpenGL combines textures and samplers in
+        texture units, so a source sampler that is combined with a texture is
+        reported once per texture unit it must be bound to, with ``texture``
+        naming that texture.
+        """
+        records = [dict(record) for record in self.glsl_resource_binding_records]
+        textures = {}
+        for record in records:
+            if record["kind"] == "texture":
+                textures.setdefault(record["glslName"], record)
+                textures.setdefault(record["name"], record)
+        sampler_registers = getattr(self, "glsl_sampler_registers", {}) or {}
+        bound_units = set()
+        unresolved_samplers = []
+        for texture_name, sampler_name in self.glsl_combined_sampler_uses:
+            texture = textures.get(texture_name)
+            if texture is None:
+                # A texture parameter of a helper: the source sampler state applies
+                # to the global textures that reach it.
+                if sampler_name not in unresolved_samplers:
+                    unresolved_samplers.append(sampler_name)
+                continue
+            key = (texture["binding"], sampler_name)
+            if key in bound_units:
+                continue
+            bound_units.add(key)
+            records.append(
+                self.glsl_combined_sampler_record(
+                    sampler_name, sampler_registers, texture
+                )
+            )
+        for sampler_name in unresolved_samplers:
+            for texture in [r for r in records if r["kind"] == "texture"]:
+                key = (texture["binding"], sampler_name)
+                if key in bound_units:
+                    continue
+                bound_units.add(key)
+                records.append(
+                    self.glsl_combined_sampler_record(
+                        sampler_name, sampler_registers, texture
+                    )
+                )
+        return records
+
+    def glsl_combined_sampler_record(self, sampler_name, sampler_registers, texture):
+        source = sampler_registers.get(sampler_name, (sampler_name, None))
+        return {
+            "name": source[0],
+            "glslName": sampler_name,
+            "kind": "sampler",
+            "namespace": "texture",
+            "binding": texture["binding"],
+            "count": texture["count"],
+            "register": source[1],
+            "texture": texture["name"],
+        }
 
     def literal_int_value(self, expr, constants=None):
         return evaluate_literal_int_expression(expr, constants)
@@ -47628,6 +48516,10 @@ complex64_t crossgl_complex64_mod_assign(
 
         if vtype_str in getattr(self, "enum_struct_type_names", set()):
             return self.glsl_type_identifier_name(vtype_str)
+
+        emulated_matrix_type = self.glsl_emulated_matrix_mapped_type(vtype_str)
+        if emulated_matrix_type is not None:
+            return emulated_matrix_type
 
         mapped_type = self.type_mapping.get(vtype_str, vtype_str)
         if mapped_type == vtype_str and vtype_str in self.glsl_type_identifier_names:
@@ -47903,6 +48795,9 @@ complex64_t crossgl_complex64_mod_assign(
             if source is None:
                 raise ValueError(self.invalid_glsl_image_format_message(node, source))
             format_name = str(source).lower()
+            if format_name == self.GLSL_UNKNOWN_IMAGE_FORMAT:
+                choices.append((attr_name, source, format_name))
+                continue
             if format_name not in supported_formats:
                 raise ValueError(self.invalid_glsl_image_format_message(node, source))
             choices.append((attr_name, source, format_name))
@@ -48515,6 +49410,11 @@ complex64_t crossgl_complex64_mod_assign(
         return f"{attr_name} {source} binding {binding}"
 
     def explicit_resource_binding_index(self, node):
+        planned = (getattr(self, "glsl_register_target_bindings", None) or {}).get(
+            id(node)
+        )
+        if planned is not None:
+            return planned
         choices = self.explicit_resource_binding_choices(node)
         if not choices:
             return None
@@ -48672,9 +49572,103 @@ complex64_t crossgl_complex64_mod_assign(
             return False
         return str(attr_name).lower() in {"rootsignature", "hlsl_rootsignature"}
 
+    GLSL_UNKNOWN_IMAGE_FORMAT = "unknown"
+    GLSL_FORMATTED_IMAGE_LOAD_EXTENSION = "GL_EXT_shader_image_load_formatted"
+
+    def glsl_unknown_image_format_qualifier(self, vtype, node):
+        """Format qualifier of a storage image whose format the runtime chooses.
+
+        Sources such as HLSL bind typed storage textures of any compatible format
+        to one declaration, so the GLSL image is declared without a format and
+        takes the format of the bound image unit. Loads from such images need
+        ``GL_EXT_shader_image_load_formatted``; images that are only written are
+        declared ``writeonly`` and need no extension. Atomic operations require a
+        single-channel 32-bit format, which is the only format they accept.
+        """
+        names = {self.resource_node_name(node)}
+        if node is not None and getattr(node, "name", None):
+            names.add(self.glsl_global_identifier_name(node.name))
+        usages = set()
+        for name in names:
+            usages |= self.glsl_image_usages.get(name, set())
+        self.glsl_unknown_format_images.update(name for name in names if name)
+        if "atomic" in usages:
+            base_type = str(self.resource_base_type(vtype) or "")
+            if base_type.startswith("iimage"):
+                return "r32i"
+            if base_type.startswith("uimage"):
+                return "r32ui"
+            return "r32f"
+        if usages & {"load", "call"}:
+            self.glsl_formatted_image_load_names.update(names)
+        else:
+            self.glsl_write_only_unknown_format_images.update(names)
+        return None
+
+    def collect_glsl_image_usages(self, ast):
+        """Map resource names to how image intrinsics and calls use them."""
+        usages = {}
+        user_functions = {
+            getattr(function, "name", None)
+            for function in getattr(ast, "functions", []) or []
+        }
+        for node in self.walk_ast(ast):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            arguments = list(getattr(node, "args", None) or [])
+            if not name or not arguments:
+                continue
+            if name in user_functions:
+                for argument in arguments:
+                    argument_name = self.expression_name(argument)
+                    if argument_name:
+                        usages.setdefault(argument_name, set()).add("call")
+                continue
+            target = self.expression_name(arguments[0])
+            if not target:
+                continue
+            if name == "imageLoad":
+                usages.setdefault(target, set()).add("load")
+            elif name.startswith("imageAtomic"):
+                usages.setdefault(target, set()).add("atomic")
+            elif name == "imageStore":
+                usages.setdefault(target, set()).add("store")
+        return usages
+
+    def glsl_unknown_format_image(self, image_arg):
+        name = self.expression_name(image_arg)
+        if not name:
+            return False
+        alias = self.current_resource_aliases.get(name)
+        if alias is not None:
+            name = alias.get("expression", name)
+        return name in self.glsl_unknown_format_images
+
+    def ensure_glsl_formatted_image_load_support(self, code):
+        if not self.glsl_formatted_image_load_names:
+            return code
+        extension = self.GLSL_FORMATTED_IMAGE_LOAD_EXTENSION
+        if re.search(rf"^\s*#extension\s+{extension}\b", code, flags=re.MULTILINE):
+            return code
+        lines = code.splitlines(keepends=True)
+        version_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.strip().startswith("#version")
+            ),
+            -1,
+        )
+        lines.insert(version_index + 1, f"#extension {extension} : require\n")
+        self.current_glsl_extensions.add(extension)
+        return "".join(lines)
+
     def image_format_qualifier(self, vtype, node=None):
         explicit_format = self.explicit_glsl_image_format(node)
         self.validate_glsl_image_format_target(node, vtype, explicit_format)
+        if explicit_format == self.GLSL_UNKNOWN_IMAGE_FORMAT:
+            return self.glsl_unknown_image_format_qualifier(vtype, node)
         if explicit_format:
             return explicit_format
         if vtype in {

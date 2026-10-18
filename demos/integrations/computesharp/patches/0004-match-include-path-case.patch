@@ -1,0 +1,22 @@
+diff --git a/src/ComputeSharp.SourceGeneration/ComputeSharp.SourceGeneration.projitems b/src/ComputeSharp.SourceGeneration/ComputeSharp.SourceGeneration.projitems
+index 2a5a2dd..2f2e43f 100644
+--- a/src/ComputeSharp.SourceGeneration/ComputeSharp.SourceGeneration.projitems
++++ b/src/ComputeSharp.SourceGeneration/ComputeSharp.SourceGeneration.projitems
+@@ -15,7 +15,7 @@
+     <Compile Include="$(MSBuildThisFileDirectory)Extensions\CompilationExtensions.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Extensions\DiagnosticsExtensions.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Extensions\IMethodSymbolExtensions.cs" />
+-    <Compile Include="$(MSBuildThisFileDirectory)extensions\IncrementalValueProviderExtensions.cs" />
++    <Compile Include="$(MSBuildThisFileDirectory)Extensions\IncrementalValueProviderExtensions.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Extensions\IndentedTextWriterExtensions.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Extensions\IPropertySymbolExtensions.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Extensions\IFieldSymbolExtensions.cs" />
+@@ -23,7 +23,7 @@
+     <Compile Include="$(MSBuildThisFileDirectory)Extensions\ISymbolExtensions.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Extensions\SymbolInfoExtensions.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Extensions\SyntaxNodeExtensions.cs" />
+-    <Compile Include="$(MSBuildThisFileDirectory)helpers\DynamicCache{TKey,TValue}.cs" />
++    <Compile Include="$(MSBuildThisFileDirectory)Helpers\DynamicCache{TKey,TValue}.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Helpers\EquatableArray{T}.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Helpers\ImmutableHashSetBuilder{T}.cs" />
+     <Compile Include="$(MSBuildThisFileDirectory)Helpers\ImmutableArrayBuilder{T}.cs" />

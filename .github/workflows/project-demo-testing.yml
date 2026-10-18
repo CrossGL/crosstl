@@ -1,0 +1,182 @@
+name: Project Demo Testing
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/project-demo-testing.yml"
+      - "demos/integrations/computesharp/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/project-demo-testing.yml"
+      - "demos/integrations/computesharp/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-demo-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  discovery-contract:
+    name: Compute discovery contract (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Install test dependencies
+        run: python -m pip install pytest pytest-xdist
+      - name: Verify compiled discovery and original-result accounting
+        env:
+          CROSSTL_REQUIRE_DOTNET: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+        run: >-
+          python -m pytest -q -n auto demos/integrations/computesharp/tests
+          --junitxml=evidence/discovery-tests.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compute-discovery-contract
+          path: evidence/
+          retention-days: 7
+
+  original-directx:
+    name: Original compute baseline (Windows WARP)
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      CI_RUNNER_DOTNET_TEST_PLATFORM: x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Record the immutable upstream inputs
+        run: >-
+          python demos/integrations/computesharp/source.py
+          --source upstream-computesharp --output evidence/source.json
+      - name: Build the original upstream test assembly
+        working-directory: upstream-computesharp
+        shell: pwsh
+        run: |
+          $audit = Join-Path $env:GITHUB_WORKSPACE "demos/integrations/computesharp/baseline-audit.props"
+          dotnet build tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj -c Release -p:Platform=x64 -p:CrossTLTrustedCorpusBaseline=true "-p:CustomAfterMicrosoftCommonTargets=$audit"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Export the actual test cases and generated HLSL
+        working-directory: upstream-computesharp
+        shell: pwsh
+        run: |
+          $assembly = (dotnet msbuild tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj -getProperty:TargetPath -p:Configuration=Release -p:Platform=x64).Trim()
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path $assembly)) { throw "Test assembly is missing" }
+          "COMPUTESHARP_BASELINE_ASSEMBLY=$assembly" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $tool = Join-Path $env:GITHUB_WORKSPACE "demos/integrations/computesharp/discovery/Discovery.csproj"
+          $output = Join-Path $env:GITHUB_WORKSPACE "evidence/discovery"
+          dotnet run --project $tool -c Release -- $assembly $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/discovery
+      - name: Execute the complete original core test project
+        working-directory: upstream-computesharp
+        run: >-
+          dotnet test tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
+          -c Release -p:Platform=x64 --no-build
+          --logger "trx;LogFileName=baseline.trx"
+          --results-directory ../evidence/trx
+      - name: Verify complete baseline case accounting
+        shell: pwsh
+        run: |
+          $discovery = Get-Content evidence/discovery/discovery.json -Raw | ConvertFrom-Json
+          $actual = (Get-FileHash $env:COMPUTESHARP_BASELINE_ASSEMBLY -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $discovery.assembly.sha256) { throw "Original assembly changed during execution" }
+          python demos/integrations/computesharp/baseline.py --discovery evidence/discovery --trx evidence/trx/baseline.trx --output evidence/baseline.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python demos/integrations/computesharp/source.py --source upstream-computesharp --check evidence/source.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-compute-directx-baseline
+          path: evidence/
+          retention-days: 7
+
+  adapted-source-parity:
+    name: Adapted source parity (Linux)
+    needs: original-directx
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Apply the documented non-Windows upstream patches
+        run: >-
+          python demos/integrations/computesharp/prepare_upstream.py
+          --source upstream-computesharp --output adapted-computesharp
+          --receipt evidence/adapted-source.json
+      - name: Build the adapted upstream test assembly
+        working-directory: adapted-computesharp
+        run: >-
+          dotnet build tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj -c Release
+          -p:CrossTLTrustedCorpusBaseline=true
+          -p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/baseline-audit.props
+      - name: Export the adapted test cases and generated HLSL
+        run: >-
+          dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
+          adapted-computesharp/tests/ComputeSharp.Tests/bin/Release/net10.0/ComputeSharp.Tests.dll
+          evidence/adapted-discovery
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-compute-directx-baseline
+          path: original
+      - name: Require identical inventory and generated HLSL
+        run: >-
+          python demos/integrations/computesharp/compare_discovery.py
+          --reference original/discovery --candidate evidence/adapted-discovery
+          --output evidence/discovery-parity.json
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/adapted-discovery
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: adapted-source-parity
+          path: evidence/
+          retention-days: 7

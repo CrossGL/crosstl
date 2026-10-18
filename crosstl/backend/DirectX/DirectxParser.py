@@ -753,8 +753,12 @@ class HLSLParser:
         self.skip_template_argument_list()
 
     def parse_template_declaration_prefixes(self):
+        """Consume template prefixes; return whether any were present."""
+        parsed = False
         while self.is_template_declaration_prefix():
             self.parse_template_declaration_prefix()
+            parsed = True
+        return parsed
 
     def skip_template_argument_list(self):
         self.eat("LESS_THAN")
@@ -1488,9 +1492,9 @@ class HLSLParser:
         members = []
         methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            self.parse_template_declaration_prefixes()
+            templated = self.parse_template_declaration_prefixes()
             attributes = self.parse_attribute_list()
-            self.parse_template_declaration_prefixes()
+            templated = self.parse_template_declaration_prefixes() or templated
             qualifiers = self.parse_qualifiers()
             if self.skip_unexpanded_member_macro():
                 continue
@@ -1524,14 +1528,14 @@ class HLSLParser:
             qualifiers.extend(self.parse_post_type_qualifiers())
             member_name = self.parse_member_declarator_name()
             if self.current_token[0] == "LPAREN":
-                methods.append(
-                    self.parse_function(
-                        return_type,
-                        member_name,
-                        qualifiers=qualifiers,
-                        attributes=attributes,
-                    )
+                method = self.parse_function(
+                    return_type,
+                    member_name,
+                    qualifiers=qualifiers,
+                    attributes=attributes,
                 )
+                method.is_template = templated
+                methods.append(method)
             else:
                 declarations = self.parse_variable_declaration_list_rest(
                     return_type,
