@@ -146,7 +146,8 @@ def cbuffer_placement(layout_type, offset):
     if kind == "matrix":
         start = align_to(offset, CBUFFER_REGISTER_SIZE)
         vector_size = layout_type.scalar_size * layout_type.components
-        return start, CBUFFER_REGISTER_SIZE * (layout_type.registers - 1) + vector_size
+        stride = cbuffer_matrix_vector_stride(layout_type)
+        return start, stride * (layout_type.registers - 1) + vector_size
     if kind == "array":
         start = align_to(offset, CBUFFER_REGISTER_SIZE)
         _element_start, element_size = cbuffer_placement(layout_type.element, 0)
@@ -157,6 +158,16 @@ def cbuffer_placement(layout_type, offset):
         _members, size = cbuffer_struct_placements(layout_type)
         return start, size
     raise HlslLayoutError(f"unsupported HLSL buffer value kind '{kind}'")
+
+
+def cbuffer_matrix_vector_stride(layout_type):
+    """Distance between the in-memory vectors of a constant-buffer matrix.
+
+    Every row (row-major) or column (column-major) starts a new register, and
+    a vector of three or four 64-bit components spans two registers.
+    """
+    vector_size = layout_type.scalar_size * layout_type.components
+    return align_to(vector_size, CBUFFER_REGISTER_SIZE)
 
 
 def cbuffer_array_stride(layout_type):

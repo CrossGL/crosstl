@@ -311,12 +311,21 @@ def test_metal_passes_hlsl_layout_members_to_reference_parameters_through_tempor
 
 
 def test_metal_rejects_hlsl_layouts_it_cannot_reproduce():
-    with pytest.raises(ValueError, match="HLSL layout of cbuffer"):
+    # The last element of an HLSL array is not padded to a register, so the
+    # next member packs into it; Metal array elements cannot overlap it.
+    with pytest.raises(ValueError, match="overlaps the Metal storage"):
         generate_metal("""
-            cbuffer _ : register(b0) { float2x3 m; }
+            cbuffer _ : register(b0) { float a[2]; float b; }
             RWStructuredBuffer<float> o : register(u0);
             [numthreads(1, 1, 1)]
-            void main(uint3 id : SV_DispatchThreadID) { o[id.x] = m._m01; }
+            void main(uint3 id : SV_DispatchThreadID) { o[id.x] = a[id.x] + b; }
+            """)
+
+    with pytest.raises(ValueError, match="matrices in HLSL structured buffers"):
+        generate_metal("""
+            RWStructuredBuffer<float2x2> m : register(u0);
+            [numthreads(1, 1, 1)]
+            void main(uint3 id : SV_DispatchThreadID) { m[id.x] = m[id.x] * 2.0; }
             """)
 
     with pytest.raises(ValueError, match="different layouts"):

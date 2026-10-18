@@ -11,7 +11,13 @@ exact HLSL offsets:
 * ``bool`` uses four-byte ``uint`` storage; reads convert back to ``bool``;
 * constant-buffer arrays of scalars or vectors use four-component storage so
   each element occupies one 16-byte register; element reads select the
-  original components.
+  original components;
+* constant-buffer matrices keep the native type when its columns match the
+  HLSL registers (``floatCx4``). Every other float, integer or boolean matrix
+  is stored as its register words, ``struct { T v[...]; }`` with four words
+  per register and none after the last vector, so the next member may pack
+  into that register as in HLSL; a load helper builds the matrix on reads and
+  a store helper splits it on writes.
 
 A layout that Metal cannot express raises :class:`HlslLayoutError` instead of
 silently reading other bytes.
@@ -114,6 +120,21 @@ class MetalHlslBufferLayouts:
         self.type_resolver = type_resolver
         self.struct_plans: Dict[str, MetalLayoutPlan] = {}
         self.struct_layouts: Dict[str, str] = {}
+        # Definitions of the matrix storage structs and helpers, by struct name.
+        self.matrix_storages: Dict[str, str] = {}
+
+    def storage_definitions(self, plan):
+        """Definitions of the matrix storage that the members of ``plan`` use.
+
+        Each definition has an include guard, so every struct that needs one
+        may emit it.
+        """
+        names = []
+        for member in plan.members:
+            if member.storage_type in self.matrix_storages:
+                if member.storage_type not in names:
+                    names.append(member.storage_type)
+        return "".join(self.matrix_storages[name] for name in names)
 
     # Type descriptions -------------------------------------------------
     def layout_type(self, raw_type, stack=()):
@@ -151,13 +172,16 @@ class MetalHlslBufferLayouts:
             if width is None:
                 return scalar_type(scalar)
             return vector_type(scalar, int(width))
-        matrix_match = re.fullmatch(r"(float|double)([234])x([234])", metal_type)
-        if matrix_match is not None:
+        # Metal ``floatCxR`` and ``crosstl_intCxR`` hold C column vectors of R
+        # components, which are the in-memory vectors of the HLSL matrix.
+        matrix_match = re.fullmatch(
+            r"(?:crosstl_)?(float|double|int|uint|bool)([234])x([234])", metal_type
+        )
+        if matrix_match is not None and (
+            metal_type.startswith("crosstl_")
+            == (matrix_match.group(1) in ("int", "uint", "bool"))
+        ):
             scalar, columns, rows = matrix_match.groups()
-            if columns != rows:
-                raise HlslLayoutError(
-                    f"non-square matrix '{metal_type}' in an HLSL buffer is not supported"
-                )
             return matrix_type(scalar, int(columns), int(rows))
         raise HlslLayoutError(f"type '{raw_type}' has no HLSL buffer layout")
 
@@ -277,14 +301,11 @@ class MetalHlslBufferLayouts:
                 write = f"uint{width}"
             return f"packed_{storage}{width}", size * width, size, read, write, None
         if kind == "matrix":
-            if layout != HLSL_CBUFFER_LAYOUT or layout_type.registers not in (3, 4):
+            if layout != HLSL_CBUFFER_LAYOUT:
                 raise HlslLayoutError(
-                    "only 3x3 and 4x4 matrices in HLSL constant buffers have a "
-                    "Metal layout"
+                    "matrices in HLSL structured buffers have no Metal layout"
                 )
-            storage, size = METAL_SCALAR_STORAGE[layout_type.scalar]
-            n = layout_type.registers
-            return f"{storage}{n}x{n}", 16 * n, 16, None, None, None
+            return self.matrix_storage(layout_type, padded=False)
         if kind == "struct":
             plan = self.require_struct(layout_type, layout)
             return plan.name, plan.size, plan.alignment, None, None, plan.name
@@ -314,9 +335,11 @@ class MetalHlslBufferLayouts:
                 read_conversion=read,
                 element_suffix=METAL_ELEMENT_SUFFIXES[width],
             )
-        storage_type, size, alignment, read, write, nested = self.value_storage(
-            element, layout
-        )
+        if layout == HLSL_CBUFFER_LAYOUT and element.kind == "matrix":
+            storage = self.matrix_storage(element, padded=True)
+        else:
+            storage = self.value_storage(element, layout)
+        storage_type, size, alignment, read, write, nested = storage
         if layout == HLSL_CBUFFER_LAYOUT:
             stride = cbuffer_array_stride(layout_type)
             if size != stride:
@@ -335,6 +358,27 @@ class MetalHlslBufferLayouts:
             write_conversion=write,
             nested_struct=nested,
         )
+
+    def matrix_storage(self, layout_type, padded):
+        """Storage of a constant-buffer matrix, as returned by :meth:`value_storage`.
+
+        ``padded`` storage fills the last register too, as array elements do.
+        """
+        scalar = layout_type.scalar
+        columns, rows = layout_type.registers, layout_type.components
+        if scalar == "double":
+            raise HlslLayoutError("Metal has no double-precision matrices")
+        if scalar == "float" and rows == 4:
+            return f"float{columns}x4", 16 * columns, 16, None, None, None
+        name = f"crosstl_hlsl_cbuffer_{scalar}{columns}x{rows}"
+        if padded:
+            name += "_padded"
+        words = 4 * columns if padded else 4 * (columns - 1) + rows
+        if name not in self.matrix_storages:
+            self.matrix_storages[name] = metal_matrix_storage_definition(
+                name, scalar, columns, rows, words
+            )
+        return name, 4 * words, 4, f"{name}_load", f"{name}_store", None
 
     def plan_cbuffer(self, name, members):
         """Plan a constant buffer declared with HLSL packing."""
@@ -363,3 +407,45 @@ class MetalHlslBufferLayouts:
             # bases are aligned, so the natural vector type has the same layout.
             storage_type = storage_type[len("packed_") :]
         return storage_type, read, write
+
+
+def metal_matrix_storage_definition(name, scalar, columns, rows, words):
+    """A register-word struct for one matrix shape with its load and store helpers."""
+    logical = (
+        f"float{columns}x{rows}"
+        if scalar == "float"
+        else f"crosstl_{scalar}{columns}x{rows}"
+    )
+    word = "uint" if scalar == "bool" else scalar
+    guard = name.upper()
+    loads = []
+    stores = []
+    for column in range(columns):
+        indices = [4 * column + row for row in range(rows)]
+        values = ", ".join(f"m.v[{index}]" for index in indices)
+        if scalar == "bool":
+            vector = f"bool{rows}(uint{rows}({values}))"
+        else:
+            vector = f"{scalar}{rows}({values})"
+        loads.append(f"    result[{column}] = {vector};\n")
+        for row, index in enumerate(indices):
+            value = f"value[{column}][{row}]"
+            if scalar == "bool":
+                value = f"uint({value})"
+            stores.append(f"    m.v[{index}] = {value};\n")
+    return (
+        f"#ifndef {guard}\n"
+        f"#define {guard}\n"
+        f"struct {name} {{\n    {word} v[{words}];\n}};\n"
+        f"inline {logical} {name}_load({name} m) {{\n"
+        f"    {logical} result;\n"
+        f"{''.join(loads)}"
+        "    return result;\n"
+        "}\n"
+        f"inline {name} {name}_store({logical} value) {{\n"
+        f"    {name} m = {{}};\n"
+        f"{''.join(stores)}"
+        "    return m;\n"
+        "}\n"
+        "#endif\n"
+    )
