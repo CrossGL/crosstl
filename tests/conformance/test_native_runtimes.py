@@ -61,7 +61,29 @@ def test_reference_kernel_reproduces_its_oracle(name, tmp_path):
     records = [
         json.loads(line) for line in (output / "results.jsonl").read_text().splitlines()
     ]
+    # Name the failing stage and its message, so a CI log explains a runtime failure without an artifact.
+    reasons = [
+        {
+            "outcome": record["outcome"],
+            "validation": [
+                (
+                    os.path.basename((item.get("command") or ("?",))[0]),
+                    item.get("status"),
+                    item.get("log", "")[-600:],
+                )
+                for item in record.get("validation") or ()
+                if item.get("status") != "accepted"
+            ],
+            "execution": {
+                key: value
+                for key, value in (record.get("execution") or {}).items()
+                if key in {"status", "exception", "message", "device"}
+            },
+            "comparison": record.get("comparison"),
+        }
+        for record in records
+    ]
     assert [(record["runtime"], record["outcome"]) for record in records] == [
         (name, "preserved")
-    ], records
+    ], json.dumps(reasons, indent=2, default=str)
     assert runtime.expect in records[0]["execution"]["device"]

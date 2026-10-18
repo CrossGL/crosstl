@@ -196,6 +196,39 @@ jobs:
           EXTRA: ${{ matrix.extra }}
         run: python -m pip install -e . numpy==2.5.4 pytest==9.1.1 ${EXTRA:+"$EXTRA"}
 
+      # The in-box WARP of the runner image predates current shader models. D3D12 loads d3d10warp.dll from the
+      # application directory first, so the pinned redistributable is placed next to python.exe and the
+      # adapter then refuses any other WARP build (CROSSTL_CONFORMANCE_WARP_VERSION).
+      - name: Install pinned WARP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          $warpUri = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg"
+          $warpSha256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $warpUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "WARP download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $warpSha256) {
+            throw "WARP package checksum mismatch: expected $warpSha256, got $actualSha256."
+          }
+          Expand-Archive -Path $archive -DestinationPath $warpRoot -Force
+          $pythonDir = python -c "import os, sys; print(os.path.dirname(sys.executable))"
+          Copy-Item -Path (Join-Path $warpRoot "build/native/bin/x64/d3d10warp.dll") -Destination $pythonDir -Force
+          "CROSSTL_CONFORMANCE_WARP_VERSION=1.0.21.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Record toolchains
         run: |
           set -euo pipefail
@@ -207,8 +240,10 @@ jobs:
           CROSSTL_CONFORMANCE_REQUIRE: ${{ matrix.runtimes }}
         run: python -m pytest -q --no-header -p no:warnings --tb=short -rfE tests/conformance/test_native_runtimes.py
 
+      # Later steps still run after a reference failure, so the uploaded artifact explains it.
       - name: Translated route against the scoreboard
         id: translated
+        if: ${{ !cancelled() }}
         env:
           TARGETS: ${{ matrix.targets }}
           RUNTIMES: ${{ matrix.runtimes }}

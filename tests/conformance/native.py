@@ -148,6 +148,76 @@ def execute_vulkan(job):
     return {"runtime": job["runtime"], "device": identity, "api": fields.get("api")}
 
 
+def loaded_module_version(name):
+    """Path and fixed file version of a DLL loaded into this Windows process, or ``(None, None)``."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+    kernel32.GetModuleFileNameW.argtypes = [
+        wintypes.HMODULE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+    ]
+    kernel32.GetModuleFileNameW.restype = wintypes.DWORD
+    handle = kernel32.GetModuleHandleW(name)
+    if not handle:
+        return None, None
+    buffer = ctypes.create_unicode_buffer(32768)
+    if not kernel32.GetModuleFileNameW(handle, buffer, len(buffer)):
+        return None, None
+    path = buffer.value
+    version = ctypes.WinDLL("version", use_last_error=True)
+    version.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, wintypes.LPDWORD]
+    version.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+    version.GetFileVersionInfoW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+    ]
+    version.GetFileVersionInfoW.restype = wintypes.BOOL
+    version.VerQueryValueW.argtypes = [
+        wintypes.LPCVOID,
+        wintypes.LPCWSTR,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.UINT),
+    ]
+    version.VerQueryValueW.restype = wintypes.BOOL
+    size = version.GetFileVersionInfoSizeW(path, None)
+    data = ctypes.create_string_buffer(size) if size else None
+    fixed = wintypes.LPVOID()
+    length = wintypes.UINT()
+    if (
+        data is None
+        or not version.GetFileVersionInfoW(path, 0, size, data)
+        or not version.VerQueryValueW(
+            data, "\\", ctypes.byref(fixed), ctypes.byref(length)
+        )
+        or length.value < 16
+    ):
+        return path, None
+    # VS_FIXEDFILEINFO starts with dwSignature, dwStrucVersion, dwFileVersionMS, dwFileVersionLS.
+    words = ctypes.cast(fixed, ctypes.POINTER(wintypes.DWORD * 4)).contents
+    if words[0] != 0xFEEF04BD:
+        return path, None
+    high, low = words[2], words[3]
+    return path, f"{high >> 16}.{high & 0xFFFF}.{low >> 16}.{low & 0xFFFF}"
+
+
+def _warp_identity(job, name):
+    """The adapter name plus the d3d10warp.dll actually loaded; CROSSTL_CONFORMANCE_WARP_VERSION pins it."""
+    path, version = loaded_module_version("d3d10warp.dll")
+    wanted = os.environ.get("CROSSTL_CONFORMANCE_WARP_VERSION")
+    if wanted and version != wanted:
+        raise RuntimeError(
+            f"Expected d3d10warp.dll {wanted}, loaded {version or 'no version'} from {path or 'nowhere'}"
+        )
+    return _expect(job, f"{name}; d3d10warp {version or 'unknown'}")
+
+
 def execute_d3d12(job):
     import compushady
     from compushady import config
@@ -161,7 +231,7 @@ def execute_d3d12(job):
     if len(devices) != 1:
         raise RuntimeError(f"Expected one D3D12 software device, found {len(devices)}")
     device = devices[0]
-    identity = _expect(job, device.name)
+    _expect(job, device.name)
     views = []
     for resource, filename in zip(job["resources"], FILES):
         data = (Path(job["directory"]) / filename).read_bytes()
@@ -192,4 +262,5 @@ def execute_d3d12(job):
         )
         buffer.copy_to(readback)
         (Path(job["directory"]) / filename).write_bytes(readback.readback())
-    return {"runtime": job["runtime"], "device": identity}
+    # d3d10warp.dll is loaded once the device exists, so its version is read after the dispatch.
+    return {"runtime": job["runtime"], "device": _warp_identity(job, device.name)}
