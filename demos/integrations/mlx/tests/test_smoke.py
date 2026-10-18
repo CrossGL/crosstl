@@ -11,6 +11,9 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.corpus_evidence import (
+    assert_deferred_metal_compiler_diagnostics,
+)
 from demos.integrations.mlx.tests.kernels import test_current_arange as arange
 from tests.runtime_helpers import _validate_generated_artifact
 
@@ -46,7 +49,11 @@ def test_pinned_translation_smoke(smoke_root, tmp_path, target, entry):
         report = translation.to_json()
         validation = validate_project_report(report_path)
         assert validation["success"] is True, validation["diagnostics"]
-        assert report["diagnostics"] == []
+        if target == "metal":
+            # The Linux smoke runner has no Metal compiler; only that warning is allowed.
+            assert_deferred_metal_compiler_diagnostics(report)
+        else:
+            assert report["diagnostics"] == []
         assert report["summary"]["translatedCount"] == 1
         assert report["summary"]["failedCount"] == 0
         (artifact,) = report["artifacts"]
