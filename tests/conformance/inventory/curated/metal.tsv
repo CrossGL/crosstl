@@ -109,26 +109,6 @@ metal.operator.vector-components	vector component access and swizzles	operator	s
 metal.operator.vector-constructors	vector constructors	operator	constructor	Vector Constructors
 metal.operator.matrix-components	matrix component access	operator	selection	Accessing Matrix Components
 metal.operator.matrix-constructors	matrix constructors	operator	constructor	Matrix Constructors
-metal.function.common	clamp, mix, saturate, sign, smoothstep, step	builtin-function	library	Common Functions
-metal.function.integer	abs, absdiff, addsat, clz, ctz, mulhi, popcount, rotate, ...	builtin-function	library	Integer Functions
-metal.function.relational	all, any, isfinite, isinf, isnan, select, ...	builtin-function	library	Relational Functions
-metal.function.math	acos ... trunc, fma, fmax, fmin, fmod, ...	builtin-function	library	Math Functions
-metal.function.matrix	determinant, transpose	builtin-function	library	Matrix Functions
-metal.function.simdgroup-matrix	simdgroup_load, simdgroup_store, simdgroup_multiply_accumulate	builtin-function	library	SIMD-Group Matrix Functions
-metal.function.geometric	cross, distance, dot, length, normalize, reflect, refract	builtin-function	library	Geometric Functions
-metal.function.barriers	threadgroup_barrier, simdgroup_barrier	builtin-function	library	Threadgroup and SIMD-Group Synchronization Functions
-metal.function.simdgroup	simd_sum, simd_shuffle, simd_ballot, ...	builtin-function	library	SIMD-Group Functions
-metal.function.quadgroup	quad_sum, quad_shuffle, ...	builtin-function	library	Quad-Group Functions
-metal.function.derivatives	dfdx, dfdy, fwidth	builtin-function	library	Fragment Functions – Derivatives
-metal.function.samples	get_num_samples, get_sample_position	builtin-function	library	Fragment Functions — Samples
-metal.function.texture-buffer	texture buffer read and write	builtin-function	library	Texture Buffer Functions
-metal.function.texture-synchronization	fence	builtin-function	library	Texture Synchronization Functions
-metal.function.null-texture	is_null_texture	builtin-function	library	Null Texture Functions
-metal.function.pack-unpack	unpack_unorm4x8_to_float, pack_float_to_unorm4x8, ...	builtin-function	library	Unpack and Convert Integers to a Floating-Point Vector
-metal.function.memory-order	memory_order_relaxed / acquire / release / seq_cst	builtin-function	library	Memory Order
-metal.function.thread-scope	thread_scope	builtin-function	library	Thread Scope
-metal.function.fences	atomic_thread_fence	builtin-function	library	Fence Functions
-metal.function.atomics	atomic_load/store/exchange/fetch_op/compare_exchange	builtin-function	library	Atomic Functions
 metal.preprocessor.directives	C++17 preprocessing directives	preprocessor	directive	Preprocessing Directives
 metal.preprocessor.definitions	__METAL_VERSION__ and other predefined macros	preprocessor	macro	Preprocessor Definitions
 metal.preprocessor.options	-D / -I preprocessor compiler options	preprocessor	option	Preprocessor Compiler Options
