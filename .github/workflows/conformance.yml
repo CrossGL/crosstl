@@ -96,7 +96,9 @@ jobs:
             extra: pyobjc-framework-Metal==12.2.2
             developer_dir: /Applications/Xcode_27.1.app/Contents/Developer
           - name: Windows Direct3D 12 WARP
-            os: windows-2022
+            # Windows Server 2022's D3D12 runtime creates compute pipelines only up to cs_6_5 (shader models
+            # 6.6 and later need a newer runtime than the in-box one), so the job runs on Server 2025.
+            os: windows-2025
             targets: hlsl
             runtimes: d3d12-warp
             extra: compushady==0.17.5

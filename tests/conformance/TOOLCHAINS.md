@@ -67,7 +67,7 @@ run) as the `conformance-<profile>` artifact; commit that candidate to record a 
 |---|---|---|---|
 | Linux | `ubuntu-24.04` | DXC v1.9.2602.24 (pinned archive), glslang 16.6.0 (release archive), SPIRV-Tools v2026.4 (built at `ef96ed76` with SPIRV-Headers `49654312`) | `vulkan-lavapipe`, `opengl-llvmpipe` in the Mesa container |
 | macOS | `xcode-27` | Xcode 27.1 `metal` | `metal-apple` |
-| Windows | `windows-2022` | DXC v1.9.2602.24 (pinned archive) | `d3d12-warp` |
+| Windows | `windows-2025` | DXC v1.9.2602.24 (pinned archive) | `d3d12-warp` (WARP 1.0.21; Server 2022's D3D12 runtime stops at cs_6_5) |
 
 Pull requests run the fixture cases under `strict` and `relaxed`; the nightly tier, `workflow_dispatch` and pull
 requests labelled `conformance-full` add six seeded held-out kernels per family and language.
