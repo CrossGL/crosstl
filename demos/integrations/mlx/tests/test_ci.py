@@ -836,8 +836,10 @@ function python {
 
 def test_project_demo_triggers_cover_code_without_root_documentation():
     workflow = _workflow_texts()["demo-project-testing.yml"]
-    paths = _workflow_event_paths(workflow, "pull_request")
-    assert paths == _workflow_event_paths(workflow, "push")
+    # Pull requests always run the workflow so its result check can be required;
+    # ci-plan then skips the MLX jobs for documentation-only changes.
+    assert yaml.safe_load(workflow)[True]["pull_request"] == {"branches": ["main"]}
+    paths = _workflow_event_paths(workflow, "push")
     assert len(paths) == len(set(paths))
     for path in (
         "crosstl/project/pipeline.py",
@@ -867,7 +869,7 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     coverage = _load_ci_coverage_module()
     jobs = coverage.workflow_job_names(workflow)
-    assert len(jobs) == 40
+    assert len(jobs) == 41
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)

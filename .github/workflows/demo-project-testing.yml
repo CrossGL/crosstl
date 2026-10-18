@@ -2,22 +2,10 @@ name: Project Demo Testing
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 on:
+  # Pull requests always run this workflow, so its result check can be required.
+  # The ci-plan job skips every MLX job for changes that do not affect MLX.
   pull_request:
     branches: [main]
-    paths:
-      - ".github/actions/**"
-      - ".github/workflows/demo-project-testing.yml"
-      - ".github/actionlint.yaml"
-      - ".pre-commit-config.yaml"
-      - "crosstl/**"
-      - "demos/integrations/**"
-      - "tests/**"
-      - "tools/**"
-      - "support/**"
-      - "conftest.py"
-      - "pyproject.toml"
-      - "requirements*.txt"
-      - "setup.cfg"
   push:
     branches: [main]
     paths:
@@ -37,6 +25,7 @@ on:
   schedule:
     - cron: "31 4 * * *"
   workflow_dispatch:
+  merge_group:
 permissions:
   contents: read
   actions: read
@@ -9658,3 +9647,67 @@ jobs:
             mlx-upstream/.crosstl-mlx-porting/full-corpus-summary.json
           if-no-files-found: ignore
           retention-days: 14
+
+  result:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-result
+      cancel-in-progress: false
+    # The one MLX check that branch protection and the merge queue require. Jobs
+    # the selected tier skips count as passing; a failed or cancelled job fails it.
+    name: MLX validation result
+    if: always()
+    needs:
+      - ci-plan
+      - mlx-smoke
+      - opengl
+      - metal
+      - metal-float
+      - directx
+      - metal-host
+      - native-metal-reference
+      - directx-dispatch-sequence
+      - opengl-dispatch-sequence
+      - portable-host
+      - small-row-reductions
+      - half-host
+      - integer64-host
+      - slice-update-host
+      - scatter-host
+      - row-packages
+      - reductions
+      - mlx-metal-porting
+      - mlx-current-native-parity
+      - mlx-unary-metal-sources
+      - mlx-unary-metal-roundtrip
+      - mlx-unary-complete-opengl-translation
+      - mlx-unary-complete-directx-translation
+      - mlx-binary-metal-sources
+      - mlx-binary-complete-metal-roundtrip
+      - mlx-copy-metal-sources
+      - mlx-copy-complete-metal-roundtrip
+      - mlx-reduce-metal-sources
+      - mlx-reduce-complete-metal-roundtrip
+      - mlx-quantized-metal-sources
+      - mlx-quantized-complete-metal-roundtrip
+      - mlx-quantized-wide-opengl
+      - mlx-reduce-complete-opengl-translation
+      - mlx-copy-complete-opengl-translation
+      - mlx-copy-complete-directx-translation
+      - mlx-reduce-complete-directx-translation
+      - mlx-binary-complete-opengl-translation
+      - mlx-binary-complete-directx-translation
+      - mlx-full-corpus-scout
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected MLX job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required MLX job ended with '$result'."; exit 1 ;;
+            esac
+          done
