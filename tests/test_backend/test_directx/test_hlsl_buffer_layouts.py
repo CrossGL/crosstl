@@ -152,7 +152,8 @@ def test_metal_constant_buffers_reproduce_hlsl_offsets(tmp_path):
 
     assert "    uint a;\n" in metal
     assert "    packed_int3 f;\n" in metal
-    assert "    packed_uint2 h;\n" in metal
+    # An eight-byte aligned two-component vector keeps the natural type.
+    assert "    uint2 h;\n" in metal
     assert "int(bool(_.a))" in metal
     assert "int(bool2(_.h).y)" in metal
     assert "all(bool2(_.h))" in metal
@@ -217,6 +218,63 @@ def test_metal_structured_buffers_reproduce_hlsl_element_layout(tmp_path):
         tmp_path,
         offsets=[("Item", "B", 8), ("Item", "H", 12), ("Item", "V", 20)],
         sizes=[("Item", 32)],
+    )
+
+
+def test_metal_keeps_natural_vectors_where_they_match_the_hlsl_layout(tmp_path):
+    metal = generate_metal("""
+        struct Pair
+        {
+            float4 A;
+            float B;
+        };
+
+        cbuffer Scene : register(b0)
+        {
+            float4 offset;
+            float4 padding[15];
+        }
+
+        cbuffer Tail : register(b1)
+        {
+            uint __x;
+            float4 color;
+            float3 direction;
+        }
+
+        StructuredBuffer<float4> colors : register(t0);
+        RWStructuredBuffer<Pair> pairs : register(u0);
+        RWStructuredBuffer<int2> cells : register(u1);
+
+        [numthreads(64, 1, 1)]
+        void Execute(uint3 ThreadIds : SV_DispatchThreadID)
+        {
+            pairs[ThreadIds.x].A = colors[ThreadIds.x] * offset + color;
+            pairs[ThreadIds.x].B = direction.x + padding[ThreadIds.x].y;
+            cells[ThreadIds.x] = int2(ThreadIds.xy) + int(__x);
+        }
+        """)
+
+    # Same size and an aligned offset: the natural vector type.
+    assert "    float4 offset;\n" in metal
+    assert "const device float4* colors" in metal
+    assert "device int2* cells" in metal
+    # A natural float4 would raise the alignment of this constant buffer and
+    # round its 44-byte size up to 48.
+    assert "    packed_float4 color;\n" in metal
+    assert "    packed_float3 direction;\n" in metal
+    # Structured elements are four-byte aligned: Pair has a 20-byte stride.
+    assert "    packed_float4 A;\n" in metal
+    compile_metal_with_layout(
+        metal,
+        tmp_path,
+        offsets=[
+            ("Scene", "padding", 16),
+            ("Tail", "color", 16),
+            ("Tail", "direction", 32),
+            ("Pair", "B", 16),
+        ],
+        sizes=[("Scene", 256), ("Tail", 44), ("Pair", 20)],
     )
 
 

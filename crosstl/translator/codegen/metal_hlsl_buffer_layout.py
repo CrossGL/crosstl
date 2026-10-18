@@ -188,7 +188,7 @@ class MetalHlslBufferLayouts:
         self.struct_plans[name] = plan
         return plan
 
-    def plan_members(self, name, layout_type, layout):
+    def plan_members(self, name, layout_type, layout, root=False):
         placements, _hlsl_size = struct_placements(layout_type, layout)
         plan = MetalLayoutPlan(name=name, layout=layout)
         cursor = 0
@@ -212,7 +212,35 @@ class MetalHlslBufferLayouts:
             max_alignment = max(max_alignment, member.alignment)
         plan.alignment = max_alignment
         plan.size = align_to(cursor, max_alignment)
+        self.use_natural_vector_storage(plan, cursor, root)
         return plan
+
+    @staticmethod
+    def use_natural_vector_storage(plan, end, root):
+        """Replace ``packed_*`` two- and four-component vectors by natural types.
+
+        Those vectors have the same size either way, so a naturally aligned
+        offset keeps every member, and the explicit padding before it, in place.
+        A nested struct keeps its alignment, which determines its offset and
+        array stride in the enclosing layout; the root of a constant buffer may
+        raise its alignment while its size stays the same.
+        """
+        for member in plan.members:
+            match = re.fullmatch(r"packed_([a-z]+)([24])", member.storage_type)
+            if match is None:
+                continue
+            scalar, width = match.group(1), int(match.group(2))
+            scalar_size = {"double": 8, "long": 8, "ulong": 8}.get(scalar, 4)
+            alignment = scalar_size * width
+            if member.offset % alignment:
+                continue
+            if alignment > plan.alignment and (
+                not root or align_to(end, alignment) != plan.size
+            ):
+                continue
+            member.storage_type = f"{scalar}{width}"
+            member.alignment = alignment
+            plan.alignment = max(plan.alignment, alignment)
 
     def member_storage(self, placement, layout):
         layout_type = placement.layout_type
@@ -317,7 +345,7 @@ class MetalHlslBufferLayouts:
                 for member_name, member_type in members
             ],
         )
-        return self.plan_members(name, layout_type, HLSL_CBUFFER_LAYOUT)
+        return self.plan_members(name, layout_type, HLSL_CBUFFER_LAYOUT, root=True)
 
     def plan_structured_element(self, raw_type):
         """Storage of one structured-buffer element.
@@ -330,4 +358,8 @@ class MetalHlslBufferLayouts:
         storage_type, _size, _alignment, read, write, _nested = self.value_storage(
             layout_type, HLSL_STRUCTURED_LAYOUT
         )
+        if layout_type.kind == "vector" and layout_type.components in (2, 4):
+            # The element stride equals the vector size either way, and buffer
+            # bases are aligned, so the natural vector type has the same layout.
+            storage_type = storage_type[len("packed_") :]
         return storage_type, read, write

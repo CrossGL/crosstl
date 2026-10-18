@@ -507,7 +507,6 @@ class GLSLEmulatedMatrices:
             _s, rows, inner = left["shape"]
             columns = right["shape"][2]
             result_shape = (scalar, rows, columns)
-            vector_type_name(scalar, rows)
             parts = []
             for j in range(columns):
                 terms = [
