@@ -122,6 +122,15 @@ def merge(baseline, records, scope):
     }
 
 
+def results_scope(records):
+    """Scope a merge to the key values the results cover, on every key field.
+
+    Scoping on fewer fields would drop baseline cells of the same case and runtime that the
+    results do not cover, such as the other route or compile configuration.
+    """
+    return {name: {str(record[name]) for record in records} for name in KEYS}
+
+
 def read_results(path):
     return [
         json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()
@@ -138,10 +147,7 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     records = [record for path in args.results for record in read_results(path)]
-    scope = {
-        name: {str(record[name]) for record in records}
-        for name in ("runtime", "target", "case")
-    }
+    scope = results_scope(records)
     baseline = json.loads(args.write.read_text()) if args.write.is_file() else {}
     args.write.write_text(
         json.dumps(merge(baseline, records, scope), indent=2, sort_keys=True) + "\n"

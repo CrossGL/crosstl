@@ -10,7 +10,7 @@ from .cases import BY_ID, CASES, compare
 from .heldout import heldout_cases
 from .interface import InterfaceChanged, hlsl_reflected_strides, interface
 from .process import CommandResult, require_artifact, run
-from .scoreboard import check, improvements, merge, snapshot
+from .scoreboard import check, improvements, merge, results_scope, snapshot
 from .validators import dxil_is_signed, validate
 
 
@@ -475,6 +475,18 @@ def test_scoreboard_scope_is_explicit_per_runtime():
     ]
     with pytest.raises(ValueError, match="scope fields"):
         check(baseline, [record()], scope={"device": {"x"}})
+
+
+def test_scoreboard_results_scope_keeps_other_routes_and_configs():
+    reference = record("diverged")
+    reference["route"] = "reference"
+    relaxed = record("diverged")
+    relaxed["config"] = "relaxed"
+    baseline = snapshot([record("diverged"), reference, relaxed])
+    fresh = [record()]
+    merged = merge(baseline, fresh, results_scope(fresh))
+    assert set(merged["cells"]) == set(baseline["cells"])
+    assert merged["counts"] == {"diverged": 2, "preserved": 1}
 
 
 def test_scoreboard_merge_replaces_only_the_runs_scope():
