@@ -103,15 +103,16 @@ def cell_id(unit, target):
 class Worker:
     """One persistent translation process; a timed-out or dead process is replaced before the next job."""
 
-    def __init__(self, timeout):
+    def __init__(self, timeout, module="tests.conformance.corpus.worker"):
         self.timeout = timeout
+        self.module = module
         self.child = None
         self.lines = None
 
     def _start(self):
         environment = {**os.environ, "PYTHONPATH": str(REPOSITORY)}
         self.child = subprocess.Popen(
-            [sys.executable, "-m", "tests.conformance.corpus.worker"],
+            [sys.executable, "-m", self.module],
             cwd=REPOSITORY,
             env=environment,
             stdin=subprocess.PIPE,
@@ -126,7 +127,7 @@ class Worker:
         ).start()
         ready = self.lines.get(timeout=300)
         if ready is None:
-            raise RuntimeError("The corpus translation worker exited during start-up")
+            raise RuntimeError(f"The worker {self.module} exited during start-up")
 
     @staticmethod
     def _read(child, lines):

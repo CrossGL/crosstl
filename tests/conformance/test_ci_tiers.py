@@ -33,11 +33,21 @@ def selected_legs(workflow, full):
     with tempfile.TemporaryDirectory() as scratch:
         output = Path(scratch) / "output"
         output.write_text("")
-        environment = {key: value for key, value in step["env"].items() if key != "FULL"}
+        environment = {
+            key: value for key, value in step["env"].items() if key != "FULL"
+        }
         environment.update(
-            PATH=os.environ.get("PATH", ""), FULL="true" if full else "false", GITHUB_OUTPUT=str(output)
+            PATH=os.environ.get("PATH", ""),
+            FULL="true" if full else "false",
+            GITHUB_OUTPUT=str(output),
         )
-        subprocess.run(["bash", "-c", step["run"]], env=environment, check=True, capture_output=True, timeout=30)
+        subprocess.run(
+            ["bash", "-c", step["run"]],
+            env=environment,
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
         key, _, value = output.read_text().strip().partition("=")
     assert key == "legs"
     return json.loads(value)
@@ -46,7 +56,10 @@ def selected_legs(workflow, full):
 @pytest.mark.parametrize("name", TIERED)
 def test_every_job_has_a_timeout(name):
     for job, definition in load(name)["jobs"].items():
-        assert isinstance(definition.get("timeout-minutes"), int) and definition["timeout-minutes"] > 0, job
+        assert (
+            isinstance(definition.get("timeout-minutes"), int)
+            and definition["timeout-minutes"] > 0
+        ), job
 
 
 @pytest.mark.parametrize("name", TIERED)
@@ -59,19 +72,30 @@ def test_full_selection_follows_the_event_and_the_label(name):
 @pytest.mark.parametrize("name", TIERED)
 def test_matrix_is_the_selected_legs(name):
     jobs = load(name)["jobs"]
-    hosted = [job for job, definition in jobs.items() if "matrix" in definition.get("runs-on", "")]
+    hosted = [
+        job
+        for job, definition in jobs.items()
+        if "matrix" in definition.get("runs-on", "")
+    ]
     assert hosted
     for job in hosted:
         assert jobs[job]["needs"] == "legs"
-        assert jobs[job]["strategy"]["matrix"] == {"include": "${{ fromJSON(needs.legs.outputs.legs) }}"}
+        assert jobs[job]["strategy"]["matrix"] == {
+            "include": "${{ fromJSON(needs.legs.outputs.legs) }}"
+        }
     for job, definition in jobs.items():
         runner = str(definition.get("runs-on", "")).lower()
         assert job in hosted or not any(word in runner for word in SCARCE), job
 
 
-@pytest.mark.skipif(not Path("/bin/bash").exists() or not any(
-    (Path(directory) / "jq").exists() for directory in os.environ.get("PATH", "").split(os.pathsep)
-), reason="the leg selection step needs bash and jq")
+@pytest.mark.skipif(
+    not Path("/bin/bash").exists()
+    or not any(
+        (Path(directory) / "jq").exists()
+        for directory in os.environ.get("PATH", "").split(os.pathsep)
+    ),
+    reason="the leg selection step needs bash and jq",
+)
 @pytest.mark.parametrize("name", TIERED)
 def test_pull_requests_run_only_linux_legs(name):
     workflow = load(name)
@@ -87,7 +111,9 @@ def test_pull_requests_run_only_linux_legs(name):
 
 def test_conformance_runs_on_pull_requests_for_its_paths():
     trigger = load("conformance.yml")["on"]
-    assert "types" not in trigger["pull_request"], "the label takes effect on the next push"
+    assert (
+        "types" not in trigger["pull_request"]
+    ), "the label takes effect on the next push"
     assert "crosstl/**" in trigger["pull_request"]["paths"]
     assert "tests/conformance/**" in trigger["pull_request"]["paths"]
     assert "schedule" in trigger and "workflow_dispatch" in trigger
@@ -97,7 +123,11 @@ def test_corpus_pull_requests_are_path_filtered():
     trigger = load("corpus.yml")["on"]
     paths = trigger["pull_request"]["paths"]
     assert "types" not in trigger["pull_request"]
-    for required in ("crosstl/**", "tests/conformance/corpus/**", ".github/workflows/corpus.yml"):
+    for required in (
+        "crosstl/**",
+        "tests/conformance/corpus/**",
+        ".github/workflows/corpus.yml",
+    ):
         assert required in paths
     assert "schedule" in trigger and "workflow_dispatch" in trigger
 
@@ -105,8 +135,14 @@ def test_corpus_pull_requests_are_path_filtered():
 def test_conformance_merge_queue_runs_the_full_tier():
     workflow = load("conformance.yml")
     assert "merge_group" in workflow["on"]
-    tier = next(step for step in workflow["jobs"]["native"]["steps"] if step.get("name", "").startswith("Select tier"))
-    assert '"$GITHUB_EVENT_NAME" = merge_group' in tier["run"], "the merge queue adds the held-out kernels"
+    tier = next(
+        step
+        for step in workflow["jobs"]["native"]["steps"]
+        if step.get("name", "").startswith("Select tier")
+    )
+    assert (
+        '"$GITHUB_EVENT_NAME" = merge_group' in tier["run"]
+    ), "the merge queue adds the held-out kernels"
 
 
 def test_conformance_result_requires_every_job():
@@ -117,3 +153,22 @@ def test_conformance_result_requires_every_job():
     assert sorted(result["needs"]) == sorted(job for job in jobs if job != "result")
     script = result["steps"][0]["run"]
     assert "success|skipped) ;;" in script and "exit 1" in script
+
+
+def test_fuzz_runs_weekly_on_linux_only():
+    workflow = load("fuzz.yml")
+    assert set(workflow["on"]) == {"schedule", "workflow_dispatch"}
+    minute, hour, day, month, weekday = workflow["on"]["schedule"][0]["cron"].split()
+    assert day == month == "*" and weekday != "*", "weekly"
+    for job, definition in workflow["jobs"].items():
+        assert definition["runs-on"].startswith("ubuntu-"), job
+        assert isinstance(definition.get("timeout-minutes"), int), job
+
+
+def test_harness_job_installs_the_fuzzing_dependency():
+    install = next(
+        step["run"]
+        for step in load("conformance.yml")["jobs"]["harness"]["steps"]
+        if "pip install" in step.get("run", "")
+    )
+    assert "hypothesis==" in install
