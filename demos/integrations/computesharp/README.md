@@ -276,20 +276,37 @@ No upstream assertion, tolerance, shader, input or expected image is changed.
 
 ## Evidence and Negative Controls
 
-The runtime writes one JSON record per device, compiled pipeline, dispatch and
-readback, each attributed to the executing case: the HLSL and artifact hashes,
-thread-group size, dispatch size and thread groups, constant bytes, each
-register with the slot and resource bound to it, and readback sizes and hashes.
-Every native buffer carries 256-byte guard regions with a fixed pattern that is
-verified after each submission. Runs have deadlines: MSTest stops the test host
-when one case runs longer than 5 minutes (the slowest case takes about 10
-seconds), and the runner stops a complete run after 25 minutes and a control
-run after 4 minutes, so a hung dispatch fails the run instead of holding the
-job. `evidence.py` checks the evidence against the
-manifest, the artifact files, the discovery and the TRX: every pipeline uses a
-translated artifact, every descriptor range is bound to the slot CrossTL
-reported, the thread groups cover the dispatch, dispatches come only from
-required GPU cases, and the device matches the profile.
+The runtime writes one JSON record per device, capability query, resource
+allocation and release, compiled pipeline, dispatch and readback, each
+attributed to the executing case (releases are not, because finalizers release
+resources while other cases run): the answer of every public capability query
+(`IsDoublePrecisionSupportAvailable`, `Is*Texture*SupportedForType<T>`), the
+type, memory (device or host), size and shape of every resource, the HLSL and
+artifact hashes, thread-group size, dispatch size and thread groups, constant
+bytes, each register with the slot and resource bound to it, and readback sizes
+and hashes. Every native buffer carries 256-byte guard regions with a fixed
+pattern that is verified after each submission. Runs have deadlines: MSTest
+stops the test host when one case runs longer than 5 minutes (the slowest case
+takes about 10 seconds), and the runner stops a complete run after 25 minutes
+and a control run after 4 minutes, so a hung dispatch fails the run instead of
+holding the job. `evidence.py` checks the evidence against the manifest, the
+artifact files, the discovery and the TRX: every pipeline uses a translated
+artifact, every descriptor range is bound to the slot CrossTL reported and to a
+device resource that was allocated and not yet released, readbacks read live
+device resources, the thread groups cover the dispatch, dispatches come only
+from required GPU cases, and the device matches the profile.
+
+Every executed required GPU case must leave evidence. `evidence_policy.json`
+lists the reviewed exceptions with their reasons: the `Allocate_Uninitialized_Fail`
+methods and two null-argument imaging tests, whose arguments are rejected
+before any device work, `InitializationTests.IsSupported`, which only queries
+the process-wide default device, and `InitializationTests.QueryDevices`, whose
+body runs once per device with dedicated memory and therefore not at all on the
+shared-memory Metal and llvmpipe devices. The policy also states which capability
+query answers each capability of the contract: every case of a capability-gated
+method must record that query, and every answer must equal the capability the
+profile declares, so a gated case cannot be skipped by anything but the device
+query.
 
 `negative_controls.json` lists five faults injected through
 `CROSSTL_COMPUTESHARP_FAULT` and the upstream methods that must fail under each:
@@ -395,9 +412,10 @@ loosening any upstream threshold:
   arithmetic in entry points relies on the driver not contracting, which holds
   for llvmpipe (the probe measures it) but is not required by the GLSL
   specification.
-- Evidence records dispatches, pipelines and readbacks. Cases that only allocate
-  resources or validate arguments (for example `*_Fail` transfer tests) leave no
-  records; their results come from the upstream assertions alone.
+- The cases of the 12 host-only methods in `evidence_policy.json` leave no
+  device records; their results come from the upstream assertions alone.
+  `InitializationTests.QueryDevices` passes without running its body on the
+  translated targets, because no shared-memory device reports dedicated memory.
 - The adapted build uses the ImageSharp codec instead of WIC for the imaging
   tests, with WIC's default JPEG settings.
 

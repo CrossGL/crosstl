@@ -62,6 +62,14 @@ namespace ComputeSharp.Resources
             GraphicsDevice = device;
             Length = length;
             this.nativeBuffer = device.Native.CreateBuffer((ulong)effectiveSizeInBytes);
+
+            EvidenceLog.Resource(ResourceId, GetType(), "device", effectiveSizeInBytes, json =>
+            {
+                json.WriteString("elementType", EvidenceLog.TypeName(typeof(T)));
+                json.WriteNumber("length", length);
+                json.WriteNumber("elementBytes", elementSizeInBytes);
+                json.WriteString("allocationMode", allocationMode.ToString());
+            });
         }
 
         /// <summary>Gets the <see cref="ComputeSharp.GraphicsDevice"/> associated with the current instance.</summary>
@@ -110,6 +118,7 @@ namespace ComputeSharp.Resources
             if (GraphicsDevice is GraphicsDevice device && this.nativeBuffer != IntPtr.Zero)
             {
                 device.Native.DestroyBuffer(this.nativeBuffer);
+                EvidenceLog.Release(ResourceId);
             }
 
             this.nativeBuffer = IntPtr.Zero;
@@ -332,6 +341,15 @@ namespace ComputeSharp.Resources
             // Transfer resources are host memory; Direct3D 12 upload and readback heaps are zero initialized.
             this.mappedData = (T*)NativeMemory.AlignedAlloc(sizeInBytes == 0 ? 1 : sizeInBytes, 256);
             NativeMemory.Clear(this.mappedData, sizeInBytes);
+            ResourceId = EvidenceLog.NextResourceId();
+
+            EvidenceLog.Resource(ResourceId, GetType(), "host", (long)sizeInBytes, json =>
+            {
+                json.WriteString("elementType", EvidenceLog.TypeName(typeof(T)));
+                json.WriteNumber("length", length);
+                json.WriteNumber("elementBytes", sizeof(T));
+                json.WriteString("allocationMode", allocationMode.ToString());
+            });
         }
 
         /// <summary>Gets the <see cref="ComputeSharp.GraphicsDevice"/> associated with the current instance.</summary>
@@ -339,6 +357,8 @@ namespace ComputeSharp.Resources
 
         /// <summary>Gets the length of the current buffer.</summary>
         public int Length { get; }
+
+        internal long ResourceId { get; }
 
         internal T* MappedData => this.mappedData;
 
@@ -368,7 +388,11 @@ namespace ComputeSharp.Resources
 
         void IReferenceTrackedObject.DangerousOnDispose()
         {
-            NativeMemory.AlignedFree(this.mappedData);
+            if (this.mappedData is not null)
+            {
+                NativeMemory.AlignedFree(this.mappedData);
+                EvidenceLog.Release(ResourceId);
+            }
 
             this.mappedData = null;
         }

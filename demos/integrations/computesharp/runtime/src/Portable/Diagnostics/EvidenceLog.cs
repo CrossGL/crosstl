@@ -12,9 +12,10 @@ using ComputeSharp.Portable.Native;
 namespace ComputeSharp.Portable.Diagnostics;
 
 /// <summary>
-/// Writes JSON Lines evidence of device creation, pipeline compilation, dispatches and
-/// readbacks when <c>CROSSTL_COMPUTESHARP_EVIDENCE</c> is set. Records carry the test
-/// case that issued them so results can be traced to the frozen case inventory.
+/// Writes JSON Lines evidence of device creation, capability queries, resource allocation
+/// and release, pipeline compilation, dispatches and readbacks when
+/// <c>CROSSTL_COMPUTESHARP_EVIDENCE</c> is set. Records carry the test case that issued them
+/// so results can be traced to the frozen case inventory.
 /// </summary>
 internal static class EvidenceLog
 {
@@ -43,7 +44,8 @@ internal static class EvidenceLog
         return CurrentTestMethod();
     }
 
-    public static void Write(string kind, Action<Utf8JsonWriter> body)
+    /// <summary>Writes one record; <paramref name="attribute"/> selects whether it names the current test case.</summary>
+    public static void Write(string kind, Action<Utf8JsonWriter> body, bool attribute = true)
     {
         if (Writer is null)
         {
@@ -62,7 +64,7 @@ internal static class EvidenceLog
                 json.WriteString("fault", fault);
             }
 
-            string? testCase = CurrentCase();
+            string? testCase = attribute ? CurrentCase() : null;
             if (testCase is not null)
             {
                 json.WriteString("case", testCase);
@@ -78,6 +80,89 @@ internal static class EvidenceLog
             Writer.WriteLine(line);
             Writer.Flush();
         }
+    }
+
+    /// <summary>
+    /// Records the allocation of a resource. <paramref name="memory"/> is <c>device</c> for
+    /// allocations made through the native backend and <c>host</c> for transfer resources,
+    /// which the portable runtime keeps in host memory.
+    /// </summary>
+    public static void Resource(long resourceId, Type type, string memory, long bytes, Action<Utf8JsonWriter> shape)
+    {
+        if (Writer is null)
+        {
+            return;
+        }
+
+        Write("resource", json =>
+        {
+            json.WriteNumber("resourceId", resourceId);
+            json.WriteString("type", TypeName(type));
+            json.WriteString("memory", memory);
+            json.WriteNumber("bytes", bytes);
+            shape(json);
+        });
+    }
+
+    /// <summary>
+    /// Records that the memory of a resource was released. Finalizers can release resources
+    /// while another case runs, so the record names no case.
+    /// </summary>
+    public static void Release(long resourceId)
+    {
+        if (Writer is null)
+        {
+            return;
+        }
+
+        Write("release", json => json.WriteNumber("resourceId", resourceId), attribute: false);
+    }
+
+    /// <summary>Records the answer of a device capability query made through the public API.</summary>
+    public static void Capability(string capability, bool available, Action<Utf8JsonWriter>? details = null)
+    {
+        if (Writer is null)
+        {
+            return;
+        }
+
+        Write("capability", json =>
+        {
+            json.WriteString("capability", capability);
+            json.WriteBoolean("available", available);
+            details?.Invoke(json);
+        });
+    }
+
+    /// <summary>Formats a type as its namespace-qualified name with C#-style type arguments.</summary>
+    public static string TypeName(Type type)
+    {
+        if (!type.IsGenericType)
+        {
+            return type.FullName ?? type.Name;
+        }
+
+        string name = type.GetGenericTypeDefinition().FullName ?? type.Name;
+        int tick = name.IndexOf('`');
+        if (tick >= 0)
+        {
+            name = name[..tick];
+        }
+
+        StringBuilder builder = new(name);
+        builder.Append('<');
+        Type[] arguments = type.GetGenericArguments();
+        for (int i = 0; i < arguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(", ");
+            }
+
+            builder.Append(TypeName(arguments[i]));
+        }
+
+        return builder.Append('>').ToString();
     }
 
     public static string Hex(ReadOnlySpan<byte> data)

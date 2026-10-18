@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CONTRACT = ROOT / "tests" / "fixture" / "coverage.json"
+FIXTURE_POLICY = ROOT / "tests" / "fixture" / "evidence_policy.json"
 
 
 def load_module(name, path):
