@@ -98,7 +98,6 @@
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.call_bfloat16_bitcast_function::fallback-text": 3,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.call_bitcast_builtin_function::fallback-text": 2,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.call_buffer_atomic_function::fallback-text": 10,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.call_builtin_function::fallback-text": 18,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.call_builtin_function::identity-fallback": 1,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.call_byte_address_buffer_load_helper::fallback-text": 3,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.call_byte_address_buffer_store_helper::fallback-text": 4,
@@ -164,7 +163,7 @@
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.process_constant_struct_constructor::fallback-text": 2,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.process_continue::fallback-text": 1,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.process_dispatch_mesh_operation::fallback-text": 3,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.process_expression::fallback-text": 11,
+  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.process_expression::fallback-text": 10,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.process_fragment_discard_statement::fallback-text": 1,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.process_geometry_stream_function_call::fallback-text": 2,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.process_increment_expression::fallback-text": 1,
@@ -246,7 +245,6 @@
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.validate_storage_image_sample::fallback-text": 1,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.validate_tessellation_integer_index::fallback-text": 2,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.validate_texture_gather_component_operand::fallback-text": 1,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.vector_math_operand_diagnostic::fallback-text": 8,
   "crosstl/translator/codegen/ast_utils.py::ASTUtils._map_primitive_type::identity-fallback": 1,
   "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.convert_builtin_function::identity-fallback": 1,
   "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.convert_crossgl_type_to_cuda::identity-fallback": 3,
@@ -493,7 +491,7 @@
  },
  "totals": {
   "empty-block-recovery": 1,
-  "fallback-text": 618,
+  "fallback-text": 591,
   "identity-fallback": 184
  }
 }

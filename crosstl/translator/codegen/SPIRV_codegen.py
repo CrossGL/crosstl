@@ -91,6 +91,7 @@ from .pointer_reinterpret import (
 )
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_local_references import SpirvLocalReferenceMixin
+from .spirv_math_polyfills import SpirvMathPolyfillMixin
 
 
 class SpirvType:
@@ -165,6 +166,42 @@ class UnsupportedSPIRVFeatureError(ValueError):
         self.source_location = source_location
 
 
+CALLEE_IDENTIFIER = re.compile(r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*")
+INDIRECT_CALL_DETAIL = (
+    "Vulkan SPIR-V has no function pointers, so a call through a function table "
+    "or other callee expression cannot be lowered"
+)
+
+
+class SPIRVBuiltinLoweringError(UnsupportedSPIRVFeatureError):
+    """Raised when a call has no SPIR-V lowering that preserves its meaning.
+
+    Covers calls to names that are neither declared functions nor supported
+    built-ins, and built-in calls whose operand count or types have no defined
+    lowering. Emitting a default value instead would be silently wrong output.
+    """
+
+    project_diagnostic_code = "project.translate.vulkan-builtin-unsupported"
+
+    def __init__(
+        self,
+        function_name: str,
+        detail: str,
+        *,
+        reason: str = "invalid-operands",
+        source_location=None,
+    ):
+        self.function_name = function_name
+        self.detail = detail
+        self.reason = reason
+        super().__init__(
+            f"builtin:{function_name}",
+            f"Cannot lower call to '{function_name}' to SPIR-V: {detail}",
+            missing_capabilities=(f"spirv.builtin.{function_name}",),
+            source_location=source_location,
+        )
+
+
 class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
     """Raised when Vulkan SPIR-V cannot preserve an atomic fence contract."""
 
@@ -198,7 +235,9 @@ class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
         )
 
 
-class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
+class VulkanSPIRVCodeGen(
+    SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin, SpirvMathPolyfillMixin
+):
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     POINTER_OFFSET_RESET_MARKER_PREFIX = "; __crosstl_pointer_offset_reset_"
@@ -11490,6 +11529,10 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
         if float_semantics_call is not None:
             return float_semantics_call
 
+        math_polyfill_call = self.call_math_polyfill_function(function_name, args)
+        if math_polyfill_call is not None:
+            return math_polyfill_call
+
         exact_operand_counts = {
             "min": 2,
             "max": 2,
@@ -11509,16 +11552,11 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
         expected_operand_count = exact_operand_counts.get(function_name)
         if expected_operand_count is not None and len(args) != expected_operand_count:
             operand_label = "operand" if expected_operand_count == 1 else "operands"
-            self.emit(
-                f"; WARNING: {function_name} requires "
-                f"{expected_operand_count} {operand_label}"
+            raise self.builtin_lowering_error(
+                function_name,
+                f"{function_name} requires "
+                f"{expected_operand_count} {operand_label}",
             )
-            fallback_type = self.register_primitive_type("float")
-            if function_name in {"length", "distance"}:
-                fallback_type = self.metric_result_type(args)
-            elif args:
-                fallback_type = self.ensure_registered_type(args[0].type)
-            return self.default_value_for_type(fallback_type)
 
         if function_name == "mix" and len(args) == 3:
             bool_mix = self.call_bool_mix_function(args)
@@ -11543,126 +11581,105 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
             absolute = self.call_abs_function(args[0])
             if absolute is not None:
                 return absolute
-            self.emit(
-                "; WARNING: abs requires floating-point or signed integer "
-                "scalar or vector operand"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "abs requires floating-point or signed integer "
+                "scalar or vector operand",
             )
 
         if function_name == "pow" and len(args) == 2:
             power = self.call_pow_function(args)
             if power is not None:
                 return power
-            self.emit(
-                "; WARNING: pow requires compatible 32-bit floating-point "
-                "scalar or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "pow requires compatible 32-bit floating-point "
+                "scalar or vector operands",
             )
 
         if function_name == "fma" and len(args) == 3:
             fused = self.call_fma_function(args)
             if fused is not None:
                 return fused
-            self.emit(
-                "; WARNING: fma requires compatible floating-point scalar "
-                "or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "fma requires compatible floating-point scalar " "or vector operands",
             )
 
         if function_name == "faceforward" and len(args) == 3:
             faced = self.call_faceforward_function(args)
             if faced is not None:
                 return faced
-            self.emit(
-                "; WARNING: faceforward requires compatible floating-point "
-                "scalar or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "faceforward requires compatible floating-point "
+                "scalar or vector operands",
             )
 
         if function_name == "refract" and len(args) == 3:
             refracted = self.call_refract_function(args)
             if refracted is not None:
                 return refracted
-            self.emit(
-                "; WARNING: refract requires matching floating-point incident "
-                "and normal operands plus scalar eta"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "refract requires matching floating-point incident "
+                "and normal operands plus scalar eta",
             )
 
         if function_name == "length" and len(args) == 1:
             measured = self.call_length_function(args[0])
             if measured is not None:
                 return measured
-            self.emit(
-                "; WARNING: length requires floating-point scalar or vector operand"
+            raise self.builtin_lowering_error(
+                function_name,
+                "length requires floating-point scalar or vector operand",
             )
-            return self.default_value_for_type(self.metric_result_type(args))
 
         if function_name == "distance" and len(args) == 2:
             measured = self.call_distance_function(args)
             if measured is not None:
                 return measured
-            self.emit(
-                "; WARNING: distance requires matching floating-point scalar "
-                "or vector operands"
+            raise self.builtin_lowering_error(
+                function_name,
+                "distance requires matching floating-point scalar "
+                "or vector operands",
             )
-            return self.default_value_for_type(self.metric_result_type(args))
 
         if function_name == "normalize" and len(args) == 1:
             normalized = self.call_normalize_function(args[0])
             if normalized is not None:
                 return normalized
-            self.emit(
-                "; WARNING: normalize requires floating-point scalar or vector operand"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "normalize requires floating-point scalar or vector operand",
             )
 
         if function_name == "reflect" and len(args) == 2:
             reflected = self.call_reflect_function(args)
             if reflected is not None:
                 return reflected
-            self.emit(
-                "; WARNING: reflect requires matching floating-point scalar "
-                "or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "reflect requires matching floating-point scalar " "or vector operands",
             )
 
         if function_name == "step" and len(args) == 2:
             stepped = self.call_step_smoothstep_function("Step", args, 1)
             if stepped is not None:
                 return stepped
-            self.emit(
-                "; WARNING: step requires compatible floating-point scalar "
-                "or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[1].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "step requires compatible floating-point scalar " "or vector operands",
             )
 
         if function_name == "smoothstep" and len(args) == 3:
             smoothed = self.call_step_smoothstep_function("SmoothStep", args, 2)
             if smoothed is not None:
                 return smoothed
-            self.emit(
-                "; WARNING: smoothstep requires compatible floating-point "
-                "scalar or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[2].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "smoothstep requires compatible floating-point "
+                "scalar or vector operands",
             )
 
         if (
@@ -11674,21 +11691,19 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
             min_max_clamp = self.call_min_max_clamp_function(function_name, args)
             if min_max_clamp is not None:
                 return min_max_clamp
-            self.emit(
-                f"; WARNING: {function_name} requires compatible scalar or "
-                "vector numeric operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                f"{function_name} requires compatible scalar or "
+                "vector numeric operands",
             )
 
         if function_name == "mix" and len(args) == 3:
             numeric_mix = self.call_numeric_mix_function(args)
             if numeric_mix is not None:
                 return numeric_mix
-            self.emit("; WARNING: mix requires compatible value operands and selector")
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "mix requires compatible value operands and selector",
             )
 
         vector_info = self.vector_component_type_and_count(function_name)
@@ -11784,10 +11799,10 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
         # Special case for dot product - use OpDot instead of OpExtInst
         elif function_name == "dot" and len(args) == 2:
             if not self.dot_operands_are_valid(args):
-                self.emit(
-                    "; WARNING: dot requires matching floating-point vector operands"
+                raise self.builtin_lowering_error(
+                    function_name,
+                    "dot requires matching floating-point vector operands",
                 )
-                return self.default_value_for_type(self.dot_result_type(args))
 
             component_type = self.scalar_or_vector_component_type(args[0].type)
             result_type = self.register_primitive_type(component_type)
@@ -11823,6 +11838,9 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
                 "sinh": "Sinh",
                 "cosh": "Cosh",
                 "tanh": "Tanh",
+                "asinh": "Asinh",
+                "acosh": "Acosh",
+                "atanh": "Atanh",
                 "exp": "Exp",
                 "log": "Log",
                 "exp2": "Exp2",
@@ -11849,12 +11867,15 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
                 "atan2" if function_name == "atan" and len(args) == 2 else function_name
             )
             if std450_function_name not in glsl_std450_map:
-                self.emit(
-                    f"; WARNING: SPIR-V backend cannot lower unknown function "
-                    f"'{function_name}'; using default value"
-                )
-                return self.default_value_for_type(
-                    self.unknown_function_fallback_type(args)
+                if not CALLEE_IDENTIFIER.fullmatch(function_name):
+                    raise self.builtin_lowering_error(
+                        function_name, INDIRECT_CALL_DETAIL, reason="indirect-call"
+                    )
+                raise self.builtin_lowering_error(
+                    function_name,
+                    "it is neither a declared function nor a built-in with a "
+                    "SPIR-V lowering",
+                    reason="unknown-function",
                 )
 
             unary_std450_functions = {
@@ -11867,6 +11888,9 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
                 "sinh",
                 "cosh",
                 "tanh",
+                "asinh",
+                "acosh",
+                "atanh",
                 "exp",
                 "log",
                 "exp2",
@@ -11901,22 +11925,17 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
                 and len(args) != expected_operand_count
             ):
                 operand_label = "operand" if expected_operand_count == 1 else "operands"
-                self.emit(
-                    f"; WARNING: {function_name} requires "
-                    f"{expected_operand_count} {operand_label}"
+                raise self.builtin_lowering_error(
+                    function_name,
+                    f"{function_name} requires "
+                    f"{expected_operand_count} {operand_label}",
                 )
-                fallback_type = float_type
-                if args and std450_function_name not in {"length", "distance"}:
-                    fallback_type = self.ensure_registered_type(args[0].type)
-                return self.default_value_for_type(fallback_type)
 
             vector_math_diagnostic = self.vector_math_operand_diagnostic(
                 std450_function_name, args
             )
             if vector_math_diagnostic is not None:
-                warning, fallback_type = vector_math_diagnostic
-                self.emit(warning)
-                return self.default_value_for_type(fallback_type)
+                raise self.builtin_lowering_error(function_name, vector_math_diagnostic)
 
             result_type = float_type.type
 
@@ -11932,6 +11951,9 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
                     "sinh",
                     "cosh",
                     "tanh",
+                    "asinh",
+                    "acosh",
+                    "atanh",
                     "exp",
                     "log",
                     "exp2",
@@ -12123,83 +12145,55 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
 
     def vector_math_operand_diagnostic(
         self, function_name: str, args: List[SpirvId]
-    ) -> Optional[Tuple[str, SpirvId]]:
+    ) -> Optional[str]:
         if self.is_float32_unary_std450_function(
             function_name
         ) and not self.float32_scalar_or_vector_operand_is_valid(args[0]):
             return (
-                f"; WARNING: {function_name} requires 32-bit floating-point "
-                "scalar or vector operand",
-                self.ensure_registered_type(args[0].type),
+                f"{function_name} requires 32-bit floating-point "
+                "scalar or vector operand"
             )
 
         if function_name == "length" and not self.metric_operand_is_valid(args[0]):
-            return (
-                "; WARNING: length requires floating-point scalar or vector operand",
-                self.metric_result_type(args),
-            )
+            return "length requires floating-point scalar or vector operand"
 
         if function_name == "distance" and not self.distance_operands_are_valid(args):
             return (
-                "; WARNING: distance requires matching floating-point scalar "
-                "or vector operands",
-                self.metric_result_type(args),
+                "distance requires matching floating-point scalar " "or vector operands"
             )
 
         if function_name == "normalize" and not self.metric_operand_is_valid(args[0]):
-            return (
-                "; WARNING: normalize requires floating-point scalar or vector operand",
-                self.ensure_registered_type(args[0].type),
-            )
+            return "normalize requires floating-point scalar or vector operand"
 
         if function_name == "atan2" and not self.atan2_operands_are_valid(args):
             return (
-                "; WARNING: atan2 requires matching 32-bit floating-point "
-                "scalar or vector operands",
-                self.ensure_registered_type(args[0].type),
+                "atan2 requires matching 32-bit floating-point "
+                "scalar or vector operands"
             )
 
         if function_name == "cross" and not self.cross_operands_are_valid(args):
             return (
-                "; WARNING: cross requires matching 3-component "
-                "floating-point vector operands",
-                self.cross_result_type(args),
+                "cross requires matching 3-component " "floating-point vector operands"
             )
 
         if function_name == "reflect" and not self.reflect_operands_are_valid(args):
             return (
-                "; WARNING: reflect requires matching floating-point scalar "
-                "or vector operands",
-                self.ensure_registered_type(args[0].type),
+                "reflect requires matching floating-point scalar " "or vector operands"
             )
 
         if function_name == "refract" and not self.refract_operands_are_valid(args):
             return (
-                "; WARNING: refract requires matching floating-point incident "
-                "and normal operands plus scalar eta",
-                self.ensure_registered_type(args[0].type),
+                "refract requires matching floating-point incident "
+                "and normal operands plus scalar eta"
             )
 
         return None
 
-    def unknown_function_fallback_type(self, args: List[SpirvId]) -> SpirvId:
-        if not args:
-            return self.register_primitive_type("float")
-
-        source_type = self.ensure_registered_type(args[0].type)
-        component_type = self.scalar_or_vector_component_type(source_type.type)
-        primitive_type = self.normalize_primitive_name(component_type)
-        if (
-            primitive_type in {
-                "float",
-                "double",
-                "bool",
-                self.BFLOAT16_TYPE_NAME,
-            } | self.INTEGER_TYPE_NAMES
-        ):
-            return source_type
-
-        return self.register_primitive_type("float")
+    def builtin_lowering_error(
+        self, function_name: str, detail: str, *, reason: str = "invalid-operands"
+    ) -> SPIRVBuiltinLoweringError:
+        """Return the typed refusal for a call with no meaning-preserving lowering."""
+        return SPIRVBuiltinLoweringError(function_name, detail, reason=reason)
 
     def is_float32_unary_std450_function(self, function_name: str) -> bool:
         return function_name in {
@@ -12212,6 +12206,9 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
             "sinh",
             "cosh",
             "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
             "exp",
             "log",
             "exp2",
@@ -28686,10 +28683,12 @@ class VulkanSPIRVCodeGen(SpirvFloatSemanticsMixin, SpirvLocalReferenceMixin):
                 return SpirvId(id_value, vector_type.type)
 
             if callee_name is None:
-                # Non-identifier callee (e.g., function table call) not supported in SPIR-V path
-                self.emit("; WARNING: Unsupported callee expression in SPIR-V backend")
-                float_type = self.register_primitive_type("float")
-                return self.register_constant(0.0, float_type)
+                raise SPIRVBuiltinLoweringError(
+                    "<expression>",
+                    INDIRECT_CALL_DETAIL,
+                    reason="indirect-call",
+                    source_location=getattr(expr, "source_location", None),
+                )
 
             if not self.validate_function_image_access_arguments(
                 callee_name, expr.args

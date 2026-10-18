@@ -8,6 +8,7 @@ import crosstl.translator.codegen as codegen
 from crosstl.formatter import CodeFormatter, ShaderLanguage
 from crosstl.translator import parse
 from crosstl.translator.codegen.registry import BackendRegistry, BackendSpec
+from crosstl.translator.codegen.SPIRV_codegen import SPIRVBuiltinLoweringError
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
@@ -590,10 +591,23 @@ def test_backend_codegen_smoke(backend):
     assert generated.strip()
 
 
+# Backends that refuse ADVANCED_SMOKE_SHADER's call through a Metal visible
+# function table: Vulkan SPIR-V has no function pointers (SPV_INTEL_function_pointers
+# requires the Kernel execution model).
+ADVANCED_SMOKE_REFUSALS = {
+    "vulkan": (SPIRVBuiltinLoweringError, "no function pointers")
+}
+
+
 @pytest.mark.parametrize("backend", codegen.backend_names())
 def test_backend_codegen_advanced_smoke(backend):
     ast = parse(ADVANCED_SMOKE_SHADER)
     generator = codegen.get_codegen(backend)
+    if backend in ADVANCED_SMOKE_REFUSALS:
+        error_type, message = ADVANCED_SMOKE_REFUSALS[backend]
+        with pytest.raises(error_type, match=message):
+            generator.generate(ast)
+        return
     generated = generator.generate(ast)
     assert isinstance(generated, str)
     assert generated.strip()

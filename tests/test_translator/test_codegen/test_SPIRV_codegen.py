@@ -2,6 +2,7 @@ import re
 import shutil
 import struct
 import subprocess
+from collections import Counter
 
 import pytest
 
@@ -31,6 +32,7 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.codegen.SPIRV_codegen import (
     SPIRVAtomicFenceLoweringError,
+    SPIRVBuiltinLoweringError,
     SpirvId,
     SpirvType,
     UnsupportedSPIRVFeatureError,
@@ -518,6 +520,53 @@ kernel void vector_list(device uint* results [[buffer(0)]]) {{
             0
         ] * (4 - count)
     assert_spirv_module_validates(output, tmp_path, target_env="vulkan1.1")
+
+
+def split_main_statements(source_code):
+    """Split the body of the first ``void main()`` into top-level statements."""
+    header = source_code.index("void main()")
+    open_brace = source_code.index("{", header)
+    depth, index = 1, open_brace + 1
+    while depth:
+        depth += {"{": 1, "}": -1}.get(source_code[index], 0)
+        index += 1
+    body = source_code[open_brace + 1 : index - 1]
+    statements, current, nesting = [], "", 0
+    for character in body:
+        current += character
+        nesting += {"(": 1, ")": -1, "{": 1, "}": -1}.get(character, 0)
+        if character == ";" and nesting == 0:
+            statements.append(current.strip())
+            current = ""
+    assert not current.strip(), current
+    return source_code[: open_brace + 1], statements, source_code[index - 1 :]
+
+
+def assert_statement_refusals(source_code, expected_refusals, tmp_path=None):
+    """Assert which main() statements SPIR-V codegen refuses, and why.
+
+    Each statement is compiled after the statements before it that were not
+    refused, so declarations it depends on are in scope. ``expected_refusals``
+    maps each refusal detail to the number of statements refused with it.
+    Returns the SPIR-V for the shader with the refused statements removed.
+    """
+    prefix, statements, suffix = split_main_statements(source_code)
+    kept, refusals = [], []
+    for statement in statements:
+        candidate = prefix + "\n".join(kept + [statement]) + suffix
+        try:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(candidate).tokens).parse())
+        except SPIRVBuiltinLoweringError as error:
+            refusals.append(error.detail)
+            assert error.project_diagnostic_code == (
+                "project.translate.vulkan-builtin-unsupported"
+            )
+            continue
+        kept.append(statement)
+    assert Counter(refusals) == Counter(expected_refusals)
+    return VulkanSPIRVCodeGen().generate(
+        Parser(Lexer(prefix + "\n".join(kept) + suffix).tokens).parse()
+    )
 
 
 def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
@@ -4752,17 +4801,16 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "atan2 requires matching 32-bit floating-point scalar or vector operands": (
+                    5
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: atan2 requires matching 32-bit floating-point "
-                "scalar or vector operands"
-            )
-            == 5
-        )
         assert " Atan2 " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -4933,15 +4981,18 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "sin requires 1 operand": 1,
+                "atan2 requires 2 operands": 1,
+                "distance requires 2 operands": 1,
+                "cross requires 2 operands": 1,
+                "refract requires 3 operands": 1,
+            },
+            tmp_path,
         )
 
-        assert "; WARNING: sin requires 1 operand" in spv_code
-        assert "; WARNING: atan2 requires 2 operands" in spv_code
-        assert "; WARNING: distance requires 2 operands" in spv_code
-        assert "; WARNING: cross requires 2 operands" in spv_code
-        assert "; WARNING: refract requires 3 operands" in spv_code
         assert " Sin " not in spv_code
         assert " Atan2 " not in spv_code
         assert " Distance " not in spv_code
@@ -4950,61 +5001,97 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_unknown_std450_fallback_emits_diagnostics(self, tmp_path):
-        source_code = """
-        shader UnknownStd450Builtins {
-            compute {
-                void main() {
-                    float scalar = notAStd450Function(vec2(1.0, 2.0));
-                    vec2 vector = missingVecCall(vec2(3.0, 4.0));
-                    int whole = missingIntegerCall(1);
-                }
-            }
-        }
+    @pytest.mark.parametrize(
+        "statement, function_name",
+        [
+            (
+                "float scalar = notAStd450Function(vec2(1.0, 2.0));",
+                "notAStd450Function",
+            ),
+            ("vec2 vector = missingVecCall(vec2(3.0, 4.0));", "missingVecCall"),
+            ("int whole = missingIntegerCall(1);", "missingIntegerCall"),
+            ("missingVoidCall();", "missingVoidCall"),
+        ],
+    )
+    def test_unknown_function_is_refused(self, statement, function_name):
+        source_code = f"""
+        shader UnknownStd450Builtins {{
+            compute {{
+                void main() {{
+                    {statement}
+                }}
+            }}
+        }}
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
+        with pytest.raises(SPIRVBuiltinLoweringError) as raised:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert (
-            "; WARNING: SPIR-V backend cannot lower unknown function "
-            "'notAStd450Function'; using default value"
-        ) in spv_code
-        assert (
-            "; WARNING: SPIR-V backend cannot lower unknown function "
-            "'missingVecCall'; using default value"
-        ) in spv_code
-        assert (
-            "; WARNING: SPIR-V backend cannot lower unknown function "
-            "'missingIntegerCall'; using default value"
-        ) in spv_code
-        assert " NotAStd450Function " not in spv_code
-        assert " MissingVecCall " not in spv_code
-        assert " MissingIntegerCall " not in spv_code
-        assert not re.search(
-            r"OpExtInst .* (NotAStd450Function|MissingVecCall|MissingIntegerCall)\b",
-            spv_code,
-        )
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        error = raised.value
+        assert error.function_name == function_name
+        assert error.reason == "unknown-function"
+        assert error.feature == f"builtin:{function_name}"
+        assert isinstance(error, UnsupportedSPIRVFeatureError)
+        assert f"Cannot lower call to '{function_name}' to SPIR-V" in str(error)
 
-    def test_unknown_function_fallback_preserves_numeric_vector_shape(self):
+    def test_unknown_builtin_call_never_returns_a_default_value(self):
         generator = VulkanSPIRVCodeGen()
         generator.register_primitive_type("float")
         uint_type = generator.register_primitive_type("uint")
         uvec2_type = generator.register_vector_type(uint_type, 2)
         zero = generator.register_constant(0, uint_type)
         value = generator.composite_construct(uvec2_type, [zero, zero])
+        emitted = list(generator.code_lines)
 
-        result = generator.call_builtin_function("missingVectorHelper", [value])
+        with pytest.raises(SPIRVBuiltinLoweringError, match="missingVectorHelper"):
+            generator.call_builtin_function("missingVectorHelper", [value])
 
-        assert result is not None
-        assert generator.value_types[result.id] == uvec2_type
-        assert (
-            "; WARNING: SPIR-V backend cannot lower unknown function "
-            "'missingVectorHelper'; using default value" in generator.code_lines
+        assert not any(
+            "WARNING" in line for line in generator.code_lines[len(emitted) :]
         )
+
+    def test_call_through_a_function_table_is_refused(self):
+        source_code = """
+        shader IndirectCall {
+            struct Payload {
+                vec3 color;
+            };
+            compute {
+                void main() {
+                    Payload payload;
+                    visible_function_table vft;
+                    vft[0](payload);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(SPIRVBuiltinLoweringError) as raised:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert raised.value.reason == "indirect-call"
+        assert "no function pointers" in str(raised.value)
+
+    @pytest.mark.parametrize("function_name", ["asinh", "acosh", "atanh"])
+    def test_inverse_hyperbolic_builtins_lower_to_std450(self, function_name, tmp_path):
+        source_code = f"""
+        shader InverseHyperbolic {{
+            compute {{
+                void main() {{
+                    float scalar = {function_name}(1.5);
+                    vec3 vector = {function_name}(vec3(1.5, 2.0, 0.5));
+                }}
+            }}
+        }}
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        instruction = function_name[0].upper() + function_name[1:]
+        assert spv_code.count(f" {instruction} ") == 2
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_malformed_min_max_clamp_mix_builtins_emit_diagnostics(self, tmp_path):
         source_code = """
@@ -5020,14 +5107,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "min requires 2 operands": 1,
+                "max requires 2 operands": 1,
+                "clamp requires 3 operands": 1,
+                "mix requires 3 operands": 1,
+            },
+            tmp_path,
         )
 
-        assert "; WARNING: min requires 2 operands" in spv_code
-        assert "; WARNING: max requires 2 operands" in spv_code
-        assert "; WARNING: clamp requires 3 operands" in spv_code
-        assert "; WARNING: mix requires 3 operands" in spv_code
         assert " Min " not in spv_code
         assert " Max " not in spv_code
         assert " Clamp " not in spv_code
@@ -5058,28 +5148,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "min requires compatible scalar or vector numeric operands": 1,
+                "max requires compatible scalar or vector numeric operands": 1,
+                "clamp requires compatible scalar or vector numeric operands": 1,
+                "mix requires compatible value operands and selector": 2,
+            },
+            tmp_path,
         )
 
-        assert (
-            "; WARNING: min requires compatible scalar or vector numeric operands"
-            in spv_code
-        )
-        assert (
-            "; WARNING: max requires compatible scalar or vector numeric operands"
-            in spv_code
-        )
-        assert (
-            "; WARNING: clamp requires compatible scalar or vector numeric operands"
-            in spv_code
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: mix requires compatible value operands and selector"
-            )
-            == 2
-        )
         assert " Min " not in spv_code
         assert " Max " not in spv_code
         assert " Clamp " not in spv_code
@@ -5144,37 +5223,19 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "dot requires matching floating-point vector operands": 3,
+                "cross requires matching 3-component floating-point vector operands": 3,
+                "reflect requires matching floating-point scalar or vector operands": 4,
+                "refract requires matching floating-point incident and normal operands plus scalar eta": (
+                    4
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: dot requires matching floating-point vector operands"
-            )
-            == 3
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: cross requires matching 3-component "
-                "floating-point vector operands"
-            )
-            == 3
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: reflect requires matching floating-point scalar "
-                "or vector operands"
-            )
-            == 4
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: refract requires matching floating-point incident "
-                "and normal operands plus scalar eta"
-            )
-            == 4
-        )
         assert "OpDot" not in spv_code
         assert " Cross " not in spv_code
         assert " Reflect " not in spv_code
@@ -5340,29 +5401,18 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "length requires floating-point scalar or vector operand": 2,
+                "normalize requires floating-point scalar or vector operand": 2,
+                "distance requires matching floating-point scalar or vector operands": (
+                    4
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: length requires floating-point scalar or vector operand"
-            )
-            == 2
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: normalize requires floating-point scalar or vector operand"
-            )
-            == 2
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: distance requires matching floating-point scalar "
-                "or vector operands"
-            )
-            == 4
-        )
         assert " Length " not in spv_code
         assert " Distance " not in spv_code
         assert " Normalize " not in spv_code
@@ -5508,30 +5558,18 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "sin requires 32-bit floating-point scalar or vector operand": 1,
+                "sqrt requires 32-bit floating-point scalar or vector operand": 1,
+                "fract requires 32-bit floating-point scalar or vector operand": 1,
+                "floor requires 32-bit floating-point scalar or vector operand": 1,
+                "cos requires 32-bit floating-point scalar or vector operand": 1,
+            },
+            tmp_path,
         )
 
-        assert (
-            "; WARNING: sin requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
-        assert (
-            "; WARNING: sqrt requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
-        assert (
-            "; WARNING: fract requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
-        assert (
-            "; WARNING: floor requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
-        assert (
-            "; WARNING: cos requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
         assert " Sin " not in spv_code
         assert " Sqrt " not in spv_code
         assert " Fract " not in spv_code
@@ -6484,17 +6522,16 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "abs requires floating-point or signed integer scalar or vector operand": (
+                    4
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: abs requires floating-point or signed integer "
-                "scalar or vector operand"
-            )
-            == 4
-        )
         assert " FAbs " not in spv_code
         assert " SAbs " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -6586,17 +6623,16 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "pow requires compatible 32-bit floating-point scalar or vector operands": (
+                    7
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: pow requires compatible 32-bit floating-point "
-                "scalar or vector operands"
-            )
-            == 7
-        )
         assert " Pow " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -6612,11 +6648,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "pow requires 2 operands": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: pow requires 2 operands") == 2
         assert " Pow " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -6733,17 +6772,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "fma requires compatible floating-point scalar or vector operands": 5,
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: fma requires compatible floating-point scalar "
-                "or vector operands"
-            )
-            == 5
-        )
         assert " Fma " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -6759,11 +6795,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "fma requires 3 operands": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: fma requires 3 operands") == 2
         assert " Fma " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -6885,17 +6924,16 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "faceforward requires compatible floating-point scalar or vector operands": (
+                    5
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: faceforward requires compatible floating-point "
-                "scalar or vector operands"
-            )
-            == 5
-        )
         assert " FaceForward " not in spv_code
         assert " Faceforward " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -6912,11 +6950,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "faceforward requires 3 operands": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: faceforward requires 3 operands") == 2
         assert " FaceForward " not in spv_code
         assert " Faceforward " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -7053,24 +7094,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "step requires compatible floating-point scalar or vector operands": 5,
+                "smoothstep requires compatible floating-point scalar or vector operands": (
+                    5
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: step requires compatible floating-point scalar "
-                "or vector operands"
-            )
-            == 5
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: smoothstep requires compatible floating-point "
-                "scalar or vector operands"
-            )
-            == 5
-        )
         assert " Step " not in spv_code
         assert " SmoothStep " not in spv_code
         assert " Smoothstep " not in spv_code
@@ -7090,12 +7124,15 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "step requires 2 operands": 2,
+                "smoothstep requires 3 operands": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: step requires 2 operands") == 2
-        assert spv_code.count("; WARNING: smoothstep requires 3 operands") == 2
         assert " Step " not in spv_code
         assert " SmoothStep " not in spv_code
         assert " Smoothstep " not in spv_code
@@ -7165,24 +7202,15 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "degrees requires 32-bit floating-point scalar or vector operand": 3,
+                "radians requires 32-bit floating-point scalar or vector operand": 2,
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: degrees requires 32-bit floating-point "
-                "scalar or vector operand"
-            )
-            == 3
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: radians requires 32-bit floating-point "
-                "scalar or vector operand"
-            )
-            == 2
-        )
         assert " Degrees " not in spv_code
         assert " Radians " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -7201,12 +7229,15 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "degrees requires 1 operand": 2,
+                "radians requires 1 operand": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: degrees requires 1 operand") == 2
-        assert spv_code.count("; WARNING: radians requires 1 operand") == 2
         assert " Degrees " not in spv_code
         assert " Radians " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)

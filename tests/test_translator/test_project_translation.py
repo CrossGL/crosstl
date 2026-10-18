@@ -56156,36 +56156,56 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 2
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 2}
+    # Metal output is scanned for leaked Mojo host constructs; the SPIR-V
+    # emitter refuses the unresolved host call itself, before any output exists.
     assert payload["summary"]["diagnosticsByCode"] == {
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 2,
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 1,
+        "project.translate.vulkan-builtin-unsupported": 1,
     }
 
     for artifact in payload["artifacts"]:
         assert not (repo / artifact["path"]).exists()
-        assert "unresolved Mojo host/runtime constructs" in artifact["error"]
         assert "vector_addition" in artifact["path"]
         assert "generatedHash" not in artifact
         assert "generatedSizeBytes" not in artifact
         assert "sourceMap" not in artifact
         assert "sourceRemap" not in artifact
+    artifacts_by_target = {
+        artifact["target"]: artifact for artifact in payload["artifacts"]
+    }
+    assert (
+        "unresolved Mojo host/runtime constructs" in artifacts_by_target["metal"][
+            "error"
+        ]
+    )
+    assert artifacts_by_target["vulkan"]["error"].startswith(
+        "Cannot lower call to 'has_accelerator' to SPIR-V"
+    )
 
     diagnostics_by_target = {
         diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
     }
     assert set(diagnostics_by_target) == {"metal", "vulkan"}
-    for target, diagnostic in diagnostics_by_target.items():
-        assert (
-            diagnostic["code"]
-            == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
-        )
+    for diagnostic in diagnostics_by_target.values():
         assert diagnostic["severity"] == "error"
         assert diagnostic["sourceBackend"] == "mojo"
-        assert diagnostic["location"]["file"].startswith(f"out/{target}/")
-        assert diagnostic["originalLocation"]["file"] == "vector_addition.mojo"
-        assert diagnostic["checkKind"] == "artifact"
-        assert diagnostic["missingCapabilities"] == [
-            project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
-        ]
+
+    metal = diagnostics_by_target["metal"]
+    assert (
+        metal["code"]
+        == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
+    )
+    assert metal["location"]["file"].startswith("out/metal/")
+    assert metal["originalLocation"]["file"] == "vector_addition.mojo"
+    assert metal["checkKind"] == "artifact"
+    assert metal["missingCapabilities"] == [
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
+    ]
+
+    vulkan = diagnostics_by_target["vulkan"]
+    assert vulkan["code"] == "project.translate.vulkan-builtin-unsupported"
+    assert vulkan["location"]["file"] == "vector_addition.mojo"
+    assert vulkan["missingCapabilities"] == ["spirv.builtin.has_accelerator"]
 
 
 def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(

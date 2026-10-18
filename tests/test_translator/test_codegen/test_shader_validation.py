@@ -7270,6 +7270,14 @@ def test_generated_spirv_codegen_examples_validate_with_spirv_tools(tmp_path):
 
     def expects_codegen_error(function_node):
         for child in ast.walk(function_node):
+            # assert_statement_refusals compiles each refused statement alone
+            # and the test validates the module without them.
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "assert_statement_refusals"
+            ):
+                return True
             if not isinstance(child, ast.With):
                 continue
             for item in child.items:
