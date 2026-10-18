@@ -821,7 +821,7 @@ def test_axis_scatter_ci_requires_native_execution_on_all_targets():
         "opengl",
     }
     assert (
-        job["if"] == "github.event_name != 'schedule'"
+        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
         and "continue-on-error" not in job
     )
     steps = {step.get("name"): step for step in job["steps"]}

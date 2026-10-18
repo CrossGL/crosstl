@@ -485,7 +485,7 @@ def test_affine_ci_uses_existing_platform_jobs_and_retains_evidence():
     )
     jobs = workflow["jobs"]
     job = jobs["half-host"]
-    assert job["needs"] == "portable-host"
+    assert job["needs"] == ["ci-plan", "portable-host"]
     assert job["env"]["MLX_COMMIT"] == jobs["portable-host"]["env"]["MLX_COMMIT"]
     assert not any(
         item.get("name") == "Execute affine quantization through MLX"

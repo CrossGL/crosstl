@@ -518,9 +518,9 @@ def test_integer64_ci_requires_all_three_native_targets():
         Path(".github/workflows/demo-project-testing.yml").read_text()
     )
     job = workflow["jobs"]["integer64-host"]
-    assert job["needs"] == "portable-host"
+    assert job["needs"] == ["ci-plan", "portable-host"]
     assert (
-        job["if"] == "github.event_name != 'schedule'"
+        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
         and "continue-on-error" not in job
     )
     assert {

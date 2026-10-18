@@ -567,7 +567,7 @@ def test_reduction_host_ci_requires_every_variant_and_retains_failures():
         "Translate reduction launch variants",
     )
     job = ci_coverage.workflow_job_text(workflow, "reductions")
-    assert "needs: [portable-host, row-packages]" in job
+    assert "needs: [ci-plan, portable-host, row-packages]" in job
     assert "artifact-ids: ${{ steps.host-artifact.outputs.id }}" in job
     assert "run_id: context.runId" in job and "merge-multiple: true" in job
     assert "if: always()" in job and "include-hidden-files: true" in job

@@ -757,10 +757,10 @@ def test_scatter_ci_requires_separate_three_os_host_execution():
         "opengl",
     }
     assert (
-        job["if"] == "github.event_name != 'schedule'"
+        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
         and "continue-on-error" not in job
     )
-    assert job["needs"] == "integer64-host"
+    assert job["needs"] == ["ci-plan", "integer64-host"]
     assert 90 <= job["timeout-minutes"] <= 360
     steps = {step.get("name"): step for step in job["steps"]}
     step = steps["Execute general scatter host operations"]

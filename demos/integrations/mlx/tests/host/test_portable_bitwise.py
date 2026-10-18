@@ -663,7 +663,7 @@ def test_ci_requires_bitwise_execution_on_every_target():
     assert {
         item["target"]: item["os"] for item in job["strategy"]["matrix"]["include"]
     } == {"metal": "macos-26", "opengl": "ubuntu-24.04", "directx": "windows-2025"}
-    assert job["needs"] == "portable-host"
+    assert job["needs"] == ["ci-plan", "portable-host"]
     steps = {step.get("name"): step for step in job["steps"]}
     build, execute = (
         steps["Translate bitwise host packages"],

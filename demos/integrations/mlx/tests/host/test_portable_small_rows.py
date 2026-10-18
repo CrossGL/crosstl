@@ -648,9 +648,9 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
     assert len(jobs) == 1
     job = jobs[0]
     assert job is workflow["jobs"]["small-row-reductions"]
-    assert job["needs"] == "portable-host"
+    assert job["needs"] == ["ci-plan", "portable-host"]
     assert (
-        job["if"] == "github.event_name != 'schedule'"
+        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
         and "continue-on-error" not in job
     )
     assert {

@@ -334,7 +334,7 @@ def test_half_arithmetic_ci_requires_native_execution_and_unchanged_upstream_tes
     )
     job = workflow["jobs"]["half-host"]
     assert (
-        job["if"] == "github.event_name != 'schedule'"
+        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
         and "continue-on-error" not in job
     )
     assert {item["target"] for item in job["strategy"]["matrix"]["include"]} == {
