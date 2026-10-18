@@ -15,11 +15,13 @@ exits non-zero unless accounting matches the frozen contract.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import json
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -53,23 +55,80 @@ FAULTS = (
 )
 CONTROLS = HERE / "negative_controls.json"
 IMAGE_CHECKS = HERE / "image_checks.json"
+# Deadlines. A hung dispatch or test host fails the run instead of holding the
+# job until its timeout: MSTest stops the test host when one case runs longer
+# than TEST_CASE_DEADLINE and records the aborted run, and the process group of
+# a ``dotnet test`` run that exceeds its run deadline is stopped. The slowest
+# case takes about 10 s and a complete run about 3 to 9 minutes.
+TEST_CASE_DEADLINE = "5m"
+RUN_DEADLINE_SECONDS = 25 * 60
+CONTROL_RUN_DEADLINE_SECONDS = 4 * 60
+DEADLINES = {
+    "testCase": TEST_CASE_DEADLINE,
+    "runSeconds": RUN_DEADLINE_SECONDS,
+    "controlRunSeconds": CONTROL_RUN_DEADLINE_SECONDS,
+}
 
 
-def run_logged(command: list[str], log: Path, **kwargs: Any) -> int:
-    """Run a command, tee its output into a log file and return the exit status."""
+class DeadlineExceeded(RuntimeError):
+    """A command did not finish within its deadline and was stopped."""
+
+
+def stop_process_group(process: subprocess.Popen) -> None:
+    """Stop a command started in its own session together with its children."""
+
+    for stop_signal in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, stop_signal)
+        try:
+            process.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def run_logged(
+    command: list[str], log: Path, *, deadline: float | None = None, **kwargs: Any
+) -> int:
+    """Run a command, tee its output into a log file and return the exit status.
+
+    With a ``deadline`` in seconds the command runs in its own session, and the
+    whole process group is stopped when it exceeds the deadline.
+    """
 
     log.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     with log.open("w", encoding="utf-8") as stream:
         stream.write("$ " + " ".join(command) + "\n")
         stream.flush()
-        completed = subprocess.run(
-            command, stdout=stream, stderr=subprocess.STDOUT, text=True, **kwargs
+        process = subprocess.Popen(
+            command,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=deadline is not None,
+            **kwargs,
         )
-        stream.write(
-            f"\n[exit {completed.returncode} after {time.monotonic() - started:.1f}s]\n"
-        )
-    return completed.returncode
+        try:
+            returncode = process.wait(timeout=deadline)
+        except subprocess.TimeoutExpired:
+            stop_process_group(process)
+            stream.write(
+                f"\n[deadline of {deadline:.0f}s exceeded; the command was stopped]\n"
+            )
+            raise DeadlineExceeded(
+                f"{Path(command[0]).name} exceeded its deadline of {deadline:.0f}s;"
+                f" see {log}"
+            ) from None
+        except BaseException:
+            if deadline is not None:
+                stop_process_group(process)
+            else:
+                process.kill()
+                process.wait()
+            raise
+        stream.write(f"\n[exit {returncode} after {time.monotonic() - started:.1f}s]\n")
+    return returncode
 
 
 def build_native(target: str, output_dir: Path, log: Path) -> Path:
@@ -255,6 +314,7 @@ def run_tests(
     log: Path,
     capture: Path | None = None,
     capture_cases: list[str] | None = None,
+    deadline: float = RUN_DEADLINE_SECONDS,
 ) -> Path:
     if results_dir.exists():
         shutil.rmtree(results_dir)
@@ -295,10 +355,14 @@ def run_tests(
         f"trx;LogFileName={trx_name}",
         "--results-directory",
         str(results_dir),
+        "--blame-hang-timeout",
+        TEST_CASE_DEADLINE,
+        "--blame-hang-dump-type",
+        "none",
     ]
     if filter_text:
         command[3:3] = ["--filter", filter_text]
-    run_logged(command, log, env=environment)
+    run_logged(command, log, env=environment, deadline=deadline)
     trx = results_dir / trx_name
     if not trx.is_file():
         raise SystemExit(f"dotnet test did not write {trx}; see {log}")
@@ -380,18 +444,23 @@ def run_negative_controls(
         selection = "|".join(
             f"FullyQualifiedName={method}" for method in control["methods"]
         )
-        trx = run_tests(
-            adapted=adapted,
-            artifacts=artifacts,
-            target=target,
-            native_library=native_library,
-            excluded=[],
-            results_dir=directory / "trx",
-            evidence=directory / "evidence.jsonl",
-            fault=fault,
-            extra_filter=selection,
-            log=directory / "test-run.log",
-        )
+        try:
+            trx = run_tests(
+                adapted=adapted,
+                artifacts=artifacts,
+                target=target,
+                native_library=native_library,
+                excluded=[],
+                results_dir=directory / "trx",
+                evidence=directory / "evidence.jsonl",
+                fault=fault,
+                extra_filter=selection,
+                log=directory / "test-run.log",
+                deadline=CONTROL_RUN_DEADLINE_SECONDS,
+            )
+        except DeadlineExceeded as exc:
+            results.append({"fault": fault, "status": "failed", "errors": [str(exc)]})
+            continue
         results.append(
             evidence_module.verify_control(
                 control,
@@ -495,6 +564,7 @@ def main(argv: list[str] | None = None) -> int:
         "translator": manifest["translator"],
         "translation": manifest["counts"],
         "preflight": device_check,
+        "deadlines": DEADLINES,
     }
     status = 0
     passed: Counter[str] | None = None
@@ -502,20 +572,32 @@ def main(argv: list[str] | None = None) -> int:
         evidence = None if args.no_evidence else work / "evidence.jsonl"
         excluded = excluded_methods(args.contract, args.discovery, args.profile)
         image_checks = json.loads(IMAGE_CHECKS.read_text(encoding="utf-8"))
-        trx = run_tests(
-            adapted=args.adapted,
-            artifacts=artifacts,
-            target=target,
-            native_library=native_library,
-            excluded=excluded,
-            results_dir=work / "trx",
-            evidence=evidence,
-            fault=None,
-            extra_filter=args.filter,
-            log=logs / "test-run.log",
-            capture=None if evidence is None else work / "captures",
-            capture_cases=image_checks["captureCases"],
-        )
+        try:
+            trx = run_tests(
+                adapted=args.adapted,
+                artifacts=artifacts,
+                target=target,
+                native_library=native_library,
+                excluded=excluded,
+                results_dir=work / "trx",
+                evidence=evidence,
+                fault=None,
+                extra_filter=args.filter,
+                log=logs / "test-run.log",
+                capture=None if evidence is None else work / "captures",
+                capture_cases=image_checks["captureCases"],
+            )
+        except DeadlineExceeded as exc:
+            report.update(
+                status="failed",
+                deadlineExceeded=str(exc),
+                nativeTargetExecutionQualified=False,
+            )
+            (work / "results.json").write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            print(f"The run did not qualify: {exc}")
+            return 1
         report["trx"] = str(trx)
         if args.filter:
             report["accounting"] = "skipped: a diagnostic filter was supplied"

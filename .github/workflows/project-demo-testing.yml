@@ -370,10 +370,14 @@ jobs:
           name: translated-opengl
           path: profiles/opengl
       - name: Qualify every profile against the frozen contract
+        env:
+          WORKFLOW_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: >-
           python demos/integrations/computesharp/qualify.py
           --directx profiles/directx --metal profiles/metal --opengl profiles/opengl
           --output qualification
+          --workflow-run "$WORKFLOW_RUN" --source-commit "$SOURCE_COMMIT"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
