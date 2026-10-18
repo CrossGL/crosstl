@@ -248,6 +248,36 @@ def test_the_merged_outcome_keeps_failures_and_incomplete_runs(tmp_path):
         RETAINED.merge_trx([], tmp_path / "none.trx")
 
 
+def test_the_merged_trx_has_the_same_bytes_on_every_platform(tmp_path, monkeypatch):
+    """The Linux qualification re-merges the Windows runs and compares bytes."""
+    runs = []
+    for name in ("a", "b"):
+        path = tmp_path / f"{name}.trx"
+        document = (
+            f'<TestRun xmlns="{RETAINED.TRX_NAMESPACE}"><Results><UnitTestResult>'
+            "<Output><StdOut>first\r\nsecond</StdOut></Output></UnitTestResult>"
+            '</Results><ResultSummary outcome="Completed"><Counters total="1"/>'
+            "</ResultSummary></TestRun>"
+        )
+        path.write_bytes(document.encode("utf-8"))
+        runs.append(path)
+    RETAINED.merge_trx(runs, tmp_path / "native.trx")
+
+    # Text-mode files translate line endings on Windows.
+    def windows_open(file, mode="r", *args, **kwargs):
+        if "b" not in mode:
+            kwargs["newline"] = "\r\n"
+        return open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(ET, "open", windows_open, raising=False)
+    RETAINED.merge_trx(runs, tmp_path / "windows.trx")
+
+    merged = (tmp_path / "windows.trx").read_bytes()
+    assert merged == (tmp_path / "native.trx").read_bytes()
+    assert b"\r" not in merged
+    assert merged.startswith(b"<?xml version='1.0' encoding='utf-8'?>\n")
+
+
 class FakeDotnet:
     """Record commands and write the TRX files and logs dotnet would."""
 

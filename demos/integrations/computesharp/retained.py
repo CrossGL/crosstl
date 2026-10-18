@@ -103,7 +103,9 @@ def merge_trx(paths: list[Path], output: Path) -> None:
             counters.set(key, str(value))
     ET.register_namespace("", TRX_NAMESPACE)
     output.parent.mkdir(parents=True, exist_ok=True)
-    ET.ElementTree(merged).write(output, encoding="utf-8", xml_declaration=True)
+    # Bytes, not text: the qualification job on Linux merges the same runs
+    # again and compares bytes, so Windows must not translate line endings.
+    output.write_bytes(ET.tostring(merged, encoding="utf-8", xml_declaration=True))
 
 
 def _test_command(

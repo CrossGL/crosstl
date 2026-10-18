@@ -152,7 +152,8 @@ def write_trx(
         failed="0" if outcome == "Passed" else "1",
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    ET.ElementTree(run).write(path, encoding="utf-8", xml_declaration=True)
+    # Bytes, so the TRX is the same on every platform.
+    path.write_bytes(ET.tostring(run, encoding="utf-8", xml_declaration=True))
     return path
 
 
