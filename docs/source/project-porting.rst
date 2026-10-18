@@ -1031,6 +1031,35 @@ away from those points stays with the per-operator gates. This is an
 877/17,832 increment; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+``reduce.current-tree.translation.json`` pins all 2,396 entries of
+``reduce.metal`` and their 7,188 artifacts: ``init_reduce`` for 40 operator
+and type pairs and, for 62 operator, input and output type triples,
+``all_reduce``, ``row_reduce_simple``, the small and looped row kernels and
+the small, long-column, looped and two-pass column kernels, the last six with
+32- and 64-bit indices over one, two and five reduction dimensions.
+``reduce.metal`` is unchanged at the corpus
+commit; ``reduce_col.h`` now adds ``IdxT(lid.x)`` to the long-column offset,
+which OpenGL's index-range precondition follows. Each entry translates with
+the threadgroup ``reduce.cpp`` launches for the gate's geometries, and the
+six kernels that call SIMD-group operations lower them to 32-lane software
+subgroups on OpenGL and DirectX, with ``native-precise`` binary32 addition and
+own-value out-of-range relative shuffles on DirectX. Software subgroups now
+reduce binary16 products, which OpenGL computes node by node in binary32 and
+rounds to binary16, and 16-bit integer minima and maxima, which DirectX
+compares in native registers. Each target executes 2,830 dispatches over
+single and two-pass ``all_reduce`` rows, rows reduced by one thread and by one
+SIMD-group, a ``row_reduce_simple`` grid whose last threadgroup moves back,
+and column reductions with partial tiles and the ``[32, out_size]``
+intermediates, with decoys between rows and blocks. A step-by-step model of
+each kernel, checked against a left fold of each output, gives the expected
+words. Inputs of types narrower than eight bytes give the same words in every
+association order, as Apple's SIMD-group intrinsics leave the order
+unspecified; eight-byte types follow the kernel's explicit shuffle order.
+Every word must match, a NaN result accepts any NaN, and guards and inputs
+must be unchanged. Metal also runs the unchanged upstream kernels, which the
+translation must match byte for byte. This is a 2,396/17,832 increment; it
+does not run the upstream MLX test suite or redirect the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,

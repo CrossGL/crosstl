@@ -1456,6 +1456,62 @@ points stays with the per-operator unary gates. This covers 877/17,832
 entries; it does not run the upstream MLX test suite or redirect the MLX host
 runtime.
 
+`contracts/reduce.current-tree.translation.json` pins all 2,396 entries of
+`reduce.metal` and their 7,188 artifacts: `init_reduce` for 40 operator and
+type pairs and, for 62 operator, input and output type triples (`And` and
+`Or` of seven types, `Sum` and `Prod` of twelve with MLX's widened outputs,
+`Min` and `Max` of twelve), `all_reduce`, `row_reduce_simple`,
+`row_reduce_small`, `row_reduce_looped`, `col_reduce_small`,
+`col_reduce_longcolumn`, `col_reduce_looped` and `col_reduce_2pass`, the
+last six with 32- and 64-bit indices over one, two and five reduction
+dimensions. `reduce.metal` is byte-identical at the corpus commit;
+`reduce_col.h` now forms `col_reduce_longcolumn`'s lane offset as
+`in_idx + IdxT(lid.x)`, so OpenGL's index-range precondition for it reads
+`in_ + in_idx + int64(lid.x)`, and its other 20 are the complete family's.
+Each entry translates with the threadgroup `reduce.cpp` launches for the
+geometries the gate runs: 32 threads for `init_reduce` and
+`row_reduce_small`, 64 for `all_reduce`, 128 for the simple and looped row
+kernels, 32 x 8 for `col_reduce_small`, the stride (7) x 32 for
+`col_reduce_longcolumn` and 256 for the tiled column kernels. The six kernels
+that call SIMD-group operations lower them to 32-lane software subgroups on
+OpenGL and DirectX; DirectX adds with the `native-precise` binary32 policy,
+and its relative wave shuffles return the lane's own value out of range, as
+Apple's `simd_shuffle_down` does. Software subgroups used to reject binary16
+products and 16-bit integer minima and maxima, which `Prod<half>`,
+`Min<int16_t>` and their neighbours need: OpenGL now computes each node of a
+binary16 product tree in binary32, which is exact for two binary16 factors,
+and rounds it to binary16, and DirectX multiplies `float16_t` and compares
+16-bit integer registers natively. Required CI executes every entry on Metal,
+Mesa EGL and Direct3D 12 WARP in twelve legs (`reduce-0` to `reduce-11`),
+2,830 dispatches and 1,186,324 checked elements per target, guards included:
+three `init_reduce` threadgroups; `all_reduce` over 203 elements in one
+threadgroup and the first pass of MLX's two-pass reduction of 16,589
+elements, 128 rows of 130 with the last cut to 79; `row_reduce_small` with
+each row reduced by one thread and by one SIMD-group; `row_reduce_simple`
+over 33 rows of 522, whose last threadgroup moves back and rewrites three
+outputs; and the column kernels over 130, 7, 70 and 33 contiguous columns,
+including partial column tiles and the `[32, out_size]` intermediates of
+`col_reduce_longcolumn` and `col_reduce_2pass`. Rows, reduced dimensions and
+outer outputs are separated by decoys that would change every finite result
+if read, and four more follow the input. A model of each kernel follows its
+thread loops, guarded loads, SIMD-group shuffle-down trees, threadgroup
+combines and guarded stores step by step and must match an independent left
+fold of every output. Types narrower than eight bytes reduce with Apple's
+SIMD-group intrinsics, whose association order is unspecified, so their
+inputs make every fold order give the same words: quarters with a bounded
+absolute sum, signed powers of two with bounded exponent sums, wrapping
+unsigned and overflow-free signed integers, logical inputs whose true values
+include NaN and infinities and whose false values take both zero signs, and
+one zero sign per output for extrema, with infinities and NaN in their own
+patterns. Eight-byte types reduce with the kernel's explicit shuffle loop,
+which the model follows in order, so complex products keep the zero signs of
+that order. Every word must match and a NaN result accepts any NaN. Outputs
+start at values that differ from their results, 16 trailing guards must keep
+their values and every input must be unchanged. Metal also runs the unchanged
+upstream kernels, which must produce the same bytes. This covers
+2,396/17,832 entries; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
