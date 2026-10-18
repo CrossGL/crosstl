@@ -26,7 +26,11 @@ from the job reports:
   readback whose pixels hash to the recorded readback, reproduce the upstream
   assertion and stay within the per-case bounds derived from the WARP output;
 - the ImageProcessingTests GPU outputs stay within the bounds derived from the
-  WARP GPU output and the CPU reference of the Windows run.
+  WARP GPU output and the CPU reference of the Windows run;
+- every companion suite of ``test_projects.json`` (the other ported upstream
+  test projects, under ``suites/<project>`` of each profile) passes the same
+  coverage, parity, accounting, evidence, control, job and exactness checks
+  with its own frozen contract, lock, evidence policy and controls.
 
 The report is ``qualification.json``, with amplified difference images under
 ``images/``, and its summary ``results.json`` (see ``results_summary.py``). The
@@ -55,11 +59,14 @@ import evidence as evidence_module  # noqa: E402
 import exactness as exactness_module  # noqa: E402
 import precision_report  # noqa: E402
 import results_summary  # noqa: E402
+import suites as suites_module  # noqa: E402
 
 CONTROLS = HERE / "negative_controls.json"
 IMAGE_CHECKS = HERE / "image_checks.json"
 DIRECTX_PROFILE = "directx-warp"
 TARGETS = {"metal": "metal-apple-gpu", "opengl": "opengl-mesa-llvmpipe"}
+# Directory of the companion suites inside each profile's artifacts.
+SUITES_DIRECTORY = "suites"
 # DXGI_FORMAT_R8G8B8A8_UNORM and DXGI_FORMAT_B8G8R8A8_UNORM.
 CHANNEL_ORDERS = {28: (0, 1, 2, 3), 87: (2, 1, 0, 3)}
 DIFFERENCE_GAIN = 8
@@ -163,6 +170,7 @@ def qualify_controls(
     profile: str,
     contract_path: Path,
     passed: Counter[str] | None,
+    policy_path: Path = evidence_module.POLICY,
 ) -> dict[str, Any]:
     """Re-verify every frozen negative control from its TRX and evidence."""
 
@@ -179,6 +187,7 @@ def qualify_controls(
                 profile=profile,
                 contract_path=contract_path,
                 passed=passed,
+                policy_path=policy_path,
             )
         )
     ok = bool(results) and all(item["status"] == "passed" for item in results)
@@ -560,9 +569,11 @@ def processing_images(
     }
 
 
-def qualify_directx(
+def directx_accounting(
     directory: Path, *, contract_path: Path, lock_path: Path
 ) -> dict[str, Any]:
+    """Coverage, accounting and category outcomes of an original Windows run."""
+
     discovery = directory / "discovery"
     trx = directory / "trx" / "baseline.trx"
     report: dict[str, Any] = {"profile": DIRECTX_PROFILE}
@@ -577,6 +588,15 @@ def qualify_directx(
         contract_path,
     )
     _check(report, "categories", category_outcomes, contract_path, discovery, trx)
+    return report
+
+
+def qualify_directx(
+    directory: Path, *, contract_path: Path, lock_path: Path
+) -> dict[str, Any]:
+    report = directx_accounting(
+        directory, contract_path=contract_path, lock_path=lock_path
+    )
     outputs = directory / "outputs" / "outputs.json"
     if outputs.is_file():
         collected = json.loads(outputs.read_text(encoding="utf-8"))
@@ -593,7 +613,7 @@ def qualify_directx(
     return report
 
 
-def qualify_target(
+def target_execution(
     name: str,
     directory: Path,
     *,
@@ -601,9 +621,15 @@ def qualify_target(
     contract_path: Path,
     lock_path: Path,
     controls: dict[str, Any],
-    image_checks: dict[str, Any],
-    images: Path,
+    policy_path: Path = evidence_module.POLICY,
+    require_float_operations: bool = True,
 ) -> dict[str, Any]:
+    """The checks every suite of a translated target must pass.
+
+    ``directory`` holds the target's ``discovery`` and ``run`` of the suite and
+    ``directx`` the original Windows run of the same suite.
+    """
+
     profile = TARGETS[name]
     discovery = directory / "discovery"
     run = directory / "run"
@@ -639,6 +665,7 @@ def qualify_target(
         trx=trx,
         profile=profile,
         contract_path=contract_path,
+        policy_path=policy_path,
     )
     passed = None
     if trx.is_file():
@@ -658,6 +685,7 @@ def qualify_target(
         profile=profile,
         contract_path=contract_path,
         passed=passed,
+        policy_path=policy_path,
     )
     _check(report, "run", _run_report, run / "results.json", profile)
     _check(
@@ -667,7 +695,33 @@ def qualify_target(
         run / "exactness.json",
         manifest,
         target=name,
+        require_float_operations=require_float_operations,
     )
+    return report
+
+
+def qualify_target(
+    name: str,
+    directory: Path,
+    *,
+    directx: Path,
+    contract_path: Path,
+    lock_path: Path,
+    controls: dict[str, Any],
+    image_checks: dict[str, Any],
+    images: Path,
+) -> dict[str, Any]:
+    report = target_execution(
+        name,
+        directory,
+        directx=directx,
+        contract_path=contract_path,
+        lock_path=lock_path,
+        controls=controls,
+    )
+    run = directory / "run"
+    trx = run / "trx" / "results.trx"
+    evidence = evidence_file(run)
     _check(
         report,
         "intrinsicPrecision",
@@ -706,6 +760,68 @@ def _status(report: dict[str, Any]) -> str:
     return "failed" if failed else "passed"
 
 
+def _settle(profiles: dict[str, dict[str, Any]]) -> str:
+    for value in profiles.values():
+        value["status"] = (
+            value["status"] if value.get("status") == "failed" else _status(value)
+        )
+    return (
+        "passed"
+        if all(value["status"] == "passed" for value in profiles.values())
+        else "failed"
+    )
+
+
+def _contract_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def qualify_suite(
+    item: suites_module.Suite, *, directx: Path, targets: dict[str, Path]
+) -> dict[str, Any]:
+    """Qualify one companion suite on every profile.
+
+    Each profile directory holds the suite under ``suites/<project>``: the
+    discovery export and TRX of the original Windows run, and the discovery
+    export and ``run_tests.py`` work directory of each translated target.
+    The suite has no image checks or intrinsic probe; every other check of the
+    main suite applies with the suite's own contract, lock, evidence policy and
+    negative controls.
+    """
+
+    controls = json.loads(item.negative_controls.read_text(encoding="utf-8"))
+    original = directx / SUITES_DIRECTORY / item.name
+    profiles = {
+        DIRECTX_PROFILE: directx_accounting(
+            original, contract_path=item.contract, lock_path=item.lock
+        )
+    }
+    for name in sorted(TARGETS):
+        if name not in targets:
+            profiles[TARGETS[name]] = _failure([f"no {name} artifacts were supplied"])
+            continue
+        profiles[TARGETS[name]] = target_execution(
+            name,
+            targets[name] / SUITES_DIRECTORY / item.name,
+            directx=original,
+            contract_path=item.contract,
+            lock_path=item.lock,
+            controls=controls,
+            policy_path=item.evidence_policy,
+            require_float_operations=item.no_float_arithmetic_reason is None,
+        )
+    status = _settle(profiles)
+    return {
+        "kind": item.kind,
+        "contractSHA256": _contract_sha256(item.contract),
+        "negativeControlsSHA256": _sha256(item.negative_controls),
+        "evidencePolicySHA256": _sha256(item.evidence_policy),
+        "noFloatArithmeticReason": item.no_float_arithmetic_reason,
+        "status": status,
+        "profiles": profiles,
+    }
+
+
 def qualify(
     *,
     directx: Path,
@@ -716,7 +832,15 @@ def qualify(
     controls_path: Path = CONTROLS,
     image_checks_path: Path = IMAGE_CHECKS,
     provenance: dict[str, Any] | None = None,
+    companion_suites: dict[str, suites_module.Suite] | None = None,
 ) -> dict[str, Any]:
+    """Qualify the main suite and every companion suite on every profile.
+
+    The main suite's artifacts are at the top of each profile directory and
+    each companion suite's under ``suites/<project>`` (see ``qualify_suite``).
+    The report passes only when every profile of every suite passes.
+    """
+
     output.mkdir(parents=True, exist_ok=True)
     controls = json.loads(controls_path.read_text(encoding="utf-8"))
     image_checks = json.loads(image_checks_path.read_text(encoding="utf-8"))
@@ -739,28 +863,25 @@ def qualify(
             image_checks=image_checks,
             images=output / "images",
         )
-    for value in profiles.values():
-        value["status"] = (
-            value["status"] if value.get("status") == "failed" else _status(value)
-        )
+    main_status = _settle(profiles)
+    companions = {
+        name: qualify_suite(item, directx=directx, targets=targets)
+        for name, item in sorted((companion_suites or {}).items())
+    }
+    passed = main_status == "passed" and all(
+        suite["status"] == "passed" for suite in companions.values()
+    )
     report = {
         "schemaVersion": 1,
         "kind": "computesharp-port-qualification",
         "upstreamCommit": coverage_contract.PIN,
-        "contractSHA256": (
-            hashlib.sha256(
-                contract_path.read_bytes().replace(b"\r\n", b"\n")
-            ).hexdigest()
-        ),
+        "contractSHA256": _contract_sha256(contract_path),
         "imageChecksSHA256": _sha256(image_checks_path),
         "negativeControlsSHA256": _sha256(controls_path),
         "provenance": dict(provenance or {}),
-        "status": (
-            "passed"
-            if all(value["status"] == "passed" for value in profiles.values())
-            else "failed"
-        ),
+        "status": "passed" if passed else "failed",
         "profiles": profiles,
+        "suites": companions,
     }
     (output / "qualification.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -771,7 +892,16 @@ def qualify(
 
 def summary_lines(report: dict[str, Any]) -> list[str]:
     lines = [f"qualification: {report['status']}"]
-    for name, profile in sorted(report["profiles"].items()):
+    lines += _profile_lines(report["profiles"])
+    for name, suite in sorted((report.get("suites") or {}).items()):
+        lines.append(f"  suite {name}: {suite['status']}")
+        lines += ["  " + line for line in _profile_lines(suite["profiles"])]
+    return lines
+
+
+def _profile_lines(profiles: dict[str, Any]) -> list[str]:
+    lines = []
+    for name, profile in sorted(profiles.items()):
         failed = sorted(
             key
             for key, value in profile.items()
@@ -791,6 +921,8 @@ def summary_lines(report: dict[str, Any]) -> list[str]:
         for key in failed:
             for error in profile[key].get("errors", [])[:5]:
                 lines.append(f"    {key}: {error}")
+        for error in profile.get("errors", [])[:5]:
+            lines.append(f"    {error}")
     return lines
 
 
@@ -825,6 +957,11 @@ def main(argv: list[str] | None = None) -> int:
         provenance=results_summary.provenance_from_arguments(
             args.workflow_run, args.source_commit
         ),
+        companion_suites={
+            name: item
+            for name, item in suites_module.ported_suites().items()
+            if name != suites_module.MAIN_SUITE
+        },
     )
     print("\n".join(summary_lines(report)))
     return 0 if report["status"] == "passed" else 1

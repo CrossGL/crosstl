@@ -72,6 +72,16 @@ jobs:
           dotnet-version: "10.0.400"
       - name: Install test dependencies
         run: python -m pip install pytest pytest-xdist pyyaml==6.0.3 numpy==2.5.4 pillow==13.0.0
+      - uses: actions/checkout@v4
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - name: Account every upstream test project and its workflow steps
+        run: >-
+          python demos/integrations/computesharp/suites.py check
+          --source upstream-computesharp
       - name: Verify compiled discovery and original-result accounting
         env:
           CROSSTL_REQUIRE_DOTNET: "1"
@@ -159,6 +169,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python demos/integrations/computesharp/source.py --source upstream-computesharp --check evidence/source.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run the companion test projects on the original runtime
+        if: ${{ !cancelled() }}
+        run: >-
+          python demos/integrations/computesharp/companions.py baseline
+          --source upstream-computesharp --output evidence/suites
       - name: Evaluate the HLSL intrinsics on WARP
         shell: pwsh
         run: |
@@ -292,6 +307,12 @@ jobs:
           --adapted adapted-computesharp --discovery evidence/discovery
           --profile metal-apple-gpu --work evidence/run
           --prebuilt-tests --negative-controls
+      - name: Run the companion test projects on Metal with negative controls
+        if: ${{ !cancelled() }}
+        run: >-
+          python demos/integrations/computesharp/companions.py translated
+          --adapted adapted-computesharp --profile metal-apple-gpu
+          --output evidence/suites
       - name: Evaluate the HLSL intrinsics on Metal
         if: ${{ !cancelled() }}
         run: >-
@@ -369,6 +390,14 @@ jobs:
           --adapted adapted-computesharp --discovery evidence/discovery
           --profile opengl-mesa-llvmpipe --work evidence/run
           --prebuilt-tests --negative-controls
+      - name: Run the companion test projects on OpenGL with negative controls
+        if: ${{ !cancelled() }}
+        env:
+          EGL_PLATFORM: surfaceless
+        run: >-
+          python demos/integrations/computesharp/companions.py translated
+          --adapted adapted-computesharp --profile opengl-mesa-llvmpipe
+          --output evidence/suites
       - name: Evaluate the HLSL intrinsics on OpenGL
         if: ${{ !cancelled() }}
         env:
@@ -418,7 +447,7 @@ jobs:
         with:
           name: translated-opengl
           path: profiles/opengl
-      - name: Qualify every profile against the frozen contract
+      - name: Qualify every profile and companion suite against the frozen contracts
         env:
           WORKFLOW_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}

@@ -7,7 +7,8 @@ per-case image comparisons and the evidence details. This module reduces it to
 execution, the case outcomes per contract category, the evidence counts, every
 negative control, the arithmetic exactness of the translated artifacts on the
 target compiler, the intrinsic precision against WARP and the image metrics
-of every shader against the original WARP output with their bounds. The
+of every shader against the original WARP output with their bounds, and the
+same per-profile results for every companion suite under ``suites``. The
 summary is a pure function of the report and the workflow provenance, so the
 results of a workflow run can be regenerated from its qualification artifact:
 
@@ -218,6 +219,28 @@ def summarize_profile(profile: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def summarize_suite(suite: dict[str, Any]) -> dict[str, Any]:
+    """Reduce the qualification of one companion suite to its results."""
+
+    summary = {
+        key: suite.get(key)
+        for key in (
+            "kind",
+            "status",
+            "contractSHA256",
+            "negativeControlsSHA256",
+            "evidencePolicySHA256",
+        )
+    }
+    if suite.get("noFloatArithmeticReason"):
+        summary["noFloatArithmeticReason"] = suite["noFloatArithmeticReason"]
+    summary["profiles"] = {
+        name: summarize_profile(profile)
+        for name, profile in sorted((suite.get("profiles") or {}).items())
+    }
+    return summary
+
+
 def summarize(
     report: dict[str, Any], provenance: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -235,6 +258,10 @@ def summarize(
         "profiles": {
             name: summarize_profile(profile)
             for name, profile in sorted((report.get("profiles") or {}).items())
+        },
+        "suites": {
+            name: summarize_suite(suite)
+            for name, suite in sorted((report.get("suites") or {}).items())
         },
     }
 

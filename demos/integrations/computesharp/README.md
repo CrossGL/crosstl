@@ -6,7 +6,8 @@ This integration ports the compute functionality of
 on Linux. CrossTL translates the HLSL that the unchanged ComputeSharp source
 generator emits, and a portable implementation of the ComputeSharp runtime
 executes the translated shaders, so the upstream `ComputeSharp.Tests` project
-runs with its original assertions on each target. The original Direct3D 12 run
+and its three portable companion test projects run with their original
+assertions on each target. The original Direct3D 12 run
 on Windows (WARP) is the independent baseline.
 
 ## Results
@@ -175,6 +176,21 @@ docker run --rm -v "$PWD:$PWD" -v /path/to/adapted-linux:/path/to/adapted-linux 
   --profile opengl-mesa-llvmpipe --work /path/to/gl-run --negative-controls
 ```
 
+Run the companion test projects (every other ported project of
+`test_projects.json`) on the same target after the main suite; each one is
+built against the portable runtime, exported, checked against its frozen lock
+and run with `run_tests.py --suite <project>` and its negative controls under
+`/path/to/suites/<project>`:
+
+```sh
+python demos/integrations/computesharp/companions.py translated \
+  --adapted /path/to/adapted --profile metal-apple-gpu --output /path/to/suites
+```
+
+On Windows, `companions.py baseline --source /path/to/ComputeSharp --output
+/path/to/suites` runs the original projects on Direct3D 12 as the upstream
+workflow does and accounts them with `baseline.py`.
+
 Each run exits non-zero unless accounting, evidence, arithmetic exactness and
 every control pass, and writes `results.json`, `exactness.json`, the TRX, the
 evidence (`evidence.jsonl`), the translated artifacts with their manifest, the
@@ -202,7 +218,8 @@ python demos/integrations/computesharp/precision/run_probe.py \
 ```
 
 Qualify downloaded workflow artifacts (or local directories with the same
-layout: `discovery/`, `run/` and `precision/` for each target):
+layout: `discovery/`, `run/` and `precision/` for each target, and
+`suites/<project>/` for each companion suite):
 
 ```sh
 python demos/integrations/computesharp/qualify.py \
@@ -226,6 +243,45 @@ CROSSTL_REQUIRE_DOTNET=1 python -m pytest -q -n auto demos/integrations/computes
 ```
 
 ## Coverage Contract
+
+### Upstream test projects
+
+`test_projects.json` accounts for all 15 projects under the pinned `tests/`
+directory, each with a scope, a specific reason and the exact steps of the
+upstream `dotnet.yml` workflow that build or run it; `suites.py check` fails if
+a project or workflow step is added, removed or recorded differently.
+
+| Scope | Projects |
+| --- | --- |
+| ported | `ComputeSharp.Tests`, `ComputeSharp.Tests.DisableDynamicCompilation`, `ComputeSharp.Tests.GlobalStatements`, `ComputeSharp.Tests.Internals` |
+| windows-specific | `ComputeSharp.Tests.DeviceLost` (D3D12 device removal and COM reference counts), `ComputeSharp.Tests.NativeLibrariesResolver` (win-x64 native library resolution) |
+| cpu-only | `ComputeSharp.Tests.SourceGenerators` (Roslyn generator and analyzer tests) |
+| out-of-scope | the five Direct2D and WinUI projects and the three NuGet packaging projects |
+
+Each ported companion project has its own frozen contract, lock, evidence
+policy and negative controls under `suites/<project>/`, sharing the profiles,
+categories and capabilities of the main contract:
+
+| Project | Cases | WARP pass (optional) | Metal pass | OpenGL pass | Controls |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `DisableDynamicCompilation` | 4 | 2 (2) | 4 | 4 | 4 |
+| `GlobalStatements` (program) | 1 | 1 | 1 | 1 | 4 |
+| `Internals` (109 required GPU, 28 CPU-only) | 137 | 86 (51) | 137 | 137 | 1 |
+
+`GlobalStatements` is a top-level program without MSTest methods: discovery
+exports its entry point as its one case and `program_runner.py` runs the
+discovered assembly, records a pass only for a zero exit status (the program
+throws when the GPU result differs from its CPU evaluation) and writes the
+outcome as TRX, so the case is accounted, attributed in the dispatch evidence
+and checked by negative controls like an MSTest case. `Internals` dispatches
+no shader: its device cases create resources, read them back through the
+debugger views and load generated dispatch data on the host, so its evidence
+policy names the reason for each case without a dispatch, its one control
+corrupts readbacks, and the suite declares that its artifacts (whose bodies only
+compare thread ids with the dispatch size) do no float arithmetic instead of
+requiring float operations in the exactness check.
+
+### Main test project
 
 The pinned test assembly exports 303 test methods, 3,792 expanded cases (1,832
 WARP rows, 1,817 discrete-device rows and 143 rows without a device argument) and
@@ -491,7 +547,8 @@ baseline: [ICC profile allocation](https://github.com/advisories/GHSA-gwg2-r3hj-
 The identified fixed release, 4.1.2, requires a separate license key to build and
 is not substituted into the original baseline. `baseline-audit.props` keeps NuGet
 auditing enabled and adds advisory-specific exceptions only for
-`ComputeSharp.Tests`, enabled by `CrossTLTrustedCorpusBaseline=true`. This is
+`ComputeSharp.Tests`, its three ported companion test projects, the portable
+runtime and the intrinsic probe, enabled by `CrossTLTrustedCorpusBaseline=true`. This is
 restricted to the immutable, trusted upstream test code and its tracked assets;
 it must not be used to process external images or as a dependency policy for a
 shipped application.
@@ -502,7 +559,10 @@ shipped application.
 the original Windows export, TRX accounting with per-category outcome counts,
 the dispatch evidence, every negative control, the job report (including the
 device preflight), the arithmetic exactness of the translated artifacts, the
-intrinsic precision and the image checks, and writes
+intrinsic precision and the image checks. Every companion suite must pass the
+same checks, except the image checks and the intrinsic probe, with its own
+frozen files; the qualification fails if any suite is missing on any profile.
+It writes
 `qualification.json` with the summary `results.json` (`results_summary.py`). The workflow runs the original Windows
 WARP job, the adapted-source parity job, the macOS Metal job, the Linux Mesa
 llvmpipe job and then the qualification job, with bounded timeouts and seven
