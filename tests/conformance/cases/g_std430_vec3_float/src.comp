@@ -1,0 +1,10 @@
+#version 450
+// std430: in struct S { vec3 a; float b; } the member b sits at offset 12 and the array stride is 16.
+layout(local_size_x = 64) in;
+struct S { vec3 a; float b; };
+layout(std430, binding = 0) buffer Inp { S s[]; };
+layout(std430, binding = 1) buffer Outp { float o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    o[i] = s[i].b;
+}

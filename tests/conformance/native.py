@@ -1,0 +1,195 @@
+"""Native compute adapters for the harness's explicit two-buffer ABI.
+
+Each adapter binds ``input.bin`` at the input slot and ``output.bin`` at the output slot of the job directory,
+dispatches ``ceil(threads / group)`` one-dimensional workgroups, and writes both buffers back so the runner can
+check the output and confirm that the input buffer and the output guard words were not overwritten. Every adapter
+reports the identity of the device that ran the job; the runner rejects a result from an unexpected driver.
+"""
+
+import os
+import re
+from pathlib import Path
+
+from .process import run
+
+FILES = ("input.bin", "output.bin")
+VULKAN_TIMEOUT = 15
+
+
+class DriverRejected(RuntimeError):
+    """The driver's own compiler or pipeline creation refused an artifact the offline checker accepted."""
+
+
+class ExecutionTimeout(RuntimeError):
+    """The dispatch did not complete in time, for example because a translated loop no longer terminates."""
+
+
+def _groups(job):
+    return (job["threads"] + job["group"][0] - 1) // job["group"][0]
+
+
+def _expect(job, identity):
+    if job.get("expect") and job["expect"] not in identity:
+        raise RuntimeError(f"Expected a {job['expect']} device, ran on {identity}")
+    return identity
+
+
+def execute_metal(job):
+    import Metal
+
+    device = Metal.MTLCreateSystemDefaultDevice()
+    if device is None:
+        raise RuntimeError("No Metal device")
+    identity = _expect(job, str(device.name()))
+    options = Metal.MTLCompileOptions.new()
+    strict = job["config"] == "strict"
+    options.setMathMode_(Metal.MTLMathModeSafe if strict else Metal.MTLMathModeFast)
+    options.setMathFloatingPointFunctions_(
+        Metal.MTLMathFloatingPointFunctionsPrecise
+        if strict
+        else Metal.MTLMathFloatingPointFunctionsFast
+    )
+    library, error = device.newLibraryWithSource_options_error_(
+        Path(job["artifact"]).read_text(), options, None
+    )
+    if library is None:
+        raise DriverRejected(f"Metal driver compile: {error}")
+    function = library.newFunctionWithName_(job["entry"])
+    if function is None:
+        raise RuntimeError(f"Missing Metal entry {job['entry']}")
+    pipeline, error = device.newComputePipelineStateWithFunction_error_(function, None)
+    if pipeline is None:
+        raise DriverRejected(f"Metal pipeline: {error}")
+    if pipeline.maxTotalThreadsPerThreadgroup() < job["group"][0]:
+        raise RuntimeError(
+            f"Metal pipeline allows {pipeline.maxTotalThreadsPerThreadgroup()} threads per group"
+        )
+    buffers = []
+    for binding, filename in zip(job["bindings"], FILES):
+        data = (Path(job["directory"]) / filename).read_bytes()
+        buffer = device.newBufferWithBytes_length_options_(
+            data, len(data), Metal.MTLResourceStorageModeShared
+        )
+        if buffer is None:
+            raise RuntimeError("Metal buffer allocation failed")
+        buffers.append((binding, buffer, filename))
+    command = device.newCommandQueue().commandBuffer()
+    encoder = command.computeCommandEncoder()
+    encoder.setComputePipelineState_(pipeline)
+    for binding, buffer, _ in buffers:
+        encoder.setBuffer_offset_atIndex_(buffer, 0, binding)
+    # Metal hosts dispatch exactly `threads` threads (non-uniform threadgroups); the other APIs can only launch
+    # whole workgroups, which is the hazard the partial-threadgroup cases measure.
+    encoder.dispatchThreads_threadsPerThreadgroup_(
+        Metal.MTLSizeMake(job["threads"], 1, 1), Metal.MTLSizeMake(*job["group"])
+    )
+    encoder.endEncoding()
+    command.commit()
+    command.waitUntilCompleted()
+    if command.error() is not None:
+        raise RuntimeError(f"Metal execution: {command.error()}")
+    for _, buffer, filename in buffers:
+        (Path(job["directory"]) / filename).write_bytes(
+            bytes(buffer.contents().as_buffer(buffer.length()))
+        )
+    return {"device": identity, "runtime": job["runtime"]}
+
+
+def execute_opengl(job):
+    import moderngl
+
+    context = moderngl.create_standalone_context(require=430, backend="egl")
+    buffers, shader = [], None
+    try:
+        identity = _expect(
+            job, f"{context.info['GL_RENDERER']}; {context.info['GL_VERSION']}"
+        )
+        # The driver compile is the "real driver" check for GLSL output.
+        try:
+            shader = context.compute_shader(Path(job["artifact"]).read_text())
+        except moderngl.Error as error:
+            raise DriverRejected(str(error)) from error
+        for binding, filename in zip(job["bindings"], FILES):
+            buffer = context.buffer((Path(job["directory"]) / filename).read_bytes())
+            buffers.append((buffer, filename))
+            buffer.bind_to_storage_buffer(binding)
+        shader.run(group_x=_groups(job))
+        context.finish()
+        for buffer, filename in buffers:
+            (Path(job["directory"]) / filename).write_bytes(buffer.read())
+        return {"device": identity, "runtime": job["runtime"]}
+    finally:
+        for buffer, _ in buffers:
+            buffer.release()
+        if shader is not None:
+            shader.release()
+        context.release()
+
+
+def execute_vulkan(job):
+    executable = os.environ.get("CROSSTL_CONFORMANCE_VKRUN", "vkrun")
+    directory = Path(job["directory"])
+    args = [executable, job["binary"], job["entry"], _groups(job), 1, 1]
+    for binding, filename in zip(job["bindings"], FILES):
+        args.append(f"{binding}:inout:{directory / filename}")
+    result = run(args, timeout=job.get("timeout", VULKAN_TIMEOUT))
+    if result.status == "timeout":
+        raise ExecutionTimeout(f"vkrun exceeded {job.get('timeout', VULKAN_TIMEOUT)} s")
+    if re.match(r"error (vkCreateShaderModule|vkCreateComputePipelines)", result.log):
+        raise DriverRejected(result.log[-1500:])
+    if result.status != "accepted" or not result.log.startswith("ok"):
+        raise RuntimeError(f"Vulkan execution {result.status}: {result.log[-1500:]}")
+    fields = dict(re.findall(r"^(\w+)=(.*)$", result.log, flags=re.M))
+    if "device" not in fields or "driver" not in fields:
+        raise RuntimeError("The Vulkan runner did not report its driver and device")
+    identity = _expect(
+        job, f"{fields['driver']} {fields.get('driver_info', '')} on {fields['device']}"
+    )
+    return {"runtime": job["runtime"], "device": identity, "api": fields.get("api")}
+
+
+def execute_d3d12(job):
+    import compushady
+    from compushady import config
+
+    config.set_backend("d3d12")
+    devices = [
+        device
+        for device in compushady.get_discovered_devices()
+        if not device.is_hardware
+    ]
+    if len(devices) != 1:
+        raise RuntimeError(f"Expected one D3D12 software device, found {len(devices)}")
+    device = devices[0]
+    identity = _expect(job, device.name)
+    views = []
+    for resource, filename in zip(job["resources"], FILES):
+        data = (Path(job["directory"]) / filename).read_bytes()
+        upload = compushady.Buffer(len(data), compushady.HEAP_UPLOAD, device=device)
+        upload.upload(data)
+        stride = resource["stride"] if resource["kind"] == "structured" else 0
+        buffer = compushady.Buffer(len(data), stride=stride, device=device)
+        upload.copy_to(buffer)
+        views.append((resource["register"], buffer, filename))
+    srv = [buffer for register, buffer, _ in views if register.startswith("t")]
+    uav = {
+        int(register[1:]): buffer
+        for register, buffer, _ in views
+        if register.startswith("u")
+    }
+    # UAV slots are positional; an unused u0 slot (input bound as t0) gets a placeholder.
+    placeholder = compushady.Buffer(16, stride=4, device=device)
+    shader = compushady.Compute(
+        Path(job["binary"]).read_bytes(),
+        srv=srv,
+        uav=[uav.get(slot, placeholder) for slot in range(max(uav) + 1)],
+        device=device,
+    )
+    shader.dispatch(_groups(job), 1, 1)
+    for _, buffer, filename in views:
+        readback = compushady.Buffer(
+            buffer.size, compushady.HEAP_READBACK, device=device
+        )
+        buffer.copy_to(readback)
+        (Path(job["directory"]) / filename).write_bytes(readback.readback())
+    return {"runtime": job["runtime"], "device": identity}

@@ -1,0 +1,56 @@
+# Conformance toolchains
+
+Recorded on 2026-10-18 with `python -m tests.conformance.toolchains --markdown` on the `darwin-arm64` scoreboard
+host: macOS (Darwin 27.2.0) on Apple M2 Max, Python 3.12.15, Vulkan SDK 1.4.363.0. Re-run the command and update
+this file in the same change whenever a validator, driver or container pin moves.
+
+## Validators
+
+| Tool | Version | Status |
+|---|---|---|
+| `metal` | Apple metal version 32023.918 (metalfe-32023.918.1); macOS SDK 27.0 | available |
+| `dxc` | libdxcompiler.dylib: 1.9(5512-01b62ad4)(1.9.0.5512) | available |
+| `glslangValidator` | Glslang 11:16.6.0; ESSL 3.20; GLSL 4.60 | available |
+| `spirv-as` | SPIRV-Tools v2026.4 | available |
+| `spirv-val` | SPIRV-Tools v2026.4 | available |
+| `docker` | server 29.5.2 | available |
+| `vkrun` | built from `vkrun.c` (dfd360e2b4d00a13) | available |
+| `mesa-image` | Mesa 25.2.8-0ubuntu0.24.04.4 aarch64 (`docker/mesa/Dockerfile`) | available |
+
+## Runtimes
+
+| Runtime | Target | Mode | Identity | Status |
+|---|---|---|---|---|
+| `metal-apple` | metal | host | Apple M2 Max | available |
+| `vulkan-moltenvk` | spirv | host | MoltenVK 1.4.2 (Vulkan 1.3.357) on Apple M2 Max | available |
+| `vulkan-kosmickrisp` | spirv | host | KosmicKrisp vulkan-sdk-1.4.363 (Vulkan 1.4.363) on Apple M2 Max | available |
+| `vulkan-lavapipe` | spirv | container | lavapipe, Mesa 25.2.8 (LLVM 20.1.2, Vulkan 1.4.318) | available |
+| `opengl-llvmpipe` | glsl | container | llvmpipe, Mesa 25.2.8 (LLVM 20.1.2), OpenGL 4.5 core | available |
+| `d3d12-warp` | hlsl | - | - | unavailable: Direct3D 12 WARP requires Windows |
+
+HLSL cells therefore stop at DXC validation (`compile-only@darwin`) on this host. D3D12 execution needs the
+Windows CI path.
+
+## Language versions accepted by these validators
+
+Probed with a trivial compute kernel per version.
+
+- **MSL** (`xcrun metal -std=`): `macos-metal1.0`–`macos-metal2.4`, `ios-metal1.0`–`ios-metal2.4`,
+  `metal3.0`, `metal3.1`, `metal3.2`, `metal4.0`, `metal4.1`. `metal3.3` and `metal4.2` are rejected.
+- **HLSL** (DXC 1.9.0.5512): profiles `cs_6_0`–`cs_6_9`; `cs_6_10` is rejected. `cs_5_0` and `cs_5_1` are
+  accepted and compiled to DXIL, so SM 5.x is a source profile, not a DXBC target. `-HV 2018` and `-HV 202x` are
+  accepted; the harness validates at `cs_6_6` with HLSL 2021.
+- **GLSL** (glslang 16.6.0): desktop up to 4.60, ES up to 3.20.
+- **SPIR-V** (`spirv-val --target-env`): `vulkan1.0`–`vulkan1.4`; the harness runs `vulkan1.1`–`vulkan1.3`.
+
+## Running the harness
+
+```bash
+# Unit tests of the harness itself (no native tools needed).
+python -m pytest -q tests/conformance
+# One source fixture per available runtime, executed unchanged against its oracle.
+CROSSTL_CONFORMANCE_NATIVE=1 python -m pytest -q tests/conformance/test_native_runtimes.py
+# Full translated matrix under both compile configurations, checked against the scoreboard.
+python -m tests.conformance.runner --output /tmp/conformance-run --configs strict,relaxed \
+  --baseline tests/conformance/scoreboards/darwin-arm64.json
+```
