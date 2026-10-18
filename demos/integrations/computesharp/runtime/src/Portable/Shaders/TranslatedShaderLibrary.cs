@@ -73,15 +73,19 @@ internal sealed class TranslatedShaderLibrary
 {
     private readonly Dictionary<string, TranslatedShader> shaders;
 
-    private TranslatedShaderLibrary(string manifestPath, string target, string translatorCommit, Dictionary<string, TranslatedShader> shaders)
+    private TranslatedShaderLibrary(string manifestPath, string manifestSha256, string target, string translatorCommit, Dictionary<string, TranslatedShader> shaders)
     {
         ManifestPath = manifestPath;
+        ManifestSha256 = manifestSha256;
         Target = target;
         TranslatorCommit = translatorCommit;
         this.shaders = shaders;
     }
 
     public string ManifestPath { get; }
+
+    /// <summary>Gets the SHA-256 of the manifest bytes that were loaded.</summary>
+    public string ManifestSha256 { get; }
 
     public string Target { get; }
 
@@ -95,7 +99,9 @@ internal sealed class TranslatedShaderLibrary
             ?? throw new InvalidOperationException("CROSSTL_COMPUTESHARP_ARTIFACTS must point to the CrossTL artifact directory.");
         string target = BackendSelection.Backend;
         string manifestPath = Path.Combine(root, target, "manifest.json");
-        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(manifestPath));
+        byte[] manifestBytes = File.ReadAllBytes(manifestPath);
+        string manifestSha256 = Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant();
+        using JsonDocument document = JsonDocument.Parse(manifestBytes);
         JsonElement manifest = document.RootElement;
         if (manifest.GetProperty("target").GetString() != target)
         {
@@ -145,7 +151,7 @@ internal sealed class TranslatedShaderLibrary
             };
         }
 
-        return new TranslatedShaderLibrary(manifestPath, target, commit, shaders);
+        return new TranslatedShaderLibrary(manifestPath, manifestSha256, target, commit, shaders);
     }
 
     public TranslatedShader Find(string hlslSha256, string typeName)

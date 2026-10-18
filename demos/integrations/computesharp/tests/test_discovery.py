@@ -4,72 +4,23 @@ import copy
 import hashlib
 import importlib.util
 import json
-import os
 import shutil
-import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "computesharp_baseline", ROOT / "baseline.py"
+TESTS = Path(__file__).resolve().parent
+_SUPPORT_SPEC = importlib.util.spec_from_file_location(
+    "computesharp_fixture_support", TESTS / "fixture_support.py"
 )
-BASELINE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(BASELINE)
-FIXTURE_CONTRACT = ROOT / "tests" / "fixture" / "coverage.json"
+SUPPORT = importlib.util.module_from_spec(_SUPPORT_SPEC)
+_SUPPORT_SPEC.loader.exec_module(SUPPORT)
+ROOT = SUPPORT.ROOT
+BASELINE = SUPPORT.load_module("computesharp_baseline", ROOT / "baseline.py")
+FIXTURE_CONTRACT = SUPPORT.FIXTURE_CONTRACT
 FIXTURE_SOURCE = "demos/integrations/computesharp/tests/fixture/Fixture.cs"
-
-
-@pytest.fixture(scope="session")
-def discovery_tools(tmp_path_factory):
-    dotnet = shutil.which("dotnet")
-    if dotnet is None:
-        if os.environ.get("CROSSTL_REQUIRE_DOTNET") == "1":
-            pytest.fail("The discovery contract requires the .NET 10 SDK")
-        pytest.skip("The discovery contract requires the .NET 10 SDK")
-    output = tmp_path_factory.mktemp("discovery-build")
-    for name, project in (
-        ("tool", ROOT / "discovery" / "Discovery.csproj"),
-        ("fixture", ROOT / "tests" / "fixture" / "Fixture.csproj"),
-    ):
-        subprocess.run(
-            [
-                dotnet,
-                "build",
-                str(project),
-                "-c",
-                "Release",
-                "-o",
-                str(output / name),
-                "--artifacts-path",
-                str(output / (name + "-artifacts")),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-    return [
-        dotnet,
-        str(output / "tool" / "Discovery.dll"),
-        str(output / "fixture" / "Fixture.dll"),
-    ]
-
-
-def export(tools, output, mode=None):
-    environment = os.environ.copy()
-    environment.pop("DISCOVERY_FIXTURE_MODE", None)
-    if mode:
-        environment["DISCOVERY_FIXTURE_MODE"] = mode
-    return subprocess.run(
-        [*tools, str(output)],
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+export = SUPPORT.export
 
 
 def test_exports_expanded_cases_and_actual_descriptor_source(discovery_tools, tmp_path):
@@ -158,28 +109,6 @@ def test_existing_export_is_preserved(discovery_tools, tmp_path):
     assert result.returncode != 0
     assert (output / "keep.txt").read_text() == "previous evidence"
     assert not (output / "discovery.json").exists()
-
-
-@pytest.fixture(scope="session")
-def baseline_fixture(discovery_tools, tmp_path_factory):
-    root = tmp_path_factory.mktemp("baseline-proof")
-    discovery = root / "discovery"
-    result = export(discovery_tools, discovery)
-    assert result.returncode == 0, result.stderr
-    result = subprocess.run(
-        [
-            discovery_tools[0],
-            "vstest",
-            discovery_tools[2],
-            "--Logger:trx;LogFileName=baseline.trx",
-            "--ResultsDirectory:" + str(root),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return discovery, root / "baseline.trx"
 
 
 def test_original_result_accounting_uses_real_mstest_output(baseline_fixture):

@@ -68,7 +68,7 @@ internal static class BackendSelection
         string fault = value.Trim().ToLowerInvariant();
         return fault switch
         {
-            "omit-dispatch" or "swap-bindings" or "perturb-constants" or "corrupt-readback" => fault,
+            "omit-dispatch" or "swap-bindings" or "perturb-constants" or "corrupt-readback" or "corrupt-guard" => fault,
             _ => throw new InvalidOperationException($"Unsupported CROSSTL_COMPUTESHARP_FAULT value '{value}'.")
         };
     }
@@ -166,6 +166,7 @@ internal sealed unsafe class NativeDevice : IDisposable
     private const int ErrorCapacity = 8192;
 
     private readonly NativeExecutor executor;
+    private readonly ConcurrentDictionary<IntPtr, ulong> bufferSizes = new();
     private IntPtr device;
 
     private NativeDevice(NativeExecutor executor, IntPtr device, NativeDeviceInfo info)
@@ -228,16 +229,46 @@ internal sealed unsafe class NativeDevice : IDisposable
         return Invoke(() => CsBackend.FormatSupported(device, dimension, format, usage) != 0);
     }
 
+    /// <summary>
+    /// Creates a device buffer with <paramref name="size"/> visible bytes. The native
+    /// allocation is surrounded by <see cref="BufferGuards.Bytes"/> guard bytes on each side
+    /// that hold a fixed pattern; every offset used by the runtime is relative to the
+    /// visible region, and <see cref="VerifyGuards"/> detects device writes outside it.
+    /// </summary>
     public IntPtr CreateBuffer(ulong size)
     {
         IntPtr device = this.device;
-        return Invoke(() =>
+        ulong capacity = checked(size + (2 * BufferGuards.Bytes));
+        IntPtr buffer = Invoke(() =>
         {
             byte* error = stackalloc byte[ErrorCapacity];
             error[0] = 0;
-            Check("buffer creation", CsBackend.BufferCreate(device, size, out IntPtr buffer, error, ErrorCapacity), error);
+            Check("buffer creation", CsBackend.BufferCreate(device, capacity, out IntPtr buffer, error, ErrorCapacity), error);
             return buffer;
         });
+        try
+        {
+            byte[] pattern = BufferGuards.Pattern;
+            fixed (byte* pointer = pattern)
+            {
+                IntPtr data = (IntPtr)pointer;
+                Invoke(() =>
+                {
+                    byte* error = stackalloc byte[ErrorCapacity];
+                    error[0] = 0;
+                    Check("buffer guard write", CsBackend.BufferWrite(device, buffer, 0, (void*)data, BufferGuards.Bytes, error, ErrorCapacity), error);
+                    Check("buffer guard write", CsBackend.BufferWrite(device, buffer, BufferGuards.Bytes + size, (void*)data, BufferGuards.Bytes, error, ErrorCapacity), error);
+                });
+            }
+        }
+        catch
+        {
+            Invoke(() => CsBackend.BufferDestroy(device, buffer));
+            throw;
+        }
+
+        this.bufferSizes[buffer] = size;
+        return buffer;
     }
 
     public void DestroyBuffer(IntPtr buffer)
@@ -245,34 +276,90 @@ internal sealed unsafe class NativeDevice : IDisposable
         IntPtr device = this.device;
         if (buffer != IntPtr.Zero && device != IntPtr.Zero)
         {
+            this.bufferSizes.TryRemove(buffer, out _);
             Invoke(() => CsBackend.BufferDestroy(device, buffer));
         }
+    }
+
+    /// <summary>Gets the visible size of a buffer created by <see cref="CreateBuffer"/>.</summary>
+    public ulong BufferSize(IntPtr buffer)
+    {
+        return this.bufferSizes.TryGetValue(buffer, out ulong size)
+            ? size
+            : throw new InvalidOperationException("The native buffer handle is not a live buffer of this device.");
+    }
+
+    /// <summary>Gets whether a handle is a buffer of this device that has not been destroyed.</summary>
+    public bool IsLiveBuffer(IntPtr buffer) => this.bufferSizes.ContainsKey(buffer);
+
+    /// <summary>Validates a range of a buffer's visible region and returns its native offset.</summary>
+    public ulong NativeOffset(IntPtr buffer, ulong offset, ulong size, string operation)
+    {
+        ulong visible = BufferSize(buffer);
+        if (offset > visible || size > visible - offset)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(offset),
+                $"The {operation} range [{offset}, {offset + size}) exceeds the {visible} bytes of the buffer.");
+        }
+
+        return offset + BufferGuards.Bytes;
     }
 
     public void WriteBuffer(IntPtr buffer, ulong offset, IntPtr data, ulong size)
     {
         IntPtr device = this.device;
+        ulong nativeOffset = NativeOffset(buffer, offset, size, "buffer write");
         Invoke(() =>
         {
             byte* error = stackalloc byte[ErrorCapacity];
             error[0] = 0;
-            Check("buffer write", CsBackend.BufferWrite(device, buffer, offset, (void*)data, size, error, ErrorCapacity), error);
+            Check("buffer write", CsBackend.BufferWrite(device, buffer, nativeOffset, (void*)data, size, error, ErrorCapacity), error);
         });
     }
 
     public void ReadBuffer(IntPtr buffer, ulong offset, IntPtr data, ulong size)
     {
         IntPtr device = this.device;
+        ulong nativeOffset = NativeOffset(buffer, offset, size, "buffer read");
         Invoke(() =>
         {
             byte* error = stackalloc byte[ErrorCapacity];
             error[0] = 0;
-            Check("buffer read", CsBackend.BufferRead(device, buffer, offset, (void*)data, size, error, ErrorCapacity), error);
+            Check("buffer read", CsBackend.BufferRead(device, buffer, nativeOffset, (void*)data, size, error, ErrorCapacity), error);
         });
         if (BackendSelection.Fault == "corrupt-readback" && size > 0)
         {
             ((byte*)data)[0] ^= 0x5A;
         }
+    }
+
+    /// <summary>
+    /// Reads both guard regions of a buffer and throws <see cref="BufferGuardException"/>
+    /// when any guard byte differs from the pattern written at creation.
+    /// </summary>
+    public void VerifyGuards(IntPtr buffer)
+    {
+        IntPtr device = this.device;
+        ulong size = BufferSize(buffer);
+        byte[] leading = new byte[BufferGuards.Bytes];
+        byte[] trailing = new byte[BufferGuards.Bytes];
+        fixed (byte* leadingPointer = leading)
+        fixed (byte* trailingPointer = trailing)
+        {
+            IntPtr leadingData = (IntPtr)leadingPointer;
+            IntPtr trailingData = (IntPtr)trailingPointer;
+            Invoke(() =>
+            {
+                byte* error = stackalloc byte[ErrorCapacity];
+                error[0] = 0;
+                Check("buffer guard read", CsBackend.BufferRead(device, buffer, 0, (void*)leadingData, BufferGuards.Bytes, error, ErrorCapacity), error);
+                Check("buffer guard read", CsBackend.BufferRead(device, buffer, BufferGuards.Bytes + size, (void*)trailingData, BufferGuards.Bytes, error, ErrorCapacity), error);
+            });
+        }
+
+        BufferGuards.Check(leading, "leading", size);
+        BufferGuards.Check(trailing, "trailing", size);
     }
 
     public IntPtr CreateTexture(uint dimension, uint format, uint width, uint height, uint depth, uint usage)
