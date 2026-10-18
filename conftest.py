@@ -70,6 +70,14 @@ kernel void probe() {}
     )
 
 
+def pytest_collection_modifyitems(config, items):
+    # Tests that a pinned WARP library is documented to fail become strict
+    # expected failures on that library only; see tests/directx_runtime_defects.py.
+    from tests.directx_runtime_defects import mark_known_runtime_defects
+
+    mark_known_runtime_defects(items)
+
+
 @pytest.fixture(autouse=True)
 def hide_xcrun_when_metal_toolchain_is_incomplete(monkeypatch):
     if not _xcrun_resolves_missing_metal_toolchain():
