@@ -162,6 +162,25 @@ def test_gating_workflows_report_one_result_for_pull_requests_and_the_merge_queu
     assert "exit 1" in step["run"]
 
 
+def test_pip_cache_is_only_enabled_for_jobs_that_install_with_pip():
+    # actions/setup-python fails its post step when the pip cache folder was never
+    # created, so a job that caches pip downloads must also install with pip.
+    for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for name, job in (workflow.get("jobs") or {}).items():
+            steps = job.get("steps") or []
+            cached = any(
+                str(step.get("uses", "")).startswith("actions/setup-python")
+                and (step.get("with") or {}).get("cache") == "pip"
+                for step in steps
+            )
+            if not cached:
+                continue
+            commands = "\n".join(str(step.get("run", "")) for step in steps)
+            assert "pip install" in commands, (path.name, name)
+            assert "--no-cache-dir" not in commands, (path.name, name)
+
+
 def _workflow_job_section(workflow, job_id):
     match = re.search(
         rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
