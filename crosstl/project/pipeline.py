@@ -30,6 +30,10 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.backend.Metal.template_overloads import (
+    declared_type_names,
+    select_instantiated_overload,
+)
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_declared_type_and_name,
@@ -21950,9 +21954,13 @@ def _metal_dispatch_bool_callbacks_defer_to_frontend(
     template: Any,
     templates: Sequence[Any],
     template_spans: Sequence[tuple[int, int]],
-    reachable_function_spans: Sequence[tuple[int, int]],
+    reachable_function_spans: Sequence[tuple[int, int]] | None,
 ) -> bool:
     if not _metal_dispatch_bool_callback_contract(preprocessor, template):
+        return False
+    if not reachable_function_spans:
+        # Without a concrete entry root there are no reachable call sites to
+        # prove the callback contract against, so the helper is not deferred.
         return False
     if sum(candidate.name == template.name for candidate in templates) != 1:
         return False
@@ -22420,6 +22428,14 @@ def _project_template_materialization_for_artifact(
     source_instantiation_unsupported: list[dict[str, Any]] = []
     source_instantiation_partial_templates: set[str] = set()
     template_lookup = {template.name: template for template in templates}
+    template_overloads: dict[str, list[Any]] = {}
+    for template in templates:
+        template_overloads.setdefault(template.name, []).append(template)
+    overload_type_names = (
+        declared_type_names(preprocessed)
+        if any(len(group) > 1 for group in template_overloads.values())
+        else frozenset()
+    )
     source_instantiation_contexts: list[_SourceInstantiationTemplateContext] = []
     source_instantiation_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
@@ -22427,7 +22443,12 @@ def _project_template_materialization_for_artifact(
         tuple[str, tuple[tuple[str, str], ...], str]
     ] = set()
     for instantiation in source_instantiations:
-        template = template_lookup.get(instantiation.function_name)
+        template = select_instantiated_overload(
+            preprocessor,
+            overload_type_names,
+            template_overloads.get(instantiation.function_name, ()),
+            instantiation.template_arguments,
+        )
         if template is None:
             continue
         raw_arguments = list(instantiation.template_arguments)

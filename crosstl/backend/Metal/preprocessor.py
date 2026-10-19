@@ -31,7 +31,9 @@ from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
 )
+from .qualified_member_types import resolve_qualified_struct_member_types
 from .template_constants import unresolved_constant_references
+from .template_overloads import declared_type_names, select_instantiated_overload
 from .type_layout import metal_type_layout, metal_type_size
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
@@ -1199,7 +1201,14 @@ class MetalPreprocessor(HLSLPreprocessor):
                 ],
             )
 
-        templates_by_name = {template.name: template for template in templates}
+        templates_by_name: Dict[str, List[_MetalTemplateFunction]] = {}
+        for template in templates:
+            templates_by_name.setdefault(template.name, []).append(template)
+        overload_type_names = (
+            declared_type_names(code)
+            if any(len(group) > 1 for group in templates_by_name.values())
+            else frozenset()
+        )
         replacements: List[Tuple[int, int, str]] = [
             (instantiation.span[0], instantiation.span[1], "")
             for instantiation in all_instantiations
@@ -1207,7 +1216,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         seen: Set[Tuple[str, Tuple[str, ...], str]] = set()
 
         for instantiation in instantiations:
-            template = templates_by_name.get(instantiation.function_name)
+            template = select_instantiated_overload(
+                self,
+                overload_type_names,
+                templates_by_name.get(instantiation.function_name, ()),
+                instantiation.template_arguments,
+            )
             if template is None:
                 continue
             template_arguments = self._template_arguments_with_defaults(
@@ -3444,6 +3458,24 @@ class MetalPreprocessor(HLSLPreprocessor):
             skip_spans=template_declaration_spans,
         )
         structs = self._find_concrete_struct_definitions(code)
+        resolved_code = resolve_qualified_struct_member_types(
+            self,
+            code,
+            structs,
+            self._source_type_alias_bindings,
+            sorted(template_declaration_spans + [struct.span for struct in structs]),
+        )
+        if resolved_code != code:
+            code = resolved_code
+            template_declaration_spans = self._find_template_declaration_spans(code)
+            self._source_type_alias_bindings = (
+                self._collect_local_type_alias_bindings(
+                    code,
+                    [(0, len(code))],
+                    skip_spans=template_declaration_spans,
+                )
+            )
+            structs = self._find_concrete_struct_definitions(code)
         self._apply_explicit_member_specializations(code, structs)
         function_excluded_spans = sorted(
             template_declaration_spans + [struct.span for struct in structs]

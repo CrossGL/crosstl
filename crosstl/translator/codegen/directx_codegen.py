@@ -119,6 +119,7 @@ from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
 from .call_effects import builtin_argument_write_indices
+from .constant_guards import constant_bool_locals
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -6815,6 +6816,9 @@ class HLSLCodeGen(LoweringRefusalMixin):
         reassigned_names = self.hlsl_software_subgroup_reassigned_candidates(
             function, mutable_names, call_mutations
         )
+        fixed_bools = constant_bool_locals(
+            self, function, self.hlsl_initial_bool_constants(function)
+        )
         # A chunk counter written only by its own initializer-free loop's
         # update follows that loop: it stays uniform when the loop is.
 
@@ -6940,6 +6944,20 @@ class HLSLCodeGen(LoweringRefusalMixin):
                     validate_statements(statement, set(names), dict(components))
                     continue
                 if isinstance(statement, IfNode):
+                    fixed = (
+                        None
+                        if getattr(statement, "else_if_conditions", None)
+                        else self.hlsl_bool_constant_value(
+                            statement.condition, fixed_bools
+                        )
+                    )
+                    if fixed is not None:
+                        # Every invocation takes the branch the constant guard
+                        # selects; the other branch never runs.
+                        taken = statement.then_branch if fixed else statement.else_branch
+                        if taken is not None:
+                            validate_statements(taken, set(names), dict(components))
+                        continue
                     conditions = [statement.condition] + list(
                         getattr(statement, "else_if_conditions", []) or []
                     )
