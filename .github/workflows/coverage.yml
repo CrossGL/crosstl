@@ -5,7 +5,8 @@ name: Coverage
 # Linux job measures GLSL, HLSL, SPIR-V and WGSL with glslang, DXC, spirv-val and naga; the macOS job measures Metal
 # with xcrun metal. The report job merges both reports and adds the CrossGL IR row. On pushes to main and nightly,
 # the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart),
-# COVERAGE.md and a bounded history.csv; main itself never receives generated files.
+# COVERAGE.md and a bounded history.csv; main itself never receives generated files. The issues job then
+# reconciles the tracking and bug issues (tools/coverage/issues.py); pull requests only print its plan.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the
@@ -173,6 +174,9 @@ jobs:
     if: always() && needs.linux.result == 'success' && needs.metal.result != 'failure' && needs.metal.result != 'cancelled'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -211,6 +215,22 @@ jobs:
           path: coverage.json
           retention-days: 14
 
+      # Pull requests and the merge queue only print what the issues job would change on main.
+      - name: Plan the issue changes
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m tools.coverage issues coverage.json --dry-run --repository "$GITHUB_REPOSITORY" | tee plan.txt
+          {
+            echo "### Issue changes on main"
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   publish:
     name: Publish coverage
     needs: report
@@ -224,6 +244,8 @@ jobs:
     concurrency:
       group: coverage-publish
       cancel-in-progress: false
+    outputs:
+      published: ${{ steps.published.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -283,9 +305,50 @@ jobs:
           git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:coverage
           echo "Published https://github.com/${GITHUB_REPOSITORY}/blob/coverage/COVERAGE.md" >> "$GITHUB_STEP_SUMMARY"
 
+  issues:
+    name: Reconcile coverage issues
+    needs: publish
+    # Runs only after this run's results were published, so issues never fall back to older data.
+    if: needs.publish.outputs.published == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: coverage-issues
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Reconciling needs only the standard library and gh, so nothing is installed.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: coverage
+
+      - name: Update the tracking and bug issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m tools.coverage issues coverage.json --repository "$GITHUB_REPOSITORY" | tee changes.txt
+          {
+            echo "### Issue changes"
+            echo
+            echo '```'
+            cat changes.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   result:
     name: Coverage result
-    needs: [plan, linux, metal, report, publish]
+    needs: [plan, linux, metal, report, publish, issues]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

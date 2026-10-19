@@ -1,7 +1,8 @@
 """Command line: ``python -m tools.coverage run [--backend B] [--direction input|output]``.
 
 ``merge`` combines the reports of runners that measured different backends, such as the Linux and macOS CI jobs, and
-rebuilds the CrossGL IR row from all of them. ``publish`` writes what CI publishes to the ``coverage`` branch.
+rebuilds the CrossGL IR row from all of them. ``publish`` writes what CI publishes to the ``coverage`` branch, and
+``issues`` reconciles the tracking and bug issues with a report.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import features, publish, report, runner, validators
+from . import features, issues, publish, report, runner, validators
 from .model import DIRECTIONS
 from .upstream import UpstreamError
 
@@ -28,6 +29,11 @@ def _parser() -> argparse.ArgumentParser:
         "--backend", action="append", choices=LANGUAGES, help="repeatable; default: all"
     )
     run.add_argument("--direction", choices=DIRECTIONS, help="default: both")
+    run.add_argument(
+        "--feature",
+        action="append",
+        help="measure only the feature with this upstream name; repeatable",
+    )
     run.add_argument("--output", type=Path, default=Path("coverage.json"))
     run.add_argument(
         "--jobs", type=int, default=0, help="worker processes; default: up to 8"
@@ -56,6 +62,20 @@ def _parser() -> argparse.ArgumentParser:
         "--history", type=Path, help="the previously published history.csv, if any"
     )
     publishing.add_argument("--repository", default="CrossGL/crosstl")
+    reconciling = commands.add_parser(
+        "issues", help="reconcile the coverage tracking and bug issues with a report"
+    )
+    reconciling.add_argument("report", type=Path)
+    reconciling.add_argument("--repository", default="CrossGL/crosstl")
+    reconciling.add_argument(
+        "--dry-run", action="store_true", help="print the plan and change nothing"
+    )
+    reconciling.add_argument(
+        "--new-bugs",
+        type=int,
+        default=issues.NEW_BUGS,
+        help=f"most bug issues to open in one run; default: {issues.NEW_BUGS}",
+    )
     listing = commands.add_parser(
         "features", help="print the feature list of one language"
     )
@@ -82,6 +102,8 @@ def _run(args: argparse.Namespace) -> int:
     jobs = []
     for language in languages:
         feature_list = features.load(language, offline=args.offline)
+        if args.feature:
+            feature_list = [f for f in feature_list if f.name in args.feature]
         for direction in directions:
             if direction == "input" and language not in runner.INPUT_BACKENDS:
                 continue
@@ -90,6 +112,12 @@ def _run(args: argparse.Namespace) -> int:
     data = report.build(results, languages, directions)
     report.write(data, args.output)
     print(report.summary(data))
+    if args.feature:
+        for result in results:
+            detail = f": {result.detail}" if result.detail else ""
+            print(
+                f"{result.feature.language} {result.direction} {result.feature.name} {result.outcome}{detail}"
+            )
     print(f"wrote {args.output}")
     return 0
 
@@ -116,6 +144,22 @@ def _publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def _issues(args: argparse.Namespace) -> int:
+    data = json.loads(args.report.read_text(encoding="utf-8"))
+    try:
+        actions = issues.reconcile(
+            data,
+            issues.GitHub(args.repository),
+            new_bugs=args.new_bugs,
+            dry_run=args.dry_run,
+        )
+    except issues.GitHubError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    print(f"{len(actions)} issue changes" + (" planned" if args.dry_run else ""))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -125,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
             return _merge(args)
         if args.command == "publish":
             return _publish(args)
+        if args.command == "issues":
+            return _issues(args)
         for feature in features.load(args.backend, offline=args.offline):
             print(f"{feature.group:<44} {feature.name}")
         return 0

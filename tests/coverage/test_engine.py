@@ -160,3 +160,32 @@ def test_merge_refuses_mixed_commits_and_double_measurements():
         report.merge([_report(row), _report(row, commit="def")])
     with pytest.raises(ValueError, match="more than one report"):
         report.merge([_report(row), _report(row)])
+
+
+def test_run_measures_only_the_requested_features(monkeypatch, tmp_path, capsys):
+    from tools.coverage import __main__ as cli
+    from tools.coverage import features
+
+    other = Feature("glsl", "function", "sin", ABS.signature, crossgl="sin")
+    monkeypatch.setattr(features, "load", lambda language, offline=False: [ABS, other])
+    monkeypatch.setattr(validators, "available", lambda language: True)
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    measured = []
+
+    def run(jobs, workers=None):
+        measured.extend((f.name, direction) for f, direction, _ in jobs)
+        return [Result(f, direction, "supported") for f, direction, _ in jobs]
+
+    monkeypatch.setattr(runner, "run", run)
+    argv = [
+        "run",
+        "--backend",
+        "glsl",
+        "--feature",
+        "abs",
+        "--output",
+        str(tmp_path / "c.json"),
+    ]
+    assert cli.main(argv) == 0
+    assert measured == [("abs", "output"), ("abs", "input")]
+    capsys.readouterr()

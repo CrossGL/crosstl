@@ -23,13 +23,13 @@ DETAIL_LIMIT = 160
 WORKFLOW = "coverage.yml"
 
 
-def _label(row: dict) -> tuple[str, str]:
+def label(row: dict) -> tuple[str, str]:
     if row["language"] == ir.LANGUAGE:
         return chart.name(row["language"]), "expressiveness"
     return chart.name(row["language"]), row["direction"]
 
 
-def _cell(text: str) -> str:
+def cell(text: str) -> str:
     """``text`` made safe for one Markdown table cell or list item: one line, no pipes, bounded length."""
     line = " ".join(text.split())
     if len(line) > DETAIL_LIMIT:
@@ -43,7 +43,7 @@ def _table(report: dict) -> list[str]:
         "|---|---|---:|---:|---:|---:|---:|",
     ]
     for row in report["backends"]:
-        language, direction = _label(row)
+        language, direction = label(row)
         if not row["offered"]:
             lines.append(f"| {language} | {direction} | not offered | | | | |")
             continue
@@ -70,10 +70,10 @@ def _sources(report: dict, repository: str) -> list[str]:
             url = f"https://github.com/{repository}/blob/{report['commit'] or 'main'}/{source['path']}"
             pinned = "this repository"
         lines.append(
-            f"| {chart.name(language)} | [{_cell(source['describes'])}]({url}) | {pinned} |"
+            f"| {chart.name(language)} | [{cell(source['describes'])}]({url}) | {pinned} |"
         )
     tools = ", ".join(
-        f"{tool} {_cell(version) if version else '(not installed)'}"
+        f"{tool} {cell(version) if version else '(not installed)'}"
         for tool, version in report["validators"].items()
     )
     return lines + ["", f"Reference tools: {tools}."]
@@ -81,7 +81,7 @@ def _sources(report: dict, repository: str) -> list[str]:
 
 def _gaps(row: dict) -> list[str]:
     """The refused and wrong features of one row, grouped by category, plus the untested count per category."""
-    language, direction = _label(row)
+    language, direction = label(row)
     gaps = [f for f in row["features"] if f["outcome"] in ("refused", "wrong")]
     untested = Counter(
         f["category"] for f in row["features"] if f["outcome"] == "untested"
@@ -101,9 +101,7 @@ def _gaps(row: dict) -> list[str]:
             for feature in sorted(
                 (f for f in gaps if f["category"] == category), key=lambda f: f["name"]
             ):
-                detail = (
-                    f": {_cell(feature['detail'])}" if feature.get("detail") else ""
-                )
+                detail = f": {cell(feature['detail'])}" if feature.get("detail") else ""
                 lines.append(f"- `{feature['name']}` {feature['outcome']}{detail}")
             lines.append("")
         lines += ["</details>", ""]
