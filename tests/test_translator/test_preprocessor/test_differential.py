@@ -3,6 +3,10 @@
 Outputs are compared as token sequences, since the reference tools space and break lines differently. Each case
 must give the same tokens; each error case must be rejected by the reference tool and refused, with its typed
 diagnostic code, by the shared preprocessor. A test is skipped when its reference tool is not installed.
+
+Clang runs in ISO C++20 mode on every host. On Windows it defaults to Microsoft compatibility, which accepts
+some ill-formed input (an invalid ``##`` paste is only a warning there), so ``-fno-ms-compatibility`` and
+``-fno-ms-extensions`` are passed explicitly.
 """
 
 from __future__ import annotations
@@ -21,6 +25,16 @@ from .cases import CPP_CASES, CPP_ERRORS, GLSL_CASES, GLSL_ERRORS, INCLUDE_TREE
 
 CLANG = shutil.which("clang") or shutil.which("clang++")
 GLSLANG = shutil.which("glslangValidator")
+CLANG_ISO_CPP = [
+    "-E",
+    "-P",
+    "-x",
+    "c++",
+    "-std=c++20",
+    "-fno-ms-compatibility",
+    "-fno-ms-extensions",
+    "-Wno-everything",
+]
 
 
 def tokens(text, cpp=True):
@@ -29,7 +43,7 @@ def tokens(text, cpp=True):
 
 def clang(path):
     return subprocess.run(
-        [CLANG, "-E", "-P", "-x", "c++", "-std=c++20", "-Wno-everything", str(path)],
+        [CLANG, *CLANG_ISO_CPP, str(path)],
         capture_output=True,
         text=True,
         timeout=60,
@@ -96,9 +110,7 @@ def test_include_closure_matches_clang(tmp_path):
     main = tmp_path / "main.cpp"
     paths = [str(tmp_path / "inc"), str(tmp_path / "inc2")]
     reference = subprocess.run(
-        [CLANG, "-E", "-P", "-x", "c++", "-std=c++20", "-Wno-everything"]
-        + [f"-I{path}" for path in paths]
-        + [str(main)],
+        [CLANG, *CLANG_ISO_CPP] + [f"-I{path}" for path in paths] + [str(main)],
         capture_output=True,
         text=True,
         timeout=60,
