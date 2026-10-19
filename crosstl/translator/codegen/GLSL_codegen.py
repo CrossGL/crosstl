@@ -43657,6 +43657,7 @@ complex64_t crossgl_complex64_mod_assign(
             if assertion.applies_to(
                 expression_name,
                 function_name or self.current_glsl_source_function_name,
+                getattr(self, "current_glsl_indexed_storage", None),
             )
         ]
         if not matches:
@@ -44146,7 +44147,24 @@ complex64_t crossgl_complex64_mod_assign(
             return self.glsl_target_index_literal(operand.minimum, "int")
         return f"int({rendered})"
 
-    def glsl_index_expression(
+    def glsl_index_expression(self, index_expr, indexed_expr=None, **options):
+        """Render a subscript index, scoping assertions to the indexed storage."""
+        previous = getattr(self, "current_glsl_indexed_storage", None)
+        if isinstance(indexed_expr, IdentifierNode):
+            storage = indexed_expr.name
+        elif isinstance(indexed_expr, str):
+            storage = indexed_expr
+        else:
+            storage = None
+        self.current_glsl_indexed_storage = storage
+        try:
+            return self.glsl_storage_index_expression(
+                index_expr, indexed_expr, **options
+            )
+        finally:
+            self.current_glsl_indexed_storage = previous
+
+    def glsl_storage_index_expression(
         self,
         index_expr,
         indexed_expr=None,
