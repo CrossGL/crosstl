@@ -3918,7 +3918,7 @@ def test_resource_selection_retains_every_native_opt_in():
                 required.add(identity)
             if any(term in name for term in expression.split(" or ")):
                 selected.add(identity)
-    assert len(required) == 72
+    assert len(required) == 73
     assert required <= selected
     for name in (
         "test_record_members_execute_natively",
