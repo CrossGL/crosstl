@@ -1269,7 +1269,7 @@ class WGSLCodeGen:
     def rewrite_stage_output_body(self, body, lowering):
         rewritten = []
         saw_return = False
-        for statement in getattr(body, "statements", []) or []:
+        for statement in self.block_statements(body):
             rewritten_statement = self.rewrite_stage_output_statement(
                 statement, lowering
             )
@@ -1403,11 +1403,14 @@ class WGSLCodeGen:
         return not self.statement_definitely_returns(statements[-1])
 
     def block_statements(self, body_node):
+        """The statements of a body; a braceless body is its one statement."""
+        if body_node is None:
+            return []
         if hasattr(body_node, "statements"):
             return list(getattr(body_node, "statements", []) or [])
-        if isinstance(body_node, list):
+        if isinstance(body_node, (list, tuple)):
             return list(body_node)
-        return []
+        return [body_node]
 
     def contains_generated_rust_match_flag(self, statements):
         return any(
@@ -2487,9 +2490,7 @@ class WGSLCodeGen:
         )
 
     def generate_block(self, block, indent=0):
-        if block is None:
-            return "{}"
-        statements = getattr(block, "statements", [])
+        statements = self.block_statements(block)
         if not statements:
             return "{}"
         pad = "    " * indent
@@ -2509,7 +2510,9 @@ class WGSLCodeGen:
             f"{pad}if ({self.generate_expression(node.condition)}) "
             f"{self.generate_block(node.then_branch, indent)}"
         )
-        if node.else_branch is not None:
+        if isinstance(node.else_branch, IfNode):
+            code += " else " + self.generate_if(node.else_branch, indent).lstrip()
+        elif node.else_branch is not None:
             code += f" else {self.generate_block(node.else_branch, indent)}"
         return code
 
@@ -2990,7 +2993,9 @@ class WGSLCodeGen:
         if not isinstance(array_type, ArrayType):
             return None
         if array_type.size is None:
-            return f"i32(arrayLength(&{self.generate_expression(function.object_expr)}))"
+            return (
+                f"i32(arrayLength(&{self.generate_expression(function.object_expr)}))"
+            )
         return f"i32({self.generate_expression(array_type.size)})"
 
     def generate_function_call(self, node, expected_type=None):
@@ -5419,7 +5424,9 @@ class WGSLCodeGen:
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"
                 and not expr.arguments
-                and isinstance(self.expression_type(expr.function.object_expr), ArrayType)
+                and isinstance(
+                    self.expression_type(expr.function.object_expr), ArrayType
+                )
             ):
                 return "int"
             resolved_function = self.resolve_function_overload(

@@ -118,6 +118,12 @@ from .bfloat_constants import bfloat16_constant_bits, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
+from .builtin_result_types import (
+    C_FAMILY,
+    component_access_type,
+    inferred_value_type,
+)
+from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
@@ -374,6 +380,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .operator_spellings import map_c_family_operator
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     same_scalar_lane_view,
@@ -14645,20 +14652,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "auto",
             "let",
         }:
-            inferred_type = self.expression_result_type(
-                getattr(stmt, "initial_value", None)
+            inferred_type = inferred_value_type(
+                self, getattr(stmt, "initial_value", None), C_FAMILY
             )
             if inferred_type is not None:
                 return inferred_type
-            return "float"
+            return self.refuse_untyped_local(stmt)
         if vtype is None:
-            vtype = self.expression_result_type(getattr(stmt, "initial_value", None))
-        vtype = vtype or "float"
+            vtype = inferred_value_type(
+                self, getattr(stmt, "initial_value", None), C_FAMILY
+            )
+        if not vtype:
+            return self.refuse_untyped_local(stmt)
         fixed_array_value_type = self.hlsl_fixed_array_local_value_type(
             vtype,
             getattr(stmt, "initial_value", None),
         )
         return fixed_array_value_type or vtype
+
+    def refuse_untyped_local(self, stmt):
+        """Refuse a local whose type is neither written nor inferable from its initializer."""
+        return self.refuse_lowering(
+            f"local declaration: the type of '{getattr(stmt, 'name', '?')}' is not "
+            "written and cannot be inferred from its initializer",
+            "float",
+        )
 
     def hlsl_fixed_array_local_value_type(self, declared_type, initializer):
         if initializer is None:
@@ -17736,6 +17754,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     if byte_shape[0] is ArithmeticScalarKind.SIGNED_INTEGER
                     else "uint8"
                 )
+            component_type = component_access_type(array_type, C_FAMILY)
+            if component_type is not None:
+                return component_type
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
@@ -17925,9 +17946,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "inversesqrt",
                     "rsqrt",
                     "mod",
-                }
-                and args
-                and func_name not in getattr(self, "function_return_types", {})
+                    # Derivatives return their operand's type (GLSL 4.60 section 8.14).
+                    "dFdx",
+                    "dFdy",
+                    "dFdxFine",
+                    "dFdyFine",
+                    "dFdxCoarse",
+                    "dFdyCoarse",
+                    "fwidth",
+                    "fwidthFine",
+                    "fwidthCoarse",
+                    "ddx",
+                    "ddy",
+                    "ddx_fine",
+                    "ddy_fine",
+                    "ddx_coarse",
+                    "ddy_coarse",
+                } and args and func_name not in getattr(
+                    self, "function_return_types", {}
+                )
             ):
                 return self.expression_result_type(args[0])
             if func_name in {
@@ -30954,7 +30991,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         if name in self.local_variable_types:
             return self.local_variable_types[name]
-        return self.global_variable_types.get(name)
+        if name in self.global_variable_types:
+            return self.global_variable_types[name]
+        builtin_type = crossgl_builtin_variable_type(name)
+        return self.map_type(builtin_type) if builtin_type is not None else None
 
     def sampler_struct_member_reference(self, expr):
         while isinstance(expr, ArrayAccessNode):
@@ -53935,40 +53975,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ) in self.comparison_sampler_struct_members
 
     def map_operator(self, op):
-        op_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "BITWISE_XOR": "^",
-            "BITWISE_OR": "|",
-            "BITWISE_AND": "&",
-            "LESS_THAN": "<",
-            "GREATER_THAN": ">",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "AND": "&&",
-            "OR": "||",
-            "EQUALS": "=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "ASSIGN_AND": "&=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_XOR": "^=",
-            "LOGICAL_AND": "&&",
-            "LOGICAL_OR": "||",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-            "MOD": "%",
-        }
-        return op_map.get(op, op)
+        """Spell a CrossGL operator; an operator CrossGL does not define is refused."""
+        return map_c_family_operator(op, self.LOWERING_REFUSAL_TYPE.label)
 
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to an HLSL semantic suffix."""

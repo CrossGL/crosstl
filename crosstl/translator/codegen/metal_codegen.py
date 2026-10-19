@@ -98,6 +98,11 @@ from .buffer_block_diagnostics import (
     record_unsupported_layout_failures,
 )
 from .buffer_length import BufferLengthUnsupportedError
+from .builtin_result_types import (
+    C_FAMILY,
+    component_access_type,
+    inferred_value_type,
+)
 from .call_graph import validate_recursion_free
 from .constant_ordering import partition_constants_by_struct_dependency
 from .entry_selection import entry_type_references
@@ -332,6 +337,7 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .metal_refusals import metal_refusals
+from .operator_spellings import map_c_family_operator
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     crossgl_literal_positive_integer,
@@ -7613,6 +7619,9 @@ class MetalCodeGen:
             )
             if acceleration_structure_alias_type is not None:
                 var_type = acceleration_structure_alias_type
+            if var_type is None:
+                # Resource aliases above are typed from their source; anything still untyped is refused.
+                var_type = self.local_variable_declared_type(stmt, refuse_untyped=True)
             initial_value = getattr(stmt, "initial_value", None)
             acceleration_structure_array_alias = (
                 self.unsupported_metal_acceleration_structure_array_alias_source(
@@ -7855,13 +7864,27 @@ class MetalCodeGen:
             result += f"{indent_str}{line}{terminator}\n"
         return result
 
-    def local_variable_declared_type(self, stmt):
+    def local_variable_declared_type(self, stmt, refuse_untyped=False):
+        """The type a local declaration is emitted with.
+
+        A local with no written type takes its initializer's; when that cannot be inferred either, analyses get
+        ``None`` and the declaration itself (``refuse_untyped``) is refused rather than given a guessed type.
+        """
         var_type = getattr(stmt, "var_type", None)
         if var_type is None:
             var_type = getattr(stmt, "vtype", None)
         if var_type is None:
-            var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
-        return self.type_name_string(var_type) or "float"
+            var_type = inferred_value_type(
+                self, getattr(stmt, "initial_value", None), C_FAMILY
+            )
+        declared_type = self.type_name_string(var_type)
+        if declared_type or not refuse_untyped:
+            return declared_type or None
+        return self.refuse_lowering(
+            f"local declaration: the type of '{getattr(stmt, 'name', '?')}' is not "
+            "written and cannot be inferred from its initializer",
+            "float",
+        )
 
     def local_variable_texture_alias_resource_type(self, node, declared_type):
         initial_value = getattr(node, "initial_value", None)
@@ -9585,6 +9608,11 @@ class MetalCodeGen:
                 if native is not None and native[-1:] in {"2", "3", "4"}:
                     return native[:-1]
                 return self.vector_component_type(array_type)
+            component_type = component_access_type(
+                self.type_name_string(array_type), C_FAMILY
+            )
+            if component_type is not None:
+                return component_type
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
@@ -27224,38 +27252,8 @@ class MetalCodeGen:
         return f"{target_type}{{{value}}}"
 
     def map_operator(self, op):
-        op_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "BITWISE_XOR": "^",
-            "BITWISE_OR": "|",
-            "BITWISE_AND": "&",
-            "LESS_THAN": "<",
-            "GREATER_THAN": ">",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "AND": "&&",
-            "OR": "||",
-            "EQUALS": "=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "ASSIGN_AND": "&=",
-            "LOGICAL_AND": "&&",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-        }
-        return op_map.get(op, op)
+        """Spell a CrossGL operator; an operator CrossGL does not define is refused."""
+        return map_c_family_operator(op, "Metal")
 
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to Metal attribute syntax."""
