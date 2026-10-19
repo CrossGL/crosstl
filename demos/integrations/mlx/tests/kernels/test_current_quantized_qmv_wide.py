@@ -1467,32 +1467,30 @@ def test_current_mlx_quantized_qmv_wide_native_parity(
 
 
 def test_ci_requires_native_quantized_qmv_wide_parity():
-    from tests.ci_helpers import assert_workflow_triggers, current_parity_step
+    from tests.ci_helpers import assert_workflow_triggers, current_parity_shard_step
 
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    for index in range(CI_SHARD_COUNT):
-        group = f"quantized-qmv-wide-{index}"
-        step = current_parity_step(
-            workflow,
-            "Prove current MLX quantized wide matrix-vector native parity "
-            f"(shard {index} of {CI_SHARD_COUNT})",
-            group=group,
-        )
-        for required in (
-            f'{REQUIRE_ENV}: "1"',
-            f'{SHARD_INDEX_ENV}: "{index}"',
-            f'{SHARD_COUNT_ENV}: "{CI_SHARD_COUNT}"',
-            "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
-            "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
-            "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
-            "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
-            "pytest -q -n auto",
-            f"--basetemp=mlx-current-results/{group}",
-            f"--junitxml=mlx-current-results/{group}.xml",
-            "demos/integrations/mlx/tests/kernels/test_current_quantized_qmv_wide.py",
-        ):
-            assert required in step, (group, required)
-        assert "continue-on-error" not in step
+    step = current_parity_shard_step(
+        workflow,
+        "Prove current MLX quantized wide matrix-vector native parity",
+        family="quantized-qmv-wide",
+        count=CI_SHARD_COUNT,
+    )
+    for required in (
+        f'{REQUIRE_ENV}: "1"',
+        f"{SHARD_INDEX_ENV}: ${{{{ matrix.shard }}}}",
+        f'{SHARD_COUNT_ENV}: "{CI_SHARD_COUNT}"',
+        "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
+        "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
+        "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
+        "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
+        "pytest -q -n auto",
+        "--basetemp=mlx-current-results/${{ matrix.group }}",
+        "--junitxml=mlx-current-results/${{ matrix.group }}.xml",
+        "demos/integrations/mlx/tests/kernels/test_current_quantized_qmv_wide.py",
+    ):
+        assert required in step, required
+    assert "continue-on-error" not in step
     assert_workflow_triggers(
         workflow,
         "demos/integrations/mlx/tests/kernels/test_current_quantized_qmv_wide.py",
