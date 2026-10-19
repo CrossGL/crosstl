@@ -41,6 +41,7 @@ from crosstl.translator.codegen.metal_codegen import (
     MetalStructConversionError,
     UnsupportedMetalFeatureError,
 )
+from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
 from tests.metal_refusal_helpers import metal_partial_output, refused_metal
 
 
@@ -24291,9 +24292,9 @@ def test_metal_texture_gather_offset_variants_use_metal_overloads():
         "tex.gather(s, uv, offset, component::w)" in generated_code
     )
     assert (
-        "float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset0, component::x).x, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset1, component::x).y, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset2, component::x).z, "
+        "float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset0, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset1, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset2, component::x).w, "
         "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset3, component::x).w)"
         in generated_code
     )
@@ -24302,9 +24303,9 @@ def test_metal_texture_gather_offset_variants_use_metal_overloads():
         in generated_code
     )
     assert (
-        "return float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[0], component::z).x, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[1], component::z).y, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[2], component::z).z, "
+        "return float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[0], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[1], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[2], component::z).w, "
         "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[3], component::z).w);"
         in generated_code
     )
@@ -24555,15 +24556,15 @@ def test_metal_texture_gather_offsets_mix_literal_and_dynamic_offsets():
     }
     for component, component_option in components.items():
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(-1, 0), {component_option}).x"
+            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(-1, 0), {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), dynamic0, {component_option}).y"
+            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), dynamic0, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, -1), {component_option}).z"
+            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, -1), {component_option}).w"
             in generated_code
         )
         assert (
@@ -24645,15 +24646,15 @@ def test_metal_direct_stage_gather_offsets_use_input_members():
         "component::w",
     ]:
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset0, {component_option}).x"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset0, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset1, {component_option}).y"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset1, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset2, {component_option}).z"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset2, {component_option}).w"
             in generated_code
         )
         assert (
@@ -28239,19 +28240,22 @@ def test_metal_texture_query_resource_descriptors():
             ),
         },
     }
-    assert codegen.texture_query_levels_expression("colorImage") == "0"
-    assert codegen.refusals.reasons[-1] == (
-        "texture query: textureQueryLevels on texture2d<float, access::read_write>"
-    )
-    assert codegen.texture_query_levels_expression("msTex") == "1"
-    assert (
-        codegen.texture_query_levels_expression("colorMap")
-        == "int(colorMap.get_num_mip_levels())"
-    )
-    assert codegen.texture_samples_expression("colorMap") == "0"
-    assert codegen.refusals.reasons[-1] == (
-        "texture samples query: requires multisample texture"
-    )
+    with codegen.refusals.active():
+        assert codegen.texture_query_levels_expression("colorImage") == "0"
+        assert codegen.refusals.reasons[-1] == (
+            "texture query: textureQueryLevels on texture2d<float, access::read_write>"
+        )
+        assert codegen.texture_query_levels_expression("msTex") == "1"
+        assert (
+            codegen.texture_query_levels_expression("colorMap")
+            == "int(colorMap.get_num_mip_levels())"
+        )
+        assert codegen.texture_samples_expression("colorMap") == "0"
+        assert codegen.refusals.reasons[-1] == (
+            "texture samples query: requires multisample texture"
+        )
+    with pytest.raises(MetalLoweringRefused, match="textureQueryLevels"):
+        codegen.texture_query_levels_expression("colorImage")
     assert codegen.texture_samples_expression("msArray") == (
         "int(msArray.get_num_samples())"
     )

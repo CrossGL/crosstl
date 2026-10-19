@@ -18,6 +18,7 @@ from crosstl.translator.codegen.metal_codegen import (
 )
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+from tests.lowering_refusal_helpers import refused_glsl
 from tests.metal_refusal_helpers import metal_partial_output
 
 HELPER_RANGE_SHADER = """
@@ -5826,6 +5827,19 @@ STATIC_SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER = (
 )
 
 
+# GLSL lets textureGatherOffset take a variable offset (GLSL 4.60, section 8.9.4),
+# while textureOffset requires a constant one (section 8.9.2).
+DYNAMIC_GATHER_STATIC_COMPARE_SHADOW_OFFSET_FRAGMENT_SHADER = (
+    SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER.replace(
+        "textureCompareOffset(tex, s, uv, depth, offset)",
+        "textureCompareOffset(tex, s, uv, depth, ivec2(1, -1))",
+    ).replace(
+        "textureCompareOffset(tex, s, uvLayer, depth, offset)",
+        "textureCompareOffset(tex, s, uvLayer, depth, ivec2(1, -1))",
+    )
+)
+
+
 SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER = """
 shader ShadowCompareLodGradValidation {
     sampler2DShadow shadowMap;
@@ -5923,6 +5937,16 @@ shader ShadowCompareLodGradValidation {
     }
 }
 """
+
+
+# GLSL has no explicit-LOD or explicit-gradient compare for cube-array shadow
+# samplers (GLSL 4.60, section 8.9.2), so this variant compares it implicitly.
+CORE_SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER = SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER.replace(
+    """        float lodValue = textureCompareLod(tex, s, cubeLayer, depth, lod);
+        float gradValue = textureCompareGrad(tex, s, cubeLayer, depth, ddx, ddy);
+        return lodValue + gradValue;""",
+    """        return textureCompare(tex, s, cubeLayer, depth);""",
+)
 
 
 PROJECTED_SHADOW_COMPARE_FRAGMENT_SHADER = """
@@ -7380,6 +7404,57 @@ SamplerComparisonState shadowSampler : register(s0);
         text=True,
     )
     return result.returncode == 0
+
+
+INTEGER_GATHER_OFFSETS_FRAGMENT_SHADER = """
+shader IntegerGatherOffsets {
+    isampler2DArray layers;
+    sampler linearSampler;
+
+    struct FSInput {
+        vec3 uvLayer @ TEXCOORD0;
+        ivec2 offset @ TEXCOORD1;
+    };
+
+    ivec4 gatherInts(isampler2DArray tex, sampler s, vec3 uvLayer, ivec2 offset) {
+        return textureGatherOffsets(
+            tex, s, uvLayer, offset, ivec2(1, 0), ivec2(0, 1), ivec2(1, 1), 2
+        );
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return vec4(gatherInts(layers, linearSampler, input.uvLayer, input.offset));
+        }
+    }
+}
+"""
+
+
+def test_generated_metal_integer_gather_offsets_compile_with_metal(tmp_path):
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(INTEGER_GATHER_OFFSETS_FRAGMENT_SHADER)
+    )
+
+    # Component i of textureGatherOffsets is texel T_i0_j0 of the footprint at
+    # offset i (GLSL 4.60, section 8.9.4); Metal's gather returns it in w.
+    assert (
+        "return int4(tex.gather(s, uvLayer.xy, uint(uvLayer.z), offset, component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 0), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(0, 1), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 1), component::z).w);"
+        in code
+    )
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+    source = tmp_path / "integer_gather_offsets.metal"
+    output = tmp_path / "integer_gather_offsets.air"
+    source.write_text(code, encoding="utf-8")
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
 
 
 def test_generated_metal_fragment_smoke_compiles_with_metal(tmp_path):
@@ -12251,6 +12326,20 @@ def test_generated_glsl_fragment_texture_projection_validates_with_glslang(
     run_validator([glslang, "-S", "frag", str(source)])
 
 
+def test_generated_glsl_fragment_shadow_compare_runtime_offset_fails_closed():
+    message = refused_glsl(
+        GLSLCodeGen().generate_stage,
+        crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+
+    assert (
+        "OpenGL cannot lower 1 construct: texture compare: textureCompareOffset "
+        "texel offsets must be compile-time integer constants" in message
+    )
+    assert "textureGatherCompareOffset" not in message
+
+
 def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_glslang(
     tmp_path,
 ):
@@ -12260,12 +12349,33 @@ def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_gls
 
     source = tmp_path / "fragment_shadow_gather_compare_offset.frag"
     code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+        crosstl.translator.parse(
+            DYNAMIC_GATHER_STATIC_COMPARE_SHADOW_OFFSET_FRAGMENT_SHADER
+        ),
         "fragment",
     )
+    assert "textureGatherOffset(tex, uv, depth, offset)" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_cube_array_shadow_compare_lod_grad_fails_closed():
+    message = refused_glsl(
+        GLSLCodeGen().generate_stage,
+        crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
+        "fragment",
+    )
+
+    assert "OpenGL cannot lower 2 constructs" in message
+    assert (
+        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
+        in message
+    )
+    assert (
+        "texture compare: textureCompareGrad explicit gradients require 2D, "
+        "2D-array, or cube shadow samplers" in message
+    )
 
 
 def test_generated_glsl_fragment_shadow_compare_lod_grad_validates_with_glslang(
@@ -12277,9 +12387,10 @@ def test_generated_glsl_fragment_shadow_compare_lod_grad_validates_with_glslang(
 
     source = tmp_path / "fragment_shadow_compare_lod_grad.frag"
     code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
+        crosstl.translator.parse(CORE_SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
         "fragment",
     )
+    assert "textureGrad(tex, vec4(uvLayer, depth), ddx, ddy)" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "frag", str(source)])

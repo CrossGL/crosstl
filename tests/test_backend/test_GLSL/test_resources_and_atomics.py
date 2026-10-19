@@ -17,6 +17,7 @@ from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 from crosstl.translator.semantics.unsized_arrays import UnsizedArrayUnsupportedError
+from tests.lowering_refusal_helpers import glsl_partial_output, hlsl_partial_output
 from tests.metal_refusal_helpers import metal_partial_output
 
 RESOURCE_GLSL = """
@@ -66,11 +67,10 @@ def normalize_codegen_snapshot(code: str):
     return "\n".join(line.rstrip() for line in dedent(code).strip().splitlines())
 
 
-def glsl_dynamic_texel_offset_diagnostic(category, operation, zero_value):
+def glsl_dynamic_texel_offset_diagnostic(category, operation, _placeholder=None):
+    """The refusal reason for a texel offset that is not a compile-time constant."""
     return (
-        f"/* unsupported GLSL {category}: {operation} "
-        "texel offsets must be compile-time integer constants */ "
-        f"{zero_value}"
+        f"{category}: {operation} texel offsets must be compile-time integer constants"
     )
 
 
@@ -4180,17 +4180,9 @@ def test_codegen_native_shadow_gather_imports_compare_helpers():
     )
     assert "textureGather(maps[layer], uv, depth)" in regenerated_glsl
     assert "textureGather(arrays[layer], uvLayer, depth)" in regenerated_glsl
-    assert (
-        regenerated_glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffset",
-                "vec4(0.0)",
-            )
-        )
-        == 2
-    )
-    assert "textureGatherOffset(" not in regenerated_glsl
+    # GLSL 4.00 lets textureGatherOffset take a variable offset.
+    assert "textureGatherOffset(maps[0], uv, depth, offset)" in regenerated_glsl
+    assert "textureGatherOffset(arrays[0], uvLayer, depth, offset)" in regenerated_glsl
     assert "textureGatherCompare(" not in regenerated_glsl
 
 
@@ -4229,16 +4221,15 @@ def test_codegen_native_shadow_gather_offsets_imports_compare_helper():
 
     assert "textureGatherCompareOffsets(" not in regenerated_glsl
     assert "textureGatherOffsets(" not in regenerated_glsl
-    assert "textureGatherOffset(" not in regenerated_glsl
+    # Component i is texel T_i0_j0 of the footprint at offsets[i], which
+    # textureGatherOffset returns in w (GLSL 4.60, section 8.9.4).
     assert (
-        regenerated_glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffsets",
-                "vec4(0.0)",
-            )
-        )
-        == 2
+        "vec4 planar = vec4("
+        "textureGatherOffset(maps[layer], uv, depth, offsets[0]).w, "
+        "textureGatherOffset(maps[layer], uv, depth, offsets[1]).w, "
+        "textureGatherOffset(maps[layer], uv, depth, offsets[2]).w, "
+        "textureGatherOffset(maps[layer], uv, depth, offsets[3]).w);"
+        in regenerated_glsl
     )
 
 
@@ -4446,7 +4437,7 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
         match=r"GLSL buffer block declaration: UnsupportedMultisampleDiagnosticBlock\b.*unsupported member flag",
     ):
         MetalCodeGen().generate(parse_crossgl(crossgl))
-    glsl = GLSLCodeGen().generate(shader_ast)
+    glsl, glsl_refusal = glsl_partial_output(GLSLCodeGen().generate, shader_ast)
     assert "layout(binding = 0) uniform sampler2DMS msTex;" in glsl
     assert "layout(binding = 1) uniform sampler2DMSArray msArray;" in glsl
     assert (
@@ -4462,23 +4453,18 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
         "ivec2 offset)" in glsl
     )
     assert "linearSampler" not in glsl
+    assert "multisample texture call: texture on sampler2DMS" in glsl_refusal
     assert (
-        "unsupported GLSL multisample texture call: texture on sampler2DMS */ "
-        "vec4(0.0)" in glsl
+        "multisample texture query: textureQueryLod on sampler2DMSArray" in glsl_refusal
     )
     assert (
-        "unsupported GLSL multisample texture query: textureQueryLod on "
-        "sampler2DMSArray */ vec2(0.0)" in glsl
+        "multisample texture comparison: textureCompare on sampler2DMS" in glsl_refusal
     )
     assert (
-        "unsupported GLSL multisample texture comparison: textureCompare on "
-        "sampler2DMS */ 0.0" in glsl
+        "multisample texture gather comparison: textureGatherCompare on sampler2DMSArray"
+        in glsl_refusal
     )
-    assert (
-        "unsupported GLSL multisample texture gather comparison: "
-        "textureGatherCompare on sampler2DMSArray */ vec4(0.0)" in glsl
-    )
-    assert glsl.count("unsupported GLSL texel fetch offset: multisample texture ") == 3
+    assert "texel fetch offset: multisample texture" in glsl_refusal
     assert (
         "vec4 direct2D = invalid2D(msTex, msDiag.uv, msDiag.ddx, msDiag.ddy, "
         "msDiag.pixel, msDiag.sampleIndex, msDiag.offset);" in glsl
@@ -4741,7 +4727,7 @@ def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
     metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
@@ -4757,8 +4743,8 @@ def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats(
     assert "return textureSamples(images[layer]);" in hlsl
     assert "uint4 count = counterLayers[input.layer].Load(int3(0, 1, 2), 3);" in hlsl
     assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMSArray<uint4>" in hlsl
+        "multisample image store: imageStore on RWTexture2DMSArray<uint4>"
+        in hlsl_refusal
     )
     assert "imageSamples(" not in hlsl
     assert "imageStore(" not in hlsl
@@ -13337,7 +13323,7 @@ def test_codegen_multisample_image_switch_match_fallbacks_stay_in_case_blocks():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
     metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
@@ -13346,8 +13332,8 @@ def test_codegen_multisample_image_switch_match_fallbacks_stay_in_case_blocks():
     assert "case 0:\n        case 1: {" in hlsl
     assert hlsl.count("case 0: {") == 1
     assert hlsl.count("float4 scoped") == 4
-    assert hlsl.count("unsupported DirectX multisample image store") == 4
-    assert hlsl.count("unsupported DirectX multisample image atomic") == 4
+    assert "multisample image store" in hlsl_refusal
+    assert "multisample image atomic" in hlsl_refusal
     assert "imageStore(" not in hlsl
     assert "imageAtomicAdd(counters" not in hlsl
     assert "InterlockedAdd" not in hlsl
@@ -13406,14 +13392,13 @@ def test_codegen_multisample_image_atomic_variants_use_sample_argument(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
     metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "Texture2DMS<uint> counters : register(t0);" in hlsl
     assert (
-        "uint old = /* unsupported DirectX multisample image atomic: "
-        f"{operation} on RWTexture2DMS<uint> */ 0u;" in hlsl
+        f"multisample image atomic: {operation} on RWTexture2DMS<uint>" in hlsl_refusal
     )
     assert intrinsic not in hlsl
     assert f"{operation}(counters" not in hlsl
@@ -13447,19 +13432,19 @@ def test_codegen_float_image_atomic_exchange_uses_backend_diagnostics():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
     metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWTexture2D<float> scalarImage : register(u0);" in hlsl
     assert "Texture2DMS<float> sampleImage : register(t0);" in hlsl
     assert (
-        "float oldScalar = /* unsupported DirectX image atomic resource call: "
-        "imageAtomicExchange on RWTexture2D<float> */ 0.0;" in hlsl
+        "image atomic resource call: imageAtomicExchange on RWTexture2D<float>"
+        in hlsl_refusal
     )
     assert (
-        "float oldSample = /* unsupported DirectX multisample image atomic: "
-        "imageAtomicExchange on RWTexture2DMS<float> */ 0.0;" in hlsl
+        "multisample image atomic: imageAtomicExchange on RWTexture2DMS<float>"
+        in hlsl_refusal
     )
     assert "imageAtomicExchange(scalarImage" not in hlsl
     assert "imageAtomicExchange(sampleImage" not in hlsl
@@ -14505,43 +14490,30 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
     ):
         MetalCodeGen().generate(parse_crossgl(crossgl))
 
-    glsl = GLSLCodeGen().generate(shader_ast)
+    glsl, glsl_refusal = glsl_partial_output(GLSLCodeGen().generate, shader_ast)
 
     assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture offset", "textureLodOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureLodOffset", "vec4(0.0)"
         )
-        == 2
+        in glsl_refusal
     )
     assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture offset", "textureGradOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureGradOffset", "vec4(0.0)"
         )
-        == 2
+        in glsl_refusal
     )
     assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather", "textureGatherOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
         )
-        == 2
-    )
-    assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
-            )
-        )
-        == 2
+        in glsl_refusal
     )
     assert "textureLodOffset(" not in glsl
     assert "textureGradOffset(" not in glsl
-    assert "textureGatherOffset(" not in glsl
+    # textureGatherOffset takes a variable offset from GLSL 4.00 on.
+    assert "textureGatherOffset(" in glsl
     assert "texelFetchOffset(" not in glsl
 
 
@@ -14613,43 +14585,43 @@ def test_codegen_mixed_ssbo_unsupported_projected_compare_calls_infer_types():
     ):
         MetalCodeGen().generate(parse_crossgl(crossgl))
 
-    glsl = GLSLCodeGen().generate(shader_ast)
+    glsl, glsl_refusal = glsl_partial_output(GLSLCodeGen().generate, shader_ast)
 
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjOffset", "vec4(0.0)"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjGradOffset", "vec4(0.0)"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareOffset", "0.0"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareGradOffset", "0.0"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareProjOffset", "0.0"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareProjGradOffset", "0.0"
         )
-        in glsl
+        in glsl_refusal
     )
     assert "textureProjOffset(" not in glsl
     assert "textureProjGradOffset(" not in glsl
@@ -14735,19 +14707,17 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
         "vec4 arrayCall = textureGather(shadowArray, "
         "readUvLayer(gatherBlock), readDepth(gatherBlock));" in glsl
     )
+    # textureGatherOffset takes a variable offset from GLSL 4.00 on.
     assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffset",
-                "vec4(0.0)",
-            )
-        )
-        == 4
+        "vec4 planarOffsetCall = textureGatherOffset(shadowMap, readUv(gatherBlock), "
+        "readDepth(gatherBlock), readOffset(gatherBlock));" in glsl
+    )
+    assert (
+        "vec4 arrayOffsetDirect = textureGatherOffset(shadowArray, "
+        "gatherBlock.uvLayer, gatherBlock.depth, gatherBlock.offset);" in glsl
     )
     assert "textureGatherCompare(" not in glsl
     assert "textureGatherCompareOffset(" not in glsl
-    assert "textureGatherOffset(" not in glsl
 
 
 def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
@@ -14805,9 +14775,9 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
     metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
+    glsl, glsl_refusal = glsl_partial_output(GLSLCodeGen().generate, shader_ast)
 
     assert "RWByteAddressBuffer cubeBlock : register(u106);" in hlsl
     assert "float3 readDirection(RWByteAddressBuffer localBlock)" in hlsl
@@ -14829,14 +14799,10 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
         "readCubeLayer(cubeBlock), readDepth(cubeBlock));" in hlsl
     )
     assert (
-        hlsl.count(
-            "/* unsupported DirectX texture gather compare: "
-            "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
-            "float4(0.0, 0.0, 0.0, 0.0)"
-        )
-        == 4
+        "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array textures"
+        in hlsl_refusal
     )
-    assert "unsupported HLSL GLSL buffer block" not in hlsl
+    assert "GLSL buffer block" not in hlsl_refusal
     assert "cubeBlock.direction" not in hlsl
     assert "cubeBlock.cubeLayer" not in hlsl
     assert "cubeBlock.offset" not in hlsl
@@ -14872,12 +14838,8 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
         "readCubeLayer(cubeBlock), readDepth(cubeBlock));" in glsl
     )
     assert (
-        glsl.count(
-            "/* unsupported GLSL texture gather compare: "
-            "textureGatherCompareOffset offsets require 2D or 2D-array shadow "
-            "samplers */ vec4(0.0)"
-        )
-        == 4
+        "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array shadow samplers"
+        in glsl_refusal
     )
     assert "textureGatherCompare(" not in glsl
     assert "textureGatherCompareOffset(" not in glsl

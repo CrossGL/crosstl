@@ -184,6 +184,7 @@ from .glsl_buffer_layout import (
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_half_storage import HLSLHalfStorage
+from .hlsl_refusals import DirectXLoweringRefused
 from .image_access_contracts import (
     TEXTURE_COMPARE_INTRINSIC_NAMES,
     TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
@@ -365,6 +366,7 @@ from .loop_induction import (
     subgroup_strided_trips,
     walk_control_scopes,
 )
+from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -1498,8 +1500,10 @@ class _DirectXResourceRegisterAllocator(dict):
         )
 
 
-class HLSLCodeGen:
+class HLSLCodeGen(LoweringRefusalMixin):
     """Emit HLSL source from the shared CrossGL translator AST."""
+
+    LOWERING_REFUSAL_TYPE = DirectXLoweringRefused
 
     DIRECTX_COOPERATIVE_MATRIX_COMPONENT_TYPES = {
         "float": "float",
@@ -3224,6 +3228,13 @@ class HLSLCodeGen:
         self.metadata_preconditions = checked_metadata_preconditions(records)
 
     def generate_program(self, ast, target_stage=None):
+        """Render an AST to HLSL, optionally filtering stage entry points.
+
+        Raises :class:`DirectXLoweringRefused` listing every construct that has no faithful HLSL lowering.
+        """
+        return self.refusals.run(self.render_program, ast, target_stage)
+
+    def render_program(self, ast, target_stage=None):
         region = codegen_dispatch_region(
             ast, self.hlsl_software_subgroup_stage_entries(ast, target_stage)
         )
@@ -4360,10 +4371,10 @@ class HLSLCodeGen:
                 continue
 
             if self.is_input_attachment_type_name(vtype):
-                code += (
-                    "/* unsupported HLSL input attachment declaration: "
-                    f"'{var_name}' uses {self.type_name_string(vtype)}; "
-                    "subpassInput resources require Vulkan subpass lowering */\n"
+                self.refuse_lowering(
+                    f"input attachment declaration: '{var_name}' uses "
+                    f"{self.type_name_string(vtype)}; subpassInput resources "
+                    "require Vulkan subpass lowering"
                 )
                 continue
 
@@ -46526,10 +46537,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         texture_type = self.texture_resource_type(texture_arg)
         if not self.is_multisample_texture_resource_type(texture_type):
             resource = texture_type or "resource"
-            return (
-                "/* unsupported DirectX texture sample-position query: "
-                f"textureSamplePosition on {resource} requires sampled "
-                "multisample texture */ float2(0.0, 0.0)"
+            return self.refuse_lowering(
+                f"texture sample-position query: textureSamplePosition on {resource} "
+                "requires a sampled multisample texture",
+                "float2(0.0, 0.0)",
             )
         sample = self.generate_expression(sample_arg)
         return f"{texture_name}.GetSamplePosition({sample})"
@@ -52656,11 +52667,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name != "subpassLoad":
             return None
         fallback_type = self.current_expression_expected_type or "vec4"
-        fallback = self.diagnostic_zero_value_for_type(fallback_type)
-        return (
-            "/* unsupported HLSL input attachment load: "
-            "subpassLoad requires Vulkan subpass input lowering */ "
-            f"{fallback}"
+        return self.refuse_lowering(
+            "input attachment load: subpassLoad requires Vulkan subpass input lowering",
+            self.diagnostic_zero_value_for_type(fallback_type),
         )
 
     def unsupported_glsl_buffer_block_access_value(self, expr):
@@ -53181,10 +53190,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if func_name == "textureSamplePosition":
             if len(args) != 2:
-                return (
-                    "/* unsupported DirectX texture sample-position query: "
-                    "textureSamplePosition requires texture and sample-index "
-                    "arguments */ float2(0.0, 0.0)"
+                return self.refuse_lowering(
+                    "texture sample-position query: textureSamplePosition requires "
+                    "texture and sample-index arguments",
+                    "float2(0.0, 0.0)",
                 )
             return self.texture_sample_position_expression(args[0], args[1])
 

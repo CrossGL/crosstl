@@ -331,7 +331,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
-from .metal_refusals import metal_refusals, split_shared_fallback
+from .metal_refusals import metal_refusals
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     crossgl_literal_positive_integer,
@@ -1871,13 +1871,6 @@ class MetalCodeGen:
         """
         self.refusals.record(reason)
         return fallback
-
-    def refuse_shared_fallback(self, text):
-        """Refuse the reasons in a fallback from the shared image-access helpers; return its placeholder value."""
-        reasons, remainder = split_shared_fallback(text)
-        for reason in reasons:
-            self.refuse_lowering(reason)
-        return remainder
 
     def render_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
@@ -24392,9 +24385,7 @@ class MetalCodeGen:
         return f"uint({value})"
 
     def unsupported_texture_sample_offset_call(self, func_name, reason):
-        return self.refuse_shared_fallback(
-            unsupported_texture_offset_call_expression("Metal", func_name, reason)
-        )
+        return unsupported_texture_offset_call_expression("Metal", func_name, reason)
 
     def texture_sample_offset_coord_args(self, texture_type, coord):
         if self.is_array_texture_resource(texture_type):
@@ -24460,9 +24451,7 @@ class MetalCodeGen:
         )
 
     def unsupported_texture_projected_call(self, func_name, reason):
-        return self.refuse_shared_fallback(
-            unsupported_projected_texture_call_expression("Metal", func_name, reason)
-        )
+        return unsupported_projected_texture_call_expression("Metal", func_name, reason)
 
     def projected_texture_coord(self, texture_arg, coord_arg, coord):
         texture_type = self.resource_base_type(self.texture_resource_type(texture_arg))
@@ -24699,11 +24688,22 @@ class MetalCodeGen:
         return f"{texture_name}.gather({', '.join(args)})"
 
     def texture_gather_offsets_expression(
-        self, texture_name, sampler_arg, coord_args, offset_args, component
+        self,
+        texture_name,
+        sampler_arg,
+        coord_args,
+        offset_args,
+        component,
+        texture_type=None,
     ):
-        component_suffixes = ("x", "y", "z", "w")
+        """Lower ``textureGatherOffsets`` to one ``gather`` per offset.
+
+        Component ``i`` of ``textureGatherOffsets`` is texel ``T_i0_j0`` of the
+        footprint at offset ``i`` (GLSL 4.60, section 8.9.4); ``gather`` returns
+        the four footprint texels in the same order as GLSL, so that texel is ``w``.
+        """
         component_values = []
-        for index, offset_arg in enumerate(offset_args):
+        for offset_arg in offset_args:
             gather = self.texture_gather_call_expression(
                 texture_name,
                 sampler_arg,
@@ -24712,8 +24712,15 @@ class MetalCodeGen:
                 component,
                 default_offset_for_component=True,
             )
-            component_values.append(f"{gather}.{component_suffixes[index]}")
-        return f"float4({', '.join(component_values)})"
+            component_values.append(f"{gather}.w")
+        vector_type = self.texture_gather_result_vector_type(texture_type)
+        return f"{vector_type}({', '.join(component_values)})"
+
+    def texture_gather_result_vector_type(self, texture_type):
+        match = re.search(
+            r"<\s*(float|half|int|uint|short|ushort)\b", str(texture_type)
+        )
+        return f"{match.group(1)}4" if match else "float4"
 
     def texture_gather_dynamic_component_expression(
         self, build_expression, component_expr
@@ -24734,49 +24741,37 @@ class MetalCodeGen:
         )
 
     def unsupported_texture_gather_call(self, func_name, reason):
-        return self.refuse_shared_fallback(
-            unsupported_texture_gather_call_expression("Metal", func_name, reason)
-        )
+        return unsupported_texture_gather_call_expression("Metal", func_name, reason)
 
     def unsupported_multisample_texture_call(self, func_name, texture_type):
-        return self.refuse_shared_fallback(
-            unsupported_multisample_texture_call_vector_expression(
-                "Metal", func_name, texture_type
-            )
+        return unsupported_multisample_texture_call_vector_expression(
+            "Metal", func_name, texture_type
         )
 
     def unsupported_multisample_texture_compare_call(self, func_name, texture_type):
-        return self.refuse_shared_fallback(
-            unsupported_multisample_texture_compare_scalar_expression(
-                "Metal", func_name, texture_type
-            )
+        return unsupported_multisample_texture_compare_scalar_expression(
+            "Metal", func_name, texture_type
         )
 
     def unsupported_multisample_texture_gather_compare_call(
         self, func_name, texture_type
     ):
-        return self.refuse_shared_fallback(
-            unsupported_multisample_texture_gather_compare_vector_expression(
-                "Metal", func_name, texture_type
-            )
+        return unsupported_multisample_texture_gather_compare_vector_expression(
+            "Metal", func_name, texture_type
         )
 
     def unsupported_multisample_texture_query_lod_call(self, texture_type):
-        return self.refuse_shared_fallback(
-            unsupported_multisample_texture_query_lod_expression("Metal", texture_type)
+        return unsupported_multisample_texture_query_lod_expression(
+            "Metal", texture_type
         )
 
     def unsupported_texture_query_levels_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return self.refuse_shared_fallback(
-            unsupported_texture_query_levels_expression("Metal", texture_type)
-        )
+        return unsupported_texture_query_levels_expression("Metal", texture_type)
 
     def unsupported_texture_query_lod_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return self.refuse_shared_fallback(
-            unsupported_texture_query_lod_expression("Metal", texture_type)
-        )
+        return unsupported_texture_query_lod_expression("Metal", texture_type)
 
     def storage_image_texture_operation_expression(self, func_name, texture_type):
         if not self.is_storage_image_resource(texture_type):
@@ -24784,17 +24779,13 @@ class MetalCodeGen:
 
         texture_type = self.resource_base_type(texture_type)
         if is_storage_image_texture_comparison_operation(func_name):
-            return self.refuse_shared_fallback(
-                unsupported_storage_image_texture_comparison_scalar_expression(
-                    "Metal", func_name, texture_type
-                )
+            return unsupported_storage_image_texture_comparison_scalar_expression(
+                "Metal", func_name, texture_type
             )
 
         if is_storage_image_texture_operation(func_name):
-            return self.refuse_shared_fallback(
-                unsupported_storage_image_texture_operation_vector_expression(
-                    "Metal", func_name, texture_type
-                )
+            return unsupported_storage_image_texture_operation_vector_expression(
+                "Metal", func_name, texture_type
             )
 
         return None
@@ -24808,9 +24799,7 @@ class MetalCodeGen:
         }
 
     def unsupported_cube_texel_fetch_call(self, func_name, texture_type):
-        return self.refuse_shared_fallback(
-            unsupported_cube_texel_fetch_expression("Metal", func_name, texture_type)
-        )
+        return unsupported_cube_texel_fetch_expression("Metal", func_name, texture_type)
 
     def generate_texture_gather_call(
         self, func_name, texture_name, sampler_arg, coord, extra_args, texture_type
@@ -24867,7 +24856,12 @@ class MetalCodeGen:
         if component is not None or component_arg is None:
             if is_texture_gather_multi_offset_operation(func_name):
                 return self.texture_gather_offsets_expression(
-                    texture_name, sampler_arg, coord_args, offset_args, component
+                    texture_name,
+                    sampler_arg,
+                    coord_args,
+                    offset_args,
+                    component,
+                    texture_type,
                 )
             offset_arg = (
                 self.generate_expression(offset_args[0]) if offset_args else None
@@ -24890,7 +24884,12 @@ class MetalCodeGen:
         if is_texture_gather_multi_offset_operation(func_name):
             return self.texture_gather_dynamic_component_expression(
                 lambda option: self.texture_gather_offsets_expression(
-                    texture_name, sampler_arg, coord_args, offset_args, option
+                    texture_name,
+                    sampler_arg,
+                    coord_args,
+                    offset_args,
+                    option,
+                    texture_type,
                 ),
                 component_expr,
             )
@@ -24912,9 +24911,7 @@ class MetalCodeGen:
         return self.texture_sampling_capabilities(texture_type)["compare_offset"]
 
     def unsupported_texture_compare_call(self, func_name, reason):
-        return self.refuse_shared_fallback(
-            unsupported_texture_compare_scalar_expression("Metal", func_name, reason)
-        )
+        return unsupported_texture_compare_scalar_expression("Metal", func_name, reason)
 
     def is_depth_texture_resource(self, texture_type):
         return self.resource_base_type(texture_type).startswith("depth")
@@ -25302,10 +25299,8 @@ class MetalCodeGen:
         return self.texture_sampling_capabilities(texture_type)["gather_compare_offset"]
 
     def unsupported_texture_gather_compare_call(self, func_name, reason):
-        return self.refuse_shared_fallback(
-            unsupported_texture_gather_compare_call_expression(
-                "Metal", func_name, reason
-            )
+        return unsupported_texture_gather_compare_call_expression(
+            "Metal", func_name, reason
         )
 
     def generate_texture_gather_compare_call(
@@ -25546,9 +25541,7 @@ class MetalCodeGen:
         texture_name = self.generate_expression(texture_arg)
         descriptor = self.texture_query_resource_descriptor(texture_arg)
         if not descriptor["multisample"]:
-            return self.refuse_shared_fallback(
-                unsupported_texture_samples_query_call_expression("Metal")
-            )
+            return unsupported_texture_samples_query_call_expression("Metal")
         return texture_samples_query_expression("Metal", texture_name)
 
     def image_coordinate_expression(self, image_type, coord):
@@ -25913,32 +25906,26 @@ class MetalCodeGen:
         resource_type = self.resource_base_type(image_type)
         agnostic_type = self.storage_image_access_agnostic_type(image_type)
         component_type = metal_storage_image_component_type(agnostic_type)
-        return self.refuse_shared_fallback(
-            unsupported_multisample_image_atomic_expression(
-                "Metal",
-                func_name,
-                resource_type,
-                storage_image_atomic_zero_value(component_type),
-            )
+        return unsupported_multisample_image_atomic_expression(
+            "Metal",
+            func_name,
+            resource_type,
+            storage_image_atomic_zero_value(component_type),
         )
 
     def unsupported_multisample_image_store_call(self, image_type):
-        return self.refuse_shared_fallback(
-            unsupported_multisample_image_store_expression(
-                "Metal", self.resource_base_type(image_type)
-            )
+        return unsupported_multisample_image_store_expression(
+            "Metal", self.resource_base_type(image_type)
         )
 
     def unsupported_image_atomic_call(self, func_name, image_type):
         image_type = self.storage_image_access_agnostic_type(image_type)
         component_type = metal_storage_image_component_type(image_type)
-        return self.refuse_shared_fallback(
-            unsupported_image_atomic_expression(
-                "Metal",
-                func_name,
-                self.resource_base_type(image_type),
-                storage_image_atomic_zero_value(component_type),
-            )
+        return unsupported_image_atomic_expression(
+            "Metal",
+            func_name,
+            self.resource_base_type(image_type),
+            storage_image_atomic_zero_value(component_type),
         )
 
     def image_atomic_compare_descriptor(self, texture_type):
@@ -26365,9 +26352,7 @@ class MetalCodeGen:
             if self.is_cube_texture_resource(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource(texture_type):
-                return self.refuse_shared_fallback(
-                    unsupported_multisample_texel_fetch_offset_expression("Metal")
-                )
+                return unsupported_multisample_texel_fetch_offset_expression("Metal")
             if self.is_texture1d_sample_resource(texture_type):
                 lod = self.metal_texture1d_read_lod_argument(args[2])
                 if lod is None:

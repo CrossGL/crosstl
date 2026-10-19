@@ -15,6 +15,7 @@ from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import glsl_partial_output
 
 VERTEX_GLSL = textwrap.dedent("""
     #version 450 core
@@ -2156,14 +2157,15 @@ def test_codegen_multisample_compare_roundtrip_uses_translator_diagnostics():
     assert "textureCompare(msTex, input.uv, 0.5)" in crossgl
     assert "textureGatherCompare(msArray, input.uvLayer, 0.5)" in crossgl
 
-    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert (
-        "unsupported GLSL multisample texture comparison: textureCompare on sampler2DMS"
-        in glsl
+    glsl, glsl_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, parse_crossgl(crossgl)
     )
     assert (
-        "unsupported GLSL multisample texture gather comparison: textureGatherCompare on sampler2DMSArray"
-        in glsl
+        "multisample texture comparison: textureCompare on sampler2DMS" in glsl_refusal
+    )
+    assert (
+        "multisample texture gather comparison: textureGatherCompare on sampler2DMSArray"
+        in glsl_refusal
     )
     assert "texture(msTex" not in glsl
     assert "textureGather(msArray" not in glsl
