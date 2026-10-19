@@ -96,6 +96,52 @@ def test_large_reduction_metadata_is_validated_without_reading_input(dtype, faul
         assert reduction_layout.validate(buffers, count, execution, dtype) == plan
 
 
+@pytest.mark.parametrize("dtype", sorted(reduction_layout.ITEM_SIZES))
+def test_static_glsl_offset_assertions_cover_every_planned_launch(dtype):
+    # Offsets grow with the count inside each row regime, so each regime's
+    # largest count bounds it.
+    boundary = 2**26 // reduction_layout.ITEM_SIZES[dtype]
+    for count in (4096, boundary, boundary + 1, reduction_layout.MAX_ELEMENTS):
+        plan = reduction_layout.stage(count, dtype)
+        offset = reduction_layout.max_rebased_offset(plan)
+        assert 0 <= offset <= reduction_layout.MAX_ELEMENTS
+        assert offset >= (plan["workgroupCount"][1] - 1) * plan["rowSize"]
+
+
+def test_static_glsl_packages_declare_the_checked_offset_assertions(
+    tmp_path, monkeypatch
+):
+    configs = []
+
+    def translate(config, **_):
+        configs.append(config)
+        raise RuntimeError("stop after configuration")
+
+    monkeypatch.setattr(reduction_packages, "require_revision", lambda root: None)
+    monkeypatch.setattr(
+        reduction_packages.subprocess, "check_output", lambda *a, **k: ""
+    )
+    monkeypatch.setattr(reduction_packages, "translate_project", translate)
+    monkeypatch.setattr(
+        reduction_packages, "load_project_config", lambda root, path: path.read_text()
+    )
+    for target in ("opengl", "metal"):
+        with pytest.raises(RuntimeError, match="stop"):
+            reduction_packages.build_packages(
+                tmp_path,
+                tmp_path / target,
+                target,
+                widths=[32],
+                entries=["all_reduce_andbool_"],
+            )
+    opengl, metal = configs
+    for expression in reduction_layout.STATIC_OFFSET_EXPRESSIONS:
+        assert f'expression = "{expression}"' in opengl
+    assert opengl.count("[[project.index_range_assertions]]") == 2
+    assert f"maximum = {reduction_layout.MAX_ELEMENTS}" in opengl
+    assert "index_range_assertions" not in metal
+
+
 @pytest.mark.parametrize("fault", [None, "row", "size", "width", "rows", "axis"])
 def test_reduction_launch_and_size_metadata_are_checked(fault):
     count = 4097
