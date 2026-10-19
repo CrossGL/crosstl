@@ -220,8 +220,8 @@ jobs:
       # The in-box WARP of the runner image predates current shader models. D3D12 loads d3d10warp.dll from the
       # application directory first, so the pinned redistributable is placed next to python.exe and the
       # adapter then refuses any other WARP build (CROSSTL_CONFORMANCE_WARP_VERSION). The pin is WARP 1.0.19,
-      # the reference library of the MLX workflow's WARP conformance matrix: WARP 1.0.21 returns wrong
-      # WaveActiveSum results there and contracts `precise` a * b - c into a fused multiply-add here.
+      # the reference library of the MLX workflow's WARP conformance matrix, where WARP 1.0.21 returns wrong
+      # WaveActiveSum results. Both builds fuse a `precise` a * b - c, which the scoreboard records as diverged.
       - name: Install pinned WARP
         if: runner.os == 'Windows'
         shell: pwsh
