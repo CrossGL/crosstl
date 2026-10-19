@@ -575,8 +575,13 @@ class MetalHlslValueMixin:
         target_type = self.expression_result_type(target)
         if op == "=" or target_type is None:
             return target_type
-        target_component = self.vector_component_type(self.map_type(target_type))
-        if target_component in {"float", "half"}:
+        mapped_target = self.map_type(target_type)
+        target_component = (
+            "bfloat"
+            if mapped_target == "bfloat"
+            else self.vector_component_type(mapped_target)
+        )
+        if target_component in {"float", "half", "bfloat"}:
             return target_type
         value_type = self.expression_result_type(value)
         value_component = (
