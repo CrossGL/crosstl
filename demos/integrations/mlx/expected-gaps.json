@@ -2121,7 +2121,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "4a722a2e285899f6255117007e1f4c289a2a9e5c69ae75b59f025334f996dfff",
+      "sha256": "b2d99336197564129e70b08eb06cc7a0d1ec493c42827dbdc9fe0231a058bae9",
       "size_bytes": 1467897,
       "entry_identity_fields": [
         "entryPoint",
@@ -2245,7 +2245,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 18740485,
+      "generated_size_bytes_total": 18732199,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addint32",
@@ -3121,8 +3121,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "178d5a67b52298bb397399fa79037985823254e324881ae7dd6bb256ba72fd6b",
-      "size_bytes": 1500974,
+      "sha256": "d547511afa6894d3437ef37dc4648ef8dedb7627a015ac7118747e6466aac5c9",
+      "size_bytes": 1500899,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -3295,7 +3295,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 45932130,
+      "generated_size_bytes_total": 45283816,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_minbool_",

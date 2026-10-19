@@ -44,7 +44,9 @@ jobs:
 
   test:
     needs: python-versions
-    runs-on: ${{ matrix.OS }}
+    # The pinned Xcode 27.1 toolchain the Metal step selects is only on the
+    # xcode-27 image; macOS-latest images carry Xcode 26.
+    runs-on: ${{ matrix.OS == 'macOS-latest' && 'xcode-27' || matrix.OS }}
     timeout-minutes: 45
     env:
       # Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
@@ -109,6 +111,31 @@ jobs:
             echo "- Classification: setup infrastructure before project tests"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      - name: Verify Metal 4.1 toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          export DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer
+          diagnose_metal_failure() {
+            local status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "::group::Metal toolchain failure diagnostics"
+              xcodebuild -showComponent MetalToolchain -json || true
+              xcrun --sdk macosx --find metal || true
+              mount || true
+              echo "::endgroup::"
+            fi
+            exit "$status"
+          }
+          trap diagnose_metal_failure EXIT
+          test -d "$DEVELOPER_DIR"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          xcodebuild -version
+          python tools/ensure_metal_toolchain.py
+          xcrun --sdk macosx metal -std=metal4.1 -x metal -fsyntax-only /dev/null
 
       - name: Install dependencies
         run: |
