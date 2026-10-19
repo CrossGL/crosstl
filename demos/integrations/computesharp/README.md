@@ -13,11 +13,13 @@ on Windows (WARP) is the independent baseline.
 ## Results
 
 The qualification job of workflow run
-[39166359222](https://github.com/CrossGL/crosstl/actions/runs/39166359222)
-(commit `ac48e845a9465b488b00aae044219ef3e452bc61`) recomputed every check from
-the fresh artifacts of the three profile jobs and passed. `results.json` is the
-machine-readable summary that job wrote; `results_summary.py` regenerates it
-byte for byte from the job's `qualification.json`.
+[39177556648](https://github.com/CrossGL/crosstl/actions/runs/39177556648)
+(commit `0ccc71832401a9b1b47d74f1eef311d6e4ceaf51`) recomputed every check from
+the fresh artifacts of the three profile jobs and passed, for the main test
+project, the three ported companion projects and the two retained projects.
+`results.json` is the machine-readable summary that job wrote;
+`results_summary.py` regenerates it byte for byte from the job's
+`qualification.json`.
 
 This run also verified arithmetic exactness on the target compilers: 144 Metal
 artifacts with 11,336 floating-point operations and 148 OpenGL artifacts with
@@ -39,6 +41,24 @@ Original discrete-device rows are optional on Windows because hosted runners
 have no GPU; on the translated targets both device rows run on the one device.
 Local runs on an Apple M2 Max produce bit-identical shader images to the CI
 device.
+
+The companion and retained projects of the same run (cases passed per profile;
+optional rows are the original discrete-device rows, which hosted Windows
+runners cannot run):
+
+| Project | Scope | `directx-warp` | `metal-apple-gpu` | `opengl-mesa-llvmpipe` |
+| --- | --- | --- | --- | --- |
+| `DisableDynamicCompilation` | ported | 2 passed, 2 optional | 4 passed | 4 passed |
+| `GlobalStatements` | ported | 1 passed | 1 passed | 1 passed |
+| `Internals` | ported | 86 passed, 51 optional | 137 passed | 137 passed |
+| `DeviceLost` | windows-specific | 23 passed, 20 optional | not run | not run |
+| `SourceGenerators` | cpu-only | 110 passed | not run | not run |
+
+Every negative control of the ported companion projects rejected its faulted
+run on both targets. The retained projects ran only on the original Windows job
+and are not counted as translated GPU execution; the three upstream DeviceLost
+steps selected no case, as described in [Retained
+projects](#retained-projects).
 
 Image differences of the shader outputs against the original WARP output
 (mean absolute error of the RGB channels in 0-255 units; the bound is derived

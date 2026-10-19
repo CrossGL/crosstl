@@ -822,7 +822,7 @@
         "translated": 144
       },
       "translator": {
-        "commit": "e52be27b5057be396cd2c416f4f9017f06bd5a3e",
+        "commit": "7c9ed839bc21f3772e131f562c15a9aa5fc0c634",
         "package": "crosstl",
         "translatorTreeClean": true
       }
@@ -1578,17 +1578,1008 @@
         "translated": 148
       },
       "translator": {
-        "commit": "e52be27b5057be396cd2c416f4f9017f06bd5a3e",
+        "commit": "7c9ed839bc21f3772e131f562c15a9aa5fc0c634",
         "package": "crosstl",
         "translatorTreeClean": true
       }
     }
   },
   "provenance": {
-    "sourceCommit": "ac48e845a9465b488b00aae044219ef3e452bc61",
-    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39166359222/attempts/1"
+    "sourceCommit": "0ccc71832401a9b1b47d74f1eef311d6e4ceaf51",
+    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39177556648/attempts/1"
+  },
+  "retained": {
+    "ComputeSharp.Tests.DeviceLost": {
+      "contractSHA256": "dbbd2e039f6fbcafc969ffe0a0d6a833e11ecdc06317a5c62b0d5e1b5f0f0d69",
+      "countedAsTranslatedExecution": false,
+      "kind": "mstest",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "windows-specific": {
+                "discovered": 43,
+                "executed": 43,
+                "notRun": 0,
+                "outcomes": {
+                  "NotExecuted": 20,
+                  "Passed": 23
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 20,
+              "pass": 23
+            },
+            "optionalHardwareSkipped": 20,
+            "requiredCasesPassed": 23,
+            "requiredGpuCasesPassed": 0
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "runs": "passed"
+          },
+          "execution": "software",
+          "selectedCases": {
+            "DeviceDisposalTests": 13,
+            "DeviceLostTests": 28,
+            "GetDefaultDeviceTests": 2,
+            "upstream-DeviceDisposal": 0,
+            "upstream-DeviceLost": 0,
+            "upstream-GetDefaultDevice": 0
+          },
+          "status": "passed"
+        }
+      },
+      "scope": "windows-specific",
+      "status": "passed"
+    },
+    "ComputeSharp.Tests.SourceGenerators": {
+      "contractSHA256": "35e9f33519997178c7daf7056b8c9e2cd135d5185e060f2db8f8b300481561e6",
+      "countedAsTranslatedExecution": false,
+      "kind": "mstest",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "cpu-only": {
+                "discovered": 110,
+                "executed": 110,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 110
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 110
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 110,
+            "requiredGpuCasesPassed": 0
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "runs": "passed"
+          },
+          "execution": "software",
+          "selectedCases": {
+            "SourceGenerators": 110
+          },
+          "status": "passed"
+        }
+      },
+      "scope": "cpu-only",
+      "status": "passed"
+    }
   },
   "schemaVersion": 1,
   "status": "passed",
+  "suites": {
+    "ComputeSharp.Tests.DisableDynamicCompilation": {
+      "contractSHA256": "9ced23face115d0ec2a0bc09de218730585486988f474cbc0b3e2d7a01c20f73",
+      "evidencePolicySHA256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+      "kind": "mstest",
+      "negativeControlsSHA256": "56b942084c518af7a03fcc7c3f43290b18c46b85785f2d2845650b1eafd4fdd2",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 4,
+                "executed": 4,
+                "notRun": 0,
+                "outcomes": {
+                  "NotExecuted": 2,
+                  "Passed": 2
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 2,
+              "pass": 2
+            },
+            "optionalHardwareSkipped": 2,
+            "requiredCasesPassed": 2,
+            "requiredGpuCasesPassed": 2
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed"
+          },
+          "execution": "software",
+          "status": "passed"
+        },
+        "metal-apple-gpu": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 2,
+            "floatOperations": 13,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "compiler": "Apple metal version 32023.620 (metalfe-32023.620)",
+              "flags": [
+                "-fmetal-math-mode=safe",
+                "-fmetal-math-fp32-functions=fast",
+                "-O2"
+              ]
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 4,
+                "executed": 4,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 4
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 4
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 4,
+            "requiredGpuCasesPassed": 4
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "Metal",
+            "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+            "fp64": false,
+            "hardware": true,
+            "maxThreadsPerGroup": 1024,
+            "name": "Apple Paravirtual device"
+          },
+          "evidence": {
+            "casesWithDispatch": 4,
+            "casesWithEvidence": 4,
+            "dispatchedShaders": 2,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 2,
+            "policySha256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+            "records": {
+              "device": 1,
+              "dispatch": 4,
+              "pipeline": 2,
+              "readback": 4,
+              "release": 4,
+              "resource": 4
+            },
+            "releasedResources": 4,
+            "requiredCaseNamesExecuted": 4,
+            "requiredCaseNamesWithEvidence": 4,
+            "resources": {
+              "device": 4
+            },
+            "status": "passed",
+            "translatedShaders": 2
+          },
+          "execution": "hardware",
+          "host": {
+            "machine": "arm64",
+            "system": "Darwin"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-readback": {
+                "cases": 4,
+                "failed": 4,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "omit-dispatch": {
+                "cases": 4,
+                "failed": 4,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "perturb-constants": {
+                "cases": 2,
+                "failed": 2,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "perturb-unorm-scales": {
+                "cases": 2,
+                "failed": 2,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 2
+          },
+          "translator": {
+            "commit": "7c9ed839bc21f3772e131f562c15a9aa5fc0c634",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        },
+        "opengl-mesa-llvmpipe": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 2,
+            "floatOperations": 5,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "driver": "llvmpipe (LLVM 20.1.2, 256 bits) 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+              "dump": "MESA_GLSL=dump"
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 4,
+                "executed": 4,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 4
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 4
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 4,
+            "requiredGpuCasesPassed": 4
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "OpenGL 4.5 core",
+            "driver": "4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+            "fp64": true,
+            "hardware": false,
+            "maxThreadsPerGroup": 1024,
+            "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+          },
+          "evidence": {
+            "casesWithDispatch": 4,
+            "casesWithEvidence": 4,
+            "dispatchedShaders": 2,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 2,
+            "policySha256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+            "records": {
+              "device": 1,
+              "dispatch": 4,
+              "pipeline": 2,
+              "readback": 4,
+              "release": 4,
+              "resource": 4
+            },
+            "releasedResources": 4,
+            "requiredCaseNamesExecuted": 4,
+            "requiredCaseNamesWithEvidence": 4,
+            "resources": {
+              "device": 4
+            },
+            "status": "passed",
+            "translatedShaders": 2
+          },
+          "execution": "software",
+          "host": {
+            "machine": "x86_64",
+            "system": "Linux"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-readback": {
+                "cases": 4,
+                "failed": 4,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "omit-dispatch": {
+                "cases": 4,
+                "failed": 4,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "perturb-constants": {
+                "cases": 2,
+                "failed": 2,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "perturb-unorm-scales": {
+                "cases": 2,
+                "failed": 2,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 2
+          },
+          "translator": {
+            "commit": "7c9ed839bc21f3772e131f562c15a9aa5fc0c634",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        }
+      },
+      "status": "passed"
+    },
+    "ComputeSharp.Tests.GlobalStatements": {
+      "contractSHA256": "576a385e621a8f29d7b8b0f4ff52756457784ff5609a0fe4e4ba28fb04975c30",
+      "evidencePolicySHA256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+      "kind": "program",
+      "negativeControlsSHA256": "392341037168ae30763058317889831af4c85e7d6ef1fdabbc6cd21264058621",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 1,
+                "executed": 1,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 1
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 1
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 1,
+            "requiredGpuCasesPassed": 1
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed"
+          },
+          "execution": "software",
+          "status": "passed"
+        },
+        "metal-apple-gpu": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 1,
+            "floatOperations": 2,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "compiler": "Apple metal version 32023.620 (metalfe-32023.620)",
+              "flags": [
+                "-fmetal-math-mode=safe",
+                "-fmetal-math-fp32-functions=fast",
+                "-O2"
+              ]
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 1,
+                "executed": 1,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 1
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 1
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 1,
+            "requiredGpuCasesPassed": 1
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "Metal",
+            "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+            "fp64": false,
+            "hardware": true,
+            "maxThreadsPerGroup": 1024,
+            "name": "Apple Paravirtual device"
+          },
+          "evidence": {
+            "casesWithDispatch": 1,
+            "casesWithEvidence": 1,
+            "dispatchedShaders": 1,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 1,
+            "policySha256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+            "records": {
+              "device": 1,
+              "dispatch": 1,
+              "pipeline": 1,
+              "readback": 1,
+              "release": 1,
+              "resource": 1
+            },
+            "releasedResources": 1,
+            "requiredCaseNamesExecuted": 1,
+            "requiredCaseNamesWithEvidence": 1,
+            "resources": {
+              "device": 1
+            },
+            "status": "passed",
+            "translatedShaders": 1
+          },
+          "execution": "hardware",
+          "host": {
+            "machine": "arm64",
+            "system": "Darwin"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-guard": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "corrupt-readback": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "omit-dispatch": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "perturb-constants": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 1
+          },
+          "translator": {
+            "commit": "7c9ed839bc21f3772e131f562c15a9aa5fc0c634",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        },
+        "opengl-mesa-llvmpipe": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 1,
+            "floatOperations": 1,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "driver": "llvmpipe (LLVM 20.1.2, 256 bits) 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+              "dump": "MESA_GLSL=dump"
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 1,
+                "executed": 1,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 1
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 1
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 1,
+            "requiredGpuCasesPassed": 1
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "OpenGL 4.5 core",
+            "driver": "4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+            "fp64": true,
+            "hardware": false,
+            "maxThreadsPerGroup": 1024,
+            "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+          },
+          "evidence": {
+            "casesWithDispatch": 1,
+            "casesWithEvidence": 1,
+            "dispatchedShaders": 1,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 1,
+            "policySha256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+            "records": {
+              "device": 1,
+              "dispatch": 1,
+              "pipeline": 1,
+              "readback": 1,
+              "release": 1,
+              "resource": 1
+            },
+            "releasedResources": 1,
+            "requiredCaseNamesExecuted": 1,
+            "requiredCaseNamesWithEvidence": 1,
+            "resources": {
+              "device": 1
+            },
+            "status": "passed",
+            "translatedShaders": 1
+          },
+          "execution": "software",
+          "host": {
+            "machine": "x86_64",
+            "system": "Linux"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-guard": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "corrupt-readback": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "omit-dispatch": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "perturb-constants": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 1
+          },
+          "translator": {
+            "commit": "7c9ed839bc21f3772e131f562c15a9aa5fc0c634",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        }
+      },
+      "status": "passed"
+    },
+    "ComputeSharp.Tests.Internals": {
+      "contractSHA256": "7876e1aaa1b6dde7ba0737852659124746585ed6cab008244115a252f099a865",
+      "evidencePolicySHA256": "39f3b933030ccd4e0b32505b505c6bd8bde7d86929bf41c6b23c2048d8ef5f1e",
+      "kind": "mstest",
+      "negativeControlsSHA256": "47fb2227c714f7028ff2cb24c5feefe5f2b7a8ba31bb155a8ac6701b9d5cec12",
+      "noFloatArithmeticReason": "The Internals shaders exist to exercise generated dispatch-data loaders; their bodies only compare the thread ids with the dispatch size, so no artifact does float arithmetic.",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "cpu-only": {
+                "discovered": 28,
+                "executed": 28,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 28
+                }
+              },
+              "required-gpu": {
+                "discovered": 109,
+                "executed": 109,
+                "notRun": 0,
+                "outcomes": {
+                  "NotExecuted": 51,
+                  "Passed": 58
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 51,
+              "pass": 86
+            },
+            "optionalHardwareSkipped": 51,
+            "requiredCasesPassed": 86,
+            "requiredGpuCasesPassed": 58
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed"
+          },
+          "execution": "software",
+          "status": "passed"
+        },
+        "metal-apple-gpu": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 3,
+            "floatOperations": 0,
+            "notCompiled": 4,
+            "status": "passed",
+            "tool": {
+              "compiler": "Apple metal version 32023.620 (metalfe-32023.620)",
+              "flags": [
+                "-fmetal-math-mode=safe",
+                "-fmetal-math-fp32-functions=fast",
+                "-O2"
+              ]
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "cpu-only": {
+                "discovered": 28,
+                "executed": 28,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 28
+                }
+              },
+              "required-gpu": {
+                "discovered": 109,
+                "executed": 109,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 109
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 137
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 137,
+            "requiredGpuCasesPassed": 109
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "Metal",
+            "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+            "fp64": false,
+            "hardware": true,
+            "maxThreadsPerGroup": 1024,
+            "name": "Apple Paravirtual device"
+          },
+          "evidence": {
+            "casesWithDispatch": 0,
+            "casesWithEvidence": 109,
+            "dispatchedShaders": 0,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 0,
+            "policySha256": "39f3b933030ccd4e0b32505b505c6bd8bde7d86929bf41c6b23c2048d8ef5f1e",
+            "records": {
+              "device": 1,
+              "readback": 66,
+              "release": 115,
+              "resource": 115
+            },
+            "releasedResources": 115,
+            "requiredCaseNamesExecuted": 109,
+            "requiredCaseNamesWithEvidence": 109,
+            "resources": {
+              "device": 79,
+              "host": 36
+            },
+            "status": "passed",
+            "translatedShaders": 3
+          },
+          "execution": "hardware",
+          "host": {
+            "machine": "arm64",
+            "system": "Darwin"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-readback": {
+                "cases": 42,
+                "failed": 42,
+                "methods": [
+                  "ComputeSharp.Tests.Internals.DebugViewTests.BufferDebugView_NotNull",
+                  "ComputeSharp.Tests.Internals.DebugViewTests.Texture2DDebugView_NotNull",
+                  "ComputeSharp.Tests.Internals.DebugViewTests.Texture3DDebugView_WithTPixel_NotNull"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "compile-failed": 3,
+            "translated": 3,
+            "translation-failed": 1
+          },
+          "translator": {
+            "commit": "7c9ed839bc21f3772e131f562c15a9aa5fc0c634",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        },
+        "opengl-mesa-llvmpipe": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 7,
+            "floatOperations": 0,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "driver": "llvmpipe (LLVM 20.1.2, 256 bits) 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+              "dump": "MESA_GLSL=dump"
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "cpu-only": {
+                "discovered": 28,
+                "executed": 28,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 28
+                }
+              },
+              "required-gpu": {
+                "discovered": 109,
+                "executed": 109,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 109
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 137
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 137,
+            "requiredGpuCasesPassed": 109
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "OpenGL 4.5 core",
+            "driver": "4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+            "fp64": true,
+            "hardware": false,
+            "maxThreadsPerGroup": 1024,
+            "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+          },
+          "evidence": {
+            "casesWithDispatch": 0,
+            "casesWithEvidence": 109,
+            "dispatchedShaders": 0,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 0,
+            "policySha256": "39f3b933030ccd4e0b32505b505c6bd8bde7d86929bf41c6b23c2048d8ef5f1e",
+            "records": {
+              "device": 1,
+              "readback": 66,
+              "release": 115,
+              "resource": 115
+            },
+            "releasedResources": 115,
+            "requiredCaseNamesExecuted": 109,
+            "requiredCaseNamesWithEvidence": 109,
+            "resources": {
+              "device": 79,
+              "host": 36
+            },
+            "status": "passed",
+            "translatedShaders": 7
+          },
+          "execution": "software",
+          "host": {
+            "machine": "x86_64",
+            "system": "Linux"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-readback": {
+                "cases": 42,
+                "failed": 42,
+                "methods": [
+                  "ComputeSharp.Tests.Internals.DebugViewTests.BufferDebugView_NotNull",
+                  "ComputeSharp.Tests.Internals.DebugViewTests.Texture2DDebugView_NotNull",
+                  "ComputeSharp.Tests.Internals.DebugViewTests.Texture3DDebugView_WithTPixel_NotNull"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 7
+          },
+          "translator": {
+            "commit": "7c9ed839bc21f3772e131f562c15a9aa5fc0c634",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        }
+      },
+      "status": "passed"
+    }
+  },
   "upstreamCommit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a"
 }
