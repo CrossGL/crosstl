@@ -84,6 +84,16 @@ CASES = {
     (True, True): ((1, 1, 16, 0, 0), (2, 2, 96, 3, 1)),
 }
 ACCUM_WORKGROUP = (4, 2, 1)
+# (indexed storage, GLSL offset) for the accumulation kernels' 64-bit
+# offsets; the pointer rebases are not subscripts, so they name no storage.
+ACCUM_INDEX_EXPRESSIONS = (
+    (None, "gid.x + gid.y * uint64(ldd)"),
+    (None, "gid.x * uint64(fdc) + gid.y * uint64(ldc)"),
+    ("C_split", "offset"),
+    ("C_split", "C_split + offset"),
+    ("D", "D + 0"),
+    ("C", "C + 0"),
+)
 # (M, N, partitions); the accumulation kernels have no bounds check, so the
 # grid covers exactly M x N threads.
 ACCUM_CASES = ((2, 4, 2), (6, 8, 4), (34, 36, 3))
@@ -170,6 +180,25 @@ def _index_assertions(entry):
     )
 
 
+def _accum_index_assertions():
+    """GLSL index ranges for the accumulation kernels' 64-bit offsets.
+
+    ``C_split``, ``D`` and ``C`` are MLX buffers, so every element offset
+    stays below 2^31; the loop's ``offset`` is ``i * partition_stride`` for
+    ``i < k_partitions``, inside ``C_split``.
+    """
+    return tuple(
+        {
+            "source": SOURCE,
+            "expression": expression,
+            **({"indexed": indexed} if indexed else {}),
+            "minimum": 0,
+            "maximum": SIGNED_MAX,
+        }
+        for indexed, expression in ACCUM_INDEX_EXPRESSIONS
+    )
+
+
 def _config(root, output, target, name, workgroup):
     entry = model.BY_NAME.get(name)
     accesses = (
@@ -177,9 +206,11 @@ def _config(root, output, target, name, workgroup):
         if entry is not None and target != "metal"
         else ()
     )
-    indices = (
-        _index_assertions(entry) if entry is not None and target == "opengl" else ()
-    )
+    indices = ()
+    if target == "opengl":
+        indices = (
+            _index_assertions(entry) if entry is not None else _accum_index_assertions()
+        )
     return ProjectConfig(
         root=root,
         source_roots=("mlx/backend/metal/kernels",),
@@ -200,7 +231,8 @@ def _config(root, output, target, name, workgroup):
                     "mlx_steel_BaseMMAFrag_get_coord"
                 ),
                 "preserve_resource_origins": True,
-                "target_options": TARGET_OPTIONS,
+                # The accumulation kernels use no simdgroup operations.
+                "target_options": TARGET_OPTIONS if entry is not None else {},
             }
         },
     )
