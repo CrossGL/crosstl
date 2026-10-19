@@ -27,6 +27,7 @@ from typing import (
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
+from .conditional_types import select_conditional_type
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
 from .function_specialization import (
@@ -19531,6 +19532,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                             or canonical in self._materialized_struct_specializations
                         ):
                             resolved_target = canonical
+            if resolved_target is None:
+                # `using L = conditional_t<C, A, B>;` names A or B once C folds.
+                selected = select_conditional_type(
+                    target, self._evaluate_static_integral_expression
+                )
+                if selected is not None:
+                    resolved_target = self._resolve_struct_type_alias_at(
+                        aliases, selected, declaration_position
+                    )
+                    if resolved_target is None and selected in struct_names:
+                        resolved_target = selected
+                    if resolved_target is None:
+                        resolved_target = qualified_struct_names.get(
+                            selected.lstrip(":")
+                        )
             scope_start, scope_end = self._innermost_lexical_scope(
                 lexical_scopes, declaration_position, len(code)
             )

@@ -44,6 +44,7 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
+from .conditional_types import split_template_arguments
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -19339,8 +19340,10 @@ float {scalar}(float value) {{
         # ``conditional`` metafunction only yields a type through ``::type``.
         if name == "conditional" and not type_accessor:
             return None
-        args = self.split_generic_arguments(inner[:-1])
-        if len(args) != 3:
+        # Conditions such as ``flag && (N < 4)`` hold angle brackets that are
+        # operators, so split with the template-argument rules.
+        args = split_template_arguments(inner[:-1])
+        if args is None or len(args) != 3:
             return None
 
         bindings = {
