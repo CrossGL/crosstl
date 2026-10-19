@@ -4126,7 +4126,7 @@ def test_native_arithmetic_selection_retains_every_device_test():
     assert "tests/test_translator/test_metal_power.py" in power_step
     assert 'CROSTL_REQUIRE_METAL_POWER: "1"' in power_step
     assert "--timeout-seconds 180" in power_step
-    assert "--timeout-seconds 240" in step
+    assert "--timeout-seconds 480" in step
     modules = re.findall(r"tests/test_translator/test_[a-z_]+\.py", step)
     assert len(modules) == len(set(modules)) == 11
     assert 'CROSTL_REQUIRE_METAL_POWER: "1"' in step

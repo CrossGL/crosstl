@@ -3,9 +3,10 @@
 The WARP conformance workflow runs the same Direct3D controls once for each
 WARP library and writes ``<evidence>/<version>/results.xml`` plus
 ``<evidence>/runs.json``. This tool joins them into ``matrix.json`` and a
-Markdown table. A failing control is a finding, not an error; the tool fails
-only when the evidence is incomplete, so a missing or truncated run can never
-read as a conformant library.
+Markdown table. A failing control is a finding, not an error, except on a
+library named with ``--require``: such a reference library must be present and
+pass every test. The tool also fails when the evidence is incomplete, so a
+missing or truncated run can never read as a conformant library.
 """
 
 from __future__ import annotations
@@ -95,6 +96,46 @@ def build_matrix(evidence: Path) -> dict:
     }
 
 
+def required_failures(matrix: dict, required: list[str]) -> list[str]:
+    """Explain why each required library is missing or did not pass."""
+
+    libraries = {library["version"]: library for library in matrix["libraries"]}
+    reasons = []
+    for version in required:
+        library = libraries.get(version)
+        if library is None:
+            reasons.append(f"required WARP {version} did not run")
+            continue
+        failed = [
+            node
+            for node, outcome in library["outcomes"].items()
+            if outcome in ("failed", "error")
+        ]
+        # A test that executed on another library must execute here too.
+        unexecuted = [
+            node
+            for node, outcome in library["outcomes"].items()
+            if outcome == "skipped"
+            and any(
+                other["outcomes"].get(node, "skipped") != "skipped"
+                for other in matrix["libraries"]
+            )
+        ]
+        if failed:
+            reasons.append(
+                f"required WARP {version} failed {len(failed)} test(s), "
+                f"first {failed[0]}"
+            )
+        elif unexecuted:
+            reasons.append(
+                f"required WARP {version} skipped {len(unexecuted)} test(s) "
+                f"that other libraries executed, first {unexecuted[0]}"
+            )
+        elif library["exitCode"] != 0:
+            reasons.append(f"required WARP {version} exited with {library['exitCode']}")
+    return reasons
+
+
 def markdown(matrix: dict) -> str:
     libraries = matrix["libraries"]
     executed = [
@@ -130,6 +171,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--summary", type=Path)
+    parser.add_argument(
+        "--require",
+        action="append",
+        default=[],
+        metavar="VERSION",
+        help="a reference library that must run and pass every test",
+    )
     args = parser.parse_args(argv)
     try:
         matrix = build_matrix(args.evidence)
@@ -139,12 +187,13 @@ def main(argv: list[str] | None = None) -> int:
     (args.evidence / "matrix.json").write_text(
         json.dumps(matrix, indent=2) + "\n", encoding="utf-8"
     )
-    table = markdown(matrix)
+    failures = required_failures(matrix, args.require)
+    table = markdown(matrix) + "".join(f"\n{reason}\n" for reason in failures)
     print(table)
     if args.summary is not None:
         with args.summary.open("a", encoding="utf-8") as handle:
             handle.write(table)
-    return 0 if matrix["complete"] else 1
+    return 0 if matrix["complete"] and not failures else 1
 
 
 if __name__ == "__main__":

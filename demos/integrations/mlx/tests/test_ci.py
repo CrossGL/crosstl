@@ -869,7 +869,7 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     coverage = _load_ci_coverage_module()
     jobs = coverage.workflow_job_names(workflow)
-    assert len(jobs) == 41
+    assert len(jobs) == 42
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)

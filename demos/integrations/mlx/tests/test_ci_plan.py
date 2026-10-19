@@ -248,6 +248,15 @@ def test_every_heavy_job_obeys_the_full_tier():
     for name, job in jobs.items():
         if name in {"ci-plan", "mlx-smoke", "result"}:
             continue
+        if name == "warp-conformance":
+            # Fixed HLSL controls and the translated reduction on every pinned
+            # WARP library: a short Windows job that runs with either tier.
+            assert job["needs"] == "ci-plan"
+            assert job["if"] == (
+                "needs.ci-plan.outputs.smoke == 'true' || "
+                "needs.ci-plan.outputs.heavy == 'true'"
+            )
+            continue
         needs = job["needs"]
         assert "ci-plan" in (needs if isinstance(needs, list) else [needs]), name
         if name != "mlx-full-corpus-scout":
