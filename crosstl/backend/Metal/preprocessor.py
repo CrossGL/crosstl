@@ -24105,13 +24105,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                     specialization_arguments,
                 ) in partial_specializations.get(ident, []):
                     canonical_specialization_arguments = [
-                        self._canonicalize_metal_standard_type_aliases(
+                        self._canonical_partial_struct_specialization_pattern(
+                            partial_template,
                             argument,
+                            partial_match_type_aliases,
                             allow_unqualified_remove_cv_t=(
                                 allow_unqualified_remove_cv_t
-                            ),
-                            dependent_identifiers=set(
-                                partial_template.template_parameters
                             ),
                         )
                         for argument in specialization_arguments
@@ -24273,13 +24272,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                     specialization_arguments,
                 ) in partial_specializations.get(name, []):
                     canonical_specialization_arguments = [
-                        self._canonicalize_metal_standard_type_aliases(
+                        self._canonical_partial_struct_specialization_pattern(
+                            partial_template,
                             argument,
+                            type_aliases,
                             allow_unqualified_remove_cv_t=(
                                 allow_unqualified_remove_cv_t
-                            ),
-                            dependent_identifiers=set(
-                                partial_template.template_parameters
                             ),
                         )
                         for argument in specialization_arguments
@@ -24502,6 +24500,30 @@ class MetalPreprocessor(HLSLPreprocessor):
             return []
         return self._split_top_level_commas(
             template.source[angle_start + 1 : angle_end]
+        )
+
+    def _canonical_partial_struct_specialization_pattern(
+        self,
+        template: _MetalTemplateStruct,
+        argument: str,
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        *,
+        allow_unqualified_remove_cv_t: bool = False,
+    ) -> str:
+        # Concrete arguments are compared with aliases resolved, so a pattern
+        # spelled with an alias (`S<complex64_t, U>` for `using complex64_t =
+        # complex_t<float>`) must be resolved where the partial specialization
+        # is declared. Its own template parameters shadow any alias.
+        parameters = set(template.template_parameters)
+        visible = {
+            alias: bindings
+            for alias, bindings in type_aliases.items()
+            if alias not in parameters
+        }
+        return self._canonicalize_metal_standard_type_aliases(
+            self._resolve_type_aliases_at(argument, visible, template.span[0]),
+            allow_unqualified_remove_cv_t=allow_unqualified_remove_cv_t,
+            dependent_identifiers=parameters,
         )
 
     def _template_arguments_may_match_partial_struct_specialization(
