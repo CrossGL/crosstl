@@ -5,6 +5,8 @@ import shlex
 import struct
 
 from ..common_ast import InitializerListNode
+from .access_chains import chain_base_pointee
+from .access_chains import walk_indices
 from .local_names import function_local_names
 from .ray_tracing_import import (
     BUILTIN_VARIABLE_NAMES,
@@ -1789,7 +1791,13 @@ class VulkanParser:
 
             if result_id and opcode == "OpImageQuerySize" and len(operands) >= 2:
                 expressions[result_id] = FunctionCallNode(
-                    "textureSize",
+                    self.spirv_image_query_name(
+                        "textureSize",
+                        "imageSize",
+                        operands[1],
+                        expression_type_ids,
+                        types,
+                    ),
                     [
                         self.spirv_assembly_operand_expression(
                             operands[1],
@@ -1844,7 +1852,13 @@ class VulkanParser:
 
             if result_id and opcode == "OpImageQuerySamples" and len(operands) >= 2:
                 expressions[result_id] = FunctionCallNode(
-                    "textureSamples",
+                    self.spirv_image_query_name(
+                        "textureSamples",
+                        "imageSamples",
+                        operands[1],
+                        expression_type_ids,
+                        types,
+                    ),
                     [
                         self.spirv_assembly_operand_expression(
                             operands[1],
@@ -2043,6 +2057,7 @@ class VulkanParser:
                     expressions[result_id] = access
                     expression_type_ids[result_id] = operands[0]
                 continue
+                        expression_type_ids=expression_type_ids,
 
             if result_id and opcode in {
                 "OpPtrAccessChain",
@@ -4005,6 +4020,7 @@ class VulkanParser:
         struct_member = self.spirv_assembly_struct_member_access_expression(
             base_operand,
             index_operands,
+        expression_type_ids=None,
             expressions,
             names,
             decorations,
@@ -4026,20 +4042,31 @@ class VulkanParser:
             variables_by_id=variables_by_id,
             types=types,
         )
-        for index_operand in index_operands:
-            access = ArrayAccessNode(
-                access,
-                self.spirv_assembly_operand_expression(
-                    index_operand,
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
-                    variables_by_id=variables_by_id,
-                    types=types,
-                ),
+        pointee = (
+            chain_base_pointee(
+                base_operand, types, variables_by_id, expression_type_ids
             )
-        return access
+            if expression_type_ids is not None
+            else None
+        )
+        return walk_indices(
+            self,
+            access,
+            pointee,
+            index_operands,
+            lambda operand: self.spirv_assembly_operand_expression(
+                operand,
+                expressions,
+                names,
+                decorations,
+                constants,
+                variables_by_id=variables_by_id,
+                types=types,
+            ),
+            member_names,
+            types,
+            constants,
+        )
 
     def spirv_assembly_composite_extract_expression(
         self,
@@ -4170,32 +4197,48 @@ class VulkanParser:
         access = self.spirv_assembly_operand_expression(
             base_operand, expressions, names, decorations, constants
         )
-        for index_operand in index_operands:
-            type_info = types.get(type_id, {})
-            if type_info.get("kind") == "struct":
-                member_index = self.spirv_integer_constant_operand(
-                    index_operand, constants
-                )
-                member_types = type_info.get("member_types", [])
-                if member_index is None or not 0 <= member_index < len(member_types):
-                    return None
-                member_key = str(member_index)
-                access = MemberAccessNode(
-                    access,
-                    member_names.get(type_id, {}).get(
-                        member_key, f"member_{member_key}"
-                    ),
-                )
-                type_id = member_types[member_index]
-                continue
-            access = ArrayAccessNode(
-                access,
-                self.spirv_assembly_operand_expression(
-                    index_operand, expressions, names, decorations, constants
-                ),
-            )
-            type_id = self.spirv_composite_index_type_id(type_id, index_operand, types)
-        return access
+        return walk_indices(
+            self,
+            access,
+            type_id,
+            index_operands,
+            lambda operand: self.spirv_assembly_operand_expression(
+                operand, expressions, names, decorations, constants
+            ),
+            member_names,
+            types,
+            constants,
+        )
+
+    def spirv_assembly_member_tail(
+        self,
+        access,
+        struct_type_id,
+        index_operands,
+        expressions,
+        names,
+        decorations,
+        member_names,
+        types,
+        constants,
+    ):
+        """Continue ``access`` (member ``index_operands[0]`` of ``struct_type_id``) through the remaining indices."""
+        member_index = self.spirv_integer_constant_operand(index_operands[0], constants)
+        member_type_id = types.get(struct_type_id, {}).get("member_types", [])[
+            member_index
+        ]
+        return walk_indices(
+            self,
+            access,
+            member_type_id,
+            index_operands[1:],
+            lambda operand: self.spirv_assembly_operand_expression(
+                operand, expressions, names, decorations, constants
+            ),
+            member_names,
+            types,
+            constants,
+        )
 
     def spirv_assembly_struct_member_access_expression(
         self,
@@ -4280,18 +4323,17 @@ class VulkanParser:
                 ),
                 member_name,
             )
-            for index_operand in index_operands[1:]:
-                access = ArrayAccessNode(
-                    access,
-                    self.spirv_assembly_operand_expression(
-                        index_operand,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                )
-            return access
+            return self.spirv_assembly_member_tail(
+                access,
+                struct_type_id,
+                index_operands,
+                expressions,
+                names,
+                decorations,
+                member_names,
+                types,
+                constants,
+            )
 
         if self.spirv_is_flattened_resource_block_access(
             storage_class, struct_type_id, decorations
@@ -4302,18 +4344,17 @@ class VulkanParser:
                 member_key, f"member{member_key}"
             )
             access = VariableNode("", member_name)
-            for index_operand in index_operands[1:]:
-                access = ArrayAccessNode(
-                    access,
-                    self.spirv_assembly_operand_expression(
-                        index_operand,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                )
-            return access
+            return self.spirv_assembly_member_tail(
+                access,
+                struct_type_id,
+                index_operands,
+                expressions,
+                names,
+                decorations,
+                member_names,
+                types,
+                constants,
+            )
 
         if self.spirv_is_structured_buffer_block_access(
             storage_class, struct_type_id, decorations
@@ -4334,18 +4375,17 @@ class VulkanParser:
                 ),
                 member_name,
             )
-            for index_operand in index_operands[1:]:
-                access = ArrayAccessNode(
-                    access,
-                    self.spirv_assembly_operand_expression(
-                        index_operand,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                )
-            return access
+            return self.spirv_assembly_member_tail(
+                access,
+                struct_type_id,
+                index_operands,
+                expressions,
+                names,
+                decorations,
+                member_names,
+                types,
+                constants,
+            )
 
         if storage_class not in self.SPIRV_INTERFACE_STORAGE_CLASSES:
             return None
@@ -4368,18 +4408,17 @@ class VulkanParser:
             storage_class=storage_class,
         )
         access = VariableNode("", member_name)
-        for index_operand in index_operands[1:]:
-            access = ArrayAccessNode(
-                access,
-                self.spirv_assembly_operand_expression(
-                    index_operand,
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
-                ),
-            )
-        return access
+        return self.spirv_assembly_member_tail(
+            access,
+            struct_type_id,
+            index_operands,
+            expressions,
+            names,
+            decorations,
+            member_names,
+            types,
+            constants,
+        )
 
     def spirv_assembly_image_sample_expression(
         self,
@@ -7278,6 +7317,19 @@ class VulkanParser:
         sampled_family = self.spirv_image_sampled_type_family(sampled_type)
         if sampled == "2":
             prefix = {"int": "i", "uint": "u"}.get(sampled_family, "")
+    def spirv_image_query_name(
+        self, sampled_name, storage_name, image_operand, expression_type_ids, types
+    ):
+        """GLSL spells a size or sample-count query of a storage image (``Sampled`` 2) ``imageSize``/``imageSamples``.
+
+        ``OpImageQuerySize`` and ``OpImageQuerySamples`` take an image of either kind (SPIR-V 1.6 section 3.49.10);
+        ``textureSize`` of an ``image2D`` is not a GLSL overload, and the emitters refuse it.
+        """
+        image_type = types.get(expression_type_ids.get(image_operand), {})
+        if image_type.get("kind") == "image" and str(image_type.get("sampled")) == "2":
+            return storage_name
+        return sampled_name
+
             return f"{prefix}image{base_name}"
 
         prefix = {"int": "i", "uint": "u"}.get(sampled_family, "")
