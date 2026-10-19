@@ -35,6 +35,19 @@ class _StorageDependency:
     parameter: int
 
 
+def storage_load_call(name, arguments):
+    """Whether an unshadowed call spells ``buffer_load(resource, index)``.
+
+    Front ends such as Metal's lower each structured-buffer element read to
+    this builtin. Callers first exclude user functions of the same name.
+    """
+    return (
+        name == "buffer_load"
+        and len(arguments) == 2
+        and isinstance(arguments[0], IdentifierNode)
+    )
+
+
 class UniformReturnAnalysis:
     """Prove body purity separately from uniformity at an individual call.
 
@@ -45,14 +58,29 @@ class UniformReturnAnalysis:
     global reads, escapes and recursion fail closed.
     """
 
-    def __init__(self, resolved_calls, pure_builtin_calls, structs=None):
+    def __init__(
+        self, resolved_calls, pure_builtin_calls, structs=None, storage_loads=()
+    ):
         self.resolved_calls = resolved_calls
         self.pure_builtin_calls = pure_builtin_calls
         self.structs = structs or {}
+        self.storage_loads = frozenset(storage_loads)
         self.summaries = {}
         self.visiting = set()
         self.resource_effects = {}
         self.resource_visiting = set()
+
+    def storage_load(self, node):
+        """Return ``(resource, index)`` for a builtin ``buffer_load`` call.
+
+        ``storage_loads`` holds the ids of calls the target resolved to the
+        CrossGL builtin ``buffer_load(resource, index)``, which reads like
+        ``resource[index]``; a user function of that name is not one.
+        """
+        if not isinstance(node, FunctionCallNode) or id(node) not in self.storage_loads:
+            return None
+        resource, index = node.arguments
+        return resource, index
 
     def pointer_argument_write_roots(self, argument, source_types):
         """Separate addressed storage from effect-free address calculations.
@@ -178,6 +206,8 @@ class UniformReturnAnalysis:
             ]
             if not indices:
                 return False
+            if self.storage_load(call) is not None:
+                return indices == [0 if resource else 1]
             callee = self.resolved_calls.get(id(call))
             if callee is None:
                 return not resource and id(call) in self.pure_builtin_calls
@@ -503,13 +533,12 @@ class UniformReturnAnalysis:
             return frozenset()
         if isinstance(node, IdentifierNode):
             return names.get(node.name)
-        if isinstance(node, ArrayAccessNode):
-            if (
-                not isinstance(node.array_expr, IdentifierNode)
-                or node.array_expr.name not in resources
-            ):
+        load = self.storage_load(node)
+        if isinstance(node, ArrayAccessNode) or load is not None:
+            base, index = load or (node.array_expr, node.index_expr)
+            if not isinstance(base, IdentifierNode) or base.name not in resources:
                 return None
-            children = [node.array_expr, node.index_expr]
+            children = [base, index]
         elif isinstance(node, MemberAccessNode):
             children = [node.object_expr]
         elif isinstance(node, SwizzleNode):

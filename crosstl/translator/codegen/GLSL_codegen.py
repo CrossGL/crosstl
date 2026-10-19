@@ -418,7 +418,7 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
-from .uniform_returns import UniformReturnAnalysis
+from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
@@ -4761,18 +4761,21 @@ class GLSLCodeGen(LoweringRefusalMixin):
             for node in self.walk_ast(getattr(function, "body", None))
             if isinstance(node, FunctionCallNode)
         ]
+        storage_loads = set()
         for call in calls:
             name = self.function_call_name(call)
+            if name in functions_by_name or not isinstance(
+                call.function, (str, IdentifierNode)
+            ):
+                continue
             if (
-                name not in functions_by_name
-                and isinstance(call.function, (str, IdentifierNode))
-                and (
-                    self.glsl_software_subgroup_exit_constructor(call)
-                    or (name in {"min", "max"} and len(call.arguments) == 2)
-                    or (name == "clamp" and len(call.arguments) == 3)
-                )
+                self.glsl_software_subgroup_exit_constructor(call)
+                or (name in {"min", "max"} and len(call.arguments) == 2)
+                or (name == "clamp" and len(call.arguments) == 3)
             ):
                 self.glsl_software_subgroup_uniform_call_ids.add(id(call))
+            elif storage_load_call(name, call.arguments):
+                storage_loads.add(id(call))
         analysis = UniformReturnAnalysis(
             {
                 call_id: functions_by_id[target_id]
@@ -4782,6 +4785,7 @@ class GLSLCodeGen(LoweringRefusalMixin):
             },
             self.glsl_software_subgroup_uniform_call_ids,
             self.structs_by_name,
+            storage_loads,
         )
         self.glsl_software_subgroup_uniform_returns = analysis
         constant_source_types = {
@@ -5990,14 +5994,15 @@ class GLSLCodeGen(LoweringRefusalMixin):
             return True
         if isinstance(node, IdentifierNode):
             return node.name in names
-        if isinstance(node, ArrayAccessNode):
-            base = node.array_expr
+        load = self.glsl_software_subgroup_uniform_returns.storage_load(node)
+        if isinstance(node, ArrayAccessNode) or load is not None:
+            base, index = load or (node.array_expr, node.index_expr)
             if (
                 not isinstance(base, IdentifierNode)
                 or base.name not in self.glsl_software_subgroup_resource_names
             ):
                 return False
-            children = [base, node.index_expr]
+            children = [base, index]
         elif isinstance(node, (MemberAccessNode, SwizzleNode)):
             base = (
                 node.object_expr

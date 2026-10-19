@@ -417,7 +417,7 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
-from .uniform_returns import UniformReturnAnalysis
+from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .union_layout import UnionLayoutCollector
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
@@ -5252,14 +5252,15 @@ class HLSLCodeGen(LoweringRefusalMixin):
             return True
         if isinstance(expression, IdentifierNode):
             return expression.name in uniform_names
-        if isinstance(expression, ArrayAccessNode):
-            base = expression.array_expr
+        load = self.hlsl_software_subgroup_uniform_returns.storage_load(expression)
+        if isinstance(expression, ArrayAccessNode) or load is not None:
+            base, index = load or (expression.array_expr, expression.index_expr)
             if (
                 not isinstance(base, IdentifierNode)
                 or base.name not in self.hlsl_software_subgroup_resource_names
             ):
                 return False
-            children = [base, expression.index_expr]
+            children = [base, index]
         elif isinstance(expression, (MemberAccessNode, SwizzleNode)):
             base = (
                 expression.object_expr
@@ -7521,22 +7522,26 @@ class HLSLCodeGen(LoweringRefusalMixin):
         calls = [
             node for node in self.walk_ast(ast) if isinstance(node, FunctionCallNode)
         ]
+        storage_loads = set()
         for node in calls:
             name = self.function_call_name(node)
+            if name in functions_by_name or not isinstance(
+                node.function, (str, IdentifierNode)
+            ):
+                continue
             if (
-                name not in functions_by_name
-                and isinstance(node.function, (str, IdentifierNode))
-                and (
-                    (name in {"min", "max"} and len(node.arguments) == 2)
-                    or (name == "clamp" and len(node.arguments) == 3)
-                    or self.directx_compile_time_constructor_type(name) is not None
-                )
+                (name in {"min", "max"} and len(node.arguments) == 2)
+                or (name == "clamp" and len(node.arguments) == 3)
+                or self.directx_compile_time_constructor_type(name) is not None
             ):
                 self.hlsl_software_subgroup_uniform_calls.add(id(node))
+            elif storage_load_call(name, node.arguments):
+                storage_loads.add(id(node))
         self.hlsl_software_subgroup_uniform_returns = UniformReturnAnalysis(
             resolved_calls,
             self.hlsl_software_subgroup_uniform_calls,
             self.structs_by_name,
+            storage_loads,
         )
         call_mutations = {}
         for binding in declarations.values():
