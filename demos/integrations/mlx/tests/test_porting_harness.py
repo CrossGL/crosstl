@@ -8980,6 +8980,56 @@ def test_full_corpus_mode_reports_tracked_timeout_without_report(tmp_path, monke
     ]
 
 
+def _write_vulkan_refusal_report(module, report_path, *, codes=None):
+    """A project report in which every refused Vulkan frontier source failed with its code."""
+    refusals = module.MLX_VULKAN_FRONTIER_REFUSALS
+    codes = codes or {source: code for source, (code, _issue) in refusals.items()}
+    report = {
+        "artifacts": [
+            {"source": source, "target": "vulkan", "status": "failed"}
+            for source in refusals
+        ],
+        "diagnostics": [
+            {"severity": "error", "code": codes[source], "location": {"file": source}}
+            for source in refusals
+        ],
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+
+def test_vulkan_frontier_refusals_fail_closed_with_their_tracked_codes(tmp_path, monkeypatch):
+    module = _load_harness()
+    refusals = module.MLX_VULKAN_FRONTIER_REFUSALS
+    assert set(refusals) <= set(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
+    assert not set(refusals) & set(module.MLX_VULKAN_FRONTIER_SOURCES)
+    assert len(module.MLX_VULKAN_FRONTIER_SOURCES) + len(refusals) == len(
+        module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    )
+    for code, issue in refusals.values():
+        assert code.startswith("project.translate.vulkan-")
+        assert issue.startswith("https://github.com/CrossGL/crosstl/issues/")
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    changed = {source: code for source, (code, _issue) in refusals.items()}
+    changed[next(iter(refusals))] = "project.translate.vulkan-builtin-unsupported"
+
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        assert name == "vulkan-frontier-refusals" and check is False
+        _write_vulkan_refusal_report(module, report_dir / f"{name}.json", codes=changed)
+        return module.CommandResult(name, list(command), 1, tmp_path / "o", tmp_path / "e")
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    with pytest.raises(module.PortingCheckError, match="no longer fails with"):
+        module._require_vulkan_frontier_refusals(
+            tmp_path,
+            work_dir=tmp_path / "work",
+            config_dir=tmp_path,
+            report_dir=report_dir,
+            log_dir=tmp_path,
+            python="python",
+        )
+
+
 def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     tmp_path, monkeypatch
 ):
@@ -8993,7 +9043,7 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     for directory in (config_dir, report_dir, log_dir):
         directory.mkdir(parents=True)
 
-    sources = module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    sources = module.MLX_VULKAN_FRONTIER_SOURCES
     frontier_count = len(sources)
     commands = []
     alias_evidence = {"source": module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE}
@@ -9005,6 +9055,12 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
 
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         commands.append((name, list(command)))
+        if name == "vulkan-frontier-refusals":
+            assert check is False
+            _write_vulkan_refusal_report(module, report_dir / f"{name}.json")
+            return module.CommandResult(
+                name, list(command), 1, log_dir / "r.out", log_dir / "r.err"
+            )
         output_dir = (
             work_dir / "out-vulkan-frontier"
             if name == "vulkan-frontier"
@@ -9061,6 +9117,12 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     assert result["semanticReadinessStatus"] == "not-established"
     assert result["regressionEvidence"] == [alias_evidence]
     assert result["runtimeParityClaimed"] is False
+    assert result["sources"] == list(module.MLX_VULKAN_FRONTIER_SOURCES)
+    assert result["trackedRefusals"] == [
+        {"source": source, "code": code, "issue": issue}
+        for source, (code, issue) in module.MLX_VULKAN_FRONTIER_REFUSALS.items()
+    ]
+    assert commands[-1][0] == "vulkan-frontier-refusals"
     assert commands[0][0] == "vulkan-frontier"
     assert "--validate" in commands[0][1]
     assert "--run-toolchains" not in commands[0][1]
@@ -15024,7 +15086,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         module.MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE
     )
     assert result["scope"]["vulkanTranslatedFrontierSources"] == list(
-        module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+        module.MLX_VULKAN_FRONTIER_SOURCES
     )
     assert result["scope"]["openglTranslatedFrontierSources"] == list(
         module.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES

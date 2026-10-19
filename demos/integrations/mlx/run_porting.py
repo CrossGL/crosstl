@@ -522,6 +522,23 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     MLX_SOFTMAX_SOURCE,
     MLX_TERNARY_SOURCE,
 )
+# Frontier sources the SPIR-V emitter refuses, fail-closed, with the diagnostic code each must raise.
+# Before #2256 these produced SPIR-V that dropped the construct, so they were never translated correctly.
+MLX_VULKAN_FRONTIER_REFUSALS: dict[str, tuple[str, str]] = {
+    MLX_BINARY_TWO_SOURCE: (
+        "project.translate.vulkan-half-float-unsupported",
+        "https://github.com/CrossGL/crosstl/issues/2284",
+    ),
+    MLX_LAYER_NORM_SOURCE: (
+        "project.translate.vulkan-lowering-unsupported",
+        "https://github.com/CrossGL/crosstl/issues/2283",
+    ),
+}
+MLX_VULKAN_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    if source not in MLX_VULKAN_FRONTIER_REFUSALS
+)
 MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_LAYER_NORM_SOURCE,
@@ -7097,6 +7114,59 @@ def _translate_directx_frontier(
     }
 
 
+def _require_vulkan_frontier_refusals(
+    mlx_root: Path,
+    *,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> list[dict[str, str]]:
+    """Each refused Vulkan frontier source must fail closed with its tracked diagnostic code."""
+    sources = tuple(MLX_VULKAN_FRONTIER_REFUSALS)
+    _result, payload, _config_path, _report_path = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+        command_name="vulkan-frontier-refusals",
+        target="vulkan",
+        sources=sources,
+        output_dir=work_dir / "out-vulkan-frontier-refusals",
+        check=False,
+        specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+    )
+    artifacts = payload.get("artifacts")
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == len(sources),
+        "Vulkan frontier refusal records are incomplete",
+    )
+    statuses = {
+        artifact.get("source"): artifact.get("status")
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+    }
+    codes_by_source: dict[str, set[str]] = {source: set() for source in sources}
+    for diagnostic in payload.get("diagnostics") or []:
+        if not isinstance(diagnostic, Mapping) or diagnostic.get("severity") != "error":
+            continue
+        location = diagnostic.get("location")
+        source = location.get("file") if isinstance(location, Mapping) else None
+        if source in codes_by_source:
+            codes_by_source[source].add(str(diagnostic.get("code")))
+    refusals = []
+    for source, (code, issue) in MLX_VULKAN_FRONTIER_REFUSALS.items():
+        _require(
+            statuses.get(source) == "failed" and code in codes_by_source[source],
+            f"Vulkan frontier source {source} no longer fails with {code}; "
+            f"if {issue} is fixed, move it back into the clean frontier",
+        )
+        refusals.append({"source": source, "code": code, "issue": issue})
+    return refusals
+
+
 def _translate_vulkan_frontier(
     mlx_root: Path,
     work_dir: Path,
@@ -7117,7 +7187,7 @@ def _translate_vulkan_frontier(
         python=python,
         command_name="vulkan-frontier",
         target="vulkan",
-        sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+        sources=MLX_VULKAN_FRONTIER_SOURCES,
         output_dir=output_dir,
         validate=True,
         specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
@@ -7127,7 +7197,7 @@ def _translate_vulkan_frontier(
         output_dir,
         payload,
         target="vulkan",
-        sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+        sources=MLX_VULKAN_FRONTIER_SOURCES,
     )
     scaled_attention_alias_evidence = _scaled_attention_local_alias_evidence(
         mlx_root, payload
@@ -7146,7 +7216,7 @@ def _translate_vulkan_frontier(
                 python=python,
                 command_name="validate-vulkan-frontier-toolchain",
                 target="vulkan",
-                sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+                sources=MLX_VULKAN_FRONTIER_SOURCES,
                 output_dir=toolchain_output_dir,
                 run_toolchains=True,
                 specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
@@ -7157,7 +7227,7 @@ def _translate_vulkan_frontier(
             toolchain_output_dir,
             toolchain_payload,
             target="vulkan",
-            sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+            sources=MLX_VULKAN_FRONTIER_SOURCES,
         )
         validation = toolchain_payload.get("validation")
         runs = (
@@ -7181,15 +7251,24 @@ def _translate_vulkan_frontier(
                 "Vulkan toolchain did not validate every configured source artifact",
             )
 
+    refusals = _require_vulkan_frontier_refusals(
+        mlx_root,
+        work_dir=work_dir,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+    )
+
     return {
         "name": "vulkan-frontier",
         "status": "passed",
         "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
-        "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "unitCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "artifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "translatedArtifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "sources": list(MLX_VULKAN_FRONTIER_SOURCES),
+        "unitCount": len(MLX_VULKAN_FRONTIER_SOURCES),
+        "artifactCount": len(MLX_VULKAN_FRONTIER_SOURCES),
+        "translatedArtifactCount": len(MLX_VULKAN_FRONTIER_SOURCES),
         "target": "vulkan",
         "toolchainRuns": len(vulkan_runs),
         "vulkanToolchainRequired": require_toolchain,
@@ -7197,6 +7276,7 @@ def _translate_vulkan_frontier(
         "semanticReadinessStatus": "not-established",
         "regressionEvidence": [scaled_attention_alias_evidence],
         "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
+        "trackedRefusals": refusals,
         "runtimeParityClaimed": False,
     }
 
@@ -10999,9 +11079,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "directxWorkgroupBlockedFrontierSources": list(
                 MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
             ),
-            "vulkanTranslatedFrontierSources": list(
-                MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-            ),
+            "vulkanTranslatedFrontierSources": list(MLX_VULKAN_FRONTIER_SOURCES),
+            "vulkanRefusedFrontierSources": list(MLX_VULKAN_FRONTIER_REFUSALS),
             "openglTranslatedFrontierSources": list(
                 MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
             ),
