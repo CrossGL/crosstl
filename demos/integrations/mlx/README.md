@@ -412,10 +412,26 @@ CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_COUNT=6 \
 python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_steel_conv.py
 ```
 
-The 18 `implicit_gemm_conv_2d_general` entries of `steel_conv_general.metal`
-are not covered: their epilogue binds a reference-returning `frag_at` to a
-`thread const auto&` local, which translation rejects until that reference can
-keep its storage identity (#2163).
+`test_current_steel_conv_general.py` executes all 18
+`implicit_gemm_conv_2d_general` entries of `steel_conv_general.metal`, each
+translated twice with `align_C` frozen true and false.
+`steel_conv_general_model.py` rebuilds the jump parameters, the
+`base_h`/`base_w` residue tables, the grid and the block selection of
+`implicit_gemm_conv_2D_general_gpu`. A Python walk of the kernel's tap loop
+over those tables must store every output exactly once with the exact
+reference. Each specialization runs three one-group convolutions, chosen so
+that `align_C` matches the channel count as the host sets it. One is
+undilated with a full output tile. One is input-dilated, dilated, strided and
+flipped, with partial tiles and a surplus threadgroup in each tile axis. In
+the third, filter taps are several taps apart, or residues have no tap at
+all. Outputs are compared as in the `steel_conv` gate, in three shards per
+operating system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_STEEL_CONV_GENERAL=1 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_steel_conv_general.py
+```
 
 ### Resource-Index Controls
 
