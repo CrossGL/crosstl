@@ -5,8 +5,7 @@ import shlex
 import struct
 
 from ..common_ast import InitializerListNode
-from .access_chains import chain_base_pointee
-from .access_chains import walk_indices
+from .access_chains import chain_base_pointee, walk_indices
 from .local_names import function_local_names
 from .ray_tracing_import import (
     BUILTIN_VARIABLE_NAMES,
