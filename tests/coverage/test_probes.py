@@ -67,8 +67,28 @@ def test_probe_refuses_what_it_cannot_express():
         )
     with pytest.raises(probes.ProbeError, match="fragment"):
         probes.build(feature("dFdx", VEC3, VEC3, stage="fragment"), "crossgl")
-    with pytest.raises(probes.ProbeError, match="no spelling"):
+    with pytest.raises(probes.NoSpelling, match="no spelling"):
         probes.build(feature("NMin", VEC3, VEC3, VEC3, crossgl=""), "crossgl")
+    with pytest.raises(probes.ProbeError, match="double"):
+        probes.build(feature("abs", Type("double"), Type("double")), "metal")
+
+
+def test_baseline_reads_the_same_arguments_without_the_call():
+    mix = feature("mix", VEC3, VEC3, VEC3, VEC3)
+    probe = probes.build(mix, "glsl").source
+    baseline = probes.build(mix, "glsl", baseline=True).source
+    assert "mix(" not in baseline
+    assert "outp[i] = outp[i];" in baseline
+    assert baseline.count("fin[") == probe.count("fin[")
+
+
+def test_hlsl_stores_the_first_row_of_a_matrix_result():
+    # float3x2 in HLSL: two columns of three rows, so a row has two components.
+    source = probes.build(
+        feature("transpose", Type("float", (2, 3)), Type("float", (3, 2))), "hlsl"
+    ).source
+    assert "RWStructuredBuffer<float2> outp" in source
+    assert "float2x3 a0 = float2x3(float3(" in source
 
 
 SIGNATURES = [
@@ -89,4 +109,24 @@ SIGNATURES = [
 def test_glsl_probes_are_valid_glsl(probe_feature):
     probe = probes.build(probe_feature, "glsl")
     verdict = validators.validate("glsl", probe.source)
+    assert verdict.accepted, verdict.log
+
+
+HLSL_SIGNATURES = [
+    feature("lerp", VEC3, VEC3, VEC3, VEC3),
+    feature("transpose", Type("float", (2, 3)), Type("float", (3, 2))),
+    feature("any", Type("bool"), Type("bool", (3,))),
+    feature(
+        "InterlockedAdd", Type.other("void"), Param(Type("uint"), "inout"), Type("uint")
+    ),
+    feature("asdouble", Type("double", (2,)), Type("uint", (2,)), Type("uint", (2,))),
+]
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+@pytest.mark.parametrize("probe_feature", HLSL_SIGNATURES, ids=lambda f: f.name)
+@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
+def test_hlsl_probes_are_valid_hlsl(probe_feature, baseline):
+    probe = probes.build(probe_feature, "hlsl", baseline=baseline)
+    verdict = validators.validate("hlsl", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log

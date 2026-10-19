@@ -96,6 +96,8 @@ class Result:
     outcome: str
     detail: str = ""
     validator: str = ""
+    # The semantic feature id (:mod:`.semantic`), filled in for the output direction; empty when there is none.
+    semantic: str = ""
 
     def __post_init__(self):
         if self.outcome not in OUTCOMES:

@@ -1,0 +1,96 @@
+"""How one language spells a probe: types, expressions, statements and the kernel around them.
+
+:class:`Dialect` spells everything the way GLSL does; a language overrides only what it writes differently. The probe
+builder in :mod:`.probes` talks to a dialect and never to a language directly.
+"""
+
+from __future__ import annotations
+
+from .model import Type
+
+# A storage buffer as ``(element type spelling, name)``; buffer ``k`` is bound at binding ``k``.
+Buffer = tuple[str, str]
+
+
+class ProbeError(ValueError):
+    """The feature's signature cannot be expressed as a probe yet."""
+
+
+class NoSpelling(ProbeError):
+    """The language has no spelling for the operation, so the operation is a gap rather than an untested probe."""
+
+
+class Dialect:
+    language = ""
+    suffix = ""
+    entry = "main"
+    # HLSL builds matrices from rows and indexes rows; the others use columns.
+    rows_first = False
+    _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
+
+    def type(self, kind: Type) -> str:
+        if kind.opaque:
+            if kind.opaque == "void":
+                return "void"
+            raise ProbeError(f"no probe for parameters of type {kind.opaque}")
+        if not kind.shape:
+            return self.scalar(kind.scalar)
+        if len(kind.shape) == 1:
+            return self.vector(kind.scalar, kind.shape[0])
+        return self.matrix(kind.scalar, *kind.shape)
+
+    def scalar(self, scalar: str) -> str:
+        return scalar
+
+    def vector(self, scalar: str, size: int) -> str:
+        return f"{self._PREFIX[scalar]}vec{size}"
+
+    def matrix(self, scalar: str, columns: int, rows: int) -> str:
+        if scalar not in ("float", "double"):
+            raise ProbeError(f"{self.language} has no {scalar} matrices")
+        shape = f"{columns}" if columns == rows else f"{columns}x{rows}"
+        return f"{self._PREFIX[scalar]}mat{shape}"
+
+    def read(self, buffer: str, offset: int) -> str:
+        return f"{buffer}[i + {offset}u]"
+
+    def positive(self, value: str) -> str:
+        return f"({value} > 0.0)"
+
+    def construct(self, kind: Type, parts: list[str]) -> str:
+        return f"{self.type(kind)}({', '.join(parts)})"
+
+    def cast(self, kind: Type, value: str) -> str:
+        return f"{self.type(kind)}({value})"
+
+    def declare(self, kind: Type, name: str, value: str = "") -> str:
+        initial = f" = {value}" if value else ""
+        return f"{self.type(kind)} {name}{initial};"
+
+    def call(self, name: str, arguments: list[str]) -> str:
+        return f"{name}({', '.join(arguments)})"
+
+    def out_argument(self, name: str) -> str:
+        return name
+
+    def inout_argument(self) -> str:
+        return "outp[i]"
+
+    def to_int(self, condition: str) -> str:
+        return f"{condition} ? 1 : 0"
+
+    def first(self, vector: str) -> str:
+        return f"{vector}.x"
+
+    def part(self, matrix: str) -> str:
+        """The first column (or, for :attr:`rows_first` languages, row) of a matrix."""
+        return f"{matrix}[0]"
+
+    def store(self, value: str) -> str:
+        return f"outp[i] = {value};"
+
+    def statement(self, expression: str) -> str:
+        return f"{expression};"
+
+    def kernel(self, buffers: list[Buffer], body: list[str]) -> str:
+        raise NotImplementedError

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import probes, validators
 from .model import Feature, Result
+from .semantic import lower
 
 OUTPUT_BACKENDS = {
     "glsl": "opengl",
@@ -29,7 +30,10 @@ class Broken(Exception):
 
 
 def _first_line(error: BaseException, scratch: str) -> str:
-    text = str(error).replace(scratch + os.sep, "").strip().splitlines()
+    text = str(error)
+    if scratch:
+        text = text.replace(scratch + os.sep, "")
+    text = text.strip().splitlines()
     return f"{type(error).__name__}: {text[0][:300] if text else ''}".rstrip(": ")
 
 
@@ -70,16 +74,54 @@ def _validated(
     )
 
 
+def parse_crossgl(source: str) -> None:
+    """Parse a CrossGL probe, raising :class:`Refused` or :class:`Broken` like :func:`translate`."""
+    from crosstl.translator.source_registry import (
+        SOURCE_REGISTRY,
+        register_default_sources,
+    )
+
+    register_default_sources()
+    try:
+        SOURCE_REGISTRY.get("cgl").parse(source)
+    except Exception as error:  # noqa: BLE001 - every failure is classified
+        code = getattr(error, "project_diagnostic_code", None)
+        detail = f"CrossGL does not parse the probe: {_first_line(error, '')}"
+        if isinstance(code, str) and code:
+            raise Refused(f"{code}: {detail}") from error
+        raise Broken(detail) from error
+
+
+def _native_rejection(feature: Feature, language: str) -> str:
+    """Why the target rejects the feature's own probe, or an empty string when it accepts it or cannot tell."""
+    if language not in probes.DIALECTS or not validators.available(language):
+        return ""
+    try:
+        native = probes.build(feature, language)
+    except probes.ProbeError:
+        return ""
+    verdict = _validated(language, native.source, feature.stage, native.entry)
+    return "" if verdict.accepted else verdict.log
+
+
 def run_output(feature: Feature, language: str) -> Result:
+    semantic, _ = lower(feature)
+
     def result(outcome: str, detail: str = "") -> Result:
         tool = validators.TOOLS[language] if outcome in ("supported", "wrong") else ""
-        return Result(feature, "output", outcome, detail, tool)
+        return Result(feature, "output", outcome, detail, tool, semantic)
 
     try:
         probe = probes.build(feature, "crossgl")
+    except probes.NoSpelling as error:
+        return result("refused", str(error))
     except probes.ProbeError as error:
         return result("untested", str(error))
+    rejected = _native_rejection(feature, language)
+    if rejected:
+        return result("untested", f"the probe itself is rejected: {rejected}")
     try:
+        parse_crossgl(probe.source)
         translated = translate(
             probe.source, probe.suffix, OUTPUT_BACKENDS[language], "cgl"
         )

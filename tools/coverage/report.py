@@ -7,7 +7,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import upstream, validators
+from . import ir, upstream, validators
 from .model import OUTCOMES, Result, Score
 
 SCHEMA = 1
@@ -77,14 +77,19 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
                             "outcome": r.outcome,
                             **({"detail": r.detail} if r.detail else {}),
                             **({"validator": r.validator} if r.validator else {}),
+                            **({"semantic": r.semantic} if r.semantic else {}),
                         }
                         for r in group
                     ],
                 }
             )
+    expressiveness = ir.build(backends)
+    if expressiveness:
+        backends.append(expressiveness)
     tools = sorted(
         {validators.TOOLS[language] for language in languages}
         | ({"spirv-as"} if "spirv" in languages else set())
+        | ({"spirv-dis"} if set(languages) & set(validators.SPIRV_COMPILERS) else set())
     )
     return {
         "schema": SCHEMA,
@@ -118,7 +123,11 @@ def summary(report: dict) -> str:
         f"{'backend':<16}{'score':>7}  " + "  ".join(f"{name:>9}" for name in OUTCOMES)
     ]
     for backend in report["backends"]:
-        label = f"{backend['language']} {backend['direction']}"
+        label = (
+            "CrossGL IR"
+            if backend["language"] == ir.LANGUAGE
+            else f"{backend['language']} {backend['direction']}"
+        )
         if not backend["offered"]:
             lines.append(f"{label:<16}{'-':>7}  not offered: {backend['reason']}")
             continue

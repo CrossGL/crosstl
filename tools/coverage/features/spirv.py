@@ -25,14 +25,17 @@ RENAMED = {
     "FindSMsb": "findMSB",
     "FindUMsb": "findMSB",
 }
-# Instructions no CrossGL built-in maps to, with the reason.
+# Instructions that are not operations of their own, with the reason.
 UNREACHABLE = {
     "IMix": "reserved by the GLSL.std.450 specification, not a valid instruction",
     "ModfStruct": "alternative encoding of Modf, chosen by the compiler",
     "FrexpStruct": "alternative encoding of Frexp, chosen by the compiler",
-    "NMin": "NaN-aware min has no GLSL built-in",
-    "NMax": "NaN-aware max has no GLSL built-in",
-    "NClamp": "NaN-aware clamp has no GLSL built-in",
+}
+# Operations CrossGL has no spelling for: the GLSL built-in whose signature the probe would use, and the reason.
+UNSPELLED = {
+    "NMin": ("min", "NaN-aware min has no GLSL built-in"),
+    "NMax": ("max", "NaN-aware max has no GLSL built-in"),
+    "NClamp": ("clamp", "NaN-aware clamp has no GLSL built-in"),
 }
 _TYPED = re.compile(r"(F|S|U)([A-Z]\w*)")
 _PREFIX_SCALAR = {"F": "float", "S": "int", "U": "uint"}
@@ -54,6 +57,8 @@ def _retyped(signature: Signature, scalar: str) -> Signature:
 
 def _match(opname: str, operands: int, functions: dict) -> tuple[str, str]:
     """The GLSL function and operand scalar type an instruction corresponds to."""
+    if opname in UNSPELLED:
+        return UNSPELLED[opname][0], "float"
     if opname in RENAMED:
         prefix = (
             "U"
@@ -133,8 +138,9 @@ def parse(grammar_text: str, glsl_text: str) -> list[Feature]:
                 opname,
                 pick(candidates),
                 group=group,
-                crossgl=name,
+                crossgl="" if opname in UNSPELLED else name,
                 stage=glsl.STAGES.get(section, "compute"),
+                note=UNSPELLED[opname][1] if opname in UNSPELLED else "",
             )
         )
     return sorted(features, key=lambda f: f.name)

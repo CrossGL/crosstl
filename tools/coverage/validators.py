@@ -155,3 +155,62 @@ def validate(
         if not assembled.accepted:
             return assembled
         return _run([*command("spirv-val"), *environment, "probe.spv"], scratch)
+
+
+# How each language's reference compiler lowers a compute probe to SPIR-V; ``{source}`` and ``{entry}`` are filled in.
+SPIRV_COMPILERS = {
+    "glsl": (
+        "glslangValidator",
+        ("-V", "--target-env", SPIRV_ENVIRONMENT, "{source}", "-o", "probe.spv"),
+    ),
+    "hlsl": (
+        "dxc",
+        (
+            "-spirv",
+            "-T",
+            HLSL_PROFILES["compute"],
+            "-E",
+            "{entry}",
+            "-HV",
+            "2021",
+            "-O0",
+            "-fspv-target-env=" + SPIRV_ENVIRONMENT,
+            "{source}",
+            "-Fo",
+            "probe.spv",
+        ),
+    ),
+}
+
+
+def can_lower(language: str) -> bool:
+    compiler = SPIRV_COMPILERS.get(language)
+    return bool(compiler and command(compiler[0]) and command("spirv-dis"))
+
+
+def lower(language: str, source: str, entry: str = "main") -> tuple[str, str]:
+    """Compile a compute probe to SPIR-V and disassemble it: ``(assembly, "")`` on success, ``("", log)`` if not.
+
+    Call only when :func:`can_lower` is true.
+    """
+    tool, arguments = SPIRV_COMPILERS[language]
+    name = "probe" + (".comp" if language == "glsl" else SUFFIX[language])
+    with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
+        Path(scratch, name).write_text(source)
+        filled = [a.format(source=name, entry=entry) for a in arguments]
+        compiled = _run([*command(tool), *filled], scratch)
+        if not compiled.accepted:
+            return "", compiled.log
+        try:
+            result = subprocess.run(
+                [*command("spirv-dis"), "--raw-id", "probe.spv"],
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT,
+                cwd=scratch,
+            )
+        except subprocess.TimeoutExpired:
+            return "", f"spirv-dis timed out after {TIMEOUT} s"
+        if result.returncode != 0:
+            return "", result.stderr.strip()[-2000:]
+        return result.stdout, ""
