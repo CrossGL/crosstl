@@ -1,0 +1,78 @@
+id	name	category	kind	reference	note
+glsl.type.struct	struct	type	aggregate	Structures
+glsl.type.array	array	type	aggregate	Arrays
+glsl.operator.length-method	length()	operator	method	The *length*() Method
+glsl.operator.implicit-conversion	implicit conversion	operator	conversion	Implicit Conversions
+glsl.declaration.initializer	initializer	declaration	initializer	Initializers
+glsl.declaration.const	const variable	declaration	variable	Constant Qualifier
+glsl.declaration.interface-block	interface block	declaration	block	Interface Blocks
+glsl.declaration.specialization-constant	constant_id	declaration	specialization	Specialization-Constant Qualifier
+glsl.qualifier.invariant	invariant	qualifier	invariance	The Invariant Qualifier
+glsl.qualifier.precise	precise	qualifier	precise	The Precise Qualifier
+glsl.declaration.default-precision	precision statement	declaration	precision	Default Precision Qualifiers
+glsl.declaration.function-definition	function definition	declaration	function	Function Definitions
+glsl.declaration.function-prototype	function prototype	declaration	function	Function Definitions
+glsl.declaration.subroutine	subroutine	declaration	function	Subroutines
+glsl.statement.if	if / else	statement	selection	Selection
+glsl.statement.switch	switch / case / default	statement	selection	Selection
+glsl.statement.for	for	statement	iteration	Iteration
+glsl.statement.while	while	statement	iteration	Iteration
+glsl.statement.do-while	do / while	statement	iteration	Iteration
+glsl.statement.break	break	statement	jump	Jumps
+glsl.statement.continue	continue	statement	jump	Jumps
+glsl.statement.return	return	statement	jump	Jumps
+glsl.statement.discard	discard	statement	jump	Jumps
+glsl.statement.compound	compound statement	statement	block	Statements and Structure
+glsl.operator.function-call	function call	operator	call	Function Calls
+glsl.operator.constructor-scalar	scalar constructor	operator	constructor	Conversion and Scalar Constructors
+glsl.operator.constructor-vector-matrix	vector and matrix constructor	operator	constructor	Vector and Matrix Constructors
+glsl.operator.constructor-structure	structure constructor	operator	constructor	Structure Constructors
+glsl.operator.constructor-array	array constructor	operator	constructor	Array Constructors
+glsl.operator.constructor-sampler	texture-combined sampler constructor	operator	constructor	Texture-Combined Sampler Constructors
+glsl.operator.swizzle	vector component selection (swizzle)	operator	selection	Vector Components
+glsl.operator.matrix-component	matrix column and component selection	operator	selection	Matrix Components
+glsl.operator.structure-array	structure field and array element	operator	selection	Structure and Array Operations
+glsl.operator.assignment	=	operator	assignment	Assignments
+glsl.operator.vector-matrix	component-wise and linear-algebraic operations	operator	arithmetic	Vector and Matrix Operations
+glsl.operator.parenthetical-grouping	()	operator	operator	Operators	parenthetical grouping
+glsl.operator.array-subscript	[]	operator	operator	Operators	array subscript
+glsl.operator.field-or-method-selector	.	operator	operator	Operators	field or method selector
+glsl.operator.post-increment	x++	operator	operator	Operators	post-increment
+glsl.operator.post-decrement	x--	operator	operator	Operators	post-decrement
+glsl.operator.pre-increment	++x	operator	operator	Operators	pre-increment
+glsl.operator.pre-decrement	--x	operator	operator	Operators	pre-decrement
+glsl.operator.unary-plus	+x	operator	operator	Operators	unary plus
+glsl.operator.unary-minus	-x	operator	operator	Operators	unary minus
+glsl.operator.bitwise-not	~	operator	operator	Operators	bitwise not
+glsl.operator.logical-not	!	operator	operator	Operators	logical not
+glsl.operator.multiply	*	operator	operator	Operators	multiply
+glsl.operator.divide	/	operator	operator	Operators	divide
+glsl.operator.remainder	%	operator	operator	Operators	remainder
+glsl.operator.add	+	operator	operator	Operators	add
+glsl.operator.subtract	-	operator	operator	Operators	subtract
+glsl.operator.shift-left	<<	operator	operator	Operators	shift left
+glsl.operator.shift-right	>>	operator	operator	Operators	shift right
+glsl.operator.less-than	<	operator	operator	Operators	less than
+glsl.operator.greater-than	>	operator	operator	Operators	greater than
+glsl.operator.less-than-or-equal	<=	operator	operator	Operators	less than or equal
+glsl.operator.greater-than-or-equal	>=	operator	operator	Operators	greater than or equal
+glsl.operator.equal	==	operator	operator	Operators	equal
+glsl.operator.not-equal	!=	operator	operator	Operators	not equal
+glsl.operator.bitwise-and	&	operator	operator	Operators	bitwise and
+glsl.operator.bitwise-exclusive-or	^	operator	operator	Operators	bitwise exclusive or
+glsl.operator.bitwise-inclusive-or	|	operator	operator	Operators	bitwise inclusive or
+glsl.operator.logical-and	&&	operator	operator	Operators	logical and
+glsl.operator.logical-exclusive-or	^^	operator	operator	Operators	logical exclusive or
+glsl.operator.logical-inclusive-or	||	operator	operator	Operators	logical inclusive or
+glsl.operator.selection	?:	operator	operator	Operators	selection
+glsl.operator.add-assign	+=	operator	operator	Operators	add assign
+glsl.operator.subtract-assign	-=	operator	operator	Operators	subtract assign
+glsl.operator.multiply-assign	*=	operator	operator	Operators	multiply assign
+glsl.operator.divide-assign	/=	operator	operator	Operators	divide assign
+glsl.operator.remainder-assign	%=	operator	operator	Operators	remainder assign
+glsl.operator.shift-left-assign	<<=	operator	operator	Operators	shift left assign
+glsl.operator.shift-right-assign	>>=	operator	operator	Operators	shift right assign
+glsl.operator.and-assign	&=	operator	operator	Operators	and assign
+glsl.operator.exclusive-or-assign	^=	operator	operator	Operators	exclusive or assign
+glsl.operator.inclusive-or-assign	|=	operator	operator	Operators	inclusive or assign
+glsl.operator.sequence	,	operator	operator	Operators	sequence

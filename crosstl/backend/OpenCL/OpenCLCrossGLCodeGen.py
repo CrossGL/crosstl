@@ -18,6 +18,7 @@ from crosstl.backend.HIP.HipAst import (
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
+from .conversions import format_conversion, is_conversion_name
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
@@ -783,6 +784,10 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            if is_conversion_name(func_name) and len(raw_args) == 1:
+                return format_conversion(
+                    func_name, self.visit(raw_args[0]), self.convert_hip_type_to_crossgl
+                )
             if func_name == "sizeof":
                 sizeof_value = self.format_opencl_sizeof_call(raw_args)
                 if sizeof_value is not None:

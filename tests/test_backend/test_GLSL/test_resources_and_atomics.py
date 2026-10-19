@@ -6,14 +6,19 @@ import pytest
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.translator.codegen.buffer_block_diagnostics import (
+    BufferBlockUnsupportedError,
+)
 from crosstl.translator.codegen.directx_codegen import (
-    DirectXTextureOffsetError,
     HLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from crosstl.translator.semantics.unsized_arrays import UnsizedArrayUnsupportedError
+from tests.lowering_refusal_helpers import glsl_partial_output, hlsl_partial_output
+from tests.metal_refusal_helpers import metal_partial_output
 
 RESOURCE_GLSL = """
 #version 450 core
@@ -62,11 +67,10 @@ def normalize_codegen_snapshot(code: str):
     return "\n".join(line.rstrip() for line in dedent(code).strip().splitlines())
 
 
-def glsl_dynamic_texel_offset_diagnostic(category, operation, zero_value):
+def glsl_dynamic_texel_offset_diagnostic(category, operation, _placeholder=None):
+    """The refusal reason for a texel offset that is not a compile-time constant."""
     return (
-        f"/* unsupported GLSL {category}: {operation} "
-        "texel offsets must be compile-time integer constants */ "
-        f"{zero_value}"
+        f"{category}: {operation} texel offsets must be compile-time integer constants"
     )
 
 
@@ -885,15 +889,14 @@ def test_codegen_mixed_ssbo_metal_readonly_blocks_use_const_device_pointer():
     void main() {
         uint i = metalReadBlock.count;
         float v = metalReadBlock.values[i];
-        metalReadBlock.values[i] = v;
+        WRITE
     }
     """
 
-    crossgl = generate_crossgl(code, "compute")
-    shader_ast = parse_crossgl(crossgl)
-    assert shader_ast is not None
+    reads = parse_crossgl(generate_crossgl(code.replace("WRITE", ""), "compute"))
+    assert reads is not None
 
-    metal = MetalCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(reads)
     assert "const device uchar* metalReadBlock [[buffer(43)]]" in metal
     assert (
         "uint i = (*reinterpret_cast<const device uint*>(metalReadBlock + 0));" in metal
@@ -902,7 +905,13 @@ def test_codegen_mixed_ssbo_metal_readonly_blocks_use_const_device_pointer():
         "float v = (*reinterpret_cast<const device float*>"
         "(metalReadBlock + (4 + i * 4)));" in metal
     )
-    assert "readonly device buffer cannot be written" in metal
+
+    write = code.replace("WRITE", "metalReadBlock.values[i] = v;")
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: metalReadBlock is a readonly block",
+    ):
+        MetalCodeGen().generate(parse_crossgl(generate_crossgl(write, "compute")))
 
 
 def test_codegen_mixed_ssbo_metal_fixed_vector_array_compound_store_uses_temp():
@@ -966,11 +975,11 @@ def test_codegen_mixed_ssbo_metal_fixed_vector_float_mod_compound_is_diagnostic(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    metal = MetalCodeGen().generate(shader_ast)
-    assert "device uchar* metalFixedVectorOpsBlock [[buffer(67)]]" in metal
-    assert "unsupported Metal GLSL buffer block compound store" in metal
-    assert "operator %= is not supported for float buffer members" in metal
-    assert "reinterpret_cast<device float*>" not in metal
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block compound store: operator %= is not supported for float",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_metal_readonly_fixed_vector_write_is_diagnostic():
@@ -992,10 +1001,11 @@ def test_codegen_mixed_ssbo_metal_readonly_fixed_vector_write_is_diagnostic():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    metal = MetalCodeGen().generate(shader_ast)
-    assert "const device uchar* metalReadFixedVectorBlock [[buffer(68)]]" in metal
-    assert "readonly device buffer cannot be written" in metal
-    assert "reinterpret_cast<device float*>" not in metal
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: metalReadFixedVectorBlock is a readonly",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_metal_float_compound_unsupported_op_stays_diagnostic():
@@ -1016,11 +1026,11 @@ def test_codegen_mixed_ssbo_metal_float_compound_unsupported_op_stays_diagnostic
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    metal = MetalCodeGen().generate(shader_ast)
-    assert "device uchar* metalFloatOpsBlock [[buffer(62)]]" in metal
-    assert "unsupported Metal GLSL buffer block compound store" in metal
-    assert "operator %= is not supported for float buffer members" in metal
-    assert "reinterpret_cast<device float*>" not in metal
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block compound store: operator %= is not supported for float",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_metal_integer_mod_compound_store_is_supported():
@@ -1230,11 +1240,11 @@ def test_codegen_mixed_ssbo_metal_matrix_compound_unsupported_op_stays_diagnosti
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    metal = MetalCodeGen().generate(shader_ast)
-    assert "device uchar* metalMatrixBlock [[buffer(48)]]" in metal
-    assert "unsupported Metal GLSL buffer block matrix compound store" in metal
-    assert "__crossgl_matrix_store_0" not in metal
-    assert "(*reinterpret_cast<device float*>(metalMatrixBlock + 16)) =" not in metal
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block matrix compound store: operator %= has no matrix form \(GLSL",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_metal_fixed_matrix_arrays_use_column_offsets():
@@ -1349,15 +1359,11 @@ def test_codegen_mixed_ssbo_metal_readonly_fixed_matrix_array_write_is_diagnosti
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    metal = MetalCodeGen().generate(shader_ast)
-    assert "const device uchar* metalReadMatrixArrayBlock [[buffer(50)]]" in metal
-    assert "float4x4 selected = float4x4(" in metal
-    assert (
-        "(*reinterpret_cast<const device float*>"
-        "(metalReadMatrixArrayBlock + (i * 64)))" in metal
-    )
-    assert "readonly device buffer cannot be written" in metal
-    assert "(*reinterpret_cast<device float*>" not in metal
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: metalReadMatrixArrayBlock is a readonly",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_metal_readonly_runtime_matrix_array_write_is_diagnostic():
@@ -1379,15 +1385,11 @@ def test_codegen_mixed_ssbo_metal_readonly_runtime_matrix_array_write_is_diagnos
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    metal = MetalCodeGen().generate(shader_ast)
-    assert "const device uchar* metalRuntimeMatrixBlock [[buffer(51)]]" in metal
-    assert "float4x4 selected = float4x4(" in metal
-    assert (
-        "(*reinterpret_cast<const device float*>"
-        "(metalRuntimeMatrixBlock + (16 + i * 64)))" in metal
-    )
-    assert "readonly device buffer cannot be written" in metal
-    assert "(*reinterpret_cast<device float*>" not in metal
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: metalRuntimeMatrixBlock is a readonly",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_directx_metal_fixed_vec3_snapshot():
@@ -2932,8 +2934,16 @@ def test_codegen_mixed_ssbo_helper_readonly_array_write_stays_diagnostic():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: helperReadonlyBlocks\[1\] is a readonly",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: helperReadonlyBlocks\[1\] is a readonly",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     with pytest.raises(
         ValueError,
         match=(
@@ -2943,16 +2953,6 @@ def test_codegen_mixed_ssbo_helper_readonly_array_write_stays_diagnostic():
         ),
     ):
         GLSLCodeGen().generate(shader_ast)
-
-    assert "ByteAddressBuffer helperReadonlyBlocks[2] : register(t81);" in hlsl
-    assert "RWByteAddressBuffer helperReadonlyBlocks" not in hlsl
-    assert "readonly ByteAddressBuffer cannot be written" in hlsl
-    assert "helperReadonlyBlocks[1].Store" not in hlsl
-
-    assert "array<const device uchar*, 2> helperReadonlyBlocks [[buffer(81)]]" in metal
-    assert "array<device uchar*, 2> helperReadonlyBlocks" not in metal
-    assert "readonly device buffer cannot be written" in metal
-    assert "reinterpret_cast<device float*>" not in metal
 
 
 def test_codegen_mixed_ssbo_helper_matrix_array_store_uses_indexed_receiver():
@@ -3074,8 +3074,16 @@ def test_codegen_mixed_ssbo_helper_readonly_matrix_array_write_stays_diagnostic(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: helperReadMatrixBlocks\[1\] is a readonly",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: helperReadMatrixBlocks\[1\] is a readonly",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     with pytest.raises(
         ValueError,
         match=(
@@ -3085,18 +3093,6 @@ def test_codegen_mixed_ssbo_helper_readonly_matrix_array_write_stays_diagnostic(
         ),
     ):
         GLSLCodeGen().generate(shader_ast)
-
-    assert "ByteAddressBuffer helperReadMatrixBlocks[2] : register(t84);" in hlsl
-    assert "RWByteAddressBuffer helperReadMatrixBlocks" not in hlsl
-    assert "readonly ByteAddressBuffer cannot be written" in hlsl
-    assert "helperReadMatrixBlocks[1].Store" not in hlsl
-
-    assert (
-        "array<const device uchar*, 2> helperReadMatrixBlocks [[buffer(84)]]" in metal
-    )
-    assert "array<device uchar*, 2> helperReadMatrixBlocks" not in metal
-    assert "readonly device buffer cannot be written" in metal
-    assert "reinterpret_cast<device float*>" not in metal
 
 
 def test_codegen_mixed_ssbo_helper_matrix_array_unsupported_compound_is_diagnostic():
@@ -3121,22 +3117,17 @@ def test_codegen_mixed_ssbo_helper_matrix_array_unsupported_compound_is_diagnost
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block matrix compound store: operator %= has no matrix form \(GLSL",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block matrix compound store: operator %= has no matrix form \(GLSL",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "RWByteAddressBuffer helperMatrixUnsupportedBlocks[2] : register(u85);" in hlsl
-    )
-    assert "unsupported HLSL GLSL buffer block matrix compound store" in hlsl
-    assert "helperMatrixUnsupportedBlocks[1].Store" not in hlsl
-
-    assert (
-        "array<device uchar*, 2> helperMatrixUnsupportedBlocks [[buffer(85)]]" in metal
-    )
-    assert "unsupported Metal GLSL buffer block matrix compound store" in metal
-    assert "reinterpret_cast<device float*>" not in metal
-
     assert "layout(std430, binding = 85) buffer HelperMatrixUnsupportedBlock" in glsl
     assert "helperMatrixUnsupportedBlocks[1].transforms[i] %= value;" in glsl
 
@@ -3477,20 +3468,17 @@ def test_codegen_mixed_ssbo_explicit_readonly_block_array_parameter_write_stays_
     shader_ast = parse_crossgl(dedent(crossgl))
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: localBlocks\[1\] is a readonly block, and",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(dedent(crossgl)))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: localBlocks\[1\] is a readonly block, and",
+    ):
+        MetalCodeGen().generate(parse_crossgl(dedent(crossgl)))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "ByteAddressBuffer blocks[2] : register(t92);" in hlsl
-    assert "void writeTo(ByteAddressBuffer localBlocks[2], uint i)" in hlsl
-    assert "readonly ByteAddressBuffer cannot be written" in hlsl
-    assert "localBlocks[1].Store" not in hlsl
-
-    assert "array<const device uchar*, 2> blocks [[buffer(92)]]" in metal
-    assert "void writeTo(array<const device uchar*, 2> localBlocks, uint i)" in metal
-    assert "readonly device buffer cannot be written" in metal
-    assert "reinterpret_cast<device float*>" not in metal
-
     assert "void writeTo(ParamReadOnlyBlock localBlocks[], uint i)" in glsl
     assert "localBlocks[1].values[i] = vec4(1.0);" in glsl
     assert "glsl_buffer_block" not in glsl
@@ -3606,7 +3594,7 @@ def test_codegen_mixed_ssbo_explicit_single_block_parameter_forwards_array_eleme
     assert "glsl_buffer_block" not in glsl
 
 
-def test_codegen_mixed_ssbo_unsupported_explicit_parameters_are_diagnostic():
+def test_codegen_mixed_ssbo_unsupported_explicit_parameters_are_refused():
     crossgl = """
     shader main {
         struct UnsupportedParamBlock {
@@ -3638,114 +3626,17 @@ def test_codegen_mixed_ssbo_unsupported_explicit_parameters_are_diagnostic():
     }
     """
 
-    shader_ast = parse_crossgl(dedent(crossgl))
-    assert shader_ast is not None
-
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "unsupported HLSL GLSL buffer block parameter UnsupportedParamBlock "
-        "localBlock (std430)" in hlsl
-    )
-    assert (
-        "unsupported HLSL GLSL buffer block parameter UnsupportedParamBlock "
-        "localBlocks (std430)" in hlsl
-    )
-    assert (
-        "unsupported member flag: type is not supported by ByteAddressBuffer lowering"
-        in hlsl
-    )
-    assert (
-        "unsupported HLSL GLSL buffer block struct UnsupportedParamBlock omitted"
-        in hlsl
-    )
-    assert (
-        "unsupported HLSL GLSL buffer block variable UnsupportedParamBlock block omitted"
-        in hlsl
-    )
-    assert "unsupported HLSL GLSL buffer block function readSingle omitted" in hlsl
-    assert "unsupported HLSL GLSL buffer block function readArray omitted" in hlsl
-    assert "unsupported HLSL GLSL buffer block function makeBlock omitted" in hlsl
-    assert "struct UnsupportedParamBlock {" not in hlsl
-    assert "UnsupportedParamBlock block;" not in hlsl
-    assert "float readSingle(UnsupportedParamBlock localBlock, uint i)" not in hlsl
-    assert "float readArray(UnsupportedParamBlock localBlocks[], uint i)" not in hlsl
-    assert "UnsupportedParamBlock makeBlock()" not in hlsl
-    assert (
-        "float value = 0 /* unsupported HLSL GLSL buffer block function call "
-        "readSingle: target function omitted */;" in hlsl
-    )
-    assert (
-        "/* unsupported HLSL GLSL buffer block local variable UnsupportedParamBlock "
-        "tmpBlock omitted: no target-side fallback declaration emitted */;" in hlsl
-    )
-    assert (
-        "float fromLocal = 0 /* unsupported HLSL GLSL buffer block access tmpBlock: "
-        "no target-side fallback declaration emitted */;" in hlsl
-    )
-    assert "return localBlock.values[i];" not in hlsl
-    assert "return localBlocks[0].values[i];" not in hlsl
-    assert "UnsupportedParamBlock tmpBlock = makeBlock();" not in hlsl
-    assert "tmpBlock.values[0]" not in hlsl
-    assert "readSingle(block, 0u)" not in hlsl
-
-    assert (
-        "unsupported Metal GLSL buffer block parameter UnsupportedParamBlock "
-        "localBlock (std430)" in metal
-    )
-    assert (
-        "unsupported Metal GLSL buffer block parameter UnsupportedParamBlock "
-        "localBlocks (std430)" in metal
-    )
-    assert (
-        "unsupported member flag: type is not supported by Metal pointer/offset lowering"
-        in metal
-    )
-    assert (
-        "unsupported Metal GLSL buffer block struct UnsupportedParamBlock omitted"
-        in metal
-    )
-    assert (
-        "unsupported Metal GLSL buffer block variable UnsupportedParamBlock block omitted"
-        in metal
-    )
-    assert "unsupported Metal GLSL buffer block function readSingle omitted" in metal
-    assert "unsupported Metal GLSL buffer block function readArray omitted" in metal
-    assert "unsupported Metal GLSL buffer block function makeBlock omitted" in metal
-    assert "struct UnsupportedParamBlock {" not in metal
-    assert "UnsupportedParamBlock block;" not in metal
-    assert "float readSingle(UnsupportedParamBlock localBlock, uint i)" not in metal
-    assert "float readArray(UnsupportedParamBlock localBlocks[], uint i)" not in metal
-    assert "UnsupportedParamBlock makeBlock()" not in metal
-    assert (
-        "float value = 0 /* unsupported Metal GLSL buffer block function call "
-        "readSingle: target function omitted */;" in metal
-    )
-    assert (
-        "/* unsupported Metal GLSL buffer block local variable UnsupportedParamBlock "
-        "tmpBlock omitted: no target-side fallback declaration emitted */;" in metal
-    )
-    assert (
-        "float fromLocal = 0 /* unsupported Metal GLSL buffer block access tmpBlock: "
-        "no target-side fallback declaration emitted */;" in metal
-    )
-    assert "return localBlock.values[i];" not in metal
-    assert "return localBlocks[0].values[i];" not in metal
-    assert "UnsupportedParamBlock tmpBlock = makeBlock();" not in metal
-    assert "tmpBlock.values[0]" not in metal
-    assert "readSingle(block, 0u)" not in metal
-
-    assert "layout(std430, binding = 95) buffer UnsupportedParamBlock" in glsl
-    assert "} block;" in glsl
-    assert "float readSingle(UnsupportedParamBlock localBlock, uint i)" in glsl
-    assert "float readArray(UnsupportedParamBlock localBlocks[], uint i)" in glsl
-    assert "UnsupportedParamBlock makeBlock()" in glsl
-    assert "float value = readSingle(block, 0u);" in glsl
-    assert "UnsupportedParamBlock tmpBlock = makeBlock();" in glsl
-    assert "float fromLocal = tmpBlock.values[0];" in glsl
-    assert "glsl_buffer_block" not in glsl
+    # The block's double member has no byte-offset lowering on HLSL or Metal, and GLSL has no
+    # interface-block types for parameters, returns or locals: every target refuses with a typed
+    # diagnostic instead of omitting the block and zeroing its uses.
+    for generator, error, pattern in (
+        (HLSLCodeGen, BufferBlockUnsupportedError, r"directx-buffer-block-unsupported"),
+        (MetalCodeGen, BufferBlockUnsupportedError, r"metal-buffer-block-unsupported"),
+        (GLSLCodeGen, UnsizedArrayUnsupportedError, r"UnsupportedParamBlock\.values"),
+    ):
+        shader_ast = parse_crossgl(dedent(crossgl))
+        with pytest.raises(error, match=pattern):
+            generator().generate(shader_ast)
 
 
 def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
@@ -3789,124 +3680,17 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedVectorBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedVectorBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "bool choose = true;" in hlsl
-    assert (
-        "dot(float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block access block: "
-        "no target-side fallback declaration emitted */, "
-        "float4(1.0, 1.0, 1.0, 1.0))" in hlsl
-    )
-    assert (
-        "dot(float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block function call "
-        "readParam: target function omitted */, "
-        "float4(1.0, 1.0, 1.0, 1.0))" in hlsl
-    )
-    assert "dot(0 /* unsupported HLSL GLSL buffer block access block" not in hlsl
-    assert (
-        "dot(0 /* unsupported HLSL GLSL buffer block function call readParam"
-        not in hlsl
-    )
-    assert (
-        "float viaScalar = 0 /* unsupported HLSL GLSL buffer block access scalarBlock: "
-        "no target-side fallback declaration emitted */;" in hlsl
-    )
-    assert (
-        "float4 viaVectorAdd = (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "access block: no target-side fallback declaration emitted */ + 0 "
-        "/* unsupported HLSL GLSL buffer block access scalarBlock: no target-side "
-        "fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "float4 viaFunctionAdd = (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "function call readParam: target function omitted */ + 0 "
-        "/* unsupported HLSL GLSL buffer block access scalarBlock: no target-side "
-        "fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "float viaScalarAdd = (0 /* unsupported HLSL GLSL buffer block access "
-        "scalarBlock: no target-side fallback declaration emitted */ + 1.0);" in hlsl
-    )
-    assert (
-        "float4 viaTernaryAccess = (choose ? float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL "
-        "GLSL buffer block access block: no target-side fallback declaration "
-        "emitted */ : float4(1.0, 1.0, 1.0, 1.0));" in hlsl
-    )
-    assert (
-        "float4 viaTernaryCall = (choose ? float4(1.0, 1.0, 1.0, 1.0) : float4(0.0, 0.0, 0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readParam: "
-        "target function omitted */);" in hlsl
-    )
-    assert (
-        "float viaTernaryScalar = (choose ? 0 /* unsupported HLSL GLSL buffer "
-        "block access scalarBlock: no target-side fallback declaration emitted */ "
-        ": 1.0);" in hlsl
-    )
-    assert (
-        "float viaTernarySwizzle = (choose ? 0 /* unsupported HLSL GLSL buffer "
-        "block access block: no target-side fallback declaration emitted */ : 0 "
-        "/* unsupported HLSL GLSL buffer block access scalarBlock: no target-side "
-        "fallback declaration emitted */);" in hlsl
-    )
-
-    assert "bool choose = true;" in metal
-    assert (
-        "dot(float4(0) /* unsupported Metal GLSL buffer block access block: "
-        "no target-side fallback declaration emitted */, float4(1.0))" in metal
-    )
-    assert (
-        "dot(float4(0) /* unsupported Metal GLSL buffer block function call "
-        "readParam: target function omitted */, float4(1.0))" in metal
-    )
-    assert "dot(0 /* unsupported Metal GLSL buffer block access block" not in metal
-    assert (
-        "dot(0 /* unsupported Metal GLSL buffer block function call readParam"
-        not in metal
-    )
-    assert (
-        "float viaScalar = 0 /* unsupported Metal GLSL buffer block access scalarBlock: "
-        "no target-side fallback declaration emitted */;" in metal
-    )
-    assert (
-        "float4 viaVectorAdd = float4(0) /* unsupported Metal GLSL buffer block "
-        "access block: no target-side fallback declaration emitted */ + float4(0 "
-        "/* unsupported Metal GLSL buffer block access scalarBlock: no target-side "
-        "fallback declaration emitted */);" in metal
-    )
-    assert (
-        "float4 viaFunctionAdd = float4(0) /* unsupported Metal GLSL buffer block "
-        "function call readParam: target function omitted */ + float4(0 "
-        "/* unsupported Metal GLSL buffer block access scalarBlock: no target-side "
-        "fallback declaration emitted */);" in metal
-    )
-    assert (
-        "float viaScalarAdd = 0 /* unsupported Metal GLSL buffer block access "
-        "scalarBlock: no target-side fallback declaration emitted */ + 1.0;" in metal
-    )
-    assert (
-        "float4 viaTernaryAccess = choose ? float4(0) /* unsupported Metal "
-        "GLSL buffer block access block: no target-side fallback declaration "
-        "emitted */ : float4(1.0);" in metal
-    )
-    assert (
-        "float4 viaTernaryCall = choose ? float4(1.0) : float4(0) "
-        "/* unsupported Metal GLSL buffer block function call readParam: "
-        "target function omitted */;" in metal
-    )
-    assert (
-        "float viaTernaryScalar = choose ? 0 /* unsupported Metal GLSL buffer "
-        "block access scalarBlock: no target-side fallback declaration emitted */ "
-        ": 1.0;" in metal
-    )
-    assert (
-        "float viaTernarySwizzle = choose ? 0 /* unsupported Metal GLSL buffer "
-        "block access block: no target-side fallback declaration emitted */ : 0 "
-        "/* unsupported Metal GLSL buffer block access scalarBlock: no target-side "
-        "fallback declaration emitted */;" in metal
-    )
-
     assert "bool choose = true;" in glsl
     assert "float viaAccess = dot(block.values[0], vec4(1.0));" in glsl
     assert "float viaCall = dot(readParam(block, 0u), vec4(1.0));" in glsl
@@ -3961,54 +3745,17 @@ def test_codegen_mixed_ssbo_unsupported_bool_conditions_are_boolean_diagnostics(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedBoolBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedBoolBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "if (false /* unsupported HLSL GLSL buffer block access boolBlock: "
-        "no target-side fallback declaration emitted */)" in hlsl
-    )
-    assert (
-        "if (false /* unsupported HLSL GLSL buffer block function call readFlag: "
-        "target function omitted */)" in hlsl
-    )
-    assert (
-        "if (false /* unsupported HLSL GLSL buffer block access boolBlock: "
-        "no target-side fallback declaration emitted */ && false /* unsupported "
-        "HLSL GLSL buffer block function call readFlag: target function omitted */)"
-        in hlsl
-    )
-    assert (
-        "while (false /* unsupported HLSL GLSL buffer block access boolBlock: "
-        "no target-side fallback declaration emitted */)" in hlsl
-    )
-    assert "if (0 /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert "while (0 /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert "boolBlock.flags" not in hlsl
-
-    assert (
-        "if (false /* unsupported Metal GLSL buffer block access boolBlock: "
-        "no target-side fallback declaration emitted */)" in metal
-    )
-    assert (
-        "if (false /* unsupported Metal GLSL buffer block function call readFlag: "
-        "target function omitted */)" in metal
-    )
-    assert (
-        "if (false /* unsupported Metal GLSL buffer block access boolBlock: "
-        "no target-side fallback declaration emitted */ && false /* unsupported "
-        "Metal GLSL buffer block function call readFlag: target function omitted */)"
-        in metal
-    )
-    assert (
-        "while (false /* unsupported Metal GLSL buffer block access boolBlock: "
-        "no target-side fallback declaration emitted */)" in metal
-    )
-    assert "if (0 /* unsupported Metal GLSL buffer block" not in metal
-    assert "while (0 /* unsupported Metal GLSL buffer block" not in metal
-    assert "boolBlock.flags" not in metal
-
     assert "if (boolBlock.flags[0])" in glsl
     assert "if (readFlag(boolBlock, 1u))" in glsl
     assert "if ((boolBlock.flags[2] && readFlag(boolBlock, 3u)))" in glsl
@@ -4067,92 +3814,17 @@ def test_codegen_mixed_ssbo_unsupported_integer_bounds_are_typed_diagnostics():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedIndexBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedIndexBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "uint directIndex = 0u /* unsupported HLSL GLSL buffer block access "
-        "indexBlock: no target-side fallback declaration emitted */;" in hlsl
-    )
-    assert (
-        "uint callIndex = 0u /* unsupported HLSL GLSL buffer block function call "
-        "readIndex: target function omitted */;" in hlsl
-    )
-    assert (
-        "int signedIndex = 0 /* unsupported HLSL GLSL buffer block access "
-        "signedBlock: no target-side fallback declaration emitted */;" in hlsl
-    )
-    assert (
-        "int signedCall = 0 /* unsupported HLSL GLSL buffer block function call "
-        "readOffset: target function omitted */;" in hlsl
-    )
-    assert (
-        "for (uint i = 0u; (i < 0u /* unsupported HLSL GLSL buffer block "
-        "access indexBlock: no target-side fallback declaration emitted */); "
-        "i = (i + 1u))" in hlsl
-    )
-    assert (
-        "for (uint j = 0u; (j < 0u /* unsupported HLSL GLSL buffer block "
-        "function call readIndex: target function omitted */); j = (j + 1u))" in hlsl
-    )
-    assert (
-        "for (int k = 0; (k < 0 /* unsupported HLSL GLSL buffer block access "
-        "signedBlock: no target-side fallback declaration emitted */); "
-        "k = (k + 1))" in hlsl
-    )
-    assert (
-        "for (int m = 0; (m < 0 /* unsupported HLSL GLSL buffer block function "
-        "call readOffset: target function omitted */); m = (m + 1))" in hlsl
-    )
-    assert "uint directIndex = 0 /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert "uint callIndex = 0 /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert "int signedIndex = 0u /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert "int signedCall = 0u /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert "indexBlock.indices" not in hlsl
-    assert "signedBlock.offsets" not in hlsl
-
-    assert (
-        "uint directIndex = 0u /* unsupported Metal GLSL buffer block access "
-        "indexBlock: no target-side fallback declaration emitted */;" in metal
-    )
-    assert (
-        "uint callIndex = 0u /* unsupported Metal GLSL buffer block function call "
-        "readIndex: target function omitted */;" in metal
-    )
-    assert (
-        "int signedIndex = 0 /* unsupported Metal GLSL buffer block access "
-        "signedBlock: no target-side fallback declaration emitted */;" in metal
-    )
-    assert (
-        "int signedCall = 0 /* unsupported Metal GLSL buffer block function call "
-        "readOffset: target function omitted */;" in metal
-    )
-    assert (
-        "for (uint i = 0u; i < 0u /* unsupported Metal GLSL buffer block access "
-        "indexBlock: no target-side fallback declaration emitted */; i = i + 1u)"
-        in metal
-    )
-    assert (
-        "for (uint j = 0u; j < 0u /* unsupported Metal GLSL buffer block "
-        "function call readIndex: target function omitted */; j = j + 1u)" in metal
-    )
-    assert (
-        "for (int k = 0; k < 0 /* unsupported Metal GLSL buffer block access "
-        "signedBlock: no target-side fallback declaration emitted */; k = k + 1)"
-        in metal
-    )
-    assert (
-        "for (int m = 0; m < 0 /* unsupported Metal GLSL buffer block function "
-        "call readOffset: target function omitted */; m = m + 1)" in metal
-    )
-    assert "uint directIndex = 0 /* unsupported Metal GLSL buffer block" not in metal
-    assert "uint callIndex = 0 /* unsupported Metal GLSL buffer block" not in metal
-    assert "int signedIndex = 0u /* unsupported Metal GLSL buffer block" not in metal
-    assert "int signedCall = 0u /* unsupported Metal GLSL buffer block" not in metal
-    assert "indexBlock.indices" not in metal
-    assert "signedBlock.offsets" not in metal
-
     assert "layout(std430, binding = 99) buffer UnsupportedIndexBlock" in glsl
     assert "layout(std430, binding = 100) buffer UnsupportedSignedIndexBlock" in glsl
     assert "uint directIndex = indexBlock.indices[0];" in glsl
@@ -4210,90 +3882,17 @@ def test_codegen_mixed_ssbo_unsupported_resource_indices_are_typed_diagnostics()
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedResourceIndexBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedResourceIndexBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "Texture2D textures[4] : register(t0);" in hlsl
-    assert "SamplerState samplers[4] : register(s0);" in hlsl
-    assert "RWTexture2D<float4> outputImage : register(u0);" in hlsl
-    assert (
-        "textures[0 /* unsupported HLSL GLSL buffer block access resourceBlock: "
-        "no target-side fallback declaration emitted */].Sample(samplers[0 "
-        "/* unsupported HLSL GLSL buffer block access resourceBlock: "
-        "no target-side fallback declaration emitted */], input.uv)" in hlsl
-    )
-    assert (
-        "textures[0u /* unsupported HLSL GLSL buffer block access resourceBlock: "
-        "no target-side fallback declaration emitted */].Sample(samplers[0u "
-        "/* unsupported HLSL GLSL buffer block function call readULayer: "
-        "target function omitted */], input.uv)" in hlsl
-    )
-    assert (
-        "textures[0 /* unsupported HLSL GLSL buffer block function call readLayer: "
-        "target function omitted */].Sample(samplers[0 /* unsupported HLSL GLSL "
-        "buffer block function call readLayer: target function omitted */], input.uv)"
-        in hlsl
-    )
-    assert (
-        "outputImage[int2(0 /* unsupported HLSL GLSL buffer block access "
-        "resourceBlock: no target-side fallback declaration emitted */, 0 "
-        "/* unsupported HLSL GLSL buffer block access resourceBlock: "
-        "no target-side fallback declaration emitted */)]" in hlsl
-    )
-    assert (
-        "outputImage[int2(0 /* unsupported HLSL GLSL buffer block function call "
-        "readLayer: target function omitted */, 0 /* unsupported HLSL GLSL "
-        "buffer block access resourceBlock: no target-side fallback declaration "
-        "emitted */)]" in hlsl
-    )
-    assert "resourceBlock.layer" not in hlsl
-    assert "resourceBlock.uLayer" not in hlsl
-    assert "resourceBlock.x" not in hlsl
-    assert "textures[float" not in hlsl
-    assert "samplers[float" not in hlsl
-    assert "outputImage[float" not in hlsl
-
-    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in metal
-    assert "array<sampler, 4> samplers [[sampler(0)]]" in metal
-    assert "texture2d<float, access::read_write> outputImage [[texture(4)]]" in metal
-    assert (
-        "textures[0 /* unsupported Metal GLSL buffer block access resourceBlock: "
-        "no target-side fallback declaration emitted */].sample(samplers[0 "
-        "/* unsupported Metal GLSL buffer block access resourceBlock: "
-        "no target-side fallback declaration emitted */], input.uv)" in metal
-    )
-    assert (
-        "textures[0u /* unsupported Metal GLSL buffer block access resourceBlock: "
-        "no target-side fallback declaration emitted */].sample(samplers[0u "
-        "/* unsupported Metal GLSL buffer block function call readULayer: "
-        "target function omitted */], input.uv)" in metal
-    )
-    assert (
-        "textures[0 /* unsupported Metal GLSL buffer block function call readLayer: "
-        "target function omitted */].sample(samplers[0 /* unsupported Metal GLSL "
-        "buffer block function call readLayer: target function omitted */], input.uv)"
-        in metal
-    )
-    assert (
-        "outputImage.read(uint2(int2(0 /* unsupported Metal GLSL buffer block "
-        "access resourceBlock: no target-side fallback declaration emitted */, "
-        "0 /* unsupported Metal GLSL buffer block access resourceBlock: "
-        "no target-side fallback declaration emitted */)))" in metal
-    )
-    assert (
-        "outputImage.read(uint2(int2(0 /* unsupported Metal GLSL buffer block "
-        "function call readLayer: target function omitted */, 0 /* unsupported "
-        "Metal GLSL buffer block access resourceBlock: no target-side fallback "
-        "declaration emitted */)))" in metal
-    )
-    assert "resourceBlock.layer" not in metal
-    assert "resourceBlock.uLayer" not in metal
-    assert "resourceBlock.x" not in metal
-    assert "textures[float" not in metal
-    assert "samplers[float" not in metal
-    assert "outputImage.read(float" not in metal
-
     assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
     assert "layout(rgba32f, binding = 0) uniform image2D outputImage;" in glsl
     assert "layout(std430, binding = 101) buffer UnsupportedResourceIndexBlock" in glsl
@@ -4372,114 +3971,17 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedArrayArgBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedArrayArgBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "Texture2D textures[4] : register(t0);" in hlsl
-    assert "SamplerState samplers[4] : register(s0);" in hlsl
-    assert "RWTexture2D<uint> counters[4] : register(u0);" in hlsl
-    assert (
-        "float4 sampleArray(Texture2D texs[4], SamplerState sams[4], int layer, "
-        "float2 uv)" in hlsl
-    )
-    assert "return texs[layer].Sample(sams[layer], uv);" in hlsl
-    assert (
-        "uint incrementArray(RWTexture2D<uint> images[4], int layer, int2 pixel, "
-        "uint value)" in hlsl
-    )
-    assert "uint oldValue = images[layer][pixel];" in hlsl
-    assert "images[0][pixel] = (oldValue + value);" in hlsl
-    assert (
-        "float4 sampledDirect = sampleArray(textures, samplers, 0 /* unsupported "
-        "HLSL GLSL buffer block access arrayBlock: no target-side fallback "
-        "declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer "
-        "block access arrayBlock: no target-side fallback declaration emitted */);"
-        in hlsl
-    )
-    assert (
-        "float4 sampledCall = sampleArray(textures, samplers, 0 /* unsupported "
-        "HLSL GLSL buffer block function call readLayer: target function "
-        "omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block function "
-        "call readUv: target function omitted */);" in hlsl
-    )
-    assert (
-        "uint incrementedDirect = incrementArray(counters, 0 /* unsupported "
-        "HLSL GLSL buffer block access arrayBlock: no target-side fallback "
-        "declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block "
-        "access arrayBlock: no target-side fallback declaration emitted */, 0u "
-        "/* unsupported HLSL GLSL buffer block access arrayBlock: no target-side "
-        "fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "uint incrementedCall = incrementArray(counters, 0 /* unsupported "
-        "HLSL GLSL buffer block function call readLayer: target function "
-        "omitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block function "
-        "call readPixel: target function omitted */, 0u /* unsupported HLSL "
-        "GLSL buffer block function call readAmount: target function omitted */);"
-        in hlsl
-    )
-    assert "sampleArray(textures, samplers, 0u /* unsupported HLSL" not in hlsl
-    assert (
-        "incrementArray(counters, 0 /* unsupported HLSL GLSL buffer block access arrayBlock"
-        in hlsl
-    )
-    assert "arrayBlock.layer" not in hlsl
-    assert "arrayBlock.pixel" not in hlsl
-    assert "imageLoad(" not in hlsl
-    assert "imageStore(" not in hlsl
-
-    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in metal
-    assert (
-        "array<texture2d<uint, access::read_write>, 4> counters [[texture(4)]]" in metal
-    )
-    assert "array<sampler, 4> samplers [[sampler(0)]]" in metal
-    assert (
-        "float4 sampleArray(array<texture2d<float>, 4> texs, array<sampler, 4> "
-        "sams, int layer, float2 uv)" in metal
-    )
-    assert "return texs[layer].sample(sams[layer], uv);" in metal
-    assert (
-        "uint incrementArray(array<texture2d<uint, access::read_write>, 4> "
-        "images, int layer, int2 pixel, uint value)" in metal
-    )
-    assert "uint oldValue = images[layer].read(uint2(pixel)).x;" in metal
-    assert "images[0].write(uint4(oldValue + value), uint2(pixel));" in metal
-    assert (
-        "float4 sampledDirect = sampleArray(textures, samplers, 0 /* unsupported "
-        "Metal GLSL buffer block access arrayBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported Metal GLSL buffer "
-        "block access arrayBlock: no target-side fallback declaration emitted */);"
-        in metal
-    )
-    assert (
-        "float4 sampledCall = sampleArray(textures, samplers, 0 /* unsupported "
-        "Metal GLSL buffer block function call readLayer: target function "
-        "omitted */, float2(0) /* unsupported Metal GLSL buffer block function "
-        "call readUv: target function omitted */);" in metal
-    )
-    assert (
-        "uint incrementedDirect = incrementArray(counters, 0 /* unsupported "
-        "Metal GLSL buffer block access arrayBlock: no target-side fallback "
-        "declaration emitted */, int2(0) /* unsupported Metal GLSL buffer block "
-        "access arrayBlock: no target-side fallback declaration emitted */, 0u "
-        "/* unsupported Metal GLSL buffer block access arrayBlock: no target-side "
-        "fallback declaration emitted */);" in metal
-    )
-    assert (
-        "uint incrementedCall = incrementArray(counters, 0 /* unsupported "
-        "Metal GLSL buffer block function call readLayer: target function "
-        "omitted */, int2(0) /* unsupported Metal GLSL buffer block function "
-        "call readPixel: target function omitted */, 0u /* unsupported Metal "
-        "GLSL buffer block function call readAmount: target function omitted */);"
-        in metal
-    )
-    assert "sampleArray(textures, samplers, 0u /* unsupported Metal" not in metal
-    assert "arrayBlock.layer" not in metal
-    assert "arrayBlock.pixel" not in metal
-    assert "imageLoad(" not in metal
-    assert "imageStore(" not in metal
-
     assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[4];" in glsl
     assert "vec4 sampleArray(sampler2D texs[4], int layer, vec2 uv)" in glsl
@@ -4572,120 +4074,17 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedShadowArrayBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedShadowArrayBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "Texture2D shadowMaps[4] : register(t0);" in hlsl
-    assert "TextureCubeArray cubeShadowArrays[4] : register(t4);" in hlsl
-    assert "SamplerComparisonState shadowSamplers[4] : register(s0);" in hlsl
-    assert (
-        "float shadowLayer(Texture2D maps[4], SamplerComparisonState samplers[4], "
-        "int layer, float2 uv, float depth)" in hlsl
-    )
-    assert "float compared = maps[layer].SampleCmp(samplers[layer], uv, depth);" in hlsl
-    assert "float4 gathered = maps[1].GatherCmp(samplers[1], uv, depth);" in hlsl
-    assert (
-        "float4 cubeGatherLayer(TextureCubeArray maps[4], SamplerComparisonState "
-        "samplers[4], int layer, float4 cubeLayer, float depth)" in hlsl
-    )
-    assert "return maps[layer].GatherCmp(samplers[layer], cubeLayer, depth);" in hlsl
-    assert (
-        "float direct = shadowLayer(shadowMaps, shadowSamplers, 0 /* unsupported "
-        "HLSL GLSL buffer block access shadowBlock: no target-side fallback "
-        "declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "access shadowBlock: no target-side fallback declaration emitted */, 0 "
-        "/* unsupported HLSL GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "float call = shadowLayer(shadowMaps, shadowSamplers, 0 /* unsupported "
-        "HLSL GLSL buffer block function call readLayer: target function omitted */, "
-        "float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block function call readUv: "
-        "target function omitted */, 0 /* unsupported HLSL GLSL buffer block "
-        "function call readDepth: target function omitted */);" in hlsl
-    )
-    assert (
-        "float4 cubeDirect = cubeGatherLayer(cubeShadowArrays, shadowSamplers, 0 "
-        "/* unsupported HLSL GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */, float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL "
-        "buffer block access shadowBlock: no target-side fallback declaration "
-        "emitted */, 0 /* unsupported HLSL GLSL buffer block access shadowBlock: "
-        "no target-side fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "float4 cubeCall = cubeGatherLayer(cubeShadowArrays, shadowSamplers, 0 "
-        "/* unsupported HLSL GLSL buffer block function call readLayer: target "
-        "function omitted */, float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "function call readCubeLayer: target function omitted */, 0 /* unsupported "
-        "HLSL GLSL buffer block function call readDepth: target function omitted */);"
-        in hlsl
-    )
-    assert "shadowLayer(shadowMaps, shadowSamplers, 0u /* unsupported HLSL" not in hlsl
-    assert "shadowBlock.layer" not in hlsl
-    assert "shadowBlock.cubeLayer" not in hlsl
-    assert "textureCompare(" not in hlsl
-    assert "textureGatherCompare(" not in hlsl
-
-    assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in metal
-    assert "array<depthcube_array<float>, 4> cubeShadowArrays [[texture(4)]]" in metal
-    assert "array<sampler, 4> shadowSamplers [[sampler(0)]]" in metal
-    assert (
-        "float shadowLayer(array<depth2d<float>, 4> maps, array<sampler, 4> "
-        "samplers, int layer, float2 uv, float depth)" in metal
-    )
-    assert (
-        "float compared = maps[layer].sample_compare(samplers[layer], uv, depth);"
-        in metal
-    )
-    assert "float4 gathered = maps[1].gather_compare(samplers[1], uv, depth);" in metal
-    assert (
-        "float4 cubeGatherLayer(array<depthcube_array<float>, 4> maps, "
-        "array<sampler, 4> samplers, int layer, float4 cubeLayer, float depth)" in metal
-    )
-    assert (
-        "return maps[layer].gather_compare(samplers[layer], cubeLayer.xyz, "
-        "uint(cubeLayer.w), depth);" in metal
-    )
-    assert (
-        "float direct = shadowLayer(shadowMaps, shadowSamplers, 0 /* unsupported "
-        "Metal GLSL buffer block access shadowBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported Metal GLSL buffer block "
-        "access shadowBlock: no target-side fallback declaration emitted */, 0 "
-        "/* unsupported Metal GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */);" in metal
-    )
-    assert (
-        "float call = shadowLayer(shadowMaps, shadowSamplers, 0 /* unsupported "
-        "Metal GLSL buffer block function call readLayer: target function omitted */, "
-        "float2(0) /* unsupported Metal GLSL buffer block function call readUv: "
-        "target function omitted */, 0 /* unsupported Metal GLSL buffer block "
-        "function call readDepth: target function omitted */);" in metal
-    )
-    assert (
-        "float4 cubeDirect = cubeGatherLayer(cubeShadowArrays, shadowSamplers, 0 "
-        "/* unsupported Metal GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */, float4(0) /* unsupported Metal GLSL "
-        "buffer block access shadowBlock: no target-side fallback declaration "
-        "emitted */, 0 /* unsupported Metal GLSL buffer block access shadowBlock: "
-        "no target-side fallback declaration emitted */);" in metal
-    )
-    assert (
-        "float4 cubeCall = cubeGatherLayer(cubeShadowArrays, shadowSamplers, 0 "
-        "/* unsupported Metal GLSL buffer block function call readLayer: target "
-        "function omitted */, float4(0) /* unsupported Metal GLSL buffer block "
-        "function call readCubeLayer: target function omitted */, 0 /* unsupported "
-        "Metal GLSL buffer block function call readDepth: target function omitted */);"
-        in metal
-    )
-    assert (
-        "shadowLayer(shadowMaps, shadowSamplers, 0u /* unsupported Metal" not in metal
-    )
-    assert "shadowBlock.layer" not in metal
-    assert "shadowBlock.cubeLayer" not in metal
-    assert "textureCompare(" not in metal
-    assert "textureGatherCompare(" not in metal
-
     assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[4];" in glsl
     assert (
         "layout(binding = 4) uniform samplerCubeArrayShadow cubeShadowArrays[4];"
@@ -4781,17 +4180,9 @@ def test_codegen_native_shadow_gather_imports_compare_helpers():
     )
     assert "textureGather(maps[layer], uv, depth)" in regenerated_glsl
     assert "textureGather(arrays[layer], uvLayer, depth)" in regenerated_glsl
-    assert (
-        regenerated_glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffset",
-                "vec4(0.0)",
-            )
-        )
-        == 2
-    )
-    assert "textureGatherOffset(" not in regenerated_glsl
+    # GLSL 4.00 lets textureGatherOffset take a variable offset.
+    assert "textureGatherOffset(maps[0], uv, depth, offset)" in regenerated_glsl
+    assert "textureGatherOffset(arrays[0], uvLayer, depth, offset)" in regenerated_glsl
     assert "textureGatherCompare(" not in regenerated_glsl
 
 
@@ -4830,16 +4221,15 @@ def test_codegen_native_shadow_gather_offsets_imports_compare_helper():
 
     assert "textureGatherCompareOffsets(" not in regenerated_glsl
     assert "textureGatherOffsets(" not in regenerated_glsl
-    assert "textureGatherOffset(" not in regenerated_glsl
+    # Component i is texel T_i0_j0 of the footprint at offsets[i], which
+    # textureGatherOffset returns in w (GLSL 4.60, section 8.9.4).
     assert (
-        regenerated_glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffsets",
-                "vec4(0.0)",
-            )
-        )
-        == 2
+        "vec4 planar = vec4("
+        "textureGatherOffset(maps[layer], uv, depth, offsets[0]).w, "
+        "textureGatherOffset(maps[layer], uv, depth, offsets[1]).w, "
+        "textureGatherOffset(maps[layer], uv, depth, offsets[2]).w, "
+        "textureGatherOffset(maps[layer], uv, depth, offsets[3]).w);"
+        in regenerated_glsl
     )
 
 
@@ -4901,125 +4291,17 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMultisampleBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMultisampleBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "Texture2DMS<float4> msTextures[4] : register(t0);" in hlsl
-    assert "Texture2DMSArray<float4> msArrays[4] : register(t4);" in hlsl
-    assert "int textureSamples(Texture2DMS<float4> tex)" in hlsl
-    assert "int textureSamples(Texture2DMSArray<float4> tex)" in hlsl
-    assert (
-        "float4 fetchSamples(Texture2DMS<float4> textures[4], "
-        "Texture2DMSArray<float4> arrays[4], int layer, int2 pixel, "
-        "int3 pixelLayer, int sampleIndex)" in hlsl
-    )
-    assert "float4 fetched2D = textures[layer].Load(pixel, sampleIndex);" in hlsl
-    assert "float4 fetchedArray = arrays[layer].Load(pixelLayer, sampleIndex);" in hlsl
-    assert (
-        "int sampleCount = (textureSamples(textures[layer]) + "
-        "textureSamples(arrays[layer]));" in hlsl
-    )
-    assert (
-        "float4 direct = fetchSamples(msTextures, msArrays, 0 /* unsupported "
-        "HLSL GLSL buffer block access msBlock: no target-side fallback "
-        "declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block "
-        "access msBlock: no target-side fallback declaration emitted */, "
-        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block access msBlock: "
-        "no target-side fallback declaration emitted */, 0 /* unsupported HLSL "
-        "GLSL buffer block access msBlock: no target-side fallback declaration "
-        "emitted */);" in hlsl
-    )
-    assert (
-        "float4 call = fetchSamples(msTextures, msArrays, 0 /* unsupported HLSL "
-        "GLSL buffer block function call readLayer: target function omitted */, "
-        "int2(0, 0) /* unsupported HLSL GLSL buffer block function call readPixel: "
-        "target function omitted */, int3(0, 0, 0) /* unsupported HLSL GLSL buffer "
-        "block function call readPixelLayer: target function omitted */, 0 "
-        "/* unsupported HLSL GLSL buffer block function call readSample: target "
-        "function omitted */);" in hlsl
-    )
-    assert (
-        "float4 inlineFetch = msTextures[0 /* unsupported HLSL GLSL buffer block "
-        "access msBlock: no target-side fallback declaration emitted */].Load("
-        "int2(0, 0) /* unsupported HLSL GLSL buffer block access msBlock: "
-        "no target-side fallback declaration emitted */, 0 /* unsupported HLSL "
-        "GLSL buffer block access msBlock: no target-side fallback declaration "
-        "emitted */);" in hlsl
-    )
-    assert (
-        "int inlineSamples = textureSamples(msArrays[0 /* unsupported HLSL GLSL "
-        "buffer block access msBlock: no target-side fallback declaration emitted */]);"
-        in hlsl
-    )
-    assert ".Load(0 /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert (
-        ".Load(int2(0, 0) /* unsupported HLSL GLSL buffer block access msBlock" in hlsl
-    )
-    assert ".Load(int3(0, 0, 0) /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert "msBlock.layer" not in hlsl
-    assert "msBlock.pixel" not in hlsl
-    assert "msBlock.pixelLayer" not in hlsl
-    assert "msBlock.sampleIndex" not in hlsl
-
-    assert "array<texture2d_ms<float>, 4> msTextures [[texture(0)]]" in metal
-    assert "array<texture2d_ms_array<float>, 4> msArrays [[texture(4)]]" in metal
-    assert (
-        "float4 fetchSamples(array<texture2d_ms<float>, 4> textures, "
-        "array<texture2d_ms_array<float>, 4> arrays, int layer, int2 pixel, "
-        "int3 pixelLayer, int sampleIndex)" in metal
-    )
-    assert (
-        "float4 fetched2D = textures[layer].read(uint2(pixel), "
-        "uint(sampleIndex));" in metal
-    )
-    assert (
-        "float4 fetchedArray = arrays[layer].read(uint2(pixelLayer.xy), "
-        "uint(pixelLayer.z), uint(sampleIndex));" in metal
-    )
-    assert (
-        "int sampleCount = int(textures[layer].get_num_samples()) + "
-        "int(arrays[layer].get_num_samples());" in metal
-    )
-    assert (
-        "float4 direct = fetchSamples(msTextures, msArrays, 0 /* unsupported "
-        "Metal GLSL buffer block access msBlock: no target-side fallback "
-        "declaration emitted */, int2(0) /* unsupported Metal GLSL buffer block "
-        "access msBlock: no target-side fallback declaration emitted */, "
-        "int3(0) /* unsupported Metal GLSL buffer block access msBlock: "
-        "no target-side fallback declaration emitted */, 0 /* unsupported Metal "
-        "GLSL buffer block access msBlock: no target-side fallback declaration "
-        "emitted */);" in metal
-    )
-    assert (
-        "float4 call = fetchSamples(msTextures, msArrays, 0 /* unsupported Metal "
-        "GLSL buffer block function call readLayer: target function omitted */, "
-        "int2(0) /* unsupported Metal GLSL buffer block function call readPixel: "
-        "target function omitted */, int3(0) /* unsupported Metal GLSL buffer "
-        "block function call readPixelLayer: target function omitted */, 0 "
-        "/* unsupported Metal GLSL buffer block function call readSample: target "
-        "function omitted */);" in metal
-    )
-    assert (
-        "float4 inlineFetch = msTextures[0 /* unsupported Metal GLSL buffer block "
-        "access msBlock: no target-side fallback declaration emitted */].read("
-        "uint2(int2(0) /* unsupported Metal GLSL buffer block access msBlock: "
-        "no target-side fallback declaration emitted */), uint(0 /* unsupported "
-        "Metal GLSL buffer block access msBlock: no target-side fallback declaration "
-        "emitted */));" in metal
-    )
-    assert (
-        "int inlineSamples = int(msArrays[0 /* unsupported Metal GLSL buffer "
-        "block access msBlock: no target-side fallback declaration emitted */]"
-        ".get_num_samples());" in metal
-    )
-    assert ".read(0 /* unsupported Metal GLSL buffer block" not in metal
-    assert "uint(int2(0)" not in metal
-    assert "msBlock.layer" not in metal
-    assert "msBlock.pixel" not in metal
-    assert "msBlock.pixelLayer" not in metal
-    assert "msBlock.sampleIndex" not in metal
-
     assert "layout(binding = 0) uniform sampler2DMS msTextures[4];" in glsl
     assert "layout(binding = 4) uniform sampler2DMSArray msArrays[4];" in glsl
     assert (
@@ -5145,168 +4427,17 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "Texture2DMS<float4> msTex : register(t0);" in hlsl
-    assert "Texture2DMSArray<float4> msArray : register(t1);" in hlsl
-    assert "SamplerState linearSampler : register(s0);" in hlsl
-    assert "SamplerComparisonState linearSampler" not in hlsl
-    assert (
-        "float4 invalid2D(Texture2DMS<float4> tex, float2 uv, float2 ddx, "
-        "float2 ddy, int2 pixel, int sampleIndex, int2 offset)" in hlsl
-    )
-    assert (
-        "float4 invalidArray(Texture2DMSArray<float4> tex, float3 uvLayer, "
-        "int3 pixelLayer, int sampleIndex, int2 offset)" in hlsl
-    )
-    assert (
-        "float invalidCompare(Texture2DMS<float4> tex, SamplerState s, "
-        "float2 uv, float depth, int2 offset)" in hlsl
-    )
-    assert (
-        "float4 invalidGatherArray(Texture2DMSArray<float4> tex, SamplerState s, "
-        "float3 uvLayer, float depth, int2 offset)" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample texture call: texture on "
-        "Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample texture call: textureGrad on "
-        "Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample texture query: textureQueryLod on "
-        "Texture2DMS<float4> */ float2(0.0, 0.0)" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample texture query: textureQueryLod on "
-        "Texture2DMSArray<float4> */ float2(0.0, 0.0)" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample texture comparison: textureCompare on "
-        "Texture2DMS<float4> */ 0.0" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample texture gather comparison: "
-        "textureGatherCompare on Texture2DMSArray<float4> */ "
-        "float4(0.0, 0.0, 0.0, 0.0)" in hlsl
-    )
-    assert (
-        hlsl.count(
-            "unsupported DirectX texel fetch offset: multisample textures do not support offsets"
-        )
-        == 3
-    )
-    assert (
-        "float4 direct2D = invalid2D(msTex, float2(0.0, 0.0) /* unsupported HLSL "
-        "GLSL buffer block access msDiag" in hlsl
-    )
-    assert (
-        "float4 call2D = invalid2D(msTex, float2(0.0, 0.0) /* unsupported HLSL GLSL "
-        "buffer block function call readUv" in hlsl
-    )
-    assert (
-        "float4 directArray = invalidArray(msArray, float3(0.0, 0.0, 0.0) /* unsupported "
-        "HLSL GLSL buffer block access msDiag" in hlsl
-    )
-    assert (
-        "float4 callArray = invalidArray(msArray, float3(0.0, 0.0, 0.0) /* unsupported "
-        "HLSL GLSL buffer block function call readUvLayer" in hlsl
-    )
-    assert (
-        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block function call "
-        "readPixelLayer: target function omitted */" in hlsl
-    )
-    assert (
-        "float compareValue = invalidCompare(msTex, linearSampler, float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access msDiag" in hlsl
-    )
-    assert "texture(msTex," not in hlsl
-    assert "texelFetchOffset(" not in hlsl
-    assert "msDiag.uv" not in hlsl
-    assert "msDiag.pixelLayer" not in hlsl
-
-    assert "texture2d_ms<float> msTex [[texture(0)]]" in metal
-    assert "texture2d_ms_array<float> msArray [[texture(1)]]" in metal
-    assert "sampler linearSampler [[sampler(0)]]" in metal
-    assert (
-        "float4 invalid2D(texture2d_ms<float> tex, float2 uv, float2 ddx, "
-        "float2 ddy, int2 pixel, int sampleIndex, int2 offset)" in metal
-    )
-    assert (
-        "float4 invalidArray(texture2d_ms_array<float> tex, float3 uvLayer, "
-        "int3 pixelLayer, int sampleIndex, int2 offset)" in metal
-    )
-    assert (
-        "float invalidCompare(texture2d_ms<float> tex, sampler s, float2 uv, "
-        "float depth, int2 offset)" in metal
-    )
-    assert (
-        "float4 invalidGatherArray(texture2d_ms_array<float> tex, sampler s, "
-        "float3 uvLayer, float depth, int2 offset)" in metal
-    )
-    assert (
-        "unsupported Metal multisample texture call: texture on "
-        "texture2d_ms<float> */ float4(0.0)" in metal
-    )
-    assert (
-        "unsupported Metal multisample texture call: textureGrad on "
-        "texture2d_ms<float> */ float4(0.0)" in metal
-    )
-    assert (
-        "unsupported Metal multisample texture query: textureQueryLod on "
-        "texture2d_ms<float> */ float2(0.0)" in metal
-    )
-    assert (
-        "unsupported Metal multisample texture query: textureQueryLod on "
-        "texture2d_ms_array<float> */ float2(0.0)" in metal
-    )
-    assert (
-        "unsupported Metal multisample texture comparison: textureCompare on "
-        "texture2d_ms<float> */ 0.0" in metal
-    )
-    assert (
-        "unsupported Metal multisample texture gather comparison: "
-        "textureGatherCompare on texture2d_ms_array<float> */ float4(0.0)" in metal
-    )
-    assert (
-        metal.count(
-            "unsupported Metal texel fetch offset: multisample textures do not support offsets"
-        )
-        == 3
-    )
-    assert (
-        "float4 direct2D = invalid2D(msTex, float2(0) /* unsupported Metal "
-        "GLSL buffer block access msDiag" in metal
-    )
-    assert (
-        "float4 call2D = invalid2D(msTex, float2(0) /* unsupported Metal GLSL "
-        "buffer block function call readUv" in metal
-    )
-    assert (
-        "float4 directArray = invalidArray(msArray, float3(0) /* unsupported "
-        "Metal GLSL buffer block access msDiag" in metal
-    )
-    assert (
-        "float4 callArray = invalidArray(msArray, float3(0) /* unsupported "
-        "Metal GLSL buffer block function call readUvLayer" in metal
-    )
-    assert (
-        "int3(0) /* unsupported Metal GLSL buffer block function call "
-        "readPixelLayer: target function omitted */" in metal
-    )
-    assert (
-        "float compareValue = invalidCompare(msTex, linearSampler, float2(0) "
-        "/* unsupported Metal GLSL buffer block access msDiag" in metal
-    )
-    assert "texture(msTex," not in metal
-    assert "texelFetchOffset(" not in metal
-    assert "msDiag.uv" not in metal
-    assert "msDiag.pixelLayer" not in metal
-
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMultisampleDiagnosticBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMultisampleDiagnosticBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
+    glsl, glsl_refusal = glsl_partial_output(GLSLCodeGen().generate, shader_ast)
     assert "layout(binding = 0) uniform sampler2DMS msTex;" in glsl
     assert "layout(binding = 1) uniform sampler2DMSArray msArray;" in glsl
     assert (
@@ -5322,23 +4453,18 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
         "ivec2 offset)" in glsl
     )
     assert "linearSampler" not in glsl
+    assert "multisample texture call: texture on sampler2DMS" in glsl_refusal
     assert (
-        "unsupported GLSL multisample texture call: texture on sampler2DMS */ "
-        "vec4(0.0)" in glsl
+        "multisample texture query: textureQueryLod on sampler2DMSArray" in glsl_refusal
     )
     assert (
-        "unsupported GLSL multisample texture query: textureQueryLod on "
-        "sampler2DMSArray */ vec2(0.0)" in glsl
+        "multisample texture comparison: textureCompare on sampler2DMS" in glsl_refusal
     )
     assert (
-        "unsupported GLSL multisample texture comparison: textureCompare on "
-        "sampler2DMS */ 0.0" in glsl
+        "multisample texture gather comparison: textureGatherCompare on sampler2DMSArray"
+        in glsl_refusal
     )
-    assert (
-        "unsupported GLSL multisample texture gather comparison: "
-        "textureGatherCompare on sampler2DMSArray */ vec4(0.0)" in glsl
-    )
-    assert glsl.count("unsupported GLSL texel fetch offset: multisample texture ") == 3
+    assert "texel fetch offset: multisample texture" in glsl_refusal
     assert (
         "vec4 direct2D = invalid2D(msTex, msDiag.uv, msDiag.ddx, msDiag.ddy, "
         "msDiag.pixel, msDiag.sampleIndex, msDiag.offset);" in glsl
@@ -5436,169 +4562,17 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMsImageBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMsImageBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "Texture2DMS<float4> msColor : register(t0);" in hlsl
-    assert "Texture2DMSArray<float4> msLayers : register(t1);" in hlsl
-    assert "Texture2DMS<uint> counters : register(t2);" in hlsl
-    assert "Texture2DMSArray<int> signedLayers : register(t3);" in hlsl
-    assert "int textureSamples(Texture2DMS<uint> tex)" in hlsl
-    assert "int textureSamples(Texture2DMSArray<int> tex)" in hlsl
-    assert (
-        "float4 touchImages(Texture2DMS<float4> colorImage, "
-        "Texture2DMSArray<float4> layerImage, Texture2DMS<uint> "
-        "countImage, Texture2DMSArray<int> signedImage, int2 pixel, "
-        "int3 pixelLayer, int sampleIndex, float4 colorValue, uint "
-        "countValue, int signedValue)" in hlsl
-    )
-    assert "float4 color = colorImage.Load(pixel, sampleIndex);" in hlsl
-    assert "float4 layer = layerImage.Load(pixelLayer, sampleIndex);" in hlsl
-    assert "uint oldCount = countImage.Load(pixel, sampleIndex);" in hlsl
-    assert "int oldSigned = signedImage.Load(pixelLayer, sampleIndex);" in hlsl
-    assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMS<float4>" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMSArray<float4>" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMS<uint>" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMSArray<int>" in hlsl
-    )
-    assert (
-        "int sampleCount = (((textureSamples(colorImage) + "
-        "textureSamples(layerImage)) + textureSamples(countImage)) + "
-        "textureSamples(signedImage));" in hlsl
-    )
-    assert (
-        "float4 direct = touchImages(msColor, msLayers, counters, signedLayers, "
-        "int2(0, 0) /* unsupported HLSL GLSL buffer block access msImageBlock" in hlsl
-    )
-    assert (
-        "float4 call = touchImages(msColor, msLayers, counters, signedLayers, "
-        "int2(0, 0) /* unsupported HLSL GLSL buffer block function call readPixel"
-        in hlsl
-    )
-    assert (
-        "float4 inlineColor = msColor.Load(int2(0, 0) /* unsupported HLSL GLSL "
-        "buffer block access msImageBlock: no target-side fallback "
-        "declaration emitted */, 0 /* unsupported HLSL GLSL buffer block "
-        "access msImageBlock: no target-side fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMS<uint>" in hlsl
-    )
-    assert (
-        "float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block function call readColor"
-        in hlsl
-    )
-    assert "0u /* unsupported HLSL GLSL buffer block function call readCount" in hlsl
-    assert "imageLoad(" not in hlsl
-    assert "imageStore(" not in hlsl
-    assert "msImageBlock.pixel" not in hlsl
-    assert "msImageBlock.sampleIndex" not in hlsl
-
-    assert (
-        "float4 touchImages(texture2d_ms<float, access::read> "
-        "colorImage, texture2d_ms_array<float, access::read> "
-        "layerImage, texture2d_ms<uint, access::read> countImage, "
-        "texture2d_ms_array<int, access::read> signedImage, int2 "
-        "pixel, int3 pixelLayer, int sampleIndex, float4 colorValue, uint "
-        "countValue, int signedValue)" in metal
-    )
-    assert "float4 color = colorImage.read(uint2(pixel), uint(sampleIndex));" in metal
-    assert (
-        "float4 layer = layerImage.read(uint2(pixelLayer.xy), "
-        "uint(pixelLayer.z), uint(sampleIndex));" in metal
-    )
-    assert (
-        "uint oldCount = countImage.read(uint2(pixel), uint(sampleIndex)).x;" in metal
-    )
-    assert (
-        "int oldSigned = signedImage.read(uint2(pixelLayer.xy), "
-        "uint(pixelLayer.z), uint(sampleIndex)).x;" in metal
-    )
-    assert (
-        "unsupported Metal multisample image store: imageStore on "
-        "texture2d_ms<float, access::read>" in metal
-    )
-    assert (
-        "unsupported Metal multisample image store: imageStore on "
-        "texture2d_ms_array<float, access::read>" in metal
-    )
-    assert (
-        "unsupported Metal multisample image store: imageStore on "
-        "texture2d_ms<uint, access::read>" in metal
-    )
-    assert (
-        "unsupported Metal multisample image store: imageStore on "
-        "texture2d_ms_array<int, access::read>" in metal
-    )
-    assert (
-        "colorImage.write(colorValue + color, uint2(pixel), uint(sampleIndex));"
-        not in metal
-    )
-    assert (
-        "layerImage.write(layer + colorValue, uint2(pixelLayer.xy), "
-        "uint(pixelLayer.z), uint(sampleIndex));" not in metal
-    )
-    assert (
-        "countImage.write(uint4(oldCount + countValue), uint2(pixel), uint(sampleIndex));"
-        not in metal
-    )
-    assert (
-        "signedImage.write(int4(oldSigned + signedValue), "
-        "uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));" not in metal
-    )
-    assert (
-        "int sampleCount = int(colorImage.get_num_samples()) + "
-        "int(layerImage.get_num_samples()) + int(countImage.get_num_samples()) "
-        "+ int(signedImage.get_num_samples());" in metal
-    )
-    assert (
-        "fragment float4 fragment_main(VSOutput input [[stage_in]], "
-        "texture2d_ms<float, access::read> msColor [[texture(0)]], "
-        "texture2d_ms_array<float, access::read> msLayers [[texture(1)]], "
-        "texture2d_ms<uint, access::read> counters [[texture(2)]], "
-        "texture2d_ms_array<int, access::read> signedLayers [[texture(3)]])" in metal
-    )
-    assert (
-        "float4 direct = touchImages(msColor, msLayers, counters, signedLayers, "
-        "int2(0) /* unsupported Metal GLSL buffer block access msImageBlock" in metal
-    )
-    assert (
-        "float4 call = touchImages(msColor, msLayers, counters, signedLayers, "
-        "int2(0) /* unsupported Metal GLSL buffer block function call readPixel"
-        in metal
-    )
-    assert (
-        "float4 inlineColor = msColor.read(uint2(int2(0) /* unsupported Metal "
-        "GLSL buffer block access msImageBlock: no target-side fallback "
-        "declaration emitted */), uint(0 /* unsupported Metal GLSL buffer "
-        "block access msImageBlock: no target-side fallback declaration "
-        "emitted */));" in metal
-    )
-    assert (
-        "counters.write(uint4(0u /* unsupported Metal GLSL buffer block "
-        "function call readCount: target function omitted */), uint2(int2(0) "
-        "/* unsupported Metal GLSL buffer block function call readPixel: target "
-        "function omitted */), uint(0 /* unsupported Metal GLSL buffer block "
-        "function call readSample: target function omitted */));" not in metal
-    )
-    assert "imageLoad(" not in metal
-    assert "imageStore(" not in metal
-    assert "msImageBlock.pixel" not in metal
-    assert "msImageBlock.sampleIndex" not in metal
-
     assert "layout(rgba16f, binding = 0) uniform image2DMS msColor;" in glsl
     assert "layout(rgba8, binding = 1) uniform image2DMSArray msLayers;" in glsl
     assert "layout(r32ui, binding = 2) uniform uimage2DMS counters;" in glsl
@@ -5753,8 +4727,8 @@ def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "Texture2DMS<float4> colorImages[4] : register(t0);" in hlsl
@@ -5769,8 +4743,8 @@ def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats(
     assert "return textureSamples(images[layer]);" in hlsl
     assert "uint4 count = counterLayers[input.layer].Load(int3(0, 1, 2), 3);" in hlsl
     assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMSArray<uint4>" in hlsl
+        "multisample image store: imageStore on RWTexture2DMSArray<uint4>"
+        in hlsl_refusal
     )
     assert "imageSamples(" not in hlsl
     assert "imageStore(" not in hlsl
@@ -5800,8 +4774,8 @@ def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats(
         in metal
     )
     assert (
-        "unsupported Metal multisample image store: imageStore on "
-        "texture2d_ms_array<uint, access::read>" in metal
+        "multisample image store: imageStore on "
+        "texture2d_ms_array<uint, access::read>" in metal_refusal
     )
     assert "texture2d_ms_array<uint, access::read_write>" not in metal
     assert ".write(" not in metal
@@ -14159,129 +13133,17 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMsIntBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMsIntBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "Texture2DMS<int4> signedImage : register(t0);" in hlsl
-    assert "Texture2DMSArray<uint4> unsignedLayers : register(t1);" in hlsl
-    assert (
-        "int4 signedDirect = signedImage.Load(int2(0, 0) /* unsupported HLSL GLSL "
-        "buffer block access intBlock: no target-side fallback declaration "
-        "emitted */, 0 /* unsupported HLSL GLSL buffer block access intBlock: "
-        "no target-side fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "uint4 unsignedCall = unsignedLayers.Load(int3(0, 0, 0) /* unsupported HLSL "
-        "GLSL buffer block function call readPixelLayer: target function "
-        "omitted */, 0 /* unsupported HLSL GLSL buffer block function call "
-        "readSample: target function omitted */);" in hlsl
-    )
-    assert (
-        "int signedScalar = signedImage.Load(int2(0, 0) /* unsupported HLSL GLSL "
-        "buffer block function call readPixel: target function omitted */, 0 "
-        "/* unsupported HLSL GLSL buffer block function call readSample: target "
-        "function omitted */).x;" in hlsl
-    )
-    assert (
-        "uint unsignedScalar = unsignedLayers.Load(int3(0, 0, 0) /* unsupported HLSL GLSL "
-        "buffer block access intBlock: no target-side fallback declaration "
-        "emitted */, 0 /* unsupported HLSL GLSL buffer block access intBlock: "
-        "no target-side fallback declaration emitted */).x;" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMS<int4>" in hlsl
-    )
-    assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMSArray<uint4>" in hlsl
-    )
-    assert "imageLoad(" not in hlsl
-    assert "imageStore(" not in hlsl
-
-    assert "texture2d_ms<int, access::read> signedImage [[texture(0)]]" in metal
-    assert (
-        "texture2d_ms_array<uint, access::read> unsignedLayers "
-        "[[texture(1)]]" in metal
-    )
-    assert (
-        "int4 signedDirect = signedImage.read(uint2(int2(0) /* unsupported "
-        "Metal GLSL buffer block access intBlock: no target-side fallback "
-        "declaration emitted */), uint(0 /* unsupported Metal GLSL buffer "
-        "block access intBlock: no target-side fallback declaration emitted */));"
-        in metal
-    )
-    assert (
-        "uint4 unsignedCall = unsignedLayers.read(uint2((int3(0) "
-        "/* unsupported Metal GLSL buffer block function call readPixelLayer: "
-        "target function omitted */).xy), uint((int3(0) /* unsupported Metal "
-        "GLSL buffer block function call readPixelLayer: target function "
-        "omitted */).z), uint(0 /* unsupported Metal GLSL buffer block "
-        "function call readSample: target function omitted */));" in metal
-    )
-    assert (
-        "int signedScalar = signedImage.read(uint2(int2(0) /* unsupported "
-        "Metal GLSL buffer block function call readPixel: target function "
-        "omitted */), uint(0 /* unsupported Metal GLSL buffer block function "
-        "call readSample: target function omitted */)).x;" in metal
-    )
-    assert (
-        "uint unsignedScalar = unsignedLayers.read(uint2((int3(0) "
-        "/* unsupported Metal GLSL buffer block access intBlock: no target-side "
-        "fallback declaration emitted */).xy), uint((int3(0) /* unsupported "
-        "Metal GLSL buffer block access intBlock: no target-side fallback "
-        "declaration emitted */).z), uint(0 /* unsupported Metal GLSL buffer "
-        "block access intBlock: no target-side fallback declaration emitted */)).x;"
-        in metal
-    )
-    assert (
-        "unsupported Metal multisample image store: imageStore on "
-        "texture2d_ms<int, access::read>" in metal
-    )
-    assert (
-        "unsupported Metal multisample image store: imageStore on "
-        "texture2d_ms_array<uint, access::read>" in metal
-    )
-    assert (
-        "signedImage.write(int4(0) /* unsupported Metal GLSL buffer block "
-        "access intBlock: no target-side fallback declaration emitted */, "
-        "uint2(int2(0) /* unsupported Metal GLSL buffer block access intBlock: "
-        "no target-side fallback declaration emitted */), uint(0 /* unsupported "
-        "Metal GLSL buffer block access intBlock: no target-side fallback "
-        "declaration emitted */));" not in metal
-    )
-    assert (
-        "unsignedLayers.write(uint4(0) /* unsupported Metal GLSL buffer block "
-        "function call readUnsignedValue: target function omitted */, "
-        "uint2((int3(0) /* unsupported Metal GLSL buffer block function call "
-        "readPixelLayer: target function omitted */).xy), uint((int3(0) "
-        "/* unsupported Metal GLSL buffer block function call readPixelLayer: "
-        "target function omitted */).z), uint(0 /* unsupported Metal GLSL "
-        "buffer block function call readSample: target function omitted */));"
-        not in metal
-    )
-    assert (
-        "signedImage.write(int4(0 /* unsupported Metal GLSL buffer block "
-        "function call readSignedScalar: target function omitted */), "
-        "uint2(int2(0) /* unsupported Metal GLSL buffer block function call "
-        "readPixel: target function omitted */), uint(0 /* unsupported Metal "
-        "GLSL buffer block function call readSample: target function omitted */));"
-        not in metal
-    )
-    assert (
-        "unsignedLayers.write(uint4(0u /* unsupported Metal GLSL buffer block "
-        "access intBlock: no target-side fallback declaration emitted */), "
-        "uint2((int3(0) /* unsupported Metal GLSL buffer block access intBlock: "
-        "no target-side fallback declaration emitted */).xy), uint((int3(0) "
-        "/* unsupported Metal GLSL buffer block access intBlock: no target-side "
-        "fallback declaration emitted */).z), uint(0 /* unsupported Metal GLSL "
-        "buffer block access intBlock: no target-side fallback declaration "
-        "emitted */));" not in metal
-    )
-    assert "imageLoad(" not in metal
-    assert "imageStore(" not in metal
-
     assert "layout(rgba32i, binding = 0) uniform iimage2DMS signedImage;" in glsl
     assert (
         "layout(rgba32ui, binding = 1) uniform uimage2DMSArray unsignedLayers;" in glsl
@@ -14381,56 +13243,17 @@ def test_codegen_mixed_ssbo_multisample_image_atomics_use_sample_fallbacks():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMsAtomicBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedMsAtomicBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "Texture2DMS<uint> counters : register(t0);" in hlsl
-    assert "Texture2DMSArray<int> signedLayers : register(t1);" in hlsl
-    assert (
-        "uint atomicDirect = /* unsupported DirectX multisample image atomic: "
-        "imageAtomicAdd on RWTexture2DMS<uint> */ 0u;" in hlsl
-    )
-    assert (
-        "uint atomicCall = /* unsupported DirectX multisample image atomic: "
-        "imageAtomicAdd on RWTexture2DMS<uint> */ 0u;" in hlsl
-    )
-    assert (
-        "int swapDirect = /* unsupported DirectX multisample image atomic: "
-        "imageAtomicCompSwap on RWTexture2DMSArray<int> */ 0;" in hlsl
-    )
-    assert (
-        "int swapCall = /* unsupported DirectX multisample image atomic: "
-        "imageAtomicCompSwap on RWTexture2DMSArray<int> */ 0;" in hlsl
-    )
-    assert "InterlockedAdd" not in hlsl
-    assert "InterlockedCompareExchange" not in hlsl
-    assert "imageAtomicAdd(counters" not in hlsl
-    assert "imageAtomicCompSwap(signedLayers" not in hlsl
-
-    assert "texture2d_ms<uint, access::read> counters [[texture(0)]]" in metal
-    assert "texture2d_ms_array<int, access::read> signedLayers [[texture(1)]]" in metal
-    assert (
-        "uint atomicDirect = /* unsupported Metal multisample image atomic: "
-        "imageAtomicAdd on texture2d_ms<uint, access::read> */ 0u;" in metal
-    )
-    assert (
-        "uint atomicCall = /* unsupported Metal multisample image atomic: "
-        "imageAtomicAdd on texture2d_ms<uint, access::read> */ 0u;" in metal
-    )
-    assert (
-        "int swapDirect = /* unsupported Metal multisample image atomic: "
-        "imageAtomicCompSwap on texture2d_ms_array<int, access::read> */ "
-        "0;" in metal
-    )
-    assert (
-        "int swapCall = /* unsupported Metal multisample image atomic: "
-        "imageAtomicCompSwap on texture2d_ms_array<int, access::read> */ "
-        "0;" in metal
-    )
-    assert "atomic_fetch_add" not in metal
-    assert "imageAtomicAdd(counters" not in metal
-
     assert "layout(r32ui, binding = 0) uniform uimage2DMS counters;" in glsl
     assert "layout(r32i, binding = 1) uniform iimage2DMSArray signedLayers;" in glsl
     assert (
@@ -14500,8 +13323,8 @@ def test_codegen_multisample_image_switch_match_fallbacks_stay_in_case_blocks():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "Texture2DMS<float4> colorImage : register(t0);" in hlsl
@@ -14509,8 +13332,8 @@ def test_codegen_multisample_image_switch_match_fallbacks_stay_in_case_blocks():
     assert "case 0:\n        case 1: {" in hlsl
     assert hlsl.count("case 0: {") == 1
     assert hlsl.count("float4 scoped") == 4
-    assert hlsl.count("unsupported DirectX multisample image store") == 4
-    assert hlsl.count("unsupported DirectX multisample image atomic") == 4
+    assert "multisample image store" in hlsl_refusal
+    assert "multisample image atomic" in hlsl_refusal
     assert "imageStore(" not in hlsl
     assert "imageAtomicAdd(counters" not in hlsl
     assert "InterlockedAdd" not in hlsl
@@ -14520,8 +13343,10 @@ def test_codegen_multisample_image_switch_match_fallbacks_stay_in_case_blocks():
     assert "case 0:\n        case 1: {" in metal
     assert metal.count("case 0: {") == 1
     assert metal.count("float4 scoped") == 4
-    assert metal.count("unsupported Metal multisample image store") == 4
-    assert metal.count("unsupported Metal multisample image atomic") == 4
+    assert "multisample image store: imageStore on texture2d_ms<float" in metal_refusal
+    assert (
+        "multisample image atomic: imageAtomicAdd on texture2d_ms<uint" in metal_refusal
+    )
     assert "imageStore(" not in metal
     assert "imageAtomicAdd(counters" not in metal
     assert "atomic_fetch_add" not in metal
@@ -14567,22 +13392,22 @@ def test_codegen_multisample_image_atomic_variants_use_sample_argument(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "Texture2DMS<uint> counters : register(t0);" in hlsl
     assert (
-        "uint old = /* unsupported DirectX multisample image atomic: "
-        f"{operation} on RWTexture2DMS<uint> */ 0u;" in hlsl
+        f"multisample image atomic: {operation} on RWTexture2DMS<uint>" in hlsl_refusal
     )
     assert intrinsic not in hlsl
     assert f"{operation}(counters" not in hlsl
 
     assert (
-        "uint old = /* unsupported Metal multisample image atomic: "
-        f"{operation} on texture2d_ms<uint, access::read> */ 0u;" in metal
+        "multisample image atomic: "
+        f"{operation} on texture2d_ms<uint, access::read>" in metal_refusal
     )
+    assert "uint old = 0u;" in metal
     assert f"{operation}(counters" not in metal
 
     assert f"uint old = {operation}(counters, ivec2(0), 1, 2u);" in glsl
@@ -14607,19 +13432,19 @@ def test_codegen_float_image_atomic_exchange_uses_backend_diagnostics():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWTexture2D<float> scalarImage : register(u0);" in hlsl
     assert "Texture2DMS<float> sampleImage : register(t0);" in hlsl
     assert (
-        "float oldScalar = /* unsupported DirectX image atomic resource call: "
-        "imageAtomicExchange on RWTexture2D<float> */ 0.0;" in hlsl
+        "image atomic resource call: imageAtomicExchange on RWTexture2D<float>"
+        in hlsl_refusal
     )
     assert (
-        "float oldSample = /* unsupported DirectX multisample image atomic: "
-        "imageAtomicExchange on RWTexture2DMS<float> */ 0.0;" in hlsl
+        "multisample image atomic: imageAtomicExchange on RWTexture2DMS<float>"
+        in hlsl_refusal
     )
     assert "imageAtomicExchange(scalarImage" not in hlsl
     assert "imageAtomicExchange(sampleImage" not in hlsl
@@ -14627,13 +13452,12 @@ def test_codegen_float_image_atomic_exchange_uses_backend_diagnostics():
     assert "texture2d<float, access::read_write> scalarImage [[texture(0)]]" in metal
     assert "texture2d_ms<float, access::read> sampleImage [[texture(1)]]" in metal
     assert (
-        "float oldScalar = /* unsupported Metal image atomic resource call: "
-        "imageAtomicExchange on texture2d<float, access::read_write> */ 0.0;" in metal
+        "image atomic resource call: "
+        "imageAtomicExchange on texture2d<float, access::read_write>" in metal_refusal
     )
     assert (
-        "float oldSample = /* unsupported Metal multisample image atomic: "
-        "imageAtomicExchange on texture2d_ms<float, access::read> */ "
-        "0.0;" in metal
+        "multisample image atomic: "
+        "imageAtomicExchange on texture2d_ms<float, access::read>" in metal_refusal
     )
     assert "atomic_exchange" not in metal
 
@@ -15574,116 +14398,17 @@ def test_codegen_mixed_ssbo_unsupported_sampling_vectors_are_typed_diagnostics()
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedSamplerCoordBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedSamplerCoordBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
-        "fallback declaration emitted */, 2.0);" in hlsl
-    )
-    assert (
-        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, 2.0);" in hlsl
-    )
-    assert (
-        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
-        "fallback declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL "
-        "buffer block access coordBlock: no target-side fallback declaration "
-        "emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block access "
-        "coordBlock: no target-side fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "function call readUv: target function omitted */, float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
-        "fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
-        "fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */);" in hlsl
-    )
-    assert (
-        "float4 fetchedDirect = textures[0].Load(int3(int2(0, 0) /* unsupported "
-        "HLSL GLSL buffer block access coordBlock: no target-side fallback "
-        "declaration emitted */, 0));" in hlsl
-    )
-    assert (
-        "float4 fetchedCall = textures[0].Load(int3(int2(0, 0) /* unsupported "
-        "HLSL GLSL buffer block function call readPixel: target function "
-        "omitted */, 0));" in hlsl
-    )
-    assert "SampleLevel(samplers[0], 0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert "SampleGrad(samplers[0], 0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert "Gather(samplers[0], 0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert "Load(int3(0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert "coordBlock.uv" not in hlsl
-    assert "coordBlock.pixel" not in hlsl
-
-    assert (
-        "float4 lodDirect = textures[0].sample(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block access coordBlock: no target-side "
-        "fallback declaration emitted */, level(2.0));" in metal
-    )
-    assert (
-        "float4 lodCall = textures[0].sample(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block function call readUv: target "
-        "function omitted */, level(2.0));" in metal
-    )
-    assert (
-        "float4 gradDirect = textures[0].sample(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block access coordBlock: no target-side "
-        "fallback declaration emitted */, gradient2d(float2(0) /* unsupported "
-        "Metal GLSL buffer block access coordBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported Metal GLSL buffer "
-        "block access coordBlock: no target-side fallback declaration emitted */));"
-        in metal
-    )
-    assert (
-        "float4 gradCall = textures[0].sample(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block function call readUv: target "
-        "function omitted */, gradient2d(float2(0) /* unsupported Metal GLSL "
-        "buffer block function call readUv: target function omitted */, "
-        "float2(0) /* unsupported Metal GLSL buffer block access coordBlock: "
-        "no target-side fallback declaration emitted */));" in metal
-    )
-    assert (
-        "float4 gatheredDirect = textures[0].gather(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block access coordBlock: no target-side "
-        "fallback declaration emitted */);" in metal
-    )
-    assert (
-        "float4 gatheredCall = textures[0].gather(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block function call readUv: target "
-        "function omitted */);" in metal
-    )
-    assert (
-        "float4 fetchedDirect = textures[0].read(uint2(int2(0) /* unsupported Metal "
-        "GLSL buffer block access coordBlock: no target-side fallback declaration "
-        "emitted */), uint(0));" in metal
-    )
-    assert (
-        "float4 fetchedCall = textures[0].read(uint2(int2(0) /* unsupported Metal "
-        "GLSL buffer block function call readPixel: target function omitted */), "
-        "uint(0));" in metal
-    )
-    assert ".sample(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal
-    assert ".gather(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal
-    assert ".read(0 /* unsupported Metal GLSL buffer" not in metal
-    assert "coordBlock.uv" not in metal
-    assert "coordBlock.pixel" not in metal
-
     assert "vec4 lodDirect = textureLod(textures[0], coordBlock.uv, 2.0);" in glsl
     assert "vec4 lodCall = textureLod(textures[0], readUv(coordBlock), 2.0);" in glsl
     assert (
@@ -15754,117 +14479,41 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    with pytest.raises(DirectXTextureOffsetError) as error:
-        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedSamplerOffsetBlock",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedSamplerOffsetBlock",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
 
-    assert error.value.operation == "textureLodOffset"
-    assert error.value.target_method == "Texture2D.SampleLevel"
-    assert error.value.blocking_expression == "offsetBlock.offset"
-    assert error.value.reason == "runtime-offset-requires-immediate"
-
-    metal = MetalCodeGen().generate(shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "float4 lodDirect = textures[0].sample(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, level(2.0), int2(0) /* unsupported "
-        "Metal GLSL buffer block access offsetBlock: no target-side fallback "
-        "declaration emitted */);" in metal
-    )
-    assert (
-        "float4 lodCall = textures[0].sample(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block function call readUv: target "
-        "function omitted */, level(2.0), int2(0) /* unsupported Metal GLSL "
-        "buffer block function call readOffset: target function omitted */);" in metal
-    )
-    assert (
-        "float4 gradDirect = textures[0].sample(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, gradient2d(float2(0) /* unsupported "
-        "Metal GLSL buffer block access offsetBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported Metal GLSL buffer "
-        "block access offsetBlock: no target-side fallback declaration emitted */), "
-        "int2(0) /* unsupported Metal GLSL buffer block access offsetBlock: "
-        "no target-side fallback declaration emitted */);" in metal
-    )
-    assert (
-        "float4 gradCall = textures[0].sample(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block function call readUv: target "
-        "function omitted */, gradient2d(float2(0) /* unsupported Metal GLSL "
-        "buffer block function call readUv: target function omitted */, "
-        "float2(0) /* unsupported Metal GLSL buffer block access offsetBlock: "
-        "no target-side fallback declaration emitted */), int2(0) /* unsupported "
-        "Metal GLSL buffer block function call readOffset: target function "
-        "omitted */);" in metal
-    )
-    assert (
-        "float4 gatheredDirect = textures[0].gather(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, int2(0) /* unsupported Metal GLSL "
-        "buffer block access offsetBlock: no target-side fallback declaration "
-        "emitted */);" in metal
-    )
-    assert (
-        "float4 gatheredCall = textures[0].gather(samplers[0], float2(0) "
-        "/* unsupported Metal GLSL buffer block function call readUv: target "
-        "function omitted */, int2(0) /* unsupported Metal GLSL buffer block "
-        "function call readOffset: target function omitted */);" in metal
-    )
-    assert (
-        "float4 fetchedDirect = textures[0].read(uint2((int2(0) /* unsupported Metal "
-        "GLSL buffer block access offsetBlock: no target-side fallback declaration "
-        "emitted */ + int2(0) /* unsupported Metal GLSL buffer block access "
-        "offsetBlock: no target-side fallback declaration emitted */)), uint(0));"
-        in metal
-    )
-    assert (
-        "float4 fetchedCall = textures[0].read(uint2((int2(0) /* unsupported Metal "
-        "GLSL buffer block function call readPixel: target function omitted */ "
-        "+ int2(0) /* unsupported Metal GLSL buffer block function call readOffset: "
-        "target function omitted */)), uint(0));" in metal
-    )
-    assert ".sample(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal
-    assert ".gather(samplers[0], 0 /* unsupported Metal GLSL buffer" not in metal
-    assert ", 0 /* unsupported Metal GLSL buffer block access offsetBlock" not in metal
-    assert "offsetBlock.uv" not in metal
-    assert "offsetBlock.offset" not in metal
+    glsl, glsl_refusal = glsl_partial_output(GLSLCodeGen().generate, shader_ast)
 
     assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture offset", "textureLodOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureLodOffset", "vec4(0.0)"
         )
-        == 2
+        in glsl_refusal
     )
     assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture offset", "textureGradOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureGradOffset", "vec4(0.0)"
         )
-        == 2
+        in glsl_refusal
     )
     assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather", "textureGatherOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
         )
-        == 2
-    )
-    assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
-            )
-        )
-        == 2
+        in glsl_refusal
     )
     assert "textureLodOffset(" not in glsl
     assert "textureGradOffset(" not in glsl
-    assert "textureGatherOffset(" not in glsl
+    # textureGatherOffset takes a variable offset from GLSL 4.00 on.
+    assert "textureGatherOffset(" in glsl
     assert "texelFetchOffset(" not in glsl
 
 
@@ -15925,94 +14574,54 @@ def test_codegen_mixed_ssbo_unsupported_projected_compare_calls_infer_types():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    with pytest.raises(DirectXTextureOffsetError) as error:
-        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedProjectedShadowBlock",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedProjectedShadowBlock",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
 
-    assert error.value.operation == "textureProjOffset"
-    assert error.value.target_method == "Texture2D.Sample"
-    assert error.value.blocking_expression == "shadowBlock.offset"
-    assert error.value.reason == "runtime-offset-requires-immediate"
-
-    metal = MetalCodeGen().generate(shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "float4 projectedCall = colorMap.sample(linearSampler, (float3(0) "
-        "/* unsupported Metal GLSL buffer block function call readUvq: target "
-        "function omitted */).xy / (float3(0) /* unsupported Metal GLSL buffer "
-        "block function call readUvq: target function omitted */).z, "
-        "gradient2d(float2(0) /* unsupported Metal GLSL buffer block access "
-        "shadowBlock: no target-side fallback declaration emitted */, float2(0) "
-        "/* unsupported Metal GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */), int2(0) /* unsupported Metal GLSL "
-        "buffer block function call readOffset: target function omitted */);" in metal
-    )
-    assert (
-        "float compareCall = shadowMap.sample_compare(compareSampler, float2(0) "
-        "/* unsupported Metal GLSL buffer block function call readUv: target "
-        "function omitted */, 0 /* unsupported Metal GLSL buffer block function "
-        "call readDepth: target function omitted */, gradient2d(float2(0) "
-        "/* unsupported Metal GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */, float2(0) /* unsupported Metal GLSL "
-        "buffer block access shadowBlock: no target-side fallback declaration "
-        "emitted */), int2(0) /* unsupported Metal GLSL buffer block function "
-        "call readOffset: target function omitted */);" in metal
-    )
-    assert (
-        "float compareProjCall = shadowMap.sample_compare(compareSampler, "
-        "(float3(0) /* unsupported Metal GLSL buffer block function call readUvq: "
-        "target function omitted */).xy / (float3(0) /* unsupported Metal GLSL "
-        "buffer block function call readUvq: target function omitted */).z, 0 "
-        "/* unsupported Metal GLSL buffer block function call readDepth: target "
-        "function omitted */, gradient2d(float2(0) /* unsupported Metal GLSL "
-        "buffer block access shadowBlock: no target-side fallback declaration "
-        "emitted */, float2(0) /* unsupported Metal GLSL buffer block access "
-        "shadowBlock: no target-side fallback declaration emitted */), int2(0) "
-        "/* unsupported Metal GLSL buffer block function call readOffset: target "
-        "function omitted */);" in metal
-    )
-    assert "unsupported Metal projected texture: textureProjGradOffset" not in metal
-    assert (
-        "unsupported Metal texture compare: textureCompareProjGradOffset" not in metal
-    )
-    assert "shadowBlock.uvq" not in metal
-    assert "shadowBlock.offset" not in metal
+    glsl, glsl_refusal = glsl_partial_output(GLSLCodeGen().generate, shader_ast)
 
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjOffset", "vec4(0.0)"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjGradOffset", "vec4(0.0)"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareOffset", "0.0"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareGradOffset", "0.0"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareProjOffset", "0.0"
         )
-        in glsl
+        in glsl_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareProjGradOffset", "0.0"
         )
-        in glsl
+        in glsl_refusal
     )
     assert "textureProjOffset(" not in glsl
     assert "textureProjGradOffset(" not in glsl
@@ -16079,89 +14688,17 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedGatherCompareBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedGatherCompareBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "float4 planarCall = shadowMap.GatherCmp(compareSampler, float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */);" in hlsl
-    )
-    assert (
-        "float4 planarOffsetCall = shadowMap.GatherCmp(compareSampler, float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */, int2(0, 0) /* unsupported "
-        "HLSL GLSL buffer block function call readOffset: target function omitted */);"
-        in hlsl
-    )
-    assert (
-        "float4 arrayCall = shadowArray.GatherCmp(compareSampler, float3(0.0, 0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUvLayer: target "
-        "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */);" in hlsl
-    )
-    assert (
-        "float4 arrayOffsetCall = shadowArray.GatherCmp(compareSampler, float3(0.0, 0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUvLayer: target "
-        "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */, int2(0, 0) /* unsupported "
-        "HLSL GLSL buffer block function call readOffset: target function omitted */);"
-        in hlsl
-    )
-    assert "unsupported DirectX texture gather compare" not in hlsl
-    assert "GatherCmp(compareSampler, 0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert (
-        ", 0 /* unsupported HLSL GLSL buffer block function call readOffset" not in hlsl
-    )
-    assert "gatherBlock.uv" not in hlsl
-    assert "gatherBlock.offset" not in hlsl
-
-    assert (
-        "float4 planarCall = shadowMap.gather_compare(compareSampler, float2(0) "
-        "/* unsupported Metal GLSL buffer block function call readUv: target "
-        "function omitted */, 0 /* unsupported Metal GLSL buffer block function "
-        "call readDepth: target function omitted */);" in metal
-    )
-    assert (
-        "float4 planarOffsetCall = shadowMap.gather_compare(compareSampler, "
-        "float2(0) /* unsupported Metal GLSL buffer block function call readUv: "
-        "target function omitted */, 0 /* unsupported Metal GLSL buffer block "
-        "function call readDepth: target function omitted */, int2(0) "
-        "/* unsupported Metal GLSL buffer block function call readOffset: target "
-        "function omitted */);" in metal
-    )
-    assert (
-        "float4 arrayCall = shadowArray.gather_compare(compareSampler, "
-        "(float3(0) /* unsupported Metal GLSL buffer block function call "
-        "readUvLayer: target function omitted */).xy, uint((float3(0) "
-        "/* unsupported Metal GLSL buffer block function call readUvLayer: "
-        "target function omitted */).z), 0 /* unsupported Metal GLSL buffer "
-        "block function call readDepth: target function omitted */);" in metal
-    )
-    assert (
-        "float4 arrayOffsetCall = shadowArray.gather_compare(compareSampler, "
-        "(float3(0) /* unsupported Metal GLSL buffer block function call "
-        "readUvLayer: target function omitted */).xy, uint((float3(0) "
-        "/* unsupported Metal GLSL buffer block function call readUvLayer: "
-        "target function omitted */).z), 0 /* unsupported Metal GLSL buffer "
-        "block function call readDepth: target function omitted */, int2(0) "
-        "/* unsupported Metal GLSL buffer block function call readOffset: target "
-        "function omitted */);" in metal
-    )
-    assert "unsupported Metal texture gather compare" not in metal
-    assert (
-        "gather_compare(compareSampler, 0 /* unsupported Metal GLSL buffer" not in metal
-    )
-    assert (
-        ", 0 /* unsupported Metal GLSL buffer block function call readOffset"
-        not in metal
-    )
-    assert "gatherBlock.uv" not in metal
-    assert "gatherBlock.offset" not in metal
-
     assert (
         "vec4 planarCall = textureGather(shadowMap, "
         "readUv(gatherBlock), readDepth(gatherBlock));" in glsl
@@ -16170,19 +14707,17 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
         "vec4 arrayCall = textureGather(shadowArray, "
         "readUvLayer(gatherBlock), readDepth(gatherBlock));" in glsl
     )
+    # textureGatherOffset takes a variable offset from GLSL 4.00 on.
     assert (
-        glsl.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffset",
-                "vec4(0.0)",
-            )
-        )
-        == 4
+        "vec4 planarOffsetCall = textureGatherOffset(shadowMap, readUv(gatherBlock), "
+        "readDepth(gatherBlock), readOffset(gatherBlock));" in glsl
+    )
+    assert (
+        "vec4 arrayOffsetDirect = textureGatherOffset(shadowArray, "
+        "gatherBlock.uvLayer, gatherBlock.depth, gatherBlock.offset);" in glsl
     )
     assert "textureGatherCompare(" not in glsl
     assert "textureGatherCompareOffset(" not in glsl
-    assert "textureGatherOffset(" not in glsl
 
 
 def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
@@ -16240,9 +14775,9 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
+    hlsl, hlsl_refusal = hlsl_partial_output(HLSLCodeGen().generate, shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
+    glsl, glsl_refusal = glsl_partial_output(GLSLCodeGen().generate, shader_ast)
 
     assert "RWByteAddressBuffer cubeBlock : register(u106);" in hlsl
     assert "float3 readDirection(RWByteAddressBuffer localBlock)" in hlsl
@@ -16264,14 +14799,10 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
         "readCubeLayer(cubeBlock), readDepth(cubeBlock));" in hlsl
     )
     assert (
-        hlsl.count(
-            "/* unsupported DirectX texture gather compare: "
-            "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
-            "float4(0.0, 0.0, 0.0, 0.0)"
-        )
-        == 4
+        "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array textures"
+        in hlsl_refusal
     )
-    assert "unsupported HLSL GLSL buffer block" not in hlsl
+    assert "GLSL buffer block" not in hlsl_refusal
     assert "cubeBlock.direction" not in hlsl
     assert "cubeBlock.cubeLayer" not in hlsl
     assert "cubeBlock.offset" not in hlsl
@@ -16289,12 +14820,9 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
         "readDepth(cubeBlock));" in metal
     )
     assert (
-        metal.count(
-            "/* unsupported Metal texture gather compare: "
-            "textureGatherCompareOffset offsets require 2D or 2D-array depth "
-            "textures */ float4(0.0)"
-        )
-        == 4
+        "texture gather compare: "
+        "textureGatherCompareOffset offsets require 2D or 2D-array depth "
+        "textures" in metal_refusal
     )
     assert "unsupported Metal GLSL buffer block" not in metal
     assert "cubeBlock.direction" not in metal
@@ -16310,12 +14838,8 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
         "readCubeLayer(cubeBlock), readDepth(cubeBlock));" in glsl
     )
     assert (
-        glsl.count(
-            "/* unsupported GLSL texture gather compare: "
-            "textureGatherCompareOffset offsets require 2D or 2D-array shadow "
-            "samplers */ vec4(0.0)"
-        )
-        == 4
+        "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array shadow samplers"
+        in glsl_refusal
     )
     assert "textureGatherCompare(" not in glsl
     assert "textureGatherCompareOffset(" not in glsl
@@ -16391,137 +14915,17 @@ def test_codegen_mixed_ssbo_unsupported_query_and_atomic_args_infer_types():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedQueryAtomicBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedQueryAtomicBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "int2 sizeDirect = textureSize(colorMap, 0 /* unsupported HLSL GLSL "
-        "buffer block access queryBlock: no target-side fallback declaration "
-        "emitted */);" in hlsl
-    )
-    assert (
-        "int3 layerSizeCall = textureSize(layerMap, 0 /* unsupported HLSL "
-        "GLSL buffer block function call readLod: target function omitted */);" in hlsl
-    )
-    assert (
-        "float2 lodDirect = float2(layerMap.CalculateLevelOfDetail"
-        "(linearSampler, (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "access queryBlock: no target-side fallback declaration emitted */).xy), "
-        "layerMap.CalculateLevelOfDetailUnclamped(linearSampler, (float3(0.0, 0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access queryBlock: no target-side "
-        "fallback declaration emitted */).xy));" in hlsl
-    )
-    assert (
-        "float2 lodCall = float2(cubeArray.CalculateLevelOfDetail"
-        "(linearSampler, (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "function call readCubeLayer: target function omitted */).xyz), "
-        "cubeArray.CalculateLevelOfDetailUnclamped(linearSampler, (float4(0.0, 0.0, 0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readCubeLayer: "
-        "target function omitted */).xyz));" in hlsl
-    )
-    assert (
-        "uint atomicDirect = imageAtomicAdd_uimage2D(counters, int2(0, 0) "
-        "/* unsupported HLSL GLSL buffer block access queryBlock: no target-side "
-        "fallback declaration emitted */, 0u /* unsupported HLSL GLSL buffer "
-        "block access queryBlock: no target-side fallback declaration emitted */);"
-        in hlsl
-    )
-    assert (
-        "uint atomicCall = imageAtomicAdd_uimage2D(counters, int2(0, 0) "
-        "/* unsupported HLSL GLSL buffer block function call readPixel: target "
-        "function omitted */, 0u /* unsupported HLSL GLSL buffer block function "
-        "call readAmount: target function omitted */);" in hlsl
-    )
-    assert (
-        "uint swapDirect = imageAtomicCompSwap_uimage2DArray(layerCounters, "
-        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block access queryBlock: "
-        "no target-side fallback declaration emitted */, 0u /* unsupported "
-        "HLSL GLSL buffer block access queryBlock: no target-side fallback "
-        "declaration emitted */, 0u /* unsupported HLSL GLSL buffer block "
-        "access queryBlock: no target-side fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "uint swapCall = imageAtomicCompSwap_uimage2DArray(layerCounters, "
-        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block function call "
-        "readPixelLayer: target function omitted */, 0u /* unsupported HLSL "
-        "GLSL buffer block access queryBlock: no target-side fallback "
-        "declaration emitted */, 0u /* unsupported HLSL GLSL buffer block "
-        "function call readAmount: target function omitted */);" in hlsl
-    )
-    assert "imageAtomicAdd(counters" not in hlsl
-    assert "imageAtomicCompSwap(layerCounters" not in hlsl
-    assert "textureQueryLod(" not in hlsl
-    assert "queryBlock.uvLayer" not in hlsl
-    assert "queryBlock.pixel" not in hlsl
-    assert "queryBlock.amount" not in hlsl
-
-    assert (
-        "int2 sizeDirect = int2(colorMap.get_width(uint(0 /* unsupported Metal "
-        "GLSL buffer block access queryBlock: no target-side fallback declaration "
-        "emitted */)), colorMap.get_height(uint(0 /* unsupported Metal GLSL "
-        "buffer block access queryBlock: no target-side fallback declaration "
-        "emitted */)));" in metal
-    )
-    assert (
-        "int3 layerSizeCall = int3(layerMap.get_width(uint(0 /* unsupported "
-        "Metal GLSL buffer block function call readLod: target function omitted */)), "
-        "layerMap.get_height(uint(0 /* unsupported Metal GLSL buffer block "
-        "function call readLod: target function omitted */)), layerMap.get_array_size());"
-        in metal
-    )
-    assert (
-        "float2 lodDirect = float2(layerMap.calculate_clamped_lod"
-        "(linearSampler, (float3(0) /* unsupported Metal GLSL buffer block "
-        "access queryBlock: no target-side fallback declaration emitted */).xy), "
-        "layerMap.calculate_unclamped_lod(linearSampler, (float3(0) "
-        "/* unsupported Metal GLSL buffer block access queryBlock: no target-side "
-        "fallback declaration emitted */).xy));" in metal
-    )
-    assert (
-        "float2 lodCall = float2(cubeArray.calculate_clamped_lod"
-        "(linearSampler, (float4(0) /* unsupported Metal GLSL buffer block "
-        "function call readCubeLayer: target function omitted */).xyz), "
-        "cubeArray.calculate_unclamped_lod(linearSampler, (float4(0) "
-        "/* unsupported Metal GLSL buffer block function call readCubeLayer: "
-        "target function omitted */).xyz));" in metal
-    )
-    assert (
-        "uint atomicDirect = counters.atomic_fetch_add(uint2(int2(0) "
-        "/* unsupported Metal GLSL buffer block access queryBlock: no target-side "
-        "fallback declaration emitted */), 0u /* unsupported Metal GLSL buffer "
-        "block access queryBlock: no target-side fallback declaration emitted */).x;"
-        in metal
-    )
-    assert (
-        "uint atomicCall = counters.atomic_fetch_add(uint2(int2(0) "
-        "/* unsupported Metal GLSL buffer block function call readPixel: target "
-        "function omitted */), 0u /* unsupported Metal GLSL buffer block function "
-        "call readAmount: target function omitted */).x;" in metal
-    )
-    assert (
-        "uint swapDirect = imageAtomicCompSwap_uimage2DArray(layerCounters, "
-        "int3(0) /* unsupported Metal GLSL buffer block access queryBlock: "
-        "no target-side fallback declaration emitted */, 0u /* unsupported "
-        "Metal GLSL buffer block access queryBlock: no target-side fallback "
-        "declaration emitted */, 0u /* unsupported Metal GLSL buffer block "
-        "access queryBlock: no target-side fallback declaration emitted */);" in metal
-    )
-    assert (
-        "uint swapCall = imageAtomicCompSwap_uimage2DArray(layerCounters, "
-        "int3(0) /* unsupported Metal GLSL buffer block function call "
-        "readPixelLayer: target function omitted */, 0u /* unsupported Metal "
-        "GLSL buffer block access queryBlock: no target-side fallback "
-        "declaration emitted */, 0u /* unsupported Metal GLSL buffer block "
-        "function call readAmount: target function omitted */);" in metal
-    )
-    assert "imageAtomicAdd(counters" not in metal
-    assert "imageAtomicCompSwap(layerCounters" not in metal
-    assert "textureQueryLod(" not in metal
-    assert "queryBlock.uvLayer" not in metal
-    assert "queryBlock.pixel" not in metal
-    assert "queryBlock.amount" not in metal
-
     assert "ivec2 sizeDirect = textureSize(colorMap, queryBlock.lod);" in glsl
     assert "ivec3 layerSizeCall = textureSize(layerMap, readLod(queryBlock));" in glsl
     assert "vec2 lodDirect = textureQueryLod(layerMap, queryBlock.uvLayer.xy);" in glsl
@@ -16623,126 +15027,17 @@ def test_codegen_mixed_ssbo_unsupported_image_format_args_infer_types():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedImageFormatBlock\b.*unsupported member flag",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedImageFormatBlock\b.*unsupported member flag",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "RWTexture2D<float> scalarFloat : register(u0);" in hlsl
-    assert "RWTexture2D<float2> rgFloat : register(u1);" in hlsl
-    assert "RWTexture2D<uint> unsignedScalar : register(u2);" in hlsl
-    assert "RWTexture2DArray<uint2> unsignedLayers : register(u3);" in hlsl
-    assert (
-        "float scalarDirect = scalarFloat[int2(0, 0) /* unsupported HLSL GLSL "
-        "buffer block access imageBlock: no target-side fallback declaration "
-        "emitted */];" in hlsl
-    )
-    assert (
-        "float scalarCall = scalarFloat[int2(0, 0) /* unsupported HLSL GLSL "
-        "buffer block function call readPixel: target function omitted */];" in hlsl
-    )
-    assert (
-        "float2 rgDirect = rgFloat[int2(0, 0) /* unsupported HLSL GLSL buffer "
-        "block access imageBlock: no target-side fallback declaration emitted */];"
-        in hlsl
-    )
-    assert (
-        "uint2 unsignedRgCall = unsignedLayers[int3(0, 0, 0) /* unsupported HLSL "
-        "GLSL buffer block function call readPixelLayer: target function "
-        "omitted */];" in hlsl
-    )
-    assert (
-        "rgFloat[int2(0, 0) /* unsupported HLSL GLSL buffer block access imageBlock: "
-        "no target-side fallback declaration emitted */] = float2(0 "
-        "/* unsupported HLSL GLSL buffer block access imageBlock: no target-side "
-        "fallback declaration emitted */, 0.0);" in hlsl
-    )
-    assert (
-        "rgFloat[int2(0, 0) /* unsupported HLSL GLSL buffer block function call "
-        "readPixel: target function omitted */] = float2(0.0, 0.0) /* unsupported "
-        "HLSL GLSL buffer block function call readRg: target function omitted */;"
-        in hlsl
-    )
-    assert (
-        "unsignedLayers[int3(0, 0, 0) /* unsupported HLSL GLSL buffer block access "
-        "imageBlock: no target-side fallback declaration emitted */] = "
-        "uint2(0u /* unsupported HLSL GLSL buffer block access imageBlock: "
-        "no target-side fallback declaration emitted */, 0u);" in hlsl
-    )
-    assert (
-        "unsignedLayers[int3(0, 0, 0) /* unsupported HLSL GLSL buffer block function "
-        "call readPixelLayer: target function omitted */] = uint2(0u, 0u) "
-        "/* unsupported HLSL GLSL buffer block function call readUnsignedRg: "
-        "target function omitted */;" in hlsl
-    )
-    assert "imageLoad(" not in hlsl
-    assert "imageStore(" not in hlsl
-    assert "imageBlock.pixel" not in hlsl
-    assert "imageBlock.scalarValue" not in hlsl
-    assert "imageBlock.unsignedRgValue" not in hlsl
-
-    assert "texture2d<float, access::read_write> scalarFloat [[texture(0)]]" in metal
-    assert "texture2d<float, access::read_write> rgFloat [[texture(1)]]" in metal
-    assert "texture2d<uint, access::read_write> unsignedScalar [[texture(2)]]" in metal
-    assert (
-        "texture2d_array<uint, access::read_write> unsignedLayers [[texture(3)]]"
-        in metal
-    )
-    assert (
-        "float scalarDirect = scalarFloat.read(uint2(int2(0) /* unsupported "
-        "Metal GLSL buffer block access imageBlock: no target-side fallback "
-        "declaration emitted */)).x;" in metal
-    )
-    assert (
-        "float scalarCall = scalarFloat.read(uint2(int2(0) /* unsupported "
-        "Metal GLSL buffer block function call readPixel: target function "
-        "omitted */)).x;" in metal
-    )
-    assert (
-        "float2 rgDirect = rgFloat.read(uint2(int2(0) /* unsupported Metal "
-        "GLSL buffer block access imageBlock: no target-side fallback declaration "
-        "emitted */)).xy;" in metal
-    )
-    assert (
-        "uint2 unsignedRgCall = unsignedLayers.read(uint2((int3(0) "
-        "/* unsupported Metal GLSL buffer block function call readPixelLayer: "
-        "target function omitted */).xy), uint((int3(0) /* unsupported Metal "
-        "GLSL buffer block function call readPixelLayer: target function "
-        "omitted */).z)).xy;" in metal
-    )
-    assert (
-        "rgFloat.write(float4(0 /* unsupported Metal GLSL buffer block access "
-        "imageBlock: no target-side fallback declaration emitted */, 0.0, 0.0, "
-        "0.0), uint2(int2(0) /* unsupported Metal GLSL buffer block access "
-        "imageBlock: no target-side fallback declaration emitted */));" in metal
-    )
-    assert (
-        "rgFloat.write(float4(float2(0) /* unsupported Metal GLSL buffer block "
-        "function call readRg: target function omitted */, 0.0, 0.0), "
-        "uint2(int2(0) /* unsupported Metal GLSL buffer block function call "
-        "readPixel: target function omitted */));" in metal
-    )
-    assert (
-        "unsignedLayers.write(uint4(0u /* unsupported Metal GLSL buffer block "
-        "access imageBlock: no target-side fallback declaration emitted */, 0u, "
-        "0u, 0u), uint2((int3(0) /* unsupported Metal GLSL buffer block access "
-        "imageBlock: no target-side fallback declaration emitted */).xy), "
-        "uint((int3(0) /* unsupported Metal GLSL buffer block access imageBlock: "
-        "no target-side fallback declaration emitted */).z));" in metal
-    )
-    assert (
-        "unsignedLayers.write(uint4(uint2(0) /* unsupported Metal GLSL buffer "
-        "block function call readUnsignedRg: target function omitted */, 0u, 0u), "
-        "uint2((int3(0) /* unsupported Metal GLSL buffer block function call "
-        "readPixelLayer: target function omitted */).xy), uint((int3(0) "
-        "/* unsupported Metal GLSL buffer block function call readPixelLayer: "
-        "target function omitted */).z));" in metal
-    )
-    assert "imageLoad(" not in metal
-    assert "imageStore(" not in metal
-    assert "imageBlock.pixel" not in metal
-    assert "imageBlock.scalarValue" not in metal
-    assert "imageBlock.unsignedRgValue" not in metal
-
     assert "layout(r32f, binding = 0) uniform image2D scalarFloat;" in glsl
     assert "layout(rg32f, binding = 1) uniform image2D rgFloat;" in glsl
     assert "layout(r32ui, binding = 2) uniform uimage2D unsignedScalar;" in glsl
@@ -17452,8 +15747,16 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block atomic: atomicAdd cannot write readonly",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block atomic: Metal atomicAdd cannot write readonly",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     with pytest.raises(
         ValueError,
         match=(
@@ -17462,50 +15765,6 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
         ),
     ):
         GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "uint readonlyOld = /* unsupported HLSL GLSL buffer block atomic: "
-        "atomicAdd cannot write readonly ByteAddressBuffer */ 0u;" in hlsl
-    )
-    assert (
-        "float floatOld = /* unsupported HLSL GLSL buffer block atomic: "
-        "atomicAdd currently supports only int or uint buffer members */ 0;" in hlsl
-    )
-    assert (
-        "uint vectorOld = /* unsupported HLSL GLSL buffer block atomic: "
-        "atomicAdd requires a scalar int or uint buffer member */ 0u;" in hlsl
-    )
-    assert (
-        "float matrixOld = /* unsupported HLSL GLSL buffer block atomic: "
-        "atomicAdd requires a scalar int or uint buffer member */ 0;" in hlsl
-    )
-    assert "Interlocked" not in hlsl
-    assert "__crossgl_byteaddress_atomic" not in hlsl
-
-    assert (
-        "uint readonlyOld = /* unsupported Metal GLSL buffer block atomic: "
-        "atomicAdd cannot write readonly device buffer */ 0u;" in metal
-    )
-    assert (
-        "float floatOld = atomic_fetch_add_explicit("
-        "reinterpret_cast<device atomic_float*>(floatAtomicBlock + 0), "
-        "1.0, memory_order_relaxed);" in metal
-    )
-    assert (
-        "float minimumOld = /* unsupported Metal GLSL buffer block atomic: "
-        "atomicMin does not support float buffer members */ 0;" in metal
-    )
-    assert (
-        "uint vectorOld = /* unsupported Metal GLSL buffer block atomic: "
-        "atomicAdd requires a scalar int or uint buffer member */ 0u;" in metal
-    )
-    assert (
-        "float matrixOld = /* unsupported Metal GLSL buffer block atomic: "
-        "atomicAdd requires a scalar int or uint buffer member */ 0;" in metal
-    )
-    assert metal.count("atomic_fetch_add_explicit(") == 1
-    assert "atomic_fetch_min_explicit(" not in metal
-    assert "__crossgl_buffer_atomic" not in metal
 
 
 @pytest.mark.parametrize(
@@ -17635,7 +15894,9 @@ def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
     assert "precision highp float" not in metal
     assert "#include <metal_stdlib>" in metal
 
-    assert "#version 300 es" in glsl
+    # GLSL ES has compute shaders from 3.10 (GLSL ES 3.20, section 1.1.1), so the
+    # emitted version is raised from the source's 3.00.
+    assert glsl.startswith("#version 310 es\n")
     assert "#extension GL_ARB_separate_shader_objects : enable" in glsl
     assert "precision highp float;" in glsl
 
@@ -17793,11 +16054,11 @@ def test_codegen_mixed_ssbo_hlsl_float_compound_unsupported_op_stays_diagnostic(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "RWByteAddressBuffer floatOpsBlock : register(u64);" in hlsl
-    assert "unsupported HLSL GLSL buffer block compound store" in hlsl
-    assert "operator %= is not supported for float buffer members" in hlsl
-    assert "floatOpsBlock.Store" not in hlsl
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block compound store: operator %= is not supported for float",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_hlsl_integer_mod_compound_store_is_supported():
@@ -17846,11 +16107,11 @@ def test_codegen_mixed_ssbo_hlsl_fixed_vector_float_mod_compound_is_diagnostic()
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "RWByteAddressBuffer fixedVectorOpsBlock : register(u69);" in hlsl
-    assert "unsupported HLSL GLSL buffer block compound store" in hlsl
-    assert "operator %= is not supported for float buffer members" in hlsl
-    assert "fixedVectorOpsBlock.Store" not in hlsl
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block compound store: operator %= is not supported for float",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_hlsl_readonly_runtime_scalar_write_is_diagnostic():
@@ -17871,11 +16132,11 @@ def test_codegen_mixed_ssbo_hlsl_readonly_runtime_scalar_write_is_diagnostic():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "ByteAddressBuffer readWriteBlock : register(t70);" in hlsl
-    assert "RWByteAddressBuffer readWriteBlock" not in hlsl
-    assert "readonly ByteAddressBuffer cannot be written" in hlsl
-    assert "readWriteBlock.Store" not in hlsl
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: readWriteBlock is a readonly block, and",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_hlsl_readonly_fixed_vector_write_is_diagnostic():
@@ -17897,11 +16158,11 @@ def test_codegen_mixed_ssbo_hlsl_readonly_fixed_vector_write_is_diagnostic():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "ByteAddressBuffer readFixedVectorWriteBlock : register(t71);" in hlsl
-    assert "RWByteAddressBuffer readFixedVectorWriteBlock" not in hlsl
-    assert "readonly ByteAddressBuffer cannot be written" in hlsl
-    assert "readFixedVectorWriteBlock.Store" not in hlsl
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: readFixedVectorWriteBlock is a readonly",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_hlsl_readonly_blocks_use_srv_registers():
@@ -18488,11 +16749,11 @@ def test_codegen_mixed_ssbo_hlsl_readonly_matrix_metadata_write_stays_diagnostic
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "ByteAddressBuffer readMatrixBlock : register(t35);" in hlsl
-    assert "RWByteAddressBuffer readMatrixBlock" not in hlsl
-    assert "readonly ByteAddressBuffer cannot be written" in hlsl
-    assert "readMatrixBlock.Store" not in hlsl
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: readMatrixBlock is a readonly block,",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_hlsl_readonly_fixed_matrix_array_write_stays_diagnostic():
@@ -18514,11 +16775,11 @@ def test_codegen_mixed_ssbo_hlsl_readonly_fixed_matrix_array_write_stays_diagnos
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "ByteAddressBuffer readMatrixArrayBlock : register(t36);" in hlsl
-    assert "RWByteAddressBuffer readMatrixArrayBlock" not in hlsl
-    assert "readonly ByteAddressBuffer cannot be written" in hlsl
-    assert "readMatrixArrayBlock.Store" not in hlsl
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: readMatrixArrayBlock is a readonly",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_hlsl_readonly_runtime_matrix_array_write_stays_diagnostic():
@@ -18540,11 +16801,11 @@ def test_codegen_mixed_ssbo_hlsl_readonly_runtime_matrix_array_write_stays_diagn
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "ByteAddressBuffer runtimeMatrixBlock : register(t37);" in hlsl
-    assert "RWByteAddressBuffer runtimeMatrixBlock" not in hlsl
-    assert "readonly ByteAddressBuffer cannot be written" in hlsl
-    assert "runtimeMatrixBlock.Store" not in hlsl
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block store: runtimeMatrixBlock is a readonly block,",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_hlsl_writable_matrix_arrays_use_column_stores():
@@ -18774,11 +17035,11 @@ def test_codegen_mixed_ssbo_hlsl_matrix_compound_unsupported_op_stays_diagnostic
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "RWByteAddressBuffer matrixBlock : register(u34);" in hlsl
-    assert "unsupported HLSL GLSL buffer block matrix compound store" in hlsl
-    assert "requires explicit matrix operation lowering" in hlsl
-    assert "matrixBlock.Store4(16" not in hlsl
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block matrix compound store: operator %= has no matrix form \(GLSL",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_mixed_ssbo_hlsl_matrix_array_compound_store_uses_temp():
@@ -19053,58 +17314,17 @@ def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: MatrixBlock\b.*runtime arrays must be the final",
+    ):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: MatrixBlock\b.*runtime arrays must be the final",
+    ):
+        MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert "unsupported HLSL GLSL buffer block MatrixBlock" in hlsl
-    assert "ByteAddressBuffer offset lowering" in hlsl
-    assert (
-        "unsupported member transforms: runtime arrays must be the final "
-        "buffer block member" in hlsl
-    )
-    assert "unsupported HLSL GLSL buffer block struct MatrixBlock omitted" in hlsl
-    assert (
-        "unsupported HLSL GLSL buffer block variable MatrixBlock matrixBlock omitted"
-        in hlsl
-    )
-    assert "struct MatrixBlock {" not in hlsl
-    assert "MatrixBlock matrixBlock;" not in hlsl
-    assert "RWByteAddressBuffer matrixBlock" not in hlsl
-    assert (
-        "float v = 0 /* unsupported HLSL GLSL buffer block access matrixBlock: "
-        "no target-side fallback declaration emitted */;" in hlsl
-    )
-    assert (
-        "/* unsupported HLSL GLSL buffer block assignment matrixBlock: "
-        "no target-side fallback declaration emitted */;" in hlsl
-    )
-    assert "matrixBlock.tail" not in hlsl
-
-    assert "unsupported Metal GLSL buffer block MatrixBlock" in metal
-    assert "explicit pointer/offset lowering" in metal
-    assert (
-        "unsupported member transforms: runtime arrays must be the final "
-        "buffer block member" in metal
-    )
-    assert "unsupported Metal GLSL buffer block struct MatrixBlock omitted" in metal
-    assert (
-        "unsupported Metal GLSL buffer block variable MatrixBlock matrixBlock omitted"
-        in metal
-    )
-    assert "struct MatrixBlock {" not in metal
-    assert "MatrixBlock matrixBlock;" not in metal
-    assert "device uchar* matrixBlock" not in metal
-    assert (
-        "float v = 0 /* unsupported Metal GLSL buffer block access matrixBlock: "
-        "no target-side fallback declaration emitted */;" in metal
-    )
-    assert (
-        "/* unsupported Metal GLSL buffer block assignment matrixBlock: "
-        "no target-side fallback declaration emitted */;" in metal
-    )
-    assert "matrixBlock.tail" not in metal
-
     assert "layout(std430, binding = 7) buffer MatrixBlock" in glsl
     assert "} matrixBlock;" in glsl
     assert "matrixBlock.tail = v;" in glsl

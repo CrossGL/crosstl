@@ -51,6 +51,9 @@ from crosstl.translator.ast import (
     VectorType,
     create_legacy_shader_node,
 )
+from crosstl.translator.codegen.buffer_block_diagnostics import (
+    BufferBlockUnsupportedError,
+)
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
     DirectXAggregateInitializerError,
@@ -93,6 +96,12 @@ from crosstl.translator.cooperative_matrix import (
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.semantics import UnsizedArrayUnsupportedError
+from tests.lowering_refusal_helpers import (
+    emitter_refusal,
+    hlsl_partial_output,
+    refused_hlsl,
+)
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
 )
@@ -5835,18 +5844,22 @@ def test_glsl_input_attachment_reports_unsupported_hlsl_diagnostic(tmp_path):
     shader_path = tmp_path / "input-attachment.frag"
     shader_path.write_text(shader)
 
-    generated_code = crosstl.translate(
+    refusal = refused_hlsl(
+        crosstl.translate,
         str(shader_path),
         backend="directx",
         format_output=False,
         source_backend="opengl",
     )
 
-    assert "unsupported HLSL input attachment declaration" in generated_code
-    assert "unsupported HLSL input attachment load" in generated_code
-    assert "subpassInput sceneColor" not in generated_code
-    assert "subpassLoad(sceneColor)" not in generated_code
-    assert "float4(0.0, 0.0, 0.0, 0.0)" in generated_code
+    assert "DirectX cannot lower 2 constructs" in refusal
+    assert (
+        "input attachment declaration: 'sceneColor' uses subpassInput; "
+        "subpassInput resources require Vulkan subpass lowering"
+    ) in refusal
+    assert (
+        "input attachment load: subpassLoad requires Vulkan subpass input lowering"
+    ) in refusal
 
 
 def test_glsl_fragment_input_locations_lower_to_distinct_hlsl_semantics(tmp_path):
@@ -7203,7 +7216,7 @@ def test_hlsl_diagnostic_scalar_vector_zero_scanner_flags_single_arg_fallbacks()
     ]
 
 
-def test_hlsl_diagnostic_vector_zero_fallbacks_expand_for_dxc():
+def test_hlsl_unsupported_buffer_block_vector_members_are_refused():
     shader = """
     shader DiagnosticVectorFallbacks {
         struct UnsupportedDiagnosticBlock {
@@ -7247,23 +7260,14 @@ def test_hlsl_diagnostic_vector_zero_fallbacks_expand_for_dxc():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
-
-    assert "float2 uv = float2(0.0, 0.0) /* unsupported HLSL" in generated_code
-    assert "double2 precise_ = double2(0.0, 0.0) /* unsupported HLSL" in generated_code
-    assert "float3 normal = float3(0.0, 0.0, 0.0) /* unsupported HLSL" in generated_code
-    assert (
-        "float4 color = float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL"
-        in generated_code
-    )
-    assert "int2 pixel = int2(0, 0) /* unsupported HLSL" in generated_code
-    assert "int3 voxel = int3(0, 0, 0) /* unsupported HLSL" in generated_code
-    assert "uint2 counts = uint2(0u, 0u) /* unsupported HLSL" in generated_code
-    assert "uint4 mask = uint4(0u, 0u, 0u, 0u) /* unsupported HLSL" in generated_code
-    assert (
-        "bool2 predicates = bool2(false, false) /* unsupported HLSL" in generated_code
-    )
-    assert hlsl_scalar_vector_zero_diagnostics(generated_code) == []
+    # The double member has no ByteAddressBuffer lowering: the block is refused instead of every
+    # use being replaced by a zero vector.
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedDiagnosticBlock",
+    ) as error:
+        generate_code(parse_code(tokenize_code(shader)))
+    assert error.value.code == "project.translate.directx-buffer-block-unsupported"
 
 
 def test_hlsl_narrow_integer_aliases_map_to_valid_hlsl_integer_types():
@@ -14328,7 +14332,7 @@ def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer()
     assert "size_t" not in generated_code
 
 
-def test_directx_glsl_buffer_block_scalar_layout_remains_diagnostic():
+def test_directx_glsl_buffer_block_scalar_layout_is_refused():
     shader = """
     shader ScalarLayoutGlslBufferBlockHLSL {
         struct ScalarLayoutBlock {
@@ -14352,22 +14356,12 @@ def test_directx_glsl_buffer_block_scalar_layout_remains_diagnostic():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
-
-    assert "unsupported layout scalar" in generated_code
-    assert "currently supports std140 and std430 only" in generated_code
-    assert (
-        "unsupported HLSL GLSL buffer block parameter "
-        "ScalarLayoutBlock localBlock (scalar)" in generated_code
-    )
-    assert "unsupported HLSL GLSL buffer block function readParam omitted" in (
-        generated_code
-    )
-    assert "RWByteAddressBuffer block" not in generated_code
-    assert "ByteAddressBuffer block :" not in generated_code
-    assert "struct ScalarLayoutBlock {" not in generated_code
-    assert "block.Load" not in generated_code
-    assert "localBlock.Load" not in generated_code
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"unsupported layout scalar: DirectX ByteAddressBuffer lowering "
+        r"currently supports std140 and std430 only",
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_directx_byte_address_vector_buffer_helpers_lower_to_load_store_methods():
@@ -29417,7 +29411,7 @@ def test_directx_array_handling(array_test_data):
 
     struct Material {
         float values[4];  // Fixed-size array
-        vec3 colors[];    // Dynamic array
+        vec3 colors[16];  // A value array needs an element count
     };
 
     cbuffer Constants {
@@ -29660,7 +29654,7 @@ def test_directx_non_resource_arrays_preserve_expression_sizes():
     assert "float localWeights[]" not in generated_code
 
 
-def test_directx_unsized_non_resource_struct_and_globals_use_fixed_fallback():
+def test_directx_unsized_non_resource_struct_and_globals_are_refused():
     shader = """
     shader UnsizedNonResourceArrays {
         struct Globals {
@@ -29680,14 +29674,11 @@ def test_directx_unsized_non_resource_struct_and_globals_use_fixed_fallback():
     }
     """
 
-    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
-
-    assert "float weights[1024];" in generated_code
-    assert "float3 colors[1024];" in generated_code
-    assert "float globalWeights[1024];" in generated_code
-    assert "float weights[];" not in generated_code
-    assert "float3 colors[];" not in generated_code
-    assert "float globalWeights[];" not in generated_code
+    # HLSL allows unsized arrays only for resources; the emitter used to invent 1024 elements.
+    with pytest.raises(UnsizedArrayUnsupportedError) as raised:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert raised.value.code == "project.translate.directx-unsized-array-unsupported"
+    assert "Globals.weights" in str(raised.value)
 
 
 def test_directx_texture_resources_and_sampling():
@@ -33787,7 +33778,7 @@ def test_directx_explicit_integer_image_formats_use_atomic_helpers():
     assert "imageAtomicExchange(image" not in generated_code
 
 
-def test_directx_float_image_atomic_exchange_emits_unsupported_fallback():
+def test_directx_float_image_atomic_exchange_is_refused():
     shader = """
     shader FloatImageAtomicExchange {
         image2D floatCounters @r32f;
@@ -33805,16 +33796,17 @@ def test_directx_float_image_atomic_exchange_emits_unsupported_fallback():
     """
 
     ast = crosstl.translator.parse(shader)
-    generated_code = HLSLCodeGen().generate(ast)
+    generated_code, refusal = hlsl_partial_output(HLSLCodeGen().generate, ast)
 
+    assert refusal == (
+        "DirectX cannot lower 1 construct: image atomic resource call: "
+        "imageAtomicExchange on RWTexture2D<float> (target directx) "
+        "[project.translate.directx-lowering-unsupported]"
+    )
     assert "RWTexture2D<float> floatCounters : register(u0);" in generated_code
     assert (
         "float exchangeFloat(RWTexture2D<float> image, int2 pixel, float value)"
         in generated_code
-    )
-    assert (
-        "return /* unsupported DirectX image atomic resource call: "
-        "imageAtomicExchange on RWTexture2D<float> */ 0.0;" in generated_code
     )
     assert "imageAtomicExchange_" not in generated_code
     assert "InterlockedExchange" not in generated_code
@@ -35716,18 +35708,16 @@ def test_directx_cube_texture_gather_offsets_emit_diagnostics_without_samplers()
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    offset_diagnostic = (
-        "/* unsupported DirectX texture gather: textureGatherOffset "
-        "offsets require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
-    )
-    offsets_diagnostic = (
-        "/* unsupported DirectX texture gather: textureGatherOffsets "
-        "offsets require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
-    )
+    assert refusal.startswith("DirectX cannot lower 2 constructs: ")
+    assert (
+        "texture gather: textureGatherOffset offsets require 2D or 2D-array "
+        "textures; texture gather: textureGatherOffsets offsets require 2D or "
+        "2D-array textures"
+    ) in refusal
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
     assert "SamplerState cubeSampler : register(s0);" in generated_code
@@ -35741,8 +35731,6 @@ def test_directx_cube_texture_gather_offsets_emit_diagnostics_without_samplers()
         "float4 gatherCubeArray(TextureCubeArray tex, SamplerState s, float4 cubeLayer, int2 offset, int2 offset0, int2 offset1, int2 offset2, int2 offset3, int component)"
         in generated_code
     )
-    assert generated_code.count(offset_diagnostic) == 4
-    assert generated_code.count(offsets_diagnostic) == 4
     assert ".Gather" not in generated_code
     assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
@@ -35784,14 +35772,11 @@ def test_directx_unsupported_dimension_texture_gather_emits_diagnostics_without_
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported DirectX texture gather: textureGather requires 2D, "
-        "2D-array, cube, or cube-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
-    )
+    diagnostic = "texture gather: textureGather requires 2D, 2D-array, cube, or cube-array textures"
     assert "Texture1D lineMap : register(t0);" in generated_code
     assert "Texture3D volumeMap : register(t1);" in generated_code
     assert "SamplerState linearSampler : register(s0);" in generated_code
@@ -35805,7 +35790,7 @@ def test_directx_unsupported_dimension_texture_gather_emits_diagnostics_without_
         "float4 gatherVolume(Texture3D tex, SamplerState s, float3 volumeUv, int component)"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 6
+    assert diagnostic in refusal
     assert ".Gather" not in generated_code
     assert "textureGather(" not in generated_code
 
@@ -35886,17 +35871,15 @@ def test_directx_unsupported_dimension_texture_gather_offsets_emit_diagnostics_w
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     offset_diagnostic = (
-        "/* unsupported DirectX texture gather: textureGatherOffset offsets "
-        "require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
+        "texture gather: textureGatherOffset offsets require 2D or 2D-array textures"
     )
     offsets_diagnostic = (
-        "/* unsupported DirectX texture gather: textureGatherOffsets offsets "
-        "require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
+        "texture gather: textureGatherOffsets offsets require 2D or 2D-array textures"
     )
     assert "Texture1D lineMap : register(t0);" in generated_code
     assert "Texture3D volumeMap : register(t1);" in generated_code
@@ -35911,8 +35894,8 @@ def test_directx_unsupported_dimension_texture_gather_offsets_emit_diagnostics_w
         "float4 gatherVolume(Texture3D tex, SamplerState s, float3 volumeUv, int2 offset, int component)"
         in generated_code
     )
-    assert generated_code.count(offset_diagnostic) == 2
-    assert generated_code.count(offsets_diagnostic) == 2
+    assert offset_diagnostic in refusal
+    assert offsets_diagnostic in refusal
     assert ".Gather" not in generated_code
     assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
@@ -35954,15 +35937,11 @@ def test_directx_unsupported_dimension_texture_gather_compare_emits_diagnostics_
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported DirectX texture gather compare: textureGatherCompare "
-        "requires 2D, 2D-array, cube, or cube-array textures */ "
-        "float4(0.0, 0.0, 0.0, 0.0)"
-    )
+    diagnostic = "texture gather compare: textureGatherCompare requires 2D, 2D-array, cube, or cube-array textures"
     assert "Texture1D lineMap : register(t0);" in generated_code
     assert "Texture3D volumeMap : register(t1);" in generated_code
     assert "Texture2D colorMap : register(t2);" in generated_code
@@ -35978,7 +35957,7 @@ def test_directx_unsupported_dimension_texture_gather_compare_emits_diagnostics_
         "float4 gatherVolume(Texture3D tex, SamplerState s, float3 volumeUv, float depth)"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 4
+    assert diagnostic in refusal
     assert (
         "float4 sampled = colorMap.Sample(sharedSampler, input.uv);" in generated_code
     )
@@ -36481,8 +36460,8 @@ def test_directx_cube_texture_sample_offsets_emit_diagnostics_without_samplers()
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
@@ -36493,40 +36472,28 @@ def test_directx_cube_texture_sample_offsets_emit_diagnostics_without_samplers()
     assert "shadowMapSampler" not in generated_code
     assert "shadowArraySampler" not in generated_code
     assert (
-        generated_code.count(
-            "/* unsupported DirectX texture offset: textureOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
-        )
-        == 4
+        "texture offset: textureOffset offsets require 1D, 2D, 2D-array, or 3D textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported DirectX texture offset: textureLodOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
-        )
-        == 4
+        "texture offset: textureLodOffset offsets require 1D, 2D, 2D-array, or 3D textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported DirectX texture offset: textureGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
-        )
-        == 4
+        "texture offset: textureGradOffset offsets require 1D, 2D, 2D-array, or 3D textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareOffset offsets require 1D, 1D-array, 2D, or 2D-array textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareLodOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareLodOffset offsets require 1D, 1D-array, 2D, or 2D-array textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures"
+        in refusal
     )
     assert ".Sample(" not in generated_code
     assert ".SampleLevel(" not in generated_code
@@ -38036,7 +38003,9 @@ def test_directx_projected_cube_shadow_compare_lowers_supported_forms():
     }
     """
 
-    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
@@ -38060,10 +38029,8 @@ def test_directx_projected_cube_shadow_compare_lowers_supported_forms():
         "textureCompareProjGradOffset",
     }:
         assert (
-            generated_code.count(
-                f"/* unsupported DirectX texture compare: {func_name} offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-            )
-            == 1
+            f"texture compare: {func_name} offsets require 1D, 1D-array, 2D, or 2D-array textures"
+            in refusal
         )
     coordinate_diagnostic_counts = {
         "textureCompareProj": 1,
@@ -38073,10 +38040,8 @@ def test_directx_projected_cube_shadow_compare_lowers_supported_forms():
     }
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported DirectX texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
-            )
-            == count
+            f"texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates"
+            in refusal
         )
     assert "textureCompareProj(" not in generated_code
     assert "textureCompareProjOffset(" not in generated_code
@@ -38162,8 +38127,8 @@ def test_directx_projected_cube_shadow_compare_implicit_samplers_lowers_supporte
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
@@ -38190,8 +38155,8 @@ def test_directx_projected_cube_shadow_compare_implicit_samplers_lowers_supporte
         in generated_code
     )
     assert (
-        "/* unsupported DirectX texture compare: textureCompareProjGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-        in generated_code
+        "texture compare: textureCompareProjGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures"
+        in refusal
     )
     coordinate_diagnostic_counts = {
         "textureCompareProj": 1,
@@ -38200,10 +38165,8 @@ def test_directx_projected_cube_shadow_compare_implicit_samplers_lowers_supporte
     }
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported DirectX texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
-            )
-            == count
+            f"texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates"
+            in refusal
         )
     assert (
         "cubeProjected(cubeMap, cubeMapSampler, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
@@ -38295,8 +38258,8 @@ def test_directx_projected_cube_shadow_compare_resource_arrays_thread_supported_
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "TextureCube cubeMaps[4] : register(t0);" in generated_code
@@ -38323,8 +38286,8 @@ def test_directx_projected_cube_shadow_compare_resource_arrays_thread_supported_
         in generated_code
     )
     assert (
-        "/* unsupported DirectX texture compare: textureCompareProjGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-        in generated_code
+        "texture compare: textureCompareProjGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures"
+        in refusal
     )
     coordinate_diagnostic_counts = {
         "textureCompareProj": 1,
@@ -38333,10 +38296,8 @@ def test_directx_projected_cube_shadow_compare_resource_arrays_thread_supported_
     }
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported DirectX texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
-            )
-            == count
+            f"texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates"
+            in refusal
         )
     assert (
         "cubeProjected(cubeMaps, cubeMapsSampler, input.layer, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
@@ -38384,8 +38345,8 @@ def test_directx_direct_projected_cube_texture_lowers_supported_color_forms():
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
@@ -38414,12 +38375,12 @@ def test_directx_direct_projected_cube_texture_lowers_supported_color_forms():
         in generated_code
     )
     assert (
-        "/* unsupported DirectX projected texture: textureProjLodOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
-        in generated_code
+        "projected texture: textureProjLodOffset offsets require 1D, 2D, 2D-array, or 3D textures"
+        in refusal
     )
     assert (
-        "/* unsupported DirectX projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
-        in generated_code
+        "projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures"
+        in refusal
     )
     coordinate_diagnostic_counts = {
         "textureProj": 1,
@@ -38429,10 +38390,8 @@ def test_directx_direct_projected_cube_texture_lowers_supported_color_forms():
     }
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported DirectX projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0, 0.0, 0.0, 0.0)"
-            )
-            == count
+            f"projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates"
+            in refusal
         )
     assert "textureProj(cubeMap" not in generated_code
     assert "textureProj(cubeArray" not in generated_code
@@ -38504,8 +38463,8 @@ def test_directx_projected_cube_texture_parameters_forward_supported_implicit_sa
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
@@ -38528,8 +38487,8 @@ def test_directx_projected_cube_texture_parameters_forward_supported_implicit_sa
         in generated_code
     )
     assert (
-        "/* unsupported DirectX projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
-        in generated_code
+        "projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures"
+        in refusal
     )
     coordinate_diagnostic_counts = {
         "textureProj": 1,
@@ -38538,10 +38497,8 @@ def test_directx_projected_cube_texture_parameters_forward_supported_implicit_sa
     }
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported DirectX projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0, 0.0, 0.0, 0.0)"
-            )
-            == count
+            f"projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates"
+            in refusal
         )
     assert (
         "cubeProjected(cubeMap, cubeMapSampler, input.cubeProj, input.lod, input.ddx, input.ddy, input.offset)"
@@ -38695,19 +38652,18 @@ def test_directx_unsupported_projected_cube_array_diagnostic_keeps_sampler_role(
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     diagnostic = (
-        "/* unsupported DirectX projected texture: textureProj requires 1D, "
-        "2D, or 3D projection coordinates */ float4(0.0, 0.0, 0.0, 0.0)"
+        "projected texture: textureProj requires 1D, 2D, or 3D projection coordinates"
     )
     assert "TextureCubeArray cubeArray : register(t0);" in generated_code
     assert "Texture2D shadowMap : register(t1);" in generated_code
     assert "SamplerComparisonState sharedSampler : register(s0);" in generated_code
     assert "SamplerState sharedSampler" not in generated_code
-    assert diagnostic in generated_code
+    assert diagnostic in refusal
     assert (
         "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
         in generated_code
@@ -38836,29 +38792,28 @@ def test_directx_unsupported_gather_diagnostics_do_not_create_sampler_role_confl
     }
     """
 
-    regular_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    regular_code, regular_refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage,
+        crosstl.translator.parse(regular_diagnostic_shader),
+        "fragment",
     )
-    compare_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(compare_diagnostic_shader), "fragment"
+    compare_code, compare_refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage,
+        crosstl.translator.parse(compare_diagnostic_shader),
+        "fragment",
     )
-    parameter_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(parameter_diagnostic_shader), "fragment"
+    parameter_code, parameter_refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage,
+        crosstl.translator.parse(parameter_diagnostic_shader),
+        "fragment",
     )
 
-    gather_diagnostic = (
-        "/* unsupported DirectX texture gather: textureGather requires 2D, "
-        "2D-array, cube, or cube-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
-    )
-    gather_compare_offset_diagnostic = (
-        "/* unsupported DirectX texture gather compare: "
-        "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
-        "float4(0.0, 0.0, 0.0, 0.0)"
-    )
+    gather_diagnostic = "texture gather: textureGather requires 2D, 2D-array, cube, or cube-array textures"
+    gather_compare_offset_diagnostic = "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array textures"
 
     assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
     assert "SamplerState sharedSampler" not in regular_code
-    assert gather_diagnostic in regular_code
+    assert gather_diagnostic in regular_refusal
     assert (
         "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
         in regular_code
@@ -38867,7 +38822,7 @@ def test_directx_unsupported_gather_diagnostics_do_not_create_sampler_role_confl
 
     assert "SamplerState sharedSampler : register(s0);" in compare_code
     assert "SamplerComparisonState sharedSampler" not in compare_code
-    assert gather_compare_offset_diagnostic in compare_code
+    assert gather_compare_offset_diagnostic in compare_refusal
     assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in compare_code
     assert "GatherCmp(sharedSampler" not in compare_code
 
@@ -38876,7 +38831,7 @@ def test_directx_unsupported_gather_diagnostics_do_not_create_sampler_role_confl
         "float inspect(SamplerComparisonState s, float u, float2 uv, float depth)"
         in parameter_code
     )
-    assert gather_diagnostic in parameter_code
+    assert gather_diagnostic in parameter_refusal
     assert "float ok = shadowMap.SampleCmp(s, uv, depth);" in parameter_code
     assert (
         "return inspect(sharedSampler, input.u, input.uv, input.depth);"
@@ -38926,26 +38881,28 @@ def test_directx_storage_image_texture_diagnostics_do_not_create_sampler_role_co
     }
     """
 
-    regular_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    regular_code, regular_refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage,
+        crosstl.translator.parse(regular_diagnostic_shader),
+        "fragment",
     )
-    comparison_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
+    comparison_code, comparison_refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage,
+        crosstl.translator.parse(comparison_diagnostic_shader),
+        "fragment",
     )
 
     storage_texture_diagnostic = (
-        "/* unsupported DirectX storage image texture operation: "
-        "texture on RWTexture2D<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
+        "storage image texture operation: texture on RWTexture2D<float4>"
     )
     storage_compare_diagnostic = (
-        "/* unsupported DirectX storage image texture comparison: "
-        "textureCompare on RWTexture2D<float4> */ 0.0"
+        "storage image texture comparison: textureCompare on RWTexture2D<float4>"
     )
 
     assert "RWTexture2D<float4> colorImage : register(u0);" in regular_code
     assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
     assert "SamplerState sharedSampler" not in regular_code
-    assert storage_texture_diagnostic in regular_code
+    assert storage_texture_diagnostic in regular_refusal
     assert (
         "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
         in regular_code
@@ -38955,7 +38912,7 @@ def test_directx_storage_image_texture_diagnostics_do_not_create_sampler_role_co
     assert "RWTexture2D<float4> colorImage : register(u0);" in comparison_code
     assert "SamplerState sharedSampler : register(s0);" in comparison_code
     assert "SamplerComparisonState sharedSampler" not in comparison_code
-    assert storage_compare_diagnostic in comparison_code
+    assert storage_compare_diagnostic in comparison_refusal
     assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in comparison_code
     assert "SampleCmp(sharedSampler" not in comparison_code
 
@@ -39672,15 +39629,11 @@ def test_directx_unsupported_cube_shadow_gather_compare_offsets_skip_implicit_sa
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported DirectX texture gather compare: "
-        "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
-        "float4(0.0, 0.0, 0.0, 0.0)"
-    )
+    diagnostic = "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array textures"
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
     assert "SamplerComparisonState" not in generated_code
@@ -39694,7 +39647,7 @@ def test_directx_unsupported_cube_shadow_gather_compare_offsets_skip_implicit_sa
         "float4 cubeArrayOffset(TextureCubeArray tex, float4 cubeLayer, float depth, int2 offset)"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 3
+    assert diagnostic in refusal
     assert (
         "cubeOffset(cubeMap, input.direction, input.depth, input.offset)"
         in generated_code
@@ -39994,7 +39947,9 @@ def test_directx_cube_shadow_compare_offsets_report_unsupported():
     }
     """
 
-    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
@@ -40009,22 +39964,16 @@ def test_directx_cube_shadow_compare_offsets_report_unsupported():
         in generated_code
     )
     assert (
-        generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareOffset offsets require 1D, 1D-array, 2D, or 2D-array textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareLodOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareLodOffset offsets require 1D, 1D-array, 2D, or 2D-array textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures"
+        in refusal
     )
     assert "textureCompareOffset(" not in generated_code
     assert "textureCompareLodOffset(" not in generated_code
@@ -40430,24 +40379,26 @@ def test_directx_texture_query_resource_descriptors():
     assert (
         codegen.texture_query_size_expression("colorMap") == "textureSize(colorMap, 0)"
     )
-    assert (
-        codegen.texture_query_levels_expression("colorImage")
-        == "/* unsupported DirectX texture query: textureQueryLevels on RWTexture2D<float4> */ 0"
+    assert emitter_refusal(
+        codegen, codegen.texture_query_levels_expression, "colorImage"
+    ) == (
+        "0",
+        "texture query: textureQueryLevels on RWTexture2D<float4>",
     )
     assert (
         codegen.texture_query_levels_expression("colorMap")
         == "textureQueryLevels(colorMap)"
     )
-    assert (
-        codegen.texture_samples_expression("colorMap")
-        == "/* unsupported DirectX texture samples query: requires multisample texture */ 0"
+    assert emitter_refusal(codegen, codegen.texture_samples_expression, "colorMap") == (
+        "0",
+        "texture samples query: requires multisample texture",
     )
     assert codegen.texture_samples_expression("msArray") == "textureSamples(msArray)"
-    assert (
-        codegen.texture_sample_position_expression("colorMap", "sampleIndex")
-        == "/* unsupported DirectX texture sample-position query: "
-        "textureSamplePosition on Texture2D requires sampled multisample texture */ "
-        "float2(0.0, 0.0)"
+    assert emitter_refusal(
+        codegen, codegen.texture_sample_position_expression, "colorMap", "sampleIndex"
+    ) == (
+        "float2(0.0, 0.0)",
+        "texture sample-position query: textureSamplePosition on Texture2D requires a sampled multisample texture",
     )
     assert (
         codegen.texture_sample_position_expression("msTex", "sampleIndex")
@@ -40595,46 +40546,17 @@ def test_directx_storage_image_levels_and_lod_queries_emit_diagnostics():
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    assert (
-        generated_code.count(
-            "/* unsupported DirectX texture query: textureQueryLevels on RWTexture2D<float4> */ 0"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "/* unsupported DirectX texture query: textureQueryLevels on RWTexture3D<float4> */ 0"
-        )
-        == 2
-    )
-    assert (
-        "/* unsupported DirectX texture query: textureQueryLevels on RWTexture2DArray<float4> */ 0"
-        in generated_code
-    )
-    assert (
-        "/* unsupported DirectX texture query: textureQueryLevels on RWTexture2D<uint> */ 0"
-        in generated_code
-    )
-    assert (
-        "/* unsupported DirectX texture query: textureQueryLevels on RWTexture3D<int> */ 0"
-        in generated_code
-    )
-    assert (
-        generated_code.count(
-            "/* unsupported DirectX texture query: textureQueryLod on RWTexture2D<float4> */ float2(0.0, 0.0)"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "/* unsupported DirectX texture query: textureQueryLod on RWTexture3D<float4> */ float2(0.0, 0.0)"
-        )
-        == 2
-    )
+    assert "texture query: textureQueryLevels on RWTexture2D<float4>" in refusal
+    assert "texture query: textureQueryLevels on RWTexture3D<float4>" in refusal
+    assert "texture query: textureQueryLevels on RWTexture2DArray<float4>" in refusal
+    assert "texture query: textureQueryLevels on RWTexture2D<uint>" in refusal
+    assert "texture query: textureQueryLevels on RWTexture3D<int>" in refusal
+    assert "texture query: textureQueryLod on RWTexture2D<float4>" in refusal
+    assert "texture query: textureQueryLod on RWTexture3D<float4>" in refusal
     assert "textureQueryLevels(" not in generated_code
     assert "textureQueryLod(" not in generated_code
     assert "CalculateLevelOfDetail" not in generated_code
@@ -40798,8 +40720,8 @@ def test_directx_multisample_texture_sample_position_queries_use_hlsl_member():
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
@@ -40824,10 +40746,9 @@ def test_directx_multisample_texture_sample_position_queries_use_hlsl_member():
     assert "msTextures[2].GetSamplePosition(input.sampleIndex)" in generated_code
     assert "textureSamplePosition(" not in generated_code
     assert (
-        "/* unsupported DirectX texture sample-position query: "
-        "textureSamplePosition on Texture2D requires sampled multisample texture */ "
-        "float2(0.0, 0.0)"
-    ) in generated_code
+        "texture sample-position query: textureSamplePosition on Texture2D requires a sampled multisample texture"
+        in refusal
+    )
     assert "SamplerState msTexSampler" not in generated_code
     assert "SamplerState msArraySampler" not in generated_code
 
@@ -41195,8 +41116,8 @@ def test_directx_typed_comparison_texture_operations_use_resource_shape():
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "Texture2D<float> shadow2D : register(t0);" in generated_code
@@ -41237,9 +41158,9 @@ def test_directx_typed_comparison_texture_operations_use_resource_shape():
         "SamplerComparisonState s, float4 cubeLayer, float depth, int2 offset)"
     ) in generated_code
     assert (
-        "/* unsupported DirectX texture compare: textureCompareOffset offsets require "
-        "1D, 1D-array, 2D, or 2D-array textures */ 0.0"
-    ) in generated_code
+        "texture compare: textureCompareOffset offsets require 1D, 1D-array, 2D, or 2D-array textures"
+        in refusal
+    )
     assert (
         "inspectImplicit(shadow2D, shadow2DSampler, shadow2DQuerySampler, input.uv, "
         "input.depth, input.ddx, input.ddy, input.offset)"
@@ -41379,20 +41300,17 @@ def test_directx_non_multisample_texture_samples_emit_diagnostics_without_sample
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported DirectX texture samples query: "
-        "requires multisample texture */ 0"
-    )
+    diagnostic = "texture samples query: requires multisample texture"
     assert "Texture2D colorMap : register(t0);" in generated_code
     assert "Texture2DArray layerMap : register(t1);" in generated_code
     assert "TextureCube cubeMap : register(t2);" in generated_code
     assert "TextureCubeArray cubeArray : register(t3);" in generated_code
     assert "Texture2D textures[4]" in generated_code
-    assert generated_code.count(diagnostic) == 10
+    assert diagnostic in refusal
     assert "textureSamples(" not in generated_code
     assert "GetDimensions(width, height, samples)" not in generated_code
     assert "SamplerState" not in generated_code
@@ -41442,20 +41360,17 @@ def test_directx_storage_image_samples_queries_emit_diagnostics():
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported DirectX texture samples query: "
-        "requires multisample texture */ 0"
-    )
+    diagnostic = "texture samples query: requires multisample texture"
     assert "RWTexture2D<float4> colorImage : register(u0);" in generated_code
     assert "RWTexture3D<float4> volumeImage : register(u1);" in generated_code
     assert "RWTexture2DArray<float4> layerImage : register(u2);" in generated_code
     assert "RWTexture2D<uint> uintImage : register(u3);" in generated_code
     assert "RWTexture3D<int> intVolume : register(u4);" in generated_code
-    assert generated_code.count(diagnostic) == 13
+    assert diagnostic in refusal
     assert "imageSamples(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "GetDimensions(width, height, samples)" not in generated_code
@@ -41521,23 +41436,30 @@ def test_directx_storage_image_sampling_and_fetch_emit_diagnostics():
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = "unsupported DirectX storage image texture operation"
     assert "RWTexture2D<float4> colorImage : register(u0);" in generated_code
     assert "RWTexture3D<float4> volumeImage : register(u1);" in generated_code
     assert "RWTexture2DArray<float4> layerImage : register(u2);" in generated_code
-    assert generated_code.count(diagnostic) == 20
-    for operation in {
-        "texture",
-        "textureLod",
-        "textureGather",
-        "texelFetch",
-        "texelFetchOffset",
-    }:
-        assert f"{operation} on RWTexture2D<float4>" in generated_code
+    assert refusal.startswith("DirectX cannot lower 15 constructs: ")
+    for image_type in (
+        "RWTexture2D<float4>",
+        "RWTexture3D<float4>",
+        "RWTexture2DArray<float4>",
+    ):
+        for operation in (
+            "texture",
+            "textureLod",
+            "textureGather",
+            "texelFetch",
+            "texelFetchOffset",
+        ):
+            assert (
+                f"storage image texture operation: {operation} on {image_type}"
+                in refusal
+            )
     assert ".Sample" not in generated_code
     assert ".Load(" not in generated_code
     assert "texture(" not in generated_code
@@ -41607,12 +41529,10 @@ def test_directx_storage_image_compare_calls_emit_diagnostics_without_comparison
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    comparison_diagnostic = "unsupported DirectX storage image texture comparison"
-    gather_diagnostic = "unsupported DirectX storage image texture operation"
     assert "RWTexture2D<float4> colorImage : register(u0);" in generated_code
     assert "RWTexture3D<float4> volumeImage : register(u1);" in generated_code
     assert "RWTexture2DArray<float4> layerImage : register(u2);" in generated_code
@@ -41625,8 +41545,25 @@ def test_directx_storage_image_compare_calls_emit_diagnostics_without_comparison
         "float4 gatherExplicit(RWTexture2DArray<float4> image, SamplerState s"
         in generated_code
     )
-    assert generated_code.count(comparison_diagnostic) == 14
-    assert generated_code.count(gather_diagnostic) == 4
+    assert refusal.startswith("DirectX cannot lower 14 constructs: ")
+    for image_type in ("RWTexture2D<float4>", "RWTexture3D<float4>"):
+        for operation in (
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+        ):
+            assert (
+                f"storage image texture comparison: {operation} on {image_type}"
+                in refusal
+            )
+    for operation in ("textureGatherCompare", "textureGatherCompareOffset"):
+        assert (
+            f"storage image texture operation: {operation} on "
+            "RWTexture2DArray<float4>" in refusal
+        )
     assert "SamplerComparisonState" not in generated_code
     assert "SampleCmp" not in generated_code
     assert "textureCompare(" not in generated_code
@@ -41739,8 +41676,8 @@ def test_directx_multisample_sampling_operations_emit_diagnostics_without_sample
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
@@ -41763,12 +41700,11 @@ def test_directx_multisample_sampling_operations_emit_diagnostics_without_sample
         "textureGatherOffset",
     }:
         assert (
-            f"unsupported DirectX multisample texture call: {func_name} on Texture2DMS<float4>"
-            in generated_code
+            f"multisample texture call: {func_name} on Texture2DMS<float4>" in refusal
         )
         assert (
-            f"unsupported DirectX multisample texture call: {func_name} on Texture2DMSArray<float4>"
-            in generated_code
+            f"multisample texture call: {func_name} on Texture2DMSArray<float4>"
+            in refusal
         )
 
     for invalid_call in {".Sample(", ".SampleLevel(", ".SampleGrad(", ".Gather("}:
@@ -41806,8 +41742,8 @@ def test_directx_multisample_texture_query_lod_emits_diagnostics_without_sampler
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
@@ -41821,16 +41757,11 @@ def test_directx_multisample_texture_query_lod_emits_diagnostics_without_sampler
     assert "CalculateLevelOfDetail" not in generated_code
     assert "textureQueryLod(" not in generated_code
     assert (
-        generated_code.count(
-            "unsupported DirectX multisample texture query: textureQueryLod on Texture2DMS<float4>"
-        )
-        == 2
+        "multisample texture query: textureQueryLod on Texture2DMS<float4>" in refusal
     )
     assert (
-        generated_code.count(
-            "unsupported DirectX multisample texture query: textureQueryLod on Texture2DMSArray<float4>"
-        )
-        == 2
+        "multisample texture query: textureQueryLod on Texture2DMSArray<float4>"
+        in refusal
     )
 
 
@@ -41867,8 +41798,8 @@ def test_directx_multisample_compare_operations_emit_diagnostics():
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
@@ -41884,13 +41815,13 @@ def test_directx_multisample_compare_operations_emit_diagnostics():
         "textureCompareGradOffset",
     }:
         assert (
-            f"unsupported DirectX multisample texture comparison: {func_name} on Texture2DMS<float4>"
-            in generated_code
+            f"multisample texture comparison: {func_name} on Texture2DMS<float4>"
+            in refusal
         )
     for func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
         assert (
-            f"unsupported DirectX multisample texture gather comparison: {func_name} on Texture2DMSArray<float4>"
-            in generated_code
+            f"multisample texture gather comparison: {func_name} on Texture2DMSArray<float4>"
+            in refusal
         )
     assert "SampleCmp" not in generated_code
     assert "GatherCmp" not in generated_code
@@ -41981,35 +41912,34 @@ def test_directx_multisample_diagnostics_do_not_create_sampler_role_conflicts():
     }
     """
 
-    regular_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    regular_code, regular_refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage,
+        crosstl.translator.parse(regular_diagnostic_shader),
+        "fragment",
     )
-    compare_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(compare_diagnostic_shader), "fragment"
+    compare_code, compare_refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage,
+        crosstl.translator.parse(compare_diagnostic_shader),
+        "fragment",
     )
-    struct_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(struct_diagnostic_shader), "fragment"
+    struct_code, struct_refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage,
+        crosstl.translator.parse(struct_diagnostic_shader),
+        "fragment",
     )
 
-    regular_diagnostic = (
-        "/* unsupported DirectX multisample texture call: "
-        "textureGrad on Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
-    )
+    regular_diagnostic = "multisample texture call: textureGrad on Texture2DMS<float4>"
     compare_diagnostic = (
-        "/* unsupported DirectX multisample texture comparison: "
-        "textureCompare on Texture2DMS<float4> */ 0.0"
+        "multisample texture comparison: textureCompare on Texture2DMS<float4>"
     )
-    sample_diagnostic = (
-        "/* unsupported DirectX multisample texture call: "
-        "texture on Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
-    )
+    sample_diagnostic = "multisample texture call: texture on Texture2DMS<float4>"
 
     assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
     assert (
         "float inspect(SamplerComparisonState s, float2 uv, float depth, float2 ddx, float2 ddy)"
         in regular_code
     )
-    assert regular_diagnostic in regular_code
+    assert regular_diagnostic in regular_refusal
     assert "float ok = shadowMap.SampleCmp(s, uv, depth);" in regular_code
     assert (
         "return inspect(sharedSampler, input.uv, input.depth, input.ddx, input.ddy);"
@@ -42018,13 +41948,13 @@ def test_directx_multisample_diagnostics_do_not_create_sampler_role_conflicts():
 
     assert "SamplerState sharedSampler : register(s0);" in compare_code
     assert "SamplerComparisonState sharedSampler" not in compare_code
-    assert compare_diagnostic in compare_code
+    assert compare_diagnostic in compare_refusal
     assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in compare_code
     assert "SampleCmp(sharedSampler" not in compare_code
 
     assert "SamplerComparisonState samplers[2];" in struct_code
     assert "SamplerState samplers[2];" not in struct_code
-    assert sample_diagnostic in struct_code
+    assert sample_diagnostic in struct_refusal
     assert (
         "float ok = shadowMap.SampleCmp(pack.samplers[input.index], input.uv, input.depth);"
         in struct_code
@@ -42064,14 +41994,11 @@ def test_directx_multisample_texel_fetch_offsets_emit_diagnostics():
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported DirectX texel fetch offset: "
-        "multisample textures do not support offsets */ float4(0.0, 0.0, 0.0, 0.0)"
-    )
+    diagnostic = "texel fetch offset: multisample textures do not support offsets"
     assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
     assert "Texture2DMSArray<float4> msArray : register(t1);" in generated_code
     assert (
@@ -42082,7 +42009,7 @@ def test_directx_multisample_texel_fetch_offsets_emit_diagnostics():
         "float4 offsetArray(Texture2DMSArray<float4> tex, int3 pixelLayer, int sampleIndex, int2 offset)"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 4
+    assert diagnostic in refusal
     assert "texelFetchOffset(" not in generated_code
     assert ".Load(" not in generated_code
     assert "SamplerState" not in generated_code
@@ -42126,8 +42053,8 @@ def test_directx_cube_texel_fetches_emit_diagnostics():
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = hlsl_partial_output(
+        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
@@ -42140,30 +42067,10 @@ def test_directx_cube_texel_fetches_emit_diagnostics():
         "float4 fetchCubeArray(TextureCubeArray tex, int4 cubeLayerCoord, int lod, int3 offset)"
         in generated_code
     )
-    assert (
-        generated_code.count(
-            "unsupported DirectX texel fetch: texelFetch on TextureCube */ float4(0.0, 0.0, 0.0, 0.0)"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "unsupported DirectX texel fetch: texelFetchOffset on TextureCube */ float4(0.0, 0.0, 0.0, 0.0)"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "unsupported DirectX texel fetch: texelFetch on TextureCubeArray"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "unsupported DirectX texel fetch: texelFetchOffset on TextureCubeArray"
-        )
-        == 2
-    )
+    assert "texel fetch: texelFetch on TextureCube" in refusal
+    assert "texel fetch: texelFetchOffset on TextureCube" in refusal
+    assert "texel fetch: texelFetch on TextureCubeArray" in refusal
+    assert "texel fetch: texelFetchOffset on TextureCubeArray" in refusal
     assert ".Load(" not in generated_code
     assert "texelFetch(" not in generated_code
     assert "texelFetchOffset(" not in generated_code
@@ -45245,7 +45152,7 @@ def test_directx_multisample_storage_images_emit_srv_reads_and_diagnostics():
     """
 
     ast = crosstl.translator.parse(shader)
-    generated_code = HLSLCodeGen().generate(ast)
+    generated_code, refusal = hlsl_partial_output(HLSLCodeGen().generate, ast)
 
     assert "Texture2DMS<float4> colorImage : register(t0);" in generated_code
     assert "Texture2DMS<uint> counters : register(t1);" in generated_code
@@ -45256,18 +45163,10 @@ def test_directx_multisample_storage_images_emit_srv_reads_and_diagnostics():
     )
     assert "float4 oldColor = image.Load(pixel, sampleIndex);" in generated_code
     assert "uint oldCount = counterImage.Load(pixel, sampleIndex);" in generated_code
-    assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMS<float4>" in generated_code
-    )
-    assert (
-        "unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMS<uint>" in generated_code
-    )
-    assert (
-        "uint atomicOld = /* unsupported DirectX multisample image atomic: "
-        "imageAtomicAdd on RWTexture2DMS<uint> */ 0u;" in generated_code
-    )
+    assert refusal.startswith("DirectX cannot lower 3 constructs: ")
+    assert "multisample image store: imageStore on RWTexture2DMS<float4>" in refusal
+    assert "multisample image store: imageStore on RWTexture2DMS<uint>" in refusal
+    assert "multisample image atomic: imageAtomicAdd on RWTexture2DMS<uint>" in refusal
     assert "RWTexture2DMS<float4> colorImage" not in generated_code
     assert "RWTexture2DMS<uint> counters" not in generated_code
     assert "RWTexture2DMS<float4> image" not in generated_code
@@ -45306,7 +45205,7 @@ def test_directx_multisample_storage_image_arrays_emit_srv_reads_and_diagnostics
     """
 
     ast = crosstl.translator.parse(shader)
-    generated_code = HLSLCodeGen().generate(ast)
+    generated_code, refusal = hlsl_partial_output(HLSLCodeGen().generate, ast)
 
     assert "Texture2DMSArray<float4> layered : register(t0);" in generated_code
     assert "Texture2DMSArray<uint> counters : register(t1);" in generated_code
@@ -45319,19 +45218,14 @@ def test_directx_multisample_storage_image_arrays_emit_srv_reads_and_diagnostics
     assert (
         "uint oldCount = counterImage.Load(pixelLayer, sampleIndex);" in generated_code
     )
-    diagnostic_prefix = "un" + "supported DirectX multisample image"
+    assert refusal.startswith("DirectX cannot lower 3 constructs: ")
     assert (
-        f"{diagnostic_prefix} store: imageStore on RWTexture2DMSArray<float4>"
-        in generated_code
+        "multisample image store: imageStore on RWTexture2DMSArray<float4>" in refusal
     )
+    assert "multisample image store: imageStore on RWTexture2DMSArray<uint>" in refusal
     assert (
-        f"{diagnostic_prefix} store: imageStore on RWTexture2DMSArray<uint>"
-        in generated_code
-    )
-    assert (
-        "uint atomicOld = /* "
-        f"{diagnostic_prefix} atomic: imageAtomicAdd on "
-        "RWTexture2DMSArray<uint> */ 0u;" in generated_code
+        "multisample image atomic: imageAtomicAdd on RWTexture2DMSArray<uint>"
+        in refusal
     )
     assert "RWTexture2DMSArray<float4> layered" not in generated_code
     assert "RWTexture2DMSArray<uint> counters" not in generated_code
@@ -48771,12 +48665,6 @@ def test_hlsl_metal_storage_struct_view_preserves_word_bits(
         ),
         pytest.param(
             "uint",
-            "uint words[];",
-            "dynamic-storage-view-extent",
-            id="dynamic-extent",
-        ),
-        pytest.param(
-            "uint",
             "uint2 words[2];",
             "unsupported-storage-view-target-layout",
             id="vector-words",
@@ -48942,13 +48830,6 @@ def test_hlsl_metal_storage_struct_view_rejects_write(tmp_path):
             "output[0] = inspect((const thread uint8_t*)&block);",
             "unsupported-private-view-source-layout",
             id="unsupported-source-width",
-        ),
-        pytest.param(
-            "uint words[];",
-            "inline uint inspect(const thread uint8_t* values) { return values[0]; }",
-            "output[0] = inspect((const thread uint8_t*)&block);",
-            "dynamic-private-view-extent",
-            id="dynamic-extent",
         ),
         pytest.param(
             "uint words[2];",

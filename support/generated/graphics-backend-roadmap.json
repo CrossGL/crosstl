@@ -1,6 +1,15 @@
 {
   "backlog": [
     {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "stages",
+      "feature": "Ray tracing stages",
+      "feature_id": "stage.ray_tracing",
+      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, are refused with project.translate.metal-lowering-unsupported. RayQuery declarations and methods are refused with the same code because Metal has no HLSL-style RayQuery object and no intersection_query lowering exists yet. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters are refused while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
+      "status": "partial"
+    },
+    {
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
       "category": "project",
@@ -630,7 +639,7 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_ray_query_operations_lower_to_compile_safe_helpers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_query_placeholders_compile_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_query_refusal_placeholders_compile_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_intersection_table_trace_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_primitive_acceleration_trace_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_payload_trace_compiles_with_metal3",
@@ -655,8 +664,8 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ],
-          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. RayQuery declarations and methods lower to compile-safe CglRayQuery placeholder helpers because Metal has no HLSL-style RayQuery object. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters emit compile-safe diagnostics while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
-          "status": "supported"
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, are refused with project.translate.metal-lowering-unsupported. RayQuery declarations and methods are refused with the same code because Metal has no HLSL-style RayQuery object and no intersection_query lowering exists yet. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters are refused while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
+          "status": "partial"
         },
         "opengl": {
           "evidence": [
@@ -949,14 +958,14 @@
     },
     {
       "category": "resources",
-      "description": "Lower GLSL-style buffer blocks and preserve deterministic diagnostics for unsupported target shapes.",
+      "description": "Lower GLSL-style buffer blocks and refuse unsupported target shapes with typed diagnostics.",
       "id": "resources.glsl_buffer_blocks",
       "name": "GLSL buffer block lowering",
       "support": {
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer",
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_glsl_buffer_block_scalar_layout_remains_diagnostic",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_glsl_buffer_block_scalar_layout_is_refused",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets",
@@ -985,7 +994,7 @@
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_aggregate_leaf_compound_hlsl_output_compiles_with_dxc",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_atomics_hlsl_output_compiles_with_dxc"
           ],
-          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, fixed-width scalar alias normalization, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, buffer-block parameters, and deterministic diagnostics for unsupported layouts/types. Scalar layout, non-final runtime arrays, and non-lowerable member types are intentionally covered by diagnostics under this feature contract.",
+          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, fixed-width scalar alias normalization, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, buffer-block parameters, and typed refusals (BufferBlockUnsupportedError) for unsupported layouts/types. Scalar layout, non-final runtime arrays, non-lowerable member types, readonly stores and invalid atomics are refused under this feature contract.",
           "status": "supported"
         },
         "metal": {
@@ -1010,7 +1019,7 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_glsl_buffer_block_atomic_compare_helpers_cover_signed_and_parameters",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_are_refused",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_std140_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_array_metal_output_compiles_with_xcrun_metal",
@@ -1022,9 +1031,9 @@
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_int_atomics_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_runtime_array_atomics_metal_output_compiles_with_xcrun_metal",
-            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_unsupported_atomics_metal_output_compiles_with_xcrun_metal"
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_unsupported_atomics_are_refused"
           ],
-          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, fixed-width scalar alias normalization, buffer-block parameter atomics, and deterministic diagnostics for unsupported layouts/types. Scalar layout and non-lowerable member types are intentionally covered by diagnostics under this feature contract.",
+          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, fixed-width scalar alias normalization, buffer-block parameter atomics, and typed refusals (BufferBlockUnsupportedError) for unsupported layouts/types. Scalar layout, non-lowerable member types (MSL has no double), readonly stores and invalid atomics are refused under this feature contract.",
           "status": "supported"
         },
         "opengl": {
@@ -6367,18 +6376,19 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 6,
+      "backlog_count": 7,
       "by_backend": {
         "directx": 1,
-        "metal": 4,
+        "metal": 5,
         "opengl": 1
       },
       "by_category": {
-        "project": 6
+        "project": 6,
+        "stages": 1
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 3,
+        "partial": 4,
         "supported": 0,
         "unknown": 0,
         "unsupported": 3,
@@ -6397,8 +6407,8 @@
       },
       "metal": {
         "diagnostic": 4,
-        "partial": 1,
-        "supported": 75,
+        "partial": 2,
+        "supported": 74,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 6

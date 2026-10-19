@@ -18,6 +18,8 @@ from crosstl.translator.codegen.metal_codegen import (
 )
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+from tests.lowering_refusal_helpers import refused_glsl
+from tests.metal_refusal_helpers import metal_partial_output
 
 HELPER_RANGE_SHADER = """
 shader RangeForInValidation {
@@ -5825,6 +5827,19 @@ STATIC_SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER = (
 )
 
 
+# GLSL lets textureGatherOffset take a variable offset (GLSL 4.60, section 8.9.4),
+# while textureOffset requires a constant one (section 8.9.2).
+DYNAMIC_GATHER_STATIC_COMPARE_SHADOW_OFFSET_FRAGMENT_SHADER = (
+    SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER.replace(
+        "textureCompareOffset(tex, s, uv, depth, offset)",
+        "textureCompareOffset(tex, s, uv, depth, ivec2(1, -1))",
+    ).replace(
+        "textureCompareOffset(tex, s, uvLayer, depth, offset)",
+        "textureCompareOffset(tex, s, uvLayer, depth, ivec2(1, -1))",
+    )
+)
+
+
 SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER = """
 shader ShadowCompareLodGradValidation {
     sampler2DShadow shadowMap;
@@ -5922,6 +5937,16 @@ shader ShadowCompareLodGradValidation {
     }
 }
 """
+
+
+# GLSL has no explicit-LOD or explicit-gradient compare for cube-array shadow
+# samplers (GLSL 4.60, section 8.9.2), so this variant compares it implicitly.
+CORE_SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER = SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER.replace(
+    """        float lodValue = textureCompareLod(tex, s, cubeLayer, depth, lod);
+        float gradValue = textureCompareGrad(tex, s, cubeLayer, depth, ddx, ddy);
+        return lodValue + gradValue;""",
+    """        return textureCompare(tex, s, cubeLayer, depth);""",
+)
 
 
 PROJECTED_SHADOW_COMPARE_FRAGMENT_SHADER = """
@@ -7270,6 +7295,14 @@ def test_generated_spirv_codegen_examples_validate_with_spirv_tools(tmp_path):
 
     def expects_codegen_error(function_node):
         for child in ast.walk(function_node):
+            # assert_statement_refusals compiles each refused statement alone
+            # and the test validates the module without them.
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "assert_statement_refusals"
+            ):
+                return True
             if not isinstance(child, ast.With):
                 continue
             for item in child.items:
@@ -7373,6 +7406,57 @@ SamplerComparisonState shadowSampler : register(s0);
     return result.returncode == 0
 
 
+INTEGER_GATHER_OFFSETS_FRAGMENT_SHADER = """
+shader IntegerGatherOffsets {
+    isampler2DArray layers;
+    sampler linearSampler;
+
+    struct FSInput {
+        vec3 uvLayer @ TEXCOORD0;
+        ivec2 offset @ TEXCOORD1;
+    };
+
+    ivec4 gatherInts(isampler2DArray tex, sampler s, vec3 uvLayer, ivec2 offset) {
+        return textureGatherOffsets(
+            tex, s, uvLayer, offset, ivec2(1, 0), ivec2(0, 1), ivec2(1, 1), 2
+        );
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return vec4(gatherInts(layers, linearSampler, input.uvLayer, input.offset));
+        }
+    }
+}
+"""
+
+
+def test_generated_metal_integer_gather_offsets_compile_with_metal(tmp_path):
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(INTEGER_GATHER_OFFSETS_FRAGMENT_SHADER)
+    )
+
+    # Component i of textureGatherOffsets is texel T_i0_j0 of the footprint at
+    # offset i (GLSL 4.60, section 8.9.4); Metal's gather returns it in w.
+    assert (
+        "return int4(tex.gather(s, uvLayer.xy, uint(uvLayer.z), offset, component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 0), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(0, 1), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 1), component::z).w);"
+        in code
+    )
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+    source = tmp_path / "integer_gather_offsets.metal"
+    output = tmp_path / "integer_gather_offsets.air"
+    source.write_text(code, encoding="utf-8")
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
 def test_generated_metal_fragment_smoke_compiles_with_metal(tmp_path):
     xcrun = shutil.which("xcrun")
     if xcrun is None:
@@ -7395,14 +7479,15 @@ def test_generated_metal_function_constants_compile_with_metal(tmp_path):
 
     source = tmp_path / "function_constants.metal"
     output = tmp_path / "function_constants.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_FUNCTION_CONSTANT_FRAGMENT_SHADER),
         "fragment",
     )
     assert (
-        "/* unsupported Metal function constant default: 'useFast' initializers "
-        "are not allowed by MSL */"
-    ) in code
+        "function constant default: 'useFast' initializers are not allowed by MSL"
+        in refusal
+    )
     assert "constant bool useFast [[function_constant(0)]];" in code
     assert "constant int mode [[function_constant(1)]];" in code
     assert "constant float scale [[function_constant(2)]];" in code
@@ -7423,7 +7508,8 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
 
     source = tmp_path / "wave_intrinsics.metal"
     output = tmp_path / "wave_intrinsics.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_WAVE_INTRINSICS_COMPUTE_SHADER),
         "compute",
     )
@@ -7481,7 +7567,7 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
     )
     assert (
         "WaveMultiPrefixSum value argument must be numeric scalar or vector, got float2x2"
-        in code
+        in refusal
     )
     assert "__crossgl_metal_wave_multi_prefix_sum(matrixValue" not in code
     assert "quad_shuffle_xor(firstValue, ushort(1))" in code
@@ -8286,13 +8372,14 @@ def test_generated_metal_mesh_dispatch_invalid_grid_compiles_with_metal3(tmp_pat
 
     source = tmp_path / "mesh_dispatch_invalid_grid.metal"
     output = tmp_path / "mesh_dispatch_invalid_grid.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_MESH_DISPATCH_INVALID_GRID_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_MESH_DISPATCH_INVALID_GRID_SHADER),
     )
     assert (
-        "unsupported Metal mesh dispatch: DispatchMesh grid argument must be "
-        "a uint3-compatible vector"
-    ) in code
+        "mesh dispatch: DispatchMesh grid argument must be a uint3-compatible vector"
+        in refusal
+    )
     assert "set_threadgroups_per_grid(2)" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -8743,10 +8830,12 @@ def test_generated_metal_mesh_payload_address_space_diagnostics_compile_with_met
     valid_shader = METAL_MESH_PAYLOAD_ADDRESS_SPACE_SHADER.replace(
         "mutate(payload);", ""
     )
-    code = MetalCodeGen().generate(crosstl.translator.parse(valid_shader))
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate, crosstl.translator.parse(valid_shader)
+    )
     assert "object_data Payload& payload [[payload]]" in code
     assert "const object_data Payload& payload [[payload]]" in code
-    assert "unsupported Metal mesh payload store" in code
+    assert "mesh payload store" in refusal
     assert "mutate(payload)" not in code
     assert "unsupported Metal address-space call" not in code
     source.write_text(code, encoding="utf-8")
@@ -8782,14 +8871,15 @@ def test_generated_metal_mesh_payload_local_aliases_compile_with_metal3(tmp_path
 
     source = tmp_path / "mesh_payload_local_alias.metal"
     output = tmp_path / "mesh_payload_local_alias.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_MESH_PAYLOAD_LOCAL_ALIAS_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_LOCAL_ALIAS_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
     assert "object_data Payload& alias = payload;" in code
     assert "const object_data Payload& alias = payload;" in code
-    assert "unsupported Metal mesh payload store" in code
+    assert "mesh payload store" in refusal
     assert "\n    Payload& alias = payload;" not in code
     assert "\n    thread Payload& alias = payload;" not in code
 
@@ -8824,15 +8914,16 @@ def test_generated_metal_mesh_payload_pointer_aliases_compile_with_metal3(tmp_pa
 
     source = tmp_path / "mesh_payload_pointer_alias.metal"
     output = tmp_path / "mesh_payload_pointer_alias.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_MESH_PAYLOAD_POINTER_ALIAS_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_POINTER_ALIAS_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
     assert "object_data Payload* alias = &payload;" in code
     assert "const object_data Payload* alias = &payload;" in code
     assert "alias->color = float4(1.0, 0.0, 0.0, 1.0);" in code
-    assert "unsupported Metal mesh payload store" in code
+    assert "mesh payload store" in refusal
     assert "\n    Payload* alias = payload;" not in code
 
     run_validator(
@@ -8868,8 +8959,9 @@ def test_generated_metal_mesh_payload_pointer_helper_aliases_compile_with_metal3
 
     source = tmp_path / "mesh_payload_pointer_helper.metal"
     output = tmp_path / "mesh_payload_pointer_helper.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_MESH_PAYLOAD_POINTER_HELPER_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_POINTER_HELPER_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
@@ -8878,7 +8970,7 @@ def test_generated_metal_mesh_payload_pointer_helper_aliases_compile_with_metal3
     assert "[[object_data]]" not in code
     assert "object_data Payload* alias = &payload;" in code
     assert "const object_data Payload* alias = &payload;" in code
-    assert "unsupported Metal mesh payload call" in code
+    assert "mesh payload call" in refusal
     assert "unsupported Metal address-space call" not in code
 
     run_validator(
@@ -8914,8 +9006,9 @@ def test_generated_metal_mesh_payload_member_pointer_helpers_compile_with_metal3
 
     source = tmp_path / "mesh_payload_member_pointer_helper.metal"
     output = tmp_path / "mesh_payload_member_pointer_helper.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_MESH_PAYLOAD_MEMBER_POINTER_HELPER_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_MEMBER_POINTER_HELPER_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
@@ -8923,8 +9016,8 @@ def test_generated_metal_mesh_payload_member_pointer_helpers_compile_with_metal3
     assert "wrapper.ptr = &payload;" in code
     assert "tint(wrapper.ptr);" in code
     assert "float value = read(wrapper.ptr);" in code
-    assert "unsupported Metal mesh payload alias" in code
-    assert "unsupported Metal mesh payload call" in code
+    assert "mesh payload alias" in refusal
+    assert "mesh payload call" in refusal
     assert "float4 color = wrapper.ptr->color + float4(value);" in code
     assert "unsupported Metal address-space call" not in code
 
@@ -8961,13 +9054,14 @@ def test_generated_metal_const_object_payload_diagnostic_compiles_with_metal3(
 
     source = tmp_path / "const_object_payload_diagnostic.metal"
     output = tmp_path / "const_object_payload_diagnostic.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_CONST_OBJECT_PAYLOAD_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_CONST_OBJECT_PAYLOAD_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
     assert "const object_data Payload& payload [[payload]]" in code
-    assert "unsupported Metal mesh payload store" in code
+    assert "mesh payload store" in refusal
     assert "payload.color = float4(1.0, 0.0, 0.0, 1.0);" not in code
 
     run_validator(
@@ -9001,12 +9095,13 @@ def test_generated_metal_mesh_payload_invalid_sources_compile_with_metal3(tmp_pa
 
     source = tmp_path / "mesh_payload_invalid_sources.metal"
     output = tmp_path / "mesh_payload_invalid_sources.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_MESH_PAYLOAD_INVALID_SOURCE_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_INVALID_SOURCE_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
-    assert "unsupported Metal mesh payload dispatch" in code
+    assert "mesh payload dispatch" in refusal
     assert "device MeshPayload* devicePayloads [[buffer(0)]]" in code
     assert "constant MeshPayload* constantPayloads [[buffer(1)]]" in code
     assert "device PayloadBlock* deviceBlocks [[buffer(2)]]" in code
@@ -9054,13 +9149,14 @@ def test_generated_metal_mesh_dispatch_without_grid_context_compiles_with_metal3
 
     source = tmp_path / "mesh_dispatch_without_grid_context.metal"
     output = tmp_path / "mesh_dispatch_without_grid_context.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_MESH_DISPATCH_WITHOUT_GRID_CONTEXT_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_MESH_DISPATCH_WITHOUT_GRID_CONTEXT_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
-    assert "unsupported Metal mesh dispatch" in code
-    assert "mesh_grid_properties context" in code
+    assert "mesh dispatch" in refusal
+    assert "mesh_grid_properties context" in refusal
     assert "DispatchMesh(" not in code
 
     run_validator(
@@ -9096,13 +9192,16 @@ def test_generated_metal_mesh_dispatch_helper_without_grid_context_compiles_with
 
     source = tmp_path / "mesh_dispatch_helper_without_grid_context.metal"
     output = tmp_path / "mesh_dispatch_helper_without_grid_context.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_MESH_DISPATCH_HELPER_WITHOUT_GRID_CONTEXT_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(
+            METAL_MESH_DISPATCH_HELPER_WITHOUT_GRID_CONTEXT_SHADER
+        ),
     )
     source.write_text(code, encoding="utf-8")
 
-    assert "unsupported Metal mesh dispatch helper call" in code
-    assert "mesh_grid_properties context" in code
+    assert "mesh dispatch helper call" in refusal
+    assert "mesh_grid_properties context" in refusal
     assert "unsupported Metal address-space call" not in code
     assert "issue(payload)" not in code
     assert "DispatchMesh(" not in code
@@ -9155,7 +9254,7 @@ def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3(
     )
 
 
-def test_generated_metal_ray_query_placeholders_compile_with_metal3(tmp_path):
+def test_generated_metal_ray_query_refusal_placeholders_compile_with_metal3(tmp_path):
     xcrun = shutil.which("xcrun")
     if xcrun is None:
         pytest.skip("xcrun is not installed")
@@ -9179,7 +9278,18 @@ def test_generated_metal_ray_query_placeholders_compile_with_metal3(tmp_path):
         }
     }
     """
-    code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate, crosstl.translator.parse(shader)
+    )
+    # The cgl_ray_query_* helpers trace nothing, so every inline ray query is refused.
+    assert (
+        "ray query: RayQuery.TraceRayInline has no Metal intersection_query lowering"
+        in refusal
+    )
+    assert (
+        "ray query: RayQuery.Proceed has no Metal intersection_query lowering"
+        in refusal
+    )
     assert "CglRayDesc ray = CglRayDesc" in code
     assert "CglRayQuery rq;" in code
     assert "cgl_ray_query_trace_ray_inline(rq, topLevelAS, 0u, 255, ray)" in code
@@ -9378,11 +9488,13 @@ def test_generated_metal_payload_diagnostic_compiles_with_metal3(
 
     source = tmp_path / "ray_tracing_payload_diagnostic.metal"
     output = tmp_path / "ray_tracing_payload_diagnostic.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_TRACING_PAYLOAD_DIAGNOSTIC_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_RAY_TRACING_PAYLOAD_DIAGNOSTIC_SHADER),
     )
-    assert "payload forwarding requires a compatible intersection_function_table" in (
-        code
+    assert (
+        "payload forwarding requires a compatible intersection_function_table"
+        in refusal
     )
     source.write_text(code, encoding="utf-8")
 
@@ -9448,16 +9560,17 @@ def test_generated_metal_ray_payload_alias_address_spaces_compile_with_metal3(
 
     source = tmp_path / "ray_payload_alias_address_spaces.metal"
     output = tmp_path / "ray_payload_alias_address_spaces.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_PAYLOAD_ALIAS_ADDRESS_SPACE_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_RAY_PAYLOAD_ALIAS_ADDRESS_SPACE_SHADER),
     )
     assert "thread Payload& threadAlias = payload;" in code
     assert "intersectionFunctions, threadAlias)" in code
     assert "device Payload& deviceAlias = external[0];" in code
     assert (
-        "payload forwarding requires a thread-local payload lvalue; payload "
-        "'deviceAlias' uses device address space"
-    ) in code
+        "payload forwarding requires a thread-local payload lvalue; payload 'deviceAlias' uses device address space"
+        in refusal
+    )
     assert "intersectionFunctions, deviceAlias)" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -9485,28 +9598,29 @@ def test_generated_metal_ray_payload_member_lvalues_compile_with_metal3(
 
     source = tmp_path / "ray_payload_member_lvalues.metal"
     output = tmp_path / "ray_payload_member_lvalues.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_PAYLOAD_MEMBER_LVALUE_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_RAY_PAYLOAD_MEMBER_LVALUE_SHADER),
     )
     assert "intersectionFunctions, wrapper.payload)" in code
     assert "intersectionFunctions, payloads[0])" in code
     assert "intersectionFunctions, pointer[0])" in code
     assert (
-        "payload forwarding requires a thread-local struct payload lvalue; "
-        "payload 'payloads' has pointer or array type"
-    ) in code
+        "payload forwarding requires a thread-local struct payload lvalue; payload 'payloads' has pointer or array type"
+        in refusal
+    )
     assert (
-        "payload forwarding requires a thread-local struct payload lvalue; "
-        "payload 'wrapper.payloads' has pointer or array type"
-    ) in code
+        "payload forwarding requires a thread-local struct payload lvalue; payload 'wrapper.payloads' has pointer or array type"
+        in refusal
+    )
     assert (
-        "payload forwarding requires a thread-local struct payload lvalue; "
-        "payload 'pointer' has pointer or array type"
-    ) in code
+        "payload forwarding requires a thread-local struct payload lvalue; payload 'pointer' has pointer or array type"
+        in refusal
+    )
     assert (
-        "payload forwarding requires a mutable thread-local struct payload "
-        "lvalue; payload 'constWrapper.payload' is const-qualified"
-    ) in code
+        "payload forwarding requires a mutable thread-local struct payload lvalue; payload 'constWrapper.payload' is const-qualified"
+        in refusal
+    )
     assert "intersectionFunctions, constWrapper.payload)" not in code
     assert "intersectionFunctions, payloads)" not in code
     assert "intersectionFunctions, wrapper.payloads)" not in code
@@ -9537,23 +9651,24 @@ def test_generated_metal_ray_payload_type_diagnostics_compile_with_metal3(
 
     source = tmp_path / "ray_payload_type_diagnostics.metal"
     output = tmp_path / "ray_payload_type_diagnostics.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_PAYLOAD_TYPE_VALIDATION_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_RAY_PAYLOAD_TYPE_VALIDATION_SHADER),
     )
     assert "intersectionFunctions, payload)" in code
     assert "intersectionFunctions, wrapper.payload)" in code
     assert (
-        "ray payload argument 'other' has type 'OtherPayload' but declared "
-        "ray payload interface expects 'Payload'"
-    ) in code
+        "ray payload argument 'other' has type 'OtherPayload' but declared ray payload interface expects 'Payload'"
+        in refusal
+    )
     assert (
-        "ray payload argument 'wrapper.other' has type 'OtherPayload' but "
-        "declared ray payload interface expects 'Payload'"
-    ) in code
+        "ray payload argument 'wrapper.other' has type 'OtherPayload' but declared ray payload interface expects 'Payload'"
+        in refusal
+    )
     assert (
-        "ray payload argument 'others' has type 'OtherPayload' but declared "
-        "ray payload interface expects 'Payload'"
-    ) in code
+        "ray payload argument 'others' has type 'OtherPayload' but declared ray payload interface expects 'Payload'"
+        in refusal
+    )
     assert "intersectionFunctions, other)" not in code
     assert "intersectionFunctions, wrapper.other)" not in code
     assert "intersectionFunctions, others[0])" not in code
@@ -9583,15 +9698,16 @@ def test_generated_metal_ray_invalid_acceleration_structure_compiles_with_metal3
 
     source = tmp_path / "ray_invalid_acceleration_structure.metal"
     output = tmp_path / "ray_invalid_acceleration_structure.air"
-    code = MetalCodeGen().generate(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
         crosstl.translator.parse(
             METAL_RAY_TRACING_INVALID_ACCELERATION_STRUCTURE_SHADER
-        )
+        ),
     )
     assert (
-        "acceleration structure argument 'payload' has type 'Payload' but "
-        "TraceRay requires an acceleration_structure resource"
-    ) in code
+        "acceleration structure argument 'payload' has type 'Payload' but TraceRay requires an acceleration_structure resource"
+        in refusal
+    )
     assert "intersect(__crossgl_ray_0, payload" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -9619,17 +9735,19 @@ def test_generated_metal_ray_acceleration_structure_array_diagnostics_compile_wi
 
     source = tmp_path / "ray_acceleration_structure_array_diagnostics.metal"
     output = tmp_path / "ray_acceleration_structure_array_diagnostics.air"
-    code = MetalCodeGen().generate(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
         crosstl.translator.parse(
             METAL_RAY_ACCELERATION_STRUCTURE_ARRAY_DIAGNOSTIC_SHADER
-        )
+        ),
     )
     assert (
-        "arrays of acceleration_structure are not valid Metal buffer parameters" in code
+        "arrays of acceleration_structure are not valid Metal buffer parameters"
+        in refusal
     )
-    assert "acceleration structure argument 'topLevelAS' uses an" in code
-    assert "acceleration structure argument 'primitiveAS' uses an" in code
-    assert "acceleration structure argument 'paramAS' uses an" in code
+    assert "acceleration structure argument 'topLevelAS' uses an" in refusal
+    assert "acceleration structure argument 'primitiveAS' uses an" in refusal
+    assert "acceleration structure argument 'paramAS' uses an" in refusal
     assert "array<instance_acceleration_structure" not in code
     assert "array<primitive_acceleration_structure" not in code
     assert ".intersect(" not in code
@@ -9659,15 +9777,16 @@ def test_generated_metal_ray_acceleration_structure_array_helper_diagnostics_com
 
     source = tmp_path / "ray_acceleration_structure_array_helper_diagnostics.metal"
     output = tmp_path / "ray_acceleration_structure_array_helper_diagnostics.air"
-    code = MetalCodeGen().generate(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
         crosstl.translator.parse(
             METAL_RAY_ACCELERATION_STRUCTURE_ARRAY_HELPER_DIAGNOSTIC_SHADER
-        )
+        ),
     )
-    assert "unsupported acceleration_structure array 'scenes'" in code
-    assert "unsupported acceleration_structure array 'primitives'" in code
-    assert "acceleration structure argument 'sceneAlias' uses an" in code
-    assert "acceleration structure argument 'primitiveElement' uses an" in code
+    assert "unsupported acceleration_structure array 'scenes'" in refusal
+    assert "unsupported acceleration_structure array 'primitives'" in refusal
+    assert "acceleration structure argument 'sceneAlias' uses an" in refusal
+    assert "acceleration structure argument 'primitiveElement' uses an" in refusal
     assert "shootInstance(topLevelAS" not in code
     assert "shootPrimitive(primitiveAS" not in code
     assert "instance_acceleration_structure sceneAlias[2] = scenes;" not in code
@@ -9767,12 +9886,13 @@ def test_generated_metal_ray_callable_invalid_explicit_table_compiles_with_metal
 
     source = tmp_path / "ray_callable_invalid_explicit_table.metal"
     output = tmp_path / "ray_callable_invalid_explicit_table.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_CALLABLE_INVALID_EXPLICIT_TABLE_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_RAY_CALLABLE_INVALID_EXPLICIT_TABLE_SHADER),
     )
     assert (
         "explicit table argument 'data' must be a visible_function_table resource"
-        in code
+        in refusal
     )
     assert "data[0](data);" not in code
     source.write_text(code, encoding="utf-8")
@@ -9801,16 +9921,17 @@ def test_generated_metal_ray_callable_alias_address_spaces_compile_with_metal3(
 
     source = tmp_path / "ray_callable_alias_address_spaces.metal"
     output = tmp_path / "ray_callable_alias_address_spaces.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_CALLABLE_ALIAS_ADDRESS_SPACE_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_RAY_CALLABLE_ALIAS_ADDRESS_SPACE_SHADER),
     )
     assert "thread CallableData& threadAlias = data;" in code
     assert "callables[0](threadAlias);" in code
     assert "device CallableData& deviceAlias = external[0];" in code
     assert (
-        "callable data forwarding requires a thread-local callable-data "
-        "lvalue; callable data 'deviceAlias' uses device address space"
-    ) in code
+        "callable data forwarding requires a thread-local callable-data lvalue; callable data 'deviceAlias' uses device address space"
+        in refusal
+    )
     assert "callables[1](deviceAlias);" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -9838,15 +9959,16 @@ def test_generated_metal_ray_callable_pointer_deref_compiles_with_metal3(
 
     source = tmp_path / "ray_callable_pointer_deref.metal"
     output = tmp_path / "ray_callable_pointer_deref.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_CALLABLE_POINTER_DEREF_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_RAY_CALLABLE_POINTER_DEREF_SHADER),
     )
     assert "thread CallableData* alias = &data;" in code
     assert "callables[0](*alias);" in code
     assert (
-        "callable data forwarding requires a thread-local callable-data "
-        "lvalue; callable data '*external' uses device address space"
-    ) in code
+        "callable data forwarding requires a thread-local callable-data lvalue; callable data '*external' uses device address space"
+        in refusal
+    )
     assert "callables[1](*external);" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -9874,16 +9996,17 @@ def test_generated_metal_ray_callable_helper_member_lvalues_compile_with_metal3(
 
     source = tmp_path / "ray_callable_helper_member_lvalues.metal"
     output = tmp_path / "ray_callable_helper_member_lvalues.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_CALLABLE_HELPER_MEMBER_LVALUE_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_RAY_CALLABLE_HELPER_MEMBER_LVALUE_SHADER),
     )
     assert "callables[shaderIndex](data);" in code
     assert "invoke(2u, wrapper.data, callables);" in code
     assert "callables[3u](wrapper.data);" in code
     assert (
-        "callable data forwarding requires a mutable thread-local callable-data "
-        "lvalue; callable data 'wrapper.data' is const-qualified"
-    ) in code
+        "callable data forwarding requires a mutable thread-local callable-data lvalue; callable data 'wrapper.data' is const-qualified"
+        in refusal
+    )
     assert "callables[1](wrapper.data);" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -10029,15 +10152,17 @@ def test_generated_metal_ray_function_table_array_diagnostics_compile_with_metal
 
     source = tmp_path / "ray_function_table_array_diagnostics.metal"
     output = tmp_path / "ray_function_table_array_diagnostics.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_RAY_FUNCTION_TABLE_ARRAY_DIAGNOSTIC_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_RAY_FUNCTION_TABLE_ARRAY_DIAGNOSTIC_SHADER),
     )
-    assert "arrays of visible_function_table are not valid Metal buffer parameters" in (
-        code
+    assert (
+        "arrays of visible_function_table are not valid Metal buffer parameters"
+        in refusal
     )
     assert (
         "arrays of intersection_function_table are not valid Metal buffer parameters"
-        in code
+        in refusal
     )
     source.write_text(code, encoding="utf-8")
 
@@ -10065,20 +10190,22 @@ def test_generated_metal_ray_function_table_array_helper_diagnostics_compile_wit
 
     source = tmp_path / "ray_function_table_array_helper_diagnostics.metal"
     output = tmp_path / "ray_function_table_array_helper_diagnostics.air"
-    code = MetalCodeGen().generate(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
         crosstl.translator.parse(
             METAL_RAY_FUNCTION_TABLE_ARRAY_HELPER_DIAGNOSTIC_SHADER
-        )
+        ),
     )
-    assert "arrays of visible_function_table are not valid Metal buffer parameters" in (
-        code
+    assert (
+        "arrays of visible_function_table are not valid Metal buffer parameters"
+        in refusal
     )
     assert (
         "arrays of intersection_function_table are not valid Metal buffer parameters"
-        in code
+        in refusal
     )
-    assert "local visible_function_table alias" in code
-    assert "local intersection_function_table alias" in code
+    assert "local visible_function_table alias" in refusal
+    assert "local intersection_function_table alias" in refusal
     assert "invoke(callables" not in code
     assert "tableSize(intersectionFunctions" not in code
     source.write_text(code, encoding="utf-8")
@@ -10433,21 +10560,21 @@ def test_generated_metal_pointer_assignment_address_spaces_compile_with_metal(
 
     source = tmp_path / "pointer_assignment_address_spaces.metal"
     output = tmp_path / "pointer_assignment_address_spaces.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_POINTER_ASSIGNMENT_ADDRESS_SPACE_SHADER),
         "compute",
     )
     assert "threadgroup atomic_int* alias = scratchA + index;" in code
     assert "alias = useA ? scratchA + index : scratchB + index;" in code
     assert (
-        "/* unsupported Metal address-space assignment: value branches "
-        "'scratchA' (threadgroup) and 'counters' (device) use different "
-        "address spaces; assignment to 'alias' requires threadgroup */"
-    ) in code
+        "address-space assignment: value branches 'scratchA' (threadgroup) and 'counters' (device) use different address spaces; assignment to 'alias' requires threadgroup"
+        in refusal
+    )
     assert (
-        "/* unsupported Metal address-space assignment: value 'counters' uses "
-        "device address space but target 'alias' uses threadgroup */"
-    ) in code
+        "address-space assignment: value 'counters' uses device address space but target 'alias' uses threadgroup"
+        in refusal
+    )
     assert "alias = useShared ? scratchA + index : counters + index;" not in code
     assert "alias = counters + index;" not in code
     assert "int second = bumpThreadgroup(alias, first);" in code
@@ -10648,7 +10775,8 @@ def test_generated_metal_device_atomic_compare_exchange_compile_with_metal(tmp_p
 
     source = tmp_path / "device_atomic_compare_exchange.metal"
     output = tmp_path / "device_atomic_compare_exchange.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_DEVICE_ATOMIC_COMPARE_EXCHANGE_SHADER),
         "compute",
     )
@@ -10658,10 +10786,10 @@ def test_generated_metal_device_atomic_compare_exchange_compile_with_metal(tmp_p
         "memory_order_relaxed);"
     ) in code
     assert (
-        "return false /* unsupported Metal atomic compare-exchange expected pointer: "
-        "expected storage 'expectedValues' uses device address space; Metal requires "
-        "thread storage */;"
-    ) in code
+        "atomic compare-exchange expected pointer: expected storage 'expectedValues' uses device address space; Metal requires thread storage"
+        in refusal
+    )
+    assert "return false;" in code
     assert (
         "bool directClaimed = atomic_compare_exchange_weak_explicit(&counters[index], "
         "&expected, 3u, memory_order_relaxed, memory_order_relaxed);"
@@ -10683,7 +10811,8 @@ def test_generated_metal_struct_member_atomic_compare_exchange_compile_with_meta
 
     source = tmp_path / "struct_member_atomic_compare_exchange.metal"
     output = tmp_path / "struct_member_atomic_compare_exchange.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_STRUCT_MEMBER_ATOMIC_COMPARE_EXCHANGE_SHADER),
         "compute",
     )
@@ -10700,10 +10829,10 @@ def test_generated_metal_struct_member_atomic_compare_exchange_compile_with_meta
         "memory_order_relaxed);"
     ) in code
     assert (
-        "bool rejectedDirect = false /* unsupported Metal atomic compare-exchange "
-        "expected pointer: expected storage 'bank.deviceExpected' uses device "
-        "address space; Metal requires thread storage */;"
-    ) in code
+        "atomic compare-exchange expected pointer: expected storage 'bank.deviceExpected' uses device address space; Metal requires thread storage"
+        in refusal
+    )
+    assert "bool rejectedDirect = false;" in code
     assert (
         "atomic_compare_exchange_weak_explicit(counters + index, bank.deviceExpected + index"
         not in code
@@ -10818,7 +10947,8 @@ def test_generated_metal_readonly_raw_buffer_diagnostics_compile_with_metal(tmp_
 
     source = tmp_path / "readonly_raw_buffer_diagnostics.metal"
     output = tmp_path / "readonly_raw_buffer_diagnostics.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_READONLY_RAW_BUFFER_DIAGNOSTIC_SHADER),
         "compute",
     )
@@ -10836,7 +10966,8 @@ def test_generated_metal_readonly_raw_buffer_helpers_compile_with_metal(tmp_path
 
     source = tmp_path / "readonly_raw_buffer_helpers.metal"
     output = tmp_path / "readonly_raw_buffer_helpers.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_READONLY_RAW_BUFFER_HELPER_SHADER),
         "compute",
     )
@@ -10856,7 +10987,8 @@ def test_generated_metal_readonly_raw_buffer_mutable_helper_call_compiles_with_m
 
     source = tmp_path / "readonly_raw_buffer_mutable_helper_call.metal"
     output = tmp_path / "readonly_raw_buffer_mutable_helper_call.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_READONLY_RAW_BUFFER_MUTABLE_HELPER_CALL_SHADER),
         "compute",
     )
@@ -10874,7 +11006,8 @@ def test_generated_metal_const_reference_helpers_compile_with_metal(tmp_path):
 
     source = tmp_path / "const_reference_helpers.metal"
     output = tmp_path / "const_reference_helpers.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_CONST_REFERENCE_HELPER_SHADER),
         "compute",
     )
@@ -10882,8 +11015,8 @@ def test_generated_metal_const_reference_helpers_compile_with_metal(tmp_path):
 
     assert "float readPayload(const thread Payload& payload)" in code
     assert "void rejectWrite(const thread Payload& payload)" in code
-    assert "unsupported Metal parameter store" in code
-    assert "unsupported Metal parameter call" in code
+    assert "parameter store" in refusal
+    assert "parameter call" in refusal
     assert "payload.value = 1.0;" not in code
     assert "mutate(payload);" not in code
 
@@ -10899,7 +11032,8 @@ def test_generated_metal_const_pointer_array_helpers_compile_with_metal(tmp_path
 
     source = tmp_path / "const_pointer_array_helpers.metal"
     output = tmp_path / "const_pointer_array_helpers.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_CONST_POINTER_ARRAY_HELPER_SHADER),
         "compute",
     )
@@ -10908,8 +11042,8 @@ def test_generated_metal_const_pointer_array_helpers_compile_with_metal(tmp_path
     assert "float readPointer(const thread Payload* payload)" in code
     assert "return payload->value;" in code
     assert "float readArray(const thread float values[], int index)" in code
-    assert "unsupported Metal parameter store" in code
-    assert "unsupported Metal parameter call" in code
+    assert "parameter store" in refusal
+    assert "parameter call" in refusal
     assert "PointerAccessNode" not in code
     assert "payload->value = 1.0;" not in code
     assert "mutatePointer(payload);" not in code
@@ -10928,14 +11062,15 @@ def test_generated_metal_const_threadgroup_pointer_alias_compiles_with_metal(tmp
 
     source = tmp_path / "const_threadgroup_pointer_alias.metal"
     output = tmp_path / "const_threadgroup_pointer_alias.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_CONST_THREADGROUP_POINTER_ALIAS_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_CONST_THREADGROUP_POINTER_ALIAS_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
     assert "const threadgroup Payload* alias = &scratch;" in code
-    assert "unsupported Metal parameter store" in code
-    assert "unsupported Metal parameter call" in code
+    assert "parameter store" in refusal
+    assert "parameter call" in refusal
     assert "alias->value = value;" not in code
     assert "mutate(alias);" not in code
 
@@ -10951,14 +11086,15 @@ def test_generated_metal_readonly_device_pointer_alias_compiles_with_metal(tmp_p
 
     source = tmp_path / "readonly_device_pointer_alias.metal"
     output = tmp_path / "readonly_device_pointer_alias.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_READONLY_DEVICE_POINTER_ALIAS_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_READONLY_DEVICE_POINTER_ALIAS_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
     assert "const device Payload* alias = payload;" in code
-    assert "unsupported Metal parameter store" in code
-    assert "unsupported Metal parameter call" in code
+    assert "parameter store" in refusal
+    assert "parameter call" in refusal
     assert "alias->value = value;" not in code
     assert "mutate(alias);" not in code
 
@@ -10974,14 +11110,15 @@ def test_generated_metal_const_local_array_alias_compiles_with_metal(tmp_path):
 
     source = tmp_path / "const_local_array_alias.metal"
     output = tmp_path / "const_local_array_alias.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_CONST_LOCAL_ARRAY_ALIAS_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_CONST_LOCAL_ARRAY_ALIAS_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
     assert "const float values[2] = {1.0, 2.0};" in code
-    assert "unsupported Metal parameter store" in code
-    assert "unsupported Metal parameter call" in code
+    assert "parameter store" in refusal
+    assert "parameter call" in refusal
     assert "values[0] = value;" not in code
     assert "mutate(values);" not in code
 
@@ -10999,15 +11136,16 @@ def test_generated_metal_constant_pointer_reference_alias_compiles_with_metal(
 
     source = tmp_path / "constant_pointer_reference_alias.metal"
     output = tmp_path / "constant_pointer_reference_alias.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_CONSTANT_POINTER_REFERENCE_ALIAS_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_CONSTANT_POINTER_REFERENCE_ALIAS_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
     assert "constant Payload* pointerAlias = pointerPayload;" in code
     assert "constant Payload& referenceAlias = referencePayload;" in code
-    assert "unsupported Metal parameter store" in code
-    assert "unsupported Metal parameter call" in code
+    assert "parameter store" in refusal
+    assert "parameter call" in refusal
     assert "pointerAlias->value = pointerValue;" not in code
     assert "referenceAlias.value = referenceValue;" not in code
     assert "mutatePointer(pointerAlias);" not in code
@@ -11025,14 +11163,15 @@ def test_generated_metal_nested_constant_local_array_compiles_with_metal(tmp_pat
 
     source = tmp_path / "nested_constant_local_array.metal"
     output = tmp_path / "nested_constant_local_array.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_NESTED_CONSTANT_LOCAL_ARRAY_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_NESTED_CONSTANT_LOCAL_ARRAY_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
     assert "const float values[2][2] = {{1.0, 2.0}, {3.0, 4.0}};" in code
-    assert "unsupported Metal parameter store" in code
-    assert "unsupported Metal parameter call" in code
+    assert "parameter store" in refusal
+    assert "parameter call" in refusal
     assert "values[0][1] = value;" not in code
     assert "mutate(values);" not in code
 
@@ -11050,8 +11189,9 @@ def test_generated_metal_constant_scalar_vector_resource_index_compiles_with_met
 
     source = tmp_path / "constant_scalar_vector_resource_index.metal"
     output = tmp_path / "constant_scalar_vector_resource_index.air"
-    code = MetalCodeGen().generate(
-        crosstl.translator.parse(METAL_CONSTANT_SCALAR_VECTOR_RESOURCE_INDEX_SHADER)
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate,
+        crosstl.translator.parse(METAL_CONSTANT_SCALAR_VECTOR_RESOURCE_INDEX_SHADER),
     )
     source.write_text(code, encoding="utf-8")
 
@@ -11062,7 +11202,7 @@ def test_generated_metal_constant_scalar_vector_resource_index_compiles_with_met
     assert "array<sampler, 4> samplers [[sampler(0)]]" in code
     assert "textures[LAYER].sample(samplers[LAYER], uv)" in code
     assert "sampleLayer(input.uv, textures, samplers)" in code
-    assert "unsupported Metal parameter store" in code
+    assert "parameter store" in refusal
     assert "scale = value;" not in code
     assert "bias.x = value;" not in code
 
@@ -11394,7 +11534,8 @@ def test_generated_metal_compute_multisample_storage_image_aliases_compile_with_
 
     source = tmp_path / "compute_multisample_storage_image_aliases.metal"
     output = tmp_path / "compute_multisample_storage_image_aliases.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(
             METAL_MULTISAMPLE_STORAGE_IMAGE_ALIASES_COMPUTE_SHADER
         ),
@@ -11420,8 +11561,8 @@ def test_generated_metal_compute_multisample_storage_image_aliases_compile_with_
         "counterAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex)).x"
         in code
     )
-    assert "unsupported Metal multisample image store: imageStore" in code
-    assert "unsupported Metal multisample image atomic: imageAtomicAdd" in code
+    assert "multisample image store: imageStore" in refusal
+    assert "multisample image atomic: imageAtomicAdd" in refusal
     assert ".write(" not in code
     assert "atomic_fetch_add" not in code
     source.write_text(code, encoding="utf-8")
@@ -11440,7 +11581,8 @@ def test_generated_metal_compute_struct_held_multisample_storage_image_aliases_c
 
     source = tmp_path / "compute_struct_held_multisample_storage_image_aliases.metal"
     output = tmp_path / "compute_struct_held_multisample_storage_image_aliases.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(
             METAL_STRUCT_HELD_MULTISAMPLE_STORAGE_IMAGE_ALIASES_COMPUTE_SHADER
         ),
@@ -11458,8 +11600,8 @@ def test_generated_metal_compute_struct_held_multisample_storage_image_aliases_c
         "counterAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex)).x"
         in code
     )
-    assert "unsupported Metal multisample image store: imageStore" in code
-    assert "unsupported Metal multisample image atomic: imageAtomicAdd" in code
+    assert "multisample image store: imageStore" in refusal
+    assert "multisample image atomic: imageAtomicAdd" in refusal
     assert ".write(" not in code
     assert "atomic_fetch_add" not in code
     source.write_text(code, encoding="utf-8")
@@ -11478,7 +11620,8 @@ def test_generated_metal_compute_storage_image_query_diagnostics_compile_with_me
 
     source = tmp_path / "compute_storage_image_query_diagnostics.metal"
     output = tmp_path / "compute_storage_image_query_diagnostics.air"
-    code = MetalCodeGen().generate_stage(
+    code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage,
         crosstl.translator.parse(METAL_STORAGE_IMAGE_QUERY_DIAGNOSTICS_COMPUTE_SHADER),
         "compute",
     )
@@ -11489,16 +11632,14 @@ def test_generated_metal_compute_storage_image_query_diagnostics_compile_with_me
     )
     assert "texture2d<float, access::write> target [[texture(3)]]" in code
     assert (
-        "unsupported Metal texture query: textureQueryLevels on "
-        "texture2d<float, access::read_write>"
-    ) in code
-    assert (
-        "unsupported Metal texture query: textureQueryLod on "
-        "texture3d<float, access::read_write>"
-    ) in code
-    assert (
-        "unsupported Metal texture samples query: requires multisample texture" in code
+        "texture query: textureQueryLevels on texture2d<float, access::read_write>"
+        in refusal
     )
+    assert (
+        "texture query: textureQueryLod on texture3d<float, access::read_write>"
+        in refusal
+    )
+    assert "texture samples query: requires multisample texture" in refusal
     assert "textureQueryLevels(" not in code
     assert "textureQueryLod(" not in code
     assert "textureSamples(" not in code
@@ -12185,6 +12326,20 @@ def test_generated_glsl_fragment_texture_projection_validates_with_glslang(
     run_validator([glslang, "-S", "frag", str(source)])
 
 
+def test_generated_glsl_fragment_shadow_compare_runtime_offset_fails_closed():
+    message = refused_glsl(
+        GLSLCodeGen().generate_stage,
+        crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+
+    assert (
+        "OpenGL cannot lower 1 construct: texture compare: textureCompareOffset "
+        "texel offsets must be compile-time integer constants" in message
+    )
+    assert "textureGatherCompareOffset" not in message
+
+
 def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_glslang(
     tmp_path,
 ):
@@ -12194,12 +12349,33 @@ def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_gls
 
     source = tmp_path / "fragment_shadow_gather_compare_offset.frag"
     code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+        crosstl.translator.parse(
+            DYNAMIC_GATHER_STATIC_COMPARE_SHADOW_OFFSET_FRAGMENT_SHADER
+        ),
         "fragment",
     )
+    assert "textureGatherOffset(tex, uv, depth, offset)" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_cube_array_shadow_compare_lod_grad_fails_closed():
+    message = refused_glsl(
+        GLSLCodeGen().generate_stage,
+        crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
+        "fragment",
+    )
+
+    assert "OpenGL cannot lower 2 constructs" in message
+    assert (
+        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
+        in message
+    )
+    assert (
+        "texture compare: textureCompareGrad explicit gradients require 2D, "
+        "2D-array, or cube shadow samplers" in message
+    )
 
 
 def test_generated_glsl_fragment_shadow_compare_lod_grad_validates_with_glslang(
@@ -12211,9 +12387,10 @@ def test_generated_glsl_fragment_shadow_compare_lod_grad_validates_with_glslang(
 
     source = tmp_path / "fragment_shadow_compare_lod_grad.frag"
     code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
+        crosstl.translator.parse(CORE_SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
         "fragment",
     )
+    assert "textureGrad(tex, vec4(uvLayer, depth), ddx, ddy)" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "frag", str(source)])

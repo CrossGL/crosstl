@@ -49,6 +49,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -4637,8 +4638,11 @@ class SlangCodeGen:
 
     def format_declaration(self, type_name, name, node=None):
         mapped_type = self.map_resource_type_with_format(type_name, node)
-        if self.slang_needs_fixed_unsized_value_array(mapped_type):
-            mapped_type = mapped_type.replace("[]", "[1024]", 1)
+        if self.slang_needs_fixed_unsized_value_array(mapped_type) and (
+            getattr(node, "initial_value", None) is None
+        ):
+            # An initializer sizes the array (HLSL and Slang follow C); nothing else can.
+            raise UnsizedArrayUnsupportedError("slang", name, "is not a resource array")
         return format_c_style_array_declaration(mapped_type, name)
 
     def slang_needs_fixed_unsized_value_array(self, mapped_type):

@@ -69,6 +69,11 @@ from crosstl.translator.codegen.pointer_reinterpret import (
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import (
+    metal_import_partial_output,
+    refused_metal_import,
+)
+from tests.metal_refusal_helpers import metal_partial_output
 
 
 def tokenize_code(code: str) -> List:
@@ -1772,11 +1777,13 @@ def test_metal_target_pointer_compound_offsets_reject_floating_value():
     """
 
     crossgl = convert_without_preprocessing(source)
-    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    metal, refusal = metal_partial_output(
+        MetalCodeGen().generate, parse_crossgl(crossgl)
+    )
 
     assert (
-        "unsupported Metal pointer offset assignment: value 'amount' is not an "
-        "integer scalar for target 'cursor'" in metal
+        "pointer offset assignment: value 'amount' is not an "
+        "integer scalar for target 'cursor'" in refusal
     )
     assert "cursor += amount;" not in metal
 
@@ -2585,17 +2592,15 @@ def test_codegen_depth_array_sample_compare_bias_option_from_msl_spec_is_diagnos
             shadowSampler, uv, layer, compare, bias(lodBias));
     }
     """
-    crossgl = convert(code)
+    crossgl, message = metal_import_partial_output(convert, code)
 
     assert (
-        "0.0 /* unsupported Metal depth compare lod option: bias on shadowMap */"
-        in crossgl
-    )
+        "Metal depth compare LOD option bias on shadowMap: CrossGL depth compares "
+        "have no bias or minimum-LOD clamp operand"
+    ) in message
     assert "textureCompare(shadowMap, shadowSampler, uv, layer, compare" not in crossgl
     assert "bias(lodBias)" not in crossgl
-
-    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
-    assert "return 0.0;" in metal
+    assert "unsupported" not in crossgl
 
 
 def test_codegen_texture_sample_bias_and_gradient_options_roundtrip():
@@ -4359,13 +4364,15 @@ def test_codegen_roundtrips_global_constant_half_vector_initializer():
     crossgl = convert(code)
 
     assert (
-        "constant f16vec3 luminanceWeighting = " "f16vec3(0.2126, 0.7152, 0.0722);"
+        "constant f16vec3 luminanceWeighting = "
+        "f16vec3(float16(0.2126), float16(0.7152), float16(0.0722));"
     ) in crossgl
     assert "0.2126h" not in crossgl
 
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
     assert (
-        "constant half3 luminanceWeighting = " "half3(0.2126, 0.7152, 0.0722);"
+        "constant half3 luminanceWeighting = "
+        "half3(half(0.2126), half(0.7152), half(0.0722));"
     ) in metal
 
 
@@ -5625,16 +5632,16 @@ def test_codegen_texture_read_write_and_compare():
         return c + r + g + float4(s);
     }
     """
-    result = convert(code)
+    result, message = metal_import_partial_output(convert, code)
     assert "image2D tex @texture(0) @readwrite" in result
     assert "imageLoad(tex, uvec2(0, 0))" in result
     assert "imageStore(tex, uvec2(0, 0), c);" in result
-    assert "unsupported Metal storage texture sampled method: sample on tex" in result
-    assert (
-        "unsupported Metal storage texture sampled method: sample_compare on tex"
-        in result
-    )
-    assert "unsupported Metal storage texture sampled method: gather on tex" in result
+    for method in ("sample", "sample_compare", "gather"):
+        assert (
+            f"Metal storage texture sampled method {method} on tex: a texture "
+            "without access::sample cannot be sampled"
+        ) in message
+    assert "unsupported" not in result
     assert "textureStore" not in result
     assert "texture(tex" not in result
     assert "textureCompare" not in result
@@ -5682,10 +5689,14 @@ def test_codegen_sampled_texture_write_emits_diagnostic():
         tex.write(float4(1.0), uint2(0, 0));
     }
     """
-    result = convert(code)
+    result, message = metal_import_partial_output(convert, code)
 
     assert "sampler2D tex @texture(0)" in result
-    assert "unsupported Metal sampled texture write: write on tex" in result
+    assert (
+        "Metal sampled texture write write on tex: a texture with access::sample "
+        "cannot be written"
+    ) in message
+    assert "unsupported" not in result
     assert "textureStore" not in result
     assert "imageStore" not in result
 
@@ -5769,16 +5780,13 @@ def test_codegen_sampled_cube_texture_read_from_msl_spec_is_diagnostic():
         return tex.read(coord, face, layer, lod);
     }
     """
-    crossgl = convert(code)
+    message = refused_metal_import(convert, code)
 
-    diagnostic = (
-        "vec4(0.0) /* unsupported Metal sampled cube texture read: "
-        "read on tex requires face-aware texel fetch */"
-    )
-    assert crossgl.count(diagnostic) == 2
-    assert "texelFetch(tex, coord, face)" not in crossgl
-    assert "texelFetch(tex, vec4(coord, face), layer)" not in crossgl
-    assert parse_crossgl(crossgl) is not None
+    assert message.startswith("CrossGL cannot represent 1 Metal construct: ")
+    assert (
+        "Metal sampled cube texture read on tex: CrossGL has no face-addressed "
+        "texel fetch for cube textures"
+    ) in message
 
 
 def test_codegen_access_qualified_1d_storage_textures():

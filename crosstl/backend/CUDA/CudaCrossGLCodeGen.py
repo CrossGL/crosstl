@@ -4992,11 +4992,10 @@ class CudaToCrossGLConverter:
         return f"({predicate} != 0)"
 
     def format_unsupported_cuda_warp_intrinsic(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda warp intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
-        )
+        # A warp intrinsic with no wave-intrinsic equivalent stays a CUDA call in CrossGL: the CUDA target emits
+        # it natively, and crosstl.translator.semantics.warp emulates or refuses it for every other target. It was
+        # replaced by the constant 0.
+        return f"{function_name}({', '.join(args)})"
 
     def format_cuda_block_sync_vote_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):
@@ -6963,9 +6962,9 @@ class CudaToCrossGLConverter:
             "truncf": "trunc",
             "atan2f": "atan2",
             "fmaf": "fma",
-            "fmodf": "mod",
-            "fminf": "min",
-            "fmaxf": "max",
+            "fmodf": "fmod",
+            "fminf": "fmin",
+            "fmaxf": "fmax",
             "lerp": "mix",
             "floorf": "floor",
             "ceilf": "ceil",
@@ -6980,9 +6979,9 @@ class CudaToCrossGLConverter:
             "rsqrt": "inversesqrt",
             "rint": "round",
             "nearbyint": "round",
-            "fmod": "mod",
-            "fmin": "min",
-            "fmax": "max",
+            "fmod": "fmod",
+            "fmin": "fmin",
+            "fmax": "fmax",
             "__threadfence": "memoryBarrier",
             "__threadfence_block": "memoryBarrier",
             "__threadfence_system": "memoryBarrier",

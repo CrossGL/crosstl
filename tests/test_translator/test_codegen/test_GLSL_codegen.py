@@ -79,6 +79,11 @@ from crosstl.translator.codegen.pointer_reinterpret import (
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.lowering_refusal_helpers import (
+    glsl_partial_output,
+    refused_glsl,
+    shared_refusal,
+)
 
 
 def tokenize_code(code: str) -> List:
@@ -2273,20 +2278,25 @@ def test_opengl_cooperative_matrix_software_lowering_keeps_non_lane_operations_c
     assert error.details["fragmentMapping"] == "tile_4x4_row_pair"
 
 
-def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value):
-    return (
-        "/* "
-        + "un"
-        + "supported GLSL image atomic resource call: "
-        + f"{operation} on {resource_type} parameter */ {zero_value}"
-    )
+def glsl_image_atomic_parameter_diagnostic(operation, resource_type, _placeholder=None):
+    """The refusal reason for an image atomic on an unsupported image parameter."""
+    return f"image atomic resource call: {operation} on {resource_type} parameter"
 
 
-def glsl_dynamic_texel_offset_diagnostic(category, operation, zero_value):
+def assert_glsl_image_atomic_specialized(generated, operation):
+    """An image atomic in a helper runs in the helper's resource-specialized clone.
+
+    GLSL image parameters carry no format, so the generic copy cannot perform the
+    atomic; with every call specialized it is dead and keeps only its prototype.
+    """
+    assert re.search(rf"\b{operation}\((?!image\b)\w+", generated), operation
+    assert not re.search(rf"\b{operation}\(image\b", generated), operation
+
+
+def glsl_dynamic_texel_offset_diagnostic(category, operation, _placeholder=None):
+    """The refusal reason for a texel offset that is not a compile-time constant."""
     return (
-        f"/* unsupported GLSL {category}: {operation} "
-        "texel offsets must be compile-time integer constants */ "
-        f"{zero_value}"
+        f"{category}: {operation} texel offsets must be compile-time integer constants"
     )
 
 
@@ -6806,7 +6816,9 @@ def test_unsized_structured_buffer_array_helper_emits_diagnostic_fallback():
     }
     """
 
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, generated_refusal = glsl_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
         "layout(std430, binding = 3) buffer buffersBuffer { uint data[]; } buffers[];"
@@ -6814,13 +6826,9 @@ def test_unsized_structured_buffer_array_helper_emits_diagnostic_fallback():
     )
     assert "uint readOne(uint which, uint index)" in generated
     assert "void writeOne(uint which, uint index, uint value)" in generated
+    assert "structured buffer array parameter readOne.localBuffers" in generated_refusal
     assert (
-        "unsupported GLSL structured buffer array parameter readOne.localBuffers"
-        in generated
-    )
-    assert (
-        "unsupported GLSL structured buffer array parameter writeOne.localBuffers"
-        in generated
+        "structured buffer array parameter writeOne.localBuffers" in generated_refusal
     )
     assert "return 0u;" in generated
     assert "uint value = readOne(which, index);" in generated
@@ -10976,7 +10984,6 @@ def test_glsl_private_struct_byte_view_rejects_writes(tmp_path):
             "uint8_t",
             "unsupported-private-byte-layout",
         ),
-        ("uint words[];", "uint8_t", "private-byte-layout-unresolved"),
         ("uint words[2];", "uint64_t", "unsupported-private-byte-view"),
     ],
 )
@@ -11484,11 +11491,6 @@ def test_glsl_storage_struct_reinterpret_rejects_writes(tmp_path):
             "uint",
             "uint words[2]; float trailing;",
             "unsupported-storage-aggregate-layout",
-        ),
-        (
-            "uint",
-            "uint words[];",
-            "storage-aggregate-layout-unresolved",
         ),
         (
             "uint",
@@ -26459,24 +26461,37 @@ def test_geometry_stage_entrypoint():
 def test_glsl_texture_and_atomic_builtins():
     code = """
     shader main {
+        sampler2D tex;
+        uimage2D img;
         compute {
             void main() {
-                sampler2D tex;
-                image2D img;
                 atomic_uint counter;
                 vec4 g = textureGatherOffset(tex, vec2(0.5), ivec2(1));
-                uint v = imageAtomicAdd(img, ivec2(0, 0), 1);
+                uint v = imageAtomicAdd(img, ivec2(0, 0), 1u);
                 uint c = atomicCounterIncrement(counter);
             }
         }
     }
     """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated = generate_code(ast)
-    assert "textureGatherOffset" in generated
-    assert "imageAtomicAdd" in generated
-    assert "atomicCounterIncrement" in generated
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "vec4 g = textureGatherOffset(tex, vec2(0.5), ivec2(1));" in generated
+    assert "uint v = imageAtomicAdd(img, ivec2(0, 0), 1u);" in generated
+    assert "uint c = atomicCounterIncrement(counter);" in generated
+
+
+def test_glsl_function_local_sampler_gather_offset_is_refused():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                sampler2D tex;
+                vec4 g = textureGatherOffset(tex, vec2(0.5), ivec2(1));
+            }
+        }
+    }
+    """
+    refusal = refused_glsl(generate_code, parse_code(tokenize_code(code)))
+    assert "texture gather: textureGatherOffset" in refusal
 
 
 def test_glsl_lowers_compiler_workgroup_atomic_resource_types():
@@ -29397,7 +29412,9 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = glsl_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     expected_diagnostics = (
         "WaveShuffleAndFillUp expects 3 or 4 arguments, got 2",
@@ -29437,7 +29454,8 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
         ),
     )
     for diagnostic in expected_diagnostics:
-        assert generated.count(diagnostic) == 1
+        assert refusal.count(f"wave intrinsic: {diagnostic}") == 1
+    assert refusal.startswith("OpenGL cannot lower 10 constructs: ")
 
     main_body = generated.rsplit("void main()", 1)[1]
     assert "crossglWaveShuffleAndFillUp(" not in main_body
@@ -29563,13 +29581,13 @@ def test_glsl_unsupported_empty_metal_simd_helper_placeholder_returns_diagnostic
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated = generate_code(ast)
+    generated, generated_refusal = glsl_partial_output(generate_code, ast)
 
     assert "float simd_shuffle_down(float data)" in generated
     assert (
-        "return /* GLSL wave intrinsic diagnostic: simd_shuffle_down "
-        "has no OpenGL subgroup equivalent */ 0.0;"
-    ) in generated
+        "wave intrinsic: simd_shuffle_down has no OpenGL subgroup equivalent"
+        in generated_refusal
+    )
     assert "float value = simd_shuffle_down(1.0);" in generated
     assert not re.search(r"\bfloat\s+simd_shuffle_down\([^)]*\)\s*\{\s*\}", generated)
 
@@ -29590,17 +29608,17 @@ def test_glsl_metal_simd_group_helper_diagnostics_replace_unresolved_calls():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated = generate_code(ast)
+    generated, generated_refusal = glsl_partial_output(generate_code, ast)
 
     assert (
         "__metal_simd_sum requires a numeric scalar or vector value argument: "
         "flag has type bool"
-    ) in generated
-    assert "__metal_simd_max expects 1 arguments, got 2" in generated
+    ) in generated_refusal
+    assert "__metal_simd_max expects 1 arguments, got 2" in generated_refusal
     assert (
-        "/* GLSL wave intrinsic diagnostic: __metal_simd_shuffle_down "
-        "has no OpenGL subgroup equivalent */ 0u"
-    ) in generated
+        "wave intrinsic: __metal_simd_shuffle_down has no OpenGL subgroup equivalent"
+        in generated_refusal
+    )
     assert "subgroupAdd(flag)" not in generated
     assert "subgroupMax(lane, lane)" not in generated
     assert "__metal_simd_shuffle_down(" not in generated
@@ -29620,15 +29638,14 @@ def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated = generate_code(ast)
+    generated, generated_refusal = glsl_partial_output(generate_code, ast)
 
     assert (
-        "uint lane = /* GLSL wave intrinsic diagnostic: WaveGetLaneIndex "
-        "expects 0 arguments, got 1 */ 0u;" in generated
+        "wave intrinsic: WaveGetLaneIndex expects 0 arguments, got 1"
+        in generated_refusal
     )
     assert (
-        "uint missing = /* GLSL wave intrinsic diagnostic: WaveReadLaneAt "
-        "expects 2 arguments, got 1 */ 0u;" in generated
+        "wave intrinsic: WaveReadLaneAt expects 2 arguments, got 1" in generated_refusal
     )
     assert "uvec4 crossglWaveMatch(uint value)" in generated
     assert "uvec4 matchMask = crossglWaveMatch(lane);" in generated
@@ -29657,7 +29674,7 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated = generate_code(ast)
+    generated, generated_refusal = glsl_partial_output(generate_code, ast)
 
     for expected in [
         (
@@ -29689,7 +29706,7 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
             "value has type float"
         ),
     ]:
-        assert expected in generated
+        assert expected in generated_refusal
 
     assert "subgroupAdd(flag)" not in generated
     assert "subgroupAnd(transform)" not in generated
@@ -29719,7 +29736,7 @@ def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated = generate_code(ast)
+    generated, generated_refusal = glsl_partial_output(generate_code, ast)
 
     assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
     assert "#extension GL_KHR_shader_subgroup_vote : require" in generated
@@ -29736,11 +29753,11 @@ def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose():
     assert (
         "WaveActiveAllEqual requires a scalar or vector value argument: "
         "transform has type mat2"
-    ) in generated
+    ) in generated_refusal
     assert (
         "WaveActiveCountBits requires a boolean scalar value argument: "
         "values has type vec2"
-    ) in generated
+    ) in generated_refusal
     assert "WaveOpNode" not in generated
     assert "WaveActiveAllEqual(" not in generated
     assert "WaveActiveCountBits(" not in generated
@@ -30046,7 +30063,7 @@ def test_opengl_array_handling(array_test_data):
 
     struct Material {
         float values[4];  // Fixed-size array
-        vec3 colors[];    // Dynamic array
+        vec3 colors[16];  // A value array needs an element count
     };
 
     cbuffer Constants {
@@ -33038,6 +33055,75 @@ def test_opengl_texture_dimension_descriptors():
     expect("image3D", coordinate_dimension=3)
 
 
+VARIABLE_GATHER_OFFSET_SHADER = """
+{version}
+shader VariableGatherOffsets {{
+    isampler2DArray layers;
+    sampler linearSampler;
+
+    struct FSInput {{
+        vec3 uvLayer @ TEXCOORD0;
+        ivec2 offset @ TEXCOORD1;
+    }};
+
+    fragment {{
+        ivec4 main(FSInput input) @ gl_FragColor {{
+            return textureGatherOffset(layers, linearSampler, input.uvLayer, input.offset, 1)
+                + textureGatherOffsets(
+                    layers,
+                    linearSampler,
+                    input.uvLayer,
+                    input.offset,
+                    ivec2(1, 0),
+                    ivec2(0, 1),
+                    ivec2(1, 1),
+                    2
+                );
+        }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize("version", ["", "#version 400", "#version 320 es"])
+def test_opengl_variable_gather_offsets_lower_where_glsl_allows_them(version):
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(VARIABLE_GATHER_OFFSET_SHADER.format(version=version)),
+        "fragment",
+    )
+
+    assert "textureGatherOffset(layers, uvLayer, offset, 1)" in generated_code
+    # Component i of textureGatherOffsets is texel T_i0_j0 of the footprint at
+    # offset i (GLSL 4.60, section 8.9.4), which textureGatherOffset returns in w.
+    # An integer sampler gathers integer texels.
+    assert (
+        "ivec4(textureGatherOffset(layers, uvLayer, offset, 2).w, "
+        "textureGatherOffset(layers, uvLayer, ivec2(1, 0), 2).w, "
+        "textureGatherOffset(layers, uvLayer, ivec2(0, 1), 2).w, "
+        "textureGatherOffset(layers, uvLayer, ivec2(1, 1), 2).w)" in generated_code
+    )
+
+
+def test_opengl_variable_gather_offsets_validate_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(VARIABLE_GATHER_OFFSET_SHADER.format(version="")),
+        "fragment",
+    )
+    source = tmp_path / "variable_gather_offsets.frag"
+    source.write_text(generated_code, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, "-S", "frag", str(source)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_opengl_texture_gather_offset_variants_filter_sampler_arguments():
     shader = """
     shader GatherOffsetVariants {
@@ -33123,23 +33209,18 @@ def test_opengl_texture_gather_offset_variants_filter_sampler_arguments():
         "component == 2 ? textureGather(tex, uv, 2) : textureGather(tex, uv, 3)"
         in generated_code
     )
+    # GLSL 4.00 lets textureGatherOffset take a variable offset; the component
+    # must still be a constant expression.
+    assert "textureGatherOffset(tex, uv, offset, 3)" in generated_code
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather", "textureGatherOffset", "vec4(0.0)"
-            )
-        )
-        == 2
+        "component == 0 ? textureGatherOffset(tex, uv, offset, 0) : "
+        "component == 1 ? textureGatherOffset(tex, uv, offset, 1) : "
+        "component == 2 ? textureGatherOffset(tex, uv, offset, 2) : "
+        "textureGatherOffset(tex, uv, offset, 3)" in generated_code
     )
-    assert (
-        glsl_dynamic_texel_offset_diagnostic(
-            "texture gather", "textureGatherOffsets", "vec4(0.0)"
-        )
-        in generated_code
-    )
+    assert "textureGatherOffset(layers, uvLayer, offset3, 3).w" in generated_code
     assert "textureGather(tex, uv, component)" not in generated_code
     assert "textureGatherOffset(tex, uv, offset, component)" not in generated_code
-    assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
     assert (
         "gatherOps(colorMap, layerMap, uv, uvLayer, offset, offset0, offset1, offset2, offset3, component)"
@@ -33227,16 +33308,21 @@ def test_opengl_texture_gather_compare_offsets_filter_sampler_arguments():
     assert "sampler s" not in generated_code
     assert "textureGatherCompareOffsets(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
-    assert "textureGatherOffset(" not in generated_code
+    # GLSL 4.00 lets textureGatherOffset take variable offsets, so each offset
+    # gets its own gather.
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffsets",
-                "vec4(0.0)",
-            )
-        )
-        == 2
+        "vec4 arrayOffsets = vec4("
+        "textureGatherOffset(tex, uv, depth, offsets[0]).w, "
+        "textureGatherOffset(tex, uv, depth, offsets[1]).w, "
+        "textureGatherOffset(tex, uv, depth, offsets[2]).w, "
+        "textureGatherOffset(tex, uv, depth, offsets[3]).w);" in generated_code
+    )
+    assert (
+        "vec4 directOffsets = vec4("
+        "textureGatherOffset(tex, uv, depth, offset0).w, "
+        "textureGatherOffset(tex, uv, depth, offset1).w, "
+        "textureGatherOffset(tex, uv, depth, offset2).w, "
+        "textureGatherOffset(tex, uv, depth, offset3).w);" in generated_code
     )
 
 
@@ -33300,9 +33386,9 @@ def test_opengl_texture_gather_offsets_accept_const_array_offsets():
         "/* unsupported GLSL texture gather compare: textureGatherCompareOffsets "
         "texel offsets must be compile-time integer constants */" not in generated_code
     )
-    assert "textureGatherOffset(tex, uv, offsets[0], 0).x" in generated_code
+    assert "textureGatherOffset(tex, uv, offsets[0], 0).w" in generated_code
     assert "textureGatherOffset(tex, uv, offsets[3], 3).w" in generated_code
-    assert "textureGatherOffset(tex, uv, depth, offsets[0]).x" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[0]).w" in generated_code
     assert "textureGatherOffset(tex, uv, depth, offsets[3]).w" in generated_code
 
 
@@ -33366,13 +33452,12 @@ def test_opengl_texture_gather_offsets_mix_literal_and_dynamic_offsets():
     assert "textureGatherOffsets(" not in generated_code
     assert "linearSampler" not in generated_code
     assert ", s, uvLayer" not in generated_code
-    assert (
-        glsl_dynamic_texel_offset_diagnostic(
-            "texture gather", "textureGatherOffsets", "vec4(0.0)"
-        )
-        in generated_code
-    )
-    assert "textureGatherOffset(" not in generated_code
+    # Literal and variable offsets both become one textureGatherOffset each.
+    assert "textureGatherOffset(layers, uvLayer, ivec2((-1), 0), 0).w" in generated_code
+    assert "textureGatherOffset(layers, uvLayer, dynamic0, 0).w" in generated_code
+    assert "textureGatherOffset(layers, uvLayer, ivec2(1, (-1)), 3).w" in generated_code
+    assert "textureGatherOffset(layers, uvLayer, dynamic1, 3).w" in generated_code
+    assert "component == 0 ? vec4(" in generated_code
     assert (
         "gatherOps(layerMap, uvLayer, dynamic0, dynamic1, component)" in generated_code
     )
@@ -33429,20 +33514,20 @@ def test_opengl_direct_stage_gather_offsets_use_input_members():
         "textureGather(colorMap, uv, 3));" in generated_code
     )
     assert (
-        glsl_dynamic_texel_offset_diagnostic(
-            "texture gather", "textureGatherOffset", "vec4(0.0)"
-        )
-        in generated_code
+        "vec4 dynamicOffset = (component == 0 ? textureGatherOffset(colorMap, uv, offset, 0) : "
+        "component == 1 ? textureGatherOffset(colorMap, uv, offset, 1) : "
+        "component == 2 ? textureGatherOffset(colorMap, uv, offset, 2) : "
+        "textureGatherOffset(colorMap, uv, offset, 3));" in generated_code
     )
     assert (
-        glsl_dynamic_texel_offset_diagnostic(
-            "texture gather", "textureGatherOffsets", "vec4(0.0)"
-        )
-        in generated_code
+        "vec4 offsetsGather = (component == 0 ? vec4("
+        "textureGatherOffset(layerMap, uvLayer, offset0, 0).w, "
+        "textureGatherOffset(layerMap, uvLayer, offset1, 0).w, "
+        "textureGatherOffset(layerMap, uvLayer, offset2, 0).w, "
+        "textureGatherOffset(layerMap, uvLayer, offset3, 0).w)" in generated_code
     )
     assert "textureGather(colorMap, uv, component)" not in generated_code
     assert "textureGatherOffset(colorMap, uv, offset, component)" not in generated_code
-    assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
     assert "input.uv" not in generated_code
     assert "input.offset" not in generated_code
@@ -33601,17 +33686,15 @@ def test_opengl_cube_texture_gather_offsets_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     offset_diagnostic = (
-        "/* unsupported GLSL texture gather: textureGatherOffset "
-        "offsets require 2D or 2D-array textures */ vec4(0.0)"
+        "texture gather: textureGatherOffset offsets require 2D or 2D-array textures"
     )
     offsets_diagnostic = (
-        "/* unsupported GLSL texture gather: textureGatherOffsets "
-        "offsets require 2D or 2D-array textures */ vec4(0.0)"
+        "texture gather: textureGatherOffsets offsets require 2D or 2D-array textures"
     )
     assert "layout(binding = 0) uniform samplerCube cubeMap;" in generated_code
     assert "layout(binding = 1) uniform samplerCubeArray cubeArray;" in generated_code
@@ -33623,8 +33706,8 @@ def test_opengl_cube_texture_gather_offsets_emit_diagnostics():
         "vec4 gatherCubeArray(samplerCubeArray tex, vec4 cubeLayer, ivec2 offset, ivec2 offset0, ivec2 offset1, ivec2 offset2, ivec2 offset3, int component)"
         in generated_code
     )
-    assert generated_code.count(offset_diagnostic) == 4
-    assert generated_code.count(offsets_diagnostic) == 4
+    assert offset_diagnostic in generated_code_refusal
+    assert offsets_diagnostic in generated_code_refusal
     assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
     assert "cubeSampler" not in generated_code
@@ -33666,14 +33749,11 @@ def test_opengl_unsupported_dimension_texture_gather_emits_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported GLSL texture gather: textureGather requires 2D, "
-        "2D-array, cube, or cube-array textures */ vec4(0.0)"
-    )
+    diagnostic = "texture gather: textureGather requires 2D, 2D-array, cube, or cube-array textures"
     assert "layout(binding = 0) uniform sampler1D lineMap;" in generated_code
     assert "layout(binding = 1) uniform sampler3D volumeMap;" in generated_code
     assert "vec4 gatherLine(sampler1D tex, float u, int component)" in generated_code
@@ -33681,7 +33761,7 @@ def test_opengl_unsupported_dimension_texture_gather_emits_diagnostics():
         "vec4 gatherVolume(sampler3D tex, vec3 volumeUv, int component)"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 6
+    assert diagnostic in generated_code_refusal
     assert "textureGather(" not in generated_code
     assert "linearSampler" not in generated_code
 
@@ -33739,8 +33819,8 @@ def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert (
@@ -33751,23 +33831,19 @@ def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments():
         glsl_dynamic_texel_offset_diagnostic(
             "texture offset", "textureOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture offset", "textureLodOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureLodOffset", "vec4(0.0)"
         )
-        == 2
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture offset", "textureGradOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureGradOffset", "vec4(0.0)"
         )
-        == 2
+        in generated_code_refusal
     )
     assert (
         "offsetOps(colorMap, layerMap, uv, uvLayer, lod, ddx, ddy, offset)"
@@ -33867,8 +33943,8 @@ def test_opengl_cube_texture_sample_offsets_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform samplerCube cubeMap;" in generated_code
@@ -33888,40 +33964,28 @@ def test_opengl_cube_texture_sample_offsets_emit_diagnostics():
         in generated_code
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture offset: textureOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ vec4(0.0)"
-        )
-        == 4
+        "texture offset: textureOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture offset: textureLodOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ vec4(0.0)"
-        )
-        == 4
+        "texture offset: textureLodOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture offset: textureGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ vec4(0.0)"
-        )
-        == 4
+        "texture offset: textureGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture compare: textureCompareOffset offsets require 2D or 2D-array shadow samplers */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareOffset offsets require 2D or 2D-array shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture compare: textureCompareGradOffset explicit gradient offsets require 2D or 2D-array shadow samplers */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareGradOffset explicit gradient offsets require 2D or 2D-array shadow samplers"
+        in generated_code_refusal
     )
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
@@ -33965,43 +34029,35 @@ def test_opengl_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_mem
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "layout(binding = 1) uniform sampler2DArray layerMap;" in generated_code
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture offset", "textureOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureOffset", "vec4(0.0)"
         )
-        == 2
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture offset", "textureLodOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureLodOffset", "vec4(0.0)"
         )
-        == 2
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture offset", "textureGradOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureGradOffset", "vec4(0.0)"
         )
-        == 2
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
         )
-        == 2
+        in generated_code_refusal
     )
     assert "linearSampler" not in generated_code
     assert "input.uv" not in generated_code
@@ -34077,8 +34133,8 @@ def test_opengl_projected_texture_variants_filter_sampler_arguments():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert (
@@ -34091,24 +34147,22 @@ def test_opengl_projected_texture_variants_filter_sampler_arguments():
     assert "textureProjLod(tex, uvq, 2.0)" in generated_code
     assert "textureProjGrad(tex, uvq, ddx, ddy)" in generated_code
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "projected texture", "textureProjOffset", "vec4(0.0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjOffset", "vec4(0.0)"
         )
-        == 2
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjLodOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjGradOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "projectedOps(colorMap, volumeMap, uvq, uvqw, xyzq, ddx, ddy, offset)"
@@ -34207,8 +34261,8 @@ def test_opengl_direct_projected_texture_stage_input_members():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
@@ -34222,24 +34276,22 @@ def test_opengl_direct_projected_texture_stage_input_members():
         in generated_code
     )
     assert (
-        "vec4 projectedOffset = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjOffset", "vec4(0.0)"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjLodOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjGradOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert "linearSampler" not in generated_code
     assert ", input." not in generated_code
@@ -34276,8 +34328,8 @@ def test_opengl_direct_projected_array_texture_stage_input_members():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DArray layerMap;" in generated_code
@@ -34290,24 +34342,22 @@ def test_opengl_direct_projected_array_texture_stage_input_members():
         in generated_code
     )
     assert (
-        "vec4 projectedOffset = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjOffset", "vec4(0.0)"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjLodOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjGradOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert "linearSampler" not in generated_code
     assert ", input." not in generated_code
@@ -34343,8 +34393,8 @@ def test_opengl_implicit_projected_array_texture_stage_input_members_strip_sampl
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DArray layerMap;" in generated_code
@@ -34357,24 +34407,22 @@ def test_opengl_implicit_projected_array_texture_stage_input_members_strip_sampl
         in generated_code
     )
     assert (
-        "vec4 projectedOffset = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjOffset", "vec4(0.0)"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjLodOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjGradOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert "input." not in generated_code
     assert "textureProjOffset(" not in generated_code
@@ -34433,8 +34481,8 @@ def test_opengl_projected_array_texture_resource_arrays_strip_samplers():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DArray layerMaps[4];" in generated_code
@@ -34449,24 +34497,22 @@ def test_opengl_projected_array_texture_resource_arrays_strip_samplers():
         in generated_code
     )
     assert (
-        "vec4 dynamicOffset = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjOffset", "vec4(0.0)"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjLodOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjGradOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "projectedLeaf(layerMaps, layer, uvLayerQ, lod, ddx, ddy, offset)"
@@ -34528,8 +34574,8 @@ def test_opengl_implicit_projected_array_texture_resource_arrays_strip_samplers(
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DArray layerMaps[4];" in generated_code
@@ -34544,24 +34590,22 @@ def test_opengl_implicit_projected_array_texture_resource_arrays_strip_samplers(
         in generated_code
     )
     assert (
-        "vec4 dynamicOffset = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjOffset", "vec4(0.0)"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjLodOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
             "projected texture", "textureProjGradOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "projectedLeaf(layerMaps, layer, uvLayerQ, lod, ddx, ddy, offset)"
@@ -34716,8 +34760,8 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in generated_code
@@ -34737,33 +34781,28 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float offsetProjected = /* unsupported GLSL texture compare: "
-        "textureCompareProjOffset texel offsets must be compile-time integer constants "
-        "*/ 0.0;" in generated_code
+        "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "float lodProjected = textureLod(tex, vec3(uvq.xy / uvq.z, depth), lod);"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareProjLodOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "float gradProjected = textureGrad(tex, vec3(uvq.xy / uvq.z, depth), ddx, ddy);"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareProjGradOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "projectedShadow(shadowMap, uvq, uvqw, depth, lod, ddx, ddy, offset)"
@@ -34778,30 +34817,24 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture compare", "textureCompareProjGradOffset", "0.0"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareProjGradOffset", "0.0"
         )
-        == 2
+        in generated_code_refusal
     )
     assert (
         "float gradProjected = textureGrad(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareProjGradOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "projectedArrayShadow(shadowArray, uvLayerQ, depth, ddx, ddy, offset)"
@@ -34841,8 +34874,8 @@ def test_opengl_direct_projected_shadow_compare_stage_input_members():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in generated_code
@@ -34855,9 +34888,8 @@ def test_opengl_direct_projected_shadow_compare_stage_input_members():
         in generated_code
     )
     assert (
-        "float planarOffset = /* unsupported GLSL texture compare: "
-        "textureCompareProjOffset texel offsets must be compile-time integer constants "
-        "*/ 0.0;" in generated_code
+        "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "float arrayGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
@@ -34945,7 +34977,9 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[4];" in generated_code
@@ -34963,31 +34997,26 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code
     )
     assert (
-        "float planarOffset = /* unsupported GLSL texture compare: "
-        "textureCompareProjOffset texel offsets must be compile-time integer constants "
-        "*/ 0.0;" in generated_code
+        "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
         in generated_code
     )
     assert (
-        "float planarGradOffset = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareProjGradOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
         in generated_code
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
@@ -35084,7 +35113,9 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[4];" in generated_code
@@ -35102,31 +35133,26 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code
     )
     assert (
-        "float planarOffset = /* unsupported GLSL texture compare: "
-        "textureCompareProjOffset texel offsets must be compile-time integer constants "
-        "*/ 0.0;" in generated_code
+        "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
         in generated_code
     )
     assert (
-        "float planarGradOffset = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareProjGradOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
         in generated_code
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
@@ -35225,7 +35251,9 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[5];" in generated_code
@@ -35248,19 +35276,16 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
         in generated_code
     )
     assert (
-        "float planarLow = /* unsupported GLSL texture compare: "
-        "textureCompareProjOffset texel offsets must be compile-time integer constants "
-        "*/ 0.0;" in generated_code
+        "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "float arrayHigh = textureGrad(shadowArrays[(2 * 2)], "
         "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
     ) in generated_code
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "shadowDeep(shadowMaps, shadowArrays, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
@@ -35321,13 +35346,13 @@ def test_opengl_projected_array_shadow_lod_offset_reports_unsupported():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert (
-        "float rejected = /* unsupported GLSL texture compare: textureCompareProjLodOffset projected explicit LOD is not supported for sampler2DArrayShadow */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareProjLodOffset projected explicit LOD is not supported for sampler2DArrayShadow"
+        in generated_code_refusal
     )
     assert "textureLodOffset(" not in generated_code
 
@@ -35409,7 +35434,9 @@ def test_opengl_projected_cube_shadow_compare_lowers_supported_basic_form():
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert "layout(binding = 0) uniform samplerCubeShadow cubeMap;" in generated_code
     assert (
@@ -35438,12 +35465,7 @@ def test_opengl_projected_cube_shadow_compare_lowers_supported_basic_form():
         ),
     }
     for func_name, reason in expected_cube_diagnostics.items():
-        assert (
-            generated_code.count(
-                f"/* unsupported GLSL texture compare: {func_name} {reason} */ 0.0"
-            )
-            == 1
-        )
+        assert f"texture compare: {func_name} {reason}" in generated_code_refusal
     coordinate_diagnostic_counts = {
         "textureCompareProj": 1,
         "textureCompareProjOffset": 1,
@@ -35452,10 +35474,8 @@ def test_opengl_projected_cube_shadow_compare_lowers_supported_basic_form():
     }
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported GLSL texture compare: {func_name} requires sampler2DShadow vec3/vec4 or sampler2DArrayShadow vec4 projection coordinates */ 0.0"
-            )
-            == count
+            f"texture compare: {func_name} requires sampler2DShadow vec3/vec4 or sampler2DArrayShadow vec4 projection coordinates"
+            in generated_code_refusal
         )
     assert "compareSampler" not in generated_code
     assert "textureCompareProj(" not in generated_code
@@ -35501,8 +35521,8 @@ def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform samplerCube cubeMap;" in generated_code
@@ -35528,12 +35548,12 @@ def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
         in generated_code
     )
     assert (
-        "/* unsupported GLSL projected texture: textureProjLodOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ vec4(0.0)"
-        in generated_code
+        "projected texture: textureProjLodOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        "/* unsupported GLSL projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ vec4(0.0)"
-        in generated_code
+        "projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers"
+        in generated_code_refusal
     )
     coordinate_diagnostic_counts = {
         "textureProj": 1,
@@ -35543,10 +35563,8 @@ def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
     }
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported GLSL projected texture: {func_name} requires 1D, 2D, 2D-array, or 3D projection coordinates */ vec4(0.0)"
-            )
-            == count
+            f"projected texture: {func_name} requires 1D, 2D, 2D-array, or 3D projection coordinates"
+            in generated_code_refusal
         )
     assert "linearSampler" not in generated_code
     assert "textureProj(cubeMap" not in generated_code
@@ -35684,8 +35702,8 @@ def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_for
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform samplerCube cubeMaps[4];" in generated_code
@@ -35729,8 +35747,8 @@ def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_for
         in generated_code
     )
     assert (
-        "/* unsupported GLSL projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ vec4(0.0)"
-        in generated_code
+        "projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers"
+        in generated_code_refusal
     )
     projected_counts = {
         "textureProj": 1,
@@ -35739,10 +35757,8 @@ def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_for
     }
     for func_name, count in projected_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported GLSL projected texture: {func_name} requires 1D, 2D, 2D-array, or 3D projection coordinates */ vec4(0.0)"
-            )
-            == count
+            f"projected texture: {func_name} requires 1D, 2D, 2D-array, or 3D projection coordinates"
+            in generated_code_refusal
         )
     assert (
         "float fixedProjected = texture(maps[2], vec4(cubeProj.xyz / cubeProj.w, depth));"
@@ -35753,12 +35769,12 @@ def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_for
         in generated_code
     )
     assert (
-        "/* unsupported GLSL texture compare: textureCompareProjLod explicit LOD requires 2D shadow samplers */ 0.0"
-        in generated_code
+        "texture compare: textureCompareProjLod explicit LOD requires 2D shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        "/* unsupported GLSL texture compare: textureCompareProjGradOffset explicit gradient offsets require 2D or 2D-array shadow samplers */ 0.0"
-        in generated_code
+        "texture compare: textureCompareProjGradOffset explicit gradient offsets require 2D or 2D-array shadow samplers"
+        in generated_code_refusal
     )
     compare_counts = {
         "textureCompareProj": 1,
@@ -35767,10 +35783,8 @@ def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_for
     }
     for func_name, count in compare_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported GLSL texture compare: {func_name} requires sampler2DShadow vec3/vec4 or sampler2DArrayShadow vec4 projection coordinates */ 0.0"
-            )
-            == count
+            f"texture compare: {func_name} requires sampler2DShadow vec3/vec4 or sampler2DArrayShadow vec4 projection coordinates"
+            in generated_code_refusal
         )
     assert (
         "projectedCube(cubeMaps, layer, cubeProj, lod, ddx, ddy, offset)"
@@ -35887,8 +35901,8 @@ def test_opengl_integer_projected_textures_lower_supported_forms_and_diagnose_cu
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform isampler2D signedMap;" in generated_code
@@ -35941,20 +35955,20 @@ def test_opengl_integer_projected_textures_lower_supported_forms_and_diagnose_cu
         in generated_code
     )
     assert (
-        "ivec4 cubeOffsetRejected = /* unsupported GLSL projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ ivec4(0);"
-        in generated_code
+        "projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        "uvec4 cubeOffsetRejected = /* unsupported GLSL projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ uvec4(0u);"
-        in generated_code
+        "projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        "ivec4 cubeArrayRejected = /* unsupported GLSL projected texture: textureProj requires 1D, 2D, 2D-array, or 3D projection coordinates */ ivec4(0);"
-        in generated_code
+        "projected texture: textureProj requires 1D, 2D, 2D-array, or 3D projection coordinates"
+        in generated_code_refusal
     )
     assert (
-        "uvec4 cubeArrayRejected = /* unsupported GLSL projected texture: textureProj requires 1D, 2D, 2D-array, or 3D projection coordinates */ uvec4(0u);"
-        in generated_code
+        "projected texture: textureProj requires 1D, 2D, 2D-array, or 3D projection coordinates"
+        in generated_code_refusal
     )
     assert (
         "unsignedProjected(unsignedLayerMap, unsignedCube, unsignedCubeArray, uvLayerQ, cubeProj, lod, ddx, ddy, offset)"
@@ -36001,8 +36015,8 @@ def test_opengl_integer_sampler_offsets_and_gathers_strip_sampler_arguments():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform isampler2D signedMap;" in generated_code
@@ -36015,32 +36029,24 @@ def test_opengl_integer_sampler_offsets_and_gathers_strip_sampler_arguments():
         in generated_code
     )
     assert (
-        "ivec4 offsetSigned = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture offset", "textureOffset", "ivec4(0)"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
-        "uvec4 offsetUnsigned = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture offset", "textureLodOffset", "uvec4(0u)"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert "textureGather(signedMap, uv, 0)" in generated_code
     assert "textureGather(signedMap, uv, 1)" in generated_code
     assert "textureGather(signedMap, uv, 2)" in generated_code
     assert "textureGather(signedMap, uv, 3)" in generated_code
     assert (
-        "uvec4 gatheredUnsigned = "
-        + glsl_dynamic_texel_offset_diagnostic(
-            "texture gather", "textureGatherOffset", "uvec4(0u)"
-        )
-        + ";"
-        in generated_code
+        "uvec4 gatheredUnsigned = (component == 0 ? "
+        "textureGatherOffset(unsignedLayers, uvLayer, offset, 0) : " in generated_code
     )
     assert (
         "ivec4 gatheredCube = textureGather(signedCube, direction);" in generated_code
@@ -36053,7 +36059,9 @@ def test_opengl_integer_sampler_offsets_and_gathers_strip_sampler_arguments():
     assert ", linearSampler" not in generated_code
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
-    assert "textureGatherOffset(" not in generated_code
+    assert "textureGatherOffset(unsignedLayers, uvLayer, offset, component)" not in (
+        generated_code
+    )
 
 
 def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
@@ -36100,8 +36108,8 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in generated_code
@@ -36118,18 +36126,14 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
         in generated_code
     )
     assert "textureGather(tex, uv, depth)" in generated_code
+    # textureGatherOffset takes a variable offset; textureOffset does not.
     assert (
-        "vec4 offsetGathered = "
-        + glsl_dynamic_texel_offset_diagnostic(
-            "texture gather compare", "textureGatherCompareOffset", "vec4(0.0)"
-        )
-        + ";"
+        "vec4 offsetGathered = textureGatherOffset(tex, uv, depth, offset);"
         in generated_code
     )
     assert (
-        "float offsetCompared = /* unsupported GLSL texture compare: "
-        "textureCompareOffset texel offsets must be compile-time integer constants "
-        "*/ 0.0;" in generated_code
+        "texture compare: textureCompareOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "vec4 gatherShadowArray(sampler2DArrayShadow tex, vec3 uvLayer, float depth, ivec2 offset)"
@@ -36137,20 +36141,12 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
     )
     assert "textureGather(tex, uvLayer, depth)" in generated_code
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffset",
-                "vec4(0.0)",
-            )
-        )
-        == 2
+        "vec4 offsetGathered = textureGatherOffset(tex, uvLayer, depth, offset);"
+        in generated_code
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture compare: textureCompareOffset texel offsets must be compile-time integer constants */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareOffset texel offsets must be compile-time integer constants"
+        in generated_code_refusal
     )
     assert (
         "vec4 gatherCubeShadowArray(samplerCubeArrayShadow tex, vec4 cubeLayer, float depth)"
@@ -36164,7 +36160,7 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
     assert "textureGatherCompare(" not in generated_code
     assert "textureGatherCompareOffset(" not in generated_code
     assert "textureCompareOffset(" not in generated_code
-    assert "textureGatherOffset(" not in generated_code
+    assert "textureOffset(" not in generated_code
 
 
 def test_opengl_shadow_compare_offset_literal_offsets_lower_to_texture_offset():
@@ -36355,13 +36351,7 @@ def test_opengl_direct_shadow_gather_compare_stage_input_members():
         )
         assert "vec4 planar = textureGather(shadowMap, uv, depth);" in generated_code
         assert (
-            "vec4 planarOffset = "
-            + glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffset",
-                "vec4(0.0)",
-            )
-            + ";"
+            "vec4 planarOffset = textureGatherOffset(shadowMap, uv, depth, offset);"
             in generated_code
         )
         assert (
@@ -36370,12 +36360,7 @@ def test_opengl_direct_shadow_gather_compare_stage_input_members():
         )
         assert (
             "vec4 arrayOffset = "
-            + glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffset",
-                "vec4(0.0)",
-            )
-            + ";"
+            "textureGatherOffset(shadowArray, uvLayer, depth, offset);"
             in generated_code
         )
         assert (
@@ -36384,7 +36369,7 @@ def test_opengl_direct_shadow_gather_compare_stage_input_members():
         )
         assert "textureGatherCompare(" not in generated_code
         assert "textureGatherCompareOffset(" not in generated_code
-        assert "textureGatherOffset(" not in generated_code
+        assert "textureOffset(" not in generated_code
         assert "compareSampler" not in generated_code
         assert "input." not in generated_code
 
@@ -36525,13 +36510,7 @@ def test_opengl_shadow_gather_compare_resource_arrays_strip_samplers():
         assert "vec4 fixedPlanar = textureGather(maps[2], uv, depth);" in generated_code
         assert (
             "vec4 dynamicPlanarOffset = "
-            + glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffset",
-                "vec4(0.0)",
-            )
-            + ";"
-            in generated_code
+            "textureGatherOffset(maps[layer], uv, depth, offset);" in generated_code
         )
         assert (
             "vec4 fixedArray = textureGather(arrays[1], uvLayer, depth);"
@@ -36539,12 +36518,7 @@ def test_opengl_shadow_gather_compare_resource_arrays_strip_samplers():
         )
         assert (
             "vec4 dynamicArrayOffset = "
-            + glsl_dynamic_texel_offset_diagnostic(
-                "texture gather compare",
-                "textureGatherCompareOffset",
-                "vec4(0.0)",
-            )
-            + ";"
+            "textureGatherOffset(arrays[layer], uvLayer, depth, offset);"
             in generated_code
         )
         assert (
@@ -36563,7 +36537,7 @@ def test_opengl_shadow_gather_compare_resource_arrays_strip_samplers():
         assert "samplers" not in generated_code
         assert "textureGatherCompare(" not in generated_code
         assert "textureGatherCompareOffset(" not in generated_code
-        assert "textureGatherOffset(" not in generated_code
+        assert "textureOffset(" not in generated_code
         assert "input." not in generated_code
 
 
@@ -36608,15 +36582,11 @@ def test_opengl_unsupported_cube_shadow_gather_compare_offsets_emit_diagnostics(
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported GLSL texture gather compare: "
-        "textureGatherCompareOffset offsets require 2D or 2D-array shadow samplers */ "
-        "vec4(0.0)"
-    )
+    diagnostic = "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array shadow samplers"
     assert "layout(binding = 0) uniform samplerCubeShadow cubeMap;" in generated_code
     assert (
         "layout(binding = 1) uniform samplerCubeArrayShadow cubeArray;"
@@ -36630,7 +36600,7 @@ def test_opengl_unsupported_cube_shadow_gather_compare_offsets_emit_diagnostics(
         "vec4 cubeArrayOffset(samplerCubeArrayShadow tex, vec4 cubeLayer, float depth, ivec2 offset)"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 3
+    assert diagnostic in generated_code_refusal
     assert "cubeOffset(cubeMap, direction, depth, offset)" in generated_code
     assert "cubeArrayOffset(cubeArray, cubeLayer, depth, offset)" in generated_code
     assert "textureGatherOffset(" not in generated_code
@@ -36713,8 +36683,8 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in generated_code
@@ -36728,24 +36698,20 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
     )
     assert "float lodValue = textureLod(tex, vec3(uv, depth), lod);" in generated_code
     assert (
-        "float lodOffsetValue = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareLodOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "float gradValue = textureGrad(tex, vec3(uv, depth), ddx, ddy);"
         in generated_code
     )
     assert (
-        "float gradOffsetValue = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareGradOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "float compareShadowArray(sampler2DArrayShadow tex, vec3 uvLayer, float depth, vec2 ddx, vec2 ddy, ivec2 offset)"
@@ -36756,12 +36722,10 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float gradOffsetValue = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareGradOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "compareShadow(shadowMap, uv, depth, lod, ddx, ddy, offset)" in generated_code
@@ -36830,8 +36794,8 @@ def test_opengl_nested_implicit_shadow_compare_lod_grad_strips_samplers():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in generated_code
@@ -36842,12 +36806,10 @@ def test_opengl_nested_implicit_shadow_compare_lod_grad_strips_samplers():
     assert "vec2 lod = textureQueryLod(tex, uv);" in generated_code
     assert "float cmp = textureLod(tex, vec3(uv, depth), lod.x);" in generated_code
     assert (
-        "float grad = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareGradOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "float wrappedShadow(sampler2DShadow tex, vec2 uv, float depth, vec2 ddx, vec2 ddy, ivec2 offset)"
@@ -36898,13 +36860,13 @@ def test_opengl_array_shadow_compare_lod_reports_unsupported():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert (
-        "float rejected = /* unsupported GLSL texture compare: textureCompareLod explicit LOD requires 2D shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
+        in generated_code_refusal
     )
     assert "textureLod(" not in generated_code
 
@@ -36950,13 +36912,13 @@ def test_opengl_array_shadow_compare_lod_offset_reports_unsupported():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert (
-        "float rejected = /* unsupported GLSL texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers"
+        in generated_code_refusal
     )
     assert "textureLodOffset(" not in generated_code
 
@@ -37041,29 +37003,29 @@ def test_opengl_cube_shadow_compare_lod_offset_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert (
-        "float lodRejected = /* unsupported GLSL texture compare: textureCompareLod explicit LOD requires 2D shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        "float lodOffsetRejected = /* unsupported GLSL texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers"
+        in generated_code_refusal
     )
     assert (
         "float gradValue = textureGrad(tex, vec4(direction, depth), ddx, ddy);"
         in generated_code
     )
     assert (
-        "float gradOffsetRejected = /* unsupported GLSL texture compare: textureCompareGradOffset explicit gradient offsets require 2D or 2D-array shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareGradOffset explicit gradient offsets require 2D or 2D-array shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        "float gradRejected = /* unsupported GLSL texture compare: textureCompareGrad explicit gradients require 2D, 2D-array, or cube shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareGrad explicit gradients require 2D, 2D-array, or cube shadow samplers"
+        in generated_code_refusal
     )
     assert "textureLod(" not in generated_code
     assert "textureLodOffset(" not in generated_code
@@ -37192,7 +37154,9 @@ def test_opengl_array_shadow_compare_lod_grad_resource_arrays():
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[4];" in generated_code
@@ -37210,24 +37174,20 @@ def test_opengl_array_shadow_compare_lod_grad_resource_arrays():
         in generated_code
     )
     assert (
-        "float planarGrad = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareGradOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
-        "float arrayLod = /* unsupported GLSL texture compare: textureCompareLod explicit LOD requires 2D shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
+        in generated_code_refusal
     )
     assert (
-        "float arrayGrad = "
-        + glsl_dynamic_texel_offset_diagnostic(
+        glsl_dynamic_texel_offset_diagnostic(
             "texture compare", "textureCompareGradOffset", "0.0"
         )
-        + ";"
-        in generated_code
+        in generated_code_refusal
     )
     assert (
         "shadowLayer(shadowMaps, shadowArrays, layer, uv, uvLayer, depth, lod, ddx, ddy, offset)"
@@ -37295,7 +37255,9 @@ def test_opengl_cube_shadow_compare_lod_grad_resource_arrays():
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert (
         "layout(binding = 0) uniform samplerCubeShadow cubeMaps[4];" in generated_code
@@ -37309,18 +37271,16 @@ def test_opengl_cube_shadow_compare_lod_grad_resource_arrays():
         in generated_code
     )
     assert (
-        generated_code.count(
-            "/* unsupported GLSL texture compare: textureCompareLod explicit LOD requires 2D shadow samplers */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
+        in generated_code_refusal
     )
     assert (
         "float cubeGrad = textureGrad(cubeMaps[1], vec4(direction, depth), ddx, ddy);"
         in generated_code
     )
     assert (
-        "float cubeArrayGrad = /* unsupported GLSL texture compare: textureCompareGrad explicit gradients require 2D, 2D-array, or cube shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareGrad explicit gradients require 2D, 2D-array, or cube shadow samplers"
+        in generated_code_refusal
     )
     assert (
         "cubeShadowLayer(cubeMaps, cubeArrays, layer, direction, cubeLayer, depth, lod, ddx, ddy)"
@@ -39913,22 +39873,10 @@ def test_opengl_explicit_integer_image_formats_use_integer_image_types():
         "int exchangeLayer(iimage2DArray image, ivec3 pixelLayer, int value)"
         in generated_code
     )
-    assert (
-        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage2D', '0u')};"
-        in generated_code
-    )
-    assert (
-        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicMin', 'iimage2D', '0')};"
-        in generated_code
-    )
-    assert (
-        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage3D', '0u')};"
-        in generated_code
-    )
-    assert (
-        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicExchange', 'iimage2DArray', '0')};"
-        in generated_code
-    )
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicAdd")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicMin")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicCompSwap")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicExchange")
 
 
 def test_opengl_explicit_vector_integer_image_formats():
@@ -40032,16 +39980,8 @@ def test_opengl_integer_image_atomic_add():
     assert (
         "int addSignedCounter(iimage2D image, ivec2 pixel, int value)" in generated_code
     )
-    assert (
-        "uint previous = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage2D', '0u')};"
-        in generated_code
-    )
-    assert (
-        "int previous = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'iimage2D', '0')};"
-        in generated_code
-    )
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicAdd")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicAdd")
 
 
 def test_opengl_integer_image_atomic_operations():
@@ -40087,20 +40027,14 @@ def test_opengl_integer_image_atomic_operations():
         "imageAtomicXor",
         "imageAtomicExchange",
     ]:
-        assert (
-            glsl_image_atomic_parameter_diagnostic(operation, "uimage2D", "0u")
-            in generated_code
-        )
+        assert_glsl_image_atomic_specialized(generated_code, operation)
 
     for operation in [
         "imageAtomicMin",
         "imageAtomicMax",
         "imageAtomicExchange",
     ]:
-        assert (
-            glsl_image_atomic_parameter_diagnostic(operation, "iimage2D", "0")
-            in generated_code
-        )
+        assert_glsl_image_atomic_specialized(generated_code, operation)
 
     assert "uint unsignedOps(uimage2D image, ivec2 pixel, uint value)" in generated_code
     assert "int signedOps(iimage2D image, ivec2 pixel, int value)" in generated_code
@@ -40142,16 +40076,8 @@ def test_opengl_integer_image_atomic_compare_swap():
         "int compareSigned(iimage2D image, ivec2 pixel, int expected, int replacement)"
         in generated_code
     )
-    assert (
-        "uint previous = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage2D', '0u')};"
-        in generated_code
-    )
-    assert (
-        "int previous = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'iimage2D', '0')};"
-        in generated_code
-    )
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicCompSwap")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicCompSwap")
 
 
 def test_opengl_integer_image_dimension_atomics():
@@ -40206,26 +40132,10 @@ def test_opengl_integer_image_dimension_atomics():
         "int touchLayers(iimage2DArray image, ivec3 pixelLayer, int value)"
         in generated_code
     )
-    assert (
-        "uint oldValue = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage3D', '0u')};"
-        in generated_code
-    )
-    assert (
-        "uint swapped = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage3D', '0u')};"
-        in generated_code
-    )
-    assert (
-        "int oldValue = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicMin', 'iimage2DArray', '0')};"
-        in generated_code
-    )
-    assert (
-        "int swapped = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'iimage2DArray', '0')};"
-        in generated_code
-    )
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicAdd")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicCompSwap")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicMin")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicCompSwap")
 
 
 def test_opengl_integer_image_scalar_load_store():
@@ -40386,16 +40296,15 @@ def test_opengl_texture_query_resource_descriptors():
         "function_name": "textureSize"
     }
     assert codegen.texture_query_size_descriptor(None) is None
-    assert (
-        codegen.texture_query_levels_expression("colorImage")
-        == "/* unsupported GLSL texture query: textureQueryLevels on image2D */ 0"
+    assert shared_refusal(codegen.texture_query_levels_expression, "colorImage") == (
+        "0",
+        "texture query: textureQueryLevels on image2D",
     )
     assert codegen.texture_query_levels_expression("msTex") == "1"
     assert codegen.texture_query_levels_expression("colorMap") is None
-    assert (
-        codegen.texture_samples_expression("textureSamples", "colorMap")
-        == "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
-    )
+    assert shared_refusal(
+        codegen.texture_samples_expression, "textureSamples", "colorMap"
+    ) == ("0", "texture samples query: requires multisample sampler")
     assert (
         codegen.texture_samples_expression("imageSamples", "msTex")
         == "textureSamples(msTex)"
@@ -40454,46 +40363,17 @@ def test_opengl_storage_image_levels_and_lod_queries_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    assert (
-        generated_code.count(
-            "/* unsupported GLSL texture query: textureQueryLevels on image2D */ 0"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "/* unsupported GLSL texture query: textureQueryLevels on image3D */ 0"
-        )
-        == 2
-    )
-    assert (
-        "/* unsupported GLSL texture query: textureQueryLevels on image2DArray */ 0"
-        in generated_code
-    )
-    assert (
-        "/* unsupported GLSL texture query: textureQueryLevels on uimage2D */ 0"
-        in generated_code
-    )
-    assert (
-        "/* unsupported GLSL texture query: textureQueryLevels on iimage3D */ 0"
-        in generated_code
-    )
-    assert (
-        generated_code.count(
-            "/* unsupported GLSL texture query: textureQueryLod on image2D */ vec2(0.0)"
-        )
-        == 3
-    )
-    assert (
-        generated_code.count(
-            "/* unsupported GLSL texture query: textureQueryLod on image3D */ vec2(0.0)"
-        )
-        == 3
-    )
+    assert "texture query: textureQueryLevels on image2D" in generated_code_refusal
+    assert "texture query: textureQueryLevels on image3D" in generated_code_refusal
+    assert "texture query: textureQueryLevels on image2DArray" in generated_code_refusal
+    assert "texture query: textureQueryLevels on uimage2D" in generated_code_refusal
+    assert "texture query: textureQueryLevels on iimage3D" in generated_code_refusal
+    assert "texture query: textureQueryLod on image2D" in generated_code_refusal
+    assert "texture query: textureQueryLod on image3D" in generated_code_refusal
     assert "textureQueryLevels(" not in generated_code
     assert "textureQueryLod(" not in generated_code
 
@@ -40843,8 +40723,8 @@ def test_opengl_integer_multisample_invalid_sampling_and_offsets_emit_typed_diag
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform isampler2DMS signedMs;" in generated_code
@@ -40853,53 +40733,33 @@ def test_opengl_integer_multisample_invalid_sampling_and_offsets_emit_typed_diag
         in generated_code
     )
     assert "linearSampler" not in generated_code
+    assert "multisample texture call: texture on isampler2DMS" in generated_code_refusal
     assert (
-        generated_code.count(
-            "unsupported GLSL multisample texture call: texture on isampler2DMS */ ivec4(0)"
-        )
-        == 2
+        "multisample texture call: textureLod on isampler2DMS" in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "unsupported GLSL multisample texture call: textureLod on isampler2DMS */ ivec4(0)"
-        )
-        == 1
+        "multisample texture call: textureGather on isampler2DMS"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "unsupported GLSL multisample texture call: textureGather on isampler2DMS */ ivec4(0)"
-        )
-        == 1
+        "texel fetch offset: multisample texture isampler2DMS does not support offsets"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "unsupported GLSL texel fetch offset: multisample texture isampler2DMS does not support offsets */ ivec4(0)"
-        )
-        == 2
+        "multisample texture call: texture on usampler2DMSArray"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "unsupported GLSL multisample texture call: texture on usampler2DMSArray */ uvec4(0u)"
-        )
-        == 2
+        "multisample texture call: textureLod on usampler2DMSArray"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "unsupported GLSL multisample texture call: textureLod on usampler2DMSArray */ uvec4(0u)"
-        )
-        == 1
+        "multisample texture call: textureGather on usampler2DMSArray"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "unsupported GLSL multisample texture call: textureGather on usampler2DMSArray */ uvec4(0u)"
-        )
-        == 1
-    )
-    assert (
-        generated_code.count(
-            "unsupported GLSL texel fetch offset: multisample texture usampler2DMSArray does not support offsets */ uvec4(0u)"
-        )
-        == 2
+        "texel fetch offset: multisample texture usampler2DMSArray does not support offsets"
+        in generated_code_refusal
     )
     assert "texture(tex," not in generated_code
     assert "textureLod(tex," not in generated_code
@@ -40978,8 +40838,8 @@ def test_opengl_integer_sampler_1d_3d_array_size_and_offsets_lower():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform isampler1D signedLine;" in generated_code
@@ -41009,20 +40869,16 @@ def test_opengl_integer_sampler_1d_3d_array_size_and_offsets_lower():
         in generated_code
     )
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texel fetch offset", "texelFetchOffset", "ivec4(0)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texel fetch offset", "texelFetchOffset", "ivec4(0)"
         )
-        == 2
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            glsl_dynamic_texel_offset_diagnostic(
-                "texel fetch offset", "texelFetchOffset", "uvec4(0u)"
-            )
+        glsl_dynamic_texel_offset_diagnostic(
+            "texel fetch offset", "texelFetchOffset", "uvec4(0u)"
         )
-        == 2
+        in generated_code_refusal
     )
     assert "int signedLineSize = textureSize(signedLine, lod);" in generated_code
     assert (
@@ -41202,19 +41058,17 @@ def test_opengl_non_multisample_texture_samples_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
-    )
+    diagnostic = "texture samples query: requires multisample sampler"
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "layout(binding = 1) uniform sampler2DArray layerMap;" in generated_code
     assert "layout(binding = 2) uniform samplerCube cubeMap;" in generated_code
     assert "layout(binding = 3) uniform samplerCubeArray cubeArray;" in generated_code
     assert "layout(binding = 6) uniform sampler2D textures[4];" in generated_code
-    assert generated_code.count(diagnostic) == 10
+    assert diagnostic in generated_code_refusal
     assert "textureSamples(" not in generated_code
     assert "input." not in generated_code
 
@@ -41262,13 +41116,11 @@ def test_opengl_storage_image_samples_queries_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
-    )
+    diagnostic = "texture samples query: requires multisample sampler"
     assert "layout(rgba32f, binding = 0) uniform image2D colorImage;" in generated_code
     assert "layout(rgba32f, binding = 1) uniform image3D volumeImage;" in generated_code
     assert (
@@ -41277,7 +41129,7 @@ def test_opengl_storage_image_samples_queries_emit_diagnostics():
     )
     assert "layout(r32ui, binding = 3) uniform uimage2D uintImage;" in generated_code
     assert "layout(r32i, binding = 4) uniform iimage3D intVolume;" in generated_code
-    assert generated_code.count(diagnostic) == 19
+    assert diagnostic in generated_code_refusal
     assert "imageSamples(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "input." not in generated_code
@@ -41341,18 +41193,18 @@ def test_opengl_storage_image_sampling_and_fetch_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = "unsupported GLSL storage image texture operation"
+    diagnostic = "storage image texture operation"
     assert "layout(rgba32f, binding = 0) uniform image2D colorImage;" in generated_code
     assert "layout(rgba32f, binding = 1) uniform image3D volumeImage;" in generated_code
     assert (
         "layout(rgba32f, binding = 2) uniform image2DArray layerImage;"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 35
+    assert diagnostic in generated_code_refusal
     for operation in {
         "texture",
         "textureLod",
@@ -41360,7 +41212,7 @@ def test_opengl_storage_image_sampling_and_fetch_emit_diagnostics():
         "texelFetch",
         "texelFetchOffset",
     }:
-        assert f"{operation} on image2D" in generated_code
+        assert f"{operation} on image2D" in generated_code_refusal
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGather(" not in generated_code
@@ -41426,20 +41278,20 @@ def test_opengl_storage_image_compare_calls_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    comparison_diagnostic = "unsupported GLSL storage image texture comparison"
-    gather_diagnostic = "unsupported GLSL storage image texture operation"
+    comparison_diagnostic = "storage image texture comparison"
+    gather_diagnostic = "storage image texture operation"
     assert "layout(rgba32f, binding = 0) uniform image2D colorImage;" in generated_code
     assert "layout(rgba32f, binding = 1) uniform image3D volumeImage;" in generated_code
     assert (
         "layout(rgba32f, binding = 2) uniform image2DArray layerImage;"
         in generated_code
     )
-    assert generated_code.count(comparison_diagnostic) == 26
-    assert generated_code.count(gather_diagnostic) == 6
+    assert comparison_diagnostic in generated_code_refusal
+    assert gather_diagnostic in generated_code_refusal
     assert "textureCompare(" not in generated_code
     assert "textureGatherCompare(" not in generated_code
     assert "textureGatherCompareOffset(" not in generated_code
@@ -41547,8 +41399,8 @@ def test_opengl_multisample_sampling_operations_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DMS msTex;" in generated_code
@@ -41570,12 +41422,12 @@ def test_opengl_multisample_sampling_operations_emit_diagnostics():
         "textureGatherOffset",
     }:
         assert (
-            f"unsupported GLSL multisample texture call: {func_name} on sampler2DMS"
-            in generated_code
+            f"multisample texture call: {func_name} on sampler2DMS"
+            in generated_code_refusal
         )
         assert (
-            f"unsupported GLSL multisample texture call: {func_name} on sampler2DMSArray"
-            in generated_code
+            f"multisample texture call: {func_name} on sampler2DMSArray"
+            in generated_code_refusal
         )
 
     for invalid_call in {
@@ -41649,8 +41501,8 @@ def test_opengl_multisample_compare_operations_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DMS msTex;" in generated_code
@@ -41666,12 +41518,12 @@ def test_opengl_multisample_compare_operations_emit_diagnostics():
         "textureCompareGradOffset",
     }:
         assert (
-            f"unsupported GLSL multisample texture comparison: {func_name} on sampler2DMS"
-            in generated_code
+            f"multisample texture comparison: {func_name} on sampler2DMS"
+            in generated_code_refusal
         )
         assert (
-            f"unsupported GLSL multisample texture comparison: {func_name} on sampler2DMSArray"
-            in generated_code
+            f"multisample texture comparison: {func_name} on sampler2DMSArray"
+            in generated_code_refusal
         )
 
     for func_name in {
@@ -41680,18 +41532,18 @@ def test_opengl_multisample_compare_operations_emit_diagnostics():
         "textureCompareProjGradOffset",
     }:
         assert (
-            f"unsupported GLSL multisample texture comparison: {func_name} on sampler2DMS"
-            in generated_code
+            f"multisample texture comparison: {func_name} on sampler2DMS"
+            in generated_code_refusal
         )
 
     for func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
         assert (
-            f"unsupported GLSL multisample texture gather comparison: {func_name} on sampler2DMS"
-            in generated_code
+            f"multisample texture gather comparison: {func_name} on sampler2DMS"
+            in generated_code_refusal
         )
         assert (
-            f"unsupported GLSL multisample texture gather comparison: {func_name} on sampler2DMSArray"
-            in generated_code
+            f"multisample texture gather comparison: {func_name} on sampler2DMSArray"
+            in generated_code_refusal
         )
 
     for invalid_call in {
@@ -41738,8 +41590,8 @@ def test_opengl_multisample_texture_query_lod_emits_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DMS msTex;" in generated_code
@@ -41748,16 +41600,12 @@ def test_opengl_multisample_texture_query_lod_emits_diagnostics():
     assert "vec2 queryArray(sampler2DMSArray tex, vec3 uvLayer)" in generated_code
     assert "textureQueryLod(" not in generated_code
     assert (
-        generated_code.count(
-            "unsupported GLSL multisample texture query: textureQueryLod on sampler2DMS */ vec2(0.0)"
-        )
-        == 2
+        "multisample texture query: textureQueryLod on sampler2DMS"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "unsupported GLSL multisample texture query: textureQueryLod on sampler2DMSArray"
-        )
-        == 2
+        "multisample texture query: textureQueryLod on sampler2DMSArray"
+        in generated_code_refusal
     )
 
 
@@ -41793,8 +41641,8 @@ def test_opengl_multisample_texel_fetch_offsets_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform sampler2DMS msTex;" in generated_code
@@ -41808,16 +41656,12 @@ def test_opengl_multisample_texel_fetch_offsets_emit_diagnostics():
         in generated_code
     )
     assert (
-        generated_code.count(
-            "unsupported GLSL texel fetch offset: multisample texture sampler2DMS does not support offsets"
-        )
-        == 2
+        "texel fetch offset: multisample texture sampler2DMS does not support offsets"
+        in generated_code_refusal
     )
     assert (
-        generated_code.count(
-            "unsupported GLSL texel fetch offset: multisample texture sampler2DMSArray does not support offsets"
-        )
-        == 2
+        "texel fetch offset: multisample texture sampler2DMSArray does not support offsets"
+        in generated_code_refusal
     )
     assert "texelFetchOffset(" not in generated_code
 
@@ -41860,8 +41704,8 @@ def test_opengl_cube_texel_fetches_emit_diagnostics():
     }
     """
 
-    generated_code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "layout(binding = 0) uniform samplerCube cubeMap;" in generated_code
@@ -41874,30 +41718,10 @@ def test_opengl_cube_texel_fetches_emit_diagnostics():
         "vec4 fetchCubeArray(samplerCubeArray tex, ivec4 cubeLayerCoord, int lod, ivec3 offset)"
         in generated_code
     )
-    assert (
-        generated_code.count(
-            "unsupported GLSL texel fetch: texelFetch on samplerCube */ vec4(0.0)"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "unsupported GLSL texel fetch: texelFetchOffset on samplerCube */ vec4(0.0)"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "unsupported GLSL texel fetch: texelFetch on samplerCubeArray"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "unsupported GLSL texel fetch: texelFetchOffset on samplerCubeArray"
-        )
-        == 2
-    )
+    assert "texel fetch: texelFetch on samplerCube" in generated_code_refusal
+    assert "texel fetch: texelFetchOffset on samplerCube" in generated_code_refusal
+    assert "texel fetch: texelFetch on samplerCubeArray" in generated_code_refusal
+    assert "texel fetch: texelFetchOffset on samplerCubeArray" in generated_code_refusal
     assert "texelFetch(" not in generated_code
     assert "texelFetchOffset(" not in generated_code
 
@@ -42360,7 +42184,9 @@ def test_opengl_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes()
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert "layout(binding = 0) uniform samplerCubeShadow cubeShadow;" in generated_code
     assert (
@@ -42375,8 +42201,8 @@ def test_opengl_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes()
     assert "vec2 lodValue = textureQueryLod(tex, direction);" in generated_code
     assert "float cmp = texture(tex, vec4(direction, depth));" in generated_code
     assert (
-        "float cmpLod = /* unsupported GLSL texture compare: textureCompareLod explicit LOD requires 2D shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
+        in generated_code_refusal
     )
     assert (
         "float grad = textureGrad(tex, vec4(direction, depth), ddx, ddy);"
@@ -42389,8 +42215,8 @@ def test_opengl_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes()
     assert "vec2 lodValue = textureQueryLod(tex, cubeLayer.xyz);" in generated_code
     assert "float cmp = texture(tex, cubeLayer, depth);" in generated_code
     assert (
-        "float grad = /* unsupported GLSL texture compare: textureCompareGrad explicit gradients require 2D, 2D-array, or cube shadow samplers */ 0.0;"
-        in generated_code
+        "texture compare: textureCompareGrad explicit gradients require 2D, 2D-array, or cube shadow samplers"
+        in generated_code_refusal
     )
     assert (
         "inspectCubeShadow(cubeShadow, direction, depth, lod, ddx, ddy)"
@@ -46893,7 +46719,9 @@ def test_glsl_sampler_1d_array_sampling_and_queries():
     """
 
     ast = crosstl.translator.parse(shader)
-    generated_code = GLSLCodeGen().generate(ast)
+    generated_code, generated_code_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, ast
+    )
 
     assert "layout(binding = 0) uniform sampler1DArray lineArray;" in generated_code
     assert "sampler linearSampler" not in generated_code
@@ -46911,7 +46739,7 @@ def test_glsl_sampler_1d_array_sampling_and_queries():
         glsl_dynamic_texel_offset_diagnostic(
             "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
         )
-        in generated_code
+        in generated_code_refusal
     )
     assert "texelFetchOffset(" not in generated_code
     assert "textureQueryLod(tex, uvLayer);" not in generated_code
@@ -46981,18 +46809,9 @@ def test_glsl_image_1d_and_1d_array_storage_operations():
     assert "imageStore(image, x, vec4((oldValue + value)));" in generated_code
     assert "vec4 oldValue = imageLoad(image, coord);" in generated_code
     assert "imageStore(image, coord, (oldValue + value));" in generated_code
-    assert (
-        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage1D', '0u')};"
-        in generated_code
-    )
-    assert (
-        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicExchange', 'uimage1DArray', '0u')};"
-        in generated_code
-    )
-    assert (
-        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage1DArray', '0u')};"
-        in generated_code
-    )
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicAdd")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicExchange")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicCompSwap")
 
 
 def test_glsl_cube_storage_images_lower_load_store_and_atomics():
@@ -47136,37 +46955,41 @@ def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
     assert (
         "layout(rgba16f, binding = 2) uniform image2DMSArray layered;" in generated_code
     )
+    # The generic copy of ``touch`` cannot perform its image atomics and is never
+    # called, so only its prototype remains; the specialized clone does the work.
     assert (
-        "vec4 touch(image2DMS image, uimage2DMS counterImage, ivec2 pixel, int sampleIndex, vec4 value, uint count)"
-        in generated_code
-    )
-    assert "vec4 oldColor = imageLoad(image, pixel, sampleIndex);" in generated_code
-    assert (
-        "uint oldCount = imageLoad(counterImage, pixel, sampleIndex).x;"
+        "vec4 touch(image2DMS image, uimage2DMS counterImage, ivec2 pixel, int sampleIndex, vec4 value, uint count);"
         in generated_code
     )
     assert (
-        "imageStore(image, pixel, sampleIndex, (oldColor + value));" in generated_code
+        "vec4 touch(image2DMS image, uimage2DMS counterImage, ivec2 pixel, int sampleIndex, vec4 value, uint count) {"
+        not in generated_code
     )
     assert (
-        "imageStore(counterImage, pixel, sampleIndex, uvec4((oldCount + count)));"
+        "vec4 touch_glsl_image_colorImage_counterImage_counters(ivec2 pixel, int sampleIndex, vec4 value, uint count) {"
         in generated_code
     )
     assert (
-        "uint atomicOld = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage2DMS', '0u')};"
+        "vec4 oldColor = imageLoad(colorImage, pixel, sampleIndex);" in generated_code
+    )
+    assert (
+        "uint oldCount = imageLoad(counters, pixel, sampleIndex).x;" in generated_code
+    )
+    assert (
+        "imageStore(colorImage, pixel, sampleIndex, (oldColor + value));"
         in generated_code
     )
     assert (
-        "uint exchanged = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicExchange', 'uimage2DMS', '0u')};"
+        "imageStore(counters, pixel, sampleIndex, uvec4((oldCount + count)));"
         in generated_code
     )
     assert (
-        "uint swapped = "
-        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage2DMS', '0u')};"
+        "vec4 color = touch_glsl_image_colorImage_counterImage_counters(ivec2(0, 1), 2, vec4(1.0), 3u);"
         in generated_code
     )
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicAdd")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicExchange")
+    assert_glsl_image_atomic_specialized(generated_code, "imageAtomicCompSwap")
     assert (
         "vec4 oldLayer = imageLoad(image, pixelLayer, sampleIndex);" in generated_code
     )

@@ -25,6 +25,7 @@ from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
 from ...translator.resource_identity import source_resource_attribute
 from ...translator.standard_constants import standard_math_constant
+from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -948,8 +949,10 @@ class MetalConstexprBranchLoweringError(ValueError):
         )
 
 
-class MetalToCrossGLConverter:
+class MetalToCrossGLConverter(ImportRefusalMixin):
     """Serialize Metal backend AST nodes back into CrossGL source."""
+
+    IMPORT_REFUSAL_TYPE = MetalImportRefused
 
     crossgl_identifier_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
     cast_literal_operand_pattern = re.compile(
@@ -2836,9 +2839,10 @@ class MetalToCrossGLConverter:
         option_name = self.unscoped_function_name(option.name)
         if option_name not in {"bias", "min_lod_clamp"}:
             return None
-        return (
-            "0.0 /* unsupported Metal depth compare lod option: "
-            f"{option_name} on {obj} */"
+        return self.refuse_import(
+            f"Metal depth compare LOD option {option_name} on {obj}: CrossGL depth "
+            "compares have no bias or minimum-LOD clamp operand",
+            "0.0",
         )
 
     def texture_gather_call(self, obj, texture_expr, method_args, is_main=False):
@@ -3135,6 +3139,13 @@ class MetalToCrossGLConverter:
             )
 
     def generate(self, ast):
+        """Render ``ast`` as a CrossGL program.
+
+        Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully.
+        """
+        return self.refusals.run(self.render_program, ast)
+
+    def render_program(self, ast):
         wide_vector_support_marker = "    // __crossgl_metal_wide_vector_support__\n"
         precise_math_support_marker = "    // __crossgl_metal_precise_math_support__\n"
         small_vector_index_support_marker = (
@@ -11274,25 +11285,32 @@ class MetalToCrossGLConverter:
         if self.binary16_widening_profile is not None and not initializer_type:
             initializer_type = self.expression_metal_type(node.left)
         try:
-            rhs = self.generate_initializer_value(
-                node.right,
-                is_main,
-                initializer_type,
-                (
-                    self.variable_has_array_initializer_shape(node.left)
-                    if isinstance(node.left, VariableNode)
-                    else False
-                ),
-                (
-                    self.declaration_constructor_receiver_address_space(node.left)
-                    if isinstance(node.left, VariableNode)
-                    else None
-                ),
-                copy_initialize_lvalue=(
-                    isinstance(node.left, VariableNode)
-                    and bool(getattr(node.left, "vtype", None))
-                ),
-            )
+            # `device T& r = buffer[i]` binds the element; buffer_load would
+            # bind a copy and drop every write through `r`.
+            if self.binds_reference_to_structured_buffer_element(node):
+                rhs = self.generate_structured_buffer_element_lvalue(
+                    node.right, is_main
+                )
+            else:
+                rhs = self.generate_initializer_value(
+                    node.right,
+                    is_main,
+                    initializer_type,
+                    (
+                        self.variable_has_array_initializer_shape(node.left)
+                        if isinstance(node.left, VariableNode)
+                        else False
+                    ),
+                    (
+                        self.declaration_constructor_receiver_address_space(node.left)
+                        if isinstance(node.left, VariableNode)
+                        else None
+                    ),
+                    copy_initialize_lvalue=(
+                        isinstance(node.left, VariableNode)
+                        and bool(getattr(node.left, "vtype", None))
+                    ),
+                )
         finally:
             if pushed_context:
                 self.materialized_constexpr_expression_contexts.pop()
@@ -11635,7 +11653,8 @@ class MetalToCrossGLConverter:
         if "'" in value and re.match(r"^(?:0[xX][0-9a-fA-F]|0[bB][01]|\d|\.\d)", value):
             value = value.replace("'", "")
         if re.fullmatch(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[hH]", value):
-            return value[:-1]
+            # A half literal keeps its type: `h * 0.5h` is half arithmetic, `h * 0.5` float (MSL section 2.1).
+            return f"float16({value[:-1]})"
         if re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*", value):
             digits, type_name = integer_literal_parts(value, legacy_octal=True)
             suffix = {"int": "", "uint": "u", "int64_t": "l", "uint64_t": "ul"}[
@@ -22268,6 +22287,23 @@ float {scalar}(float value) {{
         finally:
             self.suppress_structured_buffer_index_lowering = previous
 
+    def binds_reference_to_structured_buffer_element(self, node):
+        declaration = getattr(node, "left", None)
+        return (
+            getattr(node, "operator", None) == "="
+            and isinstance(declaration, VariableNode)
+            and bool(getattr(declaration, "vtype", None))
+            and self.reference_parameter(declaration)
+            and self.is_structured_buffer_element_access(node.right)
+        )
+
+    def generate_structured_buffer_element_lvalue(self, access, is_main=False):
+        buffer = self.generate_without_structured_buffer_index_lowering(
+            access.array, is_main
+        )
+        index = self.generate_expression(access.index, is_main)
+        return f"{buffer}[{index}]"
+
     def generate_structured_buffer_load(self, access, is_main=False):
         buffer = self.generate_without_structured_buffer_index_lowering(
             access.array, is_main
@@ -22340,14 +22376,18 @@ float {scalar}(float value) {{
             if method in {"sample_compare", "sample_compare_level"}
             else "vec4(0.0)"
         )
-        return (
-            f"{fallback} /* unsupported Metal storage texture sampled method: "
-            f"{method} on {texture} */"
+        return self.refuse_import(
+            f"Metal storage texture sampled method {method} on {texture}: a texture "
+            "without access::sample cannot be sampled",
+            fallback,
         )
 
     def unsupported_sampled_texture_write(self, texture_expr, method, is_main):
         texture = self.generate_expression(texture_expr, is_main)
-        return f"/* unsupported Metal sampled texture write: {method} on {texture} */"
+        return self.refuse_import(
+            f"Metal sampled texture write {method} on {texture}: a texture with "
+            "access::sample cannot be written"
+        )
 
     def storage_image_coordinate_expression(self, image_expr, args):
         if not args:
@@ -22400,9 +22440,10 @@ float {scalar}(float value) {{
         if not self.is_sampled_cube_texture_type(mapped_type):
             return None
         fallback = self.sampled_texture_read_zero_value(mapped_type)
-        return (
-            f"{fallback} /* unsupported Metal sampled cube texture read: "
-            f"read on {texture} requires face-aware texel fetch */"
+        return self.refuse_import(
+            f"Metal sampled cube texture read on {texture}: CrossGL has no "
+            "face-addressed texel fetch for cube textures",
+            fallback,
         )
 
     def is_sampled_cube_texture_type(self, mapped_type):

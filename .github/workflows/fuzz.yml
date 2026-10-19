@@ -1,0 +1,100 @@
+name: Fuzz
+
+# Weekly crash-fuzzing of every importer (tests/conformance/fuzz). Hypothesis draws well-formed programs, token
+# mutants of them, and mutated repository fixtures for each source language, plus preprocessor units, and runs them
+# in a persistent worker with a per-input time limit. A crash with a signature that tests/conformance/fuzz/
+# baseline.json does not list, or a listed reproducer that no longer crashes, fails the job; the shrunk inputs are
+# uploaded. A manual run takes the time budget per importer and the seed as inputs. "Fuzz result" is the one check
+# the workflow reports.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PYTHONUNBUFFERED: "1"
+  PYTHONHASHSEED: "0"
+
+on:
+  schedule:
+    - cron: "17 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Fuzzing time per importer, in seconds
+        default: "300"
+      seed:
+        description: Hypothesis seed (empty uses the run number)
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: Importer crash fuzzing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CrossTL and the fuzzing dependencies
+        run: python -m pip install -e . hypothesis==6.170.1
+      - name: Fuzz every importer
+        env:
+          SECONDS_INPUT: ${{ github.event.inputs.seconds }}
+          SEED_INPUT: ${{ github.event.inputs.seed }}
+        run: |
+          set -euo pipefail
+          seconds="${SECONDS_INPUT:-300}"
+          seed="${SEED_INPUT:-$GITHUB_RUN_NUMBER}"
+          case "$seconds$seed" in ''|*[!0-9]*) echo "seconds and seed must be non-negative integers" >&2; exit 1;; esac
+          python -m tests.conformance.fuzz --importers all --seconds "$seconds" --seed "$seed" \
+            --output "$RUNNER_TEMP/fuzz"
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          summary="$RUNNER_TEMP/fuzz/summary.json"
+          if [ -f "$summary" ]; then
+            {
+              echo '```json'
+              jq '{seed, new, fixed, importers: (.importers | map_values({inputs, seconds, newSignatures}))}' "$summary"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload findings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-findings
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/fuzz/summary.json
+            ${{ runner.temp }}/fuzz/findings/
+
+  result:
+    name: Fuzz result
+    if: always()
+    needs: [fuzz]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done

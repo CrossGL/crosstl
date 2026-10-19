@@ -31,6 +31,7 @@ from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
 )
+from .template_constants import unresolved_constant_references
 from .type_layout import metal_type_layout, metal_type_size
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
@@ -23498,18 +23499,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 # source so the residual-template diagnostic remains fail-closed.
                 continue
             resolved_arguments = constexpr_resolved_arguments
-            unresolved_local_constants = sorted(
-                name
-                for name, binding in visible_local_constants.items()
-                if binding.value is None
-                and any(
-                    self._substitute_template_argument_static_constants(
-                        argument,
-                        {name: "0"},
-                    )
-                    != argument
-                    for argument in resolved_arguments
-                )
+            unresolved_local_constants = unresolved_constant_references(
+                resolved_arguments,
+                (
+                    name
+                    for name, binding in visible_local_constants.items()
+                    if binding.value is None
+                ),
             )
             if unresolved_local_constants:
                 requested_signature = self._template_specialization_signature(
@@ -23822,18 +23818,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                         )
                         for argument in template_arguments
                     ]
-                unresolved_local_constants = sorted(
-                    name
-                    for name, binding in visible_local_constants.items()
-                    if binding.value is None
-                    and any(
-                        self._substitute_template_argument_static_constants(
-                            argument,
-                            {name: "0"},
-                        )
-                        != argument
-                        for argument in template_arguments
-                    )
+                unresolved_local_constants = unresolved_constant_references(
+                    template_arguments,
+                    (
+                        name
+                        for name, binding in visible_local_constants.items()
+                        if binding.value is None
+                    ),
                 )
                 if unresolved_local_constants:
                     requested_signature = self._template_specialization_signature(

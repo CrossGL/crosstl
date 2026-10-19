@@ -9759,6 +9759,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "mad": "fmaf",
             "abs": "fabsf",
             "round": "roundf",
+            "roundEven": "rintf",
             "trunc": "truncf",
             "mod": "fmodf",
             "mix": "lerp",

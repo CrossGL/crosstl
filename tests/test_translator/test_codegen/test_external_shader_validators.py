@@ -11,6 +11,9 @@ from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.translator.codegen.buffer_block_diagnostics import (
+    BufferBlockUnsupportedError,
+)
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
@@ -2904,17 +2907,6 @@ def test_generated_slang_ray_stage_library_compiles_with_slangc(tmp_path):
             ),
             ("unsupported HLSL GLSL buffer block atomic", "#version"),
         ),
-        (
-            "unsupported",
-            MIXED_GLSL_SSBO_UNSUPPORTED_ATOMICS_COMPUTE_SHADER,
-            (
-                "ByteAddressBuffer readAtomicBlock : register(t21);",
-                "unsupported HLSL GLSL buffer block atomic",
-                "float floatOld = /* unsupported HLSL GLSL buffer block atomic",
-                "*/ 0;",
-            ),
-            ("Interlocked", "__crossgl_byteaddress_atomic", "#version"),
-        ),
     ],
 )
 def test_mixed_glsl_ssbo_atomics_hlsl_output_compiles_with_dxc(
@@ -5473,39 +5465,20 @@ def test_mixed_glsl_ssbo_runtime_array_atomics_metal_output_compiles_with_xcrun_
     assert output_path.exists()
 
 
-def test_mixed_glsl_ssbo_unsupported_atomics_metal_output_compiles_with_xcrun_metal(
-    tmp_path,
-):
-    xcrun = _require_xcrun_tool("metal")
-    shader_path = tmp_path / "mixed_glsl_ssbo_unsupported_atomics.metal"
-    output_path = tmp_path / "mixed_glsl_ssbo_unsupported_atomics.air"
-
-    code = MetalCodeGen().generate(
-        _mixed_glsl_ast(
-            MIXED_GLSL_SSBO_UNSUPPORTED_ATOMICS_COMPUTE_SHADER,
-            "compute",
+@pytest.mark.parametrize(
+    ("generator", "target"),
+    [(HLSLCodeGen, "directx"), (MetalCodeGen, "metal")],
+)
+def test_mixed_glsl_ssbo_unsupported_atomics_are_refused(generator, target):
+    # GLSL 4.60 section 8.11 forbids atomics on readonly memory and defines them only on 32-bit
+    # integer scalars (float atomicAdd/atomicMin need extensions); each target refuses the
+    # first atomic its lowering cannot express instead of returning a zero result.
+    with pytest.raises(
+        BufferBlockUnsupportedError, match=r"GLSL buffer block atomic"
+    ) as error:
+        generator().generate(
+            _mixed_glsl_ast(
+                MIXED_GLSL_SSBO_UNSUPPORTED_ATOMICS_COMPUTE_SHADER, "compute"
+            )
         )
-    )
-    assert "#version" not in code
-    assert "unsupported Metal GLSL buffer block atomic" in code
-    assert code.count("atomic_fetch_add_explicit(") == 1
-    assert "reinterpret_cast<device atomic_float*>(floatAtomicBlock + 0)" in code
-    assert "float floatOld = atomic_fetch_add_explicit(" in code
-    assert "float minimumOld = /* unsupported Metal GLSL buffer block atomic" in code
-    assert "atomic_fetch_min_explicit(" not in code
-    assert "*/ 0;" in code
-    shader_path.write_text(code, encoding="utf-8")
-
-    _run_validator(
-        [
-            xcrun,
-            "-sdk",
-            "macosx",
-            "metal",
-            "-c",
-            str(shader_path),
-            "-o",
-            str(output_path),
-        ]
-    )
-    assert output_path.exists()
+    assert error.value.code == f"project.translate.{target}-buffer-block-unsupported"

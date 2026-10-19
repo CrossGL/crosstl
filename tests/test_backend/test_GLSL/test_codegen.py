@@ -15,6 +15,7 @@ from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import glsl_partial_output
 
 VERTEX_GLSL = textwrap.dedent("""
     #version 450 core
@@ -401,7 +402,7 @@ def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang(
 
     crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
 
-    assert "const S sc = S(0.125);" in crossgl
+    assert "const S sc = S(float16_t(0.125));" in crossgl
     assert "S{" not in crossgl
     assert "S v[2] @row_major @glsl_buffer_block(std430);" in crossgl
     assert "0.125hf" not in crossgl
@@ -821,8 +822,31 @@ def test_codegen_two_argument_atan_from_khronos_docs_maps_to_crossgl_atan2():
 
 
 def test_codegen_two_argument_atan_without_bit_casts_keeps_builtin():
-    # floatBitsToUint needs GLSL 3.30, so an older source profile keeps the
-    # builtin; stage I/O layouts may still raise the emitted #version later.
+    # floatBitsToUint needs GLSL 3.30, so a GLSL 1.50 program that nothing
+    # raises keeps the builtin.
+    code = textwrap.dedent("""
+        #version 150
+
+        void main()
+        {
+            float angle = atan(float(gl_VertexID), 2.0);
+            gl_Position = vec4(angle, 0.0, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+    assert "float angle = atan2(float(gl_VertexID), 2.0);" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert glsl.startswith("#version 150\n")
+    assert "float angle = atan(float(gl_VertexID), 2.0);" in glsl
+    assert "crossgl_atan2_float" not in glsl
+    assert "floatBitsToUint" not in glsl
+
+
+def test_codegen_two_argument_atan_uses_helper_once_layouts_raise_version():
+    # The fragment output location raises #version 150 to 3.30, and the
+    # program is emitted for 3.30 throughout, so atan2 gets the bit-cast helper.
     code = textwrap.dedent("""
         #version 150
 
@@ -840,9 +864,9 @@ def test_codegen_two_argument_atan_without_bit_casts_keeps_builtin():
     assert "float angle = atan2(input.direction.y, input.direction.x);" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "float angle = atan(direction.y, direction.x);" in glsl
-    assert "crossgl_atan2_float" not in glsl
-    assert "floatBitsToUint" not in glsl
+    assert glsl.startswith("#version 330 core\n")
+    assert "crossgl_atan2_float(direction.y, direction.x)" in glsl
+    assert "floatBitsToUint" in glsl
 
 
 def test_codegen_user_defined_two_argument_atan_is_preserved():
@@ -2156,14 +2180,15 @@ def test_codegen_multisample_compare_roundtrip_uses_translator_diagnostics():
     assert "textureCompare(msTex, input.uv, 0.5)" in crossgl
     assert "textureGatherCompare(msArray, input.uvLayer, 0.5)" in crossgl
 
-    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert (
-        "unsupported GLSL multisample texture comparison: textureCompare on sampler2DMS"
-        in glsl
+    glsl, glsl_refusal = glsl_partial_output(
+        GLSLCodeGen().generate, parse_crossgl(crossgl)
     )
     assert (
-        "unsupported GLSL multisample texture gather comparison: textureGatherCompare on sampler2DMSArray"
-        in glsl
+        "multisample texture comparison: textureCompare on sampler2DMS" in glsl_refusal
+    )
+    assert (
+        "multisample texture gather comparison: textureGatherCompare on sampler2DMSArray"
+        in glsl_refusal
     )
     assert "texture(msTex" not in glsl
     assert "textureGather(msArray" not in glsl

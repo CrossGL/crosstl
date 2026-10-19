@@ -28,6 +28,7 @@ from .translator.codegen.pointer_reinterpret import (
 )
 from .translator.default_arguments import lower_default_arguments
 from .translator.plugin_loader import discover_backend_plugins
+from .translator.semantics import apply_rule_carrying
 from .translator.source_licenses import source_license_comments
 from .translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
@@ -233,6 +234,7 @@ def translate(
             generated_code = shader_code
         else:
             codegen = get_codegen(requested_backend)
+            apply_rule_carrying(ast, source_spec.name, normalized_backend)
             lower_default_arguments(ast)
             selected_ast, remaining_entry_point = prepare_entry_scoped_target(
                 codegen,
@@ -293,6 +295,7 @@ def translate(
             if source_spec.name == "hip" and normalized_backend == "directx":
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(requested_backend)
+            apply_rule_carrying(cgl_ast, source_spec.name, normalized_backend)
             lower_default_arguments(cgl_ast)
             selected_ast, remaining_entry_point = prepare_entry_scoped_target(
                 codegen,

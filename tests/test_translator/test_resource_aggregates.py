@@ -36,6 +36,7 @@ from crosstl.translator.codegen.resource_aggregates import (
     lower_resource_aggregates,
 )
 from tests.ci_helpers import assert_paths_covered
+from tests.metal_refusal_helpers import refused_metal
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -565,7 +566,7 @@ def test_constant_pointer_offset_is_not_a_store_through_the_pointer(tmp_path):
             "return values[index];", "values[index] = 9; return values[index];"
         )
     )
-    rejected = translate(str(path), backend="metal", format_output=False)
+    rejected = refused_metal(translate, str(path), backend="metal", format_output=False)
     assert "readonly buffer 'values' cannot be written" in rejected
 
 

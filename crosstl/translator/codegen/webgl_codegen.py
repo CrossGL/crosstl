@@ -18,6 +18,7 @@ from .GLSL_codegen import (
     OpenGLIndexTypeError,
     OpenGLStructConstructionError,
 )
+from .glsl_refusals import WebGLLoweringRefused
 from .index_range_contracts import WEBGL_INDEX_PROFILE
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
@@ -65,6 +66,7 @@ class WebGLCodeGen(GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
     GLSL_TARGET_DISPLAY_NAME = "WebGL"
+    LOWERING_REFUSAL_TYPE = WebGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = WebGLBooleanOrderedIntrinsicError
@@ -201,6 +203,10 @@ class WebGLCodeGen(GLSLCodeGen):
 
     def glsl_resource_binding_layouts_supported(self, version_line):
         return False
+
+    def glsl_version_line_is_fixed(self):
+        # WebGL 2 compiles GLSL ES 3.00 only.
+        return True
 
     def generate_expression(self, expr, is_main=False):
         replacement = getattr(self, "_webgl_expression_replacements", {}).get(id(expr))

@@ -1,0 +1,12 @@
+#version 450
+// shared memory is one copy per work group: each invocation reads the value its mirror invocation wrote.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { int a[]; };
+layout(std430, binding = 1) buffer Outp { int o[]; };
+shared int tile[64];
+void main() {
+    uint l = gl_LocalInvocationIndex;
+    tile[l] = a[gl_GlobalInvocationID.x];
+    barrier();
+    o[gl_GlobalInvocationID.x] = tile[63u - l];
+}

@@ -1,0 +1,161 @@
+name: Corpus
+
+# Third-party corpus tier (tests/conformance/corpus). Rebuilds the corpus from the projects and commits pinned in
+# its manifest, translates every unit to each target this runner checks natively, and compares every cell and the
+# p95 translation latency per source language with the committed scoreboard and budgets.json. A cell that gets
+# worse or cannot be checked, or a latency budget that is exceeded, fails the job. Pull requests and the merge
+# queue run the Linux leg; the nightly schedule, manual runs and pull requests labelled "ci:full" also run the
+# macOS Metal leg. The legs job (tests/conformance/ci_plan.py) skips the corpus for a pull request or merge group
+# that changes none of the corpus paths, and "Corpus result" is the one check to require. The runner's unit tests
+# run with the conformance tier.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PYTHONUNBUFFERED: "1"
+  PYTHONHASHSEED: "0"
+
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  # Pull requests always run this workflow, so that its result check can be required.
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      slices:
+        description: Comma-separated corpus slices (empty runs every slice)
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: corpus-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  legs:
+    name: Select corpus legs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.select.outputs.run }}
+      legs: ${{ steps.select.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select legs
+        id: select
+        env:
+          # macOS runners are scarce, so a pull request runs the Metal leg only while it is labelled ci:full, and
+          # the merge queue never runs it.
+          FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          LINUX_LEGS: >-
+            [{"name": "Linux HLSL, GLSL, GLSL ES and SPIR-V", "os": "ubuntu-24.04", "targets": "hlsl,glsl,essl,spirv",
+            "developer_dir": ""}]
+          HOSTED_LEGS: >-
+            [{"name": "macOS Metal", "os": "xcode-27", "targets": "metal",
+            "developer_dir": "/Applications/Xcode_27.1.app/Contents/Developer"}]
+        run: >-
+          python3 -m tests.conformance.ci_plan --workflow corpus --event "$GITHUB_EVENT_NAME"
+          --base "$BASE" --head "$HEAD" --full "$FULL"
+
+  corpus:
+    name: Corpus (${{ matrix.name }})
+    needs: legs
+    if: needs.legs.outputs.run == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.legs.outputs.legs) }}
+    env:
+      DEVELOPER_DIR: ${{ matrix.developer_dir }}
+      CROSSTL_CONFORMANCE_CACHE: ${{ github.workspace }}/../conformance-cache
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Select the scoreboard profile
+        run: |
+          set -euo pipefail
+          profile="$(python -c "import platform; print(f'ci-{platform.system()}-{platform.machine()}'.lower())")"
+          {
+            echo "CROSSTL_CONFORMANCE_PROFILE=$profile"
+            echo "CORPUS_OUT=$RUNNER_TEMP/corpus"
+            echo "CORPUS_SCOREBOARD=tests/conformance/corpus/scoreboards/$profile.json"
+          } >> "$GITHUB_ENV"
+
+      - name: Install pinned Linux DXC
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-linux-dxc
+        with:
+          pinned: "true"
+
+      - name: Install pinned glslang and SPIRV-Tools
+        uses: ./.github/actions/install-shader-validators
+
+      - name: Prepare the Metal toolchain
+        if: runner.os == 'macOS'
+        run: python tools/ensure_metal_toolchain.py
+
+      - name: Install CrossTL
+        run: python -m pip install -e .
+
+      - name: Record toolchains
+        run: python -m tests.conformance.toolchains --markdown | tee "$RUNNER_TEMP/toolchains.md"
+
+      - name: Corpus against the scoreboard and latency budgets
+        env:
+          TARGETS: ${{ matrix.targets }}
+          SLICES: ${{ github.event.inputs.slices }}
+        run: >-
+          python -m tests.conformance.corpus.run --output "$CORPUS_OUT" --targets "$TARGETS"
+          ${SLICES:+--slices "$SLICES"} --workers "$(python -c 'import os; print(os.cpu_count() or 2)')"
+          --scoreboard "$CORPUS_SCOREBOARD"
+
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: corpus-${{ env.CROSSTL_CONFORMANCE_PROFILE }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.CORPUS_OUT }}/results.jsonl
+            ${{ env.CORPUS_OUT }}/summary.json
+            ${{ env.CORPUS_OUT }}/${{ env.CROSSTL_CONFORMANCE_PROFILE }}.json
+            ${{ runner.temp }}/toolchains.md
+
+  result:
+    # The one check per workflow that branch protection and the merge queue can require.
+    name: Corpus result
+    if: always()
+    needs: [legs, corpus]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done

@@ -90,6 +90,8 @@ from ..metadata_preconditions import (
     with_metadata_precondition_header,
 )
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
+from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
+from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
 from ..structure_conversions import (
@@ -184,7 +186,16 @@ from .generic_struct_utils import (
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_refusals import OpenGLLoweringRefused
 from .glsl_union_storage import UnionStorage
+from .glsl_version_requirements import (
+    VARIABLE_GATHER_OFFSET,
+    generated_program_requirements,
+    parse_version_line,
+    program_extensions,
+    resolve_version_line,
+    with_es_default_precisions,
+)
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -315,11 +326,6 @@ from .image_access_contracts import (
     texture_resource_offset_dimension_key,
     texture_sample_offset_capability_error,
     texture_samples_query_expression,
-)
-from .image_access_contracts import (
-    unsupported_image_atomic_expression as image_atomic_diagnostic_expression,
-)
-from .image_access_contracts import (
     unsupported_multisample_texture_compare_scalar_expression,
     unsupported_multisample_texture_gather_compare_vector_expression,
     unsupported_multisample_texture_query_lod_expression,
@@ -364,6 +370,7 @@ from .loop_induction import (
     subgroup_strided_trips,
     walk_control_scopes,
 )
+from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -1407,10 +1414,11 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
     )
 
 
-class GLSLCodeGen:
+class GLSLCodeGen(LoweringRefusalMixin):
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
+    LOWERING_REFUSAL_TYPE = OpenGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = OpenGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = OpenGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = OpenGLBooleanOrderedIntrinsicError
@@ -2541,6 +2549,8 @@ class GLSLCodeGen:
         self.glsl_resource_function_specializations = {}
         self.glsl_resource_function_call_names = {}
         self.glsl_resource_specialized_source_names = set()
+        self.glsl_generic_helper_refusals = {}
+        self.glsl_generic_helper_code = {}
         self.glsl_resource_function_call_plans = {}
         self.glsl_resource_function_semantic_call_plans = {}
         self.current_glsl_resource_function_call_semantic_locations = {}
@@ -2602,6 +2612,9 @@ class GLSLCodeGen:
         self.current_glsl_extensions = set()
         self.current_glsl_version_line = None
         self.current_glsl_resource_binding_layouts_supported = True
+        self.glsl_emission_requirements = []
+        self.glsl_raised_version_line = None
+        self.glsl_required_version_line = None
         self.current_mesh_output_count_limits = {}
         self.task_payload_shared_variables = []
         self.current_target_stage = None
@@ -3594,13 +3607,11 @@ class GLSLCodeGen:
         if self.glsl_extension_enabled("GL_ARB_shading_language_420pack"):
             return True
 
-        if "es" in str(version_line or "").strip().split()[2:]:
-            return True
-
         version_number = self.glsl_version_number(version_line)
         if version_number is None:
             return True
-        return version_number >= 420
+        # layout(binding) arrived in GLSL 4.20 and GLSL ES 3.10 (section 4.4.5 and 4.4.6).
+        return version_number >= (310 if self.glsl_version_is_es(version_line) else 420)
 
     def glsl_version_line_with_minimum(self, version_line, minimum_version):
         version_number = self.glsl_version_number(version_line)
@@ -3621,73 +3632,53 @@ class GLSLCodeGen:
         )
         return f"#version {minimum_version} {profile}"
 
-    def generated_stage_io_layout_minimum_version(self, code):
-        minimum_version = None
-        for line in str(code or "").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("layout("):
-                end = stripped.find(")")
-                if end == -1:
-                    continue
-                layout_parts = {
-                    part.partition("=")[0].strip()
-                    for part in stripped[len("layout(") : end].split(",")
-                }
-                if "component" in layout_parts:
-                    minimum_version = max(minimum_version or 0, 440)
-                if layout_parts & {"location", "index"}:
-                    minimum_version = max(minimum_version or 0, 330)
-                remainder = stripped[end + 1 :].strip()
-                if remainder.startswith("uniform ") and "{" in remainder:
-                    minimum_version = max(minimum_version or 0, 330)
-                if any(
-                    remainder.startswith(f"{direction} ") for direction in ("in", "out")
-                ):
-                    minimum_version = max(minimum_version or 0, 330)
-                continue
-
-            interface_parts = stripped.rstrip(";").split()
-            if (
-                stripped.endswith(";")
-                and len(interface_parts) >= 3
-                and interface_parts[-3] in {"in", "out"}
-            ):
-                minimum_version = max(minimum_version or 0, 330)
-        return minimum_version
-
-    def glsl_layout_minimum_satisfied_by_extensions(self, minimum_version):
-        if minimum_version is None:
-            return True
-        if minimum_version <= 330 and self.glsl_extension_enabled(
-            "GL_ARB_explicit_attrib_location"
-        ):
-            return True
-        if minimum_version <= 440 and self.glsl_extension_enabled(
-            "GL_ARB_enhanced_layouts"
-        ):
-            return True
+    def glsl_version_line_is_fixed(self):
+        """Whether the target profile pins the ``#version`` line, so a construct above it is refused."""
         return False
 
     def ensure_glsl_version_supports_generated_layouts(self, code):
-        minimum_version = self.generated_stage_io_layout_minimum_version(code)
-        if self.glsl_layout_minimum_satisfied_by_extensions(minimum_version):
-            return code
+        """Raise the ``#version`` line to the lowest one the rendered program's constructs need.
 
+        Constructs that no version of the profile has, and any raise when the version is fixed, are refused. GLSL
+        ES output then declares ``highp`` defaults for every type that lacks one.
+        """
         lines = str(code).splitlines(keepends=True)
-        for index, line in enumerate(lines):
-            stripped = line.strip()
-            if not stripped.startswith("#version"):
-                continue
-            upgraded = self.glsl_version_line_with_minimum(stripped, minimum_version)
-            if upgraded == stripped:
-                return code
-            line_end = "\n" if line.endswith("\n") else ""
-            lines[index] = f"{upgraded}{line_end}"
+        version_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.strip().startswith("#version")
+            ),
+            None,
+        )
+        if version_index is None:
+            return code
+        version_line = lines[version_index].strip()
+        requirements = generated_program_requirements(
+            code,
+            sorted(getattr(self, "current_glsl_stage_names", ()) or ()),
+            self.GLSL_STAGE_GUARD_MACROS,
+        )
+        for requirement in getattr(self, "glsl_emission_requirements", ()):
+            if requirement not in requirements:
+                requirements.append(requirement)
+        extensions = set(self.current_glsl_extensions) | program_extensions(code)
+        upgraded, refusals = resolve_version_line(
+            version_line,
+            requirements,
+            extensions,
+            can_raise=not self.glsl_version_line_is_fixed(),
+        )
+        for reason in refusals:
+            self.refuse_lowering(f"GLSL version requirement: {reason}")
+        if upgraded != version_line:
+            line_end = "\n" if lines[version_index].endswith("\n") else ""
+            lines[version_index] = f"{upgraded}{line_end}"
             self.current_glsl_version_line = upgraded
-            self.current_glsl_resource_binding_layouts_supported = (
-                self.glsl_resource_binding_layouts_supported(upgraded)
-            )
-            return "".join(lines)
+            self.glsl_raised_version_line = upgraded
+            code = "".join(lines)
+        if self.glsl_version_is_es(upgraded):
+            code = with_es_default_precisions(code)
         return code
 
     def should_emit_resource_binding_layouts(self):
@@ -3808,6 +3799,7 @@ class GLSLCodeGen:
                 lines[index] = f"{upgraded_version}{line_end}"
                 break
             self.current_glsl_version_line = upgraded_version
+            self.glsl_raised_version_line = upgraded_version
 
         has_extension = any(
             re.match(
@@ -8033,6 +8025,39 @@ class GLSLCodeGen:
         self.metadata_preconditions = checked_metadata_preconditions(records)
 
     def generate_program(self, ast, target_stage=None):
+        """Render an AST to GLSL, optionally filtering stage entry points.
+
+        Raises the emitter's ``LOWERING_REFUSAL_TYPE`` listing every construct that has no faithful lowering.
+        """
+        return self.refusals.run(
+            self.render_program_at_required_version, ast, target_stage
+        )
+
+    GLSL_VERSION_RESOLUTION_PASSES = 3
+
+    def render_program_at_required_version(self, ast, target_stage=None):
+        """Render the program at the lowest ``#version`` its constructs need.
+
+        Emission decides some forms from the version (``layout(binding)``, variable gather offsets), so a program
+        whose first rendering raised the version line is rendered again starting from the raised line, with only
+        the refusals of that final rendering.
+        """
+        recorded = list(self.refusals.reasons)
+        self.glsl_required_version_line = None
+        try:
+            code = self.render_program(ast, target_stage)
+            for _ in range(self.GLSL_VERSION_RESOLUTION_PASSES - 1):
+                raised = getattr(self, "glsl_raised_version_line", None)
+                if raised is None:
+                    break
+                self.refusals.reasons = list(recorded)
+                self.glsl_required_version_line = raised
+                code = self.render_program(ast, target_stage)
+            return code
+        finally:
+            self.glsl_required_version_line = None
+
+    def render_program(self, ast, target_stage=None):
         region = codegen_dispatch_region(
             ast, self.glsl_software_subgroup_stage_entries(ast, target_stage)
         )
@@ -8202,6 +8227,8 @@ class GLSLCodeGen:
         self.glsl_function_call_graph = {}
         self.glsl_function_call_locations = {}
         self.glsl_function_call_source_edges = {}
+        self.glsl_generic_helper_refusals = {}
+        self.glsl_generic_helper_code = {}
         self.collect_preserved_nonuniform_sampler_resources(ast, functions)
         self.validate_glsl_tessellation_control_barriers(ast, target_stage, functions)
         self.glsl_resource_function_specializations = {}
@@ -8312,6 +8339,7 @@ class GLSLCodeGen:
             for stage_name in self.glsl_stage_names(ast, target_stage)
             if stage_name is not None
         }
+        self.current_glsl_stage_names = stage_names
         if target_stage is not None:
             self.current_global_stage_io_stage = target_stage
         elif len(stage_names) == 1:
@@ -8603,6 +8631,11 @@ class GLSLCodeGen:
                 extra_lines.append(line)
         if version_line is None:
             version_line = self.default_glsl_version_line(ast, target_stage)
+        required_version_line = getattr(self, "glsl_required_version_line", None)
+        if required_version_line is not None:
+            version_line = required_version_line
+        self.glsl_raised_version_line = None
+        self.glsl_emission_requirements = []
         self.current_glsl_version_line = version_line
         self.current_glsl_disabled_extensions = {
             match.group(1)
@@ -9450,10 +9483,13 @@ class GLSLCodeGen:
                 )
                 code += self.wrap_stage_guard(stage_code, "compute")
             else:
-                code += self.generate_function(
+                function_code = self.generate_function(
                     func,
                     stage_context=helper_stage_context,
                 )
+                if getattr(func, "name", None) in self.glsl_generic_helper_refusals:
+                    self.glsl_generic_helper_code[func.name] = function_code
+                code += function_code
 
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
@@ -9585,6 +9621,7 @@ class GLSLCodeGen:
                 + cooperative_matrix_support
                 + code[cooperative_matrix_support_insertion_index:]
             )
+        code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
         return self.ensure_glsl_int64_support(code)
@@ -33303,6 +33340,17 @@ float {name}(int64_t value) {{
         return "\n".join(helpers) + "\n"
 
     def generate_glsl_ieee_math_helper(self, name, operation, value_type, width):
+        if operation == "half-fma":
+            if width == 1:
+                return glsl_half_helper_source("cgl_half_fma", name)
+            scalar = self.glsl_ieee_helper_name("half-fma", "float")
+            lanes = ", ".join(
+                f"{scalar}(left.{c}, right.{c}, addend.{c})" for c in "xyzw"[:width]
+            )
+            return (
+                f"{value_type} {name}({value_type} left, {value_type} right, "
+                f"{value_type} addend) {{\n    return {value_type}({lanes});\n}}\n"
+            )
         if operation == "fma":
             # A precise result makes fma() one operation (GLSL 4.60, 8.3):
             # Mesa otherwise splits it and folds (a * b + c) - c into a * b.
@@ -33428,9 +33476,12 @@ float {name}(int64_t value) {{
         for name, operation, value_type, condition_type, width in sorted(
             self.required_glsl_metal_math_helpers
         ):
-            if operation in {"fma", "difference", "atan2"} or operation.startswith(
-                ("precise-", "ieee-")
-            ):
+            if operation in {
+                "fma",
+                "half-fma",
+                "difference",
+                "atan2",
+            } or operation.startswith(("precise-", "ieee-")):
                 helpers.append(
                     self.generate_glsl_ieee_math_helper(
                         name, operation, value_type, width
@@ -36316,7 +36367,9 @@ complex64_t crossgl_complex64_mod_assign(
             if index_builtin is None:
                 return {
                     "kind": "comment",
-                    "text": "/* GLSL mesh SetPrimitive requires output topology */",
+                    "text": self.refuse_lowering(
+                        "mesh SetPrimitive: requires a declared output topology"
+                    ),
                 }
             self.validate_mesh_output_helper_index(
                 args[0], ("primitives", "indices"), "SetPrimitive primitive"
@@ -39778,11 +39831,11 @@ complex64_t crossgl_complex64_mod_assign(
             return None
 
         indent_str = "    " * indent
-        fallback = self.zero_value_expression(return_type)
-        return (
-            f"{indent_str}return /* GLSL wave intrinsic diagnostic: {func.name} "
-            f"has no OpenGL subgroup equivalent */ {fallback};\n"
+        fallback = self.refuse_lowering(
+            f"wave intrinsic: {func.name} has no OpenGL subgroup equivalent",
+            self.zero_value_expression(return_type),
         )
+        return f"{indent_str}return {fallback};\n"
 
     def glsl_wave_operation_name(self, operation):
         if not isinstance(operation, str):
@@ -40103,6 +40156,12 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             return None
         value_type = info["mapped"]
+        if operation == "fma" and all(
+            self.glsl_half_width(self.glsl_source_expression_type(arg)) is not None
+            for arg in args
+        ):
+            # A binary32 fma of binary16 values rounds twice; the helper rounds the exact sum once.
+            operation = "half-fma"
         rendered = [
             self.generate_expression_with_expected(arg, value_type) for arg in args
         ]
@@ -40110,6 +40169,13 @@ complex64_t crossgl_complex64_mod_assign(
         self.required_glsl_metal_math_helpers.add(
             (helper_name, operation, value_type, "", info["width"])
         )
+        if operation == "half-fma":
+            if info["width"] != 1:
+                scalar_name = self.glsl_ieee_helper_name("half-fma", "float")
+                self.required_glsl_metal_math_helpers.add(
+                    (scalar_name, "half-fma", "float", "", 1)
+                )
+            return f"{helper_name}({', '.join(rendered)})"
         if operation == "atan2":
             if info["width"] != 1:
                 # Vector lanes call the scalar helper.
@@ -42222,9 +42288,9 @@ complex64_t crossgl_complex64_mod_assign(
         return None
 
     def glsl_wave_diagnostic_expression(self, operation, reason):
-        return (
-            f"/* GLSL wave intrinsic diagnostic: {operation} {reason} */ "
-            f"{self.glsl_wave_default_value(operation)}"
+        return self.refuse_lowering(
+            f"wave intrinsic: {operation} {reason}",
+            self.glsl_wave_default_value(operation),
         )
 
     def glsl_wave_default_value(self, operation):
@@ -42382,9 +42448,8 @@ complex64_t crossgl_complex64_mod_assign(
             )
             counter = self.structured_buffer_counter_reference(args[0])
             if counter is None:
-                return (
-                    "/* unsupported GLSL buffer append: requires append/consume "
-                    "counter buffer */"
+                return self.refuse_lowering(
+                    "buffer append: requires an append/consume counter buffer"
                 )
             index = f"atomicAdd({counter}, 1u)"
             return (
@@ -42394,9 +42459,8 @@ complex64_t crossgl_complex64_mod_assign(
             self.validate_structured_buffer_access_argument(func_name, args)
             counter = self.structured_buffer_counter_reference(args[0])
             if counter is None:
-                return (
-                    "0 /* unsupported GLSL buffer consume: requires append/consume "
-                    "counter buffer */"
+                return self.refuse_lowering(
+                    "buffer consume: requires an append/consume counter buffer", "0"
                 )
             index = f"(atomicAdd({counter}, uint(-1)) - 1u)"
             value = self.structured_buffer_access_expression(args[0], index)
@@ -45882,11 +45946,16 @@ complex64_t crossgl_complex64_mod_assign(
         return f"{function_name}({', '.join(args)})"
 
     def texture_gather_offsets_expression(
-        self, texture_name, coord, offset_args, component
+        self, texture_name, coord, offset_args, component, texture_type=None
     ):
-        component_suffixes = ("x", "y", "z", "w")
+        """Lower ``textureGatherOffsets`` to one ``textureGatherOffset`` per offset.
+
+        Component ``i`` of ``textureGatherOffsets`` is texel ``T_i0_j0`` of the
+        footprint at offset ``i`` (GLSL 4.60, section 8.9.4), and
+        ``textureGatherOffset`` returns that texel in ``w``.
+        """
         component_values = []
-        for index, offset_arg in enumerate(offset_args):
+        for offset_arg in offset_args:
             gather = self.texture_gather_call_expression(
                 "textureGatherOffset",
                 texture_name,
@@ -45894,8 +45963,17 @@ complex64_t crossgl_complex64_mod_assign(
                 self.generate_expression(offset_arg),
                 component,
             )
-            component_values.append(f"{gather}.{component_suffixes[index]}")
-        return f"vec4({', '.join(component_values)})"
+            component_values.append(f"{gather}.w")
+        vector_type = self.texture_gather_result_vector_type(texture_type)
+        return f"{vector_type}({', '.join(component_values)})"
+
+    def texture_gather_result_vector_type(self, texture_type):
+        texture_type = self.resource_base_type(texture_type) or ""
+        if texture_type.startswith("isampler"):
+            return "ivec4"
+        if texture_type.startswith("usampler"):
+            return "uvec4"
+        return "vec4"
 
     def texture_gather_compare_offsets_args(self, extra_args):
         if not extra_args:
@@ -45910,14 +45988,14 @@ complex64_t crossgl_complex64_mod_assign(
     def texture_gather_compare_offsets_expression(
         self, texture_name, coord, compare, offset_args
     ):
-        component_suffixes = ("x", "y", "z", "w")
+        """Lower a shadow ``textureGatherOffsets``; see ``texture_gather_offsets_expression``."""
         component_values = []
-        for index, offset_arg in enumerate(offset_args):
+        for offset_arg in offset_args:
             offset = self.generate_expression(offset_arg)
             gather = (
                 f"textureGatherOffset({texture_name}, {coord}, {compare}, {offset})"
             )
-            component_values.append(f"{gather}.{component_suffixes[index]}")
+            component_values.append(f"{gather}.w")
         return f"vec4({', '.join(component_values)})"
 
     def texture_gather_dynamic_component_expression(self, build_expression, component):
@@ -46028,9 +46106,8 @@ complex64_t crossgl_complex64_mod_assign(
 
     def unsupported_texture_projected_call(self, func_name, reason, texture_type=None):
         zero_value = self.texture_sample_vector_zero_value(texture_type)
-        return (
-            f"/* unsupported GLSL projected texture: {func_name} {reason} */ "
-            f"{zero_value}"
+        return self.refuse_lowering(
+            f"projected texture: {func_name} {reason}", zero_value
         )
 
     def projected_cube_texture_coordinate(self, texture_type, coord_arg, coord):
@@ -46120,9 +46197,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def unsupported_texture_sample_offset_call(self, func_name, reason):
         zero_value = self.texture_sample_vector_zero_value()
-        return (
-            f"/* unsupported GLSL texture offset: {func_name} {reason} */ {zero_value}"
-        )
+        return self.refuse_lowering(f"texture offset: {func_name} {reason}", zero_value)
 
     def is_multisample_texture_resource_type(self, texture_type):
         return self.resource_base_type(texture_type) in {
@@ -46153,9 +46228,8 @@ complex64_t crossgl_complex64_mod_assign(
     def unsupported_multisample_texture_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(texture_type)
         zero_value = self.texture_sample_vector_zero_value(texture_type)
-        return (
-            f"/* unsupported GLSL multisample texture call: "
-            f"{func_name} on {texture_type} */ {zero_value}"
+        return self.refuse_lowering(
+            f"multisample texture call: {func_name} on {texture_type}", zero_value
         )
 
     def unsupported_multisample_texture_compare_call(self, func_name, texture_type):
@@ -46262,9 +46336,10 @@ complex64_t crossgl_complex64_mod_assign(
     def unsupported_multisample_texel_fetch_offset_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
         zero_value = self.texture_sample_vector_zero_value(texture_type)
-        return (
-            f"/* unsupported GLSL texel fetch offset: multisample texture "
-            f"{texture_type} does not support offsets */ {zero_value}"
+        return self.refuse_lowering(
+            f"texel fetch offset: multisample texture {texture_type} does not "
+            "support offsets",
+            zero_value,
         )
 
     def is_cube_texture_resource_type(self, texture_type):
@@ -46282,9 +46357,8 @@ complex64_t crossgl_complex64_mod_assign(
     def unsupported_cube_texel_fetch_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(texture_type)
         zero_value = self.texture_sample_vector_zero_value(texture_type)
-        return (
-            f"/* unsupported GLSL texel fetch: {func_name} on {texture_type} */ "
-            f"{zero_value}"
+        return self.refuse_lowering(
+            f"texel fetch: {func_name} on {texture_type}", zero_value
         )
 
     def generate_texture_gather_call(self, func_name, args):
@@ -46340,9 +46414,8 @@ complex64_t crossgl_complex64_mod_assign(
                 func_name, texture_gather_operation_error()
             )
 
-        if offset_args and not self.glsl_texel_offsets_are_compile_time_constants(
-            offset_args
-        ):
+        # Multi-offset gathers are emitted as one textureGatherOffset per offset.
+        if offset_args and not self.glsl_gather_offsets_are_expressible(offset_args):
             return self.unsupported_dynamic_texel_offset_gather_call(
                 func_name, texture_type
             )
@@ -46355,7 +46428,7 @@ complex64_t crossgl_complex64_mod_assign(
                 )
             if is_texture_gather_multi_offset_operation(func_name):
                 return self.texture_gather_offsets_expression(
-                    texture_name, coord, offset_args, component
+                    texture_name, coord, offset_args, component, texture_type
                 )
             offset_arg = (
                 self.generate_expression(offset_args[0]) if offset_args else None
@@ -46372,7 +46445,7 @@ complex64_t crossgl_complex64_mod_assign(
         if component_arg is None:
             if is_texture_gather_multi_offset_operation(func_name):
                 return self.texture_gather_offsets_expression(
-                    texture_name, coord, offset_args, None
+                    texture_name, coord, offset_args, None, texture_type
                 )
             offset_arg = (
                 self.generate_expression(offset_args[0]) if offset_args else None
@@ -46390,7 +46463,7 @@ complex64_t crossgl_complex64_mod_assign(
         if is_texture_gather_multi_offset_operation(func_name):
             return self.texture_gather_dynamic_component_expression(
                 lambda option: self.texture_gather_offsets_expression(
-                    texture_name, coord, offset_args, option
+                    texture_name, coord, offset_args, option, texture_type
                 ),
                 component_expr,
             )
@@ -46781,6 +46854,37 @@ complex64_t crossgl_complex64_mod_assign(
             is not None
         )
 
+    def glsl_version_supports_variable_gather_offsets(self):
+        """Return whether ``textureGatherOffset`` accepts a non-constant offset.
+
+        GLSL 4.00 and GLSL ES 3.20 let the gather offset be variable (GLSL 4.60 and
+        GLSL ES 3.20, section 8.9.4); ``textureOffset`` and the other offset forms
+        still require constant expressions.
+        """
+        number, profile = parse_version_line(
+            getattr(self, "current_glsl_version_line", None)
+        )
+        if number is None:
+            return True
+        return VARIABLE_GATHER_OFFSET.satisfied_by(
+            number, profile == "es", self.current_glsl_extensions
+        )
+
+    def glsl_gather_offsets_are_expressible(self, offset_args):
+        """Return whether ``textureGatherOffset`` can take these offsets.
+
+        A non-constant offset below the version that allows one is a version requirement, so the program is
+        emitted at that version; a profile whose version is fixed refuses it.
+        """
+        if self.glsl_version_supports_variable_gather_offsets():
+            return True
+        if self.glsl_texel_offsets_are_compile_time_constants(offset_args):
+            return True
+        if self.glsl_version_line_is_fixed():
+            return False
+        self.glsl_emission_requirements.append(VARIABLE_GATHER_OFFSET)
+        return True
+
     def glsl_texel_offsets_are_compile_time_constants(self, offset_args):
         return all(
             self.glsl_texel_offset_is_compile_time_constant(offset_arg)
@@ -46820,9 +46924,9 @@ complex64_t crossgl_complex64_mod_assign(
 
     def unsupported_dynamic_texel_offset_gather_call(self, func_name, texture_type):
         zero_value = self.texture_sample_vector_zero_value(texture_type)
-        return (
-            f"/* unsupported GLSL texture gather: {func_name} "
-            f"{self.dynamic_texel_offset_reason()} */ {zero_value}"
+        return self.refuse_lowering(
+            f"texture gather: {func_name} {self.dynamic_texel_offset_reason()}",
+            zero_value,
         )
 
     def unsupported_dynamic_texel_offset_gather_compare_call(self, func_name):
@@ -46832,9 +46936,9 @@ complex64_t crossgl_complex64_mod_assign(
 
     def unsupported_dynamic_texel_fetch_offset_call(self, func_name, texture_type):
         zero_value = self.texture_sample_vector_zero_value(texture_type)
-        return (
-            f"/* unsupported GLSL texel fetch offset: {func_name} "
-            f"{self.dynamic_texel_offset_reason()} */ {zero_value}"
+        return self.refuse_lowering(
+            f"texel fetch offset: {func_name} {self.dynamic_texel_offset_reason()}",
+            zero_value,
         )
 
     def generate_texture_compare_call(self, func_name, args):
@@ -47194,7 +47298,7 @@ complex64_t crossgl_complex64_mod_assign(
             self.validate_texture_gather_compare_offsets_argument(
                 func_name, texture_type, offset_arg
             )
-        if not self.glsl_texel_offsets_are_compile_time_constants(offset_args):
+        if not self.glsl_gather_offsets_are_expressible(offset_args):
             return self.unsupported_dynamic_texel_offset_gather_compare_call(func_name)
 
         compare = self.generate_expression(compare_arg)
@@ -47242,7 +47346,7 @@ complex64_t crossgl_complex64_mod_assign(
                 func_name, texture_compare_offset_capability_error("GLSL")
             )
         offset_arg = extra_args[1]
-        if not self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+        if not self.glsl_gather_offsets_are_expressible([offset_arg]):
             return self.unsupported_dynamic_texel_offset_gather_compare_call(func_name)
         offset = self.generate_expression(offset_arg)
         return f"textureGatherOffset({texture_name}, {coord}, {compare}, {offset})"
@@ -47323,12 +47427,59 @@ complex64_t crossgl_complex64_mod_assign(
         texture_type = self.resource_base_type(texture_type) or expression_debug_name(
             args[0]
         )
-        return image_atomic_diagnostic_expression(
-            "GLSL",
-            func_name,
-            f"{texture_type} parameter",
+        # GLSL image parameters carry no format qualifier, so image atomics need
+        # a clone specialized for a concrete resource.
+        return self.refuse_in_generic_resource_helper(
+            f"image atomic resource call: {func_name} on {texture_type} parameter",
             zero_value,
         )
+
+    def refuse_in_generic_resource_helper(self, reason, placeholder):
+        """Refuse a construct of a helper whose resource parameters are bound by specialization.
+
+        The generic copy of such a helper is still emitted, while every call that
+        passes a concrete resource calls a specialized clone. A construct only the
+        clones can lower is refused if emitted code still calls the generic copy.
+        """
+        key = self.current_glsl_function_key
+        source_name = self.current_glsl_source_function_name
+        if (
+            key
+            and key[1] == source_name
+            and source_name in self.glsl_resource_specialized_source_names
+        ):
+            self.glsl_generic_helper_refusals.setdefault(source_name, []).append(reason)
+            return placeholder
+        return self.refuse_lowering(reason, placeholder)
+
+    def finish_generic_resource_helper_refusals(self, code):
+        """Drop the dead generic copies of specialized helpers and refuse the live ones.
+
+        A generic copy is dead when no emitted function outside the other dead
+        generic copies calls it. A dead copy that needed a refusal loses its body;
+        its prototype stays, which GLSL accepts for a function that is never
+        called. A refusal in a generic copy that is still called stands.
+        """
+        dead = set(self.glsl_resource_specialized_source_names)
+        while True:
+            called = {
+                target_key[1]
+                for source_key, target_keys in self.glsl_function_call_graph.items()
+                if source_key[1] not in dead
+                for target_key in target_keys
+            }
+            live = dead & called
+            if not live:
+                break
+            dead -= live
+        for name, reasons in sorted(self.glsl_generic_helper_refusals.items()):
+            function_code = self.glsl_generic_helper_code.get(name)
+            if name in dead and function_code and code.count(function_code) == 1:
+                code = code.replace(function_code, "", 1)
+                continue
+            for reason in reasons:
+                self.refuse_lowering(reason)
+        return code
 
     def generate_image_atomic_call(self, func_name, args):
         if self.image_atomic_parameter_requires_diagnostic(args[0]):
@@ -53705,10 +53856,9 @@ complex64_t crossgl_complex64_mod_assign(
         func_name = getattr(func, "name", "<anonymous>")
         for param in unsupported_info.get("params", []):
             param_name = param.get("name") or "<anonymous>"
-            code += (
-                f"{indent_str}/* unsupported GLSL structured buffer array parameter "
-                f"{func_name}.{param_name}: fixed array size is required for helper "
-                "lowering */\n"
+            self.refuse_lowering(
+                f"structured buffer array parameter {func_name}.{param_name}: "
+                "fixed array size is required for helper lowering"
             )
 
         return_type = (
@@ -56550,14 +56700,20 @@ complex64_t crossgl_complex64_mod_assign(
                 return f"{indent}{self.map_type(element_type)} {member_name}[{member.size}];\n"
             if preserve_unsized_arrays:
                 return f"{indent}{self.map_type(element_type)} {member_name}[];\n"
-            return f"{indent}{self.map_type(element_type)} {member_name}[1024];\n"
+            raise UnsizedArrayUnsupportedError(
+                "opengl", f"{struct_name or '?'}.{member_name}", "is a struct member"
+            )
 
         if hasattr(member, "member_type"):
             if str(type(member.member_type)).find("ArrayType") != -1:
                 member_type_str = self.convert_type_node_to_string(member.member_type)
                 member_type = self.map_type(member_type_str)
                 if str(member_type).endswith("[]") and not preserve_unsized_arrays:
-                    member_type = f"{str(member_type)[:-2]}[1024]"
+                    raise UnsizedArrayUnsupportedError(
+                        "opengl",
+                        f"{struct_name or '?'}.{member_name}",
+                        "is a struct member",
+                    )
                 declaration = format_c_style_array_declaration(member_type, member_name)
                 return f"{indent}{declaration};\n"
 

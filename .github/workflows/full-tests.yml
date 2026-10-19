@@ -610,6 +610,7 @@ jobs:
           mkdir -p support/generated
           python -m pytest -q -n auto \
             tests/test_translator/test_codegen/test_external_shader_validators.py \
+            tests/test_translator/test_preprocessor \
             --junitxml support/generated/compiler-smoke-linux-pytest.xml \
             -rs
 
@@ -678,6 +679,7 @@ jobs:
             tests/test_translator/test_codegen/test_external_shader_validators.py \
             tests/test_translator/test_codegen/test_shader_validation.py \
             tests/test_translator/test_codegen/test_metal_codegen.py \
+            tests/test_translator/test_preprocessor/test_dialects.py \
             -k "metal" \
             --junitxml support/generated/compiler-smoke-macos-pytest.xml \
             -rs

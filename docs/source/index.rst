@@ -23,6 +23,7 @@ systems-language targets.
    examples
    extending
    doxygen
+   adr/index
 
 .. toctree::
    :maxdepth: 2
