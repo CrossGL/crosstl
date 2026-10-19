@@ -172,6 +172,8 @@ class WGSLCodeGen:
         "lerp": "mix",
         "mix": "mix",
         "rsqrt": "inverseSqrt",
+        # WGSL round() rounds halfway cases to the nearest even integer.
+        "roundEven": "round",
         "saturate": "saturate",
     }
     BIT_CAST_FUNCTIONS = {

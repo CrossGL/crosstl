@@ -2661,6 +2661,8 @@ class HLSLCodeGen:
             "metal::rint": "round",
             "metal_u3a_u3arint": "round",
             "rint": "round",
+            # HLSL round() rounds halfway cases to the nearest even integer.
+            "roundEven": "round",
             "uintBitsToFloat": "asfloat",
         }
 

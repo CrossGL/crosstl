@@ -540,6 +540,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "floor": "floorf",
             "ceil": "ceilf",
             "round": "roundf",
+            "roundEven": "rintf",
             "trunc": "truncf",
             "mod": "fmodf",
             "min": "fminf",
