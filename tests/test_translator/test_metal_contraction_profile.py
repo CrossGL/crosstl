@@ -579,4 +579,5 @@ def test_ci_requires_contraction_profiles_in_existing_native_job():
         workflow.count("tests/test_translator/test_metal_contraction_profile.py") == 1
     )
     assert "tests/test_translator/test_metal_contraction_profile.py" in step
-    assert "--timeout-seconds 240" in step
+    # The step budget covers the slowest Windows runner observed (about 1.9x).
+    assert "--timeout-seconds 480" in step
