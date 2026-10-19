@@ -20,6 +20,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.semantics import UnsizedArrayUnsupportedError
 
 
 def tokenize_code(code: str) -> List:
@@ -22758,7 +22759,7 @@ def test_entry_structs_and_plain_returns_get_default_slang_semantics():
     assert "float depth : SV_Depth;" in generated_code
 
 
-def test_unsized_value_array_members_get_fixed_slang_fallback():
+def test_unsized_value_array_members_are_refused_by_slang():
     code = """
     shader UnsizedValueArrayMember {
         struct Globals {
@@ -22775,11 +22776,10 @@ def test_unsized_value_array_members_get_fixed_slang_fallback():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-
-    assert "float noiseValues[1024];" in generated_code
-    assert "uniform Globals globals;" in generated_code
-    assert "float noiseValues[];" not in generated_code
+    # Slang follows HLSL: only resource arrays may be unsized. The emitter used to invent 1024 elements.
+    with pytest.raises(UnsizedArrayUnsupportedError) as raised:
+        generate_code(parse_code(tokenize_code(code)))
+    assert raised.value.code == "project.translate.slang-unsized-array-unsupported"
 
 
 def test_stage_output_sv_position_semantic():

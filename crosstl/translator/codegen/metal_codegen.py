@@ -57,6 +57,7 @@ from ..math_namespaces import (
     METAL_PRECISE_MATH_FUNCTIONS,
 )
 from ..resource_identity import resource_identity_marker
+from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..structure_conversions import (
     ScalarKind,
@@ -91,6 +92,10 @@ from .array_utils import (
     get_array_size_from_node,
     parse_array_type,
     split_array_type_suffix,
+)
+from .buffer_block_diagnostics import (
+    BufferBlockUnsupportedError,
+    record_unsupported_layout_failures,
 )
 from .buffer_length import BufferLengthUnsupportedError
 from .call_graph import validate_recursion_free
@@ -2203,6 +2208,12 @@ class MetalCodeGen:
                 "type is not supported by Metal pointer/offset lowering"
             ),
         )
+        self.record_metal_glsl_buffer_block_layout_failures(
+            global_vars,
+            self.lowered_glsl_buffer_blocks,
+            self.glsl_buffer_block_lowering_failures,
+            self.glsl_buffer_block_struct_lowering_failures,
+        )
         self.lowered_glsl_buffer_block_struct_names = {
             block["type_name"] for block in self.lowered_glsl_buffer_blocks.values()
         }
@@ -3760,9 +3771,10 @@ class MetalCodeGen:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Metal requires a concrete element count for value arrays.
-                            code += (
-                                f"    {self.map_type(element_type)} "
-                                f"{member.name}[1024];\n"
+                            raise UnsizedArrayUnsupportedError(
+                                "metal",
+                                f"{node.name}.{member.name}",
+                                "is a cbuffer member",
                             )
                     else:
                         if hasattr(member, "member_type"):
@@ -3789,9 +3801,10 @@ class MetalCodeGen:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Metal requires a concrete element count for value arrays.
-                            code += (
-                                f"    {self.map_type(element_type)} "
-                                f"{member.name}[1024];\n"
+                            raise UnsizedArrayUnsupportedError(
+                                "metal",
+                                f"{node.name}.{member.name}",
+                                "is a cbuffer member",
                             )
                     else:
                         if hasattr(member, "member_type"):
@@ -4422,16 +4435,8 @@ class MetalCodeGen:
                     f"{semantic_attr}{interpolation_attr};\n",
                     dependencies,
                 )
-            if self.metal_array_semantic_attribute_precedes_extent(semantic):
-                return (
-                    f"    {mapped_type} {member.name}{semantic_attr}"
-                    f"{interpolation_attr}[1024];\n",
-                    dependencies,
-                )
-            return (
-                f"    {mapped_type} {member.name}[1024]{semantic_attr}"
-                f"{interpolation_attr};\n",
-                dependencies,
+            raise UnsizedArrayUnsupportedError(
+                "metal", f"{struct_name or '?'}.{member.name}", "is a struct member"
             )
 
         semantic = self.metal_struct_member_effective_semantic(
@@ -4479,7 +4484,11 @@ class MetalCodeGen:
                 if self.metal_array_semantic_attribute_precedes_extent(semantic):
                     base_type, array_size = split_array_type_suffix(member_type)
                     if member.member_type.size is None:
-                        array_size = "1024"
+                        raise UnsizedArrayUnsupportedError(
+                            "metal",
+                            f"{struct_name or '?'}.{member.name}",
+                            "is a struct member",
+                        )
                     if not array_size:
                         array_size = self.safe_expression_to_string(
                             member.member_type.size
@@ -4493,11 +4502,10 @@ class MetalCodeGen:
                         dependencies,
                     )
                 if member.member_type.size is None:
-                    base_type, _ = split_array_type_suffix(member_type)
-                    return (
-                        f"    {base_type} {member.name}[1024]{abi_attr}"
-                        f"{semantic_attr}{interpolation_attr};\n",
-                        dependencies,
+                    raise UnsizedArrayUnsupportedError(
+                        "metal",
+                        f"{struct_name or '?'}.{member.name}",
+                        "is a struct member",
                     )
                 return (
                     f"    {declaration}{abi_attr}{semantic_attr}"
@@ -7718,12 +7726,9 @@ class MetalCodeGen:
             local_name = self.metal_local_identifier_name(stmt.name)
 
             if size is None:
-                # Dynamic arrays in Metal need a size, use a large enough buffer
-                declaration = self.maybe_format_unused_local_declaration(
-                    f"device array<{element_type}, 1024> {local_name}",
-                    stmt.name,
+                raise UnsizedArrayUnsupportedError(
+                    "metal", stmt.name, "is a local variable"
                 )
-                return f"{indent_str}{declaration};\n"
             else:
                 declaration = self.maybe_format_unused_local_declaration(
                     f"array<{element_type}, {size}> {local_name}",
@@ -21884,8 +21889,23 @@ class MetalCodeGen:
             names.add(str(type_name))
         return names
 
+    def record_metal_glsl_buffer_block_layout_failures(
+        self, nodes, lowered_blocks, var_failures, struct_failures
+    ):
+        record_unsupported_layout_failures(
+            nodes,
+            lowered_blocks,
+            var_failures,
+            struct_failures,
+            is_block=self.is_glsl_buffer_block_variable,
+            node_type=glsl_buffer_block_node_type,
+            layout_of=self.glsl_buffer_block_layout,
+            base_type=self.resource_base_type,
+            lowering="Metal device pointer offset lowering",
+        )
+
     def collect_lowered_glsl_buffer_block_parameters(self, parameters):
-        return collect_lowered_glsl_buffer_blocks(
+        blocks, var_failures, struct_failures = collect_lowered_glsl_buffer_blocks(
             parameters,
             structs_by_name=self.structs_by_name,
             is_glsl_buffer_block_variable=self.is_glsl_buffer_block_variable,
@@ -21901,6 +21921,10 @@ class MetalCodeGen:
                 "type is not supported by Metal pointer/offset lowering"
             ),
         )
+        self.record_metal_glsl_buffer_block_layout_failures(
+            parameters, blocks, var_failures, struct_failures
+        )
+        return blocks, var_failures, struct_failures
 
     def collect_unsupported_glsl_buffer_block_parameter_names(self, parameters):
         names = set()
@@ -22379,9 +22403,12 @@ class MetalCodeGen:
             buffer_name, offset, temp_name, access
         )
         if stores is None:
-            return (
-                "/* unsupported Metal GLSL buffer block aggregate store: "
-                "array fields require element-wise stores */"
+            raise BufferBlockUnsupportedError(
+                "metal",
+                "aggregate store",
+                f"storing a whole {access.get('type')} value through a device byte "
+                "pointer needs element-wise stores for its array fields, which are "
+                "not lowered",
             )
         return "\n".join([f"{access['metal_type']} {temp_name} = {value}", *stores])
 
@@ -22394,9 +22421,11 @@ class MetalCodeGen:
         }
         binary_op = compound_ops.get(op)
         if binary_op is None:
-            return (
-                "/* unsupported Metal GLSL buffer block matrix compound store: "
-                "requires explicit matrix operation lowering */"
+            raise BufferBlockUnsupportedError(
+                "metal",
+                "matrix compound store",
+                f"operator {op} has no matrix form (GLSL 4.60 section 5.9 defines "
+                "+=, -=, *= and /= on matrices)",
             )
 
         current = self.metal_buffer_load(buffer_name, offset, access)
@@ -22404,10 +22433,11 @@ class MetalCodeGen:
         return self.metal_matrix_store(buffer_name, offset, rhs, access)
 
     def metal_buffer_compound_store_diagnostic(self, op, access):
-        return (
-            "/* unsupported Metal GLSL buffer block compound store: "
+        raise BufferBlockUnsupportedError(
+            "metal",
+            "compound store",
             f"operator {op} is not supported for "
-            f"{access['component_type']} buffer members */"
+            f"{access['component_type']} buffer members",
         )
 
     def generate_glsl_buffer_block_member_load(self, expr):
@@ -22439,15 +22469,19 @@ class MetalCodeGen:
             offset = access["offset_expr"]
 
         if access.get("readonly"):
-            return (
-                "/* unsupported Metal GLSL buffer block store: "
-                "readonly device buffer cannot be written */"
+            raise BufferBlockUnsupportedError(
+                "metal",
+                "store",
+                f"{access['buffer']} is a readonly block, and a readonly device "
+                "buffer cannot be written",
             )
         if access.get("members"):
             if op != "=":
-                return (
-                    "/* unsupported Metal GLSL buffer block aggregate compound "
-                    "store: assign a full aggregate value explicitly */"
+                raise BufferBlockUnsupportedError(
+                    "metal",
+                    "aggregate compound store",
+                    f"operator {op} does not apply to a {access.get('type')} "
+                    "aggregate; assign a full aggregate value explicitly",
                 )
             return self.metal_aggregate_store(access["buffer"], offset, rhs, access)
 
@@ -22509,17 +22543,8 @@ class MetalCodeGen:
     def unsupported_glsl_buffer_block_atomic_call(
         self, target, operation, reason, access=None
     ):
-        if operation in {"atomicLoad", "atomicCompareExchangeWeak"}:
-            raise ValueError(f"Metal {operation} {reason}")
-        result_type = self.expression_result_type(target) or "uint"
-        component_type = access.get("component_type") if access else None
-        if component_type is not None:
-            zero_value = "0u" if component_type == "uint" else "0"
-        else:
-            zero_value = "0u" if self.type_name_string(result_type) == "uint" else "0"
-        return (
-            "/* unsupported Metal GLSL buffer block atomic: "
-            f"{operation} {reason} */ {zero_value}"
+        raise BufferBlockUnsupportedError(
+            "metal", "atomic", f"Metal {operation} {reason}"
         )
 
     def generate_glsl_buffer_block_atomic_call(self, func_name, args):
@@ -22610,19 +22635,21 @@ class MetalCodeGen:
         failure_detail = self.glsl_buffer_block_lowering_failure_detail(
             type_name, var_name
         )
-        if failure_detail:
-            details += f"; {failure_detail}"
-        return (
-            f"// unsupported {target} GLSL buffer block {declaration}{details}: "
-            "mixed metadata/runtime-array layout requires explicit pointer/offset "
-            "lowering\n"
+        reason = f"; {failure_detail}" if failure_detail else ""
+        raise BufferBlockUnsupportedError(
+            target,
+            "declaration",
+            f"{declaration}{details}: device pointer offset lowering does not cover this block{reason}",
         )
 
     def unsupported_glsl_buffer_block_struct_placeholder(self, target, type_name):
         type_name = str(self.resource_base_type(type_name))
-        return (
-            f"// unsupported {target} GLSL buffer block struct {type_name} "
-            "omitted: no target-side fallback declaration emitted\n"
+        failure_detail = self.glsl_buffer_block_lowering_failure_detail(type_name)
+        reason = f": {failure_detail}" if failure_detail else ""
+        raise BufferBlockUnsupportedError(
+            target,
+            "struct",
+            f"{type_name} has no device pointer offset lowering{reason}",
         )
 
     def unsupported_glsl_buffer_block_variable_placeholder(
@@ -22631,19 +22658,15 @@ class MetalCodeGen:
         declaration = str(self.resource_base_type(type_name))
         if var_name:
             declaration += f" {var_name}"
-        return (
-            f"// unsupported {target} GLSL buffer block variable {declaration} "
-            "omitted: no target-side fallback declaration emitted\n"
+        raise BufferBlockUnsupportedError(
+            target, "variable", f"{declaration} has no device pointer offset lowering"
         )
 
     def unsupported_glsl_buffer_block_function_placeholder(
         self, target, func_name, info
     ):
         reason = info.get("reason", "signature references omitted GLSL buffer block")
-        return (
-            f"// unsupported {target} GLSL buffer block function {func_name} "
-            f"omitted: {reason}\n"
-        )
+        raise BufferBlockUnsupportedError(target, "function", f"{func_name}: {reason}")
 
     def unsupported_glsl_buffer_block_function_call(self, func_name):
         if (
@@ -22652,15 +22675,10 @@ class MetalCodeGen:
         ):
             return None
         info = self.unsupported_glsl_buffer_block_functions[func_name]
-        return_type = info.get("return_type") or self.current_expression_expected_type
-        diagnostic = (
-            f"unsupported Metal GLSL buffer block function call {func_name}: "
-            "target function omitted"
+        reason = info.get("reason", "signature references omitted GLSL buffer block")
+        raise BufferBlockUnsupportedError(
+            "metal", "function call", f"{func_name}: {reason}"
         )
-        if self.map_type(return_type) == "void":
-            return f"/* {diagnostic} */"
-        fallback = self.diagnostic_zero_value_for_type(return_type)
-        return f"{fallback} /* {diagnostic} */"
 
     def is_unsupported_glsl_buffer_block_struct_type(self, vtype):
         return str(self.resource_base_type(vtype)) in (
@@ -22673,9 +22691,10 @@ class MetalCodeGen:
         declaration = str(self.resource_base_type(type_name))
         if var_name:
             declaration += f" {var_name}"
-        return (
-            f"/* unsupported {target} GLSL buffer block local variable {declaration} "
-            "omitted: no target-side fallback declaration emitted */"
+        raise BufferBlockUnsupportedError(
+            target,
+            "local variable",
+            f"{declaration} has a block struct type with no device pointer offset lowering",
         )
 
     def is_unsupported_glsl_buffer_block_name(self, name):
@@ -22750,22 +22769,16 @@ class MetalCodeGen:
         name = self.unsupported_glsl_buffer_block_access_name(expr)
         if not name:
             return None
-        value_type = (
-            self.expression_result_type(expr) or self.current_expression_expected_type
-        )
-        fallback = self.diagnostic_zero_value_for_type(value_type)
-        return (
-            f"{fallback} /* unsupported Metal GLSL buffer block access {name}: "
-            "no target-side fallback declaration emitted */"
+        raise BufferBlockUnsupportedError(
+            "metal", "access", f"{name} has no device pointer offset lowering"
         )
 
     def unsupported_glsl_buffer_block_assignment_diagnostic(self, target):
         name = self.unsupported_glsl_buffer_block_access_name(target)
         if not name:
             return None
-        return (
-            "/* unsupported Metal GLSL buffer block assignment "
-            f"{name}: no target-side fallback declaration emitted */"
+        raise BufferBlockUnsupportedError(
+            "metal", "assignment", f"{name} has no device pointer offset lowering"
         )
 
     def resource_array_count(self, size):

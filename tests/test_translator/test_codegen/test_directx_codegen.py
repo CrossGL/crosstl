@@ -51,6 +51,9 @@ from crosstl.translator.ast import (
     VectorType,
     create_legacy_shader_node,
 )
+from crosstl.translator.codegen.buffer_block_diagnostics import (
+    BufferBlockUnsupportedError,
+)
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
     DirectXAggregateInitializerError,
@@ -93,6 +96,7 @@ from crosstl.translator.cooperative_matrix import (
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.semantics import UnsizedArrayUnsupportedError
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
 )
@@ -7203,7 +7207,7 @@ def test_hlsl_diagnostic_scalar_vector_zero_scanner_flags_single_arg_fallbacks()
     ]
 
 
-def test_hlsl_diagnostic_vector_zero_fallbacks_expand_for_dxc():
+def test_hlsl_unsupported_buffer_block_vector_members_are_refused():
     shader = """
     shader DiagnosticVectorFallbacks {
         struct UnsupportedDiagnosticBlock {
@@ -7247,23 +7251,14 @@ def test_hlsl_diagnostic_vector_zero_fallbacks_expand_for_dxc():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
-
-    assert "float2 uv = float2(0.0, 0.0) /* unsupported HLSL" in generated_code
-    assert "double2 precise_ = double2(0.0, 0.0) /* unsupported HLSL" in generated_code
-    assert "float3 normal = float3(0.0, 0.0, 0.0) /* unsupported HLSL" in generated_code
-    assert (
-        "float4 color = float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL"
-        in generated_code
-    )
-    assert "int2 pixel = int2(0, 0) /* unsupported HLSL" in generated_code
-    assert "int3 voxel = int3(0, 0, 0) /* unsupported HLSL" in generated_code
-    assert "uint2 counts = uint2(0u, 0u) /* unsupported HLSL" in generated_code
-    assert "uint4 mask = uint4(0u, 0u, 0u, 0u) /* unsupported HLSL" in generated_code
-    assert (
-        "bool2 predicates = bool2(false, false) /* unsupported HLSL" in generated_code
-    )
-    assert hlsl_scalar_vector_zero_diagnostics(generated_code) == []
+    # The double member has no ByteAddressBuffer lowering: the block is refused instead of every
+    # use being replaced by a zero vector.
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: UnsupportedDiagnosticBlock",
+    ) as error:
+        generate_code(parse_code(tokenize_code(shader)))
+    assert error.value.code == "project.translate.directx-buffer-block-unsupported"
 
 
 def test_hlsl_narrow_integer_aliases_map_to_valid_hlsl_integer_types():
@@ -14328,7 +14323,7 @@ def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer()
     assert "size_t" not in generated_code
 
 
-def test_directx_glsl_buffer_block_scalar_layout_remains_diagnostic():
+def test_directx_glsl_buffer_block_scalar_layout_is_refused():
     shader = """
     shader ScalarLayoutGlslBufferBlockHLSL {
         struct ScalarLayoutBlock {
@@ -14352,22 +14347,12 @@ def test_directx_glsl_buffer_block_scalar_layout_remains_diagnostic():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
-
-    assert "unsupported layout scalar" in generated_code
-    assert "currently supports std140 and std430 only" in generated_code
-    assert (
-        "unsupported HLSL GLSL buffer block parameter "
-        "ScalarLayoutBlock localBlock (scalar)" in generated_code
-    )
-    assert "unsupported HLSL GLSL buffer block function readParam omitted" in (
-        generated_code
-    )
-    assert "RWByteAddressBuffer block" not in generated_code
-    assert "ByteAddressBuffer block :" not in generated_code
-    assert "struct ScalarLayoutBlock {" not in generated_code
-    assert "block.Load" not in generated_code
-    assert "localBlock.Load" not in generated_code
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"unsupported layout scalar: DirectX ByteAddressBuffer lowering "
+        r"currently supports std140 and std430 only",
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_directx_byte_address_vector_buffer_helpers_lower_to_load_store_methods():
@@ -29417,7 +29402,7 @@ def test_directx_array_handling(array_test_data):
 
     struct Material {
         float values[4];  // Fixed-size array
-        vec3 colors[];    // Dynamic array
+        vec3 colors[16];  // A value array needs an element count
     };
 
     cbuffer Constants {
@@ -29660,7 +29645,7 @@ def test_directx_non_resource_arrays_preserve_expression_sizes():
     assert "float localWeights[]" not in generated_code
 
 
-def test_directx_unsized_non_resource_struct_and_globals_use_fixed_fallback():
+def test_directx_unsized_non_resource_struct_and_globals_are_refused():
     shader = """
     shader UnsizedNonResourceArrays {
         struct Globals {
@@ -29680,14 +29665,11 @@ def test_directx_unsized_non_resource_struct_and_globals_use_fixed_fallback():
     }
     """
 
-    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
-
-    assert "float weights[1024];" in generated_code
-    assert "float3 colors[1024];" in generated_code
-    assert "float globalWeights[1024];" in generated_code
-    assert "float weights[];" not in generated_code
-    assert "float3 colors[];" not in generated_code
-    assert "float globalWeights[];" not in generated_code
+    # HLSL allows unsized arrays only for resources; the emitter used to invent 1024 elements.
+    with pytest.raises(UnsizedArrayUnsupportedError) as raised:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert raised.value.code == "project.translate.directx-unsized-array-unsupported"
+    assert "Globals.weights" in str(raised.value)
 
 
 def test_directx_texture_resources_and_sampling():
@@ -48771,12 +48753,6 @@ def test_hlsl_metal_storage_struct_view_preserves_word_bits(
         ),
         pytest.param(
             "uint",
-            "uint words[];",
-            "dynamic-storage-view-extent",
-            id="dynamic-extent",
-        ),
-        pytest.param(
-            "uint",
             "uint2 words[2];",
             "unsupported-storage-view-target-layout",
             id="vector-words",
@@ -48942,13 +48918,6 @@ def test_hlsl_metal_storage_struct_view_rejects_write(tmp_path):
             "output[0] = inspect((const thread uint8_t*)&block);",
             "unsupported-private-view-source-layout",
             id="unsupported-source-width",
-        ),
-        pytest.param(
-            "uint words[];",
-            "inline uint inspect(const thread uint8_t* values) { return values[0]; }",
-            "output[0] = inspect((const thread uint8_t*)&block);",
-            "dynamic-private-view-extent",
-            id="dynamic-extent",
         ),
         pytest.param(
             "uint words[2];",

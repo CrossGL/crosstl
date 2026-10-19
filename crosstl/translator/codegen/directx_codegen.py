@@ -77,6 +77,7 @@ from ..metadata_preconditions import (
     with_metadata_precondition_header,
 )
 from ..resource_identity import resource_identity_marker
+from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
 from ..structure_conversions import (
@@ -115,8 +116,9 @@ from .array_utils import (
 )
 from .bfloat_constants import bfloat16_constant_bits, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
-from .call_effects import builtin_argument_write_indices
+from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
+from .call_effects import builtin_argument_write_indices
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -4240,7 +4242,9 @@ class HLSLCodeGen:
                         elif self.is_resource_array_hint_type(base_type):
                             array_suffix = "[]"
                         else:
-                            array_suffix = "[1024]"
+                            raise UnsizedArrayUnsupportedError(
+                                "directx", node.name, "is declared at module scope"
+                            )
                         resource_count = self.resource_array_count(
                             node.var_type.size if node.var_type.size else array_size
                         )
@@ -10030,7 +10034,9 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                 elif self.hlsl_struct_member_is_resource(element_type):
                     declaration_type = f"{member_type}[]"
                 else:
-                    declaration_type = f"{member_type}[1024]"
+                    raise UnsizedArrayUnsupportedError(
+                        "directx", f"{node.name}.{member.name}", "is a struct member"
+                    )
                 semantic = default_member_semantics.get(member.name)
                 if semantic is None:
                     semantic = self.hlsl_struct_member_declared_semantic(member)
@@ -10109,7 +10115,9 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             ):
                 array_size = getattr(member.member_type, "size", None)
                 if array_size is None:
-                    member_type = f"{self.map_struct_member_type(node.name, member.name, raw_element_type)}[1024]"
+                    raise UnsizedArrayUnsupportedError(
+                        "directx", f"{node.name}.{member.name}", "is a struct member"
+                    )
 
             semantic = default_member_semantics.get(member.name)
             if semantic is None:
@@ -14228,7 +14236,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             stmt_name = self.hlsl_declaration_identifier_name(stmt.name)
 
             if size is None:
-                return f"{indent_str}{element_type}[1024] {stmt_name};\n"
+                raise UnsizedArrayUnsupportedError(
+                    "directx", stmt.name, "is a local variable"
+                )
             else:
                 return f"{indent_str}{element_type}[{size}] {stmt_name};\n"
 
@@ -30227,7 +30237,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "directx",
                 f"buffer_dimensions({self.generate_expression(buffer_expr)}) needs a "
                 "structured or typed buffer, whose GetDimensions reports an element "
-                f"count; the argument is {resource_type or 'not a buffer resource'}"
+                f"count; the argument is {resource_type or 'not a buffer resource'}",
             )
         return rendered
 
@@ -30257,7 +30267,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             raise BufferLengthUnsupportedError(
                 "directx",
                 f"length() of runtime array '{access.get('member')}' has no constant "
-                "offset and stride in its byte-address buffer"
+                "offset and stride in its byte-address buffer",
             )
         return rendered
 
@@ -52191,9 +52201,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer_name, offset, temp_name, access
         )
         if stores is None:
-            return (
-                "/* unsupported HLSL GLSL buffer block aggregate store: "
-                "array fields require element-wise stores */"
+            raise BufferBlockUnsupportedError(
+                "directx",
+                "aggregate store",
+                f"storing a whole {access.get('type')} value into a ByteAddressBuffer "
+                "needs element-wise stores for its array fields, which are not lowered",
             )
         return "\n".join([f"{access['hlsl_type']} {temp_name} = {value}", *stores])
 
@@ -52208,9 +52220,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         binary_op = compound_ops.get(op)
         if binary_op is None:
-            return (
-                "/* unsupported HLSL GLSL buffer block matrix compound store: "
-                "requires explicit matrix operation lowering */"
+            raise BufferBlockUnsupportedError(
+                "directx",
+                "matrix compound store",
+                f"operator {op} has no matrix form (GLSL 4.60 section 5.9 defines "
+                "+=, -=, *= and /= on matrices)",
             )
 
         temp_name = self.next_hlsl_temp_variable("matrix_store")
@@ -52222,10 +52236,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return f"{temp}\n{stores}"
 
     def hlsl_byteaddress_compound_store_diagnostic(self, op, access):
-        return (
-            "/* unsupported HLSL GLSL buffer block compound store: "
+        raise BufferBlockUnsupportedError(
+            "directx",
+            "compound store",
             f"operator {op} is not supported for "
-            f"{access['component_type']} buffer members */"
+            f"{access['component_type']} buffer members",
         )
 
     def generate_glsl_buffer_block_member_load(self, expr):
@@ -52261,15 +52276,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             offset = access["offset_expr"]
 
         if access.get("readonly"):
-            return (
-                "/* unsupported HLSL GLSL buffer block store: "
-                "readonly ByteAddressBuffer cannot be written */"
+            raise BufferBlockUnsupportedError(
+                "directx",
+                "store",
+                f"{access['buffer']} is a readonly block, and a readonly "
+                "ByteAddressBuffer cannot be written",
             )
         if access.get("members"):
             if op != "=":
-                return (
-                    "/* unsupported HLSL GLSL buffer block aggregate compound "
-                    "store: assign a full aggregate value explicitly */"
+                raise BufferBlockUnsupportedError(
+                    "directx",
+                    "aggregate compound store",
+                    f"operator {op} does not apply to a {access.get('type')} "
+                    "aggregate; assign a full aggregate value explicitly",
                 )
             rhs = self.generate_expression_with_expected(value, access["type"])
             return self.hlsl_byteaddress_aggregate_store(
@@ -52314,16 +52333,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def unsupported_glsl_buffer_block_atomic_call(
         self, target, operation, reason, access=None
     ):
-        result_type = self.expression_result_type(target) or "uint"
-        component_type = access.get("component_type") if access else None
-        if component_type is not None:
-            zero_value = "0u" if component_type == "uint" else "0"
-        else:
-            zero_value = "0u" if self.type_name_string(result_type) == "uint" else "0"
-        return (
-            "/* unsupported HLSL GLSL buffer block atomic: "
-            f"{operation} {reason} */ {zero_value}"
-        )
+        raise BufferBlockUnsupportedError("directx", "atomic", f"{operation} {reason}")
 
     def generate_glsl_buffer_block_atomic_call(self, func_name, args):
         operations = self.byteaddress_atomic_operations()
@@ -52458,17 +52468,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             type_name, var_name
         )
         reason = f"; {failure_detail}" if failure_detail else ""
-        return (
-            f"// unsupported {target} GLSL buffer block {declaration}{details}: "
-            "mixed metadata/runtime-array layout requires ByteAddressBuffer "
-            f"offset lowering{reason}\n"
+        raise BufferBlockUnsupportedError(
+            target,
+            "declaration",
+            f"{declaration}{details}: ByteAddressBuffer offset lowering does not cover this block{reason}",
         )
 
     def unsupported_glsl_buffer_block_struct_placeholder(self, target, type_name):
         type_name = str(self.resource_base_type(type_name))
-        return (
-            f"// unsupported {target} GLSL buffer block struct {type_name} "
-            "omitted: no target-side fallback declaration emitted\n"
+        failure_detail = self.glsl_buffer_block_lowering_failure_detail(type_name)
+        reason = f": {failure_detail}" if failure_detail else ""
+        raise BufferBlockUnsupportedError(
+            target,
+            "struct",
+            f"{type_name} has no ByteAddressBuffer lowering{reason}",
         )
 
     def unsupported_glsl_buffer_block_variable_placeholder(
@@ -52477,19 +52490,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         declaration = str(self.resource_base_type(type_name))
         if var_name:
             declaration += f" {var_name}"
-        return (
-            f"// unsupported {target} GLSL buffer block variable {declaration} "
-            "omitted: no target-side fallback declaration emitted\n"
+        raise BufferBlockUnsupportedError(
+            target, "variable", f"{declaration} has no ByteAddressBuffer lowering"
         )
 
     def unsupported_glsl_buffer_block_function_placeholder(
         self, target, func_name, info
     ):
         reason = info.get("reason", "signature references omitted GLSL buffer block")
-        return (
-            f"// unsupported {target} GLSL buffer block function {func_name} "
-            f"omitted: {reason}\n"
-        )
+        raise BufferBlockUnsupportedError(target, "function", f"{func_name}: {reason}")
 
     def unsupported_glsl_buffer_block_function_call(self, func_name):
         if (
@@ -52498,15 +52507,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return None
         info = self.unsupported_glsl_buffer_block_functions[func_name]
-        return_type = info.get("return_type") or self.current_expression_expected_type
-        diagnostic = (
-            f"unsupported HLSL GLSL buffer block function call {func_name}: "
-            "target function omitted"
+        reason = info.get("reason", "signature references omitted GLSL buffer block")
+        raise BufferBlockUnsupportedError(
+            "directx", "function call", f"{func_name}: {reason}"
         )
-        if self.map_type(return_type) == "void":
-            return f"/* {diagnostic} */"
-        fallback = self.diagnostic_zero_value_for_type(return_type)
-        return f"{fallback} /* {diagnostic} */"
 
     def is_unsupported_glsl_buffer_block_struct_type(self, vtype):
         return str(self.resource_base_type(vtype)) in (
@@ -52519,9 +52523,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         declaration = str(self.resource_base_type(type_name))
         if var_name:
             declaration += f" {var_name}"
-        return (
-            f"/* unsupported {target} GLSL buffer block local variable {declaration} "
-            "omitted: no target-side fallback declaration emitted */"
+        raise BufferBlockUnsupportedError(
+            target,
+            "local variable",
+            f"{declaration} has a block struct type with no ByteAddressBuffer lowering",
         )
 
     def is_unsupported_glsl_buffer_block_name(self, name):
@@ -52662,22 +52667,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         name = self.unsupported_glsl_buffer_block_access_name(expr)
         if not name:
             return None
-        value_type = (
-            self.expression_result_type(expr) or self.current_expression_expected_type
-        )
-        fallback = self.diagnostic_zero_value_for_type(value_type)
-        return (
-            f"{fallback} /* unsupported HLSL GLSL buffer block access {name}: "
-            "no target-side fallback declaration emitted */"
+        raise BufferBlockUnsupportedError(
+            "directx", "access", f"{name} has no ByteAddressBuffer lowering"
         )
 
     def unsupported_glsl_buffer_block_assignment_diagnostic(self, target):
         name = self.unsupported_glsl_buffer_block_access_name(target)
         if not name:
             return None
-        return (
-            "/* unsupported HLSL GLSL buffer block assignment "
-            f"{name}: no target-side fallback declaration emitted */"
+        raise BufferBlockUnsupportedError(
+            "directx", "assignment", f"{name} has no ByteAddressBuffer lowering"
         )
 
     def hlsl_resource_type_name(self, vtype):

@@ -32,6 +32,9 @@ from crosstl.translator.ast import (
     VectorType,
     WaveOpNode,
 )
+from crosstl.translator.codegen.buffer_block_diagnostics import (
+    BufferBlockUnsupportedError,
+)
 from crosstl.translator.codegen.metal_codegen import (
     MetalCodeGen,
     MetalEntryPointSelectionError,
@@ -6730,7 +6733,7 @@ def test_metal_glsl_buffer_block_atomic_compare_helpers_cover_signed_and_paramet
     assert "atomic_compare_exchange_strong_explicit" not in generated_code
 
 
-def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_emit_diagnostics():
+def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_are_refused():
     scalar_layout_shader = """
     shader ScalarGlslBufferBlockMetal {
         struct ScalarBlock {
@@ -6749,21 +6752,13 @@ def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_emit_diagnos
     }
     """
 
-    scalar_layout_code = generate_code(parse_code(tokenize_code(scalar_layout_shader)))
-
-    assert (
-        "unsupported Metal GLSL buffer block ScalarBlock scalarBlock "
-        "(scalar, binding = 11)"
-    ) in scalar_layout_code
-    assert "device uchar* scalarBlock" not in scalar_layout_code
-    assert (
-        "float value = 0 /* unsupported Metal GLSL buffer block access scalarBlock: "
-        "no target-side fallback declaration emitted */;"
-    ) in scalar_layout_code
-    assert (
-        "/* unsupported Metal GLSL buffer block assignment scalarBlock: "
-        "no target-side fallback declaration emitted */;"
-    ) in scalar_layout_code
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: ScalarBlock\b.*unsupported layout scalar: "
+        r"Metal device pointer offset lowering currently supports std140 and std430 only",
+    ) as error:
+        generate_code(parse_code(tokenize_code(scalar_layout_shader)))
+    assert error.value.code == "project.translate.metal-buffer-block-unsupported"
 
     unsupported_type_shader = """
     shader UnsupportedGlslBufferTypeMetal {
@@ -6782,24 +6777,13 @@ def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_emit_diagnos
     }
     """
 
-    unsupported_type_code = generate_code(
-        parse_code(tokenize_code(unsupported_type_shader))
-    )
-
-    assert (
-        "unsupported Metal GLSL buffer block DoubleBlock doubleBlock "
-        "(std430, binding = 12); unsupported member value: type is not supported "
-        "by Metal pointer/offset lowering"
-    ) in unsupported_type_code
-    assert "device uchar* doubleBlock" not in unsupported_type_code
-    assert (
-        "double value = 0 /* unsupported Metal GLSL buffer block access doubleBlock: "
-        "no target-side fallback declaration emitted */;"
-    ) in unsupported_type_code
-    assert (
-        "/* unsupported Metal GLSL buffer block assignment doubleBlock: "
-        "no target-side fallback declaration emitted */;"
-    ) in unsupported_type_code
+    # MSL has no double type (MSL specification, section 2.1), so the block is refused.
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: DoubleBlock\b.*unsupported member value: "
+        r"type is not supported by Metal pointer/offset lowering",
+    ):
+        generate_code(parse_code(tokenize_code(unsupported_type_shader)))
 
 
 def test_structured_buffer_operations_lower_to_device_buffer():
@@ -17035,7 +17019,7 @@ def test_metal_array_handling(array_test_data):
 
     struct Material {
         float values[4];  // Fixed-size array
-        vec3 colors[];    // Dynamic array
+        vec3 colors[16];  // A value array needs an element count
     };
 
     cbuffer Constants {
@@ -17693,7 +17677,7 @@ def test_metal_array_member_semantics():
     code = """
     struct VertexData {
         float weights[4] @ TEXCOORD0;
-        vec3 colors[] @ COLOR;
+        vec3 colors[2] @ COLOR;
         vec4 indexedColor @ COLOR0;
     };
     """
@@ -17702,7 +17686,7 @@ def test_metal_array_member_semantics():
     generated_code = MetalCodeGen().generate(ast)
 
     assert "float weights[4] [[attribute(5)]];" in generated_code
-    assert "float3 colors[1024] [[COLOR]];" in generated_code
+    assert "float3 colors[2] [[COLOR]];" in generated_code
     assert "float4 indexedColor [[user(Color0)]];" in generated_code
 
 

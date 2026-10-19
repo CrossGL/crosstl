@@ -91,6 +91,7 @@ from ..metadata_preconditions import (
 )
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
+from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
 from ..structure_conversions import (
@@ -33411,9 +33412,12 @@ float {name}(int64_t value) {{
         for name, operation, value_type, condition_type, width in sorted(
             self.required_glsl_metal_math_helpers
         ):
-            if operation in {"fma", "half-fma", "difference", "atan2"} or operation.startswith(
-                ("precise-", "ieee-")
-            ):
+            if operation in {
+                "fma",
+                "half-fma",
+                "difference",
+                "atan2",
+            } or operation.startswith(("precise-", "ieee-")):
                 helpers.append(
                     self.generate_glsl_ieee_math_helper(
                         name, operation, value_type, width
@@ -56524,14 +56528,20 @@ complex64_t crossgl_complex64_mod_assign(
                 return f"{indent}{self.map_type(element_type)} {member_name}[{member.size}];\n"
             if preserve_unsized_arrays:
                 return f"{indent}{self.map_type(element_type)} {member_name}[];\n"
-            return f"{indent}{self.map_type(element_type)} {member_name}[1024];\n"
+            raise UnsizedArrayUnsupportedError(
+                "opengl", f"{struct_name or '?'}.{member_name}", "is a struct member"
+            )
 
         if hasattr(member, "member_type"):
             if str(type(member.member_type)).find("ArrayType") != -1:
                 member_type_str = self.convert_type_node_to_string(member.member_type)
                 member_type = self.map_type(member_type_str)
                 if str(member_type).endswith("[]") and not preserve_unsized_arrays:
-                    member_type = f"{str(member_type)[:-2]}[1024]"
+                    raise UnsizedArrayUnsupportedError(
+                        "opengl",
+                        f"{struct_name or '?'}.{member_name}",
+                        "is a struct member",
+                    )
                 declaration = format_c_style_array_declaration(member_type, member_name)
                 return f"{indent}{declaration};\n"
 

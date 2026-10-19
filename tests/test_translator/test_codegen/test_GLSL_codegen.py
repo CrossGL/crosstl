@@ -10974,7 +10974,6 @@ def test_glsl_private_struct_byte_view_rejects_writes(tmp_path):
             "uint8_t",
             "unsupported-private-byte-layout",
         ),
-        ("uint words[];", "uint8_t", "private-byte-layout-unresolved"),
         ("uint words[2];", "uint64_t", "unsupported-private-byte-view"),
     ],
 )
@@ -11482,11 +11481,6 @@ def test_glsl_storage_struct_reinterpret_rejects_writes(tmp_path):
             "uint",
             "uint words[2]; float trailing;",
             "unsupported-storage-aggregate-layout",
-        ),
-        (
-            "uint",
-            "uint words[];",
-            "storage-aggregate-layout-unresolved",
         ),
         (
             "uint",
@@ -30044,7 +30038,7 @@ def test_opengl_array_handling(array_test_data):
 
     struct Material {
         float values[4];  // Fixed-size array
-        vec3 colors[];    // Dynamic array
+        vec3 colors[16];  // A value array needs an element count
     };
 
     cbuffer Constants {

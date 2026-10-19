@@ -90,6 +90,7 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
@@ -28542,8 +28543,8 @@ class VulkanSPIRVCodeGen(
             if handled_byte_address_call:
                 return byte_address_result
 
-            handled_length_call, length_result = (
-                self.process_block_member_length_call(expr)
+            handled_length_call, length_result = self.process_block_member_length_call(
+                expr
             )
             if handled_length_call:
                 return length_result
@@ -30334,6 +30335,12 @@ class VulkanSPIRVCodeGen(
             return result
 
         body = self.ordered_function_body_lines(body)
+        debug_names, annotations, declarations = drop_unused_runtime_array_structs(
+            debug_names,
+            annotations,
+            declarations,
+            entry_points + execution_modes + global_variables + body,
+        )
 
         return (
             header_lines
