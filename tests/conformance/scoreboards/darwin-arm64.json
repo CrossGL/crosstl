@@ -512,32 +512,32 @@
     },
     "c_uchar_wrap|opencl|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "77f18bb39aeec6b741f12ba6ad9bc75d6fed74aec9ec69e259803830b81b3fd4"
     },
     "c_uchar_wrap|opencl|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "77f18bb39aeec6b741f12ba6ad9bc75d6fed74aec9ec69e259803830b81b3fd4"
     },
     "c_uchar_wrap|opencl|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "77f18bb39aeec6b741f12ba6ad9bc75d6fed74aec9ec69e259803830b81b3fd4"
     },
     "c_uchar_wrap|opencl|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "77f18bb39aeec6b741f12ba6ad9bc75d6fed74aec9ec69e259803830b81b3fd4"
     },
     "c_uchar_wrap|opencl|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "77f18bb39aeec6b741f12ba6ad9bc75d6fed74aec9ec69e259803830b81b3fd4"
     },
     "c_uchar_wrap|opencl|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "77f18bb39aeec6b741f12ba6ad9bc75d6fed74aec9ec69e259803830b81b3fd4"
     },
     "g_add_wrap|glsl|glsl|relaxed|reference|vulkan1.1|opengl-llvmpipe": {
@@ -3102,32 +3102,32 @@
     },
     "m_uchar_wrap|metal|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "888015da39b317fa2329cbae8d4ab99aec9592652870037384e43df5e64fd31b"
     },
     "m_uchar_wrap|metal|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "888015da39b317fa2329cbae8d4ab99aec9592652870037384e43df5e64fd31b"
     },
     "m_uchar_wrap|metal|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "888015da39b317fa2329cbae8d4ab99aec9592652870037384e43df5e64fd31b"
     },
     "m_uchar_wrap|metal|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "888015da39b317fa2329cbae8d4ab99aec9592652870037384e43df5e64fd31b"
     },
     "m_uchar_wrap|metal|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "888015da39b317fa2329cbae8d4ab99aec9592652870037384e43df5e64fd31b"
     },
     "m_uchar_wrap|metal|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "888015da39b317fa2329cbae8d4ab99aec9592652870037384e43df5e64fd31b"
     },
     "m_ulong_mul|metal|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
@@ -4372,32 +4372,32 @@
     },
     "u_uchar_wrap|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "a9edd415f6adbd191fa27ffacc1b3099c9f403c85df66311118a9dfb27ccd9d1"
     },
     "u_uchar_wrap|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "a9edd415f6adbd191fa27ffacc1b3099c9f403c85df66311118a9dfb27ccd9d1"
     },
     "u_uchar_wrap|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "a9edd415f6adbd191fa27ffacc1b3099c9f403c85df66311118a9dfb27ccd9d1"
     },
     "u_uchar_wrap|cuda|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "a9edd415f6adbd191fa27ffacc1b3099c9f403c85df66311118a9dfb27ccd9d1"
     },
     "u_uchar_wrap|cuda|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "a9edd415f6adbd191fa27ffacc1b3099c9f403c85df66311118a9dfb27ccd9d1"
     },
     "u_uchar_wrap|cuda|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "d982b2ee13220260f0ebb5ca015d59207cb71ce49dd1afd258dc069c4ada44c5",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "a9edd415f6adbd191fa27ffacc1b3099c9f403c85df66311118a9dfb27ccd9d1"
     },
     "u_warp_reduce|cuda|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
@@ -4463,11 +4463,11 @@
   },
   "counts": {
     "compiled-only": 140,
-    "diverged": 148,
+    "diverged": 130,
     "driver-rejected": 8,
     "invalid": 28,
     "observed": 40,
-    "preserved": 510,
+    "preserved": 528,
     "refused": 18
   },
   "keys": [

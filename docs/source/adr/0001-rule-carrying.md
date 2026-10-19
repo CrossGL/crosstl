@@ -145,7 +145,15 @@ switch.
    operators to LLVM `udiv` and `urem`, which are undefined for a zero divisor. Remaining: shift-count masking, truncated signed remainder (moved from the SPIR-V
    emitter into the table), mixed-sign comparison, float-to-int with NaN and saturation, and `min`/`max`/`isnan` with
    NaN, including the configuration entries (Metal `math_mode(safe)`, HLSL `/Gis`, Vulkan float controls).
-3. Narrow integers (S6) and 64-bit integers, which need the typed IR's storage legalization.
+3. Narrow integers (S6) and 64-bit integers, which need the typed IR's storage legalization. Done for narrow
+   registers: on Vulkan and WGSL, which have no 8- or 16-bit integer registers, `crosstl/translator/semantics/narrow.py`
+   runs before annotation. It gives every narrow scalar, vector, array, parameter, return value and struct member a
+   32-bit `int` and normalizes each write and each conversion to a narrow type modulo 2^N, with sign extension for
+   signed types. Arithmetic results are normalized only where they keep a narrow type: C-family scalar operands are
+   promoted to `int` first, but vector operands and GLSL, HLSL and SPIR-V explicit narrow types are not. Narrow host
+   storage keeps the emitters' one-word-per-element layout. Reporting that layout in the reflection metadata is M3
+   work. Measured on the darwin-arm64 board: the 18 `m_`, `c_` and `u_uchar_wrap` SPIR-V cells go from `diverged` to
+   `preserved` on lavapipe, MoltenVK and KosmicKrisp, with no regression among the SPIR-V cells.
 4. Unresolved rule-relevant operations become refusals.
 
 ## Consequences

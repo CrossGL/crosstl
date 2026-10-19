@@ -12,10 +12,12 @@ from dataclasses import dataclass, field
 
 from .annotate import Annotator
 from .lower import Lowerer, RuleInexpressibleError
+from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 
 __all__ = [
     "FAMILIES",
+    "NarrowIntegerUnsupportedError",
     "RuleInexpressibleError",
     "RuleReport",
     "SOURCE_RULES",
@@ -52,10 +54,13 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
-    The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target cannot express a rule.
+    Narrow integers are legalized first for targets without narrow registers (:mod:`.narrow`). The AST is
+    rewritten in place. Raises :class:`RuleInexpressibleError` when the target cannot express a rule, and
+    :class:`NarrowIntegerUnsupportedError` for narrow-integer storage the target cannot lay out.
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    legalize_narrow_integers(program, report.source, report.target)
     Annotator(program, report.source, report).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)

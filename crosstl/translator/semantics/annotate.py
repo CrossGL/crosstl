@@ -174,6 +174,9 @@ class Annotator:
 
     # Rewrites -------------------------------------------------------------------------------------------------
     def rewrite(self, node):
+        # A legalization pass generated this operation and proved it exact.
+        if node.annotations.get("cgl_rule_exempt"):
+            return node
         wrap, udiv_zero = WRAP in self.families, UDIV_ZERO in self.families
         if isinstance(node, A.BinaryOpNode):
             if wrap and node.op in BINARY_WRAP_INTRINSIC:
