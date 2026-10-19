@@ -51,6 +51,11 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..diagnostics import TranslationDiagnostic
+from ..matrix_shape import (
+    crossgl_matrix_shape,
+    length_method_object,
+    matrix_type_spelling,
+)
 from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
@@ -16493,10 +16498,7 @@ class VulkanSPIRVCodeGen(
             return type_node.name
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
-            prefix = "dmat" if element_type in {"double", "f64"} else "mat"
-            if type_node.rows == type_node.cols:
-                return f"{prefix}{type_node.rows}"
-            return f"{prefix}{type_node.rows}x{type_node.cols}"
+            return matrix_type_spelling(type_node, element_type)
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = type_node.size
@@ -26671,6 +26673,14 @@ class VulkanSPIRVCodeGen(
 
             array_type = self.variable_value_types.get(array_variable.id)
             element_type = self.array_element_type_from_type(array_type)
+            vector_info = (
+                self.vector_component_type_and_count(array_type.type.base_type)
+                if element_type is None and array_type is not None
+                else None
+            )
+            if vector_info is not None:
+                # A subscript of a vector, such as a matrix column, selects one component.
+                element_type = self.register_primitive_type(vector_info[0])
             if (
                 element_type is None
                 and array_type is not None
@@ -28839,6 +28849,19 @@ class VulkanSPIRVCodeGen(
             )
             if handled_length_call:
                 return length_result
+            length_object = length_method_object(
+                getattr(expr, "function", None), getattr(expr, "args", None) or []
+            )
+            matrix_shape = (
+                crossgl_matrix_shape(self.expression_result_type(length_object))
+                if length_object is not None
+                else None
+            )
+            if matrix_shape is not None:
+                # A matrix's length() is its column count (GLSL 4.60 section 5.10).
+                return self.register_constant(
+                    matrix_shape[1], self.register_primitive_type("int")
+                )
 
             handled_structured_buffer_call, structured_buffer_result = (
                 self.process_structured_buffer_method_call(expr)
@@ -29962,6 +29985,15 @@ class VulkanSPIRVCodeGen(
                     for type_id in type_dict.values():
                         if type_id.type.base_type == element_type_name:
                             return type_id
+
+        # A matrix value's subscript is a column; a vector value's is a component.
+        matrix_shape = crossgl_matrix_shape(array_type)
+        if matrix_shape is not None:
+            scalar, _columns, rows = matrix_shape
+            return self.register_vector_type(self.register_primitive_type(scalar), rows)
+        vector_info = self.vector_component_type_and_count(array_type)
+        if vector_info is not None:
+            return self.register_primitive_type(vector_info[0])
 
         # Last resort: Try to parse from type name
         for type_dict in [

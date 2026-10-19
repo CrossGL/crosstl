@@ -240,10 +240,6 @@ class GLSLToCrossGLConverter:
             "CommittedWorldToObject",
         ),
     }
-    RAY_QUERY_TRANSFORM_FUNCTIONS = {
-        "rayQueryGetIntersectionObjectToWorldEXT",
-        "rayQueryGetIntersectionWorldToObjectEXT",
-    }
     SHADOW_TEXTURE_COMPARE_FUNCTIONS = {
         "texture": "textureCompare",
         "textureLod": "textureCompareLod",
@@ -3963,20 +3959,8 @@ class GLSLToCrossGLConverter:
         return mapped_base
 
     def variable_declaration_type(self, node):
-        var_type = self.convert_type(node.vtype)
-        if var_type == "mat4x3" and self.is_ray_query_transform_call(
-            getattr(node, "value", None)
-        ):
-            return "mat3x4"
-        return var_type
-
-    def is_ray_query_transform_call(self, node):
-        if not isinstance(node, FunctionCallNode):
-            return False
-        name = node.name
-        if isinstance(name, VariableNode):
-            name = name.name
-        return name in self.RAY_QUERY_TRANSFORM_FUNCTIONS
+        # GLSL and CrossGL share the matCxR spelling (C columns, R rows).
+        return self.convert_type(node.vtype)
 
     def generate_variable_declaration(
         self,

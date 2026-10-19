@@ -5419,8 +5419,9 @@ def test_metal_float16_matrix_ir_aliases_map_to_half_matrices():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "half2x3 passMatrix(half2x3 input)" in generated_code
-    assert "half2x3 m = half2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
+    # MSL halfCxR, like CrossGL f16matCxR, has C columns and R rows.
+    assert "half3x2 passMatrix(half3x2 input)" in generated_code
+    assert "half3x2 m = half3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     assert "half3x3 passSquare(half3x3 input)" in generated_code
     assert "half3x3 m = half3x3(1.0);" in generated_code
     assert "return input * m;" in generated_code

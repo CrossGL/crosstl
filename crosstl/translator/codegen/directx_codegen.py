@@ -190,6 +190,7 @@ from .glsl_buffer_layout import (
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_half_storage import HLSLHalfStorage
+from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
 from .image_access_contracts import (
     TEXTURE_COMPARE_INTRINSIC_NAMES,
@@ -2239,6 +2240,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         self.implicit_member_texture_samplers = {}
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
+        self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
         self.hlsl_float_atomic_helpers = {}
@@ -3599,6 +3601,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
+        self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
         self.hlsl_float_atomic_helpers = {}
@@ -5030,6 +5033,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         code += self.generate_hlsl_expected_compare_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_hlsl_inverse_helpers()
+        code += self.hlsl_matrix_orientation.helper_code()
         code += self.generate_hlsl_fragment_shading_rate_helper()
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
         code += self.generate_hlsl_trailing_zero_helpers()
@@ -17713,6 +17717,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     width = integer_contract["result_width"]
                     suffix = "" if width == 1 else str(width)
                     return f"{integer_contract['base_type']}{suffix}"
+            if mapped_operator == "*":
+                product_type = self.hlsl_matrix_orientation.product_type(
+                    left_type, right_type
+                )
+                if product_type is not None:
+                    return product_type
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -17800,6 +17810,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     if byte_shape[0] is ArithmeticScalarKind.SIGNED_INTEGER
                     else "uint8"
                 )
+            column_type = self.hlsl_matrix_orientation.column_type(array_type)
+            if column_type is not None:
+                return column_type
             component_type = component_access_type(array_type, C_FAMILY)
             if component_type is not None:
                 return component_type
@@ -24140,6 +24153,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if storage_assignment is not None:
             return storage_assignment
+        column_assignment = self.hlsl_matrix_orientation.column_assignment(
+            target, value, op, statement_context
+        )
+        if column_assignment is not None:
+            return column_assignment
         target_type = self.hlsl_assignment_target_type(target)
         target_name = (
             target
@@ -26670,6 +26688,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if fixed_array_access is not None:
                 return fixed_array_access
+            matrix_access = self.hlsl_matrix_orientation.subscript(
+                array_expr, index_expr
+            )
+            if matrix_access is not None:
+                return matrix_access
             array = self.generate_expression(array_expr)
             index = self.generate_expression(index_expr)
             index = self.hlsl_resource_pointer_offset_index(array, index)
@@ -26752,6 +26775,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if block_length_call is not None:
                 return block_length_call
+            matrix_length = self.hlsl_matrix_orientation.length_call(func_expr, args)
+            if matrix_length is not None:
+                return matrix_length
 
             byteaddress_member_call = self.generate_hlsl_byteaddress_member_call(
                 func_expr,
@@ -26899,6 +26925,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             inverse_call = self.hlsl_inverse_function_call(func_name, args)
             if inverse_call is not None:
                 return inverse_call
+            matrix_builtin = self.hlsl_matrix_orientation.builtin_call(func_name, args)
+            if matrix_builtin is not None:
+                return matrix_builtin
 
             call_argument_func_name = self.hlsl_materialized_function_name(func_name)
             specialized_func_name = generic_function_call_name(
@@ -46360,6 +46389,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if matrix_resize is not None:
             return matrix_resize
+        matrix_constructor = self.hlsl_matrix_orientation.constructor(
+            constructor_type,
+            args,
+            lambda arg: self.generate_expression_with_expected(arg, None),
+        )
+        if matrix_constructor is not None:
+            return matrix_constructor
 
         info = self.hlsl_floating_arithmetic_type_info(constructor_type)
         float_constructor = info is not None and info["base_type"] == "float"
@@ -49788,6 +49824,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return f"{mapped_type}({', '.join(rendered)})"
 
     def hlsl_matrix_aggregate_initializer(self, expr, mapped_type):
+        """Lower ``{...}`` for a CrossGL matrix.
+
+        Nested lists are columns (GLSL 4.60 section 4.1.11) and a flat list fills the columns in
+        order; missing trailing elements are zero. HLSL constructors fill rows, so the columns are
+        built as the transposed matrix, which keeps the elements in evaluation order.
+        """
         dimensions = self.hlsl_matrix_dimensions(mapped_type)
         if dimensions is None:
             return None
@@ -49804,38 +49846,38 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 expr,
                 expected_type=mapped_type,
                 reason="matrix-shape-mismatch",
-                detail="matrix rows cannot mix nested and flat initializer elements",
+                detail="matrix columns cannot mix nested and flat initializer elements",
             )
 
         rendered = []
         if nested_count or not elements:
-            if len(elements) > rows:
+            if len(elements) > columns:
                 self.hlsl_aggregate_error(
                     expr,
                     expected_type=mapped_type,
                     reason="element-count-mismatch",
-                    expected_element_count=rows,
+                    expected_element_count=columns,
                 )
-            for row in elements:
-                row_elements = list(getattr(row, "elements", []) or [])
-                if len(row_elements) > columns:
+            for column in elements:
+                column_elements = list(getattr(column, "elements", []) or [])
+                if len(column_elements) > rows:
                     self.hlsl_aggregate_error(
-                        row,
+                        column,
                         expected_type=mapped_type,
                         reason="element-count-mismatch",
-                        expected_element_count=columns,
+                        expected_element_count=rows,
                     )
                 rendered.extend(
                     self.generate_expression_with_expected(element, component_type)
-                    for element in row_elements
+                    for element in column_elements
                 )
                 rendered.extend(
-                    self.hlsl_value_initialized_expression(row, component_type)
-                    for _index in range(len(row_elements), columns)
+                    self.hlsl_value_initialized_expression(column, component_type)
+                    for _index in range(len(column_elements), rows)
                 )
             rendered.extend(
                 self.hlsl_value_initialized_expression(expr, component_type)
-                for _index in range(len(elements) * columns, rows * columns)
+                for _index in range(len(elements) * rows, rows * columns)
             )
         else:
             expected_count = rows * columns
@@ -49854,7 +49896,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_value_initialized_expression(expr, component_type)
                 for _index in range(len(elements), expected_count)
             )
-        return f"{mapped_type}({', '.join(rendered)})"
+        transposed_type = f"{component_type}{columns}x{rows}"
+        return f"transpose({transposed_type}({', '.join(rendered)}))"
 
     def hlsl_struct_aggregate_initializer(self, expr, mapped_type):
         fields = self.hlsl_struct_constructor_fields(mapped_type)
@@ -52081,7 +52124,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"({column_offset})"
                 )
                 columns.append(f"asfloat({load})")
-            return f"{access['hlsl_type']}({', '.join(columns)})"
+            # The buffer holds columns and an HLSL constructor fills rows.
+            transposed_type = (
+                f"{access['component_type']}{access['matrix_columns']}"
+                f"x{access['matrix_rows']}"
+            )
+            return f"transpose({transposed_type}({', '.join(columns)}))"
 
         if access["component_type"] == "bool" and access["components"] > 1:
             values = []
@@ -52142,9 +52190,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for column, column_offset in matrix_column_offsets(
             offset, access["matrix_columns"], access["column_stride"]
         ):
+            # HLSL m[i] is a row; the swizzle selects column ``column``.
+            swizzle = "".join(
+                f"_m{row}{column}" for row in range(access["matrix_rows"])
+            )
             lines.append(
                 f"{buffer_name}.{store_method}"
-                f"({column_offset}, asuint({value_expr}[{column}]))"
+                f"({column_offset}, asuint({value_expr}.{swizzle}))"
             )
         return "\n".join(lines)
 
@@ -52371,7 +52423,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return "\n".join([f"{access['hlsl_type']} {temp_name} = {value}", *stores])
 
     def hlsl_byteaddress_matrix_compound_store(
-        self, buffer_name, offset, value, op, access
+        self, buffer_name, offset, value, op, access, *, value_is_matrix=False
     ):
         compound_ops = {
             "+=": "+",
@@ -52390,7 +52442,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         temp_name = self.next_hlsl_temp_variable("matrix_store")
         current = self.hlsl_byteaddress_load(buffer_name, offset, access)
-        temp = f"{access['hlsl_type']} {temp_name} = ({current} {binary_op} {value})"
+        if binary_op == "*" and value_is_matrix:
+            # CrossGL m *= n is the linear-algebra product; HLSL * is componentwise.
+            updated = f"mul({current}, {value})"
+        else:
+            updated = f"({current} {binary_op} {value})"
+        temp = f"{access['hlsl_type']} {temp_name} = {updated}"
         stores = self.hlsl_byteaddress_matrix_store(
             buffer_name, offset, temp_name, access
         )
@@ -52460,7 +52517,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if access.get("matrix_columns"):
             if op != "=":
                 return self.hlsl_byteaddress_matrix_compound_store(
-                    access["buffer"], offset, rhs, op, access
+                    access["buffer"],
+                    offset,
+                    rhs,
+                    op,
+                    access,
+                    value_is_matrix=(
+                        self.hlsl_matrix_orientation.expression_dimensions(value)
+                        is not None
+                    ),
                 )
             return self.hlsl_byteaddress_matrix_store(
                 access["buffer"], offset, rhs, access
@@ -53608,9 +53673,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return type_name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
-            if type_node.rows == type_node.cols:
-                return f"float{type_node.rows}x{type_node.rows}"
-            return f"float{type_node.cols}x{type_node.rows}"
+            scalar = "double" if element_type in {"double", "f64"} else "float"
+            # HLSL floatRxC has R rows and C columns, the same shape as CrossGL matCxR.
+            return f"{scalar}{type_node.rows}x{type_node.cols}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             if str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)

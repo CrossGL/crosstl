@@ -1323,11 +1323,12 @@ def test_parse_ray_query_transform_matrices_roundtrip_with_glsl_orientation():
     crossgl = generate_crossgl(code, "compute")
 
     assert "bool active = rq.Proceed();" in crossgl
-    assert "mat3x4 committedObjectToWorld = rq.CommittedObjectToWorld();" in crossgl
-    assert "mat3x4 candidateObjectToWorld = rq.CandidateObjectToWorld();" in crossgl
-    assert "mat3x4 committedWorldToObject = rq.CommittedWorldToObject();" in crossgl
-    assert "mat3x4 candidateWorldToObject = rq.CandidateWorldToObject();" in crossgl
-    assert "mat4x3 committedObjectToWorld" not in crossgl
+    # GLSL and CrossGL share matCxR: these transforms have 4 columns of 3 rows.
+    assert "mat4x3 committedObjectToWorld = rq.CommittedObjectToWorld();" in crossgl
+    assert "mat4x3 candidateObjectToWorld = rq.CandidateObjectToWorld();" in crossgl
+    assert "mat4x3 committedWorldToObject = rq.CommittedWorldToObject();" in crossgl
+    assert "mat4x3 candidateWorldToObject = rq.CandidateWorldToObject();" in crossgl
+    assert "mat3x4 committedObjectToWorld" not in crossgl
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
 

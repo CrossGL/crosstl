@@ -24322,8 +24322,8 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
                 vec2 barycentrics = rq.CandidateTriangleBarycentrics();
                 bool frontFace = rq.CommittedTriangleFrontFace();
                 bool aabbOpaque = rq.CandidateAABBOpaque();
-                mat3x4 objectToWorld = rq.CommittedObjectToWorld();
-                mat3x4 worldToObject = rq.CandidateWorldToObject3x4();
+                mat4x3 objectToWorld = rq.CommittedObjectToWorld();
+                mat4x3 worldToObject = rq.CandidateWorldToObject3x4();
                 vec3 trianglePositions[3];
                 rq.CandidateTriangleVertexPositions(trianglePositions);
                 rq.CommittedTriangleVertexPositions(trianglePositions);
@@ -43335,11 +43335,12 @@ def test_opengl_lowers_contextual_aggregate_initializers(tmp_path):
     assert "Bundle result = Bundle(Pair(x, y), float[2](1.0, 2.0));" in generated_code
     assert "result = Bundle(Pair(y, x), float[2](3.0, 4.0));" in generated_code
     assert "vec2 direction = vec2(1.0, 2.0);" in generated_code
-    assert "mat2 basis = mat2(vec2(1.0, 3.0), vec2(2.0, 4.0));" in generated_code
-    assert "mat2 flatBasis = mat2(vec2(5.0, 7.0), vec2(6.0, 8.0));" in generated_code
+    # Nested lists are columns and flat lists fill columns in order (GLSL 4.60 4.1.11).
+    assert "mat2 basis = mat2(vec2(1.0, 2.0), vec2(3.0, 4.0));" in generated_code
+    assert "mat2 flatBasis = mat2(vec2(5.0, 6.0), vec2(7.0, 8.0));" in generated_code
     assert (
-        "mat3x2 rectangular = mat3x2(vec2(1.0, 4.0), "
-        "vec2(2.0, 5.0), vec2(3.0, 6.0));" in generated_code
+        "mat2x3 rectangular = mat2x3(vec3(1.0, 2.0, 3.0), "
+        "vec3(4.0, 5.0, 6.0));" in generated_code
     )
     assert "return {" not in generated_code
     assert " = {{" not in generated_code

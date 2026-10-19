@@ -4837,11 +4837,12 @@ def test_matrix_type_keywords_parse():
     ast = parse_code(tokens)
     statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
 
+    # CrossGL follows GLSL: matCxR has C columns and R rows.
     affine = statements[0]
     assert isinstance(affine.var_type, MatrixType)
     assert affine.var_type.element_type.name == "float"
-    assert affine.var_type.rows == 3
-    assert affine.var_type.cols == 4
+    assert affine.var_type.cols == 3
+    assert affine.var_type.rows == 4
 
     precise = statements[1]
     assert isinstance(precise.var_type, MatrixType)
@@ -4854,8 +4855,8 @@ def test_matrix_type_keywords_parse():
     jacobian = statements[2]
     assert isinstance(jacobian.var_type, MatrixType)
     assert jacobian.var_type.element_type.name == "double"
-    assert jacobian.var_type.rows == 4
-    assert jacobian.var_type.cols == 3
+    assert jacobian.var_type.cols == 4
+    assert jacobian.var_type.rows == 3
 
 
 def test_sampler_type_keywords_parse():

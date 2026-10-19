@@ -1,5 +1,6 @@
 """Shared AST validation helpers for the CrossGL translator."""
 
+from .matrix_shape import matrix_type_spelling
 from .stage_utils import (
     SHADER_STAGE_NAMES,
     STAGE_NAME_ALIASES,
@@ -1726,10 +1727,7 @@ def _stage_interface_type_name(type_node):
         and hasattr(type_node, "cols")
     ):
         element_type = _stage_interface_type_name(type_node.element_type)
-        prefix = "dmat" if element_type == "double" else "mat"
-        if type_node.rows == type_node.cols:
-            return f"{prefix}{type_node.rows}"
-        return f"{prefix}{type_node.rows}x{type_node.cols}"
+        return matrix_type_spelling(type_node, element_type)
     if type_node.__class__.__name__ == "VectorType":
         element_type = _stage_interface_type_name(type_node.element_type)
         vector_prefixes = {

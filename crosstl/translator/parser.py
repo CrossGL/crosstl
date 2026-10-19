@@ -2534,7 +2534,8 @@ class Parser:
             is_double_matrix = mat_type.startswith("dmat")
             dimensions = mat_type[4:] if is_double_matrix else mat_type[3:]
             if "x" in dimensions:
-                rows, cols = map(int, dimensions.split("x"))
+                # CrossGL follows GLSL: matCxR has C columns of R-component vectors.
+                cols, rows = map(int, dimensions.split("x"))
             else:
                 size = int(dimensions)
                 rows = cols = size

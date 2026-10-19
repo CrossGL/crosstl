@@ -7545,8 +7545,13 @@ def test_hlsl_glsl_matrix_constructors_emit_hlsl_names():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "float4x4 m = float4x4(1.0);" in generated_code
-    assert "return float3x3(x, y, z);" in generated_code
+    # mat4(1.0) is the identity, and CrossGL constructor arguments fill columns while
+    # HLSL ones fill rows (GLSL 4.60 section 5.4.2).
+    assert (
+        "float4x4 m = float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, "
+        "0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);"
+    ) in generated_code
+    assert "return transpose(float3x3(x, y, z));" in generated_code
     assert "mat4(" not in generated_code
     assert "mat3(" not in generated_code
 

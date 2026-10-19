@@ -49,6 +49,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..matrix_shape import matrix_type_spelling
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
     collect_literal_int_constants,
@@ -4607,9 +4608,10 @@ class SlangCodeGen:
         if hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
             if element_type == "float":
-                if type_node.rows == type_node.cols:
-                    return f"mat{type_node.rows}"
-                return f"mat{type_node.rows}x{type_node.cols}"
+                return matrix_type_spelling(type_node, "float")
+            if type(type_node).__name__ == "MatrixType":
+                # Slang keeps the CrossGL column-by-row spelling order.
+                return f"{element_type}{type_node.cols}x{type_node.rows}"
             return f"{element_type}{type_node.rows}x{type_node.cols}"
         if hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             element_type = self.convert_type_node_to_string(type_node.element_type)

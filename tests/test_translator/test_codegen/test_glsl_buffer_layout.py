@@ -224,7 +224,8 @@ def test_collect_lowered_glsl_buffer_blocks_lays_out_metadata_fixed_and_runtime_
         member("normal", primitive("ivec3")),
         member(
             "transforms",
-            ArrayType(MatrixType(primitive("float"), rows=2, cols=3), size=2),
+            # mat2x3: two columns of three rows.
+            ArrayType(MatrixType(primitive("float"), rows=3, cols=2), size=2),
         ),
         member("data", ArrayType(primitive("float"), size=None)),
     )

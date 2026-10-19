@@ -56,6 +56,7 @@ from ..math_namespaces import (
     METAL_MATH_NAMESPACE_ANNOTATION,
     METAL_PRECISE_MATH_FUNCTIONS,
 )
+from ..matrix_shape import length_method_object
 from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
 from ..semantics.sampler_states import is_sampler_constructor
@@ -345,6 +346,7 @@ from .metal_array_copies import (
     render_metal_split_member_constructor_arguments,
 )
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
+from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_refusals import metal_refusals
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .operator_spellings import map_c_family_operator
@@ -974,6 +976,7 @@ class MetalCodeGen:
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
         self.required_metal_inverse_helpers = set()
+        self.metal_matrix_builtins = MetalMatrixBuiltins(self)
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
         self.required_metal_ray_query_helpers = set()
@@ -1287,13 +1290,13 @@ class MetalCodeGen:
             "mat3": "float3x3",
             "mat4": "float4x4",
             "mat2x2": "float2x2",
-            "mat2x3": "float3x2",
-            "mat2x4": "float4x2",
-            "mat3x2": "float2x3",
+            "mat2x3": "float2x3",
+            "mat2x4": "float2x4",
+            "mat3x2": "float3x2",
             "mat3x3": "float3x3",
-            "mat3x4": "float4x3",
-            "mat4x2": "float2x4",
-            "mat4x3": "float3x4",
+            "mat3x4": "float3x4",
+            "mat4x2": "float4x2",
+            "mat4x3": "float4x3",
             "mat4x4": "float4x4",
             "half2x2": "half2x2",
             "half2x3": "half2x3",
@@ -1308,13 +1311,13 @@ class MetalCodeGen:
             "f16mat3": "half3x3",
             "f16mat4": "half4x4",
             "f16mat2x2": "half2x2",
-            "f16mat2x3": "half3x2",
-            "f16mat2x4": "half4x2",
-            "f16mat3x2": "half2x3",
+            "f16mat2x3": "half2x3",
+            "f16mat2x4": "half2x4",
+            "f16mat3x2": "half3x2",
             "f16mat3x3": "half3x3",
-            "f16mat3x4": "half4x3",
-            "f16mat4x2": "half2x4",
-            "f16mat4x3": "half3x4",
+            "f16mat3x4": "half3x4",
+            "f16mat4x2": "half4x2",
+            "f16mat4x3": "half4x3",
             "f16mat4x4": "half4x4",
             "simd_float2x2": "float2x2",
             "simd_float2x3": "float2x3",
@@ -2039,6 +2042,7 @@ class MetalCodeGen:
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_image_atomic_compare_helpers = set()
         self.required_metal_inverse_helpers = set()
+        self.metal_matrix_builtins = MetalMatrixBuiltins(self)
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
         self.required_metal_ray_query_helpers = set()
@@ -2227,6 +2231,7 @@ class MetalCodeGen:
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
         self.required_metal_inverse_helpers = set()
+        self.metal_matrix_builtins = MetalMatrixBuiltins(self)
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
         self.required_metal_ray_query_helpers = set()
@@ -3049,6 +3054,7 @@ class MetalCodeGen:
         code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_metal_inverse_helpers()
+        code += self.metal_matrix_builtins.code()
         code += functions_code
         return code
 
@@ -9689,6 +9695,12 @@ class MetalCodeGen:
                 if native is not None and native[-1:] in {"2", "3", "4"}:
                     return native[:-1]
                 return self.vector_component_type(array_type)
+            matrix_dimensions = self.metal_matrix_dimensions(
+                self.type_name_string(array_type) or ""
+            )
+            if matrix_dimensions is not None:
+                # An MSL floatCxR subscript is a column of R components, as in CrossGL.
+                return f"{matrix_dimensions[0]}{matrix_dimensions[2]}"
             component_type = component_access_type(
                 self.type_name_string(array_type), C_FAMILY
             )
@@ -11201,6 +11213,17 @@ class MetalCodeGen:
             block_length = self.glsl_buffer_block_length_call(func_expr, expr.args)
             if block_length is not None:
                 return block_length
+            length_object = length_method_object(func_expr, expr.args)
+            matrix_dimensions = (
+                self.metal_matrix_dimensions(
+                    self.expression_result_type(length_object) or ""
+                )
+                if length_object is not None
+                else None
+            )
+            if matrix_dimensions is not None:
+                # A matrix's length() is its column count (GLSL 4.60 section 5.10).
+                return f"int({matrix_dimensions[1]})"
 
             unsupported_table_call = (
                 self.unsupported_metal_ray_function_table_array_member_call(func_expr)
@@ -11310,6 +11333,9 @@ class MetalCodeGen:
                     else "normalize"
                 )
                 return f"{call_name}({args})"
+            matrix_builtin = self.metal_matrix_builtins.call(func_name, expr.args)
+            if matrix_builtin is not None:
+                return matrix_builtin
             if (
                 func_name == "inverse"
                 and len(expr.args) == 1

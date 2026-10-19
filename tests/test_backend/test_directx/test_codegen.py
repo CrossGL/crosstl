@@ -7428,7 +7428,8 @@ def test_codegen_fixed_array_partial_initializers_recurse_through_aggregates(
         "float2(2.0, 3.0), (float2)0};" in hlsl
     )
     assert (
-        "float2x2 matrices[2] = {float2x2(1.0, float(0), 2.0, 3.0), "
+        # Nested matrix initializers are columns; HLSL constructors fill rows.
+        "float2x2 matrices[2] = {transpose(float2x2(1.0, float(0), 2.0, 3.0)), "
         "(float2x2)0};" in hlsl
     )
     assert "Pair pairs[2] = {{1.0, float(0)}, (Pair)0};" in hlsl

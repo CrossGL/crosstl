@@ -83,6 +83,7 @@ from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
 )
+from ..matrix_shape import crossgl_linear_algebra_product_type
 from ..metadata_preconditions import (
     MAX_METADATA_PRECONDITIONS,
     checked_metadata_preconditions,
@@ -35355,29 +35356,33 @@ complex64_t crossgl_complex64_mod_assign(
         return columns, rows, component_type, column_type
 
     def generate_glsl_matrix_aggregate_initializer(self, expr, mapped_type):
+        """Lower ``{...}`` for a matrix: nested lists are columns (GLSL 4.60 section 4.1.11)
+        and a flat list fills the columns in order, as a constructor does."""
         dimensions = self.glsl_matrix_dimensions(mapped_type)
         if dimensions is None:
             return None
 
         columns, rows, component_type, column_type = dimensions
         elements = list(getattr(expr, "elements", []) or [])
-        nested_rows = all(isinstance(element, ArrayLiteralNode) for element in elements)
-        if nested_rows:
-            if len(elements) != rows:
+        nested_columns = all(
+            isinstance(element, ArrayLiteralNode) for element in elements
+        )
+        if nested_columns:
+            if len(elements) != columns:
                 self.glsl_aggregate_error(
                     expr,
                     expected_type=mapped_type,
                     reason="element-count-mismatch",
-                    expected_element_count=rows,
+                    expected_element_count=columns,
                 )
-            row_values = [list(element.elements) for element in elements]
-            for row_node, row in zip(elements, row_values):
-                if len(row) != columns:
+            column_values = [list(element.elements) for element in elements]
+            for column_node, column in zip(elements, column_values):
+                if len(column) != rows:
                     self.glsl_aggregate_error(
-                        row_node,
+                        column_node,
                         expected_type=mapped_type,
                         reason="element-count-mismatch",
-                        expected_element_count=columns,
+                        expected_element_count=rows,
                     )
         else:
             expected_count = columns * rows
@@ -35388,18 +35393,16 @@ complex64_t crossgl_complex64_mod_assign(
                     reason="element-count-mismatch",
                     expected_element_count=expected_count,
                 )
-            row_values = [
-                elements[row * columns : (row + 1) * columns] for row in range(rows)
+            column_values = [
+                elements[column * rows : (column + 1) * rows]
+                for column in range(columns)
             ]
 
         rendered_columns = []
-        for column in range(columns):
+        for values in column_values:
             rendered_values = [
-                self.generate_expression_with_expected(
-                    row_values[row][column],
-                    component_type,
-                )
-                for row in range(rows)
+                self.generate_expression_with_expected(value, component_type)
+                for value in values
             ]
             rendered_columns.append(f"{column_type}({', '.join(rendered_values)})")
         return f"{mapped_type}({', '.join(rendered_columns)})"
@@ -35895,6 +35898,12 @@ complex64_t crossgl_complex64_mod_assign(
                 right_type
             ):
                 return "complex64_t"
+            if operator == "*":
+                product_type = crossgl_linear_algebra_product_type(
+                    left_type, right_type
+                )
+                if product_type is not None:
+                    return product_type
             arithmetic_type = self.glsl_common_arithmetic_type(
                 left_type, right_type, operator
             )
@@ -44155,6 +44164,12 @@ complex64_t crossgl_complex64_mod_assign(
                 return right_type
             if right_type is None:
                 return left_type
+            if operator == "*":
+                product_type = crossgl_linear_algebra_product_type(
+                    self.map_type(left_type), self.map_type(right_type)
+                )
+                if product_type is not None:
+                    return product_type
             arithmetic_type = self.glsl_common_arithmetic_type(
                 left_type, right_type, operator
             )
