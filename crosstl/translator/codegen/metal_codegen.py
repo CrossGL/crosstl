@@ -84,6 +84,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from .relational_builtins import lower_relational_builtins, metal_logical_not_operand
 from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -1867,6 +1868,7 @@ class MetalCodeGen:
 
         Raises :class:`MetalLoweringRefused` listing every construct that has no faithful Metal lowering.
         """
+        lower_relational_builtins(ast)
         return self.refusals.run(self.render_program, ast, target_stage)
 
     def refuse_lowering(self, reason, fallback=""):
@@ -10950,6 +10952,10 @@ class MetalCodeGen:
                     return byte_update
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{operator}"
+            if operator == "!":
+                operand = metal_logical_not_operand(
+                    operand, self.expression_result_type(expr.operand)
+                )
             if operator in {"+", "-"} and operand.startswith(("+", "-")):
                 # Keep adjacent signs from becoming an increment or decrement.
                 operand = f"({operand})"

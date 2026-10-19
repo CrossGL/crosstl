@@ -46,6 +46,7 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
+from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
@@ -659,6 +660,7 @@ class WGSLCodeGen:
 
     def generate_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
+        lower_relational_builtins(ast)
         self.validate_wgsl_stage_support(ast, target_stage)
         validate_recursion_free(ast, "wgsl")
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
@@ -2874,6 +2876,11 @@ class WGSLCodeGen:
                 return f"{operand} += 1"
             if expr.operator == "--":
                 return f"{operand} -= 1"
+            if expr.operator == "!":
+                operand_type = self.expression_type(expr.operand)
+                if operand_type is not None and not isinstance(operand_type, str):
+                    operand_type = self.type_name_string(operand_type)
+                operand = wgsl_logical_not_operand(operand, operand_type)
             return f"{expr.operator}{operand}"
         if isinstance(expr, TernaryOpNode):
             return (

@@ -103,6 +103,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from .relational_builtins import lower_relational_builtins
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -3239,6 +3240,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
 
         Raises :class:`DirectXLoweringRefused` listing every construct that has no faithful HLSL lowering.
         """
+        lower_relational_builtins(ast)
         return self.refusals.run(self.render_program, ast, target_stage)
 
     def render_program(self, ast, target_stage=None):

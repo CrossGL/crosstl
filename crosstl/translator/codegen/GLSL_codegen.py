@@ -119,6 +119,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from .relational_builtins import glsl_vector_logical_not
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -38695,6 +38696,9 @@ complex64_t crossgl_complex64_mod_assign(
                     return narrow_update
                 operand = self.generate_glsl_buffer_block_mutation_target(expr.operand)
             elif op == "!":
+                vector_not = glsl_vector_logical_not(self, expr.operand)
+                if vector_not is not None:
+                    return vector_not
                 operand = self.generate_glsl_boolean_context(expr.operand)
             else:
                 operand = self.generate_expression_with_expected(
@@ -43962,7 +43966,10 @@ complex64_t crossgl_complex64_mod_assign(
             narrow = self.glsl_narrow_integer_contract(type_name)
             if narrow is not None and narrow["width"] > 1:
                 return ("int" if narrow["signed"] else "uint") + str(narrow["bits"])
-            component_type = self.vector_component_type(type_name)
+            # A vector subscript selects a component and a matrix subscript a column (GLSL 4.60 section 5.6).
+            component_type = self.vector_component_type(
+                type_name
+            ) or component_access_type(type_name, GLSL_FAMILY)
             if component_type is not None:
                 return component_type
             return type_name

@@ -50,6 +50,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
+from .relational_builtins import lower_relational_builtins
 from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -351,6 +352,7 @@ class SlangCodeGen:
         outermost = not self._generating
         if outermost:
             self._generating = True
+            lower_relational_builtins(ast)
             self.variable_types = {}
             self.local_variable_types = self.variable_types
             self.image_resource_types = {}
