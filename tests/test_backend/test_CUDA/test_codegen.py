@@ -1056,10 +1056,8 @@ class TestCudaCodeGen:
         assert "WaveActiveBallot((pred != 0)).x" in result
         assert "(WaveActiveAnyTrue((pred != 0)) ? 1 : 0)" in result
         assert "WaveReadLaneAt(value, lane)" in result
-        assert (
-            "/* cuda warp intrinsic __ballot_sync(mask, pred) not directly "
-            "supported in CrossGL */ 0"
-        ) in result
+        assert "__ballot_sync(mask, pred)" in result
+        assert "not directly supported" not in result
         assert (
             "(((WaveGetLaneIndex() + (1)) < 32) ? "
             "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value)"
@@ -1087,10 +1085,8 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "result[tx] = (WaveActiveAnyTrue((input[tx] != 0)) ? 1 : 0);" in result
-        assert (
-            "/* cuda warp intrinsic __any_sync(mask, input[tx]) "
-            "not directly supported in CrossGL */ 0"
-        ) in result
+        assert "result[(tx + 1)] = __any_sync(mask, input[tx]);" in result
+        assert "not directly supported" not in result
 
     def test_cuda_docs_full_warp_shuffle_sync_variants_convert(self):
         # Source: NVIDIA CUDA C++ Programming Guide, warp shuffle functions.
@@ -1151,10 +1147,9 @@ class TestCudaCodeGen:
         assert "WaveActiveBitAnd(value)" in result
         assert "WaveActiveBitOr(value)" in result
         assert "WaveActiveBitXor(value)" in result
-        assert (
-            "/* cuda warp intrinsic __reduce_max_sync(mask, value) not directly "
-            "supported in CrossGL */ 0"
-        ) in result
+        # A partial-mask reduction has no wave equivalent; it stays a CUDA call, never a constant.
+        assert "__reduce_max_sync(mask, value)" in result
+        assert "not directly supported" not in result
         assert "__reduce_add_sync(0xffffffffu, value)" not in result
         assert "__reduce_min_sync(0xffffffffu, value)" not in result
         assert "__reduce_max_sync(0xffffffffu, value)" not in result

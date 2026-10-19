@@ -15,8 +15,10 @@ from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .lower import Lowerer, RuleInexpressibleError
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
+from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 
 __all__ = [
+    "CudaWarpIntrinsicUnsupportedError",
     "FAMILIES",
     "HalfFloatUnsupportedError",
     "NarrowIntegerUnsupportedError",
@@ -56,13 +58,16 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
-    Binary16 values (:mod:`.half`) and narrow integers (:mod:`.narrow`) are legalized first for targets that compute
-    them in 32-bit registers. The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target
+    CUDA warp shuffles are emulated or refused first for targets without CUDA warps (:mod:`.warp`). Binary16 values
+    (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
+    registers. The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
-    exactly, and :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry.
+    exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
+    :class:`CudaWarpIntrinsicUnsupportedError` for a CUDA warp intrinsic it cannot compute with CUDA's lanes.
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    legalize_cuda_warp_intrinsics(program, report.target)
     legalize_half_floats(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
     Annotator(program, report.source, report).run()

@@ -15,9 +15,10 @@ from .validators import dxil_is_signed, validate
 
 
 def test_hazard_inventory_and_oracles():
-    # The 66 evidence kernels, the binary16 division, square-root, fma and conversion cases, and the OpenCL
-    # saturated conversions to uint (round to nearest even) and to char.
-    assert len(CASES) == len(BY_ID) == 72
+    # The 66 evidence kernels, the binary16 division, square-root, fma and conversion cases, the OpenCL
+    # saturated conversions to uint (round to nearest even) and to char, the HLSL and GLSL workgroup-memory
+    # exchanges, and the CUDA warp shuffles called from CrossGL.
+    assert len(CASES) == len(BY_ID) == 75
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",
@@ -25,6 +26,7 @@ def test_hazard_inventory_and_oracles():
         "spirv",
         "cuda",
         "opencl",
+        "cgl",
     }
     for case in CASES:
         expected = case.expected()

@@ -1,0 +1,27 @@
+// CUDA warp shuffles called from CrossGL: the 32-invocation workgroup is one warp, lane = local invocation index.
+shader WarpShuffle {
+    compute hazard {
+        layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+        buffer int* inp;
+        buffer int* outp;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            uint lane = gl_LocalInvocationIndex;
+            int v = inp[i];
+            int sum = v;
+            for (int offset = 16; offset > 0; offset /= 2) {
+                sum += __shfl_down_sync(0xFFFFFFFF, sum, offset);
+            }
+            outp[i * 8u] = sum;
+            outp[i * 8u + 1u] = __shfl_up_sync(0xFFFFFFFF, v, 3);
+            outp[i * 8u + 2u] = __shfl_xor_sync(0xFFFFFFFF, v, 5);
+            outp[i * 8u + 3u] = __shfl_sync(0xFFFFFFFF, v, int(lane) * 7 + 3);
+            outp[i * 8u + 4u] = __shfl_down_sync(0xFFFFFFFF, v, 3, 8);
+            outp[i * 8u + 5u] = __shfl_up_sync(0xFFFFFFFF, v, 2, 4);
+            outp[i * 8u + 6u] = __shfl_xor_sync(0xFFFFFFFF, v, 17, 16);
+            outp[i * 8u + 7u] = __shfl_sync(0xFFFFFFFF, v, 5, 4);
+        }
+    }
+}

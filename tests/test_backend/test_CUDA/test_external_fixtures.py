@@ -3165,12 +3165,10 @@ def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():
 
     assert_crossgl_reparse(crossgl)
     assert "return WaveActiveSum(mySum);" in crossgl
-    assert (
-        "/* cuda warp intrinsic __reduce_add_sync(mask, mySum) not directly "
-        "supported in CrossGL */ 0"
-    ) in crossgl
+    # The partial-mask reduction stays a CUDA call for each target to emulate or refuse; it is never a constant.
+    assert "mySum = __reduce_add_sync(mask, mySum);" in crossgl
+    assert "not directly supported" not in crossgl
     assert "__reduce_add_sync(0xffffffffu, mySum);" not in crossgl
-    assert "__reduce_add_sync(mask, mySum);" not in crossgl
 
 
 def test_cuda_samples_reduction_multiblock_cg_tile_reduce_codegen_reparse():

@@ -15,7 +15,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import conversion_cases, half_cases
+from . import conversion_cases, half_cases, warp_cases
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 EXT_LANG = {
@@ -25,6 +25,7 @@ EXT_LANG = {
     ".spvasm": "spirv",
     ".cu": "cuda",
     ".cl": "opencl",
+    ".cgl": "cgl",
 }
 I32_MAX, I32_MIN = 2**31 - 1, -(2**31)
 NAN, INF = float("nan"), float("inf")
@@ -445,6 +446,11 @@ def o_partial(inp, n=100, total=128):
     out = np.full(total, CANARY, np.int64)
     out[:n] = np.arange(n) * 3 + int(inp[0])
     return out.astype(np.int32)
+
+
+def o_mirror(inp):
+    """Each 64-element group reversed: workgroup memory is shared by the group."""
+    return inp.reshape(-1, 64)[:, ::-1].reshape(-1).astype(np.int32)
 
 
 def o_warp(inp):
@@ -1199,6 +1205,38 @@ CASES = [
         o_warp,
         threads=128,
         out_count=4,
+    ),
+    Case(
+        "h_groupshared",
+        "H13",
+        "groupshared array written and read across the thread group",
+        "HLSL groupshared: one copy per thread group",
+        SMALL,
+        np.int32,
+        o_mirror,
+        threads=128,
+    ),
+    Case(
+        "g_shared_exchange",
+        "H13",
+        "shared array written and read across the work group",
+        "GLSL 4.60 section 4.3.8: shared variables are shared by the work group",
+        SMALL,
+        np.int32,
+        o_mirror,
+        threads=128,
+    ),
+    Case(
+        "x_warp_shuffle",
+        "H13",
+        "CUDA warp shuffles called from CrossGL in a one-warp workgroup",
+        "CUDA warp = 32 consecutive threads; width segments; own value out of range",
+        SMALL,
+        np.int32,
+        warp_cases.shuffle_reference,
+        threads=128,
+        group=32,
+        out_count=128 * warp_cases.RESULTS,
     ),
     Case(
         "m_simd_sum",
