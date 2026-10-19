@@ -118,10 +118,9 @@ def verify(args):
             "--output-dir",
             str(output / mode),
         ]
-        with (
-            (output / f"{mode}.stdout").open("w") as stdout,
-            (output / f"{mode}.stderr").open("w") as stderr,
-        ):
+        with (output / f"{mode}.stdout").open("w") as stdout, (
+            output / f"{mode}.stderr"
+        ).open("w") as stderr:
             result = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
         (output / f"{mode}.command.json").write_text(
             json.dumps({"command": command, "returncode": result.returncode}, indent=2)

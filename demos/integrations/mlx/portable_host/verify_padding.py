@@ -194,10 +194,9 @@ def verify(args):
         ]
         for directory in args.reductions:
             command.extend(("--reductions", str(directory.resolve())))
-        with (
-            (output / f"{mode}.stdout").open("w") as stdout,
-            (output / f"{mode}.stderr").open("w") as stderr,
-        ):
+        with (output / f"{mode}.stdout").open("w") as stdout, (
+            output / f"{mode}.stderr"
+        ).open("w") as stderr:
             process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
         write_json(
             output / f"{mode}.command.json",
