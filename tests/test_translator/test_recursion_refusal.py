@@ -180,7 +180,7 @@ def test_aggregate_arguments_select_the_overload_their_declared_type_names(kind)
 def test_aggregate_self_calls_remain_cycles():
     ast = parse_cgl(
         compute_cgl(
-            "float pick(mat2 m) { return pick(m); }\n"
+            "float pick(mat2 m) { return 2.0 * pick(m); }\n"
             "float pick(vec2 v) { return v.x; }\n"
             "float helper(float x) { mat2 m = mat2(x); return pick(m); }",
         )

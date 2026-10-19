@@ -13,6 +13,9 @@ infers, then those with the same lane counts. Among those, arguments without a v
 matrices, arrays, structures) keep the overloads whose parameters declare the argument's declared type, when any
 do. Overloads that cannot be told apart all receive an edge.
 Calls through member access, function values and built-ins have no user-declared callee and no edge.
+
+Before refusing, a function whose self calls are all tail calls is rewritten as a loop (:mod:`.tail_calls`); only the
+cycles that remain afterwards are refused.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from .. import ast as A
 from ..diagnostics import CODE_PREFIX, SourceSpan, TranslationDiagnostic
 from ..semantics.hub_types import TypeScope, call_name, type_from_node
 from ..semantics.rewrite import child_slots, get_child
+from .tail_calls import lower_self_tail_calls
 
 __all__ = [
     "RECURSION_FREE_TARGETS",
@@ -137,6 +141,7 @@ class CallGraph:
     """Functions in declaration order, and for each one the sorted indices of the functions it may call."""
 
     def __init__(self, program):
+        self.program = program
         self.functions: list = []
         self._scopes: list = []
         for function in getattr(program, "functions", None) or []:
@@ -151,6 +156,9 @@ class CallGraph:
         self.scope = TypeScope(program)
         self._declare_globals(program)
         self.edges: list[dict[int, object]] = [{} for _ in self.functions]
+        # Every call of each function by callee, and the callee indices each call node resolves to.
+        self.call_sites: list[dict[int, list]] = [{} for _ in self.functions]
+        self.resolutions: dict[int, tuple[int, ...]] = {}
         for index, function in enumerate(self.functions):
             self._collect(index, function)
 
@@ -188,23 +196,26 @@ class CallGraph:
         scope.push()
         for parameter in function.parameters or []:
             scope.declare(getattr(parameter, "name", None), _parameter_type(parameter))
-        self._walk(function.body, self.edges[index])
+        self._walk(function.body, index)
         scope.pop()
         scope.pop()
 
-    def _walk(self, node, edges):
+    def _walk(self, node, caller):
         if isinstance(node, (A.FunctionNode, A.StructNode)):
             return
         scoped = isinstance(node, (A.BlockNode, A.ForNode))
         if scoped:
             self.scope.push()
         for field, key in list(child_slots(node)):
-            self._walk(get_child(node, field, key), edges)
+            self._walk(get_child(node, field, key), caller)
         if isinstance(node, A.VariableNode):
             self.scope.declare(node.name, node.var_type)
         elif isinstance(node, A.FunctionCallNode):
-            for callee in self._callees(node):
-                edges.setdefault(callee, node)
+            callees = self._callees(node)
+            self.resolutions[id(node)] = tuple(callees)
+            for callee in callees:
+                self.edges[caller].setdefault(callee, node)
+                self.call_sites[caller].setdefault(callee, []).append(node)
         if scoped:
             self.scope.pop()
 
@@ -277,6 +288,35 @@ class CallGraph:
                 return False
         return True
 
+    def self_calls(self, index):
+        """The calls function ``index`` makes to itself, or ``None`` if one of them may resolve to another function.
+
+        A body-less declaration whose parameters declare the same types is a prototype of the function, not another
+        candidate.
+        """
+        calls = self.call_sites[index].get(index)
+        if not calls:
+            return None
+        signature = self._signature(self.functions[index])
+        for call in calls:
+            for callee in self.resolutions.get(id(call), ()):
+                other = self.functions[callee]
+                if callee == index:
+                    continue
+                if getattr(other, "body", None) is not None or signature is None:
+                    return None
+                if self._signature(other) != signature:
+                    return None
+        return calls
+
+    @staticmethod
+    def _signature(function):
+        keys = tuple(
+            _declared_key(_parameter_type(parameter))
+            for parameter in function.parameters or []
+        )
+        return None if None in keys else keys
+
     # Cycles ---------------------------------------------------------------------------------------------------
     def find_cycle(self):
         """The first cycle in a depth-first search in declaration order: ``(function indices, closing call)``."""
@@ -312,11 +352,17 @@ class CallGraph:
 
 
 def validate_recursion_free(program, target):
-    """Raise :class:`RecursionUnsupportedError` when ``target`` forbids recursion and ``program`` recurses."""
+    """Make ``program`` recursion-free for ``target``, or raise :class:`RecursionUnsupportedError`.
+
+    Targets that forbid recursion get self tail calls rewritten as loops in place; any cycle that remains raises.
+    """
     if target not in RECURSION_FREE_TARGETS or not isinstance(program, A.ShaderNode):
         return
     graph = CallGraph(program)
     found = graph.find_cycle()
+    if found is not None and lower_self_tail_calls(graph):
+        graph = CallGraph(program)
+        found = graph.find_cycle()
     if found is None:
         return
     indices, call = found
