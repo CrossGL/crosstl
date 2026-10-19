@@ -18,9 +18,9 @@ import crosstl
 from crosstl.translator import ast as A
 from crosstl.translator.semantics import (
     HalfFloatUnsupportedError,
-    legalize_half_floats,
 )
 from crosstl.translator.semantics import half_helpers as H
+from crosstl.translator.semantics import legalize_half_floats
 from crosstl.translator.semantics.half import (
     HALF_TARGETS,
     half_from_name,
