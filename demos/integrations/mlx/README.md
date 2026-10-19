@@ -318,6 +318,42 @@ specialization now matches through the `complex64_t` alias, but its local tile
 types and `reinterpret_cast` float views stop translation with a typed
 diagnostic; #2261 tracks the partial-specialization materialization.
 
+#### GEMM split-K
+
+`test_current_gemm_splitk.py` executes all 192 float32, float16 and bfloat16
+`gemm_splitk` entries of `steel_gemm_splitk.metal` (four tile shapes, four
+transpositions and four `MN_aligned`/`K_aligned` pairs per type) and the six
+real-typed `gemm_splitk_accum` and `_axpby` kernels. `gemm_splitk_model.py`
+names every entry and reproduces the partition count, iteration count and
+partition size that `matmul.cpp` dispatches. Entries unaligned in both run
+4x5x7, 33x35x70 with padded leading dimensions and a spare threadgroup in each
+tile axis, and 17x40x100, which splits into four partitions with a `K` tail in
+the last one. `K`-aligned entries use multiples of 16 for `K`, and
+`MN`-aligned entries scale `M` and `N` to whole tiles. Every partition word of
+`C_split`, guards included, is compared with an exact reference, and on macOS
+with the original source too. The accumulation kernels sum two to four
+partitions, with `alpha * sum + beta * C` over a strided addend for `_axpby`.
+
+Two struct specializations whose spelled arguments differed only in
+punctuation, such as `!flag` and `flag`, used to receive one name, so the
+second one reused the first one's members. The Metal frontend now gives them
+distinct names, and `tests/test_backend/test_metal/test_struct_specialization_names.py`
+covers the case independently of MLX. The current-tree native parity job runs
+the entries in seven shards per operating system; shard 0 also runs the
+accumulation kernels:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_SPLITK=1 \
+CROSTL_MLX_CURRENT_GEMM_SPLITK_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_SPLITK_SHARD_COUNT=7 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_splitk.py
+```
+
+The 64 complex64 split-K entries and two complex64 accumulation kernels are
+not covered; they need the same `BlockMMA` partial specialization as the
+fused complex64 entries (#2261).
+
 ### Resource-Index Controls
 
 Guarded resource-index controls execute on original/generated Metal and on
