@@ -1,15 +1,24 @@
 """Geometry and arithmetic of the pinned MLX ``steel_conv`` kernels.
 
 ``steel_conv.metal`` instantiates ``implicit_gemm_conv_2d`` for three element
-types, six block shapes and six loader selections. ``conv.cpp`` turns a 2-D
-convolution into an implicit GEMM: ``M`` output pixels, ``N`` output channels
-per group and ``K`` filter taps times input channels per group. This module
-names the entries, models the threadgroup slots each loader writes and
-reproduces the host parameters ``implicit_gemm_conv_2D_gpu`` encodes.
+types, six block shapes and six loader selections, and ``steel_conv_3d.metal``
+instantiates ``implicit_gemm_conv_3d`` for the same types and shapes with a
+small- or large-filter input loader. ``conv.cpp`` turns a convolution into an
+implicit GEMM: ``M`` output pixels, ``N`` output channels per group and ``K``
+filter taps times input channels per group. This module names the entries,
+models the threadgroup slots each loader writes and reproduces the host
+parameters ``implicit_gemm_conv_2D_gpu`` and ``implicit_gemm_conv_3D_gpu``
+encode.
 """
 
-from dataclasses import dataclass
+import itertools
+import math
+from dataclasses import dataclass, field
 
+SOURCES = {
+    2: "mlx/backend/metal/kernels/steel/conv/kernels/steel_conv.metal",
+    3: "mlx/backend/metal/kernels/steel/conv/kernels/steel_conv_3d.metal",
+}
 TYPES = (
     ("float32", "float", 4),
     ("float16", "half", 2),
@@ -25,17 +34,22 @@ BLOCKS = (
     (64, 64, 16, 2, 2),
 )
 # (channel name, channels, filter name, small filter) in instantiation order.
-FILTERS = (
-    ("l", 0, "s", True),
-    ("l", 0, "l", False),
-    ("1", 1, "l", False),
-    ("2", 2, "l", False),
-    ("3", 3, "l", False),
-    ("4", 4, "l", False),
-)
+FILTERS = {
+    2: (
+        ("l", 0, "s", True),
+        ("l", 0, "l", False),
+        ("1", 1, "l", False),
+        ("2", 2, "l", False),
+        ("3", 3, "l", False),
+        ("4", 4, "l", False),
+    ),
+    3: (("l", 0, "s", True), ("l", 0, "l", False)),
+}
 SIMD_WIDTH = 32
 # ``ChannelHelper`` widens 3 channels to 4 and keeps 1, 2 and 4.
 CHANNEL_VECTORS = {1: 1, 2: 2, 3: 4, 4: 4}
+# The small-filter loaders keep one ``short`` bit per tap and axis.
+SMALL_FILTER_TAPS = 16
 
 
 @dataclass(frozen=True)
@@ -74,8 +88,9 @@ class Loader:
 
 @dataclass(frozen=True)
 class ConvEntry:
-    """One instantiated ``implicit_gemm_conv_2d`` entry point."""
+    """One instantiated ``implicit_gemm_conv_{2,3}d`` entry point."""
 
+    rank: int
     dtype: str
     metal_type: str
     element_bytes: int
@@ -90,11 +105,15 @@ class ConvEntry:
     small_filter: bool
 
     @property
+    def source(self):
+        return SOURCES[self.rank]
+
+    @property
     def name(self):
+        channel = "" if self.rank == 3 else f"_channel_{self.channel_name}"
         return (
-            f"implicit_gemm_conv_2d_{self.dtype}_bm{self.bm}_bn{self.bn}"
-            f"_bk{self.bk}_wm{self.wm}_wn{self.wn}"
-            f"_channel_{self.channel_name}_filter_{self.filter_name}"
+            f"implicit_gemm_conv_{self.rank}d_{self.dtype}_bm{self.bm}_bn{self.bn}"
+            f"_bk{self.bk}_wm{self.wm}_wn{self.wn}{channel}_filter_{self.filter_name}"
         )
 
     @property
@@ -107,7 +126,7 @@ class ConvEntry:
 
     @property
     def padding(self):
-        # steel_conv.h pads each threadgroup row by 16 bytes.
+        # Both kernels pad each threadgroup row by 16 bytes.
         return 16 // self.element_bytes
 
     @property
@@ -163,30 +182,34 @@ class ConvEntry:
 
     def accepts(self, conv):
         """Whether ``conv`` meets this entry's loader preconditions."""
-        per_group = conv.channels // conv.groups
-        if self.channels:
-            return per_group == self.channels
-        if per_group % self.bk:
+        if conv.rank != self.rank:
             return False
-        return not self.small_filter or max(conv.kernel) <= 16
+        if self.channels:
+            return conv.per_group == self.channels
+        if conv.per_group % self.bk:
+            return False
+        return not self.small_filter or max(conv.kernel) <= SMALL_FILTER_TAPS
 
 
-def entries():
-    """Every instantiated entry, in source order."""
+def entries(rank=2):
+    """Every instantiated entry of one rank, in source order."""
     return tuple(
-        ConvEntry(dtype, metal_type, size, *block, *selection)
+        ConvEntry(rank, dtype, metal_type, size, *block, *selection)
         for dtype, metal_type, size in TYPES
         for block in BLOCKS
-        for selection in FILTERS
+        for selection in FILTERS[rank]
     )
 
 
-BY_NAME = {entry.name: entry for entry in entries()}
+BY_NAME = {entry.name: entry for rank in SOURCES for entry in entries(rank)}
 
 
 @dataclass(frozen=True)
 class Conv:
-    """One 2-D convolution in MLX's NHWC input and OHWI weight layouts."""
+    """One 2-D or 3-D convolution in MLX's channels-last layouts.
+
+    Unset strides and dilations are one and unset paddings zero.
+    """
 
     batch: int
     spatial: tuple
@@ -194,10 +217,22 @@ class Conv:
     channels: int
     outputs: int
     groups: int = 1
-    stride: tuple = (1, 1)
-    padding: tuple = (0, 0)
-    dilation: tuple = (1, 1)
+    stride: tuple = field(default=None)
+    padding: tuple = field(default=None)
+    dilation: tuple = field(default=None)
     flip: bool = False
+
+    def __post_init__(self):
+        rank = len(self.spatial)
+        for name, default in (("stride", 1), ("padding", 0), ("dilation", 1)):
+            if getattr(self, name) is None:
+                object.__setattr__(self, name, (default,) * rank)
+        assert {len(self.kernel), len(self.stride), len(self.padding)} == {rank}
+        assert len(self.dilation) == rank
+
+    @property
+    def rank(self):
+        return len(self.spatial)
 
     @property
     def out_spatial(self):
@@ -229,7 +264,7 @@ class Conv:
         return (self.batch, *self.out_spatial, self.outputs)
 
     def params(self):
-        """``MLXConvParams<2>`` as ``conv.cpp`` fills it for row-major arrays."""
+        """``MLXConvParams<N>`` as ``conv.cpp`` fills it for row-major arrays."""
         return dict(
             N=self.batch,
             C=self.channels,
@@ -240,7 +275,7 @@ class Conv:
             str=list(self.stride),
             pad=list(self.padding),
             kdil=list(self.dilation),
-            idil=[1, 1],
+            idil=[1] * self.rank,
             in_strides=_row_major(self.input_shape),
             wt_strides=_row_major(self.weight_shape),
             out_strides=_row_major(self.output_shape),
@@ -248,85 +283,101 @@ class Conv:
             flip=self.flip,
         )
 
+    def _k_iterations(self, bk):
+        taps = math.prod(self.kernel)
+        if self.rank == 2 and self.per_group <= 2:
+            return -(-taps * self.per_group // bk)
+        if self.rank == 2 and self.per_group <= 4:
+            return -(-(taps * 4) // bk)
+        return taps * -(-self.per_group // bk)
+
     def gemm_params(self, entry):
-        """``ImplicitGemmConv2DParams`` as ``implicit_gemm_conv_2D_gpu`` builds it."""
-        oh, ow = self.out_spatial
-        kh, kw = self.kernel
-        implicit_m = self.batch * oh * ow
+        """``ImplicitGemmConv{2,3}DParams`` as the host builds them.
+
+        Each jump moves the input pointer from the last tap along one axis to
+        the first tap along the next, and ``inp_jump_c`` to the next channel
+        block, so the fields appear innermost axis first.
+        """
+        implicit_m = self.batch * math.prod(self.out_spatial)
         implicit_n = self.outputs_per_group
-        implicit_k = kh * kw * self.per_group
-        bk = entry.bk
-        if self.per_group <= 2:
-            k_iterations = -(-implicit_k // bk)
-        elif self.per_group <= 4:
-            k_iterations = -(-(kh * kw * 4) // bk)
-        else:
-            k_iterations = kh * kw * -(-self.per_group // bk)
         sign = -1 if self.flip else 1
         in_strides = _row_major(self.input_shape)
-        ijw = in_strides[2] * self.dilation[1]
-        ijh = in_strides[1] * self.dilation[0]
+        # Jump per tap along each spatial axis, outermost first.
+        steps = [
+            in_strides[axis + 1] * self.dilation[axis] for axis in range(self.rank)
+        ]
+        jumps = {}
+        names = ("inp_jump_w", "inp_jump_h", "inp_jump_d")
+        for depth, name in enumerate(names[: self.rank]):
+            axis = self.rank - 1 - depth
+            inner = sum(
+                (self.kernel[a] - 1) * steps[a] for a in range(axis + 1, self.rank)
+            )
+            jumps[name] = sign * (steps[axis] - inner)
+        jumps["inp_jump_c"] = entry.bk - sign * sum(
+            (taps - 1) * step for taps, step in zip(self.kernel, steps)
+        )
         return dict(
             M=implicit_m,
             N=implicit_n,
-            K=implicit_k,
-            gemm_k_iterations=k_iterations,
-            inp_jump_w=sign * ijw,
-            inp_jump_h=sign * (ijh - (kw - 1) * ijw),
-            inp_jump_c=bk - sign * (kh - 1) * ijh - sign * (kw - 1) * ijw,
+            K=math.prod(self.kernel) * self.per_group,
+            gemm_k_iterations=self._k_iterations(entry.bk),
+            **jumps,
             tiles_n=-(-implicit_n // entry.bn),
             tiles_m=-(-implicit_m // entry.bm),
             swizzle_log=0,
         )
 
     def host_entry(self, dtype):
-        """The entry ``implicit_gemm_conv_2D_gpu`` selects for ``dtype``."""
-        oh, ow = self.out_spatial
-        implicit_m = self.batch * oh * ow
+        """The entry ``implicit_gemm_conv_{2,3}D_gpu`` selects for ``dtype``."""
+        implicit_m = self.batch * math.prod(self.out_spatial)
         implicit_n = self.outputs_per_group
         wm, wn = 2, 2
         bm = 64 if implicit_m >= 8192 and self.per_group >= 64 else 32
         bn = 64 if bm == 64 or implicit_n >= 64 else 32
         if implicit_n <= 16:
             bn, wm, wn = 8, 4, 1
-        channels = self.per_group if self.per_group <= 4 else 0
-        small = not channels and max(self.kernel) <= 16
+        channels = self.per_group if self.rank == 2 and self.per_group <= 4 else 0
+        small = not channels and max(self.kernel) <= SMALL_FILTER_TAPS
+        channel = "" if self.rank == 3 else f"_channel_{channels or 'l'}"
         return BY_NAME[
-            f"implicit_gemm_conv_2d_{dtype}_bm{bm}_bn{bn}_bk16_wm{wm}_wn{wn}"
-            f"_channel_{channels or 'l'}_filter_{'s' if small else 'l'}"
+            f"implicit_gemm_conv_{self.rank}d_{dtype}_bm{bm}_bn{bn}_bk16_wm{wm}"
+            f"_wn{wn}{channel}_filter_{'s' if small else 'l'}"
         ]
 
     def reference(self, inputs, weights):
-        """Exact NHWC outputs: every tap that lands in the input contributes."""
+        """Exact channels-last outputs: every tap inside the input contributes."""
         n_in = _row_major(self.input_shape)
         n_wt = _row_major(self.weight_shape)
-        oh, ow = self.out_spatial
-        kh, kw = self.kernel
         outputs = []
         for n in range(self.batch):
-            for y in range(oh):
-                for x in range(ow):
-                    for o in range(self.outputs):
-                        group = o // self.outputs_per_group
-                        total = 0.0
-                        for ty in range(kh):
-                            iy = y * self.stride[0] - self.padding[0]
-                            iy += ty * self.dilation[0]
-                            if not 0 <= iy < self.spatial[0]:
-                                continue
-                            wy = kh - 1 - ty if self.flip else ty
-                            for tx in range(kw):
-                                ix = x * self.stride[1] - self.padding[1]
-                                ix += tx * self.dilation[1]
-                                if not 0 <= ix < self.spatial[1]:
-                                    continue
-                                wx = kw - 1 - tx if self.flip else tx
-                                base = n * n_in[0] + iy * n_in[1] + ix * n_in[2]
-                                base += group * self.per_group
-                                wbase = o * n_wt[0] + wy * n_wt[1] + wx * n_wt[2]
-                                for c in range(self.per_group):
-                                    total += inputs[base + c] * weights[wbase + c]
-                        outputs.append(total)
+            for pixel in itertools.product(*(range(size) for size in self.out_spatial)):
+                for o in range(self.outputs):
+                    group = o // self.outputs_per_group
+                    total = 0.0
+                    for tap in itertools.product(*(range(k) for k in self.kernel)):
+                        position = [
+                            p * s - pad + t * d
+                            for p, s, pad, t, d in zip(
+                                pixel, self.stride, self.padding, tap, self.dilation
+                            )
+                        ]
+                        if not all(
+                            0 <= value < size
+                            for value, size in zip(position, self.spatial)
+                        ):
+                            continue
+                        weight_tap = [
+                            k - 1 - t if self.flip else t
+                            for k, t in zip(self.kernel, tap)
+                        ]
+                        base = n * n_in[0] + group * self.per_group
+                        base += sum(v * s for v, s in zip(position, n_in[1:]))
+                        wbase = o * n_wt[0]
+                        wbase += sum(v * s for v, s in zip(weight_tap, n_wt[1:]))
+                        for c in range(self.per_group):
+                            total += inputs[base + c] * weights[wbase + c]
+                    outputs.append(total)
         return outputs
 
 

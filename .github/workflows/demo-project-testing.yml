@@ -9232,8 +9232,8 @@ jobs:
               --junitxml=mlx-current-results/gemm-gather-6.xml \
               demos/integrations/mlx/tests/kernels/test_current_gemm_gather.py
 
-      # steel_conv.metal's 108 implicit_gemm_conv_2d entries, each with
-      # three convolutions, in six shards.
+      # The 144 implicit-GEMM convolution entries of steel_conv.metal and
+      # steel_conv_3d.metal, each with three convolutions, in six shards.
       - name: Prove current MLX steel_conv native parity (shard 0 of 6)
         if: matrix.group == 'steel-conv-0'
         shell: bash

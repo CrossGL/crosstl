@@ -3,16 +3,20 @@
 ``steel_conv.metal`` instantiates ``implicit_gemm_conv_2d`` for three element
 types, six block shapes and six loader selections: the general-channel input
 loader for small or large filters and the small-channel loaders for one to
-four channels per group. This gate translates all 108 entries and dispatches
-each with the buffers and parameters ``implicit_gemm_conv_2D_gpu`` binds, over
-convolutions that meet the entry's loader preconditions: padded, strided,
+four channels per group. ``steel_conv_3d.metal`` instantiates
+``implicit_gemm_conv_3d`` for the same types and shapes with a small- or
+large-filter input loader. This gate translates all 144 entries and dispatches
+each with the buffers and parameters ``implicit_gemm_conv_{2,3}D_gpu`` binds,
+over convolutions that meet the entry's loader preconditions: padded, strided,
 dilated, flipped and grouped, with partial row and column tiles and surplus
 threadgroups. Every output word, guards included, must equal an exact
 reference; on Metal it must also equal the original source.
 """
 
 import hashlib
+import itertools
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -51,11 +55,20 @@ from tests.runtime_helpers import _prepare_native_package, compile_metal, run
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
-SOURCE = "mlx/backend/metal/kernels/steel/conv/kernels/steel_conv.metal"
-SOURCE_SHA256 = "29ce84c7fbc964cc2257ad7a1f5792493f0af502a2e74223d473a26f83493928"
+SOURCE_HASHES = {
+    model.SOURCES[
+        2
+    ]: "29ce84c7fbc964cc2257ad7a1f5792493f0af502a2e74223d473a26f83493928",
+    model.SOURCES[
+        3
+    ]: "bd9985c4bc4d468b1485edf98065f4fb6319bf912d1de2bb766bf183655791dd",
+}
 CONV_HEADERS = {
     "kernels/steel_conv.h": (
         "a34ae933e291169538ef9415323833f568d649b8ed6a5342c0eff40ced085d8c"
+    ),
+    "kernels/steel_conv_3d.h": (
+        "d785d7032d460d8ac1277b1a0707b43bfc6fd3e4e3aeb87d33771d920bf920c5"
     ),
     "loaders/loader_channel_l.h": (
         "4377845f9553eed23ff1707cddfaabcf0056578c829f67616a1e68efcab94703"
@@ -71,16 +84,19 @@ REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_STEEL_CONV"
 SHARD_INDEX_ENV = "CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_INDEX"
 SHARD_COUNT_ENV = "CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_COUNT"
 CI_SHARD_COUNT = 6
-ENTRIES = model.entries()
+ENTRIES = model.entries(2) + model.entries(3)
 BINDINGS = ("A", "B", "C", "params", "gemm_params")
-PARAMS_BYTES = {"params": 176, "gemm_params": 40}
+PARAMS_BYTES = {
+    2: {"params": 176, "gemm_params": 40},
+    3: {"params": 224, "gemm_params": 44},
+}
 # Output channels per group for each case, by block width: one full tile,
 # a partial second tile, and a partial tile per group.
 OUTPUTS = {8: (8, 12, 5), 32: (32, 48, 16), 64: (64, 80, 16)}
 SCOPE = (
-    "Every float32, float16 and bfloat16 steel_conv implicit_gemm_conv_2d "
-    "entry; steel_conv_general, steel_conv_3d and the upstream suite are not "
-    "covered."
+    "Every float32, float16 and bfloat16 implicit_gemm_conv_2d and "
+    "implicit_gemm_conv_3d entry; steel_conv_general and the upstream suite "
+    "are not covered."
 )
 TARGET_OPTIONS = {
     "directx": {
@@ -94,22 +110,27 @@ TARGET_OPTIONS = {
     },
 }
 # Records the kernel reads through constant pointers, by GLSL helper name.
-RECORD_HELPERS = (
-    "ImplicitGemmConv2DParams",
-    "MLXConvParams",
-    "MLXConvParams<2>",
-    "MLXConvParams_2",
-    "MLXConvParams_int_2",
-)
+RECORD_HELPERS = {
+    rank: (
+        f"ImplicitGemmConv{rank}DParams",
+        "MLXConvParams",
+        f"MLXConvParams<{rank}>",
+        f"MLXConvParams_{rank}",
+        f"MLXConvParams_int_{rank}",
+    )
+    for rank in model.SOURCES
+}
 
 
 def _cases(entry):
     """Convolutions and surplus threadgroups that exercise ``entry``.
 
-    Each convolution meets the entry's loader preconditions. The large-filter
-    loader tests bounds at the unflipped tap, so its flipped case keeps every
-    tap inside the input.
+    Each convolution meets the entry's loader preconditions. The 2-D
+    large-filter loader tests bounds at the unflipped tap, so its flipped case
+    keeps every tap inside the input.
     """
+    if entry.rank == 3:
+        return _cases_3d(entry)
     full, partial, grouped = OUTPUTS[entry.bn]
     channels = entry.channels or 16
     large = not entry.channels and not entry.small_filter
@@ -140,6 +161,42 @@ def _cases(entry):
         outputs=2 * grouped,
         groups=2,
         padding=(0, 0) if not entry.channels else (2, 1),
+    )
+    return ((first, 0), (second, 0), (third, 1))
+
+
+def _cases_3d(entry):
+    """3-D cases: the 3-D loaders test bounds at the flipped tap and read
+    whole 16-channel blocks."""
+    full, partial, grouped = OUTPUTS[entry.bn]
+    large = not entry.small_filter
+    first = model.Conv(
+        batch=1,
+        spatial=(2, 2, 18) if large else (3, 4, 3),
+        kernel=(1, 1, 17) if large else (2, 3, 3),
+        channels=16,
+        outputs=full,
+        padding=(0, 1, 1) if large else (1, 1, 1),
+    )
+    second = model.Conv(
+        batch=2,
+        spatial=(3, 5, 4),
+        kernel=(2, 2, 3),
+        channels=32,
+        outputs=partial,
+        stride=(1, 2, 1),
+        padding=(1, 0, 1),
+        dilation=(2, 1, 1),
+        flip=True,
+    )
+    third = model.Conv(
+        batch=1,
+        spatial=(2, 3, 4),
+        kernel=(1, 2, 1),
+        channels=32,
+        outputs=2 * grouped,
+        groups=2,
+        padding=(0, 1, 0),
     )
     return ((first, 0), (second, 0), (third, 1))
 
@@ -188,7 +245,7 @@ def _index_assertions(entry):
             "function": f"crosstl_resource_load_{record}",
             "maximum": 0,
         }
-        for record in RECORD_HELPERS
+        for record in RECORD_HELPERS[entry.rank]
     ]
     workgroup = [
         {
@@ -199,7 +256,7 @@ def _index_assertions(entry):
         for tile, maximum in zip(("As", "Bs"), _tile_maxima(entry))
     ]
     return tuple(
-        {"source": SOURCE, **item, "minimum": 0} for item in device + workgroup
+        {"source": entry.source, **item, "minimum": 0} for item in device + workgroup
     )
 
 
@@ -208,12 +265,12 @@ def _config(root, output, target, entry):
     return ProjectConfig(
         root=root,
         source_roots=("mlx/backend/metal/kernels",),
-        include_patterns=(SOURCE,),
+        include_patterns=(entry.source,),
         include_dirs=(".",),
         targets=(target,),
         output_dir=output,
-        entry_points={SOURCE: (entry.name,)},
-        workgroup_size_rules={SOURCE: entry.workgroup_size},
+        entry_points={entry.source: (entry.name,)},
+        workgroup_size_rules={entry.source: entry.workgroup_size},
         index_range_assertions=(_index_assertions(entry) if target == "opengl" else ()),
         source_options={
             "metal": {
@@ -259,8 +316,8 @@ def _case_data(entry, conv, extra):
     assert entry.accepts(conv), (entry.name, conv)
     guard = GUARDS[entry.dtype]
     gemm = conv.gemm_params(entry)
-    count_in = conv.batch * conv.spatial[0] * conv.spatial[1] * conv.channels
-    count_wt = conv.outputs * conv.kernel[0] * conv.kernel[1] * conv.per_group
+    count_in = math.prod(conv.input_shape)
+    count_wt = math.prod(conv.weight_shape)
     inputs = _values(entry.dtype, 1, count_in, 0.25)
     weights = _values(entry.dtype, 2, count_wt, 0.5)
     reference = conv.reference(inputs, weights)
@@ -294,7 +351,7 @@ def _dispatch_values(bindings, entry, conv, extra, target):
     for name, binding in bindings.items():
         if name in records:
             layout = binding["scalarLayout"]
-            assert layout["elementStrideBytes"] == PARAMS_BYTES[name], layout
+            assert layout["elementStrideBytes"] == PARAMS_BYTES[entry.rank][name]
             if layout["elementType"] == "record":
                 words = pack_storage_records(layout, [records[name]])
                 value = {"dtype": "uint32", "shape": [len(words)], "values": words}
@@ -315,43 +372,58 @@ def _dispatch_values(bindings, entry, conv, extra, target):
 
 
 def test_steel_conv_model_names_every_entry():
-    assert len(ENTRIES) == 3 * 6 * 6 == len(model.BY_NAME)
+    assert len(ENTRIES) == 3 * 6 * (6 + 2) == len(model.BY_NAME)
     assert Counter(entry.dtype for entry in ENTRIES) == {
-        dtype: 36 for dtype, _, _ in model.TYPES
+        dtype: 48 for dtype, _, _ in model.TYPES
     }
-    assert Counter((entry.channel_name, entry.filter_name) for entry in ENTRIES) == {
-        (channel, name): 18 for channel, _, name, _ in model.FILTERS
-    }
+    for rank in model.SOURCES:
+        kinds = Counter(
+            (entry.channel_name, entry.filter_name)
+            for entry in ENTRIES
+            if entry.rank == rank
+        )
+        assert kinds == {
+            (channel, name): 18 for channel, _, name, _ in model.FILTERS[rank]
+        }
     entry = model.BY_NAME[
         "implicit_gemm_conv_2d_bfloat16_bm64_bn32_bk16_wm2_wn2_channel_3_filter_l"
     ]
     assert entry.workgroup_size == (32, 2, 2)
     assert entry.padding == 8 and entry.leading == 24
+    entry = model.BY_NAME[
+        "implicit_gemm_conv_3d_float16_bm32_bn8_bk16_wm4_wn1_filter_s"
+    ]
+    assert entry.source.endswith("steel_conv_3d.metal")
+    assert entry.workgroup_size == (32, 1, 4) and entry.loaders[1].vector == 1
 
 
 def test_steel_conv_host_selection():
-    """``implicit_gemm_conv_2D_gpu`` selects every entry but two block groups.
+    """``implicit_gemm_conv_{2,3}D_gpu`` select every entry but two groups.
 
-    It widens a 64-row block to 64 columns unless the output fits 8, and
-    picks 64 rows only for 64 or more channels per group. The gate executes
+    They widen a 64-row block to 64 columns unless the output fits 8, and
+    pick 64 rows only for 64 or more channels per group. The gate executes
     the unselected entries too: their loaders take the same preconditions.
     """
     reached = set()
+    shapes = (
+        ((16, 24), ((3, 3), (1, 17)), (64, 1, 2, 3, 4)),
+        ((6, 6, 24), ((3, 3, 3), (1, 1, 17)), (64,)),
+    )
     for dtype, _, _ in model.TYPES:
-        for batch in (1, 64):
-            for outputs in (8, 32, 64):
-                for channels in (64, 1, 2, 3, 4):
-                    for kernel in ((3, 3), (1, 17)):
-                        conv = model.Conv(batch, (16, 24), kernel, channels, outputs)
-                        entry = conv.host_entry(dtype)
-                        assert entry.accepts(conv)
-                        reached.add(entry.name)
+        for spatial, kernels, all_channels in shapes:
+            for batch, outputs, channels, kernel in itertools.product(
+                (1, 64), (8, 32, 64), all_channels, kernels
+            ):
+                conv = model.Conv(batch, spatial, kernel, channels, outputs)
+                entry = conv.host_entry(dtype)
+                assert entry.accepts(conv)
+                reached.add(entry.name)
     unselected = {
         entry.name
         for entry in ENTRIES
         if entry.bm == 64 and (entry.bn == 32 or entry.channels)
     }
-    assert len(unselected) == 3 * (6 + 2 * 4)
+    assert len(unselected) == 3 * (6 + 2 * 4 + 2)
     assert reached == set(model.BY_NAME) - unselected
     small = model.Conv(1, (16, 8), (3, 3), 64, 32).host_entry("float32")
     assert small.name.endswith("bm32_bn32_bk16_wm2_wn2_channel_l_filter_s")
@@ -367,8 +439,9 @@ def test_steel_conv_shards_partition_the_entries(monkeypatch):
         model.BY_NAME
     )
     for shard in shards:
-        assert len(shard) == 18
+        assert len(shard) == 24
         assert {entry.dtype for entry in shard} == {d for d, _, _ in model.TYPES}
+        assert {entry.rank for entry in shard} == set(model.SOURCES)
     monkeypatch.setenv(SHARD_INDEX_ENV, str(CI_SHARD_COUNT))
     with pytest.raises(RuntimeError):
         _selected_entries()
@@ -430,11 +503,54 @@ def test_steel_conv_gemm_params_follow_the_host():
     )
 
 
+def test_steel_conv_3d_gemm_params_follow_the_host():
+    """``implicit_gemm_conv_3D_gpu``'s jumps, flipped, walk every tap."""
+    entry = model.BY_NAME[
+        "implicit_gemm_conv_3d_float32_bm32_bn8_bk16_wm4_wn1_filter_s"
+    ]
+    conv = model.Conv(2, (3, 5, 4), (2, 2, 3), 32, 12, dilation=(2, 1, 1), flip=True)
+    gemm = conv.gemm_params(entry)
+    assert list(gemm) == [
+        "M",
+        "N",
+        "K",
+        "gemm_k_iterations",
+        "inp_jump_w",
+        "inp_jump_h",
+        "inp_jump_d",
+        "inp_jump_c",
+        "tiles_n",
+        "tiles_m",
+        "swizzle_log",
+    ]
+    d, h, w = conv.params()["in_strides"][1:4]
+    assert (d, h, w) == (5 * 4 * 32, 4 * 32, 32)
+    # Depth taps are two frames apart.
+    assert (gemm["inp_jump_w"], gemm["inp_jump_h"]) == (-w, -(h - 2 * w))
+    assert gemm["inp_jump_d"] == -(2 * d - h - 2 * w)
+    # Walking every tap of one channel block and jumping to the next lands
+    # one block of channels further on.
+    walk = 0
+    for tap in range(1, 2 * 2 * 3):
+        if tap % 3:
+            walk += gemm["inp_jump_w"]
+        elif tap % 6:
+            walk += gemm["inp_jump_h"]
+        else:
+            walk += gemm["inp_jump_d"]
+    assert walk + gemm["inp_jump_c"] == entry.bk
+    assert gemm["gemm_k_iterations"] == 12 * 2
+    assert (gemm["M"], gemm["K"]) == (2 * 1 * 4 * 2, 12 * 32)
+
+
 def test_steel_conv_params_follow_the_mlx_struct_layout():
     params = model.Conv(3, (9, 8), (2, 3), 32, 12, flip=True).params()
     data = _params_bytes(params)
-    assert len(data) == PARAMS_BYTES["params"]
+    assert len(data) == PARAMS_BYTES[2]["params"]
     assert params["oS"] == [8, 6] and params["wt_strides"] == [6 * 32, 3 * 32, 32, 1]
+    params = model.Conv(1, (2, 3, 4), (1, 2, 1), 32, 16, groups=2).params()
+    assert len(_params_bytes(params)) == PARAMS_BYTES[3]["params"]
+    assert params["idil"] == [1, 1, 1] and params["wt_strides"][0] == 2 * 16
 
 
 def test_steel_conv_reference_flips_and_groups():
@@ -452,6 +568,13 @@ def test_steel_conv_reference_flips_and_groups():
         hits = [index for index, value in enumerate(outputs) if value]
         assert hits == [(pixel[0] * 2 + pixel[1]) * 2 + 1]
         assert outputs[hits[0]] == 1.0
+    # In 3-D, flipped, the first weight frame pairs with the second input tap:
+    # input frame 0 reaches output frame 0 instead of frame 1.
+    conv = model.Conv(1, (2, 1, 1), (2, 1, 1), 1, 1, padding=(1, 0, 0), flip=True)
+    assert conv.out_spatial == (3, 1, 1)
+    assert conv.reference([1.0, 0.0], [1.0, 0.0]) == [1.0, 0.0, 0.0]
+    unflipped = replace(conv, flip=False)
+    assert unflipped.reference([1.0, 0.0], [1.0, 0.0]) == [0.0, 1.0, 0.0]
 
 
 @pytest.mark.parametrize("dtype", [name for name, _, _ in model.TYPES])
@@ -461,7 +584,7 @@ def test_steel_conv_references_are_exact_and_guarded(dtype):
     assert _exact(dtype, guard)
     seen = set()
     for entry in ENTRIES:
-        key = (entry.dtype, entry.bn, entry.channels, entry.small_filter)
+        key = (entry.rank, entry.dtype, entry.bn, entry.channels, entry.small_filter)
         if entry.dtype != dtype or key in seen:
             continue
         seen.add(key)
@@ -472,7 +595,7 @@ def test_steel_conv_references_are_exact_and_guarded(dtype):
             assert any(expected[:-8]) and guard not in expected[:-8]
             assert geometry["workgroupCount"][2] == conv.groups
             assert gemm["N"] * conv.groups == params["O"]
-    assert len(seen) == 3 * 6
+    assert len(seen) == 3 * (6 + 2)
 
 
 @pytest.fixture(scope="module")
@@ -502,35 +625,38 @@ def conv_source(tmp_path_factory):
         timeout=30,
     )
     assert not status.strip()
-    source = root / SOURCE
-    assert hashlib.sha256(source.read_bytes()).hexdigest() == SOURCE_SHA256
     for name, digest in CONV_HEADERS.items():
         header = root / "mlx/backend/metal/kernels/steel/conv" / name
         assert hashlib.sha256(header.read_bytes()).hexdigest() == digest, name
     register_default_sources()
-    discovery = SOURCE_REGISTRY.get("metal").discover_entry_points(
-        source.read_text(encoding="utf-8"),
-        file_path=str(source),
-        include_paths=[str(root)],
-    )
-    assert discovery.status == ENTRY_DISCOVERY_AVAILABLE
-    assert [entry.name for entry in discovery.entries] == [
-        entry.name for entry in ENTRIES
-    ]
-    original = None
     if target == "metal":
         run(
             ["xcrun", "--sdk", "macosx", "metal", "--version"],
             tmp_path,
             "metal-version",
         )
-        original = compile_metal(
-            source, root, tmp_path / "original", flags=ORIGINAL_FLAGS
-        )
     else:
         tool = GATE_TOOLS[target][0]
         run([tool, "--version"], tmp_path, f"{tool}-version")
-    return root, original, target
+    originals = {}
+    for rank, relative in model.SOURCES.items():
+        source = root / relative
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        assert digest == SOURCE_HASHES[relative], relative
+        discovery = SOURCE_REGISTRY.get("metal").discover_entry_points(
+            source.read_text(encoding="utf-8"),
+            file_path=str(source),
+            include_paths=[str(root)],
+        )
+        assert discovery.status == ENTRY_DISCOVERY_AVAILABLE
+        assert [entry.name for entry in discovery.entries] == [
+            entry.name for entry in model.entries(rank)
+        ]
+        if target == "metal":
+            originals[rank] = compile_metal(
+                source, root, tmp_path / f"original-{rank}d", flags=ORIGINAL_FLAGS
+            )
+    return root, originals, target
 
 
 def _original_outputs(request, source, module, work, name):
@@ -555,7 +681,7 @@ def _original_outputs(request, source, module, work, name):
             {
                 "outputs": actual,
                 "sourceCommit": MLX_COMMIT,
-                "sourceSha256": SOURCE_SHA256,
+                "sourceSha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "moduleSha256": module_hash,
                 "compileFlags": ORIGINAL_FLAGS,
             },
@@ -580,7 +706,7 @@ def _validate(root):
 
 @pytest.mark.parametrize("entry", SELECTED_ENTRIES, ids=lambda entry: entry.name)
 def test_current_steel_conv_executes(tmp_path, conv_source, entry):
-    root, original, target = conv_source
+    root, originals, target = conv_source
     results = []
     with tempfile.TemporaryDirectory(prefix=".current-conv-", dir=root) as directory:
         work = Path(directory)
@@ -633,7 +759,11 @@ def test_current_steel_conv_executes(tmp_path, conv_source, entry):
                 if target == "metal":
                     assert (
                         _original_outputs(
-                            request, root / SOURCE, original, case_work, entry.name
+                            request,
+                            root / entry.source,
+                            originals[entry.rank],
+                            case_work,
+                            entry.name,
                         )
                         == record["outputs"]
                     )
@@ -665,7 +795,8 @@ def test_current_steel_conv_executes(tmp_path, conv_source, entry):
             "sourceCommit": MLX_COMMIT,
             "target": target,
             "entryPoint": entry.name,
-            "sourceSha256": SOURCE_SHA256,
+            "source": entry.source,
+            "sourceSha256": SOURCE_HASHES[entry.source],
             "cases": results,
             "complete": len(results) == len(_cases(entry)),
             "scope": SCOPE,

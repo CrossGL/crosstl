@@ -388,20 +388,21 @@ scans only once the read-only storage they read is proved immutable (#2263).
 #### Implicit-GEMM convolution
 
 `test_current_steel_conv.py` executes all 108 `implicit_gemm_conv_2d` entries
-of `steel_conv.metal`: three element types, six block shapes and six loader
-selections (the general-channel input loader for small or large filters and
-the loaders for one to four channels per group). `steel_conv_model.py` names
-every entry, models the threadgroup slots each loader writes and `BlockMMA`
-reads, and rebuilds the `MLXConvParams<2>` and `ImplicitGemmConv2DParams` that
-`implicit_gemm_conv_2D_gpu` encodes; the test checks the entry list against
-entry discovery. Each entry runs three convolutions that meet its loader
-preconditions: padded with a full output tile, strided, dilated and flipped
-with a partial column tile and several row tiles, and grouped with a surplus
-threadgroup in each tile axis. The host never selects the `bm64_bn32` entries
-or the 64-row entries for four or fewer channels; the gate executes them all
-the same. Every output word, guards included, is compared with an exact
-reference, and on macOS with the original source too. The current-tree native
-parity job runs the entries in six shards per operating system:
+of `steel_conv.metal` and all 36 `implicit_gemm_conv_3d` entries of
+`steel_conv_3d.metal`: three element types and six block shapes, with the
+general-channel input loader for small or large filters and, in 2-D, the
+loaders for one to four channels per group. `steel_conv_model.py` names every
+entry, models the threadgroup slots each loader writes and `BlockMMA` reads,
+and rebuilds the `MLXConvParams<N>` and `ImplicitGemmConv{2,3}DParams` that
+`implicit_gemm_conv_{2,3}D_gpu` encode; the test checks the entry lists
+against entry discovery. Each entry runs three convolutions that meet its
+loader preconditions: padded with a full output tile, strided, dilated and
+flipped with a partial column tile and several row tiles, and grouped with a
+surplus threadgroup in each tile axis. The host never selects the `bm64_bn32`
+entries or the 64-row entries for four or fewer channels; the gate executes
+them all the same. Every output word, guards included, is compared with an
+exact reference, and on macOS with the original source too. The current-tree
+native parity job runs the entries in six shards per operating system:
 
 ```sh
 CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
@@ -411,7 +412,10 @@ CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_COUNT=6 \
 python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_steel_conv.py
 ```
 
-`steel_conv_general.metal` and `steel_conv_3d.metal` are not covered yet.
+The 18 `implicit_gemm_conv_2d_general` entries of `steel_conv_general.metal`
+are not covered: their epilogue binds a reference-returning `frag_at` to a
+`thread const auto&` local, which translation rejects until that reference can
+keep its storage identity (#2163).
 
 ### Resource-Index Controls
 
