@@ -163,9 +163,7 @@ def test_explicit_instantiation_selects_overload_by_template_parameter_kinds(
         (["4", "nomask_t", "3"], None),
     ],
 )
-def test_overload_selection_uses_arity_defaults_and_certain_kinds(
-    arguments, expected
-):
+def test_overload_selection_uses_arity_defaults_and_certain_kinds(arguments, expected):
     source = textwrap.dedent(OVERLOADED_KERNELS)
     preprocessor = MetalPreprocessor()
     templates = [
@@ -230,9 +228,7 @@ def test_declared_type_names_reads_structs_aliases_and_typedefs():
         "typename Kernel<T, N>::loader_t",
     ],
 )
-def test_receiver_declared_through_qualified_member_type_alias(
-    tmp_path, declared_type
-):
+def test_receiver_declared_through_qualified_member_type_alias(tmp_path, declared_type):
     payload, outputs = _translate(
         tmp_path,
         QUALIFIED_RECEIVER_KERNEL.replace("{declared_type}", declared_type),

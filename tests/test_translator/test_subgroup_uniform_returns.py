@@ -914,9 +914,7 @@ def test_builtin_storage_loads_follow_constant_storage(tmp_path, return_target):
         with pytest.raises(RETURN_ERRORS):
             _return_codegen(return_target).generate_stage(
                 parse(
-                    _storage_source(
-                        "buffer_load(counts, group.x)", qualifier=qualifier
-                    )
+                    _storage_source("buffer_load(counts, group.x)", qualifier=qualifier)
                 ),
                 "compute",
             )
