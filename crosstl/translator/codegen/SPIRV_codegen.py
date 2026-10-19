@@ -20749,6 +20749,18 @@ class VulkanSPIRVCodeGen(
 
         if self.is_task_payload_shared_node(node):
             return "TaskPayloadWorkgroupEXT"
+        # Module- and stage-scope GLSL `shared`, HLSL `groupshared` and MSL `threadgroup` variables are one copy
+        # per workgroup; Private storage would give every invocation its own copy.
+        workgroup_names = {"shared", "groupshared", "threadgroup", "workgroup"}
+        if attribute_names & workgroup_names or qualifiers & workgroup_names:
+            if getattr(node, "initial_value", None) is not None:
+                raise UnsupportedSPIRVFeatureError(
+                    "workgroup variable initializer",
+                    f"SPIR-V workgroup variable '{node.name}' cannot take an initializer",
+                    missing_capabilities=("spirv.workgroup_storage.initializer",),
+                    source_location=getattr(node, "source_location", None),
+                )
+            return "Workgroup"
         if attribute_names & {"input", "in"} or qualifiers & {"input", "in"}:
             return "Input"
         if attribute_names & {"output", "out"} or qualifiers & {"output", "out"}:
