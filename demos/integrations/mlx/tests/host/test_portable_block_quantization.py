@@ -326,25 +326,35 @@ def test_block_ci_requires_native_execution_in_existing_platform_jobs():
 
 
 @pytest.mark.parametrize("target", ("metal", "opengl", "directx"))
-@pytest.mark.parametrize("fault", (None, "compile", "empty", "source-change"))
+@pytest.mark.parametrize(
+    "fault", (None, "compile", "empty", "source-change", "staged-change")
+)
 def test_block_toolchains_require_exact_sources_and_nonempty_modules(
     tmp_path, monkeypatch, target, fault
 ):
-    source = tmp_path / "source"
+    # Package paths can exceed Windows MAX_PATH, so the compiler reads a short copy.
+    source = tmp_path.joinpath(*("d" * 40 for _ in range(6)), "source.kernel")
+    source.parent.mkdir(parents=True)
     source.write_text("void main() {}")
     descriptor = {
         "artifact": {
-            "packagePath": source.name,
+            "packagePath": source.relative_to(tmp_path).as_posix(),
             "hash": {"value": hashlib.sha256(source.read_bytes()).hexdigest()},
         },
         "entryPoint": {"name": "CSMain" if target == "directx" else "main"},
     }
     calls = []
+    output = tmp_path / "compilation"
+    staged = output / "entry.kernel"
 
     def execute(command, **kwargs):
         calls.append(command)
         assert kwargs["timeout"] == 120 and kwargs["check"] is False
         if command[0] != "spirv-val":
+            assert str(staged) in command and str(source) not in command
+            assert staged.read_bytes() == source.read_bytes()
+            if fault == "staged-change":
+                staged.write_text("changed")
             module = Path(
                 command[command.index("-Fo" if target == "directx" else "-o") + 1]
             )
@@ -359,7 +369,6 @@ def test_block_toolchains_require_exact_sources_and_nonempty_modules(
         )
 
     monkeypatch.setattr(verification.subprocess, "run", execute)
-    output = tmp_path / "compilation"
     if fault:
         with pytest.raises((ValueError, RuntimeError)):
             verification.compile_entry(target, "entry", descriptor, tmp_path, output)
@@ -367,6 +376,7 @@ def test_block_toolchains_require_exact_sources_and_nonempty_modules(
         verification.compile_entry(target, "entry", descriptor, tmp_path, output)
     record = json.loads((output / "entry.json").read_text())
     assert record["status"] == ("failed" if fault else "passed")
+    assert fault or record["compiledSource"] == staged.name
     assert record["steps"][0]["stdout"] == "output"
     if target == "metal":
         assert "-Werror" in calls[0] and "-fno-fast-math" in calls[0]

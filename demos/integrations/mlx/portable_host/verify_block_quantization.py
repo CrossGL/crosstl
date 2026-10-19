@@ -250,8 +250,15 @@ def compile_entry(target, entry, descriptor, package, output):
     output.mkdir(parents=True, exist_ok=True)
     source = package / descriptor["artifact"]["packagePath"]
     expected = descriptor["artifact"]["hash"]["value"]
-    if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+    contents = source.read_bytes()
+    if hashlib.sha256(contents).hexdigest() != expected:
         raise ValueError("Block compilation source identity differs")
+    # Compile a byte-identical copy at a short path: package paths can exceed the
+    # Windows MAX_PATH limit that dxc.exe still enforces when opening its input.
+    staged = output / (entry + source.suffix)
+    if staged.suffix in {"", ".air", ".spv", ".dxil", ".json"}:
+        staged = output / (entry + ".source")
+    staged.write_bytes(contents)
     module = output / (
         entry + {"metal": ".air", "opengl": ".spv", "directx": ".dxil"}[target]
     )
@@ -265,7 +272,7 @@ def compile_entry(target, entry, descriptor, package, output):
                 "-Werror",
                 "-fno-fast-math",
                 "-c",
-                str(source),
+                str(staged),
                 "-o",
                 str(module),
             ]
@@ -281,8 +288,8 @@ def compile_entry(target, entry, descriptor, package, output):
                 "-HV",
                 "2021",
                 "-WX",
-                *dxc_compiler_arguments_for_source(source.read_text()),
-                str(source),
+                *dxc_compiler_arguments_for_source(staged.read_text()),
+                str(staged),
                 "-Fo",
                 str(module),
             ]
@@ -297,7 +304,7 @@ def compile_entry(target, entry, descriptor, package, output):
                 "spirv1.3",
                 "-S",
                 "comp",
-                str(source),
+                str(staged),
                 "-o",
                 str(module),
             ],
@@ -324,10 +331,14 @@ def compile_entry(target, entry, descriptor, package, output):
                 raise RuntimeError(f"Block toolchain validation failed: {entry}")
         if not module.is_file() or not module.stat().st_size:
             raise RuntimeError("Block compiler did not produce a module")
-        if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+        if any(
+            hashlib.sha256(path.read_bytes()).hexdigest() != expected
+            for path in (source, staged)
+        ):
             raise ValueError("Block compilation source changed")
         record.update(
             status="passed",
+            compiledSource=staged.name,
             module=module.name,
             moduleHash=hashlib.sha256(module.read_bytes()).hexdigest(),
         )
