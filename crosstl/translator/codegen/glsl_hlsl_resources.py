@@ -140,9 +140,7 @@ class GLSLHlslResourceMixin:
             "name": source_name,
             "glslName": glsl_name,
             "kind": kind,
-            "namespace": self.GLSL_BINDING_RECORD_NAMESPACES.get(
-                binding_namespace, binding_namespace
-            ),
+            "namespace": self.GLSL_BINDING_RECORD_NAMESPACES[binding_namespace],
             "binding": int(binding),
             "count": max(count, 1) if isinstance(count, int) else 1,
             "register": self.glsl_source_register(node),

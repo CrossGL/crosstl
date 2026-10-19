@@ -358,14 +358,15 @@ class GLSLHlslPreciseMixin:
         name = self.function_call_name(expression)
         if not isinstance(name, str) or name in self.function_definitions:
             return False
-        native_aliases = {
-            "floatBitsToInt": "asint",
-            "floatBitsToUint": "asuint",
-            "intBitsToFloat": "asfloat",
-            "uintBitsToFloat": "asfloat",
+        native_bitcasts = {
+            "floatBitsToInt",
+            "floatBitsToUint",
+            "intBitsToFloat",
+            "uintBitsToFloat",
         }
         return (
-            native_aliases.get(name, name) in self.GLSL_BITCAST_FUNCTIONS
+            name in native_bitcasts
+            or name in self.GLSL_BITCAST_FUNCTIONS
             or self.metal_as_type_target(name) is not None
         )
 
