@@ -373,6 +373,131 @@ def test_published_results_reject_incomplete_arithmetic_evidence(
         test_published_results_qualify_the_current_contract()
 
 
+SUITES = load_module("computesharp_results_suites", ROOT / "suites.py")
+
+
+def _check_frozen_profiles(name, summary, lock):
+    """Every frozen profile of ``lock`` passed with its frozen outcomes."""
+    assert set(summary["profiles"]) == set(lock["profiles"]), name
+    for profile_name, frozen in lock["profiles"].items():
+        profile = summary["profiles"][profile_name]
+        label = f"{name} {profile_name}"
+        assert profile["status"] == "passed", label
+        assert profile["checks"] and set(profile["checks"].values()) == {
+            "passed"
+        }, label
+        assert profile["execution"] == frozen["execution"], label
+        cases = profile["cases"]
+        assert cases["expected"] == frozen["expected"], label
+        assert (
+            cases["requiredGpuCasesPassed"] == frozen["requiredGpuExpected"]["pass"]
+        ), label
+        assert cases["capabilityGated"] == frozen["expected"]["inconclusive"], label
+        for category, totals in lock["totals"].items():
+            if totals["cases"]:
+                observed = cases["categories"][category]
+                assert observed["discovered"] == totals["cases"], label
+                assert observed["notRun"] == 0, label
+            else:
+                assert category not in cases["categories"], label
+
+
+def test_published_results_cover_every_ported_companion_project():
+    results = json.loads(PUBLISHED.read_text(encoding="utf-8"))
+    suites = SUITES.ported_suites()
+    companions = {
+        name: item for name, item in suites.items() if name != SUITES.MAIN_SUITE
+    }
+    assert companions
+    assert set(results["suites"]) == set(companions)
+    for name, item in companions.items():
+        summary = results["suites"][name]
+        lock = json.loads(item.lock.read_text(encoding="utf-8"))
+        assert summary["status"] == "passed", name
+        assert summary["kind"] == item.kind, name
+        assert summary["contractSHA256"] == lock["contractSHA256"], name
+        assert summary["contractSHA256"] == sha256(
+            item.contract, normalize_newlines=True
+        ), name
+        assert summary["evidencePolicySHA256"] == sha256(item.evidence_policy), name
+        assert summary["negativeControlsSHA256"] == sha256(item.negative_controls), name
+        assert summary.get("noFloatArithmeticReason") == (
+            item.no_float_arithmetic_reason
+        ), name
+        _check_frozen_profiles(name, summary, lock)
+        controls = json.loads(item.negative_controls.read_text(encoding="utf-8"))
+        faults = {control["fault"] for control in controls["controls"]}
+        for profile_name in TRANSLATED:
+            profile = summary["profiles"][profile_name]
+            label = f"{name} {profile_name}"
+            assert profile["device"]["hardware"] is (
+                lock["profiles"][profile_name]["execution"] == "hardware"
+            ), label
+            assert profile["arithmeticExactness"]["status"] == "passed", label
+            assert profile["arithmeticExactness"]["contractible"] == 0, label
+            if item.no_float_arithmetic_reason is None:
+                assert profile["arithmeticExactness"]["floatOperations"] > 0, label
+            assert set(profile["negativeControls"]["faults"]) == faults, label
+            for fault in profile["negativeControls"]["faults"].values():
+                assert fault["status"] == "passed", label
+                assert fault["cases"] == fault["failed"] > 0, label
+
+
+def test_published_results_keep_retained_projects_out_of_translated_execution():
+    results = json.loads(PUBLISHED.read_text(encoding="utf-8"))
+    retained = SUITES.retained_suites()
+    assert retained
+    assert set(results["retained"]) == set(retained)
+    for name, item in retained.items():
+        summary = results["retained"][name]
+        lock = json.loads(item.lock.read_text(encoding="utf-8"))
+        assert summary["status"] == "passed", name
+        assert summary["scope"] == item.scope, name
+        assert summary["countedAsTranslatedExecution"] is False, name
+        assert summary["contractSHA256"] == lock["contractSHA256"], name
+        assert set(lock["profiles"]) == {SUITES.RETAINED_PROFILE}, name
+        _check_frozen_profiles(name, summary, lock)
+        profile = summary["profiles"][SUITES.RETAINED_PROFILE]
+        assert profile["cases"]["requiredGpuCasesPassed"] == 0, name
+        assert set(profile["cases"]["categories"]) == {
+            SUITES.RETAINED_SCOPES[item.scope]
+        }, name
+        assert isinstance(profile.get("selectedCases"), dict), name
+
+
+@pytest.mark.parametrize(
+    "defect", ["missing-suite", "failed-profile", "counted", "missing-retained"]
+)
+def test_published_results_reject_incomplete_project_results(
+    tmp_path, monkeypatch, defect
+):
+    results = json.loads(PUBLISHED.read_text(encoding="utf-8"))
+    suite_name = sorted(results["suites"])[0]
+    retained_name = sorted(results["retained"])[0]
+    if defect == "missing-suite":
+        results["suites"].pop(suite_name)
+        check = test_published_results_cover_every_ported_companion_project
+    elif defect == "failed-profile":
+        profile = results["suites"][suite_name]["profiles"]["opengl-mesa-llvmpipe"]
+        profile["cases"]["requiredGpuCasesPassed"] -= 1
+        check = test_published_results_cover_every_ported_companion_project
+    elif defect == "counted":
+        results["retained"][retained_name]["countedAsTranslatedExecution"] = True
+        check = (
+            test_published_results_keep_retained_projects_out_of_translated_execution
+        )
+    else:
+        results["retained"].pop(retained_name)
+        check = (
+            test_published_results_keep_retained_projects_out_of_translated_execution
+        )
+    invalid = tmp_path / "results.json"
+    invalid.write_text(json.dumps(results), encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "PUBLISHED", invalid)
+    with pytest.raises(AssertionError):
+        check()
+
+
 def _readme_results_section():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     start = text.index("## Results\n")
@@ -440,3 +565,62 @@ def test_readme_results_describe_the_published_run():
             f"{opengl_output['meanAbsoluteErrorVsDirectX']:.4f}",
             f"{metal_output['meanAbsoluteErrorBound']:.3f}",
         ], shader
+
+
+def _project_cell(profile):
+    cases = profile["cases"]
+    cell = f"{cases['requiredCasesPassed']:,} passed"
+    if cases["optionalHardwareSkipped"]:
+        cell += f", {cases['optionalHardwareSkipped']:,} optional"
+    if cases["capabilityGated"]:
+        cell += f", {cases['capabilityGated']:,} capability-gated"
+    return cell
+
+
+def test_readme_results_describe_every_companion_and_retained_project():
+    """The project table of the Results section matches ``results.json``."""
+    results = json.loads(PUBLISHED.read_text(encoding="utf-8"))
+    section = _readme_results_section()
+    header = "| Project | Scope | `directx-warp` |"
+    rows = {row[0].strip("`"): row for row in _table_rows(section, header)}
+    projects = {
+        **{name: ("ported", item) for name, item in results["suites"].items()},
+        **{name: (item["scope"], item) for name, item in results["retained"].items()},
+    }
+    assert set(rows) == {name.removeprefix("ComputeSharp.Tests.") for name in projects}
+    profiles = ("directx-warp", *TRANSLATED)
+    for name, (scope, summary) in projects.items():
+        row = rows[name.removeprefix("ComputeSharp.Tests.")]
+        assert row[1] == scope, name
+        expected = [
+            (
+                _project_cell(summary["profiles"][profile])
+                if profile in summary["profiles"]
+                else "not run"
+            )
+            for profile in profiles
+        ]
+        assert row[2:] == expected, name
+
+
+def test_readme_results_state_what_the_upstream_device_lost_steps_selected():
+    """The README claims the verbatim upstream DeviceLost steps select no case."""
+    results = json.loads(PUBLISHED.read_text(encoding="utf-8"))
+    profile = results["retained"]["ComputeSharp.Tests.DeviceLost"]["profiles"][
+        SUITES.RETAINED_PROFILE
+    ]
+    upstream = {
+        step: count
+        for step, count in profile["selectedCases"].items()
+        if step.startswith("upstream-")
+    }
+    assert len(upstream) == 3
+    accounted = sum(
+        count
+        for step, count in profile["selectedCases"].items()
+        if step not in upstream
+    )
+    assert accounted == profile["cases"]["categories"]["windows-specific"]["discovered"]
+    section = " ".join(_readme_results_section().split())
+    claim = "the three upstream DeviceLost steps selected no case"
+    assert (claim in section) is (set(upstream.values()) == {0})
