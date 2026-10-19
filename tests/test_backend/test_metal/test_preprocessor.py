@@ -4979,6 +4979,58 @@ def test_preprocessor_matches_partial_specialization_through_materialized_alias(
     assert "StorageTraits_ComplexHalf" not in output
 
 
+def test_preprocessor_matches_partial_specialization_spelled_with_an_alias():
+    code = """
+    template <typename T>
+    struct Complex {
+        T real;
+        T imag;
+    };
+
+    using ComplexFloat = Complex<float>;
+
+    template <typename T, int N>
+    struct Block {
+        T values[N];
+    };
+
+    template <int N>
+    struct Block<ComplexFloat, N> {
+        float real[N];
+        float imag[N];
+    };
+
+    template <typename N>
+    struct Shadow {
+        int value;
+    };
+
+    template <typename ComplexFloat>
+    struct Shadow<Block<ComplexFloat, 1>> {
+        ComplexFloat value;
+    };
+
+    Block<Complex<float>, 2> split;
+    Block<ComplexFloat, 4> aliased;
+    Block<float, 2> plain;
+    Shadow<Block<half, 1>> shadowed;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    # The pattern names Complex<float> through its alias, so both spellings
+    # select the partial specialization rather than the primary's body.
+    assert "Block<Complex<float>, 2> split;" in output
+    assert "Block<ComplexFloat, 4> aliased;" in output
+    assert "ComplexFloat values" not in output
+    assert "Complex_float values" not in output
+    assert "Block_float_2 plain;" in output
+    assert "struct Block_float_2" in output
+    # A template parameter shadows the alias inside its own specialization.
+    assert "Shadow<Block<half, 1>> shadowed;" in output
+    assert "struct Shadow_Block_half_1" not in output
+
+
 def test_preprocessor_resolves_struct_alias_in_nested_method_parameter_template():
     code = """
     template <typename T>
