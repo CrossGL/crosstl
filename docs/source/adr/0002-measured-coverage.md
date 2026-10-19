@@ -29,17 +29,18 @@ Mojo follow. A direction CrossTL does not offer, such as WGSL input, is reported
 
 ### 2. Feature lists come from pinned upstream sources
 
-| Language | Source, pinned by commit |
+| Language | Source, pinned by commit and SHA-256 in `tools/coverage/upstream.py` |
 |---|---|
-| SPIR-V | KhronosGroup/SPIRV-Headers: the unified core grammar and `extinst.glsl.std.450.grammar.json`, shader subset |
+| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`; the core grammar's shader subset follows |
 | HLSL | microsoft/DirectXShaderCompiler: `utils/hct/gen_intrin_main.txt` |
-| GLSL | KhronosGroup/glslang: built-in declarations in `glslang/MachineIndependent/Initialize.cpp` |
-| WGSL | gpuweb/gpuweb: the built-in function index of the WGSL specification |
-| Metal | The MSL specification's standard-library tables, extracted once by a script kept in the repository, with the specification version recorded |
+| GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification |
+| WGSL | google/dawn: Tint's `src/tint/lang/wgsl/wgsl.def` |
+| Metal | The standard-library headers of Apple's Metal toolchain, read once by a script in the repository into `metal.txt`, which records the toolchain and language version |
 
-Language-level categories are added on top of built-ins: types, control flow, resources, compute (shared memory,
-barriers, atomics, subgroups) and stages. CI fetches the sources at their pinned commits and caches them. No feature
-list is committed by hand.
+Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
+only when the script is rerun for a newer toolchain. Language-level categories are added on top of built-ins: types,
+control flow, resources, compute (shared memory, barriers, atomics, subgroups) and stages. CI fetches the sources at
+their pinned commits, checks their digests and caches them. No feature list is written by hand.
 
 ### 3. Each feature is checked by the target's reference validator
 
@@ -56,14 +57,29 @@ for a backend and direction is `supported / (supported + refused + wrong)`; `unt
 `python -m tools.coverage run [--backend B] [--direction input|output]` runs the probes locally and writes
 `coverage.json`.
 
-### 4. Generated data stays out of `main`
+### 4. The CrossGL IR is measured as its own row
+
+CrossGL has no compatibility guarantee: its goal is to express everything any backend can, so that every backend can
+reach 100 %. The "CrossGL IR" row measures that goal. Its universe is the union of every backend's features,
+normalized to semantic features: a feature's id is the set of SPIR-V instructions its native probe lowers to when the
+reference compiler builds it (DXC `-spirv`, glslang, naga), minus a baseline probe that reads the same arguments
+without the call. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. A feature SPIR-V cannot express is
+listed by hand in `tools/coverage/semantic.py` only when it is known to equal another; otherwise it stays a semantic
+feature of its own.
+
+A semantic feature is expressible when a CrossGL probe for it parses, type-checks and translates correctly to at least
+one backend that has it. CrossGL probes come from a small template layer, `tools/coverage/crossgl.py`, which Core
+updates in the same pull request as any IR change; no CrossGL probe text is pinned. The row's gaps go to one tracking
+issue labelled `backend:crossgl` and `area:frontend`, which Core owns.
+
+### 5. Generated data stays out of `main`
 
 A `coverage` workflow runs on every push to `main` and nightly. It publishes `coverage.json`, `coverage.svg`,
 `COVERAGE.md` and a bounded `history.csv` to an orphan `coverage` branch as a single replaced commit. Only that job
 has `contents: write`. The README embeds the SVG from the `coverage` branch. The chart is plain SVG written by a
 small script with no plotting dependency. Contributors never run a regeneration step.
 
-### 5. Issues are reconciled from `coverage.json`
+### 6. Issues are reconciled from `coverage.json`
 
 `tools/coverage/issues.py` keeps one tracking issue per backend and direction, titled for example "HLSL output
 coverage: 87 % (23 gaps)", with a checklist of gaps grouped by category. It edits the issue in place, closes it at
