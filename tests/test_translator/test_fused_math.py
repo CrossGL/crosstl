@@ -207,8 +207,9 @@ def test_ci_requires_native_fma_on_all_three_platforms(job):
     assert "--junitxml=" in step
     # The porting job runs two llvmpipe workers (67-125 s observed). The
     # native host selection takes 39-98 s on WARP 1.0.21 but 107-121 s on the
-    # WARP 1.0.13 qualification runtime, which timed out at 120 s.
-    budget = 300 if job == "mlx-metal-porting" else 240
+    # WARP 1.0.13 qualification runtime, which timed out at 120 s, and a slow
+    # Windows runner (about 1.9x) later exceeded 240 s there.
+    budget = 300 if job == "mlx-metal-porting" else 480
     assert f"--timeout-seconds {budget}" in step
     assert "pytest -q -n auto" in step
 
