@@ -4171,9 +4171,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 # const member accepts every receiver the source's did.
                 qualifiers = {
                     str(item).lower()
-                    for item in list(
-                        getattr(parameters[0], "qualifiers", []) or []
-                    ) + list(getattr(parameters[0].param_type, "qualifiers", []) or [])
+                    for item in list(getattr(parameters[0], "qualifiers", []) or [])
+                    + list(getattr(parameters[0].param_type, "qualifiers", []) or [])
                 }
                 receiver = ["const"] + (
                     [
@@ -6165,7 +6164,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.current_image_format_parameters = image_format_parameters
         self.register_metal_buffer_resource_parameter_scope(
             self.current_function_name,
-            include_all=shader_type in {
+            include_all=shader_type
+            in {
                 "vertex",
                 "fragment",
                 "geometry",
@@ -9507,16 +9507,52 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         # Keep arithmetic carriers widened, but preserve the source conversion.
         return f"{self.map_type(value_type)}({native}({rendered}))"
 
+    def metal_narrow_update_repeatable_lvalue(self, target):
+        """Return whether ``target`` can be read and written by repeating it.
+
+        The widened update renders the lvalue twice, so every subexpression
+        must name the same storage on both evaluations: variables, fields and
+        array elements whose indices are side-effect-free.
+        """
+        if isinstance(target, (IdentifierNode, VariableNode)):
+            return True
+        if isinstance(target, MemberAccessNode):
+            return self.metal_narrow_update_repeatable_lvalue(target.object_expr)
+        if isinstance(target, ArrayAccessNode):
+            return self.metal_narrow_update_repeatable_lvalue(
+                target.array_expr
+            ) and self.metal_narrow_update_repeatable_index(target.index_expr)
+        return False
+
+    def metal_narrow_update_repeatable_index(self, index):
+        if isinstance(index, LiteralNode):
+            return True
+        if isinstance(index, (IdentifierNode, VariableNode, MemberAccessNode)):
+            return self.metal_narrow_update_repeatable_lvalue(index)
+        if isinstance(index, ArrayAccessNode):
+            return self.metal_narrow_update_repeatable_lvalue(index)
+        if isinstance(index, BinaryOpNode):
+            return self.metal_narrow_update_repeatable_index(
+                index.left
+            ) and self.metal_narrow_update_repeatable_index(index.right)
+        if isinstance(index, UnaryOpNode):
+            return str(index.operator) not in {
+                "++",
+                "--",
+            } and self.metal_narrow_update_repeatable_index(index.operand)
+        if isinstance(index, CastNode):
+            return self.metal_narrow_update_repeatable_index(
+                getattr(index, "expression", None)
+            )
+        return False
+
     def metal_narrow_integer_update_expression(
         self, node, target, operator, value=None
     ):
         value_type = self.expression_result_type(target)
         if self.metal_narrow_integer_conversion_expression("value", value_type) is None:
             return None
-        owner = target
-        while isinstance(owner, MemberAccessNode):
-            owner = owner.object_expr
-        if not isinstance(owner, (IdentifierNode, VariableNode)):
+        if not self.metal_narrow_update_repeatable_lvalue(target):
             raise UnsupportedMetalFeatureError(
                 "byte-update",
                 "Narrow integer updates require a stable variable or field",
@@ -12005,7 +12041,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     str(func_name),
                 )
                 is not None
-                or func_name in [
+                or func_name
+                in [
                     "float",
                     "half",
                     "float16",
@@ -21353,9 +21390,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return bool(
             func_name
             and name
-            and name in self.function_structured_buffer_length_dependencies.get(
-                func_name, set()
-            )
+            and name
+            in self.function_structured_buffer_length_dependencies.get(func_name, set())
         )
 
     def global_structured_buffer_requires_counter(self, name):
@@ -22805,7 +22841,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def buffer_atomic_supports_scalar_type(operation, component_type):
         return component_type in {"int", "uint"} or (
             component_type == "float"
-            and operation in {
+            and operation
+            in {
                 "load",
                 "store",
                 "fetch_add",
@@ -27144,7 +27181,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             fragment_label(fragment_provenance),
         )
         if (
-            fragment_metadata != (
+            fragment_metadata
+            != (
                 "unspecified",
                 "unspecified",
                 "unspecified",
