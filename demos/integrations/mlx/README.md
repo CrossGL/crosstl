@@ -217,10 +217,10 @@ same defect.
 `tests/kernels/test_current_gemm.py` translates the unchanged
 `steel_gemm_fused_nn_float32_float32_bm32_bn32_bk16_wm2_wn2` entry at commit
 `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` through the project API, package
-verification and native Metal or DirectX loader. Both targets compare generated
-execution with an exact matrix-product reference. Metal additionally compares
-with the independently compiled upstream kernel; Windows does not claim to run
-the original Metal control.
+verification and native Metal, DirectX or OpenGL loader. All three targets
+compare generated execution with an exact matrix-product reference. Metal
+additionally compares with the independently compiled upstream kernel; Windows
+and Linux do not claim to run the original Metal control.
 Fifteen cases cover scalar, partial-tile, aligned-tile and multi-tile matrices,
 contiguous and two-dimensional broadcast batches, padded rows and batch strides,
 and extra workgroups. Output padding and eight trailing guard values must remain
@@ -236,21 +236,30 @@ The original Metal kernel receives matching native function constants.
 The test uses the source-backed fragment mapping documented in
 `contracts/cooperative-matrix-fragment-mapping.json`, a 32-by-2-by-2 workgroup,
 and reflected parameter layouts. It does not edit upstream or generated kernels,
-or substitute a reference shader. DirectX uses two source-backed workgroup
-access assertions for the complete vector loads in `steel/gemm/loader.h`.
+or substitute a reference shader. DirectX and OpenGL use two source-backed
+workgroup access assertions for the complete vector loads in
+`steel/gemm/loader.h`.
 For this entry, 128 threads load four adjacent floats each into A's 32-by-20
 and B's 16-by-36 shared arrays. The test enumerates every destination, proves
 unique coverage of the live elements, and bounds the addresses to 0..635 and
-0..571 respectively. Both this header and `steel/gemm/gemm.h` are hash-checked
-against the pin before execution. No unchecked index ranges are supplied.
+0..571 respectively. This header, `steel/gemm/gemm.h` and `steel/gemm/mma.h`
+are hash-checked against the pin before execution. DirectX takes no
+index-range assertions. GLSL indexes with 32-bit integers, so OpenGL takes
+eleven: the four device reads of each loader vector and the float and
+`int64_t` device helpers stay below 2^31 elements, as MLX buffers do, and the
+A and B shared-array helpers stay in the same 0..635 and 0..571. A lane-level
+model of `mma.h`'s tile reads must reach exactly the slots the loaders write.
+OpenGL lowers the simdgroup matrix products to 32-lane software subgroups, as
+DirectX does.
 The original source is compiled with Metal 3.2 and the C++17/C++20 extension
 warning exceptions from upstream's kernel build. Both original and generated
 compilation disable fast math and treat remaining warnings as errors.
 
-The existing macOS and Windows project-porting jobs run this required check and retain
+The macOS, Windows and Linux project-porting jobs run this required check and retain
 translation reports, packages, compiler logs, input records, compiled modules,
 readbacks and per-case parity results. Windows requires DXC compilation with
-warnings as errors and Direct3D 12 execution. Quarter-integer inputs make these
+warnings as errors and Direct3D 12 execution; Linux requires glslangValidator
+and spirv-val and Mesa EGL execution. Quarter-integer inputs make these
 products and sums exactly representable; this gate does not replace the separate
 rounding-sensitive cooperative-matrix controls tracked by #2193.
 Run it locally against a clean checkout
@@ -267,9 +276,9 @@ python -m pytest -q -n auto \
 
 This proves one float32 NN entry and six function-constant configurations, not
 the complete GEMM family or the upstream MLX suite. Transposed operands, other
-element types and every mixed alignment combination are not covered. OpenGL
-collective participation and live-offset bounds remain separate translation
-gaps tracked by #2186 and #2179. This check does not establish full host-runtime
+element types and every mixed alignment combination are not covered. OpenGL's
+device offsets are asserted, not checked against runtime metadata, which #2179
+tracks. This check does not establish full host-runtime
 redirection for any backend. A configured gate is not proof of success until
 its native job passes for the relevant revision.
 
