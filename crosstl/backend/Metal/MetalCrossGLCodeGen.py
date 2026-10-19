@@ -18533,9 +18533,13 @@ float {scalar}(float value) {{
         if close_index is None:
             return None
 
-        suffix = text[close_index + 1 :].strip()
-        if suffix and re.fullmatch(r"[*&]+", suffix) is None:
+        suffix_match = re.fullmatch(
+            r"((?:\s*::\s*[A-Za-z_]\w*)*)\s*([*&]*)", text[close_index + 1 :]
+        )
+        if suffix_match is None:
             return None
+        member_suffix = re.sub(r"\s+", "", suffix_match.group(1))
+        suffix = member_suffix + suffix_match.group(2)
         expression_text = text[open_index + 1 : close_index].strip()
         if not expression_text or expression_text == "auto":
             return None
@@ -18560,7 +18564,35 @@ float {scalar}(float value) {{
             and not resolved_type.endswith("&")
         ):
             resolved_type += "&"
+        if member_suffix:
+            if re.search(r"[*&\[]", resolved_type):
+                # A reference, pointer or array type has no nested members.
+                return None
+            resolved_type = self.resolve_concrete_struct_member_aliases(
+                resolved_type, member_suffix
+            )
+            if resolved_type is None:
+                return None
+            suffix = suffix[len(member_suffix) :]
         return f"{resolved_type}{suffix}"
+
+    def resolve_concrete_struct_member_aliases(self, owner, member_suffix):
+        """Follow ``::member`` type aliases from a concrete struct, as ``decltype(local)::member`` names them."""
+        current = str(owner).strip()
+        for member in member_suffix.split("::")[1:]:
+            struct_name = self.normalized_metal_type(current)
+            if struct_name in self.ambiguous_struct_names:
+                return None
+            struct_node = self.struct_declarations.get(struct_name)
+            aliases = [
+                alias
+                for alias in getattr(struct_node, "type_aliases", None) or ()
+                if getattr(alias, "name", None) == member
+            ]
+            if len(aliases) != 1:
+                return None
+            current = str(self.resolve_type_alias(aliases[0].alias_type)).strip()
+        return current
 
     def map_type(self, metal_type):
         """Map a Metal type name to the closest CrossGL type name."""

@@ -5211,6 +5211,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     )
                 else:
                     initializer = self._replace_concrete_sizeof_expressions(initializer)
+                initializer = self._fold_initializer_type_traits(
+                    initializer, type_aliases, declaration_position
+                )
                 if constexpr_functions:
                     _resolved_initializer, initializer, _unresolved = (
                         self._resolve_static_constexpr_calls(
@@ -5421,6 +5424,43 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if best is not None:
                 visible[name] = best
         return visible
+
+    def _resolve_template_argument_types_at(
+        self,
+        arguments: Sequence[str],
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+        declared_types: Dict[str, str],
+    ) -> List[str]:
+        """Resolve local type aliases and ``decltype(<local>)`` in template arguments.
+
+        An alias such as ``using tile_t = decltype(tile);`` brings the ``decltype`` in only once it is resolved, and a
+        declared type may itself name an alias, so each argument alternates the two until neither changes it.
+        """
+        resolved: List[str] = []
+        for argument in arguments:
+            current = argument
+            for _ in range(8):
+                substituted = self._resolve_type_aliases_at(
+                    substitute_local_decltypes_in((current,), declared_types)[0],
+                    type_aliases,
+                    position,
+                )
+                if substituted == current:
+                    break
+                current = substituted
+            resolved.append(current)
+        return resolved
+
+    def _select_conditional_template_arguments(
+        self, arguments: Sequence[str]
+    ) -> List[str]:
+        """Replace each argument spelled ``conditional_t<C, A, B>`` by ``A`` or ``B`` once ``C`` folds."""
+        return [
+            select_conditional_type(argument, self._evaluate_static_integral_expression)
+            or argument
+            for argument in arguments
+        ]
 
     @staticmethod
     def _visible_local_declared_types(
@@ -6849,6 +6889,49 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     )
                 )
         return min(candidates)[1] if candidates else None
+
+    def _fold_initializer_type_traits(
+        self,
+        initializer: str,
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
+        position: int,
+    ) -> str:
+        """Fold type traits over concrete operands in one constexpr initializer, e.g. ``is_same_v<float, bool>``.
+
+        A trait whose operands do not all resolve to concrete supported types is left in place, so the constant
+        stays unknown and any template argument that names it is still refused.
+        """
+        if not any(name in initializer for name in self._METAL_TYPE_TRAIT_ARITIES):
+            return initializer
+        replacements: List[Tuple[int, int, str]] = []
+        for match in self._METAL_TYPE_TRAIT_START_RE.finditer(initializer):
+            angle_start = initializer.find("<", match.start("trait"), match.end())
+            angle_end = self._find_matching_angle(initializer, angle_start)
+            if angle_end is None:
+                continue
+            spelling = match.group("trait")
+            trait = spelling[:-2] if spelling.endswith("_v") else spelling
+            expression_end = angle_end + 1
+            if not spelling.endswith("_v"):
+                suffix = re.match(r"\s*::\s*value\b", initializer[expression_end:])
+                if suffix is None:
+                    continue
+                expression_end += suffix.end()
+            value, _operands, _reason = self._evaluate_metal_type_trait(
+                trait,
+                self._split_top_level_commas(initializer[angle_start + 1 : angle_end]),
+                resolver=lambda operand: self._canonicalize_type_aliases_at(
+                    operand, type_aliases or {}, position
+                ),
+                known_type_names=set(),
+            )
+            if value is not None:
+                replacements.append(
+                    (match.start(), expression_end, "true" if value else "false")
+                )
+        if not replacements:
+            return initializer
+        return self._apply_text_replacements(initializer, replacements)
 
     def _fold_concrete_type_trait_values(self, code: str) -> str:
         if not any(name in code for name in self._METAL_TYPE_TRAIT_ARITIES):
@@ -23769,30 +23852,27 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 local_integral_constants,
                 span[0],
             )
-            resolved_arguments = [
-                self._resolve_type_aliases_at(
-                    argument,
-                    local_type_aliases,
-                    span[0],
-                )
-                for argument in substitute_local_decltypes_in(
-                    template_arguments,
-                    self._visible_local_declared_types(visible_local_constants),
-                )
-            ]
+            resolved_arguments = self._resolve_template_argument_types_at(
+                template_arguments,
+                local_type_aliases,
+                span[0],
+                self._visible_local_declared_types(visible_local_constants),
+            )
             local_constants = {
                 name: binding.value
                 for name, binding in visible_local_constants.items()
                 if binding.value is not None
             }
             if local_constants:
-                resolved_arguments = [
-                    self._substitute_template_argument_static_constants(
-                        argument,
-                        local_constants,
-                    )
-                    for argument in resolved_arguments
-                ]
+                resolved_arguments = self._select_conditional_template_arguments(
+                    [
+                        self._substitute_template_argument_static_constants(
+                            argument,
+                            local_constants,
+                        )
+                        for argument in resolved_arguments
+                    ]
+                )
             unresolved_constexpr_calls: Set[str] = set()
             constexpr_resolved_arguments: List[str] = []
             for argument in resolved_arguments:
@@ -24112,30 +24192,27 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     local_integral_constants,
                     i,
                 )
-                template_arguments = [
-                    self._resolve_type_aliases_at(
-                        argument,
-                        local_type_aliases,
-                        i,
-                    )
-                    for argument in substitute_local_decltypes_in(
-                        template_arguments,
-                        self._visible_local_declared_types(visible_local_constants),
-                    )
-                ]
+                template_arguments = self._resolve_template_argument_types_at(
+                    template_arguments,
+                    local_type_aliases,
+                    i,
+                    self._visible_local_declared_types(visible_local_constants),
+                )
                 local_constants = {
                     name: binding.value
                     for name, binding in visible_local_constants.items()
                     if binding.value is not None
                 }
                 if local_constants:
-                    template_arguments = [
-                        self._substitute_template_argument_static_constants(
-                            argument,
-                            local_constants,
-                        )
-                        for argument in template_arguments
-                    ]
+                    template_arguments = self._select_conditional_template_arguments(
+                        [
+                            self._substitute_template_argument_static_constants(
+                                argument,
+                                local_constants,
+                            )
+                            for argument in template_arguments
+                        ]
+                    )
                 unresolved_local_constants = unresolved_constant_references(
                     template_arguments,
                     (

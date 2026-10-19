@@ -1,10 +1,15 @@
-"""``decltype`` of a function-local variable inside Metal template arguments.
+"""Function-local ``decltype`` and type-trait constants inside Metal template arguments.
 
 For an unparenthesized id-expression naming a variable, ``decltype`` is the variable's declared type
 ([dcl.type.decltype]/1.3). Template materialization resolves it after the enclosing template is instantiated, both
-in a nested struct template argument (``Limits<typename decltype(tile)::elem_type>``) and in an explicit function
-template argument (``tripled<decltype(scale)>(...)``). A parenthesized operand names an lvalue reference and a
+in a nested struct template argument (``Limits<typename decltype(tile)::elem_type>``), through local aliases
+(``using tile_t = decltype(tile);``), as a declared type (``typename decltype(tile)::elem_type step``) and in an
+explicit function template argument (``tripled<decltype(scale)>(...)``). A parenthesized operand names an lvalue reference and a
 pointer local has no spelled class type here, so both stay refused with the typed specialization diagnostic.
+
+A ``constexpr bool`` local initialized by a type trait over concrete types (``is_same_v<M, bool>``) is a known
+constant, so ``conditional_t<is_bool, bool, T>`` selects its branch before the struct it parameterizes materializes,
+as MLX's attention kernels select the mask element type.
 """
 
 import os
@@ -37,9 +42,16 @@ STRUCT_ARGUMENT = "Limits<typename decltype(tile)::elem_type>::min"
 FUNCTION_ARGUMENT = "tripled<decltype(scale)>(int(index))"
 
 
-def _source(struct_argument=STRUCT_ARGUMENT, function_argument=FUNCTION_ARGUMENT):
+def _source(
+    struct_argument=STRUCT_ARGUMENT, function_argument=FUNCTION_ARGUMENT, mask="bool"
+):
     return f"""#include <metal_stdlib>
 using namespace metal;
+
+template <typename T>
+struct Width {{
+  static constexpr constant int bytes = sizeof(T);
+}};
 
 template <typename T>
 struct Limits {{
@@ -64,7 +76,7 @@ U tripled(int v) {{
   return U(v) * U(3);
 }}
 
-template <typename T>
+template <typename T, typename M>
 [[kernel]] void lowest(
     const device T* values [[buffer(0)]],
     device T* results [[buffer(1)]],
@@ -73,22 +85,42 @@ template <typename T>
   const device T* cursor = values + index;
   fill(tile, *cursor);
   tile.values[1] = {struct_argument};
+  // The aliases MLX's attention kernels use to name a tile's element type.
+  using tile_t = decltype(tile);
+  using elem_t = typename tile_t::elem_type;
+  constexpr auto lowest = Limits<elem_t>::min;
+  typename decltype(tile)::elem_type step = elem_t(3);
   T scale = tile.values[0];
-  results[index] = tile.values[0] + tile.values[1] + {function_argument};
+  constexpr bool is_bool = is_same_v<M, bool>;
+  using melem_t = typename metal::conditional_t<is_bool, bool, elem_t>;
+  results[index] = tile.values[0] + tile.values[1] + lowest / elem_t(10) +
+      step * {function_argument} + Width<melem_t>::bytes;
 }}
 
-template [[host_name("{ENTRY}")]] [[kernel]] void lowest<int>(
+template [[host_name("{ENTRY}")]] [[kernel]] void lowest<int, {mask}>(
     const device int*, device int*, uint);
 """
 
 
-def _expected():
-    return [value + LOWEST + 3 * index for index, value in enumerate(VALUES)] + GUARD
+# sizeof(bool) and sizeof(int) in the Metal Shading Language specification, table 2.1.
+MASK_BYTES = {"bool": 1, "int": 4}
 
 
-def _request(root, target):
+def _expected(mask):
+    return [
+        value + LOWEST + LOWEST // 10 + 9 * index + MASK_BYTES[mask]
+        for index, value in enumerate(VALUES)
+    ] + GUARD
+
+
+def _request(root, target, mask="bool"):
     source, descriptor, package = _package(
-        root, target, "int", WORKGROUP, source=_source(), software_subgroups=False
+        root,
+        target,
+        "int",
+        WORKGROUP,
+        source=_source(mask=mask),
+        software_subgroups=False,
     )
     initial = [-0x21524111] * len(VALUES) + GUARD
     inputs = _bound_values(
@@ -98,7 +130,7 @@ def _request(root, target):
             "results": {"dtype": "int32", "shape": [len(initial)], "values": initial},
         },
     )
-    expected = _expected()
+    expected = _expected(mask)
     outputs = _bound_values(
         descriptor,
         {"results": {"dtype": "int32", "shape": [len(expected)], "values": expected}},
@@ -161,11 +193,12 @@ def test_only_unparenthesized_known_locals_are_substituted():
         assert substitute_local_decltypes(argument, types) == argument
 
 
+@pytest.mark.parametrize("mask", sorted(MASK_BYTES))
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
-def test_local_decltype_template_arguments_compile(tmp_path, target):
-    _, request, _ = _request(tmp_path, target)
+def test_local_decltype_template_arguments_compile(tmp_path, target, mask):
+    _, request, _ = _request(tmp_path, target, mask)
     generated = request.artifact_path.read_text()
-    assert "decltype" not in generated
+    assert "decltype" not in generated and "conditional" not in generated
     _compile(generated, target, tmp_path, metal_compile_flags=("-Wall", "-Wextra"))
 
 
@@ -188,13 +221,14 @@ def test_unspellable_local_decltypes_stay_refused(
     assert codes == {"project.translate.metal-template-specialization"}, codes
 
 
-def test_local_decltype_template_arguments_execute(tmp_path):
+@pytest.mark.parametrize("mask", sorted(MASK_BYTES))
+def test_local_decltype_template_arguments_execute(tmp_path, mask):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native local decltypes")
     from tests.test_translator.test_loop_updates import _execute
 
     target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
-    source, request, expected = _request(tmp_path, target)
+    source, request, expected = _request(tmp_path, target, mask)
     _execute(
         request,
         expected,
