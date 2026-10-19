@@ -1,0 +1,53 @@
+name: Bug report
+description: CrossTL crashes, rejects valid input, or produces wrong output
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Please search the [open issues](https://github.com/CrossGL/crosstl/issues) first.
+  - type: input
+    id: version
+    attributes:
+      label: CrossTL version
+      description: Output of `pip show crosstl`, or the commit you built from.
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Source language
+      options: [CrossGL, GLSL, HLSL, Metal, SPIR-V, CUDA, HIP, Slang, Rust, Mojo, Other]
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target language
+      options: [CrossGL, GLSL, HLSL, Metal, SPIR-V, WGSL, CUDA, HIP, Slang, Rust, Mojo, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input
+      description: The smallest shader or kernel that shows the problem.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or code
+      description: How you ran the translation.
+      placeholder: python -m crosstl translate shader.cgl --backend metal --output -
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened, and what you expected
+      description: Paste the error, or the wrong output with the validator's message if you checked it with one.
+    validations:
+      required: true
