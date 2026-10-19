@@ -108,6 +108,11 @@ SELECTIONS = {
         "typename metal::conditional<narrow, NarrowLoader<T, N>, "
         "WideLoader<T, N>>::type"
     ),
+    "nested": (
+        "typename metal::conditional_t<narrow && N <= 4, NarrowLoader<T, N>, "
+        "typename metal::conditional_t<(N > 2), WideLoader<T, N>, "
+        "NarrowLoader<T, N>>>"
+    ),
 }
 
 

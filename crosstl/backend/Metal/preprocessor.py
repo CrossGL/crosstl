@@ -34,6 +34,11 @@ from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
 )
+from .identifier_rewrites import (
+    qualified_identifiers,
+    replace_unqualified_identifiers,
+    unqualified_identifiers,
+)
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .template_constants import unresolved_constant_references
 from .template_overloads import declared_type_names, select_instantiated_overload
@@ -901,6 +906,18 @@ class _PointerPromotionPlan:
     # residual struct. This is used only by the explicit derived-pointer opt-in;
     # the default direct-pointer promotion remains byte-for-byte unchanged.
     pointer_offset_initializers: Optional[List[str]] = None
+    # Pointer parameters that a remaining member initializer reads. The
+    # rebuilt constructor and every construction keep them.
+    retained_pointer_ctor_arg_indices: Tuple[int, ...] = ()
+    # Promoted members that a remaining initializer reads, mapped to the
+    # parameter that initializes each one directly.
+    initializer_member_parameters: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def dropped_pointer_ctor_arg_indices(self) -> Set[int]:
+        return set(self.pointer_ctor_arg_indices) - set(
+            self.retained_pointer_ctor_arg_indices
+        )
 
     @property
     def pointer_member_names(self) -> List[str]:
@@ -12438,6 +12455,39 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return None
         if body_identifiers & pointer_member_names:
             return None
+        # The remaining initializers stay in the rebuilt constructor. One that
+        # reads a pointer parameter keeps that parameter. One that reads a
+        # promoted member initialized directly from a parameter reads the
+        # parameter instead; any other promoted member makes promotion unsafe.
+        direct_member_parameters = {
+            member.name: constructor.init_map[member.name].strip()
+            for member in pointer_members
+            if constructor.init_map[member.name].strip() in pointer_param_names
+        }
+        retained_parameter_names: Set[str] = set()
+        for member_name, init_expr in constructor.init_map.items():
+            if member_name in pointer_member_names:
+                continue
+            identifiers = set(unqualified_identifiers(init_expr))
+            # ``this->src`` or ``other.src`` names a member the rewrite cannot
+            # map to a parameter.
+            if "this" in identifiers or (
+                set(qualified_identifiers(init_expr)) & pointer_member_names
+            ):
+                return None
+            for name in sorted(identifiers & pointer_member_names):
+                if name not in direct_member_parameters:
+                    return None
+                retained_parameter_names.add(direct_member_parameters[name])
+            retained_parameter_names.update(identifiers & pointer_param_names)
+        retained_pointer_ctor_arg_indices = tuple(
+            sorted(
+                {
+                    constructor.param_names.index(name)
+                    for name in retained_parameter_names
+                }
+            )
+        )
         # No method may declare a parameter or local that collides with a pointer
         # member name (the promoted parameter would shadow / be shadowed by it).
         for method in struct.methods:
@@ -12481,6 +12531,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             pointer_ctor_arg_indices=pointer_ctor_arg_indices,
             constructor=constructor,
             pointer_offset_initializers=offset_initializers,
+            retained_pointer_ctor_arg_indices=retained_pointer_ctor_arg_indices,
+            initializer_member_parameters={
+                name: parameter
+                for name, parameter in sorted(direct_member_parameters.items())
+                if parameter in retained_parameter_names
+            },
         )
 
     def _promoted_struct_template_method_is_referenced(
@@ -12602,7 +12658,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # initializer-list entries; the scalar parameters, remaining initializers
         # and the body (which computes scalar members) are preserved verbatim.
         constructor = plan.constructor
-        drop_indices = set(plan.pointer_ctor_arg_indices)
+        drop_indices = plan.dropped_pointer_ctor_arg_indices
         kept_params: List[str] = []
         params = [
             param.strip()
@@ -12635,7 +12691,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                             f"({offset_initializers[member_name]})"
                         )
                     continue
-                kept_inits.append(item)
+                kept_inits.append(
+                    replace_unqualified_identifiers(
+                        item, plan.initializer_member_parameters
+                    )
+                )
         rebuilt = f"{constructor.prefix}{', '.join(kept_params)})"
         if kept_inits:
             rebuilt += " : " + ", ".join(kept_inits)
@@ -20068,7 +20128,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if index >= len(arguments):
                 return ("fail", arg_close + 1)
             pointer_exprs.append(arguments[index])
-        drop = set(plan.pointer_ctor_arg_indices)
+        drop = plan.dropped_pointer_ctor_arg_indices
         kept = [
             argument for index, argument in enumerate(arguments) if index not in drop
         ]
