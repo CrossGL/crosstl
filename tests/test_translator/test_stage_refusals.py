@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import crosstl
@@ -84,11 +86,12 @@ def test_directx_ray_entry_without_payload_parameter_is_a_typed_refusal(tmp_path
 @pytest.mark.parametrize(
     ("backend", "declaration"),
     [
-        ("directx", "float16_t4 color : SV_TARGET"),
-        ("metal", "half4 color [[color(0)]]"),
+        ("directx", r"float16_t4 color\s*:\s*SV_TARGET\b"),
+        ("metal", r"half4 color\s*\[\[color\(0\)\]\]"),
     ],
 )
 def test_half_precision_color_outputs_are_render_targets(
     tmp_path, backend, declaration
 ):
-    assert declaration in translate(tmp_path, HALF_COLOR, backend)
+    # Whitespace-insensitive: the output may or may not pass through clang-format.
+    assert re.search(declaration, translate(tmp_path, HALF_COLOR, backend))

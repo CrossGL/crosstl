@@ -6,6 +6,8 @@ translated program, where DXC and glslang reject it, and the header's declaratio
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import crosstl
@@ -98,5 +100,5 @@ fragment FragData shade(VOut in [[stage_in]]) {
     assert "#import" not in crossgl
     assert "struct FragData" in crossgl
     # A half-precision color attachment stays a 16-bit render target value.
-    assert "float16_t4 color : SV_TARGET" in hlsl
+    assert re.search(r"float16_t4 color\s*:\s*SV_TARGET\b", hlsl)
     assert "#import" not in hlsl
