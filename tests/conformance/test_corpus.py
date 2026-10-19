@@ -257,6 +257,17 @@ def test_hlsl_entry_discovery():
     )
 
 
+def test_glsl_environment_checks_ray_stages_with_vulkan_rules():
+    # GL_EXT_ray_tracing exists only for SPIR-V generation; every other stage keeps the OpenGL rules.
+    assert checks.glsl_environment(["ray_generation"]) == ["--target-env", "vulkan1.2"]
+    assert checks.glsl_environment(["ray_closest_hit", "ray_any_hit"]) == [
+        "--target-env",
+        "vulkan1.2",
+    ]
+    assert checks.glsl_environment(["fragment"]) == []
+    assert checks.glsl_environment(["mesh"]) == []
+
+
 def test_spirv_environment_follows_module_version():
     assert checks.spirv_environment("; SPIR-V\n; Version: 1.0\n") == "vulkan1.1"
     assert checks.spirv_environment("; Version: 1.5\n") == "vulkan1.2"

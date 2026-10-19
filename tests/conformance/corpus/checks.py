@@ -14,7 +14,7 @@ from pathlib import Path
 from ..process import run
 from ..toolchains import tool
 from ..validators import dxil_is_signed
-from .manifest import GLSLANG_STAGE
+from .manifest import GLSLANG_STAGE, RAY_TRACING
 
 TIMEOUT = 120
 COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
@@ -187,8 +187,35 @@ def check_hlsl(path, scratch, stages):
     return _verdict(results, entries=[name for name, _, _ in jobs])
 
 
+def glsl_environment(stages):
+    """glslang options for the API a GLSL artifact's stages exist in.
+
+    Ray tracing stages exist only in Vulkan: GL_EXT_ray_tracing is defined for SPIR-V generation, and glslang
+    rejects the extension under OpenGL rules. They are checked with Vulkan 1.2 rules, the first Vulkan whose SPIR-V
+    (1.5) includes SPV_KHR_ray_tracing's 1.4 requirement. Every other stage is checked with the OpenGL or OpenGL ES
+    rules the artifact's ``#version`` selects.
+    """
+    if stages and set(stages) <= RAY_TRACING:
+        return ["--target-env", "vulkan1.2"]
+    return []
+
+
+def _glsl_command(path, stage, scratch):
+    environment = glsl_environment([stage])
+    # Vulkan rules make glslang write SPIR-V, by default to ``<stage>.spv`` in the working directory.
+    output = ["-o", str(Path(scratch) / f"{stage}.spv")] if environment else []
+    return [
+        *tool("glslangValidator").command,
+        *environment,
+        *output,
+        "-S",
+        GLSLANG_STAGE[stage],
+        path,
+    ]
+
+
 def check_glsl(path, stages):
-    """glslang with the OpenGL or OpenGL ES rules the artifact's ``#version`` selects."""
+    """glslang with the rules of the API the stages exist in (:func:`glsl_environment`)."""
     missing = _missing("glslangValidator")
     if missing:
         return missing
@@ -200,14 +227,12 @@ def check_glsl(path, stages):
     ]
     selected = guarded or list(stages)
     results = []
-    for stage in selected:
-        result = run(
-            [*tool("glslangValidator").command, "-S", GLSLANG_STAGE[stage], path],
-            timeout=TIMEOUT,
-        )
-        results.append(result)
-        if result.status != "accepted":
-            break
+    with tempfile.TemporaryDirectory(prefix="crosstl-glslang-") as scratch:
+        for stage in selected:
+            result = run(_glsl_command(path, stage, scratch), timeout=TIMEOUT)
+            results.append(result)
+            if result.status != "accepted":
+                break
     return _verdict(results, entries=selected)
 
 
