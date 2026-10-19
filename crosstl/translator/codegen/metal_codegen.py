@@ -9758,6 +9758,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 return self.pointer_pointee_type_name(operand_type) or operand_type
             if getattr(expr, "operator", None) == "&" and operand_type is not None:
                 return f"{self.type_name_string(operand_type)}*"
+            if getattr(expr, "operator", None) == "!" and operand_type is not None:
+                # Logical negation applies componentwise and yields bool
+                # with the operand's shape.
+                mapped = self.map_type(operand_type)
+                if isinstance(mapped, str) and self.is_vector_value_type(mapped):
+                    return f"bool{self.vector_value_width(mapped)}"
+                if isinstance(mapped, str) and self.is_scalar_value_type(mapped):
+                    return "bool"
             return operand_type
         if isinstance(expr, TernaryOpNode):
             true_type = self.expression_result_type(getattr(expr, "true_expr", None))
