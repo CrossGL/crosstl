@@ -483,11 +483,15 @@ def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
     translator = yaml.safe_load((WORKFLOW_DIR / "translator-tests.yml").read_text())[
         "jobs"
     ]["test"]
+    backend = yaml.safe_load((WORKFLOW_DIR / "backend-tests.yml").read_text())[
+        "jobs"
+    ]["test"]
     demo = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())[
         "jobs"
     ]["portable-host"]
     for job, name in (
         (translator, "Verify Metal 4.1 toolchain"),
+        (backend, "Verify Metal 4.1 toolchain"),
         (demo, "Verify macOS Metal toolchain"),
     ):
         step = next(step for step in job["steps"] if step.get("name") == name)
@@ -520,6 +524,7 @@ def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
     "workflow,job_id,step_name",
     [
         ("translator-tests.yml", "test", "Verify Metal 4.1 toolchain"),
+        ("backend-tests.yml", "test", "Verify Metal 4.1 toolchain"),
         ("demo-project-testing.yml", "portable-host", "Verify macOS Metal toolchain"),
     ],
 )
@@ -670,7 +675,11 @@ def test_metal_setup_diagnostics_preserve_failures(
 def test_all_metal_downloads_use_the_bounded_readiness_check():
     helper = "python tools/ensure_metal_toolchain.py"
     counts = {}
-    for name in ("translator-tests.yml", "demo-project-testing.yml"):
+    for name in (
+        "translator-tests.yml",
+        "backend-tests.yml",
+        "demo-project-testing.yml",
+    ):
         text = (WORKFLOW_DIR / name).read_text()
         assert "-downloadComponent MetalToolchain" not in text
         workflow = yaml.safe_load(text)
@@ -695,7 +704,11 @@ def test_all_metal_downloads_use_the_bounded_readiness_check():
             for step in job["steps"]:
                 if helper in step.get("run", ""):
                     assert "continue-on-error" not in step
-    assert counts == {"translator-tests.yml": 1, "demo-project-testing.yml": 16}
+    assert counts == {
+        "translator-tests.yml": 1,
+        "backend-tests.yml": 1,
+        "demo-project-testing.yml": 16,
+    }
 
 
 @pytest.mark.parametrize("exit_code", (0, 7))
