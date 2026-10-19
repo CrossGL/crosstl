@@ -10731,6 +10731,16 @@ class GLSLCodeGen:
                     return False
             return True
 
+        def refuted_branch(body):
+            # The checked intervals refute this branch's guard, so its
+            # statements are unreachable unless another replay reaches them.
+            statements = getattr(body, "statements", body)
+            if statements is None:
+                return
+            if not isinstance(statements, (list, tuple)):
+                statements = [statements]
+            unreachable_tails.update(id(item) for item in statements)
+
         bounded_zero_trip = set()
         possibly_entered_loops = set()
 
@@ -11491,6 +11501,8 @@ class GLSLCodeGen:
                 if then_intervals is not None:
                     if visit_sequence(value.if_body, then_intervals) is not False:
                         branch_intervals.append(then_intervals)
+                else:
+                    refuted_branch(value.if_body)
                 fallthrough_intervals = refine_guard(
                     condition,
                     intervals,
@@ -11501,7 +11513,8 @@ class GLSLCodeGen:
                     getattr(value, "else_if_bodies", []) or [],
                 ):
                     if fallthrough_intervals is None:
-                        break
+                        refuted_branch(else_if_body)
+                        continue
                     visit(else_if_condition, fallthrough_intervals)
                     candidate = refine_guard(
                         else_if_condition,
@@ -11511,6 +11524,8 @@ class GLSLCodeGen:
                     if candidate is not None:
                         if visit_sequence(else_if_body, candidate) is not False:
                             branch_intervals.append(candidate)
+                    else:
+                        refuted_branch(else_if_body)
                     fallthrough_intervals = refine_guard(
                         else_if_condition,
                         fallthrough_intervals,
@@ -11525,6 +11540,8 @@ class GLSLCodeGen:
                         is not False
                     ):
                         branch_intervals.append(else_intervals)
+                else:
+                    refuted_branch(getattr(value, "else_body", None))
                 if not branch_intervals:
                     return False
                 merged = branch_intervals[0]
