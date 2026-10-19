@@ -425,6 +425,10 @@ HLSL_NULL_WORKGROUP_POINTER_CONTRACT = ("nullptr", 0)
 # tracks the rebased view start as an interval under this tuple key, which can
 # never collide with an identifier name in the same interval map.
 HLSL_PRIVATE_POINTER_OFFSET_KEY = "private-pointer-view-offset"
+HLSL_INDEXED_VECTOR_TYPE = re.compile(
+    r"(bool|int|uint|float|double|half|float16_t|int16_t|uint16_t|int64_t|uint64_t"
+    r"|min16float|min10float|min16int|min12int|min16uint)[234]"
+)
 HLSL_PRIVATE_POINTER_MAX_REBASE_ITERATIONS = 4096
 HLSL_PRIVATE_POINTER_MAX_REBASE_SIMULATION_STEPS = 1 << 16
 HLSL_PRIVATE_POINTER_BASE_MAX = (1 << 31) - 1
@@ -17736,6 +17740,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     if byte_shape[0] is ArithmeticScalarKind.SIGNED_INTEGER
                     else "uint8"
                 )
+            # Subscripting a vector selects one component.
+            vector = HLSL_INDEXED_VECTOR_TYPE.fullmatch(self.map_type(array_type))
+            if vector is not None:
+                return vector.group(1)
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
