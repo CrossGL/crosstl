@@ -19,7 +19,7 @@ NEGATIVE_CHECKS = {
     "allocation": "column reduction source view exceeds its bounds",
     "small": "small-column and long-column reduction plans",
     "long": "small-column and long-column reduction plans",
-    "limit": "reduction supports at most 65535 elements",
+    "limit": "row and column reductions support at most 65535 elements",
 }
 
 

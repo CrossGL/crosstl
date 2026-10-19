@@ -5,6 +5,12 @@ import ctypes
 # Generated buffer indices share the copy adapter's signed 32-bit bound.
 MAX_ELEMENTS = 2**31 - 1
 ITEM_SIZES = {"float32": 4, "int32": 4, "uint32": 4, "bool_": 1, "bfloat16": 2}
+# REDUCE_N_READS in the pinned kernels/defines.h.
+N_READS = 4
+# Static GLSL packages assert that the pinned all_reduce rebase
+# ``in += gid.y * row_size + N_READS * lid.x`` and every ``in[i]`` read lie in
+# [0, MAX_ELEMENTS]; ``validate`` re-establishes that for each launch.
+STATIC_OFFSET_EXPRESSIONS = ("in_ + start_idx", "in_ + i")
 
 
 def stage(count, dtype="float32"):
@@ -25,8 +31,17 @@ def stage(count, dtype="float32"):
     }
 
 
+def max_rebased_offset(plan):
+    """Largest input offset any lane forms before its first read."""
+    rows, width = plan["workgroupCount"][1], plan["workgroupSize"][0]
+    return (rows - 1) * plan["rowSize"] + N_READS * (width - 1)
+
+
 def validate(buffers, count, execution, dtype="float32"):
     plan = stage(count, dtype)
+    # Reads stay below count; lanes past the end still form their rebase.
+    if max(max_rebased_offset(plan), count - 1) > MAX_ELEMENTS:
+        raise ValueError("Whole-array reduction offsets exceed the asserted bound")
     if execution != {key: plan[key] for key in ("workgroupCount", "workgroupSize")}:
         raise ValueError("Native reduction launch does not match the upstream plan")
     for name, expected in (("in_size", count), ("row_size", plan["rowSize"])):

@@ -176,6 +176,8 @@ jobs:
           New-Item -ItemType Directory -Force $evidence | Out-Null
           $installed = Join-Path $env:pythonLocation "d3d10warp.dll"
           if (Test-Path $installed) { throw "A WARP library is already installed beside Python." }
+          $cpu = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
+          Write-Host "Runner CPU: $($cpu.Name.Trim()) ($($cpu.NumberOfLogicalProcessors) logical processors)"
           $cases = @(
             @{ version = "system" },
             @{ version = "1.0.13"; archiveSHA256 = "63231c48b0573ba4c078f69cd10a4059a0fee3427107b8219e5e80ab75bd304b"; dllSHA256 = "0621056518e047fd2fa9f75f03a49fed42d7158dee77c11c441cd34d32e93638" },
@@ -3944,6 +3946,9 @@ jobs:
           Copy-Item -Path $warp -Destination $pythonWarp -Force
           Write-Host "Installed WARP $((Get-Item $pythonWarp).VersionInfo.FileVersion) beside python.exe."
           Write-Host "WARP DLL SHA256: $((Get-FileHash -Path $pythonWarp -Algorithm SHA256).Hash.ToLowerInvariant())"
+          # WARP JIT-compiles shaders for the host CPU; record it beside each result.
+          $cpu = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
+          Write-Host "Runner CPU: $($cpu.Name.Trim()) ($($cpu.NumberOfLogicalProcessors) logical processors)"
 
       - name: Validate Direct3D Metal math semantics
         if: runner.os == 'Windows'
@@ -6828,6 +6833,9 @@ jobs:
           Copy-Item -Path $warp -Destination $pythonWarp -Force
           Write-Host "Installed WARP $((Get-Item $pythonWarp).VersionInfo.FileVersion) beside python.exe."
           Write-Host "WARP DLL SHA256: $((Get-FileHash -Path $pythonWarp -Algorithm SHA256).Hash.ToLowerInvariant())"
+          # WARP JIT-compiles shaders for the host CPU; record it beside each result.
+          $cpu = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
+          Write-Host "Runner CPU: $($cpu.Name.Trim()) ($($cpu.NumberOfLogicalProcessors) logical processors)"
 
       - name: Checkout current MLX kernel tree
         shell: bash
@@ -7139,6 +7147,20 @@ jobs:
             *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
           esac
           mkdir -p mlx-current-results
+          if [ "$RUNNER_OS" = Windows ]; then
+            # Fixed HLSL controls for the guarded slot write and read-back the
+            # contiguous scans rely on. They isolate WARP from CrossTL code
+            # generation and record evidence only; the parity run below gates.
+            CROSTL_REQUIRE_DIRECTX_SOFTWARE_REDUCTIONS=1 \
+              python tools/run_bounded_command.py \
+                --label "guarded groupshared runtime controls" \
+                --timeout-seconds 300 -- \
+                python -m pytest -q -rA -p no:cacheprovider \
+                  --basetemp=mlx-current-results/guarded-groupshared \
+                  --junitxml=mlx-current-results/guarded-groupshared.xml \
+                  tests/test_translator/test_directx_guarded_groupshared_controls.py \
+              || echo "::warning::Guarded groupshared runtime controls failed on this runner."
+          fi
           python tools/run_bounded_command.py \
             --label "current MLX scan family native parity" \
             --timeout-seconds 9000 -- \

@@ -17,6 +17,7 @@ from crosstl.project import (
     load_project_config,
     translate_project,
 )
+from demos.integrations.mlx.portable_host import reduction_layout
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
 
 SOURCE = "mlx/backend/metal/kernels/reduce.metal"
@@ -234,6 +235,18 @@ def build_packages(
             )
         if target == "directx" and family != "init":
             options += 'relative_wave_shuffle_out_of_range = "self"\n'
+        if family in {"all", "bfloat"} and target == "opengl":
+            # A static package serves every count, so the rebased input offset
+            # has no interval proof. reduction_layout.validate bounds it and
+            # each read by MAX_ELEMENTS before dispatch; --on-demand packages
+            # prove the same offsets from exact metadata instead.
+            options += "".join(
+                "[[project.index_range_assertions]]\n"
+                f'source = "{SOURCE}"\n'
+                f'expression = "{expression}"\n'
+                f"minimum = 0\nmaximum = {reduction_layout.MAX_ELEMENTS}\n"
+                for expression in reduction_layout.STATIC_OFFSET_EXPRESSIONS
+            )
         if family == "row" and target == "opengl":
             # row_reduction_layout.validate_metadata requires rows >= 32,
             # input_count == rows * row_size and

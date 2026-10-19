@@ -128,6 +128,16 @@ def test_column_ci_includes_metadata_tests_on_changes():
         )
 
 
+def test_column_rejection_messages_match_the_host_backend():
+    from pathlib import Path
+
+    from demos.integrations.mlx.portable_host import verify_columns
+
+    source = (Path(verify_columns.__file__).with_name("backend.cpp")).read_text()
+    for message in verify_columns.NEGATIVE_CHECKS.values():
+        assert f"CrossTL {message}" in source
+
+
 @pytest.mark.parametrize("mode", ["allocation", "small", "long", "limit"])
 @pytest.mark.parametrize("fault", [None, "message", "dispatch", "accepted"])
 def test_column_rejection_requires_the_expected_error_before_dispatch(mode, fault):
