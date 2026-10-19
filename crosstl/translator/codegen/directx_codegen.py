@@ -120,12 +120,12 @@ from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
 from .call_effects import builtin_argument_write_indices
 from .constant_guards import constant_bool_locals
+from .constant_ordering import partition_constants_by_struct_dependency
 from .counter_loops import (
     any_start_counter_loop_terminates,
     any_start_counter_loops,
     counter_update,
 )
-from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_enum_struct_variant_fields,
@@ -5619,7 +5619,8 @@ class HLSLCodeGen(LoweringRefusalMixin):
         # the counter may reach with another value proves every start.
         start = (
             checked_induction_value(declaration.initial_value, {})
-            if id(node) in getattr(self, "hlsl_software_subgroup_fresh_counter_loops", ())
+            if id(node)
+            in getattr(self, "hlsl_software_subgroup_fresh_counter_loops", ())
             else None
         )
         condition = getattr(node, "condition", None)
@@ -6928,10 +6929,21 @@ class HLSLCodeGen(LoweringRefusalMixin):
                 return
             names.difference_update(written)
 
-        def validate_statements(statements, names, components):
+        def validate_statements(statements, names, components, work_follows=True):
+            # ``work_follows``: a barrier or collective may run after this
+            # list completes, in program order or in a later loop iteration.
             previous = None
             sibling_statements = self.hlsl_software_subgroup_statement_list(statements)
-            for statement in sibling_statements:
+            later_work = [False] * (len(sibling_statements) + 1)
+            later_work[-1] = work_follows
+            for index in range(len(sibling_statements) - 1, -1, -1):
+                later_work[index] = later_work[index + 1] or (
+                    self.hlsl_software_subgroup_contains_work(
+                        sibling_statements[index], dependent_calls
+                    )
+                )
+            for index, statement in enumerate(sibling_statements):
+                work_after = later_work[index + 1]
                 if previous is not None:
                     apply_reassignments(previous, names, components)
                 previous = statement
@@ -6966,10 +6978,17 @@ class HLSLCodeGen(LoweringRefusalMixin):
                 )
                 if not has_return and not has_work:
                     continue
+                if not has_work and not work_after:
+                    # No barrier or collective of this function runs after
+                    # this return, so an invocation that leaves early misses
+                    # none of them. A helper's return resumes its caller.
+                    continue
                 if isinstance(statement, (BlockNode,)) or hasattr(
                     statement, "statements"
                 ):
-                    validate_statements(statement, set(names), dict(components))
+                    validate_statements(
+                        statement, set(names), dict(components), work_after
+                    )
                     continue
                 if isinstance(statement, IfNode):
                     fixed = (
@@ -6982,9 +7001,13 @@ class HLSLCodeGen(LoweringRefusalMixin):
                     if fixed is not None:
                         # Every invocation takes the branch the constant guard
                         # selects; the other branch never runs.
-                        taken = statement.then_branch if fixed else statement.else_branch
+                        taken = (
+                            statement.then_branch if fixed else statement.else_branch
+                        )
                         if taken is not None:
-                            validate_statements(taken, set(names), dict(components))
+                            validate_statements(
+                                taken, set(names), dict(components), work_after
+                            )
                         continue
                     conditions = [statement.condition] + list(
                         getattr(statement, "else_if_conditions", []) or []
@@ -7038,7 +7061,10 @@ class HLSLCodeGen(LoweringRefusalMixin):
                         # Every invocation reaches the predicated collective;
                         # only the planned prefix and suffix stay conditional.
                         validate_statements(
-                            statement.then_branch, set(names), dict(components)
+                            statement.then_branch,
+                            set(names),
+                            dict(components),
+                            work_after,
                         )
                         continue
                     if not all(
@@ -7066,7 +7092,9 @@ class HLSLCodeGen(LoweringRefusalMixin):
                         *(getattr(statement, "else_if_bodies", []) or []),
                         statement.else_branch,
                     ]:
-                        validate_statements(branch, set(names), dict(components))
+                        validate_statements(
+                            branch, set(names), dict(components), work_after
+                        )
                     continue
                 if isinstance(statement, ForNode):
                     strided_plan = None
@@ -7130,10 +7158,12 @@ class HLSLCodeGen(LoweringRefusalMixin):
                             # The counter differs between subgroups.
                             nested_names.discard(initializer.name)
                         nested_components.pop(initializer.name, None)
+                    # A later iteration runs the loop's own work again.
                     validate_statements(
                         getattr(statement, "body", None),
                         nested_names,
                         nested_components,
+                        work_after or has_work,
                     )
                     continue
                 if isinstance(
@@ -7206,7 +7236,12 @@ class HLSLCodeGen(LoweringRefusalMixin):
                                 )
                             }
 
-        validate_statements(body, set(uniform_names), dict(uniform_components))
+        validate_statements(
+            body,
+            set(uniform_names),
+            dict(uniform_components),
+            work_follows=False,
+        )
 
     def prepare_hlsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_hlsl_software_subgroup_helpers = set()
