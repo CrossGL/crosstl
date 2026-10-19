@@ -30,18 +30,18 @@ SMOKE_PATHS = (
 def validation_plan(event, paths, full_requested=False):
     """Select the MLX validation tier for an event and the files it changes.
 
-    Nightly runs, dispatches, merge-queue groups and pushes that change the MLX
-    corpus or this workflow get full validation. A pull request gets the smoke tier for any relevant change
-    and full validation only when it carries the ``ci:full`` label. The full tier is
-    several hundred jobs on macOS, Windows and Linux runners that every open pull
-    request shares, so a routine push must not queue it.
+    Nightly runs and dispatches always get full validation. Pushes and
+    merge-queue groups get it when they change the MLX corpus or this workflow.
+    A pull request gets the smoke tier for any relevant change and full
+    validation only when it carries the ``ci:full`` label. The full tier is
+    several hundred jobs on macOS, Windows and Linux runners that every open
+    pull request shares, and the queue builds one group at a time, so a group
+    that cannot affect MLX must not wait hours for it. Every merge-queue group
+    still runs the smoke tier on the exact commit that lands.
     """
     if event in {"schedule", "workflow_dispatch"}:
         return {"heavy": True, "smoke": False}
-    if event == "merge_group":
-        # The queue is the last gate before main: run everything, smoke included.
-        return {"heavy": True, "smoke": True}
-    if event not in {"pull_request", "push"}:
+    if event not in {"pull_request", "push", "merge_group"}:
         raise ValueError(f"Unsupported workflow event: {event}")
     paths = tuple(paths)
     corpus = any(fnmatchcase(path, pattern) for path in paths for pattern in FULL_PATHS)
@@ -49,6 +49,7 @@ def validation_plan(event, paths, full_requested=False):
     smoke = (
         heavy
         or corpus
+        or event == "merge_group"
         or any(fnmatchcase(path, pattern) for path in paths for pattern in SMOKE_PATHS)
     )
     return {"heavy": heavy, "smoke": smoke}
@@ -105,10 +106,13 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     full_requested = args.full_requested == "true"
-    if args.event in {"schedule", "workflow_dispatch", "merge_group"}:
+    if args.event in {"schedule", "workflow_dispatch"}:
         plan = validation_plan(args.event, ())
-    elif args.event == "push" and (args.base == "0" * 40 or not has_commit(args.base)):
-        # A new branch has no old tip, and a rewritten one may not be fetched.
+    elif args.event in {"push", "merge_group"} and (
+        args.base == "0" * 40 or not has_commit(args.base)
+    ):
+        # A new branch has no old tip, and a rewritten push tip or an earlier
+        # queue group may not be fetched: without a diff, validate everything.
         plan = {"heavy": True, "smoke": True}
     else:
         plan = validation_plan(

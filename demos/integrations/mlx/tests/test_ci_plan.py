@@ -226,15 +226,108 @@ def test_documentation_only_pull_request_skips_every_mlx_job():
     }
 
 
-def test_merge_queue_runs_every_tier(tmp_path, capsys):
-    assert validation_plan("merge_group", ["docs/source/index.rst"]) == {
-        "heavy": True,
+@pytest.mark.parametrize(
+    "path,heavy",
+    [
+        ("docs/source/index.rst", False),
+        ("README.md", False),
+        (".github/workflows/conformance.yml", False),
+        ("crosstl/translator/codegen/directx_codegen.py", False),
+        ("tests/conformance/test_ci_tiers.py", False),
+        ("demos/integrations/mlx/portable_host/runtime.py", True),
+        (".github/workflows/demo-project-testing.yml", True),
+    ],
+)
+def test_merge_queue_runs_full_tier_only_for_mlx_changes(path, heavy):
+    # The queue builds one group at a time, so a group that cannot affect MLX
+    # must not wait for the multi-hour native tier; smoke still gates it.
+    assert validation_plan("merge_group", [path]) == {"heavy": heavy, "smoke": True}
+    assert validation_plan("merge_group", [path]) == {
+        "heavy": validation_plan("push", [path])["heavy"],
         "smoke": True,
     }
-    output = tmp_path / "output"
-    assert main(["--event", "merge_group", "--output", str(output)]) == 0
+
+
+@pytest.mark.parametrize(
+    "path,heavy",
+    [
+        ("docs/index.rst", "false"),
+        ("crosstl/translator/parser.py", "false"),
+        ("demos/integrations/mlx/source.metal", "true"),
+    ],
+)
+def test_merge_group_reads_the_diff_from_its_base(tmp_path, monkeypatch, path, heavy):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    (tmp_path / "README.md").write_text("start\n")
+    base = _commit("Start")
+    changed = tmp_path / path
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    changed.write_text("change\n")
+    head = _commit("Queued change")
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", "merge_group", "--base", base, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
+    assert output.read_text() == f"heavy={heavy}\nsmoke=true\n"
+
+
+def test_merge_group_without_its_base_gets_full_validation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    (tmp_path / "README.md").write_text("start\n")
+    head = _commit("Start")
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", "merge_group", "--base", "c" * 40, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
     assert output.read_text() == "heavy=true\nsmoke=true\n"
-    assert json.loads(capsys.readouterr().out) == {"heavy": True, "smoke": True}
+
+
+def test_merge_group_without_revisions_fails(tmp_path):
+    with pytest.raises(ValueError, match="full Git commit hashes"):
+        main(["--event", "merge_group", "--output", str(tmp_path / "output")])
+
+
+def test_plan_inputs_cover_pull_requests_merge_groups_and_pushes():
+    plan = yaml.safe_load(WORKFLOW.read_text())["jobs"]["ci-plan"]
+    tier = next(step for step in plan["steps"] if step.get("id") == "plan")
+    assert tier["env"]["MLX_CI_BASE"] == (
+        "${{ github.event.pull_request.base.sha || "
+        "github.event.merge_group.base_sha || github.event.before }}"
+    )
+    assert tier["env"]["MLX_CI_HEAD"] == (
+        "${{ github.event.pull_request.head.sha || "
+        "github.event.merge_group.head_sha || github.sha }}"
+    )
+
+
+def _run_result_gate(results):
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["result"]
+    step = next(step for step in job["steps"] if "run" in step)
+    return subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env={"RESULTS": " ".join(results), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_result_gate_needs_every_job_and_passes_when_the_plan_skips_them():
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    job = workflow["jobs"]["result"]
+    assert job["if"] == "always()"
+    assert set(job["needs"]) == set(workflow["jobs"]) - {"result"}
+    skipped = ["skipped"] * (len(job["needs"]) - 2)
+    assert _run_result_gate(["success", "success", *skipped]).returncode == 0
+
+
+@pytest.mark.parametrize("outcome", ["failure", "cancelled"])
+def test_result_gate_fails_when_a_job_that_ran_fails(outcome):
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["result"]
+    results = ["success"] * (len(job["needs"]) - 1)
+    results.insert(3, outcome)
+    completed = _run_result_gate(results)
+    assert completed.returncode == 1
+    assert f"ended with '{outcome}'" in completed.stdout
 
 
 def test_unsupported_event_fails():

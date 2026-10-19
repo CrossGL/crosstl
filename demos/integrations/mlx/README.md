@@ -40,8 +40,9 @@ Complete DirectX corpus compilation uses pinned DXC on Ubuntu; Direct3D runtime
 execution remains on Windows. Metal compilation and execution remain on macOS.
 See the [CI coverage policy](../../../.github/TESTING.md) for the platform split.
 Full native, parity, corpus and host jobs run nightly, on manual dispatch, and
-for main-branch pushes that change `demos/integrations/mlx/**` or this demo's
-workflow. A pull request runs them only when it carries the `ci:full` label,
+for main-branch pushes and merge-queue groups that change
+`demos/integrations/mlx/**` or this demo's workflow. Every merge-queue group
+runs the smoke job. A pull request runs them only when it carries the `ci:full` label,
 because the full tier is several hundred jobs on runners every open pull
 request shares. Run `gh workflow run demo-project-testing.yml --ref <branch>`
 for a single full run of a branch. Pull requests that change the MLX demo,
