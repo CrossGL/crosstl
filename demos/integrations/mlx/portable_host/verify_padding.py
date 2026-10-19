@@ -12,6 +12,9 @@ from demos.integrations.mlx.portable_host import padding_workloads
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.reduction_packages import load_index
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
+from demos.integrations.mlx.portable_host.slice_update_layout import (
+    MAX_STORAGE_ELEMENTS,
+)
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
@@ -66,6 +69,10 @@ def worker(args):
             else ("int64" if args.worker == "missing-wide" else "int32")
         )
         operand = mx.array(np.arange(count, dtype=dtype))
+        if args.worker == "update-limit":
+            # Slice updates accept larger storage than padding; exceed it with
+            # a broadcast view rather than a dense allocation.
+            operand = mx.broadcast_to(operand[:1], (MAX_STORAGE_ELEMENTS + 1,))
         value = mx.array(np.asarray(1, dtype=dtype))
         try:
             if args.worker == "update-reduction":
@@ -187,9 +194,10 @@ def verify(args):
         ]
         for directory in args.reductions:
             command.extend(("--reductions", str(directory.resolve())))
-        with (output / f"{mode}.stdout").open("w") as stdout, (
-            output / f"{mode}.stderr"
-        ).open("w") as stderr:
+        with (
+            (output / f"{mode}.stdout").open("w") as stdout,
+            (output / f"{mode}.stderr").open("w") as stderr,
+        ):
             process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
         write_json(
             output / f"{mode}.command.json",
