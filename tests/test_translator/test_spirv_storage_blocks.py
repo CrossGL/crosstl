@@ -28,7 +28,9 @@ from tests.conformance.validators import validate
 
 CASES = Path(__file__).resolve().parents[1] / "conformance" / "cases"
 COUNT = CASES / "s_buffer_count" / "src.spvasm"  # block { int a[]; }
-LENGTH = CASES / "s_buffer_length" / "src.spvasm"  # block { int head; ivec2 pad; int a[]; }
+LENGTH = (
+    CASES / "s_buffer_length" / "src.spvasm"
+)  # block { int head; ivec2 pad; int a[]; }
 GLSL_LENGTH = CASES / "g_buffer_length" / "src.comp"
 GLSL_COUNT = CASES / "g_buffer_count" / "src.comp"
 WRAP = CASES / "s_add_wrap" / "src.spvasm"  # blocks without a length query
@@ -92,7 +94,11 @@ def test_glsl_block_lengths_reach_hlsl_spirv_and_wgsl(tmp_path):
             code = translate(source, target)
             assert ".length()" not in code
             check_natively(tmp_path, target, code)
-    assert "OpArrayLength %uint %inp 2" in translate(GLSL_LENGTH, "spirv")
+    # Unformatted output keeps numeric ids whether or not SPIRV-Tools is installed to add friendly names.
+    raw = crosstl.translate(str(GLSL_LENGTH), backend="vulkan", format_output=False)
+    inp = re.search(r'^OpName %(\w+) "inp"$', raw, re.M).group(1)
+    uint = re.search(r"^%(\w+) = OpTypeInt 32 0$", raw, re.M).group(1)
+    assert re.search(rf"= OpArrayLength %{uint} %{inp} 2$", raw, re.M)
     assert "i32(arrayLength(&inp.a))" in translate(GLSL_LENGTH, "wgsl")
 
 
@@ -109,8 +115,7 @@ def test_metal_translates_blocks_without_length_queries(tmp_path):
 
 
 def spirv_like(body, declaration="RWStructuredBuffer<Block> v @set(0) @binding(0);"):
-    return parse(
-        f"""
+    return parse(f"""
         shader S {{
             struct Block {{ uint head; int a[]; }};
             {declaration}
@@ -119,8 +124,7 @@ def spirv_like(body, declaration="RWStructuredBuffer<Block> v @set(0) @binding(0
                 void main() {{ {body} }}
             }}
         }}
-        """
-    )
+        """)
 
 
 def test_other_uses_leave_the_variable_unchanged():
@@ -148,8 +152,7 @@ def test_array_length_of_anything_else_is_refused():
 
 
 def test_hlsl_buffer_dimensions_of_a_byte_address_buffer_is_refused():
-    program = parse(
-        """
+    program = parse("""
         shader S {
             ByteAddressBuffer raw @binding(0);
             RWStructuredBuffer<uint> o @binding(1);
@@ -158,7 +161,6 @@ def test_hlsl_buffer_dimensions_of_a_byte_address_buffer_is_refused():
                 void main() { o[0] = buffer_dimensions(raw); }
             }
         }
-        """
-    )
+        """)
     with pytest.raises(BufferLengthUnsupportedError, match="element count"):
         HLSLCodeGen().generate(program)

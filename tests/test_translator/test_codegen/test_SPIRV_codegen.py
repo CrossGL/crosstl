@@ -4307,7 +4307,6 @@ class TestVulkanSPIRVCodeGen:
                     vec4 color = vec4(1.0, 2.0, 3.0, 4.0);
                     color.xx += vec2(0.1, 0.2);
                     color.xyz += vec2(0.3, 0.4);
-                    color.xy += 0.5;
                 }
             }
         }
@@ -4324,7 +4323,39 @@ class TestVulkanSPIRVCodeGen:
             "Cannot assign 2-component vector to 3-component swizzle xyz"
             in spv_code_refused
         )
-        assert "Cannot assign scalar value to vector swizzle xy" in spv_code_refused
+
+    def test_vector_swizzle_compound_assignment_applies_a_scalar_to_every_component(
+        self, tmp_path
+    ):
+        # GLSL 4.60 section 5.9: `v.xy op= s` is `v.xy = v.xy op s` with s applied to each component.
+        source_code = """
+        shader ScalarSwizzleCompoundAssignments {
+            compute {
+                buffer vec4 results[];
+                void main() {
+                    vec4 color = vec4(1.0, 2.0, 3.0, 4.0);
+                    color.xy += 0.5;
+                    color.zw *= 2.0;
+                    color.yzw /= 4.0;
+                    results[0] = color;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        assert "Cannot assign" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+        float_type = re.search(r"^%(\w+) = OpTypeFloat 32$", spv_code, re.M).group(1)
+        for operation, width in (("OpFAdd", 2), ("OpFMul", 2), ("OpFDiv", 3)):
+            vector = re.search(
+                rf"^%(\w+) = OpTypeVector %{float_type} {width}$", spv_code, re.M
+            ).group(1)
+            assert re.search(rf"= {operation} %{vector} ", spv_code)
+        half = re.search(r"^%(\w+) = OpConstant %\w+ 0\.5$", spv_code, re.M).group(1)
+        assert re.search(rf"OpCompositeConstruct %\w+ %{half} %{half}$", spv_code, re.M)
 
     def test_nested_vector_swizzle_lvalues_update_base_lvalue(self):
         source_code = """

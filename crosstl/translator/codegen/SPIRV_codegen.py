@@ -92,6 +92,7 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .spirv_dead_types import drop_unused_runtime_array_structs
+from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
@@ -242,6 +243,7 @@ class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
 
 
 class VulkanSPIRVCodeGen(
+    SpirvDefaultUniformMixin,
     SpirvFloatSemanticsMixin,
     SpirvLocalReferenceMixin,
     SpirvMathPolyfillMixin,
@@ -17805,6 +17807,12 @@ class VulkanSPIRVCodeGen(
     def storage_layout_type(self, type_id: SpirvId, layout: str) -> SpirvId:
         if type_id.type.base_type == "bool":
             return self.register_primitive_type("uint")
+        bool_vector = self.vector_component_type_and_count(type_id.type.base_type)
+        if bool_vector is not None and bool_vector[0] == "bool":
+            # Booleans have no externally visible size; blocks hold them as 32-bit uints
+            # (GLSL 4.60 section 7.6.2.2), and loads convert back to booleans.
+            uint_type = self.register_primitive_type("uint")
+            return self.register_vector_type(uint_type, bool_vector[1])
 
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
@@ -19545,6 +19553,8 @@ class VulkanSPIRVCodeGen(
         self, node: VariableNode, default_storage_class: str = "Private"
     ) -> SpirvId:
         """Process a module-scope CrossGL variable declaration."""
+        if self.is_default_uniform_node(node):
+            return self.default_uniform_block
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         var_type_name = self.type_name_from_value(var_type_source)
         if self.is_glsl_buffer_block_node(node):
@@ -26508,16 +26518,13 @@ class VulkanSPIRVCodeGen(
                 return
 
             var_id = self.ensure_assignable_pointer_for_name(target)
+            if var_id is None and target in self.cbuffer_members:
+                # GLSL 4.60 section 4.3.5 and HLSL constant buffers: uniforms are read-only.
+                self.refuse_lowering(f"cannot assign to read-only uniform {target}")
+                return
             if var_id is None:
-                var_type = self.primitive_types["float"]
-                if hasattr(rhs_value, "type"):
-                    var_type = (
-                        self.find_registered_type_by_base(rhs_value.type.base_type)
-                        or var_type
-                    )
-
-                var_id = self.create_variable(var_type, "Function", target)
-                self.local_variables[target] = var_id
+                self.refuse_lowering(f"cannot assign to undeclared variable {target}")
+                return
 
             self.store_to_variable(var_id, rhs_value)
 
@@ -26849,9 +26856,15 @@ class VulkanSPIRVCodeGen(
             rhs_value = self.process_expression(value_expr)
             if rhs_value is None:
                 return True
-            rhs_components = self.convert_vector_swizzle_assignment_components(
-                rhs_value, member_type, len(member_indices), member_name
-            )
+            if self.is_scalar_numeric_value(rhs_value):
+                # `v.xy op= s` applies the scalar to every selected component
+                # (GLSL 4.60 section 5.9; HLSL scalar promotion).
+                scalar = self.convert_scalar_to_type(rhs_value, member_type)
+                rhs_components = [scalar] * len(member_indices)
+            else:
+                rhs_components = self.convert_vector_swizzle_assignment_components(
+                    rhs_value, member_type, len(member_indices), member_name
+                )
             if rhs_components is None:
                 return True
 
@@ -30614,6 +30627,7 @@ class VulkanSPIRVCodeGen(
 
         for cbuffer in getattr(ast, "cbuffers", []) or []:
             self.process_cbuffer_declaration(cbuffer)
+        self.declare_default_uniform_block(ast)
 
         for var in getattr(ast, "global_variables", []):
             declaration = self.spirv_specialization_constant_declaration_node(var)
@@ -30623,6 +30637,8 @@ class VulkanSPIRVCodeGen(
             ):
                 continue
             self.process_global_variable_declaration(var)
+        if not getattr(ast, "stages", None):
+            self.bind_default_uniform_block()
 
         top_level_entries = []
         helper_functions = []
@@ -30685,6 +30701,7 @@ class VulkanSPIRVCodeGen(
                     self.current_execution_model = previous_execution_model
                     self.current_stage = previous_stage
 
+            self.bind_default_uniform_block()
             self.entry_point_resource_binding_baseline = self.resource_binding_state()
 
             processed_local_functions = set()

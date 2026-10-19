@@ -223,8 +223,16 @@ def test_std140_buffer_arrays_keep_the_std140_stride(tmp_path):
     assert re.search(
         r"layout\(std140, binding = 2\) readonly buffer WeightsBlock", glsl
     )
-    spirv = translate(tmp_path, STD140, "spirv")
-    assert re.search(r"OpDecorate %_runtimearr_float\w* ArrayStride 16", spirv)
+    # Unformatted output keeps numeric ids whether or not SPIRV-Tools is installed to add friendly names.
+    path = tmp_path / "shader.cgl"
+    path.write_text(STD140)
+    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
+    float_id = re.search(r"^%(\w+) = OpTypeFloat 32$", spirv, re.M).group(1)
+    arrays = re.findall(rf"^%(\w+) = OpTypeRuntimeArray %{float_id}$", spirv, re.M)
+    assert any(
+        re.search(rf"^OpDecorate %{array} ArrayStride 16$", spirv, re.M)
+        for array in arrays
+    )
 
 
 def test_initializers_size_unsized_arrays(tmp_path):
