@@ -477,15 +477,15 @@ repeats the quick triage rollups under fields such as `success`,
 for automation or a fast status check; use `<case>-portability-report.json` for
 the full source, artifact, diagnostic, and validation detail.
 
-CI keeps the same report files under `support/generated/demo-reports` and
+CI keeps the same report files under `build/reports/demo-reports` and
 uploads them from the `Open-Source Porting Demo` workflow as the artifact named
 `open-source-porting-demo-reports-${{ matrix.os }}`. The reproducibility check
 writes per-case reports under
-`support/generated/demo-reports/${{ matrix.os }}/artifacts`, and platform smoke
-checks write under `support/generated/demo-reports/linux-opengl`,
-`support/generated/demo-reports/linux-vulkan`,
-`support/generated/demo-reports/macos-metal`, or
-`support/generated/demo-reports/windows-directx`. If the pytest selection fails,
+`build/reports/demo-reports/${{ matrix.os }}/artifacts`, and platform smoke
+checks write under `build/reports/demo-reports/linux-opengl`,
+`build/reports/demo-reports/linux-vulkan`,
+`build/reports/demo-reports/macos-metal`, or
+`build/reports/demo-reports/windows-directx`. If the pytest selection fails,
 CI also uploads `open-source-porting-demo-failure-summary-${{ matrix.os }}`
 with the JUnit XML and failure-summary JSON/Markdown files.
 

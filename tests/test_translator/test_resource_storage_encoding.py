@@ -401,10 +401,10 @@ def test_binary16_storage_decodes_for_arithmetic(tmp_path, form):
 
 
 def test_storage_contract_controls_join_existing_windows_job():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate indexed DirectX gather and resource aggregates"
     )
     assert "tests/test_translator/test_resource_storage_encoding.py" in step

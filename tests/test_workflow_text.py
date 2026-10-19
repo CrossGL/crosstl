@@ -1,4 +1,3 @@
-import re
 import textwrap
 
 import pytest
@@ -82,25 +81,3 @@ def test_reads_every_repository_workflow():
     texts = wt.workflow_texts()
     assert "coverage.yml" in texts
     assert all(wt.workflow_job_names(text) for text in texts.values())
-
-
-# Until tools/ci_coverage.py is removed, its copies of these helpers must agree with this module.
-def test_matches_the_ci_coverage_helpers():
-    ci_coverage = pytest.importorskip("tools.ci_coverage")
-    for name, text in wt.workflow_texts().items():
-        for event in ("push", "pull_request", "merge_group", "schedule"):
-            assert wt.workflow_event_path_filters(
-                text, event
-            ) == ci_coverage.workflow_event_path_filters(text, event), (name, event)
-        jobs = wt.workflow_job_names(text)
-        assert jobs == ci_coverage.workflow_job_names(text), name
-        for job in jobs:
-            body = wt.workflow_job_text(text, job)
-            assert body == ci_coverage.workflow_job_text(text, job), (name, job)
-            assert wt.workflow_job_timeout_minutes(
-                text, job
-            ) == ci_coverage.workflow_job_timeout_minutes(text, job)
-            for step in re.findall(r"^\s*-\s+name:\s*(.+?)\s*$", body, re.MULTILINE):
-                assert wt.workflow_step_section(
-                    body, step
-                ) == ci_coverage.workflow_step_section(body, step), (name, job, step)

@@ -66,14 +66,12 @@ def test_package_build_contract_retains_supported_python_and_resources():
         "CITATION.cff",
         ".zenodo.json",
         "examples/",
-        "support/",
         "docs/",
     }
     assert set(source["exclude"]) == {
         "docs/_build/",
         "docs/doxygen/build/",
         "examples/output/",
-        "support/generated/",
         "**/__pycache__/",
         "**/*.py[cod]",
     }

@@ -1176,14 +1176,14 @@ def test_chunked_kernel_executes_natively(tmp_path, steps):
 def test_ci_requires_matrix_transfer_execution():
     from pathlib import Path
 
+    from tests import workflow_text
     from tests.ci_helpers import assert_paths_covered
-    from tools import ci_coverage
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
     assert "tests/test_translator/test_matrix_transfers.py" in step
@@ -1191,6 +1191,6 @@ def test_ci_requires_matrix_transfer_execution():
     assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_matrix_transfers.py",
         )

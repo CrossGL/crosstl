@@ -17,7 +17,6 @@ systems-language targets.
    ast
    codegen-utilities
    backend-support
-   support-matrix
    backends/index
    extending
    doxygen

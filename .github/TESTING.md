@@ -47,7 +47,7 @@ Branch protection and the merge queue require these checks:
 - `Backend Tests result`
 - `Complete Test Suite result`
 - `Examples Test result`
-- `Support Matrix result`
+- `Coverage result`
 - `MLX validation result`
 
 Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
@@ -507,8 +507,8 @@ is retained. A long Metal corpus run therefore does not hold up an unrelated
 DirectX or OpenGL check from the next revision. The workflow does not serialize
 all platforms behind one workflow-wide queue.
 
-Project demo checks run for changes to source, tests, demo inputs, support
-contracts and build/toolchain configuration. Root documentation-only changes do
+Project demo checks run for changes to source, tests, demo inputs and
+build/toolchain configuration. Root documentation-only changes do
 not launch the native demo matrices. The `ci-plan` job selects a tier from the
 event's complete Git diff. On a push to main, changes to
 `demos/integrations/mlx/**` or the demo workflow run the full MLX native, parity,
@@ -519,9 +519,11 @@ numerical smoke job. The full jobs also run nightly and on manual dispatch
 The Metal storage step has a 30-minute bound within an 80-minute job; the earlier
 15-minute bound expired during passing cases as the required suite grew.
 
-The full local command is `python -m pytest -q -n auto`. The all-file pre-commit
-checks validate workflow contracts and generated support artifacts. Changes to
-matrix coverage must update those contracts and this policy together.
+The full local command is `python -m pytest -q -n auto`. The pre-commit hooks
+run actionlint and `tests/test_ci_workflows.py`, which checks that actions are
+pinned to release tags, that each gating workflow ends in one `result` job and
+runs in the merge queue, and that every job has a timeout and explicit
+permissions. Changes to the tiers must update this policy in the same PR.
 
 The optional Metal discovery probe hides `xcrun` only when it confirms that the
 Metal toolchain component is missing. A bounded lookup or probe timeout is
@@ -558,12 +560,3 @@ definitions with default arithmetic and the explicit additive profile on each
 native target. Exact readbacks distinguish the qualified implementation from
 its template fallback, retain input copies and check eight output guards.
 macOS also executes the unchanged source. No runner or timeout is added.
-
-The base-to-head coverage comparison accepts explicitly reviewed workflow moves
-from `.github/ci-coverage-migrations.json`. Only workflow filenames are mapped;
-job identities and coverage requirements are not removed. Each old job must
-retain its timeout under the destination workflow, which must also retain every
-positive permission and action-policy requirement. Missing jobs, duplicate job
-destinations and weakened policies still fail. Applied mappings are recorded in
-the comparison artifact. A mapping is inactive once its source is absent from
-the base revision. Test, compiler and platform coverage are compared separately.

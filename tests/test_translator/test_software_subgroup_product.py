@@ -32,11 +32,11 @@ REQUIRE_ENV = "CROSTL_REQUIRE_SOFTWARE_SUBGROUP_PRODUCT"
 
 
 def test_product_gate_is_required_on_every_native_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate software subgroup products"
     )
     assert "test_software_subgroup_product.py" in step
@@ -49,7 +49,7 @@ def test_product_gate_is_required_on_every_native_target():
     )
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_software_subgroup_product.py",
         )
 

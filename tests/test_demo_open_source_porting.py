@@ -14,7 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_ROOT = ROOT / "demos" / "open-source-porting"
 CASE_ROOT = DEMO_ROOT / "cases"
-DEMO_CI_METADATA_PATH = ROOT / "support" / "demo-ci-metadata.json"
+DEMO_CI_METADATA_PATH = ROOT / "demos" / "open-source-porting" / "ci-metadata.json"
 DEMO_CI_TOOL_PATH = ROOT / "tools" / "demo_ci_metadata.py"
 DEMO_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "demo.yml"
 
@@ -214,7 +214,7 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "open-source-porting-demo-linux-vulkan" in workflow
     assert "open-source-porting-demo-macos-metal-compile" in workflow
     assert "open-source-porting-demo-windows-directx-compile" in workflow
-    assert "support/generated/demo-reports/**/*-failure-summary.json" in workflow
+    assert "build/reports/demo-reports/**/*-failure-summary.json" in workflow
 
 
 def _workflow_step_block(workflow: str, step_name: str) -> str:

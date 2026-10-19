@@ -266,19 +266,21 @@ def test_ordered_loop_updates_execute_natively(tmp_path, case):
 
 
 def test_loop_updates_native_gate_is_required():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(workflow, "Validate ordered loop updates")
+    step = workflow_text.workflow_step_section(
+        workflow, "Validate ordered loop updates"
+    )
     assert "test_loop_updates.py" in step and f'{REQUIRE_ENV}: "1"' in step
     assert "--timeout-seconds" in step and "--junitxml" in step and "-n auto" in step
     assert_native_step_prerequisites(step, job="portable-host")
     assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_loop_updates.py",
         )

@@ -243,10 +243,10 @@ def test_unavailable_toolchain_never_reuses_a_stale_helper(toolchain, monkeypatc
 
 
 def test_native_helper_reuse_is_required_in_existing_package_job():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate native Metal package execution"
     )
     assert 'CROSTL_REQUIRE_METAL_PACKAGE_RUNTIME: "1"' in step

@@ -419,13 +419,13 @@ kernel void rounding(const device uint* values [[buffer(0)]], device uint* resul
 
 
 def test_ci_requires_round_in_existing_native_step():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned unary arithmetic"
     )
     selector = "tests/test_translator/test_metal_round.py::test_round_executes"
