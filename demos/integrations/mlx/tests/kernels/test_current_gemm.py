@@ -43,6 +43,7 @@ CONSTANT_IDS = {
 HEADER_HASHES = {
     "loader.h": "c1b82153670b1e18371a6e88fdbcf440af692957775c2f837700315ab8a5112e",
     "gemm.h": "c84af31e2c57154f2a8a24fa7f9fe2449765cce9a66f3f035846ed3c03b6a8b0",
+    "mma.h": "9b37709de40c3acaa5411875e52c8d26e6de093261741f671fbdab9c39a852b7",
 }
 WORKGROUP_LOADERS = {
     "BlockLoader_float_false_16_32_false_32_16_false_32_4_16_4_false_128__load_unsafe": (
@@ -53,6 +54,13 @@ WORKGROUP_LOADERS = {
         16,
         32,
     ),
+}
+SIGNED_MAX = 2**31 - 1
+PLATFORM_TARGETS = {"darwin": "metal", "win32": "directx", "linux": "opengl"}
+GATE_TOOLS = {
+    "metal": ("xcrun",),
+    "directx": ("dxc",),
+    "opengl": ("glslangValidator", "spirv-val"),
 }
 GUARD = -98765.0
 CASES = (
@@ -119,8 +127,42 @@ def _loader_access_assertions():
     return tuple(assertions)
 
 
+def _opengl_index_assertions():
+    """GLSL indexes with 32-bit ints, so 64-bit pointer offsets need ranges.
+
+    Device views index MLX buffers, which stay below 2^31 elements. Each
+    threadgroup view reaches only the slots its loader writes, the ranges the
+    DirectX gate asserts for the loaders' ``self.dst``.
+    """
+    device = [
+        {"expression": f"source.offset + {element}", "maximum": SIGNED_MAX}
+        for element in range(4)
+    ] + [
+        {
+            "expression": "reference.offset + index",
+            "function": f"crosstl_resource_{access}",
+            "maximum": SIGNED_MAX,
+        }
+        # Batched variants also read batch_strides, an int64_t buffer.
+        for access in ("load_float", "store_float", "load_int64_t")
+    ]
+    # The A tile's helpers come first, then the B tile's, as the loaders do.
+    workgroup = [
+        {
+            "expression": "reference.offset + index",
+            "function": f"crosstl_workgroup_{access}_float{suffix}",
+            "maximum": loader["maximum"],
+        }
+        for suffix, loader in zip(("", "_2"), _loader_access_assertions())
+        for access in ("load", "store")
+    ]
+    return tuple(
+        {"source": SOURCE, **item, "minimum": 0} for item in device + workgroup
+    )
+
+
 def _config(root, output, target="metal"):
-    assert target in {"metal", "directx"}
+    assert target in {"metal", "directx", "opengl"}
     return ProjectConfig(
         root=root,
         source_roots=("mlx/backend/metal/kernels",),
@@ -133,7 +175,10 @@ def _config(root, output, target="metal"):
         freeze_specialization_constants=True,
         workgroup_size_rules={SOURCE: (32, 2, 2)},
         workgroup_access_assertions=(
-            _loader_access_assertions() if target == "directx" else ()
+            _loader_access_assertions() if target != "metal" else ()
+        ),
+        index_range_assertions=(
+            _opengl_index_assertions() if target == "opengl" else ()
         ),
         source_options={
             "metal": {
@@ -150,33 +195,56 @@ def _config(root, output, target="metal"):
                         "software_subgroup_width": 32,
                         "relative_wave_shuffle_out_of_range": "self",
                     },
+                    "opengl": {
+                        "cooperative_matrix_software_lowering": True,
+                        "software_subgroup_width": 32,
+                    },
                 },
             }
         },
     )
 
 
-@pytest.mark.parametrize("target", ["metal", "directx"])
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
 def test_gemm_target_contract_is_explicit(tmp_path, target):
     config = _config(tmp_path, "out", target)
     assert list(config.targets) == [target]
     assert config.workgroup_size_rules == {SOURCE: ("32", "2", "2")}
-    assert not config.index_range_assertions
-    if target == "directx":
-        assertions = config.workgroup_access_assertions
-        assert [(item.minimum, item.maximum) for item in assertions] == [
-            (0, 635),
-            (0, 571),
-        ]
-        assert {item.function for item in assertions} == set(WORKGROUP_LOADERS)
-        assert all(
-            item.source == SOURCE
-            and item.entry_point == ENTRY
-            and item.parameter == "self.dst"
-            for item in assertions
-        )
-    else:
+    if target == "metal":
         assert not config.workgroup_access_assertions
+        assert not config.index_range_assertions
+        return
+    assertions = config.workgroup_access_assertions
+    assert [(item.minimum, item.maximum) for item in assertions] == [
+        (0, 635),
+        (0, 571),
+    ]
+    assert {item.function for item in assertions} == set(WORKGROUP_LOADERS)
+    assert all(
+        item.source == SOURCE
+        and item.entry_point == ENTRY
+        and item.parameter == "self.dst"
+        for item in assertions
+    )
+    ranges = [item.to_json() for item in config.index_range_assertions]
+    if target == "directx":
+        assert not ranges
+        return
+    assert ranges == list(_opengl_index_assertions())
+    device = [item for item in ranges if item["maximum"] == SIGNED_MAX]
+    assert len(device) == 7
+    assert all(item["source"] == SOURCE and item["minimum"] == 0 for item in ranges)
+    workgroup = {
+        item["function"]: item["maximum"]
+        for item in ranges
+        if item["maximum"] != SIGNED_MAX
+    }
+    assert workgroup == {
+        "crosstl_workgroup_load_float": 635,
+        "crosstl_workgroup_store_float": 635,
+        "crosstl_workgroup_load_float_2": 571,
+        "crosstl_workgroup_store_float_2": 571,
+    }
 
 
 def _frozen_values(variant):
@@ -511,6 +579,46 @@ def test_gemm_broadcast_scalar_reference(variant, reference):
     assert expected == reference + [GUARD] * 8
 
 
+def _tile_read_slots():
+    """Shared-array slots ``BlockMMA::mma`` reads, following ``steel/gemm/mma.h``.
+
+    ``BaseMMAFrag::get_coord`` gives each lane an 8-by-8 fragment coordinate
+    and two adjacent elements; simdgroups split the 32-by-32 output two by two
+    and step K by fragments of 8.
+    """
+    a_slots, b_slots = set(), set()
+    lda, ldb = 16 + 4, 32 + 4
+    for group in range(4):
+        tm, tn = 8 * (group // 2), 8 * (group % 2)
+        for lane in range(32):
+            qid = lane // 4
+            sm = (qid & 4) + (lane // 2) % 4
+            sn = (qid & 2) * 2 + (lane % 2) * 2
+            for kk in range(0, 16, 8):
+                for tile in range(2):
+                    for element in range(2):
+                        a_slots.add((tm + sm + 16 * tile) * lda + sn + kk + element)
+                        b_slots.add((sm + kk) * ldb + tn + sn + 16 * tile + element)
+    return a_slots, b_slots
+
+
+def test_gemm_tile_reads_stay_in_the_loader_slots():
+    slots = []
+    for rows, columns in WORKGROUP_LOADERS.values():
+        slots.append(
+            {row * (columns + 4) + col for row in range(rows) for col in range(columns)}
+        )
+    reads = _tile_read_slots()
+    assert [len(item) for item in reads] == [32 * 16, 16 * 32]
+    assert reads[0] == slots[0] and reads[1] == slots[1]
+    workgroup = [
+        item for item in _opengl_index_assertions() if item["maximum"] != SIGNED_MAX
+    ]
+    assert [(item["minimum"], item["maximum"]) for item in workgroup] == [
+        (min(reads[0]), max(reads[0])),
+    ] * 2 + [(min(reads[1]), max(reads[1]))] * 2
+
+
 def test_gemm_scalar_reference():
     a, b, expected, _, _ = _case_data(CASES[0])
     assert a[0] == -1.0 and b[0] == -1.0
@@ -521,12 +629,10 @@ def test_gemm_scalar_reference():
 def gemm_source(tmp_path_factory):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for the pinned GEMM native gate")
-    target = os.environ.get(
-        "CROSTL_MLX_CURRENT_TARGET", "directx" if sys.platform == "win32" else "metal"
-    )
-    assert target in {"metal", "directx"}
-    assert sys.platform == {"metal": "darwin", "directx": "win32"}[target]
-    assert shutil.which("xcrun" if target == "metal" else "dxc")
+    target = os.environ.get("CROSTL_MLX_CURRENT_TARGET", PLATFORM_TARGETS[sys.platform])
+    assert PLATFORM_TARGETS[sys.platform] == target
+    for tool in GATE_TOOLS[target]:
+        assert shutil.which(tool), f"Required tool is missing: {tool}"
     tmp_path = tmp_path_factory.mktemp("gemm-original")
     root = Path(os.environ["CROSTL_MLX_CURRENT_ROOT"]).resolve()
     assert (
@@ -565,7 +671,8 @@ def gemm_source(tmp_path_factory):
             source, root, tmp_path / "original", flags=ORIGINAL_FLAGS
         )
     else:
-        run(["dxc", "--version"], tmp_path, "dxc-version")
+        tool = GATE_TOOLS[target][0]
+        run([tool, "--version"], tmp_path, f"{tool}-version")
     return root, original, target
 
 
@@ -587,9 +694,11 @@ def test_current_gemm_executes(tmp_path, gemm_source, variant):
             assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
             assert not payload["diagnostics"]
             assert len(payload["artifacts"]) == 1
-            assert payload["project"]["indexRangeAssertions"] == []
+            assert payload["project"]["indexRangeAssertions"] == (
+                list(_opengl_index_assertions()) if target == "opengl" else []
+            )
             assert payload["project"]["workgroupAccessAssertions"] == (
-                list(_loader_access_assertions()) if target == "directx" else []
+                list(_loader_access_assertions()) if target != "metal" else []
             )
             descriptor, package = _prepare_native_package(report, tmp_path)
             constants = descriptor["specializationConstants"]

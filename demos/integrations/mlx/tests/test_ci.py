@@ -141,10 +141,14 @@ def test_full_gemm_uses_existing_native_jobs_and_retains_evidence():
     path = "demos/integrations/mlx/tests/kernels/test_current_gemm.py"
     assert workflow.count(path) == 1
     assert path in step["run"]
-    assert step["if"] == "runner.os == 'macOS' || runner.os == 'Windows'"
+    assert "if" not in step
     assert step["env"]["CROSTL_MLX_CURRENT_TARGET"] == (
-        "${{ runner.os == 'Windows' && 'directx' || 'metal' }}"
+        "${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl'"
+        " || 'metal' }}"
     )
+    assert step["env"]["EGL_PLATFORM"] == "surfaceless"
+    assert step["env"]["LIBGL_ALWAYS_SOFTWARE"] == "1"
+    assert step["env"]["PYOPENGL_PLATFORM"] == "egl"
     assert step["env"]["CROSTL_REQUIRE_MLX_CURRENT_GEMM"] == "1"
     assert step["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
     assert step["env"]["CROSTL_MLX_CURRENT_ROOT"].endswith("/mlx-current-tree-upstream")
@@ -159,9 +163,7 @@ def test_full_gemm_uses_existing_native_jobs_and_retains_evidence():
         for s in job["steps"]
         if s.get("name") == "Upload current MLX GEMM native evidence"
     )
-    assert (
-        upload["if"] == "always() && (runner.os == 'macOS' || runner.os == 'Windows')"
-    )
+    assert upload["if"] == "always()"
     assert upload["with"]["name"] == "mlx-gemm-${{ runner.os }}"
     assert upload["with"]["path"] == "mlx-gemm-results"
     assert upload["with"]["if-no-files-found"] == "error"
