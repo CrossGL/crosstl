@@ -105,7 +105,8 @@ def _run(arguments: list[str], cwd: str) -> Verdict:
     except subprocess.TimeoutExpired:
         return Verdict(False, f"{arguments[0]} timed out after {TIMEOUT} s")
     log = _ANSI.sub("", result.stdout + result.stderr).replace(cwd + os.sep, "").strip()
-    return Verdict(result.returncode == 0, log[-2000:])
+    # Compilers report the first error first and end with notes and counts, so the head of the log is kept.
+    return Verdict(result.returncode == 0, log[:2000])
 
 
 # Entry-point names HLSL writers conventionally give each stage, tried when a shader has no ``main``.

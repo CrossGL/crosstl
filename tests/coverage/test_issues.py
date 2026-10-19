@@ -48,6 +48,12 @@ def _hlsl(**outcomes):
     )
 
 
+def _bug(language, name, direction="output"):
+    """The bug key of feature ``name`` in the rows built here, whose detail is ``"<name> failed"``."""
+    row = {"language": language, "direction": direction}
+    return issues.bug_key(row, _feature(name, "wrong", detail=f"{name} failed"))
+
+
 def _applied(actions, existing=()):
     """The managed issues after ``actions`` run, numbering new issues after the existing ones."""
     state = {issue.key: issue for issue in existing}
@@ -87,7 +93,7 @@ def test_first_run_files_tracking_and_bug_issues():
     actions = issues.plan(report, [])
     assert _kinds(actions) == [
         ("create", "tracking/hlsl/output"),
-        ("create", "wrong/hlsl/output/b"),
+        ("create", _bug("hlsl", "b")),
     ]
     tracking = actions[0]
     assert tracking.title == "HLSL output coverage: 33.3 % (2 gaps)"
@@ -102,7 +108,10 @@ def test_first_run_files_tracking_and_bug_issues():
     assert "- [ ] `c` refused: c failed" in tracking.body
     assert "`d`" not in tracking.body
     bug = actions[1]
-    assert bug.title == "HLSL output: wrong result for b"
+    assert bug.title == "HLSL output: b failed"
+    assert (
+        "The coverage probe for `b` (HLSL output, g) gives a wrong result." in bug.body
+    )
     assert bug.labels[0] == "bug"
     assert (
         "python -m tools.coverage run --backend hlsl --direction output --feature b"
@@ -132,11 +141,11 @@ def test_a_run_links_the_bugs_it_files_and_the_next_run_changes_nothing():
     actions = issues.reconcile(report, repository, log=logged.append)
     assert _kinds(actions) == [
         ("create", "tracking/hlsl/output"),
-        ("create", "wrong/hlsl/output/b"),
+        ("create", _bug("hlsl", "b")),
         ("edit", "tracking/hlsl/output"),
     ]
     assert len(logged) == 3
-    bug = next(i for i in repository.issues if i.key == "wrong/hlsl/output/b")
+    bug = next(i for i in repository.issues if i.key == _bug("hlsl", "b"))
     tracking = next(i for i in repository.issues if i.key == "tracking/hlsl/output")
     assert f"- [ ] `b` wrong (#{bug.number}): b failed" in tracking.body
     assert issues.reconcile(report, repository, log=logged.append) == []
@@ -144,13 +153,16 @@ def test_a_run_links_the_bugs_it_files_and_the_next_run_changes_nothing():
 
 
 def test_the_follow_up_pass_files_no_further_bugs():
-    row = _row("wgsl", "output", [_feature(f"w{i}", "wrong") for i in range(3)])
+    row = _row(
+        "wgsl",
+        "output",
+        [_feature(f"w{i}", "wrong", detail=f"w{i} failed") for i in range(3)],
+    )
     repository = _Repository()
     issues.reconcile(_report(row), repository, new_bugs=1, log=lambda line: None)
-    assert sorted(i.key for i in repository.issues) == [
-        "tracking/wgsl/output",
-        "wrong/wgsl/output/w0",
-    ]
+    assert sorted(i.key for i in repository.issues) == sorted(
+        ["tracking/wgsl/output", _bug("wgsl", "w0")]
+    )
 
 
 def test_a_dry_run_changes_nothing():
@@ -178,22 +190,71 @@ def test_tracking_issue_closes_at_full_coverage_and_reopens_on_regression():
     assert reopen[0].title == "HLSL output coverage: 66.7 % (1 gap)"
 
 
-def test_bug_issues_close_when_the_probe_passes_or_is_refused():
+def test_bug_issues_close_when_no_probe_fails_their_way():
     state = _applied(issues.plan(_report(_hlsl(a="wrong")), []))
     actions = issues.plan(_report(_hlsl(a="supported", b="refused")), state)
     closes = {a.key: a for a in actions if a.kind == "close"}
-    assert set(closes) == {"wrong/hlsl/output/a", "wrong/hlsl/output/b"}
-    assert closes["wrong/hlsl/output/a"].reason == "completed"
-    assert "passes" in closes["wrong/hlsl/output/a"].comment
+    assert set(closes) == {_bug("hlsl", "a"), _bug("hlsl", "b")}
+    assert {a.reason for a in closes.values()} == {"completed"}
+    assert "No HLSL output probe fails this way" in closes[_bug("hlsl", "a")].comment
     tracking = next(i for i in state if i.key == "tracking/hlsl/output")
-    assert f"#{tracking.number}" in closes["wrong/hlsl/output/b"].comment
+    assert f"#{tracking.number}" in closes[_bug("hlsl", "b")].comment
+
+
+def test_wrong_results_with_one_cause_are_one_bug_issue():
+    detail = 'probe.cu({}): error: identifier "{}" is undefined in device code'
+    row = _row(
+        "cuda",
+        "output",
+        [
+            _feature("sinf", "wrong", detail=detail.format(1888, "fin")),
+            _feature("atomicAdd", "wrong", detail=detail.format(1890, "iin")),
+            _feature("erff", "wrong", detail='error: identifier "erff" is undefined'),
+        ],
+    )
+    bugs = [a for a in issues.plan(_report(row), []) if a.key.startswith("wrong/")]
+    assert [a.title for a in bugs] == [
+        'CUDA output: identifier "<probe>" is undefined in device code',
+        'CUDA output: identifier "erff" is undefined',
+    ]
+    assert (
+        "The coverage probes for 2 CUDA output features give a wrong result" in bugs[
+            0
+        ].body
+    )
+    assert "Affected features: `atomicAdd`, `sinf`." in bugs[0].body
+    assert "--feature atomicAdd" in bugs[0].body
+    assert issues.FEATURES.format("atomicAdd,sinf") in bugs[0].body
+
+
+def test_a_bug_stays_open_while_one_of_its_features_is_untested():
+    row = _row(
+        "cuda",
+        "output",
+        [_feature(n, "wrong", detail="same failure") for n in ("p", "q")],
+    )
+    state = _applied(issues.plan(_report(row), []))
+    row["features"] = [_feature("p", "supported"), _feature("q", "untested")]
+    actions = issues.plan(_report(row), state)
+    assert [a for a in actions if a.key.startswith("wrong/")] == []
+
+
+def test_causes_keep_the_digits_of_names():
+    first = issues.cause(
+        {"detail": "probe.hlsl:3:9: error: undeclared identifier 'packSnorm2x16'"}
+    )
+    second = issues.cause(
+        {"detail": "probe.hlsl:4:9: error: undeclared identifier 'packSnorm4x8'"}
+    )
+    assert first == "probe.hlsl:N:N: error: undeclared identifier 'packSnorm2x16'"
+    assert first != second
 
 
 def test_bug_issues_reopen_when_the_result_is_wrong_again():
     state = _applied(issues.plan(_report(_hlsl()), []))
     state = _applied(issues.plan(_report(_hlsl(b="supported")), state), state)
     actions = issues.plan(_report(_hlsl()), state)
-    assert ("reopen", "wrong/hlsl/output/b") in _kinds(actions)
+    assert ("reopen", _bug("hlsl", "b")) in _kinds(actions)
 
 
 def test_untested_and_unmeasured_results_leave_issues_alone():
@@ -224,15 +285,23 @@ def test_bug_for_a_feature_dropped_from_the_list_is_closed_as_not_planned():
 
 
 def test_new_bug_issues_are_capped_and_spread_over_rows():
-    many = _row("wgsl", "output", [_feature(f"w{i:02}", "wrong") for i in range(20)])
-    few = _row("glsl", "output", [_feature("g0", "wrong"), _feature("g1", "wrong")])
+    many = _row(
+        "wgsl",
+        "output",
+        [_feature(f"w{i:02}", "wrong", detail=f"w{i:02} failed") for i in range(20)],
+    )
+    few = _row(
+        "glsl",
+        "output",
+        [_feature(f"g{i}", "wrong", detail=f"g{i} failed") for i in range(2)],
+    )
     actions = issues.plan(_report(many, few), [], new_bugs=4)
     bugs = [a.key for a in actions if a.key.startswith("wrong/")]
     assert bugs == [
-        "wrong/wgsl/output/w00",
-        "wrong/glsl/output/g0",
-        "wrong/wgsl/output/w01",
-        "wrong/glsl/output/g1",
+        _bug("wgsl", "w00"),
+        _bug("glsl", "g0"),
+        _bug("wgsl", "w01"),
+        _bug("glsl", "g1"),
     ]
     state = _applied(actions)
     following = [
@@ -240,14 +309,14 @@ def test_new_bug_issues_are_capped_and_spread_over_rows():
         for a in issues.plan(_report(many, few), state, new_bugs=4)
         if a.kind == "create"
     ]
-    assert following == [f"wrong/wgsl/output/w{i:02}" for i in range(2, 6)]
+    assert following == [_bug("wgsl", f"w{i:02}") for i in range(2, 6)]
 
 
 def test_existing_bug_issues_are_updated_even_past_the_cap():
     state = _applied(issues.plan(_report(_hlsl()), []))
     state = _applied(issues.plan(_report(_hlsl(b="supported")), state), state)
     actions = issues.plan(_report(_hlsl()), state, new_bugs=0)
-    assert ("reopen", "wrong/hlsl/output/b") in _kinds(actions)
+    assert ("reopen", _bug("hlsl", "b")) in _kinds(actions)
 
 
 def test_edits_add_missing_labels_and_keep_the_others():
@@ -390,7 +459,7 @@ def test_cli_prints_the_plan_and_applies_it_unless_dry_run(
     assert applied == (
         []
         if dry_run
-        else ["tracking/hlsl/output", "wrong/hlsl/output/b", "tracking/hlsl/output"]
+        else ["tracking/hlsl/output", _bug("hlsl", "b"), "tracking/hlsl/output"]
     )
 
 

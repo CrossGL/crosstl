@@ -1,7 +1,8 @@
 """Reconcile the coverage tracking and bug issues with a coverage report.
 
 There is one tracking issue per language and direction, plus one for CrossGL IR expressiveness, and one bug issue per
-``wrong`` result. Every managed issue carries a hidden marker, ``<!-- crosstl-coverage key=... -->``, and nothing here
+cause of ``wrong`` results in a language and direction (:func:`cause`), so one translator bug that breaks many probes
+is one issue. Every managed issue carries a hidden marker, ``<!-- crosstl-coverage key=... -->``, and nothing here
 edits or closes an issue without one.
 
 :func:`plan` is pure: it compares the report with the managed issues and returns the actions, so a dry run prints
@@ -12,6 +13,7 @@ commit or date, so a new measurement edits an issue only when its results change
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shlex
@@ -27,7 +29,24 @@ BODY_LIMIT = 60_000
 DETAIL_LIMIT = 2_000
 MARKER = "<!-- crosstl-coverage key={} -->"
 _MARKER = re.compile(r"<!-- crosstl-coverage key=([^\s>]+) -->")
+# A bug issue also records the features it covers, so a later run can tell a fix from a result it could not measure.
+FEATURES = "<!-- crosstl-coverage features={} -->"
+_FEATURES = re.compile(r"<!-- crosstl-coverage features=(.*?) -->")
 _UNSAFE = re.compile(r"[^\w.:+-]")
+# Bug titles stay short; the body has the whole diagnostic.
+TITLE_LIMIT = 120
+# A bug issue names this many of the features that share its cause.
+LISTED = 40
+# Numbers on their own, such as line and column numbers; the digits of a name such as ``float4`` stay.
+_DIGITS = re.compile(r"(?<!\w)\d+(?!\w)")
+# The buffers, locals and entry points of the generated probes (:mod:`.probes`), quoted in a diagnostic.
+_PLUMBING = re.compile(
+    r"""(['"`])(?:fin|iin|uin|rin|outp|i|r|a\d+|tile|probe|main|compute_main)\1"""
+)
+# The file and position a diagnostic starts with: ``probe.cu(N): error:``, ``probe.hlsl:N:N: error:``, ``ERROR: N:N:``.
+_LOCATION = re.compile(
+    r"^(?:after the round trip: )?(?:\S*probe\.\w+[(:][N:)]*:?\s*|ERROR: N:N:\s*)?(?:error:\s*)?"
+)
 
 TOOLS = {
     "glsl": "glslang",
@@ -146,8 +165,22 @@ def tracking_key(row: dict) -> str:
     return key("tracking", row["language"], row["direction"])
 
 
+def cause(feature: dict) -> str:
+    """The diagnostic of a wrong result with what is particular to its probe removed: line and column numbers and
+    the names every probe uses. Wrong results with one cause are one bug."""
+    detail = (feature.get("detail") or "no diagnostic was recorded").splitlines()[0]
+    detail = _PLUMBING.sub(lambda m: m.group(1) + "<probe>" + m.group(1), detail)
+    return _DIGITS.sub("N", detail).strip()
+
+
+def _covered(body: str | None) -> list[str]:
+    found = _FEATURES.search(body or "")
+    return found.group(1).split(",") if found and found.group(1) else []
+
+
 def bug_key(row: dict, feature: dict) -> str:
-    return key("wrong", row["language"], row["direction"], feature["name"])
+    digest = hashlib.sha256(cause(feature).encode()).hexdigest()[:12]
+    return key("wrong", row["language"], row["direction"], digest)
 
 
 def tracking_title(row: dict) -> str:
@@ -245,14 +278,17 @@ def _fence(text: str) -> str:
     return text.replace("```", "'''")
 
 
-def bug_title(row: dict, feature: dict) -> str:
-    return f"{_name(row)}: wrong result for {feature['name']}"
+def bug_title(row: dict, cause: str) -> str:
+    summary = _LOCATION.sub("", cause, count=1).strip()
+    if len(summary) > TITLE_LIMIT:
+        summary = summary[: TITLE_LIMIT - 1].rstrip() + "…"
+    return f"{_name(row)}: {summary}"
 
 
-def bug_body(row: dict, feature: dict, repository: str) -> str:
+def bug_body(row: dict, features: list[dict], repository: str) -> str:
+    """The bug issue body for the ``features`` of ``row`` that fail with one :func:`cause`."""
     language, direction = row["language"], row["direction"]
     tool = TOOLS.get(language, language)
-    spelled = feature.get("crossgl")
     if direction == "input":
         what = (
             f"CrossTL imports the generated {chart.name(language)} probe, which {tool} accepts, but the "
@@ -260,27 +296,40 @@ def bug_body(row: dict, feature: dict, repository: str) -> str:
             f"{tool} rejects."
         )
     else:
-        call = f", which calls `{spelled}`," if spelled else ""
         what = (
-            f"CrossTL translates the generated CrossGL probe{call} but fails without a typed diagnostic or "
+            "CrossTL translates the generated CrossGL probe but fails without a typed diagnostic or "
             f"produces code that {tool} rejects."
         )
+    first = features[0]
+    count = len(features)
+    subject = (
+        f"The coverage probe for `{first['name']}` ({_name(row)}, {first.get('group') or first['category']}) "
+        "gives a wrong result."
+        if count == 1
+        else f"The coverage probes for {count} {_name(row)} features give a wrong result with the same diagnostic."
+    )
     lines = [
-        MARKER.format(bug_key(row, feature)),
-        f"The coverage probe for `{feature['name']}` ({_name(row)}, {feature.get('group') or feature['category']}) "
-        "gives a wrong result. " + what,
+        MARKER.format(bug_key(row, first)),
+        FEATURES.format(",".join(f["name"] for f in features)),
+        f"{subject} {what}",
         "",
         "```text",
-        _fence(feature.get("detail") or "no diagnostic was recorded"),
+        _fence(first.get("detail") or "no diagnostic was recorded"),
         "```",
         "",
+    ]
+    if count > 1:
+        shown = ", ".join(f"`{f['name']}`" for f in features[:LISTED])
+        rest = f" and {count - LISTED} more" if count > LISTED else ""
+        lines += [f"Affected features: {shown}{rest}.", ""]
+    lines += [
         "Reproduce it with:",
         "",
         "```bash",
-        f"python -m tools.coverage run --backend {language} --direction {direction} --feature {shlex.quote(feature['name'])}",
+        f"python -m tools.coverage run --backend {language} --direction {direction} --feature {shlex.quote(first['name'])}",
         "```",
         "",
-        f"The coverage workflow closes this issue when the probe passes. [COVERAGE.md]({_coverage_url(repository, row)}) "
+        f"The coverage workflow closes this issue when no probe fails this way. [COVERAGE.md]({_coverage_url(repository, row)}) "
         "has the current results.",
     ]
     return "\n".join(lines) + "\n"
@@ -314,61 +363,51 @@ def _tracking(plan: _Plan, row: dict, bugs: dict[str, int]) -> None:
             )
 
 
+def _causes(row: dict) -> list[tuple[str, list[dict]]]:
+    """The row's wrong results grouped by :func:`cause`, the cause shared by most features first."""
+    groups: dict[str, list[dict]] = {}
+    for feature in sorted(row["features"], key=lambda f: f["name"]):
+        if feature["outcome"] == "wrong":
+            groups.setdefault(cause(feature), []).append(feature)
+    return sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
+
+
 def _bugs(plan: _Plan, rows: list[dict], new_bugs: int) -> None:
     # New bugs are taken one row at a time, so a capped run files issues for every language rather than the first.
-    wanted: list[tuple[int, int, dict, dict]] = []
+    wanted: list[tuple[int, int, dict, list[dict]]] = []
     for order, row in enumerate(rows):
-        wrong = sorted(
-            (f for f in row["features"] if f["outcome"] == "wrong"),
-            key=lambda f: f["name"],
-        )
-        wanted += [(rank, order, row, feature) for rank, feature in enumerate(wrong)]
-        present = {bug_key(row, f): f for f in row["features"]}
+        causes = _causes(row)
+        wanted += [(rank, order, row, group) for rank, (_, group) in enumerate(causes)]
+        present = {bug_key(row, group[0]) for _, group in causes}
         prefix = key("wrong", row["language"], row["direction"]) + "/"
         tracking = plan.managed.get(tracking_key(row))
-        see = f" The gap stays on #{tracking.number}." if tracking else ""
+        see = f" The remaining gaps are on #{tracking.number}." if tracking else ""
+        outcomes = {f["name"]: f["outcome"] for f in row["features"]}
         for issue_key, issue in sorted(plan.managed.items()):
-            if not issue_key.startswith(prefix):
+            if not issue_key.startswith(prefix) or issue_key in present:
                 continue
-            feature = present.get(issue_key)
-            if feature is None:
-                plan.close(
-                    issue,
-                    issue.title,
-                    issue.body,
-                    "The feature is no longer in the pinned feature list, so this issue is closed.",
-                    "not_planned",
-                )
-            elif feature["outcome"] == "supported":
-                plan.close(
-                    issue,
-                    issue.title,
-                    issue.body,
-                    "The probe passes now, so this issue is closed as completed.",
-                    "completed",
-                )
-            elif feature["outcome"] == "refused":
-                plan.close(
-                    issue,
-                    issue.title,
-                    issue.body,
-                    "CrossTL now refuses this feature with a typed diagnostic instead of producing a wrong result."
-                    + see,
-                    "completed",
-                )
+            members = [outcomes[n] for n in _covered(issue.body) if n in outcomes]
+            if "untested" in members:
+                continue  # a result that could not be measured says nothing about the bug
+            if members:
+                comment = f"No {_name(row)} probe fails this way any more, so this issue is closed."
+                plan.close(issue, issue.title, issue.body, comment + see, "completed")
+            else:
+                comment = "Its features are no longer in the pinned feature list, so this issue is closed."
+                plan.close(issue, issue.title, issue.body, comment, "not_planned")
     created = 0
-    for _, _, row, feature in sorted(wanted, key=lambda w: (w[0], w[1])):
-        issue_key = bug_key(row, feature)
+    for _, _, row, group in sorted(wanted, key=lambda w: (w[0], w[1])):
+        issue_key = bug_key(row, group[0])
         if issue_key not in plan.managed:
             if created >= new_bugs:
                 continue
             created += 1
         plan.ensure(
             issue_key,
-            bug_title(row, feature),
-            bug_body(row, feature, plan.repository),
+            bug_title(row, cause(group[0])),
+            bug_body(row, group, plan.repository),
             bug_labels(row),
-            "The probe gives a wrong result again, so this issue is reopened.",
+            "A probe fails this way again, so this issue is reopened.",
         )
 
 
