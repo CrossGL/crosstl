@@ -5,8 +5,8 @@ using namespace metal;
 __attribute__((unused)) constant float3 lightDir = float3(0.424, 0.566, 0.707);
 
 struct FragmentInput {
-    float4 texcoord [[attribute(0)]];
-    float3 frag_pos [[attribute(1)]];
+    float4 texcoord [[user(locn0)]];
+    float3 frag_pos [[user(locn1)]];
 };
 float linearToSrgb(float linear) {
     if (linear <= 0.0031308) {

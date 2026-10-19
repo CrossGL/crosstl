@@ -4,7 +4,7 @@ using namespace metal;
 
 struct PSInput {
     float4 position [[position]];
-    float4 color [[attribute(0)]];
+    float4 color [[user(COLOR0)]];
 };
 // Constant Buffers
 struct SceneConstantBuffer {
