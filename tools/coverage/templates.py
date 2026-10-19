@@ -441,4 +441,89 @@ WGSL = {
     ),
 }
 
-TEMPLATES = {"glsl": GLSL, "hlsl": HLSL, "metal": METAL, "wgsl": WGSL, "spirv": {}}
+_CSTDINT = "#include <cstdint>"
+
+CUDA = {
+    **C_FAMILY,
+    "function-call": Template(
+        C_FAMILY["function-call"].body,
+        "__device__ float twice(float x) {\n    return x * 2.0f;\n}",
+    ),
+    "out-parameter": Template(
+        C_FAMILY["out-parameter"].body,
+        "__device__ void split(float x, float& a, float& b) {\n    a = x;\n    b = x * 2.0f;\n}",
+    ),
+    "inout-parameter": Template(
+        C_FAMILY["inout-parameter"].body,
+        "__device__ void bump(float& a) {\n    a = a + 1.0f;\n}",
+    ),
+    # CUDA vector types are plain structs: no swizzles, and no matrix types at all.
+    "swizzle": ABSENT,
+    "matrix-vector-product": ABSENT,
+    "global-constant": Template(
+        "outp[i] = fin[i] * SCALE;", "constexpr float SCALE = 2.0f;"
+    ),
+    # A CUDA buffer is a pointer; its length is not part of the language.
+    "runtime-array-length": ABSENT,
+    "half": _scalar("__half", "fin", "#include <cuda_fp16.h>"),
+    "double": _scalar("double", "fin"),
+    "int8": _scalar("int8_t", prelude=_CSTDINT),
+    "uint8": _scalar("uint8_t", prelude=_CSTDINT),
+    "int16": _scalar("int16_t", prelude=_CSTDINT),
+    "uint16": _scalar("uint16_t", prelude=_CSTDINT),
+    "int64": _scalar("int64_t", prelude=_CSTDINT),
+    "uint64": _scalar("uint64_t", prelude=_CSTDINT),
+    "shared-memory": Template(
+        "__shared__ float tile[1];\ntile[0] = fin[i];\n__syncthreads();\noutp[i] = tile[0];"
+    ),
+    "local-invocation-id": Template("outp[i] = float(threadIdx.x);"),
+    "workgroup-id": Template("outp[i] = float(blockIdx.x);"),
+    # CUDA has no built-in for the flattened thread index; kernels compute it the way GLSL defines it.
+    "local-invocation-index": Template(
+        "outp[i] = float(threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z));"
+    ),
+    "num-workgroups": Template("outp[i] = float(gridDim.x);"),
+    "uniform-buffer": Template(
+        "outp[i] = fin[i] * scale;", "__constant__ float scale;"
+    ),
+    "read-only-buffer": Template(
+        "outp[i] = rin[i];", params="const float* __restrict__ rin"
+    ),
+    "sampled-texture": Template(
+        "outp[i] = tex2DLod<float4>(tex, fin[i], 0.5f, 0.0f).x;",
+        params="cudaTextureObject_t tex",
+    ),
+    "storage-image": Template(
+        "surf2Dwrite(make_float4(fin[i], fin[i], fin[i], fin[i]), img, 0, 0);\noutp[i] = 0.0f;",
+        params="cudaSurfaceObject_t img",
+    ),
+    # CUDA has kernels only; graphics and ray-tracing stages belong to the graphics APIs and OptiX.
+    **dict.fromkeys(
+        (
+            "discard",
+            "vertex",
+            "fragment",
+            "geometry",
+            "tessellation-control",
+            "tessellation-evaluation",
+            "task",
+            "mesh",
+            "ray-generation",
+            "intersection",
+            "any-hit",
+            "closest-hit",
+            "miss",
+            "callable",
+        ),
+        ABSENT,
+    ),
+}
+
+TEMPLATES = {
+    "cuda": CUDA,
+    "glsl": GLSL,
+    "hlsl": HLSL,
+    "metal": METAL,
+    "wgsl": WGSL,
+    "spirv": {},
+}

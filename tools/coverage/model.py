@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 SCALARS = ("bool", "int", "uint", "float", "double")
 OUTCOMES = ("supported", "refused", "wrong", "untested")
-LANGUAGES = ("glsl", "hlsl", "metal", "spirv", "wgsl")
+LANGUAGES = ("cuda", "glsl", "hlsl", "metal", "spirv", "wgsl")
 DIRECTIONS = ("output", "input")
 
 

@@ -21,6 +21,7 @@ TIMEOUT = 60
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # The tool each language is validated with, and the suffix its compiler expects.
 TOOLS = {
+    "cuda": "nvcc",
     "glsl": "glslangValidator",
     "hlsl": "dxc",
     "metal": "metal",
@@ -28,6 +29,7 @@ TOOLS = {
     "wgsl": "naga",
 }
 SUFFIX = {
+    "cuda": ".cu",
     "glsl": ".comp",
     "hlsl": ".hlsl",
     "metal": ".metal",
@@ -39,6 +41,9 @@ HLSL_PROFILES = {"compute": "cs_6_6", "fragment": "ps_6_6", "vertex": "vs_6_6"}
 SPIRV_ENVIRONMENT = "vulkan1.1"
 # The language version of the Metal feature list (features/metal.txt); probes compile against the same version.
 METAL_STANDARD = "metal4.1"
+# CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
+# feature list names, and for C++17.
+CUDA_ARCH = "sm_80"
 
 
 @dataclass(frozen=True)
@@ -174,6 +179,19 @@ def validate(
             )
         if language == "wgsl":
             return _run([*command("naga"), name], scratch)
+        if language == "cuda":
+            return _run(
+                [
+                    *command("nvcc"),
+                    f"-arch={CUDA_ARCH}",
+                    "-std=c++17",
+                    "-c",
+                    name,
+                    "-o",
+                    "probe.o",
+                ],
+                scratch,
+            )
         environment = ["--target-env", SPIRV_ENVIRONMENT]
         assembled = _run(
             [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch

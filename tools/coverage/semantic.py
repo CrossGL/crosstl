@@ -19,8 +19,9 @@ from .model import Feature
 # that have one.
 CURATED: dict[str, str] = {}
 # Languages no reference compiler here lowers to SPIR-V. Their functions take the id of the function of the named
-# language that CrossGL spells the same way: Metal ``fabs`` is CrossGL ``abs``, so it shares GLSL ``abs``'s id.
-BORROWED = {"metal": "glsl"}
+# language that CrossGL spells the same way: Metal ``fabs`` and CUDA ``fabsf`` are CrossGL ``abs``, so they share
+# GLSL ``abs``'s id.
+BORROWED = {"cuda": "glsl", "metal": "glsl"}
 # Instructions that only move or address values. They never identify a call.
 _MEMORY = frozenset(
     "OpLoad OpStore OpAccessChain OpInBoundsAccessChain OpPtrAccessChain OpVariable OpCopyObject OpCopyMemory "

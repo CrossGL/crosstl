@@ -5,11 +5,19 @@ from __future__ import annotations
 from .. import constructs
 from ..model import Feature
 from ..upstream import fetch
-from . import glsl, hlsl, metal, spirv, wgsl
+from . import cuda, glsl, hlsl, metal, spirv, wgsl
 
 
 def _glsl_names(offline: bool) -> set[str]:
     return set(glsl.overloads(fetch("glsl", offline=offline)))
+
+
+def _cuda(offline: bool) -> list[Feature]:
+    return cuda.parse(
+        fetch("cuda", offline=offline),
+        fetch("cuda-device", offline=offline),
+        _glsl_names(offline),
+    )
 
 
 def _glsl(offline: bool) -> list[Feature]:
@@ -33,6 +41,7 @@ def _wgsl(offline: bool) -> list[Feature]:
 
 
 PARSERS = {
+    "cuda": _cuda,
     "glsl": _glsl,
     "hlsl": _hlsl,
     "metal": _metal,

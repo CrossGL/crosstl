@@ -1,5 +1,5 @@
 from tools.coverage import validators
-from tools.coverage.features import glsl, hlsl, metal, spirv, wgsl
+from tools.coverage.features import cuda, glsl, hlsl, metal, spirv, wgsl
 from tools.coverage.model import Param, Type
 
 GLSL_EXCERPT = """
@@ -269,3 +269,78 @@ def test_metal_list_records_its_toolchain():
     # Probes compile against the language version the committed list was read from.
     version = validators.METAL_STANDARD.removeprefix("metal")
     assert f"# language: Metal Shading Language {version}\n" in metal.LIST.read_text()
+
+
+CUDA_MATH = """
+#define __DEVICE__ static __device__ __forceinline__
+__DEVICE__ double erf(double __a) { return __nv_erf(__a); }
+__DEVICE__ float erff(float __a) { return __nv_erff(__a); }
+__DEVICE__ double fabs(double __a) { return __nv_fabs(__a); }
+__DEVICE__ float fabsf(float __a) { return __nv_fabsf(__a); }
+__DEVICE__ double frexp(double __a, int *__b) { return __nv_frexp(__a, __b); }
+__DEVICE__ float frexpf(float __a, int *__b) { return __nv_frexpf(__a, __b); }
+__DEVICE__ long labs(long __a) { return llabs(__a); }
+__DEVICE__ void *memcpy(void *__a, const void *__b, size_t __c) {
+  return __builtin_memcpy(__a, __b, __c);
+}
+"""
+
+CUDA_DEVICE = """
+__DEVICE__ int __all(int __a) { return __nvvm_vote_all(__a); }
+__DEVICE__ void __brkpt() { __asm__ __volatile__("brkpt;"); }
+__DEVICE__ void __attribute__((overloadable)) __brkpt(int __a) { __brkpt(); }
+__DEVICE__ float __fAtomicAdd(float *__p, float __v) {
+  return __nvvm_atom_add_gen_f(__p, __v);
+}
+__DEVICE__ int __iAtomicAdd(int *__p, int __v) {
+  return __nvvm_atom_add_gen_i(__p, __v);
+}
+__DEVICE__ unsigned int __uAtomicAdd_block(unsigned int *__p, unsigned int __v) {
+  return __nvvm_atom_cta_add_gen_i((int *)__p, __v);
+}
+__DEVICE__ int __popc(unsigned int __a) { return __nv_popc(__a); }
+__DEVICE_VOID__ void __threadfence(void) { __nvvm_membar_gl(); }
+"""
+
+
+def test_cuda_reads_device_functions_and_leaves_out_the_rest():
+    features = by_name(cuda.parse(CUDA_MATH, CUDA_DEVICE, {"abs", "frexp"}))
+    assert sorted(features) == [
+        "__popc",
+        "__threadfence",
+        "atomicAdd",
+        "atomicAdd_block",
+        "erf",
+        "erff",
+        "fabs",
+        "fabsf",
+        "frexp",
+        "frexpf",
+        "labs",
+    ]
+    assert features["labs"].signature.params[0].type == Type.other("long")
+    assert features["__threadfence"].group == "intrinsics"
+    assert features["fabsf"].group == "math"
+
+
+def test_cuda_atomics_take_the_int_helper_and_bind_the_pointer_inout():
+    features = by_name(cuda.parse(CUDA_MATH, CUDA_DEVICE))
+    add = features["atomicAdd"]
+    assert add.group == "atomic"
+    assert add.signature.params == (Param(Type("int"), "inout"), Param(Type("int")))
+    assert features["atomicAdd_block"].signature.result == Type("uint")
+    frexp = features["frexpf"].signature
+    assert frexp.params[1] == Param(Type("int"), "out")
+
+
+def test_cuda_spells_single_precision_functions_as_their_crossgl_overload():
+    glsl_names = {"abs", "frexp", "erf", "bitCount", "memoryBarrier"}
+    features = by_name(cuda.parse(CUDA_MATH, CUDA_DEVICE, glsl_names))
+    assert features["fabsf"].crossgl == features["fabs"].crossgl == "abs"
+    assert features["frexpf"].crossgl == "frexp"
+    # erff and erf are one CrossGL function, told apart by argument type.
+    assert features["erff"].crossgl == features["erf"].crossgl
+    assert features["__popc"].crossgl == "bitCount"
+    assert features["__threadfence"].crossgl == "memoryBarrier"
+    # A rename applies only when GLSL has the target, so a CrossGL spelling is never invented.
+    assert by_name(cuda.parse(CUDA_MATH, CUDA_DEVICE))["__popc"].crossgl == "__popc"

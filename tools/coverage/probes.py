@@ -165,8 +165,49 @@ class WGSL(Dialect):
         return "\n".join(lines + ["}"]) + "\n"
 
 
+class CUDA(Dialect):
+    language = "cuda"
+    suffix = ".cu"
+    entry = "probe"
+
+    def scalar(self, scalar: str) -> str:
+        return "unsigned int" if scalar == "uint" else scalar
+
+    def vector(self, scalar: str, size: int) -> str:
+        if scalar == "bool":
+            raise ProbeError("CUDA has no bool vectors")
+        return f"{scalar}{size}"
+
+    def matrix(self, scalar: str, columns: int, rows: int) -> str:
+        raise ProbeError("CUDA has no matrix types")
+
+    def construct(self, kind: Type, parts: list[str]) -> str:
+        return f"make_{self.type(kind)}({', '.join(parts)})"
+
+    def cast(self, kind: Type, value: str) -> str:
+        return f"({self.type(kind)}){value}"
+
+    def out_argument(self, name: str) -> str:
+        return f"&{name}"
+
+    def inout_argument(self) -> str:
+        return "&outp[i]"
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        params = [f"{kind}* {name}" for kind, name in buffers]
+        params += parts.get("params", ())
+        lines = [
+            *parts.get("prelude", ()),
+            *parts.get("declarations", ()),
+            f'extern "C" __global__ void probe({", ".join(params)}) {{',
+            "    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["}"]) + "\n"
+
+
 DIALECTS: dict[str, Dialect] = {
-    d.language: d for d in (CROSSGL, GLSL(), HLSL(), Metal(), WGSL())
+    d.language: d for d in (CROSSGL, CUDA(), GLSL(), HLSL(), Metal(), WGSL())
 }
 
 

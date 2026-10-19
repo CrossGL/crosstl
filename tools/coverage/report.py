@@ -44,7 +44,7 @@ def _sources(languages: list[str]) -> dict[str, dict[str, str]]:
             "describes": s.describes,
         }
         for language, s in sorted(upstream.SOURCES.items())
-        if language in languages
+        if language.split("-")[0] in languages
     }
     if "metal" in languages:
         sources["metal"] = metal.source(metal.LIST.read_text())

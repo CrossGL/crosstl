@@ -181,7 +181,10 @@ def _spellings(dialect) -> dict[str, str]:
         spelled[f"vec{size}"] = dialect.type(Type("float", (size,)))
         spelled[f"ivec{size}"] = dialect.type(Type("int", (size,)))
         spelled[f"uvec{size}"] = dialect.type(Type("uint", (size,)))
-    spelled["mat2"] = dialect.type(Type("float", (2, 2)))
+    try:
+        spelled["mat2"] = dialect.type(Type("float", (2, 2)))
+    except ProbeError:
+        pass  # the language has no matrices, and its templates do not use $mat2
     return spelled
 
 

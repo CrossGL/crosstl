@@ -2,8 +2,9 @@ name: Coverage
 
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The
-# Linux job measures GLSL, HLSL, SPIR-V and WGSL with glslang, DXC, spirv-val and naga; the macOS job measures Metal
-# with xcrun metal. The report job merges both reports and adds the CrossGL IR row. On pushes to main and nightly,
+# Linux job measures GLSL, HLSL, SPIR-V and WGSL with glslang, DXC, spirv-val and naga, a second Linux job measures
+# CUDA with nvcc, and the macOS job measures Metal with xcrun metal. The report job merges the reports and adds the
+# CrossGL IR row. On pushes to main and nightly,
 # the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart),
 # COVERAGE.md and a bounded history.csv; main itself never receives generated files. The issues job then
 # reconciles the tracking and bug issues (tools/coverage/issues.py); pull requests only print its plan.
@@ -131,6 +132,57 @@ jobs:
           path: coverage-linux.json
           retention-days: 14
 
+  cuda:
+    name: Coverage (CUDA)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CROSSTL_COVERAGE_CACHE: ${{ github.workspace }}/../coverage-cache
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      # nvcc compiles without a GPU, so the CUDA compiler and runtime headers are all the probes need.
+      - name: Install nvcc 13.0
+        run: |
+          set -euo pipefail
+          keyring="$RUNNER_TEMP/cuda-keyring.deb"
+          curl -fsSLo "$keyring" --retry 8 --retry-all-errors --retry-delay 10 --connect-timeout 30 \
+            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          echo "d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a06dba  $keyring" | sha256sum --check --strict
+          sudo dpkg -i "$keyring"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            cuda-nvcc-13-0=13.0.88-1 cuda-crt-13-0=13.0.88-1 cuda-cudart-dev-13-0=13.0.96-1
+          echo /usr/local/cuda-13.0/bin >> "$GITHUB_PATH"
+          /usr/local/cuda-13.0/bin/nvcc --version
+
+      - name: Restore upstream feature sources
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/../coverage-cache
+          key: coverage-upstream-${{ hashFiles('tools/coverage/upstream.py') }}
+
+      - name: Measure coverage
+        run: python -m tools.coverage run --strict --jobs 4 --backend cuda --output coverage-cuda.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-cuda
+          path: coverage-cuda.json
+          retention-days: 14
+
   metal:
     name: Coverage (Metal)
     needs: plan
@@ -170,8 +222,8 @@ jobs:
 
   report:
     name: Coverage report
-    needs: [linux, metal]
-    if: always() && needs.linux.result == 'success' && needs.metal.result != 'failure' && needs.metal.result != 'cancelled'
+    needs: [linux, cuda, metal]
+    if: always() && needs.linux.result == 'success' && needs.cuda.result == 'success' && needs.metal.result != 'failure' && needs.metal.result != 'cancelled'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -348,7 +400,7 @@ jobs:
 
   result:
     name: Coverage result
-    needs: [plan, linux, metal, report, publish, issues]
+    needs: [plan, linux, cuda, metal, report, publish, issues]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

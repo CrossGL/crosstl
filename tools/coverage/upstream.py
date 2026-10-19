@@ -31,6 +31,20 @@ class Source:
 
 
 SOURCES = {
+    "cuda": Source(
+        "llvm/llvm-project",
+        "0d261d1ca552c95a8f007e061c787ac7132fbcbc",
+        "clang/lib/Headers/__clang_cuda_math.h",
+        "debe73cf7191627b94fea9e1bfe13a4318b1616fed38b2e94f5eefe2a8637c72",
+        "LLVM 23.1.3 device-side CUDA Math API wrappers",
+    ),
+    "cuda-device": Source(
+        "llvm/llvm-project",
+        "0d261d1ca552c95a8f007e061c787ac7132fbcbc",
+        "clang/lib/Headers/__clang_cuda_device_functions.h",
+        "216f56ec0925602aaf8cab05bf226d0efcc531083993cc664d025d1737b3469a",
+        "LLVM 23.1.3 CUDA intrinsic and atomic wrappers",
+    ),
     "glsl": Source(
         "KhronosGroup/GLSL",
         "0099bf83b0288469917fc2e2972cb0a2b74d6711",

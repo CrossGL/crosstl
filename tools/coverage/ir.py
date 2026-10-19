@@ -31,10 +31,11 @@ def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
         lender = BORROWED.get(language, "")
         for feature in backend["features"]:
             spelled = feature.get("crossgl") or feature["name"]
+            # Without an id, features one language spells alike in CrossGL are one: CUDA ``erff`` and ``erf``.
             key = (
                 feature.get("semantic")
                 or ids.get((lender, spelled))
-                or f"{language}/{feature['name']}"
+                or f"{language}/{spelled}"
             )
             groups.setdefault(key, []).append((language, feature))
     return groups

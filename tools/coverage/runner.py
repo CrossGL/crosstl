@@ -12,13 +12,19 @@ from .model import Feature, Result
 from .semantic import lower
 
 OUTPUT_BACKENDS = {
+    "cuda": "cuda",
     "glsl": "opengl",
     "hlsl": "directx",
     "metal": "metal",
     "spirv": "vulkan",
     "wgsl": "wgsl",
 }
-INPUT_BACKENDS = {"glsl": "opengl", "hlsl": "directx", "metal": "metal"}
+INPUT_BACKENDS = {
+    "cuda": "cuda",
+    "glsl": "opengl",
+    "hlsl": "directx",
+    "metal": "metal",
+}
 
 
 class Refused(Exception):

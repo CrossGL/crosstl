@@ -190,3 +190,40 @@ def test_metal_probes_are_valid_metal(probe_feature):
     probe = probes.build(probe_feature, "metal")
     verdict = validators.validate("metal", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+CUDA_SIGNATURES = [
+    feature("fmaf", Type("float"), Type("float"), Type("float"), Type("float")),
+    feature("frexpf", Type("float"), Type("float"), Param(Type("int"), "out")),
+    feature("atomicAdd", Type("int"), Param(Type("int"), "inout"), Type("int")),
+    feature("__popc", Type("int"), Type("uint")),
+    feature("__syncthreads", Type.other("void")),
+]
+
+
+def test_cuda_probe_passes_buffers_as_kernel_pointers():
+    source = probes.build(CUDA_SIGNATURES[2], "cuda").source
+    assert 'extern "C" __global__ void probe(int* iin, int* outp) {' in source
+    assert "atomicAdd(&outp[i], a1);" in source
+    frexp = probes.build(CUDA_SIGNATURES[1], "cuda").source
+    assert "frexpf(a0, &" in frexp
+    vector = probes.build(feature("normalize", VEC3, VEC3), "cuda").source
+    assert "float3 a0 = make_float3(fin[i + 0u], fin[i + 1u], fin[i + 2u]);" in vector
+
+
+def test_cuda_has_no_matrices_or_boolean_vectors():
+    with pytest.raises(probes.ProbeError, match="matrix"):
+        probes.build(
+            feature("transpose", Type("float", (2, 2)), Type("float", (2, 2))), "cuda"
+        )
+    with pytest.raises(probes.ProbeError, match="bool vectors"):
+        probes.build(feature("any", Type("bool"), Type("bool", (3,))), "cuda")
+
+
+@pytest.mark.skipif(not validators.available("cuda"), reason="nvcc is not installed")
+@pytest.mark.parametrize("probe_feature", CUDA_SIGNATURES, ids=lambda f: f.name)
+@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
+def test_cuda_probes_are_valid_cuda(probe_feature, baseline):
+    probe = probes.build(probe_feature, "cuda", baseline=baseline)
+    verdict = validators.validate("cuda", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
