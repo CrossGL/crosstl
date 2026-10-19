@@ -3,7 +3,7 @@
 import re
 import struct
 from copy import deepcopy
-from hashlib import sha1
+from hashlib import sha1, sha256
 
 from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ..arithmetic_conversions import (
@@ -12589,7 +12589,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if (struct_name in self.structs_by_name or existing_metadata is not None) and (
             existing_metadata is None or existing_metadata.get("type_text") != type_text
         ):
-            digest = sha1(type_text.encode("utf-8")).hexdigest()[:8]
+            digest = sha256(type_text.encode("utf-8")).hexdigest()[:8]
             struct_name = f"{candidate_name}_{digest}"
 
         members = [
