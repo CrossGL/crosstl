@@ -2722,7 +2722,7 @@ The current harness verifies:
   `contracts/reduce.opengl-translation.json` contract spans the same 39 exact
   ABI shapes, nine kernel templates, six operator families, 44 concrete
   operator types, and 13 input/output types. It pins 9,216 exact
-  materializations, 45,932,130 generated GLSL bytes, and 25,088
+  materializations, 45,283,816 generated GLSL bytes, and 25,088
   resources across scalar-layout-aware one- through twelve-resource target ABIs.
   Complete source comparisons and strict compiler checks cover every entry.
   The latest review reconstructs every previous source identity and verifies

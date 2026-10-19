@@ -2971,7 +2971,7 @@ standalone OpenGL ``main`` artifacts. The compact schema-v2
 ``reduce.opengl-translation.json`` contract preserves the 39 shapes, nine
 kernel templates, six operator families, 44 concrete operator types, and 13
 input/output types while pinning 9,216 exact materializations,
-45,932,130 generated GLSL bytes, and 25,088 resources across
+45,283,816 generated GLSL bytes, and 25,088 resources across
 scalar-layout-aware one- through twelve-resource target ABIs.
 All source bodies and resource interfaces have complete reference comparisons;
 an earlier 85-entry pipeline review covers its edit patterns and ABI shapes.
