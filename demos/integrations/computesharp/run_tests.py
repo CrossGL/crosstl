@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import ctypes
+import dataclasses
 import json
 import os
 import platform
@@ -516,7 +517,7 @@ def run_negative_controls(
     return {"status": status, "controls": results}
 
 
-def main(argv: list[str] | None = None) -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adapted", required=True, type=Path)
     parser.add_argument("--discovery", required=True, type=Path)
@@ -550,82 +551,104 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run only the negative controls, for diagnosis",
     )
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
+
+
+@dataclasses.dataclass(frozen=True)
+class _Run:
+    """One translated-target run: its arguments, suite, profile and work tree."""
+
+    args: argparse.Namespace
+    suite: suites.Suite
+    profile: dict[str, Any]
+    work: Path
+
+    @property
+    def target(self) -> str:
+        return self.profile["target"]
+
+    @property
+    def program(self) -> bool:
+        return self.suite.kind == "program"
+
+    @property
+    def logs(self) -> Path:
+        return self.work / "logs"
+
+    @property
+    def artifacts(self) -> Path:
+        return self.work / "artifacts"
+
+    @property
+    def native_library(self) -> Path:
+        return self.work / "native" / NATIVE_SOURCES[self.target][1]
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.artifacts / self.target / "manifest.json"
+
+    @property
+    def evidence(self) -> Path | None:
+        return None if self.args.no_evidence else self.work / "evidence.jsonl"
+
+    def write_report(self, report: dict[str, Any]) -> None:
+        (self.work / "results.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+
+def _resolve_run(args: argparse.Namespace) -> _Run:
     suite = suites.suite(args.suite)
-    program = suite.kind == "program"
-    if program and args.filter:
+    if suite.kind == "program" and args.filter:
         raise SystemExit(
             f"{suite.name} is a program with one case; --filter does not apply"
         )
     args.contract = args.contract or suite.contract
     args.controls = args.controls or suite.negative_controls
-
     contract = json.loads(args.contract.read_text(encoding="utf-8"))
     profile = contract["profiles"].get(args.profile)
     if profile is None or profile.get("role") != "translated-target":
         raise SystemExit(f"{args.profile} is not a translated-target profile")
-    target = profile["target"]
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
-    logs = work / "logs"
-    artifacts = work / "artifacts"
-    native_library = work / "native" / NATIVE_SOURCES[target][1]
+    return _Run(args=args, suite=suite, profile=profile, work=work)
 
-    if not args.skip_build:
-        build_native(target, native_library.parent, logs / "native-build.log")
-        if not args.prebuilt_tests:
-            build_tests(args.adapted, logs / "test-build.log", suite.project)
-    device_check = preflight(native_library, profile)
-    print(json.dumps({"preflight": device_check}, indent=2))
-    if device_check["status"] != "passed":
-        blocked = {
+
+def _report_blocked_preflight(run: _Run, device_check: dict[str, Any]) -> int:
+    run.write_report(
+        {
             "schemaVersion": 2,
             "kind": "computesharp-translated-run",
-            "profile": args.profile,
-            "target": target,
-            "execution": profile.get("execution"),
+            "profile": run.args.profile,
+            "target": run.target,
+            "execution": run.profile.get("execution"),
             "host": {"system": platform.system(), "machine": platform.machine()},
             "preflight": device_check,
             "status": device_check["status"],
             "nativeTargetExecutionQualified": False,
         }
-        (work / "results.json").write_text(
-            json.dumps(blocked, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        kind = (
-            "infrastructure blocker"
-            if device_check["status"] == "blocked"
-            else "capability mismatch"
-        )
-        print(f"No test was run ({kind}); see {work / 'results.json'}")
-        return 1
-    if not args.skip_translate:
-        translate(args.discovery, artifacts, target, logs / "translate.log")
-    manifest_path = artifacts / target / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-    report: dict[str, Any] = {
-        "schemaVersion": 2,
-        "kind": "computesharp-translated-run",
-        "suite": suite.name,
-        "profile": args.profile,
-        "target": target,
-        "execution": profile.get("execution"),
-        "host": {"system": platform.system(), "machine": platform.machine()},
-        "translator": manifest["translator"],
-        "translation": manifest["counts"],
-        "preflight": device_check,
-        "deadlines": DEADLINES,
-    }
-    status = 0
-    exactness_report = exactness.analyze(
-        target,
-        artifacts,
-        library=native_library,
-        device=device_check.get("device"),
-        require_float_operations=suite.no_float_arithmetic_reason is None,
     )
-    (work / "exactness.json").write_text(
+    kind = (
+        "infrastructure blocker"
+        if device_check["status"] == "blocked"
+        else "capability mismatch"
+    )
+    print(f"No test was run ({kind}); see {run.work / 'results.json'}")
+    return 1
+
+
+def _check_exactness(
+    run: _Run, device_check: dict[str, Any], report: dict[str, Any]
+) -> bool:
+    """Record the arithmetic exactness analysis; return whether it passed."""
+    exactness_report = exactness.analyze(
+        run.target,
+        run.artifacts,
+        library=run.native_library,
+        device=device_check.get("device"),
+        require_float_operations=run.suite.no_float_arithmetic_reason is None,
+    )
+    (run.work / "exactness.json").write_text(
         json.dumps(exactness_report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -635,115 +658,112 @@ def main(argv: list[str] | None = None) -> int:
         "totals": exactness_report["totals"],
         "errors": exactness_report.get("errors", [])[:20],
     }
-    if exactness_report["status"] != "passed":
-        status = 1
-    passed: Counter[str] | None = None
-    if not args.controls_only:
-        evidence = None if args.no_evidence else work / "evidence.jsonl"
-        excluded = excluded_methods(args.contract, args.discovery, args.profile)
-        capture_cases = []
-        if suite.image_checks is not None:
-            image_checks = json.loads(suite.image_checks.read_text(encoding="utf-8"))
-            capture_cases = image_checks["captureCases"]
+    return exactness_report["status"] == "passed"
+
+
+def _run_complete_suite(run: _Run) -> Path:
+    """Run every required case of the suite once; return its TRX file."""
+    args = run.args
+    excluded = excluded_methods(args.contract, args.discovery, args.profile)
+    capture_cases = []
+    if run.suite.image_checks is not None:
+        image_checks = json.loads(run.suite.image_checks.read_text(encoding="utf-8"))
+        capture_cases = image_checks["captureCases"]
+    return run_tests(
+        adapted=args.adapted,
+        artifacts=run.artifacts,
+        target=run.target,
+        native_library=run.native_library,
+        excluded=excluded,
+        results_dir=run.work / "trx",
+        evidence=run.evidence,
+        fault=None,
+        extra_filter=args.filter,
+        log=run.logs / "test-run.log",
+        capture=None if run.evidence is None else run.work / "captures",
+        capture_cases=capture_cases,
+        assembly=run.suite.assembly,
+        program=args.discovery if run.program else None,
+    )
+
+
+def _account_complete_run(
+    run: _Run, trx: Path, report: dict[str, Any]
+) -> tuple[bool, Counter[str]]:
+    """Account the complete run and verify its evidence.
+
+    Returns whether both qualified and the passed cases, which the negative
+    controls require to fail under each fault.
+    """
+    args = run.args
+    qualified = True
+    report["trx"] = str(trx)
+    if args.filter:
+        report["accounting"] = "skipped: a diagnostic filter was supplied"
+        qualified = False
+    else:
         try:
-            trx = run_tests(
-                adapted=args.adapted,
-                artifacts=artifacts,
-                target=target,
-                native_library=native_library,
-                excluded=excluded,
-                results_dir=work / "trx",
-                evidence=evidence,
-                fault=None,
-                extra_filter=args.filter,
-                log=logs / "test-run.log",
-                capture=None if evidence is None else work / "captures",
-                capture_cases=capture_cases,
-                assembly=suite.assembly,
-                program=args.discovery if program else None,
+            report["accounting"] = baseline.verify_results(
+                args.discovery, trx, args.profile, args.contract
             )
-        except DeadlineExceeded as exc:
-            report.update(
-                status="failed",
-                deadlineExceeded=str(exc),
-                nativeTargetExecutionQualified=False,
+        except baseline.AccountingError as exc:
+            report["accounting"] = {"status": "failed", "errors": exc.errors}
+            qualified = False
+    if run.evidence is None:
+        report["evidence"] = "skipped: evidence was disabled"
+        qualified = False
+    else:
+        try:
+            report["evidence"] = evidence_module.verify(
+                evidence=run.evidence,
+                manifest_path=run.manifest_path,
+                discovery_dir=args.discovery,
+                trx=trx,
+                profile=args.profile,
+                contract_path=args.contract,
+                policy_path=run.suite.evidence_policy,
             )
-            (work / "results.json").write_text(
-                json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
-            print(f"The run did not qualify: {exc}")
-            return 1
-        report["trx"] = str(trx)
-        if args.filter:
-            report["accounting"] = "skipped: a diagnostic filter was supplied"
-            status = 1
-        else:
-            try:
-                report["accounting"] = baseline.verify_results(
-                    args.discovery, trx, args.profile, args.contract
-                )
-            except baseline.AccountingError as exc:
-                report["accounting"] = {"status": "failed", "errors": exc.errors}
-                status = 1
-        if evidence is None:
-            report["evidence"] = "skipped: evidence was disabled"
-            status = 1
-        else:
-            try:
-                report["evidence"] = evidence_module.verify(
-                    evidence=evidence,
-                    manifest_path=manifest_path,
-                    discovery_dir=args.discovery,
-                    trx=trx,
-                    profile=args.profile,
-                    contract_path=args.contract,
-                    policy_path=suite.evidence_policy,
-                )
-            except evidence_module.EvidenceError as exc:
-                report["evidence"] = {"status": "failed", "errors": exc.errors[:200]}
-                status = 1
-        report["failures"] = summarize_failures(trx)
-        outputs = collect_outputs.collect(
-            (args.adapted / suite.assembly).resolve().parent, work / "outputs"
-        )
-        report["outputs"] = {
-            "directory": str(work / "outputs"),
-            "outputs": len(outputs["outputs"]),
-            "references": len(outputs["references"]),
-        }
-        passed = Counter(
-            case["name"]
-            for case in evidence_module.trx_cases(trx)
-            if case["outcome"] == "Passed"
-        )
-    if args.negative_controls or args.controls_only:
-        report["negativeControls"] = run_negative_controls(
-            adapted=args.adapted,
-            artifacts=artifacts,
-            target=target,
-            native_library=native_library,
-            discovery=args.discovery,
-            profile=args.profile,
-            contract=args.contract,
-            work=work,
-            spec_path=args.controls,
-            passed=passed,
-            assembly=suite.assembly,
-            policy=suite.evidence_policy,
-            program=program,
-        )
-        if report["negativeControls"]["status"] != "passed":
-            status = 1
-    if args.controls_only:
-        status = 1
-        report["accounting"] = "skipped: only negative controls were run"
-    report["status"] = "passed" if status == 0 else "failed"
-    report["nativeTargetExecutionQualified"] = bool(
-        status == 0 and args.negative_controls and not args.filter
+        except evidence_module.EvidenceError as exc:
+            report["evidence"] = {"status": "failed", "errors": exc.errors[:200]}
+            qualified = False
+    report["failures"] = summarize_failures(trx)
+    outputs = collect_outputs.collect(
+        (args.adapted / run.suite.assembly).resolve().parent, run.work / "outputs"
     )
-    (work / "results.json").write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    report["outputs"] = {
+        "directory": str(run.work / "outputs"),
+        "outputs": len(outputs["outputs"]),
+        "references": len(outputs["references"]),
+    }
+    passed = Counter(
+        case["name"]
+        for case in evidence_module.trx_cases(trx)
+        if case["outcome"] == "Passed"
     )
+    return qualified, passed
+
+
+def _run_controls(run: _Run, passed: Counter[str] | None) -> dict[str, Any]:
+    args = run.args
+    return run_negative_controls(
+        adapted=args.adapted,
+        artifacts=run.artifacts,
+        target=run.target,
+        native_library=run.native_library,
+        discovery=args.discovery,
+        profile=args.profile,
+        contract=args.contract,
+        work=run.work,
+        spec_path=args.controls,
+        passed=passed,
+        assembly=run.suite.assembly,
+        policy=run.suite.evidence_policy,
+        program=run.program,
+    )
+
+
+def run_summary(report: dict[str, Any]) -> dict[str, Any]:
+    """The short console summary of a translated-target report."""
     summary = {
         key: report.get(key)
         for key in (
@@ -769,9 +789,71 @@ def main(argv: list[str] | None = None) -> int:
             item["fault"]: item["status"]
             for item in report["negativeControls"]["controls"]
         }
-    print(json.dumps(summary, indent=2))
+    return summary
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    run = _resolve_run(args)
+    if not args.skip_build:
+        build_native(
+            run.target, run.native_library.parent, run.logs / "native-build.log"
+        )
+        if not args.prebuilt_tests:
+            build_tests(args.adapted, run.logs / "test-build.log", run.suite.project)
+    device_check = preflight(run.native_library, run.profile)
+    print(json.dumps({"preflight": device_check}, indent=2))
+    if device_check["status"] != "passed":
+        return _report_blocked_preflight(run, device_check)
+    if not args.skip_translate:
+        translate(args.discovery, run.artifacts, run.target, run.logs / "translate.log")
+    manifest = json.loads(run.manifest_path.read_text(encoding="utf-8"))
+
+    report: dict[str, Any] = {
+        "schemaVersion": 2,
+        "kind": "computesharp-translated-run",
+        "suite": run.suite.name,
+        "profile": args.profile,
+        "target": run.target,
+        "execution": run.profile.get("execution"),
+        "host": {"system": platform.system(), "machine": platform.machine()},
+        "translator": manifest["translator"],
+        "translation": manifest["counts"],
+        "preflight": device_check,
+        "deadlines": DEADLINES,
+    }
+    qualified = _check_exactness(run, device_check, report)
+    passed: Counter[str] | None = None
+    if not args.controls_only:
+        try:
+            trx = _run_complete_suite(run)
+        except DeadlineExceeded as exc:
+            report.update(
+                status="failed",
+                deadlineExceeded=str(exc),
+                nativeTargetExecutionQualified=False,
+            )
+            run.write_report(report)
+            print(f"The run did not qualify: {exc}")
+            return 1
+        accounted, passed = _account_complete_run(run, trx, report)
+        qualified = qualified and accounted
+    if args.negative_controls or args.controls_only:
+        report["negativeControls"] = _run_controls(run, passed)
+        if report["negativeControls"]["status"] != "passed":
+            qualified = False
+    if args.controls_only:
+        qualified = False
+        report["accounting"] = "skipped: only negative controls were run"
+    status = 0 if qualified else 1
+    report["status"] = "passed" if status == 0 else "failed"
+    report["nativeTargetExecutionQualified"] = bool(
+        status == 0 and args.negative_controls and not args.filter
+    )
+    run.write_report(report)
+    print(json.dumps(run_summary(report), indent=2))
     if status:
-        print(f"The run did not qualify; see {work / 'results.json'}")
+        print(f"The run did not qualify; see {run.work / 'results.json'}")
     return status
 
 
