@@ -1,5 +1,6 @@
 """Build and run the MSTest descriptor fixture shared by the demo test modules."""
 
+import contextlib
 import importlib.util
 import os
 import shutil
@@ -35,30 +36,87 @@ def _dotnet():
     return dotnet
 
 
+def _build_output(tmp_path_factory, name):
+    """Return a build directory that every xdist worker of the session shares.
+
+    Each worker otherwise runs its own concurrent ``dotnet build`` of the same
+    projects, which multiplies the build cost and lets the SDK's shared state
+    (NuGet caches, build servers) race between workers.
+    """
+    root = tmp_path_factory.getbasetemp()
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        root = root.parent
+    output = root / "computesharp-dotnet" / name
+    output.mkdir(parents=True, exist_ok=True)
+    return output
+
+
+@contextlib.contextmanager
+def _exclusive(path):
+    """Hold an exclusive advisory lock on ``path`` across processes."""
+    with open(path, "a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            # LK_LOCK retries for about ten seconds; wait out longer builds.
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _build(dotnet, project, output, name):
-    subprocess.run(
-        [
-            dotnet,
-            "build",
-            str(project),
-            "-c",
-            "Release",
-            "-o",
-            str(output / name),
-            "--artifacts-path",
-            str(output / (name + "-artifacts")),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
+    """Build ``project`` into ``output/name`` once per test session."""
+    marker = output / (name + ".built")
+    with _exclusive(output / (name + ".lock")):
+        if marker.exists():
+            return
+        result = subprocess.run(
+            [
+                dotnet,
+                "build",
+                str(project),
+                "-c",
+                "Release",
+                "-o",
+                str(output / name),
+                "--artifacts-path",
+                str(output / (name + "-artifacts")),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode != 0:
+            log = (result.stdout + result.stderr).strip().splitlines()
+            pytest.fail(
+                f"dotnet build {project.name} exited with {result.returncode}:\n"
+                + "\n".join(log[-40:]),
+                pytrace=False,
+            )
+        marker.touch()
 
 
 def build_tools(tmp_path_factory):
     """Build the discovery exporter and the fixture assembly with the .NET SDK."""
     dotnet = _dotnet()
-    output = tmp_path_factory.mktemp("discovery-build")
+    output = _build_output(tmp_path_factory, "discovery-build")
     for name, project in (
         ("tool", ROOT / "discovery" / "Discovery.csproj"),
         ("fixture", ROOT / "tests" / "fixture" / "Fixture.csproj"),
@@ -73,7 +131,7 @@ def build_tools(tmp_path_factory):
 
 def build_program(tools, tmp_path_factory):
     """Build the top-level program fixture; return the discovery tools for it."""
-    output = tmp_path_factory.mktemp("program-build")
+    output = _build_output(tmp_path_factory, "program-build")
     _build(
         tools[0],
         ROOT / "tests" / "program_fixture" / "ProgramFixture.csproj",
@@ -85,7 +143,7 @@ def build_program(tools, tmp_path_factory):
 
 def build_host(tools, tmp_path_factory):
     """Build the host-only MSTest fixture; return the discovery tools for it."""
-    output = tmp_path_factory.mktemp("host-build")
+    output = _build_output(tmp_path_factory, "host-build")
     _build(
         tools[0],
         ROOT / "tests" / "host_fixture" / "HostFixture.csproj",
