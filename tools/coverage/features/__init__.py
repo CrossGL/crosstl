@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .. import constructs
 from ..model import Feature
 from ..upstream import fetch
 from . import glsl, hlsl, metal, spirv, wgsl
@@ -41,5 +42,8 @@ PARSERS = {
 
 
 def load(language: str, *, offline: bool = False) -> list[Feature]:
-    """The feature list of one language, parsed from its pinned upstream sources."""
-    return PARSERS[language](offline)
+    """The feature list of one language: its built-in functions, parsed from its pinned upstream sources, then its
+    language-level features (:mod:`..constructs`), checked against the pinned SPIR-V core grammar.
+    """
+    grammar = fetch("spirv-core", offline=offline)
+    return PARSERS[language](offline) + constructs.features(language, grammar)

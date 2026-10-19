@@ -52,6 +52,13 @@ SOURCES = {
         "5d72e48247569f9b77a17a849db624350abc9d26f7f72b153bbcf15c37238239",
         "SPIR-V GLSL.std.450 extended instruction grammar",
     ),
+    "spirv-core": Source(
+        "KhronosGroup/SPIRV-Headers",
+        "496543121ce6419f23d6fa5d7194ba66c36212d2",
+        "include/spirv/unified1/spirv.core.grammar.json",
+        "c125a0fbf6730fde4625fef2618c4f7611ab42edf9b2ad5bb9291002b10bfad3",
+        "SPIR-V core grammar (execution models, capabilities, storage classes, instructions)",
+    ),
     "wgsl": Source(
         "google/dawn",
         "ff7c6960f62d4249f967a78448918eec21705a86",

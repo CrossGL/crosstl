@@ -9,6 +9,7 @@ anywhere else.
 from __future__ import annotations
 
 from .dialect import Buffer, Dialect
+from .templates import C_FAMILY, Template
 
 # Built-in functions CrossGL spells as GLSL does rather than as the backend does. A rename applies only when the GLSL
 # feature list has the new name; any other backend function is probed under its own spelling.
@@ -118,13 +119,15 @@ class CrossGL(Dialect):
     language = "crossgl"
     suffix = ".cgl"
 
-    def kernel(self, buffers: list[Buffer], body: list[str]) -> str:
-        lines = [
-            "shader Probe {",
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in parts.get("prelude", ())]
+        lines += [
             "    compute {",
             "        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;",
         ]
         lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
         lines += [
             "        void main() {",
             "            uint i = gl_GlobalInvocationID.x;",
@@ -135,3 +138,68 @@ class CrossGL(Dialect):
 
 
 DIALECT = CrossGL()
+
+
+def _scalar(spelling: str, source: str = "iin") -> Template:
+    return Template(f"{spelling} v = {spelling}({source}[i]);\noutp[i] = float(v * v);")
+
+
+_PAIR = "struct Pair {\n    float a;\n    float b;\n};"
+_FRAGMENT = (
+    "shader Probe {\n    struct FragmentInput {\n        vec2 uv;\n    }\n    struct FragmentOutput {\n"
+    "        vec4 color;\n    }\n    fragment {\n        FragmentOutput main(FragmentInput input) {\n"
+    "            FragmentOutput output;\n{body}            output.color = vec4(input.uv, 0.0, 1.0);\n"
+    "            return output;\n        }\n    }\n}\n"
+)
+
+# Language-level probes (:mod:`.constructs`). Kernel templates use the CrossGL kernel above: ``prelude`` lines are
+# shader-level declarations, ``declarations`` go inside the compute block.
+CONSTRUCTS: dict[str, Template] = {
+    **C_FAMILY,
+    "struct": Template(C_FAMILY["struct"].body, prelude=_PAIR),
+    "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=_PAIR),
+    "global-constant": Template(
+        "outp[i] = fin[i] * SCALE;", prelude="const float SCALE = 2.0;"
+    ),
+    "runtime-array-length": Template("outp[i] = float(outp.length());"),
+    "half": _scalar("half", "fin"),
+    "double": _scalar("double", "fin"),
+    "int8": _scalar("int8_t"),
+    "uint8": _scalar("uint8_t"),
+    "int16": _scalar("int16_t"),
+    "uint16": _scalar("uint16_t"),
+    "int64": _scalar("int64_t"),
+    "uint64": _scalar("uint64_t"),
+    "shared-memory": Template(
+        "tile[0] = fin[i];\nbarrier();\noutp[i] = tile[0];", "shared float tile[1];"
+    ),
+    "local-invocation-id": Template("outp[i] = float(gl_LocalInvocationID.x);"),
+    "workgroup-id": Template("outp[i] = float(gl_WorkGroupID.x);"),
+    "local-invocation-index": Template("outp[i] = float(gl_LocalInvocationIndex);"),
+    "num-workgroups": Template("outp[i] = float(gl_NumWorkGroups.x);"),
+    "uniform-buffer": Template(
+        "outp[i] = fin[i] * scale;", prelude="cbuffer Params {\n    float scale;\n};"
+    ),
+    "read-only-buffer": Template("outp[i] = rin[i];", "readonly buffer float* rin;"),
+    "sampled-texture": Template(
+        "outp[i] = textureLod(tex, vec2(fin[i], 0.5), 0.0).x;", "uniform sampler2D tex;"
+    ),
+    "storage-image": Template(
+        "imageStore(img, ivec2(0, 0), vec4(fin[i]));\noutp[i] = 0.0;",
+        "layout(rgba32f) uniform image2D img;",
+    ),
+    "vertex": Template(
+        program="shader Probe {\n    struct VertexInput {\n        vec4 position;\n    }\n"
+        "    struct VertexOutput {\n        vec4 position @ gl_Position;\n    }\n    vertex {\n"
+        "        VertexOutput main(VertexInput input) {\n            VertexOutput output;\n"
+        "            output.position = input.position * 2.0;\n            return output;\n        }\n"
+        "    }\n}\n"
+    ),
+    "fragment": Template(program=_FRAGMENT.replace("{body}", "")),
+    "discard": Template(
+        program=_FRAGMENT.replace(
+            "{body}",
+            "            if (input.uv.x < 0.5) {\n                discard;\n            }\n",
+        )
+    ),
+}

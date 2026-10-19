@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import constructs
 from .crossgl import DIALECT as CROSSGL
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .model import Feature, Signature, Type
@@ -22,15 +23,17 @@ class GLSL(Dialect):
     language = "glsl"
     suffix = ".comp"
 
-    def kernel(self, buffers: list[Buffer], body: list[str]) -> str:
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = [
             "#version 460",
+            *parts.get("prelude", ()),
             "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;",
         ]
         for binding, (kind, name) in enumerate(buffers):
             lines.append(
                 f"layout(std430, binding = {binding}) buffer B{binding} {{ {kind} {name}[]; }};"
             )
+        lines += parts.get("declarations", ())
         lines += ["void main() {", "    uint i = gl_GlobalInvocationID.x;"]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["}"]) + "\n"
@@ -50,14 +53,17 @@ class HLSL(Dialect):
     def cast(self, kind: Type, value: str) -> str:
         return f"({self.type(kind)}){value}"
 
-    def kernel(self, buffers: list[Buffer], body: list[str]) -> str:
-        lines = [
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = list(parts.get("prelude", ()))
+        lines += [
             f"RWStructuredBuffer<{kind}> {name} : register(u{binding});"
             for binding, (kind, name) in enumerate(buffers)
         ]
+        lines += parts.get("declarations", ())
+        params = ", ".join(["uint3 id : SV_DispatchThreadID", *parts.get("params", ())])
         lines += [
             "[numthreads(1, 1, 1)]",
-            "void main(uint3 id : SV_DispatchThreadID) {",
+            f"void main({params}) {{",
             "    uint i = id.x;",
         ]
         lines += [f"    {line}" for line in body]
@@ -82,16 +88,19 @@ class Metal(Dialect):
             raise ProbeError(f"Metal has no {scalar} matrices")
         return f"float{columns}x{rows}"
 
-    def kernel(self, buffers: list[Buffer], body: list[str]) -> str:
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         params = [
             f"device {kind}* {name} [[buffer({binding})]]"
             for binding, (kind, name) in enumerate(buffers)
         ]
         params.append("uint3 id [[thread_position_in_grid]]")
+        params += parts.get("params", ())
         lines = [
             "#include <metal_stdlib>",
             "using namespace metal;",
+            *parts.get("prelude", ()),
             "",
+            *parts.get("declarations", ()),
             f"kernel void probe({', '.join(params)}) {{",
             "    uint i = id.x;",
         ]
@@ -137,14 +146,19 @@ class WGSL(Dialect):
         # An atomic buffer element can only be used through atomic built-in functions.
         return "" if atomic else self.store("outp[i]")
 
-    def kernel(self, buffers: list[Buffer], body: list[str]) -> str:
-        lines = [
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = list(parts.get("prelude", ()))
+        lines += [
             f"@group(0) @binding({binding}) var<storage, read_write> {name}: array<{kind}>;"
             for binding, (kind, name) in enumerate(buffers)
         ]
+        lines += parts.get("declarations", ())
+        params = ", ".join(
+            ["@builtin(global_invocation_id) id: vec3<u32>", *parts.get("params", ())]
+        )
         lines += [
             "@compute @workgroup_size(1, 1, 1)",
-            "fn main(@builtin(global_invocation_id) id: vec3<u32>) {",
+            f"fn main({params}) {{",
             "    let i = id.x;",
         ]
         lines += [f"    {line}" for line in body]
@@ -261,6 +275,12 @@ class _Builder:
 def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     """The probe for ``feature`` in ``language``: CrossGL for the output direction, the feature's own language for
     input and for lowering to SPIR-V."""
+    if constructs.is_construct(feature):
+        if baseline:
+            raise ProbeError("language-level features have no baseline probe")
+        dialect = DIALECTS[language]
+        source, entry, suffix = constructs.build(feature, language, dialect)
+        return Probe(language, source, entry, suffix)
     if feature.signature is None:
         raise ProbeError(feature.note or "the feature list gives no signature")
     if feature.stage != "compute":

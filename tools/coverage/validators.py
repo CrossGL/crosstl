@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 TIMEOUT = 60
+# Terminal colour codes some validators (naga) write even when their output is not a terminal.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # The tool each language is validated with, and the suffix its compiler expects.
 TOOLS = {
     "glsl": "glslangValidator",
@@ -102,18 +104,28 @@ def _run(arguments: list[str], cwd: str) -> Verdict:
         )
     except subprocess.TimeoutExpired:
         return Verdict(False, f"{arguments[0]} timed out after {TIMEOUT} s")
-    log = (result.stdout + result.stderr).replace(cwd + os.sep, "").strip()
+    log = _ANSI.sub("", result.stdout + result.stderr).replace(cwd + os.sep, "").strip()
     return Verdict(result.returncode == 0, log[-2000:])
 
 
+# Entry-point names HLSL writers conventionally give each stage, tried when a shader has no ``main``.
+HLSL_STAGE_ENTRIES = {"vertex": "VSMain", "fragment": "PSMain"}
+
+
 def hlsl_entry(source: str, stage: str) -> str:
-    """The entry point of an HLSL compute shader: the function that follows ``[numthreads(...)]``."""
+    """The entry point of an HLSL shader: for compute the function that follows ``[numthreads(...)]``, otherwise
+    ``main``, or the stage's conventional name when there is no ``main``."""
     if stage == "compute":
         match = re.search(
             r"\[numthreads\([^)]*\)\]\s*(?:\[[^\]]*\]\s*)*void\s+(\w+)", source
         )
         if match:
             return match.group(1)
+        return "main"
+    conventional = HLSL_STAGE_ENTRIES.get(stage, "")
+    if not re.search(r"\bmain\s*\(", source) and conventional:
+        if re.search(rf"\b{conventional}\s*\(", source):
+            return conventional
     return "main"
 
 
@@ -140,6 +152,7 @@ def validate(
                     entry,
                     "-HV",
                     "2021",
+                    "-enable-16bit-types",
                     name,
                     "-Fo",
                     "probe.bin",
@@ -185,6 +198,7 @@ SPIRV_COMPILERS = {
             "{entry}",
             "-HV",
             "2021",
+            "-enable-16bit-types",
             "-O0",
             "-fspv-target-env=" + SPIRV_ENVIRONMENT,
             "{source}",

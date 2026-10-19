@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from . import probes, validators
+from . import constructs, probes, validators
 from .model import Feature
 
 # Features with no SPIR-V lowering, keyed ``language/category/name``, and the semantic id they share with features
@@ -107,6 +107,8 @@ def identify(probe: Counter, baseline: Counter) -> str:
 
 def lower(feature: Feature) -> tuple[str, str]:
     """``(semantic id, "")`` for ``feature``, or ``("", reason)`` when it has none."""
+    if constructs.is_construct(feature):
+        return constructs.semantic_id(feature), ""
     if feature.key in CURATED:
         return CURATED[feature.key], ""
     if feature.language == "spirv":

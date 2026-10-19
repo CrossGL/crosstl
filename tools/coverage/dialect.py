@@ -106,5 +106,11 @@ class Dialect:
     def statement(self, expression: str) -> str:
         return f"{expression};"
 
-    def kernel(self, buffers: list[Buffer], body: list[str]) -> str:
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A compute kernel that runs ``body`` once per invocation, with ``i`` the invocation's index.
+
+        ``parts`` may add ``prelude`` lines (extensions, enable directives, or for CrossGL shader-level declarations),
+        ``declarations`` that precede the entry point and, for languages that pass them as entry-point parameters,
+        ``params``.
+        """
         raise NotImplementedError
