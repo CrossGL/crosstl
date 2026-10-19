@@ -24185,6 +24185,44 @@ class VulkanSPIRVCodeGen(
         self.structured_buffer_metadata[access.id] = access_metadata
         return access
 
+    def process_block_member_length_call(self, expr):
+        """``block.member.length()`` (GLSL 4.60 section 4.1.9) as an int.
+
+        A runtime array's length is ``OpArrayLength`` on the block variable; a sized array's is its size.
+        """
+        callee = getattr(expr, "function", None)
+        if not (
+            isinstance(callee, MemberAccessNode)
+            and callee.member == "length"
+            and not (getattr(expr, "args", None) or [])
+            and isinstance(callee.object_expr, MemberAccessNode)
+        ):
+            return False, None
+        array_expr = callee.object_expr
+        block_pointer = self.variable_pointer_from_expression(array_expr.object_expr)
+        if block_pointer is None:
+            return False, None
+        member_info = self.struct_member_info(
+            self.struct_type_name_from_pointer(block_pointer), array_expr.member
+        )
+        array_info = (
+            self.array_type_info_from_type(member_info[1]) if member_info else None
+        )
+        if array_info is None:
+            return False, None
+        int_type = self.register_primitive_type("int")
+        if array_info[1] is not None:
+            return True, self.register_constant(int(array_info[1]), int_type)
+        uint_type = self.register_primitive_type("uint")
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpArrayLength %{uint_type.id} %{block_pointer.id} "
+            f"{member_info[0]}"
+        )
+        self.value_types[id_value] = uint_type
+        length = SpirvId(id_value, uint_type.type)
+        return True, self.convert_value_to_type(length, int_type)
+
     def single_struct_buffer_zero_index_alias(
         self, buffer_pointer: SpirvId, index_expr
     ) -> Optional[SpirvId]:
@@ -28503,6 +28541,12 @@ class VulkanSPIRVCodeGen(
             )
             if handled_byte_address_call:
                 return byte_address_result
+
+            handled_length_call, length_result = (
+                self.process_block_member_length_call(expr)
+            )
+            if handled_length_call:
+                return length_result
 
             handled_structured_buffer_call, structured_buffer_result = (
                 self.process_structured_buffer_method_call(expr)

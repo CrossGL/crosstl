@@ -92,6 +92,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .buffer_length import BufferLengthUnsupportedError
 from .call_graph import validate_recursion_free
 from .constant_ordering import partition_constants_by_struct_dependency
 from .entry_selection import entry_type_references
@@ -11060,6 +11061,10 @@ class MetalCodeGen:
                     selected = self.generate_expression(expr.args[2])
                     return f"({target}[{lane}] = {native[:-1]}({selected}))"
 
+            block_length = self.glsl_buffer_block_length_call(func_expr, expr.args)
+            if block_length is not None:
+                return block_length
+
             unsupported_table_call = (
                 self.unsupported_metal_ray_function_table_array_member_call(func_expr)
             )
@@ -14984,9 +14989,10 @@ class MetalCodeGen:
         if func_name == "buffer_dimensions" and args:
             length_expr = self.structured_buffer_length_reference(args[0])
             if length_expr is None:
-                length_expr = (
-                    "0 /* unsupported Metal buffer dimensions: requires explicit "
-                    "length sidecar buffer */"
+                raise BufferLengthUnsupportedError(
+                    "metal",
+                    f"buffer_dimensions({self.generate_expression(args[0])}) needs a "
+                    "length sidecar buffer, and this buffer has none",
                 )
             if len(args) >= 2:
                 target = self.generate_expression(args[1])
@@ -21987,6 +21993,27 @@ class MetalCodeGen:
                 target, param_type, param_name, param, declaration_kind="parameter"
             )
         return code
+
+    def glsl_buffer_block_length_call(self, func_expr, args):
+        """``block.member.length()``: a sized array's size; a runtime array is refused, MSL buffers have no size."""
+        if not (
+            isinstance(func_expr, MemberAccessNode)
+            and getattr(func_expr, "member", None) == "length"
+            and not args
+        ):
+            return None
+        access = self.glsl_buffer_block_member_access(
+            getattr(func_expr, "object_expr", getattr(func_expr, "object", None))
+        )
+        if access is None or not access.get("is_array"):
+            return None
+        if access.get("array_size") is not None:
+            return f"int({self.generate_expression(access['array_size'])})"
+        raise BufferLengthUnsupportedError(
+            "metal",
+            f"length() of runtime array '{access.get('member')}' needs the bound "
+            "buffer's size, which a Metal buffer argument does not carry",
+        )
 
     def glsl_buffer_block_member_access(self, expr):
         if not isinstance(expr, MemberAccessNode):

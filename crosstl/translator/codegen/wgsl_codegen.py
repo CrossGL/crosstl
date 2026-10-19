@@ -2977,6 +2977,22 @@ class WGSLCodeGen:
             return f"{text}u"
         return text
 
+    def generate_array_length_call(self, node):
+        """GLSL ``array.length()`` (GLSL 4.60 section 4.1.9) as an i32: ``arrayLength`` or the declared size."""
+        function = node.function
+        if not (
+            isinstance(function, MemberAccessNode)
+            and function.member == "length"
+            and not node.arguments
+        ):
+            return None
+        array_type = self.expression_type(function.object_expr)
+        if not isinstance(array_type, ArrayType):
+            return None
+        if array_type.size is None:
+            return f"i32(arrayLength(&{self.generate_expression(function.object_expr)}))"
+        return f"i32({self.generate_expression(array_type.size)})"
+
     def generate_function_call(self, node, expected_type=None):
         function_name = self.expression_name(node.function)
         normalized_name = self.semantic_key(function_name)
@@ -2987,11 +3003,17 @@ class WGSLCodeGen:
             return self.generate_structured_buffer_free_helper_call(
                 node, normalized_name
             )
+        if normalized_name == "buffer_dimensions" and len(node.arguments) == 1:
+            # The element count of a runtime-sized storage array (WGSL section 17.11, arrayLength).
+            return f"arrayLength(&{self.generate_expression(node.arguments[0])})"
         if normalized_name in self.UNSUPPORTED_STORAGE_BUFFER_FREE_HELPERS:
             raise ValueError(
                 "WGSL target does not support storage buffer helper "
                 f"{function_name} yet"
             )
+        array_length = self.generate_array_length_call(node)
+        if array_length is not None:
+            return array_length
         if isinstance(node.function, MemberAccessNode):
             member_name = self.semantic_key(node.function.member)
             if member_name in self.STRUCTURED_BUFFER_MEMBER_HELPERS:
@@ -5391,6 +5413,15 @@ class WGSLCodeGen:
                 return option_call_type
             if self.is_type_constructor_name(function_name):
                 return self.type_name_string(function_name)
+            if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
+                return "uint"
+            if (
+                isinstance(expr.function, MemberAccessNode)
+                and expr.function.member == "length"
+                and not expr.arguments
+                and isinstance(self.expression_type(expr.function.object_expr), ArrayType)
+            ):
+                return "int"
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )

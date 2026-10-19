@@ -1644,13 +1644,37 @@ def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms(
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_maps_buffer_lengths_to_array_length():
+    # WGSL section 17.11: arrayLength reports a runtime-sized array's element count.
+    shader = """
+    shader WGSLBufferLengths {
+        struct Block {
+            uint head;
+            int items[];
+        };
+        StructuredBuffer<float> values;
+        Block block @glsl_buffer_block(std430) @set(0) @binding(1) @readonly;
+        compute {
+            void main() {
+                uint count = buffer_dimensions(values);
+                int items = block.items.length();
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "arrayLength(&values)" in generated
+    assert "i32(arrayLength(&block.items))" in generated
+    assert "buffer_dimensions" not in generated
+    assert ".length()" not in generated
+
+
 @pytest.mark.parametrize(
     ("statement", "expected"),
     [
-        (
-            "buffer_dimensions(values);",
-            "does not support storage buffer helper buffer_dimensions yet",
-        ),
         (
             "values.GetDimensions();",
             "does not support storage buffer member helper GetDimensions yet",

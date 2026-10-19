@@ -116,6 +116,7 @@ from .array_utils import (
 from .bfloat_constants import bfloat16_constant_bits, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .call_effects import builtin_argument_write_indices
+from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -2196,6 +2197,7 @@ class HLSLCodeGen:
         self.global_implicit_texture_query_lod_samplers = {}
         self.implicit_member_texture_samplers = {}
         self.required_texture_query_helpers = set()
+        self.hlsl_buffer_length = HlslBufferLength()
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
         self.hlsl_float_atomic_helpers = {}
@@ -3539,6 +3541,7 @@ class HLSLCodeGen:
         self.global_implicit_texture_regular_samplers = {}
         self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
+        self.hlsl_buffer_length = HlslBufferLength()
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
         self.hlsl_float_atomic_helpers = {}
@@ -4957,6 +4960,7 @@ class HLSLCodeGen:
             function_declaration_sources
         )
         code += self.generate_texture_query_helpers()
+        code += self.hlsl_buffer_length.code()
         code += self.generate_image_atomic_helpers()
         code += self.generate_byteaddress_atomic_helpers()
         code += self.generate_hlsl_float_atomic_helpers()
@@ -26632,6 +26636,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if byteaddress_interlocked_call is not None:
                 return byteaddress_interlocked_call
 
+            block_length_call = self.generate_glsl_buffer_block_length_call(
+                func_expr, args
+            )
+            if block_length_call is not None:
+                return block_length_call
+
             byteaddress_member_call = self.generate_hlsl_byteaddress_member_call(
                 func_expr,
                 args,
@@ -30199,7 +30209,57 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer = self.generate_expression(args[0])
             dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
             return f"{buffer}.GetDimensions({dimensions})"
+        if func_name == "buffer_dimensions" and len(args) == 1:
+            return self.hlsl_buffer_element_count(args[0])
         return None
+
+    def hlsl_buffer_element_count(self, buffer_expr):
+        """``buffer_dimensions(b)``: the element count of a structured or typed buffer."""
+        resource_type = self.hlsl_buffer_helper_resource_type(buffer_expr)
+        resource_name = self.hlsl_resource_type_name(resource_type)
+        rendered = self.hlsl_buffer_length.element_count(
+            self.generate_expression(buffer_expr),
+            resource_name,
+            self.map_type(resource_type) if resource_type else None,
+        )
+        if rendered is None:
+            raise BufferLengthUnsupportedError(
+                "directx",
+                f"buffer_dimensions({self.generate_expression(buffer_expr)}) needs a "
+                "structured or typed buffer, whose GetDimensions reports an element "
+                f"count; the argument is {resource_type or 'not a buffer resource'}"
+            )
+        return rendered
+
+    def generate_glsl_buffer_block_length_call(self, func_expr, args):
+        """``block.member.length()`` for a GLSL buffer block lowered to a byte-address buffer."""
+        if not (
+            isinstance(func_expr, MemberAccessNode)
+            and getattr(func_expr, "member", None) == "length"
+            and not args
+        ):
+            return None
+        access = self.glsl_buffer_block_member_access(
+            getattr(func_expr, "object_expr", getattr(func_expr, "object", None))
+        )
+        if access is None or not access.get("is_array"):
+            return None
+        size = access.get("array_size")
+        if size is not None:
+            return f"int({self.generate_expression(size)})"
+        resource_name = (
+            "ByteAddressBuffer" if access.get("readonly") else "RWByteAddressBuffer"
+        )
+        rendered = self.hlsl_buffer_length.runtime_array_length(
+            access["buffer"], resource_name, access.get("offset"), access.get("stride")
+        )
+        if rendered is None:
+            raise BufferLengthUnsupportedError(
+                "directx",
+                f"length() of runtime array '{access.get('member')}' has no constant "
+                "offset and stride in its byte-address buffer"
+            )
+        return rendered
 
     def hlsl_byteaddress_interlocked_operations(self):
         return {

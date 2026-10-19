@@ -352,7 +352,7 @@
   "crosstl/translator/codegen/metal_codegen.py::CharTypeMapper.map_char_type::identity-fallback": 1,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.address_space_assignment_diagnostic::fallback-text": 3,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.canonical_metal_semantic::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_buffer_call::fallback-text": 3,
+  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_buffer_call::fallback-text": 2,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_constants::fallback-text": 1,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_function::identity-fallback": 1,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_glsl_buffer_block_store::fallback-text": 2,
@@ -491,7 +491,7 @@
  },
  "totals": {
   "empty-block-recovery": 1,
-  "fallback-text": 591,
+  "fallback-text": 590,
   "identity-fallback": 184
  }
 }
