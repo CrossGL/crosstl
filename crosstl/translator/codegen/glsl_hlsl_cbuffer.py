@@ -153,7 +153,9 @@ def std140_scalar_offsets(layout_type, offset=0):
         return [
             item
             for index in range(layout_type.count)
-            for item in std140_scalar_offsets(layout_type.element, offset + index * stride)
+            for item in std140_scalar_offsets(
+                layout_type.element, offset + index * stride
+            )
         ]
     offsets, _size, _alignment = std140_struct_offsets(layout_type)
     return [
@@ -184,7 +186,9 @@ def hlsl_scalar_offsets(layout_type, offset=0):
         return [
             item
             for index in range(layout_type.count)
-            for item in hlsl_scalar_offsets(layout_type.element, offset + index * stride)
+            for item in hlsl_scalar_offsets(
+                layout_type.element, offset + index * stride
+            )
         ]
     placements, _size = cbuffer_struct_placements(layout_type)
     return [
@@ -283,7 +287,9 @@ class GLSLHlslConstantBuffers:
                 VECTOR_SCALARS[vector.group("prefix")], int(vector.group("width"))
             )
         matrix = MATRIX_PATTERN.fullmatch(mapped)
-        if matrix is not None and not (matrix.group("emulated") and matrix.group("double")):
+        if matrix is not None and not (
+            matrix.group("emulated") and matrix.group("double")
+        ):
             columns = int(matrix.group("columns"))
             rows = int(matrix.group("rows") or columns)
             if matrix.group("emulated"):
@@ -346,7 +352,9 @@ class GLSLHlslConstantBuffers:
                 ],
             )
             placements, size = cbuffer_struct_placements(layout_type)
-            std140_offsets, _std140_size, _alignment = std140_struct_offsets(layout_type)
+            std140_offsets, _std140_size, _alignment = std140_struct_offsets(
+                layout_type
+            )
             if all(
                 hlsl_scalar_offsets(placement.layout_type, placement.offset)
                 == std140_scalar_offsets(placement.layout_type, std140_offset)
@@ -410,7 +418,9 @@ class GLSLHlslConstantBuffers:
 
     # Loaders ----------------------------------------------------------------
 
-    def glsl_hlsl_cbuffer_load_value(self, loader, layout_type, target, location, depth):
+    def glsl_hlsl_cbuffer_load_value(
+        self, loader, layout_type, target, location, depth
+    ):
         indent = "    " * depth
         kind = layout_type.kind
         if kind in ("scalar", "vector"):
@@ -472,9 +482,9 @@ class GLSLHlslConstantBuffers:
         if layout_type.scalar_size == 8:
             parts = []
             for index in range(width):
-                register, component = location.shifted(8 * index).register_and_component(
-                    loader.registers
-                )
+                register, component = location.shifted(
+                    8 * index
+                ).register_and_component(loader.registers)
                 words = f"{register}.{COMPONENTS[component:component + 2]}"
                 parts.append(
                     {
