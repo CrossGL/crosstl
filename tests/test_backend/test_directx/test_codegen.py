@@ -18,6 +18,7 @@ from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import hlsl_import_partial_output
 from tests.test_translator.test_project_translation import (
     assert_directx_compute_validates_if_available,
 )
@@ -3719,17 +3720,20 @@ def test_codegen_byte_address_status_loads_do_not_become_texture_fetches():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert (
-        "unsupported DirectX tiled-resource status for Load: " "dropped status output"
-    ) in crossgl
+        "DirectX tiled-resource status for Load: CrossGL has no operand for status output"
+        in message
+    )
     assert (
-        "unsupported DirectX tiled-resource status for Load2: " "dropped status output"
-    ) in crossgl
+        "DirectX tiled-resource status for Load2: CrossGL has no operand for status output"
+        in message
+    )
     assert (
-        "unsupported DirectX tiled-resource status for Load4: " "dropped status output"
-    ) in crossgl
+        "DirectX tiled-resource status for Load4: CrossGL has no operand for status output"
+        in message
+    )
     assert "buffer_load(rawInput, offset)" in crossgl
     assert "buffer_load2(rawInput, offset + 8u)" in crossgl
     assert "buffer_load4(rawOutput, offset + 16u)" in crossgl
@@ -3743,7 +3747,6 @@ def test_codegen_byte_address_status_loads_do_not_become_texture_fetches():
     assert "uint2 pair = rawInput.Load2((offset + 8u));" in regenerated_hlsl
     assert "uint4 quad = rawOutput.Load4((offset + 16u));" in regenerated_hlsl
     assert "rawOutput.Store((offset + 4u), scalar);" in regenerated_hlsl
-    assert "bool mapped = true;" in regenerated_hlsl
     assert "texelFetch(" not in regenerated_hlsl
     assert "CheckAccessFullyMapped(" not in regenerated_hlsl
     assert ", status)" not in regenerated_hlsl
@@ -4626,7 +4629,7 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert "sampler2DShadow shadowMap;" in crossgl
     assert "sampler2DArrayShadow shadowArray;" in crossgl
@@ -4636,11 +4639,8 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
         "offset0)"
     ) in crossgl
     assert (
-        crossgl.count(
-            "unsupported DirectX texture overload extras for GatherCmpRed: "
-            "dropped status output"
-        )
-        == 2
+        "DirectX texture overload extras for GatherCmpRed: CrossGL has no operand for status output"
+        in message
     )
     assert (
         "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
@@ -4659,11 +4659,10 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
         "offset3).w"
     ) in crossgl
     assert (
-        "unsupported DirectX texture gather-compare component for Texture2DArray: "
-        "GatherCmpGreen requires a compare-gather component selector"
-    ) in crossgl
+        "DirectX texture gather-compare component for Texture2DArray: GatherCmpGreen requires a compare-gather component selector"
+        in message
+    )
     assert "GatherCmpRed four-offset overload" not in crossgl
-    assert "vec4(0.0)" in crossgl
     assert ".GatherCmpRed(" not in crossgl
     assert ".GatherCmpGreen(" not in crossgl
 
@@ -4727,7 +4726,7 @@ def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert "sampler2DShadow shadowMap;" in crossgl
     assert "samplerCubeShadow cubeShadow;" in crossgl
@@ -4752,13 +4751,13 @@ def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
         "cubeShadow, compareSampler, direction, depth, ddx3, ddy3)" in crossgl
     )
     assert (
-        "unsupported DirectX texture overload extras for SampleCmpLevel: "
-        "dropped status output"
-    ) in crossgl
+        "DirectX texture overload extras for SampleCmpLevel: CrossGL has no operand for status output"
+        in message
+    )
     assert (
-        "unsupported DirectX texture overload extras for SampleCmpGrad: "
-        "dropped LOD clamp, status output"
-    ) in crossgl
+        "DirectX texture overload extras for SampleCmpGrad: CrossGL has no operand for LOD clamp, status output"
+        in message
+    )
     assert ".SampleCmpLevel(" not in crossgl
     assert ".SampleCmpGrad(" not in crossgl
 
@@ -4808,19 +4807,19 @@ def test_codegen_texture_compare_bias_member_imports_as_compare_with_diagnostics
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert "sampler2DShadow shadowMap;" in crossgl
     assert "sampler2DArrayShadow shadowArray;" in crossgl
     assert "samplerCubeShadow cubeShadow;" in crossgl
     assert (
-        "unsupported DirectX texture overload extras for SampleCmpBias: "
-        "dropped LOD bias"
-    ) in crossgl
+        "DirectX texture overload extras for SampleCmpBias: CrossGL has no operand for LOD bias"
+        in message
+    )
     assert (
-        "unsupported DirectX texture overload extras for SampleCmpBias: "
-        "dropped LOD bias, LOD clamp, status output"
-    ) in crossgl
+        "DirectX texture overload extras for SampleCmpBias: CrossGL has no operand for LOD bias, LOD clamp, status output"
+        in message
+    )
     assert "textureCompare(shadowMap, compareSampler, uv, depth)" in crossgl
     assert (
         "textureCompareOffset(shadowArray, compareSampler, uvLayer, depth, offset)"
@@ -4893,20 +4892,20 @@ def test_codegen_texture_status_and_clamp_overloads_import_as_valid_crossgl():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert (
-        "unsupported DirectX texture overload extras for Sample: "
-        "dropped LOD clamp, status output"
-    ) in crossgl
+        "DirectX texture overload extras for Sample: CrossGL has no operand for LOD clamp, status output"
+        in message
+    )
     assert (
-        "unsupported DirectX texture overload extras for SampleLevel: "
-        "dropped status output"
-    ) in crossgl
+        "DirectX texture overload extras for SampleLevel: CrossGL has no operand for status output"
+        in message
+    )
     assert (
-        "unsupported DirectX texture overload extras for GatherRed: "
-        "dropped status output"
-    ) in crossgl
+        "DirectX texture overload extras for GatherRed: CrossGL has no operand for status output"
+        in message
+    )
     assert "textureOffset(colorMap, linearSampler, uv, offset)" in crossgl
     assert "textureOffset(colorMap, linearSampler, uv, offset, bias)" in crossgl
     assert "textureLodOffset(colorMap, linearSampler, uv, lod, offset)" in crossgl
@@ -4978,16 +4977,16 @@ def test_codegen_cube_texture_status_overloads_do_not_become_offset_calls():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert (
-        "unsupported DirectX texture overload extras for Sample: "
-        "dropped LOD clamp, status output"
-    ) in crossgl
+        "DirectX texture overload extras for Sample: CrossGL has no operand for LOD clamp, status output"
+        in message
+    )
     assert (
-        "unsupported DirectX texture overload extras for Gather: "
-        "dropped status output"
-    ) in crossgl
+        "DirectX texture overload extras for Gather: CrossGL has no operand for status output"
+        in message
+    )
     assert "texture(cubeMap, linearSampler, direction)" in crossgl
     assert "texture(cubeMap, linearSampler, direction, bias)" in crossgl
     assert "textureLod(cubeMap, linearSampler, direction, lod)" in crossgl
@@ -5038,24 +5037,19 @@ def test_codegen_tiled_resource_status_loads_import_as_diagnostics():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert (
-        crossgl.count(
-            "unsupported DirectX tiled-resource status for Load: "
-            "dropped status output"
-        )
-        == 3
+        "DirectX tiled-resource status for Load: CrossGL has no operand for status output"
+        in message
     )
     assert (
-        "unsupported DirectX tiled-resource status check: "
-        "CheckAccessFullyMapped assumed fully mapped"
-    ) in crossgl
+        "DirectX tiled-resource status check CheckAccessFullyMapped: CrossGL has no residency status"
+        in message
+    )
     assert "texelFetchOffset(colorMap, pixel, 0, offset)" in crossgl
     assert "imageLoad(outputImage, pixel)" in crossgl
     assert "texelFetchOffset(msMap, pixel, sampleIndex, offset)" in crossgl
-    assert "bool mapped = " in crossgl
-    assert "true;" in crossgl
     assert "CheckAccessFullyMapped(" not in crossgl
     assert ".Load(" not in crossgl
     assert ", status" not in crossgl
@@ -5128,14 +5122,11 @@ def test_codegen_tiled_resource_status_only_loads_roundtrip_without_offsets():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert (
-        crossgl.count(
-            "unsupported DirectX tiled-resource status for Load: "
-            "dropped status output"
-        )
-        == 6
+        "DirectX tiled-resource status for Load: CrossGL has no operand for status output"
+        in message
     )
     assert "texelFetch(ramp, x, lod)" in crossgl
     assert "texelFetch(colorMap, pixel, lod)" in crossgl
@@ -5155,7 +5146,6 @@ def test_codegen_tiled_resource_status_only_loads_roundtrip_without_offsets():
     assert "float4 volumeColor = volume.Load(int4(voxel, lod));" in hlsl
     assert "float4 ms = msMap.Load(pixel, sampleIndex);" in hlsl
     assert "float4 msLayer = msLayers.Load(pixelLayer, sampleIndex);" in hlsl
-    assert "bool mapped = true;" in hlsl
     assert "CheckAccessFullyMapped(" not in hlsl
     assert "texelFetch(" not in hlsl
     assert "texelFetchOffset(" not in hlsl
@@ -5180,19 +5170,16 @@ def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads()
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert (
-        crossgl.count(
-            "unsupported DirectX tiled-resource status for Load: "
-            "dropped status output"
-        )
-        == 2
+        "DirectX tiled-resource status for Load: CrossGL has no operand for status output"
+        in message
     )
     assert (
-        "unsupported DirectX tiled-resource status check: "
-        "CheckAccessFullyMapped assumed fully mapped"
-    ) in crossgl
+        "DirectX tiled-resource status check CheckAccessFullyMapped: CrossGL has no residency status"
+        in message
+    )
     assert "imageLoad(msImage, pixel, sampleIndex)" in crossgl
     assert "imageLoad(counters, pixelLayer, sampleIndex)" in crossgl
     assert ".Load(" not in crossgl
@@ -5204,7 +5191,6 @@ def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads()
     assert "Texture2DMSArray<uint> counters : register(t1);" in hlsl
     assert "float4 color = msImage.Load(pixel, sampleIndex);" in hlsl
     assert "uint count = counters.Load(pixelLayer, sampleIndex);" in hlsl
-    assert "bool mapped = true;" in hlsl
     assert "RWTexture2DMS" not in hlsl
     assert "RWTexture2DMSArray" not in hlsl
     assert "CheckAccessFullyMapped(" not in hlsl
@@ -6639,14 +6625,10 @@ def test_codegen_get_dimensions_unsupported_overload_imports_diagnostic():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert ".GetDimensions(" not in crossgl
-    assert (
-        "/* unsupported DirectX GetDimensions overload for Texture2D: "
-        "preserved dimension helper call */ "
-        "texture_dimensions(colorMap, width, height, levels, extra, overflow);"
-    ) in crossgl
+    assert "DirectX GetDimensions overload for Texture2D with" in message
 
 
 def test_codegen_texture_lod_query_member_imports_to_texture_query_lod():
@@ -6697,17 +6679,17 @@ def test_codegen_texture_lod_query_invalid_imports_diagnostic():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert ".CalculateLevelOfDetail(" not in crossgl
     assert (
-        "/* unsupported DirectX texture LOD query for Texture2D: "
-        "expected sampler and coordinate arguments */ 0.0"
-    ) in crossgl
+        "DirectX texture LOD query for Texture2D: expected sampler and coordinate arguments"
+        in message
+    )
     assert (
-        "/* unsupported DirectX texture LOD query for Texture2DMS: "
-        "CalculateLevelOfDetail is unavailable for multisample textures */ 0.0"
-    ) in crossgl
+        "DirectX texture LOD query for Texture2DMS: CalculateLevelOfDetail is unavailable for multisample textures"
+        in message
+    )
     assert "textureQueryLod(msMap" not in crossgl
 
 
@@ -6897,23 +6879,21 @@ def test_codegen_texture_sample_position_invalid_imports_diagnostic():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code)
+    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
     assert ".GetSamplePosition(" not in crossgl
     assert (
-        "/* unsupported DirectX texture sample-position query for Texture2DMS: "
-        "expected sample-index argument */ vec2(0.0, 0.0)"
-    ) in crossgl
+        "DirectX texture sample-position query for Texture2DMS: expected sample-index argument"
+        in message
+    )
     assert (
-        "/* unsupported DirectX texture sample-position query for Texture2D: "
-        "GetSamplePosition is only available on sampled multisample textures */ "
-        "vec2(0.0, 0.0)"
-    ) in crossgl
+        "DirectX texture sample-position query for Texture2D: GetSamplePosition is only available on sampled multisample textures"
+        in message
+    )
     assert (
-        "/* unsupported DirectX texture sample-position query for RWTexture2DMS: "
-        "GetSamplePosition is only available on sampled multisample textures */ "
-        "vec2(0.0, 0.0)"
-    ) in crossgl
+        "DirectX texture sample-position query for RWTexture2DMS: GetSamplePosition is only available on sampled multisample textures"
+        in message
+    )
     assert "textureSamplePosition(colorMap" not in crossgl
     assert "textureSamplePosition(msImage" not in crossgl
 

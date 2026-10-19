@@ -5,13 +5,10 @@
   "crosstl/backend/CUDA/CudaCrossGLCodeGen.py::CudaToCrossGLConverter.visit_CudaBuiltinNode::identity-fallback": 1,
   "crosstl/backend/CUDA/CudaParser.py::CudaParser.normalized_operator_value::identity-fallback": 1,
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.collect_global_identifier_renames::identity-fallback": 1,
-  "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.generate_expression::fallback-text": 1,
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.generate_expression::identity-fallback": 2,
-  "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.generate_get_dimensions_statement::fallback-text": 1,
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.render_function_identifier::identity-fallback": 1,
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.render_identifier::identity-fallback": 1,
   "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.render_type_identifier::identity-fallback": 1,
-  "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py::HLSLToCrossGLConverter.resource_method_diagnostic::fallback-text": 3,
   "crosstl/backend/GLSL/openglCrossglCodegen.py::GLSLToCrossGLConverter.evaluate_integer_layout_constant::identity-fallback": 2,
   "crosstl/backend/GLSL/openglCrossglCodegen.py::GLSLToCrossGLConverter.flattened_uniform_block_member::identity-fallback": 1,
   "crosstl/backend/GLSL/openglCrossglCodegen.py::GLSLToCrossGLConverter.format_function_name::identity-fallback": 1,
@@ -28,10 +25,6 @@
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.resolve_lowered_static_struct_owner::identity-fallback": 1,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.substitute_template_type_text::identity-fallback": 1,
   "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.substitute_template_value_text::identity-fallback": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.unsupported_sampled_cube_texture_read_expression::fallback-text": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.unsupported_sampled_texture_write::fallback-text": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.unsupported_storage_texture_sampled_method::fallback-text": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.unsupported_texture_compare_lod_option::fallback-text": 1,
   "crosstl/backend/Metal/MetalParser.py::MetalParser.parse_type_specifier::identity-fallback": 1,
   "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._canonical_type_trait_operand::identity-fallback": 1,
   "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._replace_identifiers::identity-fallback": 1,
@@ -256,7 +249,7 @@
  },
  "totals": {
   "empty-block-recovery": 1,
-  "fallback-text": 93,
+  "fallback-text": 84,
   "identity-fallback": 184
  }
 }

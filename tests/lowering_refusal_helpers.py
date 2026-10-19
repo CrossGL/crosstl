@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from crosstl.backend.import_refusals import DirectXImportRefused, MetalImportRefused
 from crosstl.translator.codegen.glsl_refusals import (
     OpenGLLoweringRefused,
     WebGLLoweringRefused,
@@ -14,6 +15,8 @@ from crosstl.translator.codegen.lowering_refusals import LoweringRefusals
 OPENGL_REFUSAL_CODE = "project.translate.opengl-lowering-unsupported"
 WEBGL_REFUSAL_CODE = "project.translate.webgl-lowering-unsupported"
 DIRECTX_REFUSAL_CODE = "project.translate.directx-lowering-unsupported"
+DIRECTX_IMPORT_REFUSAL_CODE = "project.translate.directx-import-unsupported"
+METAL_IMPORT_REFUSAL_CODE = "project.translate.metal-import-unsupported"
 
 
 def refused(error_type, generate, *args, **kwargs):
@@ -81,3 +84,19 @@ def shared_refusal(helper, *args, **kwargs):
         placeholder = helper(*args, **kwargs)
     assert sink.reasons, f"{getattr(helper, '__name__', helper)} recorded no refusal"
     return placeholder, "; ".join(sink.reasons)
+
+
+def refused_hlsl_import(generate, *args, **kwargs):
+    return refused(DirectXImportRefused, generate, *args, **kwargs)
+
+
+def hlsl_import_partial_output(generate, *args, **kwargs):
+    return partial_output(DirectXImportRefused, generate, *args, **kwargs)
+
+
+def refused_metal_import(generate, *args, **kwargs):
+    return refused(MetalImportRefused, generate, *args, **kwargs)
+
+
+def metal_import_partial_output(generate, *args, **kwargs):
+    return partial_output(MetalImportRefused, generate, *args, **kwargs)

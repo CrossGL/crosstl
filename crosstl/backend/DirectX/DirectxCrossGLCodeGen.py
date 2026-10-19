@@ -17,6 +17,7 @@ from ..common_ast import (
     InitializerListNode,
     TextureSampleNode,
 )
+from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
@@ -47,8 +48,10 @@ class HLSLIntegerConversionError(ValueError):
         super().__init__(f"Cannot preserve HLSL integer arithmetic: {reason}")
 
 
-class HLSLToCrossGLConverter:
+class HLSLToCrossGLConverter(ImportRefusalMixin):
     """Serialize DirectX backend AST nodes back into CrossGL source."""
+
+    IMPORT_REFUSAL_TYPE = DirectXImportRefused
 
     crossgl_reserved_identifiers = frozenset(CROSSGL_KEYWORDS)
 
@@ -1332,27 +1335,29 @@ class HLSLToCrossGLConverter:
         return coord, lod
 
     def resource_method_diagnostic(self, member, descriptor):
+        """Refuse a resource method CrossGL cannot carry faithfully; return whether one was refused.
+
+        A descriptor with a ``diagnostic_reason`` has no CrossGL helper at all, and one with ``dropped_parameters``
+        would lose operands (an LOD clamp, a tiled-resource status output) that change the result.
+        """
         diagnostic_reason = descriptor.get("diagnostic_reason")
         if diagnostic_reason:
             resource = self.raw_type_base(descriptor.get("resource_type")) or "resource"
             label = descriptor.get("diagnostic_label", "texture LOD query")
-            return (
-                f"/* unsupported DirectX {label} for {resource}: "
-                f"{diagnostic_reason} */"
-            )
+            self.refuse_import(f"DirectX {label} for {resource}: {diagnostic_reason}")
+            return True
         dropped_parameters = descriptor.get("dropped_parameters")
         if not dropped_parameters:
-            return None
+            return False
         parameters = ", ".join(dropped_parameters)
         if descriptor.get("diagnostic_kind") == "tiled_resource_status":
-            return (
-                f"/* unsupported DirectX tiled-resource status for {member}: "
-                f"dropped {parameters} */"
-            )
-        return (
-            f"/* unsupported DirectX texture overload extras for {member}: "
-            f"dropped {parameters} */"
+            kind = "tiled-resource status"
+        else:
+            kind = "texture overload extras"
+        self.refuse_import(
+            f"DirectX {kind} for {member}: CrossGL has no operand for {parameters}"
         )
+        return True
 
     def legacy_texture_function_call(
         self, func_name, raw_args, rendered_args, is_main=False
@@ -3342,6 +3347,13 @@ class HLSLToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate(self, ast):
+        """Render ``ast`` as a CrossGL program.
+
+        Raises :class:`DirectXImportRefused` listing every HLSL construct CrossGL cannot represent faithfully.
+        """
+        return self.refusals.run(self.render_program, ast)
+
+    def render_program(self, ast):
         self.source_function_names = {function.name for function in ast.functions}
         self.source_functions = {}
         for function in ast.functions:
@@ -4260,14 +4272,11 @@ class HLSLToCrossGLConverter:
                 member, len(stmt.args), resource_type
             )
             function = descriptor["function"] if descriptor else "texture_dimensions"
-            diagnostic = (
-                f"/* unsupported DirectX GetDimensions overload for {resource_base}: "
-                "preserved dimension helper call */"
+            self.refuse_import(
+                f"DirectX GetDimensions overload for {resource_base} with "
+                f"{len(stmt.args)} arguments: no CrossGL dimension query fills them"
             )
-            return (
-                indent_text
-                + f"{diagnostic} {function}({', '.join([obj, *rendered_args])});\n"
-            )
+            return indent_text + f"{function}({', '.join([obj, *rendered_args])});\n"
         return "".join(indent_text + assignment + ";\n" for assignment in assignments)
 
     def get_dimensions_assignments(
@@ -4806,10 +4815,9 @@ class HLSLToCrossGLConverter:
                         obj, rendered_args[:7]
                     )
                     if len(rendered_args) == 8:
-                        diagnostic = self.resource_method_diagnostic(
+                        self.resource_method_diagnostic(
                             method_member, {"dropped_parameters": ["status output"]}
                         )
-                        return f"{diagnostic} {call}"
                     return call
                 descriptor = self.resource_method_descriptor(
                     method_member, len(expr.args), resource_type
@@ -4838,11 +4846,7 @@ class HLSLToCrossGLConverter:
                         result_component = descriptor.get("result_component")
                         if result_component:
                             call = f"{call}{result_component}"
-                    diagnostic = self.resource_method_diagnostic(
-                        method_member, descriptor
-                    )
-                    if diagnostic:
-                        return f"{diagnostic} {call}"
+                    self.resource_method_diagnostic(method_member, descriptor)
                     return call
                 return f"{obj}.{member}({args})"
 
@@ -4859,9 +4863,10 @@ class HLSLToCrossGLConverter:
                 if sizeof_value is not None:
                     return sizeof_value
             if func_name == "CheckAccessFullyMapped":
-                return (
-                    "/* unsupported DirectX tiled-resource status check: "
-                    "CheckAccessFullyMapped assumed fully mapped */ true"
+                return self.refuse_import(
+                    "DirectX tiled-resource status check CheckAccessFullyMapped: "
+                    "CrossGL has no residency status, so the mapped result is unknown",
+                    "true",
                 )
             interlocked_image_atomic = self.interlocked_storage_image_atomic_expression(
                 func_name, expr.args, is_main

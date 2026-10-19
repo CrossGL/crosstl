@@ -25,6 +25,7 @@ from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
 from ...translator.resource_identity import source_resource_attribute
 from ...translator.standard_constants import standard_math_constant
+from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -948,8 +949,10 @@ class MetalConstexprBranchLoweringError(ValueError):
         )
 
 
-class MetalToCrossGLConverter:
+class MetalToCrossGLConverter(ImportRefusalMixin):
     """Serialize Metal backend AST nodes back into CrossGL source."""
+
+    IMPORT_REFUSAL_TYPE = MetalImportRefused
 
     crossgl_identifier_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
     cast_literal_operand_pattern = re.compile(
@@ -2836,9 +2839,10 @@ class MetalToCrossGLConverter:
         option_name = self.unscoped_function_name(option.name)
         if option_name not in {"bias", "min_lod_clamp"}:
             return None
-        return (
-            "0.0 /* unsupported Metal depth compare lod option: "
-            f"{option_name} on {obj} */"
+        return self.refuse_import(
+            f"Metal depth compare LOD option {option_name} on {obj}: CrossGL depth "
+            "compares have no bias or minimum-LOD clamp operand",
+            "0.0",
         )
 
     def texture_gather_call(self, obj, texture_expr, method_args, is_main=False):
@@ -3135,6 +3139,13 @@ class MetalToCrossGLConverter:
             )
 
     def generate(self, ast):
+        """Render ``ast`` as a CrossGL program.
+
+        Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully.
+        """
+        return self.refusals.run(self.render_program, ast)
+
+    def render_program(self, ast):
         wide_vector_support_marker = "    // __crossgl_metal_wide_vector_support__\n"
         precise_math_support_marker = "    // __crossgl_metal_precise_math_support__\n"
         small_vector_index_support_marker = (
@@ -22365,14 +22376,18 @@ float {scalar}(float value) {{
             if method in {"sample_compare", "sample_compare_level"}
             else "vec4(0.0)"
         )
-        return (
-            f"{fallback} /* unsupported Metal storage texture sampled method: "
-            f"{method} on {texture} */"
+        return self.refuse_import(
+            f"Metal storage texture sampled method {method} on {texture}: a texture "
+            "without access::sample cannot be sampled",
+            fallback,
         )
 
     def unsupported_sampled_texture_write(self, texture_expr, method, is_main):
         texture = self.generate_expression(texture_expr, is_main)
-        return f"/* unsupported Metal sampled texture write: {method} on {texture} */"
+        return self.refuse_import(
+            f"Metal sampled texture write {method} on {texture}: a texture with "
+            "access::sample cannot be written"
+        )
 
     def storage_image_coordinate_expression(self, image_expr, args):
         if not args:
@@ -22425,9 +22440,10 @@ float {scalar}(float value) {{
         if not self.is_sampled_cube_texture_type(mapped_type):
             return None
         fallback = self.sampled_texture_read_zero_value(mapped_type)
-        return (
-            f"{fallback} /* unsupported Metal sampled cube texture read: "
-            f"read on {texture} requires face-aware texel fetch */"
+        return self.refuse_import(
+            f"Metal sampled cube texture read on {texture}: CrossGL has no "
+            "face-addressed texel fetch for cube textures",
+            fallback,
         )
 
     def is_sampled_cube_texture_type(self, mapped_type):
