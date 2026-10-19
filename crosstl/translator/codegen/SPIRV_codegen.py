@@ -51,6 +51,10 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..diagnostics import TranslationDiagnostic
+from ..semantics.shader_records import (
+    is_shader_record_buffer,
+    shader_record_memory_layout,
+)
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .array_utils import (
     collect_literal_int_constants,
@@ -17236,7 +17240,12 @@ class VulkanSPIRVCodeGen(
         allow_binding_reassignment: bool = False,
     ) -> SpirvId:
         """Emit a GLSL-style buffer block or buffer-qualified array variable."""
-        layout = self.glsl_buffer_block_layout(node)
+        shader_record = is_shader_record_buffer(node)
+        layout = (
+            shader_record_memory_layout(node)
+            if shader_record
+            else self.glsl_buffer_block_layout(node)
+        )
         base_type_name = self.array_base_type_name(type_name)
         outer_array = self.split_outer_array_type(type_name)
         pointer_element_type_name = self.pointer_pointee_type_name_from_string(
@@ -17306,20 +17315,29 @@ class VulkanSPIRVCodeGen(
                 block_type, pointer_descriptor_array_size
             )
 
-        self.decorate_storage_buffer_block_type(block_type, layout)
+        self.decorate_storage_buffer_block_type(
+            block_type, layout, block_decoration="Block" if shader_record else None
+        )
         memory_flags = self.storage_buffer_memory_flags(node)
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
-        var_id = self.create_variable(
-            value_type, self.storage_buffer_storage_class(), node.name
-        )
-        descriptor_set, binding = self.resource_descriptor_slot(
-            node, allow_binding_reassignment=allow_binding_reassignment
-        )
-        self.decorations.append(
-            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
-        )
-        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+        if shader_record:
+            # SPV_KHR_ray_tracing: the shader binding table record, read through no descriptor.
+            self.validate_shader_record_buffer(node, value_type, block_type)
+            var_id = self.create_variable(
+                value_type, "ShaderRecordBufferKHR", node.name
+            )
+        else:
+            var_id = self.create_variable(
+                value_type, self.storage_buffer_storage_class(), node.name
+            )
+            descriptor_set, binding = self.resource_descriptor_slot(
+                node, allow_binding_reassignment=allow_binding_reassignment
+            )
+            self.decorations.append(
+                f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+            )
+            self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
 
         self.global_variables[node.name] = var_id
         self.register_glsl_buffer_access_metadata(node, var_id, value_type, block_type)
@@ -17838,12 +17856,16 @@ class VulkanSPIRVCodeGen(
         return type_id
 
     def decorate_storage_buffer_block_type(
-        self, block_type: SpirvId, layout: str = "std430"
+        self,
+        block_type: SpirvId,
+        layout: str = "std430",
+        block_decoration: Optional[str] = None,
     ):
         if self.type_contains_bfloat16(block_type):
             self.require_bfloat16_storage()
         self.decorations.append(
-            f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
+            f"OpDecorate %{block_type.id} "
+            f"{block_decoration or self.storage_buffer_block_decoration()}"
         )
         members = self.current_struct_members.get(block_type.type.base_type, [])
         self.validate_specialization_sized_member_layout(
@@ -17864,6 +17886,19 @@ class VulkanSPIRVCodeGen(
                     f"MatrixStride {matrix_stride}"
                 )
             self.decorate_storage_buffer_nested_type(member_type, layout)
+
+    def validate_shader_record_buffer(self, node, value_type, block_type):
+        """A shader record buffer is one ``Block`` struct with no descriptor slot, read by a ray tracing stage."""
+        if value_type is not block_type:
+            raise ValueError(
+                f"SPIR-V shader record buffer '{node.name}' must be a single block, not an array of blocks "
+                "(GL_EXT_ray_tracing allows one shaderRecordEXT block per stage)"
+            )
+        if self.explicit_descriptor_binding(node) is not None:
+            raise ValueError(
+                f"SPIR-V shader record buffer '{node.name}' cannot declare a binding: the record is read "
+                "through no descriptor (GL_EXT_ray_tracing)"
+            )
 
     def storage_buffer_storage_class(self) -> str:
         return "StorageBuffer" if self.cooperative_matrix_khr_enabled else "Uniform"

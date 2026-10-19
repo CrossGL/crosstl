@@ -1029,6 +1029,8 @@ class VulkanToCrossGLConverter:
                     f"{attributes};\n\n"
                 )
                 self.reserve_global_declaration_name(variable_name)
+        elif layout_type == "shader_record":
+            code += self.generate_shader_record_layout(node)
         elif layout_type == "in" or layout_type == "out":
             if node.data_type and node.variable_name:
                 attributes = self.interface_layout_attribute_suffix(
@@ -1052,6 +1054,39 @@ class VulkanToCrossGLConverter:
             )
             self.reserve_global_declaration_name(node.variable_name)
 
+        return code
+
+    def generate_shader_record_layout(self, node):
+        """``SBT sbt @glsl_buffer_block(shaderRecordEXT, std430);``: see :mod:`crosstl.translator.semantics.shader_records`.
+
+        SPIR-V gives the record explicit offsets; CrossGL declares it ``std430``, the layout GLSL ray tracing
+        shaders use for it.
+        """
+        block_name = node.block_name or "ShaderRecord"
+        variable_name = node.variable_name or block_name[0].lower() + block_name[1:]
+        code = ""
+        if block_name not in self.emitted_storage_buffer_type_names:
+            code += f"    struct {block_name} {{\n"
+            for field_type, field_name in node.struct_fields:
+                code += f"        {self.map_type(field_type)} {field_name};\n"
+            code += "    };\n\n"
+            self.emitted_storage_buffer_type_names.add(block_name)
+        qualifiers = [
+            f"@{qualifier}"
+            for qualifier in getattr(node, "declaration_qualifiers", None) or []
+            if qualifier in {
+                "readonly",
+                "writeonly",
+                "coherent",
+                "volatile",
+                "restrict",
+            }
+        ]
+        attributes = " ".join(
+            ["@glsl_buffer_block(shaderRecordEXT, std430)", *qualifiers]
+        )
+        code += f"    {block_name} {variable_name} {attributes};\n\n"
+        self.reserve_global_declaration_name(variable_name)
         return code
 
     def storage_buffer_block_type_name(self, node):

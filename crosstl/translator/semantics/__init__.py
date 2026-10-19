@@ -22,6 +22,10 @@ from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
+from .shader_records import (
+    ShaderRecordBufferUnsupportedError,
+    refuse_shader_record_buffers,
+)
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
@@ -42,6 +46,7 @@ __all__ = [
     "RuleInexpressibleError",
     "RuleReport",
     "SOURCE_RULES",
+    "ShaderRecordBufferUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
     "TARGET_ENTRIES",
     "UnsizedArrayUnsupportedError",
@@ -82,6 +87,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`); ``a.length()`` of a sized
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
     (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
+    Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`).
     Structs holding samplers,
     textures or images are flattened into separate resources for SPIR-V, or refused with
@@ -99,6 +105,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_unsized_arrays(program, report.target)
     refuse_per_vertex_inputs(program, report.target)
     legalize_sampler_states(program, report.target)
+    refuse_shader_record_buffers(program, report.target)
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
     legalize_opaque_struct_members(program, report.target)

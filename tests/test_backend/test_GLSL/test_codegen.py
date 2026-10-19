@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 import textwrap
@@ -404,7 +405,11 @@ def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang(
 
     assert "const S sc = S(float16_t(0.125));" in crossgl
     assert "S{" not in crossgl
-    assert "S v[2] @row_major @glsl_buffer_block(std430);" in crossgl
+    # The anonymous block stays a buffer block (its members are buffer members, GLSL 4.60 section 4.3.9).
+    assert re.search(
+        r"layout\((?=[^)]*\bstd430\b)(?=[^)]*\brow_major\b)[^)]*\)\s*buffer\s+B2\s*\{\s*S v\[2\];\s*\}\s*b2;",
+        crossgl,
+    )
     assert "0.125hf" not in crossgl
     assert "const int64_t signedLong = (-10);" in crossgl
     assert "const uint64_t unsignedLong = 0xFFFFFFFFu;" in crossgl

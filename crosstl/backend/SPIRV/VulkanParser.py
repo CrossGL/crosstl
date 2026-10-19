@@ -86,6 +86,10 @@ class VulkanParser:
         "ASSIGN_SHIFT_RIGHT",
     )
     SPIRV_INTERFACE_STORAGE_CLASSES = {"Input": "IN", "Output": "OUT"}
+    # SPV_KHR_ray_tracing: a shader binding table record, read through no descriptor.
+    SPIRV_SHADER_RECORD_STORAGE_CLASSES = frozenset(
+        {"ShaderRecordBufferKHR", "ShaderRecordBufferNV"}
+    )
     # SPV_KHR_ray_tracing storage classes and the GL_EXT_ray_tracing qualifiers that declare them.
     SPIRV_RAY_STORAGE_QUALIFIERS = {
         "RayPayloadKHR": "rayPayloadEXT",
@@ -2053,11 +2057,11 @@ class VulkanParser:
                         types,
                         variables_by_id,
                         constants,
+                        expression_type_ids=expression_type_ids,
                     )
                     expressions[result_id] = access
                     expression_type_ids[result_id] = operands[0]
                 continue
-                        expression_type_ids=expression_type_ids,
 
             if result_id and opcode in {
                 "OpPtrAccessChain",
@@ -4016,11 +4020,11 @@ class VulkanParser:
         types,
         variables_by_id,
         constants,
+        expression_type_ids=None,
     ):
         struct_member = self.spirv_assembly_struct_member_access_expression(
             base_operand,
             index_operands,
-        expression_type_ids=None,
             expressions,
             names,
             decorations,
@@ -6183,7 +6187,12 @@ class VulkanParser:
                     layouts.append(resource_layout)
                 continue
 
-            if storage_class in {"PushConstant", "StorageBuffer", "Uniform"}:
+            if storage_class in {
+                "PushConstant",
+                "StorageBuffer",
+                "Uniform",
+                *self.SPIRV_SHADER_RECORD_STORAGE_CLASSES,
+            }:
                 resource_block_layout = self.spirv_assembly_resource_block_layout(
                     variable,
                     pointer_type,
@@ -6870,6 +6879,10 @@ class VulkanParser:
             if not has_block:
                 return None
             layout_type = "BUFFER"
+        elif storage_class in self.SPIRV_SHADER_RECORD_STORAGE_CLASSES:
+            if not has_block:
+                return None
+            layout_type = "SHADER_RECORD"
         else:
             return None
 
@@ -7304,19 +7317,6 @@ class VulkanParser:
             "1",
         )
 
-    def spirv_image_type_name(
-        self, sampled_type, dim, depth, arrayed, multisampled, sampled
-    ):
-        if dim == "SubpassData":
-            return "subpassInputMS" if multisampled == "1" else "subpassInput"
-
-        base_name = self.spirv_image_base_type_name(dim, arrayed, multisampled)
-        if base_name is None:
-            return None
-
-        sampled_family = self.spirv_image_sampled_type_family(sampled_type)
-        if sampled == "2":
-            prefix = {"int": "i", "uint": "u"}.get(sampled_family, "")
     def spirv_image_query_name(
         self, sampled_name, storage_name, image_operand, expression_type_ids, types
     ):
@@ -7330,6 +7330,19 @@ class VulkanParser:
             return storage_name
         return sampled_name
 
+    def spirv_image_type_name(
+        self, sampled_type, dim, depth, arrayed, multisampled, sampled
+    ):
+        if dim == "SubpassData":
+            return "subpassInputMS" if multisampled == "1" else "subpassInput"
+
+        base_name = self.spirv_image_base_type_name(dim, arrayed, multisampled)
+        if base_name is None:
+            return None
+
+        sampled_family = self.spirv_image_sampled_type_family(sampled_type)
+        if sampled == "2":
+            prefix = {"int": "i", "uint": "u"}.get(sampled_family, "")
             return f"{prefix}image{base_name}"
 
         prefix = {"int": "i", "uint": "u"}.get(sampled_family, "")

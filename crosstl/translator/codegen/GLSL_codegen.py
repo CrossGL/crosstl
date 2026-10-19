@@ -91,6 +91,10 @@ from ..metadata_preconditions import (
 )
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
+from ..semantics.shader_records import (
+    is_shader_record_buffer,
+    shader_record_memory_layout,
+)
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
@@ -54100,14 +54104,21 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_buffer_block_layout(self, node):
         attr = self.glsl_buffer_block_attribute(node)
         arguments = getattr(attr, "arguments", []) if attr is not None else []
-        if arguments:
-            layout_parts = [
-                self.attribute_value_to_string(argument) for argument in arguments
-            ]
-            layout_parts = [part for part in layout_parts if part]
-            if layout_parts:
-                self.validate_glsl_buffer_block_layout_parts(node, layout_parts)
-                return ", ".join(layout_parts)
+        layout_parts = [
+            self.attribute_value_to_string(argument) for argument in arguments or []
+        ]
+        layout_parts = [part for part in layout_parts if part]
+        if is_shader_record_buffer(node) and not any(
+            self.normalized_glsl_buffer_block_layout_part(part) == "shaderrecordext"
+            for part in layout_parts
+        ):
+            # ``layout(shaderRecordEXT, std430) buffer B {...} b;`` parses with shaderRecordEXT as its own attribute.
+            layout_parts.insert(0, "shaderRecordEXT")
+            if len(layout_parts) == 1:
+                layout_parts.append(shader_record_memory_layout(node))
+        if layout_parts:
+            self.validate_glsl_buffer_block_layout_parts(node, layout_parts)
+            return ", ".join(layout_parts)
         return "std430"
 
     def validate_glsl_buffer_block_layout_parts(self, node, layout_parts):

@@ -1302,14 +1302,9 @@ class GLSLToCrossGLConverter:
         if getattr(struct, "interface_instance_name", None):
             return False
         layout = getattr(struct, "interface_layout", None) or {}
-        if "buffer_reference" in {str(key).lower() for key in layout}:
-            return False
-        return any(
-            self.is_runtime_array_member(member)
-            for member in getattr(struct, "members", []) or getattr(
-                struct, "fields", []
-            )
-        )
+        # A block without an instance name puts its members in global scope, but they stay members of a buffer
+        # (GLSL 4.60 section 4.3.9); declared as plain globals they became private or uniform variables.
+        return "buffer_reference" not in {str(key).lower() for key in layout}
 
     def is_runtime_array_member(self, member):
         array_sizes = getattr(member, "array_sizes", None)
