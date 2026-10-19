@@ -6729,11 +6729,11 @@ jobs:
     timeout-minutes: 210
     strategy:
       fail-fast: false
-      # 135 legs, a third of them on macOS: leave runners for other pull requests.
+      # 177 legs, a third of them on macOS: leave runners for other pull requests.
       max-parallel: 24
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8]
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4]
 
     steps:
       - name: Checkout CrossTL
@@ -8616,6 +8616,158 @@ jobs:
               --basetemp=mlx-current-results/quantized-qmv-wide-8 \
               --junitxml=mlx-current-results/quantized-qmv-wide-8.xml \
               demos/integrations/mlx/tests/kernels/test_current_quantized_qmv_wide.py
+
+      # steel_gemm_fused.metal's 72 float32, float16 and bfloat16 entries, three
+      # constant configurations each, in five shards.
+      - name: Prove current MLX GEMM family native parity (shard 0 of 5)
+        if: matrix.group == 'gemm-family-0'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_FAMILY: "1"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_INDEX: "0"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_COUNT: "5"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX GEMM family native parity (shard 0 of 5)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gemm-family-0 \
+              --junitxml=mlx-current-results/gemm-family-0.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_family.py
+
+      - name: Prove current MLX GEMM family native parity (shard 1 of 5)
+        if: matrix.group == 'gemm-family-1'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_FAMILY: "1"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_INDEX: "1"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_COUNT: "5"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX GEMM family native parity (shard 1 of 5)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gemm-family-1 \
+              --junitxml=mlx-current-results/gemm-family-1.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_family.py
+
+      - name: Prove current MLX GEMM family native parity (shard 2 of 5)
+        if: matrix.group == 'gemm-family-2'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_FAMILY: "1"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_INDEX: "2"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_COUNT: "5"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX GEMM family native parity (shard 2 of 5)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gemm-family-2 \
+              --junitxml=mlx-current-results/gemm-family-2.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_family.py
+
+      - name: Prove current MLX GEMM family native parity (shard 3 of 5)
+        if: matrix.group == 'gemm-family-3'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_FAMILY: "1"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_INDEX: "3"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_COUNT: "5"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX GEMM family native parity (shard 3 of 5)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gemm-family-3 \
+              --junitxml=mlx-current-results/gemm-family-3.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_family.py
+
+      - name: Prove current MLX GEMM family native parity (shard 4 of 5)
+        if: matrix.group == 'gemm-family-4'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_FAMILY: "1"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_INDEX: "4"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_COUNT: "5"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX GEMM family native parity (shard 4 of 5)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/gemm-family-4 \
+              --junitxml=mlx-current-results/gemm-family-4.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_family.py
 
       - name: Upload current MLX native parity evidence
         if: always()
