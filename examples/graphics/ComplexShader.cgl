@@ -72,7 +72,7 @@ shader ComplexShader {
         float nearPlane;
         float farPlane;
         int frameCount;
-        float[] noiseValues;   // Dynamic array
+        float noiseValues[16];
     }
 
     // Constants

@@ -46,6 +46,7 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
+from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
     generic_type_parts,
@@ -171,7 +172,18 @@ class WGSLCodeGen:
         "lerp": "mix",
         "mix": "mix",
         "rsqrt": "inverseSqrt",
+        # WGSL round() rounds halfway cases to the nearest even integer.
+        "roundEven": "round",
         "saturate": "saturate",
+    }
+    BIT_CAST_FUNCTIONS = {
+        "asuint": "u32",
+        "asint": "i32",
+        "asfloat": "f32",
+        "floatBitsToUint": "u32",
+        "floatBitsToInt": "i32",
+        "uintBitsToFloat": "f32",
+        "intBitsToFloat": "f32",
     }
     DERIVATIVE_FUNCTION_NAME_MAP = {
         "dfdx": "dpdx",
@@ -648,6 +660,7 @@ class WGSLCodeGen:
     def generate_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
         self.validate_wgsl_stage_support(ast, target_stage)
+        validate_recursion_free(ast, "wgsl")
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
         self._global_binding_index = 0
         self._identifier_scopes = []
@@ -2946,6 +2959,10 @@ class WGSLCodeGen:
         literal_type = self.type_name_string(getattr(node, "literal_type", ""))
         if literal_type == "f32" and re.fullmatch(r"[-+]?\d+", text):
             return f"{text}.0"
+        # An unsigned literal keeps its type: an abstract integer would become i32 in
+        # `select(0, 1, c)` or `1 << n` and mismatch a u32 operand (WGSL section 6.1.2).
+        if literal_type == "u32" and re.fullmatch(r"\d+", text):
+            return f"{text}u"
         return text
 
     def generate_workgroup_size_literal(self):
@@ -2960,6 +2977,22 @@ class WGSLCodeGen:
             return f"{text}u"
         return text
 
+    def generate_array_length_call(self, node):
+        """GLSL ``array.length()`` (GLSL 4.60 section 4.1.9) as an i32: ``arrayLength`` or the declared size."""
+        function = node.function
+        if not (
+            isinstance(function, MemberAccessNode)
+            and function.member == "length"
+            and not node.arguments
+        ):
+            return None
+        array_type = self.expression_type(function.object_expr)
+        if not isinstance(array_type, ArrayType):
+            return None
+        if array_type.size is None:
+            return f"i32(arrayLength(&{self.generate_expression(function.object_expr)}))"
+        return f"i32({self.generate_expression(array_type.size)})"
+
     def generate_function_call(self, node, expected_type=None):
         function_name = self.expression_name(node.function)
         normalized_name = self.semantic_key(function_name)
@@ -2970,11 +3003,17 @@ class WGSLCodeGen:
             return self.generate_structured_buffer_free_helper_call(
                 node, normalized_name
             )
+        if normalized_name == "buffer_dimensions" and len(node.arguments) == 1:
+            # The element count of a runtime-sized storage array (WGSL section 17.11, arrayLength).
+            return f"arrayLength(&{self.generate_expression(node.arguments[0])})"
         if normalized_name in self.UNSUPPORTED_STORAGE_BUFFER_FREE_HELPERS:
             raise ValueError(
                 "WGSL target does not support storage buffer helper "
                 f"{function_name} yet"
             )
+        array_length = self.generate_array_length_call(node)
+        if array_length is not None:
+            return array_length
         if isinstance(node.function, MemberAccessNode):
             member_name = self.semantic_key(node.function.member)
             if member_name in self.STRUCTURED_BUFFER_MEMBER_HELPERS:
@@ -3001,6 +3040,9 @@ class WGSLCodeGen:
             return self.generate_derivative_call(node, derivative_name, function_name)
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
+        bit_cast = self.BIT_CAST_FUNCTIONS.get(function_name)
+        if bit_cast is not None and not self.is_user_function_name(function_name):
+            return self.generate_bit_cast_call(node, function_name, bit_cast)
         if function_name == "mod":
             return self.generate_mod_call(node)
 
@@ -3043,6 +3085,21 @@ class WGSLCodeGen:
         elif isinstance(node.function, MemberAccessNode):
             mapped_name = self.generate_expression(node.function)
         return f"{mapped_name}({args})"
+
+    def is_user_function_name(self, name):
+        return bool(getattr(self, "_function_overloads_by_name", {}).get(name))
+
+    def generate_bit_cast_call(self, node, function_name, scalar):
+        """HLSL ``asuint``/``asint``/``asfloat`` and GLSL ``floatBitsToUint`` and the like as WGSL ``bitcast``."""
+        if len(node.arguments) != 1:
+            raise ValueError(
+                f"WGSL target supports {function_name}() with exactly 1 argument; got "
+                f"{len(node.arguments)}"
+            )
+        argument = node.arguments[0]
+        lanes = self.vector_component_count(self.expression_type(argument))
+        target = scalar if lanes is None else f"vec{lanes}<{scalar}>"
+        return f"bitcast<{target}>({self.generate_expression(argument)})"
 
     def generate_derivative_call(self, node, mapped_name, function_name):
         if len(node.arguments) != 1:
@@ -5356,6 +5413,15 @@ class WGSLCodeGen:
                 return option_call_type
             if self.is_type_constructor_name(function_name):
                 return self.type_name_string(function_name)
+            if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
+                return "uint"
+            if (
+                isinstance(expr.function, MemberAccessNode)
+                and expr.function.member == "length"
+                and not expr.arguments
+                and isinstance(self.expression_type(expr.function.object_expr), ArrayType)
+            ):
+                return "int"
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )

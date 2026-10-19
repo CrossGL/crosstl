@@ -1309,8 +1309,10 @@ class OpenCLParser(HipParser):
             token.value
             for token in self.tokens[type_start:type_end]
             if token.type != "NEWLINE"
-            and token.type
-            not in {*self.TYPE_QUALIFIER_TOKENS, *self.POSTFIX_TYPE_QUALIFIER_TOKENS}
+            and token.type not in {
+                *self.TYPE_QUALIFIER_TOKENS,
+                *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
+            }
         ]
         if len(parts) != 1:
             return False

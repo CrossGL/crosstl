@@ -1,3 +1,4 @@
+from copy import deepcopy
 from enum import Enum
 
 from crosstl.translator import stage_utils as shared_stage_utils
@@ -275,6 +276,21 @@ def test_stage_helpers_preserve_multiple_entries_for_same_stage():
         (id(main_entry), "compute", main_entry),
         (id(spawn_entry), "compute", spawn_entry),
     ]
+
+
+def test_stage_map_deepcopy_preserves_duplicate_entries_and_shared_identity():
+    first, second = DummyStageNode(DummyFunction("first")), DummyStageNode(
+        DummyFunction("second")
+    )
+    stages = StageMap()
+    stages.append("compute", first)
+    stages.append("compute", second)
+    copied, copied_first = deepcopy((stages, first))
+    assert [stage.entry_point.name for stage in copied.values()] == ["first", "second"]
+    assert copied["compute"] is copied_first
+    assert copied.all_for_stage("compute")[0] is copied_first
+    assert copied_first is not first
+    assert copied.all_for_stage("compute")[1] is not second
 
 
 def test_collect_stage_local_variables_filters_by_stage_and_predicate():

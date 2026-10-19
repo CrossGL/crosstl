@@ -272,6 +272,7 @@ from crosstl.translator.codegen.image_access_contracts import (
     validate_texture_operation_arity,
 )
 from crosstl.translator.codegen.resource_query import ResourceQueryMixin
+from tests.lowering_refusal_helpers import shared_refusal
 
 
 def attribute_value_to_string(value):
@@ -1407,30 +1408,28 @@ def test_unsupported_image_atomic_fallback_helpers_build_backend_expressions():
     assert storage_image_atomic_zero_value("uint") == "0u"
     assert storage_image_atomic_zero_value("float") == "0.0"
     assert storage_image_atomic_zero_value("int") == "0"
-    assert (
-        unsupported_image_atomic_expression(
-            "Metal",
-            "imageAtomicExchange",
-            "texture2d<float, access::read_write>",
-            "0.0",
-        )
-        == "/* unsupported Metal image atomic resource call: "
-        "imageAtomicExchange on texture2d<float, access::read_write> */ 0.0"
+    assert shared_refusal(
+        unsupported_image_atomic_expression,
+        "Metal",
+        "imageAtomicExchange",
+        "texture2d<float, access::read_write>",
+        "0.0",
+    ) == (
+        "0.0",
+        "image atomic resource call: imageAtomicExchange on texture2d<float, access::read_write>",
     )
-    assert (
-        unsupported_multisample_image_atomic_expression(
-            "DirectX", "imageAtomicAdd", "RWTexture2DMS<uint>", "0u"
-        )
-        == "/* unsupported DirectX multisample image atomic: imageAtomicAdd "
-        "on RWTexture2DMS<uint> */ 0u"
-    )
-    assert (
-        unsupported_multisample_image_store_expression(
-            "DirectX", "RWTexture2DMS<float4>"
-        )
-        == "/* unsupported DirectX multisample image store: imageStore on "
-        "RWTexture2DMS<float4> */ ((void)0)"
-    )
+    assert shared_refusal(
+        unsupported_multisample_image_atomic_expression,
+        "DirectX",
+        "imageAtomicAdd",
+        "RWTexture2DMS<uint>",
+        "0u",
+    ) == ("0u", "multisample image atomic: imageAtomicAdd on RWTexture2DMS<uint>")
+    assert shared_refusal(
+        unsupported_multisample_image_store_expression,
+        "DirectX",
+        "RWTexture2DMS<float4>",
+    ) == ("((void)0)", "multisample image store: imageStore on RWTexture2DMS<float4>")
 
 
 def test_image_atomic_helper_descriptor_fields_build_backend_helper_names():
@@ -1725,211 +1724,222 @@ def test_texture_samples_query_requirement_name_matches_backend_terms():
 
 
 def test_unsupported_texture_query_fallback_helpers_build_backend_expressions():
-    assert (
-        unsupported_texture_query_expression(
-            "GLSL", "textureQueryLevels", "image2D", "0"
-        )
-        == "/* unsupported GLSL texture query: textureQueryLevels on image2D */ 0"
+    assert shared_refusal(
+        unsupported_texture_query_expression,
+        "GLSL",
+        "textureQueryLevels",
+        "image2D",
+        "0",
+    ) == ("0", "texture query: textureQueryLevels on image2D")
+    assert shared_refusal(
+        unsupported_texture_query_levels_expression, "GLSL", "image2D"
+    ) == ("0", "texture query: textureQueryLevels on image2D")
+    assert shared_refusal(
+        unsupported_texture_query_levels_expression,
+        "Metal",
+        "texture2d<float, access::read_write>",
+    ) == (
+        "0",
+        "texture query: textureQueryLevels on texture2d<float, access::read_write>",
     )
-    assert (
-        unsupported_texture_query_levels_expression("GLSL", "image2D")
-        == "/* unsupported GLSL texture query: textureQueryLevels on image2D */ 0"
+    assert shared_refusal(
+        unsupported_texture_query_expression,
+        "Metal",
+        "textureQueryLod",
+        "texture2d<float, access::read_write>",
+        "float2(0.0)",
+    ) == (
+        "float2(0.0)",
+        "texture query: textureQueryLod on texture2d<float, access::read_write>",
     )
-    assert (
-        unsupported_texture_query_levels_expression(
-            "Metal", "texture2d<float, access::read_write>"
-        )
-        == "/* unsupported Metal texture query: textureQueryLevels on "
-        "texture2d<float, access::read_write> */ 0"
-    )
-    assert (
-        unsupported_texture_query_expression(
-            "Metal",
-            "textureQueryLod",
-            "texture2d<float, access::read_write>",
-            "float2(0.0)",
-        )
-        == "/* unsupported Metal texture query: textureQueryLod on "
-        "texture2d<float, access::read_write> */ float2(0.0)"
-    )
-    assert (
-        unsupported_multisample_texture_query_expression(
-            "DirectX", "textureQueryLod", "Texture2DMS<float4>", "float2(0.0)"
-        )
-        == "/* unsupported DirectX multisample texture query: "
-        "textureQueryLod on Texture2DMS<float4> */ float2(0.0)"
+    assert shared_refusal(
+        unsupported_multisample_texture_query_expression,
+        "DirectX",
+        "textureQueryLod",
+        "Texture2DMS<float4>",
+        "float2(0.0)",
+    ) == (
+        "float2(0.0)",
+        "multisample texture query: textureQueryLod on Texture2DMS<float4>",
     )
     assert texture_query_lod_zero_value("GLSL") == "vec2(0.0)"
     assert texture_query_lod_zero_value("DirectX") == "float2(0.0, 0.0)"
     assert texture_query_lod_zero_value("Metal") == "float2(0.0)"
-    assert (
-        unsupported_texture_query_lod_expression("GLSL", "image2D")
-        == "/* unsupported GLSL texture query: textureQueryLod on "
-        "image2D */ vec2(0.0)"
+    assert shared_refusal(
+        unsupported_texture_query_lod_expression, "GLSL", "image2D"
+    ) == ("vec2(0.0)", "texture query: textureQueryLod on image2D")
+    assert shared_refusal(
+        unsupported_texture_query_lod_expression, "DirectX", "RWTexture2D<float4>"
+    ) == ("float2(0.0, 0.0)", "texture query: textureQueryLod on RWTexture2D<float4>")
+    assert shared_refusal(
+        unsupported_multisample_texture_query_lod_expression, "GLSL", "sampler2DMS"
+    ) == ("vec2(0.0)", "multisample texture query: textureQueryLod on sampler2DMS")
+    assert shared_refusal(
+        unsupported_multisample_texture_query_lod_expression,
+        "Metal",
+        "texture2d_ms_array<float>",
+    ) == (
+        "float2(0.0)",
+        "multisample texture query: textureQueryLod on texture2d_ms_array<float>",
     )
-    assert (
-        unsupported_texture_query_lod_expression("DirectX", "RWTexture2D<float4>")
-        == "/* unsupported DirectX texture query: textureQueryLod on "
-        "RWTexture2D<float4> */ float2(0.0, 0.0)"
-    )
-    assert (
-        unsupported_multisample_texture_query_lod_expression("GLSL", "sampler2DMS")
-        == "/* unsupported GLSL multisample texture query: "
-        "textureQueryLod on sampler2DMS */ vec2(0.0)"
-    )
-    assert (
-        unsupported_multisample_texture_query_lod_expression(
-            "Metal", "texture2d_ms_array<float>"
-        )
-        == "/* unsupported Metal multisample texture query: "
-        "textureQueryLod on texture2d_ms_array<float> */ float2(0.0)"
-    )
-    assert (
-        unsupported_texture_samples_query_expression("GLSL", "sampler")
-        == "/* unsupported GLSL texture samples query: "
-        "requires multisample sampler */ 0"
-    )
-    assert (
-        unsupported_texture_samples_query_call_expression("DirectX")
-        == "/* unsupported DirectX texture samples query: "
-        "requires multisample texture */ 0"
-    )
-    assert (
-        unsupported_texture_samples_query_call_expression("Metal")
-        == "/* unsupported Metal texture samples query: "
-        "requires multisample texture */ 0"
-    )
-    assert (
-        unsupported_texture_samples_query_expression("Metal", "texture")
-        == "/* unsupported Metal texture samples query: "
-        "requires multisample texture */ 0"
-    )
+    assert shared_refusal(
+        unsupported_texture_samples_query_expression, "GLSL", "sampler"
+    ) == ("0", "texture samples query: requires multisample sampler")
+    assert shared_refusal(
+        unsupported_texture_samples_query_call_expression, "DirectX"
+    ) == ("0", "texture samples query: requires multisample texture")
+    assert shared_refusal(
+        unsupported_texture_samples_query_call_expression, "Metal"
+    ) == ("0", "texture samples query: requires multisample texture")
+    assert shared_refusal(
+        unsupported_texture_samples_query_expression, "Metal", "texture"
+    ) == ("0", "texture samples query: requires multisample texture")
 
 
 def test_unsupported_multisample_texture_fallback_helpers_build_backend_expressions():
-    assert (
-        unsupported_multisample_texture_call_expression(
-            "GLSL", "texture", "sampler2DMS", "vec4(0.0)"
-        )
-        == "/* unsupported GLSL multisample texture call: "
-        "texture on sampler2DMS */ vec4(0.0)"
+    assert shared_refusal(
+        unsupported_multisample_texture_call_expression,
+        "GLSL",
+        "texture",
+        "sampler2DMS",
+        "vec4(0.0)",
+    ) == ("vec4(0.0)", "multisample texture call: texture on sampler2DMS")
+    assert shared_refusal(
+        unsupported_multisample_texture_call_vector_expression,
+        "DirectX",
+        "textureGrad",
+        "Texture2DMS<float4>",
+    ) == (
+        "float4(0.0, 0.0, 0.0, 0.0)",
+        "multisample texture call: textureGrad on Texture2DMS<float4>",
     )
-    assert (
-        unsupported_multisample_texture_call_vector_expression(
-            "DirectX", "textureGrad", "Texture2DMS<float4>"
-        )
-        == "/* unsupported DirectX multisample texture call: "
-        "textureGrad on Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
+    assert shared_refusal(
+        unsupported_multisample_texture_call_vector_expression,
+        "Metal",
+        "texture",
+        "texture2d_ms_array<float>",
+    ) == (
+        "float4(0.0)",
+        "multisample texture call: texture on texture2d_ms_array<float>",
     )
-    assert (
-        unsupported_multisample_texture_call_vector_expression(
-            "Metal", "texture", "texture2d_ms_array<float>"
-        )
-        == "/* unsupported Metal multisample texture call: "
-        "texture on texture2d_ms_array<float> */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_multisample_texture_compare_expression,
+        "Metal",
+        "textureCompare",
+        "texture2d_ms<float>",
+        "0.0",
+    ) == (
+        "0.0",
+        "multisample texture comparison: textureCompare on texture2d_ms<float>",
     )
-    assert (
-        unsupported_multisample_texture_compare_expression(
-            "Metal", "textureCompare", "texture2d_ms<float>", "0.0"
-        )
-        == "/* unsupported Metal multisample texture comparison: "
-        "textureCompare on texture2d_ms<float> */ 0.0"
+    assert shared_refusal(
+        unsupported_multisample_texture_compare_scalar_expression,
+        "GLSL",
+        "textureCompareGrad",
+        "sampler2DMS",
+    ) == ("0.0", "multisample texture comparison: textureCompareGrad on sampler2DMS")
+    assert shared_refusal(
+        unsupported_multisample_texture_compare_scalar_expression,
+        "DirectX",
+        "textureCompare",
+        "Texture2DMSArray<float4>",
+    ) == (
+        "0.0",
+        "multisample texture comparison: textureCompare on Texture2DMSArray<float4>",
     )
-    assert (
-        unsupported_multisample_texture_compare_scalar_expression(
-            "GLSL", "textureCompareGrad", "sampler2DMS"
-        )
-        == "/* unsupported GLSL multisample texture comparison: "
-        "textureCompareGrad on sampler2DMS */ 0.0"
+    assert shared_refusal(
+        unsupported_multisample_texture_gather_compare_expression,
+        "DirectX",
+        "textureGatherCompare",
+        "Texture2DMSArray<float4>",
+        "float4(0.0)",
+    ) == (
+        "float4(0.0)",
+        "multisample texture gather comparison: textureGatherCompare on Texture2DMSArray<float4>",
     )
-    assert (
-        unsupported_multisample_texture_compare_scalar_expression(
-            "DirectX", "textureCompare", "Texture2DMSArray<float4>"
-        )
-        == "/* unsupported DirectX multisample texture comparison: "
-        "textureCompare on Texture2DMSArray<float4> */ 0.0"
+    assert shared_refusal(
+        unsupported_multisample_texture_gather_compare_vector_expression,
+        "GLSL",
+        "textureGatherCompare",
+        "sampler2DMS",
+    ) == (
+        "vec4(0.0)",
+        "multisample texture gather comparison: textureGatherCompare on sampler2DMS",
     )
-    assert (
-        unsupported_multisample_texture_gather_compare_expression(
-            "DirectX",
-            "textureGatherCompare",
-            "Texture2DMSArray<float4>",
-            "float4(0.0)",
-        )
-        == "/* unsupported DirectX multisample texture gather comparison: "
-        "textureGatherCompare on Texture2DMSArray<float4> */ float4(0.0)"
-    )
-    assert (
-        unsupported_multisample_texture_gather_compare_vector_expression(
-            "GLSL", "textureGatherCompare", "sampler2DMS"
-        )
-        == "/* unsupported GLSL multisample texture gather comparison: "
-        "textureGatherCompare on sampler2DMS */ vec4(0.0)"
-    )
-    assert (
-        unsupported_multisample_texture_gather_compare_vector_expression(
-            "Metal", "textureGatherCompareOffset", "texture2d_ms_array<float>"
-        )
-        == "/* unsupported Metal multisample texture gather comparison: "
-        "textureGatherCompareOffset on texture2d_ms_array<float> */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_multisample_texture_gather_compare_vector_expression,
+        "Metal",
+        "textureGatherCompareOffset",
+        "texture2d_ms_array<float>",
+    ) == (
+        "float4(0.0)",
+        "multisample texture gather comparison: textureGatherCompareOffset on texture2d_ms_array<float>",
     )
 
 
 def test_unsupported_storage_image_texture_helpers_build_backend_expressions():
-    assert (
-        unsupported_storage_image_texture_comparison_expression(
-            "GLSL", "textureCompare", "image2D", "0.0"
-        )
-        == "/* unsupported GLSL storage image texture comparison: "
-        "textureCompare on image2D */ 0.0"
-    )
+    assert shared_refusal(
+        unsupported_storage_image_texture_comparison_expression,
+        "GLSL",
+        "textureCompare",
+        "image2D",
+        "0.0",
+    ) == ("0.0", "storage image texture comparison: textureCompare on image2D")
     assert texture_scalar_zero_value("GLSL") == "0.0"
     assert texture_scalar_zero_value("DirectX") == "0.0"
     assert texture_scalar_zero_value("Metal") == "0.0"
-    assert (
-        unsupported_storage_image_texture_comparison_scalar_expression(
-            "Metal", "textureCompare", "texture2d<float, access::read_write>"
-        )
-        == "/* unsupported Metal storage image texture comparison: "
-        "textureCompare on texture2d<float, access::read_write> */ 0.0"
+    assert shared_refusal(
+        unsupported_storage_image_texture_comparison_scalar_expression,
+        "Metal",
+        "textureCompare",
+        "texture2d<float, access::read_write>",
+    ) == (
+        "0.0",
+        "storage image texture comparison: textureCompare on texture2d<float, access::read_write>",
     )
-    assert (
-        unsupported_storage_image_texture_comparison_scalar_expression(
-            "DirectX", "textureGatherCompare", "RWTexture2D<float4>"
-        )
-        == "/* unsupported DirectX storage image texture comparison: "
-        "textureGatherCompare on RWTexture2D<float4> */ 0.0"
+    assert shared_refusal(
+        unsupported_storage_image_texture_comparison_scalar_expression,
+        "DirectX",
+        "textureGatherCompare",
+        "RWTexture2D<float4>",
+    ) == (
+        "0.0",
+        "storage image texture comparison: textureGatherCompare on RWTexture2D<float4>",
     )
-    assert (
-        unsupported_storage_image_texture_operation_expression(
-            "DirectX", "textureGather", "RWTexture2D<float4>", "float4(0.0)"
-        )
-        == "/* unsupported DirectX storage image texture operation: "
-        "textureGather on RWTexture2D<float4> */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_storage_image_texture_operation_expression,
+        "DirectX",
+        "textureGather",
+        "RWTexture2D<float4>",
+        "float4(0.0)",
+    ) == (
+        "float4(0.0)",
+        "storage image texture operation: textureGather on RWTexture2D<float4>",
     )
-    assert (
-        unsupported_storage_image_texture_operation_expression(
-            "Metal",
-            "texelFetch",
-            "texture2d<float, access::read_write>",
-            "float4(0.0)",
-        )
-        == "/* unsupported Metal storage image texture operation: texelFetch "
-        "on texture2d<float, access::read_write> */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_storage_image_texture_operation_expression,
+        "Metal",
+        "texelFetch",
+        "texture2d<float, access::read_write>",
+        "float4(0.0)",
+    ) == (
+        "float4(0.0)",
+        "storage image texture operation: texelFetch on texture2d<float, access::read_write>",
     )
-    assert (
-        unsupported_storage_image_texture_operation_vector_expression(
-            "GLSL", "texture", "image2D"
-        )
-        == "/* unsupported GLSL storage image texture operation: texture on "
-        "image2D */ vec4(0.0)"
-    )
-    assert (
-        unsupported_storage_image_texture_operation_vector_expression(
-            "DirectX", "textureGather", "RWTexture2D<float4>"
-        )
-        == "/* unsupported DirectX storage image texture operation: "
-        "textureGather on RWTexture2D<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
+    assert shared_refusal(
+        unsupported_storage_image_texture_operation_vector_expression,
+        "GLSL",
+        "texture",
+        "image2D",
+    ) == ("vec4(0.0)", "storage image texture operation: texture on image2D")
+    assert shared_refusal(
+        unsupported_storage_image_texture_operation_vector_expression,
+        "DirectX",
+        "textureGather",
+        "RWTexture2D<float4>",
+    ) == (
+        "float4(0.0, 0.0, 0.0, 0.0)",
+        "storage image texture operation: textureGather on RWTexture2D<float4>",
     )
 
 
@@ -2269,77 +2279,72 @@ def test_texel_fetch_classifiers_match_intrinsic_groups():
 
 
 def test_unsupported_texture_gather_and_texel_fetch_helpers_build_backend_expressions():
-    assert (
-        unsupported_texture_gather_expression(
-            "GLSL",
-            "textureGather",
-            "requires 2D, 2D-array, cube, or cube-array textures",
-            "vec4(0.0)",
-        )
-        == "/* unsupported GLSL texture gather: textureGather requires 2D, "
-        "2D-array, cube, or cube-array textures */ vec4(0.0)"
+    assert shared_refusal(
+        unsupported_texture_gather_expression,
+        "GLSL",
+        "textureGather",
+        "requires 2D, 2D-array, cube, or cube-array textures",
+        "vec4(0.0)",
+    ) == (
+        "vec4(0.0)",
+        "texture gather: textureGather requires 2D, 2D-array, cube, or cube-array textures",
     )
-    assert (
-        unsupported_texture_gather_call_expression(
-            "Metal",
-            "textureGatherOffsets",
-            "offsets require 2D or 2D-array textures",
-        )
-        == "/* unsupported Metal texture gather: textureGatherOffsets offsets "
-        "require 2D or 2D-array textures */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_texture_gather_call_expression,
+        "Metal",
+        "textureGatherOffsets",
+        "offsets require 2D or 2D-array textures",
+    ) == (
+        "float4(0.0)",
+        "texture gather: textureGatherOffsets offsets require 2D or 2D-array textures",
     )
-    assert (
-        unsupported_texture_gather_compare_expression(
-            "DirectX",
-            "textureGatherCompareOffset",
-            "offsets require 2D or 2D-array depth textures",
-            "float4(0.0)",
-        )
-        == "/* unsupported DirectX texture gather compare: "
-        "textureGatherCompareOffset offsets require 2D or 2D-array depth "
-        "textures */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_texture_gather_compare_expression,
+        "DirectX",
+        "textureGatherCompareOffset",
+        "offsets require 2D or 2D-array depth textures",
+        "float4(0.0)",
+    ) == (
+        "float4(0.0)",
+        "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array depth textures",
     )
-    assert (
-        unsupported_texture_gather_compare_call_expression(
-            "GLSL",
-            "textureGatherCompareOffset",
-            "offsets require 2D or 2D-array depth textures",
-        )
-        == "/* unsupported GLSL texture gather compare: "
-        "textureGatherCompareOffset offsets require 2D or 2D-array depth "
-        "textures */ vec4(0.0)"
+    assert shared_refusal(
+        unsupported_texture_gather_compare_call_expression,
+        "GLSL",
+        "textureGatherCompareOffset",
+        "offsets require 2D or 2D-array depth textures",
+    ) == (
+        "vec4(0.0)",
+        "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array depth textures",
     )
-    assert (
-        unsupported_texel_fetch_expression(
-            "Metal", "texelFetch", "texturecube<float>", "float4(0.0)"
-        )
-        == "/* unsupported Metal texel fetch: texelFetch on "
-        "texturecube<float> */ float4(0.0)"
-    )
+    assert shared_refusal(
+        unsupported_texel_fetch_expression,
+        "Metal",
+        "texelFetch",
+        "texturecube<float>",
+        "float4(0.0)",
+    ) == ("float4(0.0)", "texel fetch: texelFetch on texturecube<float>")
     assert texel_fetch_zero_value("GLSL") == "vec4(0.0)"
     assert texel_fetch_zero_value("DirectX") == "float4(0.0, 0.0, 0.0, 0.0)"
     assert texel_fetch_zero_value("Metal") == "float4(0.0)"
-    assert (
-        unsupported_cube_texel_fetch_expression(
-            "GLSL", "texelFetchOffset", "samplerCube"
-        )
-        == "/* unsupported GLSL texel fetch: texelFetchOffset on "
-        "samplerCube */ vec4(0.0)"
-    )
-    assert (
-        unsupported_cube_texel_fetch_expression(
-            "DirectX", "texelFetch", "TextureCubeArray"
-        )
-        == "/* unsupported DirectX texel fetch: texelFetch on "
-        "TextureCubeArray */ float4(0.0, 0.0, 0.0, 0.0)"
-    )
-    assert (
-        unsupported_cube_texel_fetch_expression(
-            "Metal", "texelFetch", "texturecube<float>"
-        )
-        == "/* unsupported Metal texel fetch: texelFetch on "
-        "texturecube<float> */ float4(0.0)"
-    )
+    assert shared_refusal(
+        unsupported_cube_texel_fetch_expression,
+        "GLSL",
+        "texelFetchOffset",
+        "samplerCube",
+    ) == ("vec4(0.0)", "texel fetch: texelFetchOffset on samplerCube")
+    assert shared_refusal(
+        unsupported_cube_texel_fetch_expression,
+        "DirectX",
+        "texelFetch",
+        "TextureCubeArray",
+    ) == ("float4(0.0, 0.0, 0.0, 0.0)", "texel fetch: texelFetch on TextureCubeArray")
+    assert shared_refusal(
+        unsupported_cube_texel_fetch_expression,
+        "Metal",
+        "texelFetch",
+        "texturecube<float>",
+    ) == ("float4(0.0)", "texel fetch: texelFetch on texturecube<float>")
 
 
 def test_unsupported_texture_offset_helpers_build_backend_expressions():
@@ -2355,162 +2360,166 @@ def test_unsupported_texture_offset_helpers_build_backend_expressions():
         texel_fetch_offset_multisample_reason("Metal")
         == "multisample textures do not support offsets"
     )
-    assert (
-        unsupported_texture_offset_expression(
-            "GLSL",
-            "textureOffset",
-            "requires offset and optional bias arguments",
-            "vec4(0.0)",
-        )
-        == "/* unsupported GLSL texture offset: textureOffset requires "
-        "offset and optional bias arguments */ vec4(0.0)"
+    assert shared_refusal(
+        unsupported_texture_offset_expression,
+        "GLSL",
+        "textureOffset",
+        "requires offset and optional bias arguments",
+        "vec4(0.0)",
+    ) == (
+        "vec4(0.0)",
+        "texture offset: textureOffset requires offset and optional bias arguments",
     )
     assert texture_vector_zero_value("GLSL") == "vec4(0.0)"
     assert texture_vector_zero_value("DirectX") == "float4(0.0, 0.0, 0.0, 0.0)"
     assert texture_vector_zero_value("Metal") == "float4(0.0)"
-    assert (
-        unsupported_texture_offset_call_expression(
-            "DirectX",
-            "textureGradOffset",
-            "offsets require 1D, 2D, 2D-array, or 3D textures",
-        )
-        == "/* unsupported DirectX texture offset: textureGradOffset "
-        "offsets require 1D, 2D, 2D-array, or 3D textures */ "
-        "float4(0.0, 0.0, 0.0, 0.0)"
+    assert shared_refusal(
+        unsupported_texture_offset_call_expression,
+        "DirectX",
+        "textureGradOffset",
+        "offsets require 1D, 2D, 2D-array, or 3D textures",
+    ) == (
+        "float4(0.0, 0.0, 0.0, 0.0)",
+        "texture offset: textureGradOffset offsets require 1D, 2D, 2D-array, or 3D textures",
     )
-    assert (
-        unsupported_texture_offset_call_expression(
-            "Metal", "textureOffset", "offsets require 2D, 2D-array, or 3D textures"
-        )
-        == "/* unsupported Metal texture offset: textureOffset offsets "
-        "require 2D, 2D-array, or 3D textures */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_texture_offset_call_expression,
+        "Metal",
+        "textureOffset",
+        "offsets require 2D, 2D-array, or 3D textures",
+    ) == (
+        "float4(0.0)",
+        "texture offset: textureOffset offsets require 2D, 2D-array, or 3D textures",
     )
-    assert (
-        unsupported_texel_fetch_offset_expression(
-            "GLSL",
-            "multisample texture sampler2DMS does not support offsets",
-            "vec4(0.0)",
-        )
-        == "/* unsupported GLSL texel fetch offset: multisample texture "
-        "sampler2DMS does not support offsets */ vec4(0.0)"
+    assert shared_refusal(
+        unsupported_texel_fetch_offset_expression,
+        "GLSL",
+        "multisample texture sampler2DMS does not support offsets",
+        "vec4(0.0)",
+    ) == (
+        "vec4(0.0)",
+        "texel fetch offset: multisample texture sampler2DMS does not support offsets",
     )
-    assert (
-        unsupported_texel_fetch_offset_expression(
-            "DirectX",
-            "multisample textures do not support offsets",
-            "float4(0.0)",
-        )
-        == "/* unsupported DirectX texel fetch offset: multisample "
-        "textures do not support offsets */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_texel_fetch_offset_expression,
+        "DirectX",
+        "multisample textures do not support offsets",
+        "float4(0.0)",
+    ) == (
+        "float4(0.0)",
+        "texel fetch offset: multisample textures do not support offsets",
     )
-    assert (
-        unsupported_multisample_texel_fetch_offset_expression(
-            "GLSL", "sampler2DMSArray"
-        )
-        == "/* unsupported GLSL texel fetch offset: multisample texture "
-        "sampler2DMSArray does not support offsets */ vec4(0.0)"
+    assert shared_refusal(
+        unsupported_multisample_texel_fetch_offset_expression,
+        "GLSL",
+        "sampler2DMSArray",
+    ) == (
+        "vec4(0.0)",
+        "texel fetch offset: multisample texture sampler2DMSArray does not support offsets",
     )
-    assert (
-        unsupported_multisample_texel_fetch_offset_expression("DirectX")
-        == "/* unsupported DirectX texel fetch offset: multisample "
-        "textures do not support offsets */ float4(0.0, 0.0, 0.0, 0.0)"
+    assert shared_refusal(
+        unsupported_multisample_texel_fetch_offset_expression, "DirectX"
+    ) == (
+        "float4(0.0, 0.0, 0.0, 0.0)",
+        "texel fetch offset: multisample textures do not support offsets",
     )
-    assert (
-        unsupported_multisample_texel_fetch_offset_expression("Metal")
-        == "/* unsupported Metal texel fetch offset: multisample textures "
-        "do not support offsets */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_multisample_texel_fetch_offset_expression, "Metal"
+    ) == (
+        "float4(0.0)",
+        "texel fetch offset: multisample textures do not support offsets",
     )
 
 
 def test_unsupported_projected_texture_helper_builds_backend_expressions():
-    assert (
-        unsupported_projected_texture_expression(
-            "GLSL",
-            "textureProjGradOffset",
-            "requires 1D, 2D, 2D-array, or 3D projection coordinates",
-            "vec4(0.0)",
-        )
-        == "/* unsupported GLSL projected texture: textureProjGradOffset "
-        "requires 1D, 2D, 2D-array, or 3D projection coordinates */ vec4(0.0)"
+    assert shared_refusal(
+        unsupported_projected_texture_expression,
+        "GLSL",
+        "textureProjGradOffset",
+        "requires 1D, 2D, 2D-array, or 3D projection coordinates",
+        "vec4(0.0)",
+    ) == (
+        "vec4(0.0)",
+        "projected texture: textureProjGradOffset requires 1D, 2D, 2D-array, or 3D projection coordinates",
     )
-    assert (
-        unsupported_projected_texture_expression(
-            "Metal",
-            "textureProj",
-            "requires 1D, 2D, or 3D projection coordinates",
-            "float4(0.0)",
-        )
-        == "/* unsupported Metal projected texture: textureProj requires "
-        "1D, 2D, or 3D projection coordinates */ float4(0.0)"
+    assert shared_refusal(
+        unsupported_projected_texture_expression,
+        "Metal",
+        "textureProj",
+        "requires 1D, 2D, or 3D projection coordinates",
+        "float4(0.0)",
+    ) == (
+        "float4(0.0)",
+        "projected texture: textureProj requires 1D, 2D, or 3D projection coordinates",
     )
-    assert (
-        unsupported_projected_texture_call_expression(
-            "DirectX",
-            "textureProj",
-            "requires 1D, 2D, or 3D projection coordinates",
-        )
-        == "/* unsupported DirectX projected texture: textureProj requires "
-        "1D, 2D, or 3D projection coordinates */ float4(0.0, 0.0, 0.0, 0.0)"
+    assert shared_refusal(
+        unsupported_projected_texture_call_expression,
+        "DirectX",
+        "textureProj",
+        "requires 1D, 2D, or 3D projection coordinates",
+    ) == (
+        "float4(0.0, 0.0, 0.0, 0.0)",
+        "projected texture: textureProj requires 1D, 2D, or 3D projection coordinates",
     )
-    assert (
-        unsupported_projected_texture_call_expression(
-            "GLSL",
-            "textureProjGradOffset",
-            "requires 1D, 2D, 2D-array, or 3D projection coordinates",
-        )
-        == "/* unsupported GLSL projected texture: textureProjGradOffset "
-        "requires 1D, 2D, 2D-array, or 3D projection coordinates */ vec4(0.0)"
+    assert shared_refusal(
+        unsupported_projected_texture_call_expression,
+        "GLSL",
+        "textureProjGradOffset",
+        "requires 1D, 2D, 2D-array, or 3D projection coordinates",
+    ) == (
+        "vec4(0.0)",
+        "projected texture: textureProjGradOffset requires 1D, 2D, 2D-array, or 3D projection coordinates",
     )
 
 
 def test_unsupported_texture_compare_helper_builds_backend_expressions():
-    assert (
-        unsupported_texture_compare_expression(
-            "GLSL",
-            "textureCompareProjLodOffset",
-            "projected explicit LOD is not supported for sampler2DArrayShadow",
-            "0.0",
-        )
-        == "/* unsupported GLSL texture compare: textureCompareProjLodOffset "
-        "projected explicit LOD is not supported for sampler2DArrayShadow */ 0.0"
+    assert shared_refusal(
+        unsupported_texture_compare_expression,
+        "GLSL",
+        "textureCompareProjLodOffset",
+        "projected explicit LOD is not supported for sampler2DArrayShadow",
+        "0.0",
+    ) == (
+        "0.0",
+        "texture compare: textureCompareProjLodOffset projected explicit LOD is not supported for sampler2DArrayShadow",
     )
-    assert (
-        unsupported_texture_compare_expression(
-            "DirectX",
-            "textureCompareProjGradOffset",
-            "requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates",
-            "0.0",
-        )
-        == "/* unsupported DirectX texture compare: textureCompareProjGradOffset "
-        "requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
+    assert shared_refusal(
+        unsupported_texture_compare_expression,
+        "DirectX",
+        "textureCompareProjGradOffset",
+        "requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates",
+        "0.0",
+    ) == (
+        "0.0",
+        "texture compare: textureCompareProjGradOffset requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates",
     )
-    assert (
-        unsupported_texture_compare_expression(
-            "Metal",
-            "textureCompareProjGradOffset",
-            "requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates",
-            "0.0",
-        )
-        == "/* unsupported Metal texture compare: textureCompareProjGradOffset "
-        "requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates */ 0.0"
+    assert shared_refusal(
+        unsupported_texture_compare_expression,
+        "Metal",
+        "textureCompareProjGradOffset",
+        "requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates",
+        "0.0",
+    ) == (
+        "0.0",
+        "texture compare: textureCompareProjGradOffset requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates",
     )
-    assert (
-        unsupported_texture_compare_scalar_expression(
-            "GLSL",
-            "textureCompareLodOffset",
-            "explicit LOD offsets require 2D shadow samplers",
-        )
-        == "/* unsupported GLSL texture compare: textureCompareLodOffset "
-        "explicit LOD offsets require 2D shadow samplers */ 0.0"
+    assert shared_refusal(
+        unsupported_texture_compare_scalar_expression,
+        "GLSL",
+        "textureCompareLodOffset",
+        "explicit LOD offsets require 2D shadow samplers",
+    ) == (
+        "0.0",
+        "texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers",
     )
-    assert (
-        unsupported_texture_compare_scalar_expression(
-            "Metal",
-            "textureCompareOffset",
-            "offsets require 2D or 2D-array depth textures",
-        )
-        == "/* unsupported Metal texture compare: textureCompareOffset "
-        "offsets require 2D or 2D-array depth textures */ 0.0"
+    assert shared_refusal(
+        unsupported_texture_compare_scalar_expression,
+        "Metal",
+        "textureCompareOffset",
+        "offsets require 2D or 2D-array depth textures",
+    ) == (
+        "0.0",
+        "texture compare: textureCompareOffset offsets require 2D or 2D-array depth textures",
     )
 
 

@@ -495,7 +495,7 @@ class SlangToCrossGLConverter:
             "fwidth_coarse": "fwidthCoarse",
             "fwidth_fine": "fwidthFine",
             "frac": "fract",
-            "fmod": "mod",
+            "fmod": "fmod",
             "lerp": "mix",
             "rsqrt": "inversesqrt",
             "atan2": "atan",
@@ -2892,8 +2892,7 @@ class SlangToCrossGLConverter:
         offset_index = (
             2
             if len(extra_args) > 2
-            and resource_base
-            not in {
+            and resource_base not in {
                 "TextureCube",
                 "TextureCubeArray",
                 "SamplerCube",

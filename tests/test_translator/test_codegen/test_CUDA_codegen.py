@@ -1577,7 +1577,7 @@ class TestCudaCodeGen:
         assert "return __shfl_down_sync(mask, value, delta);" in cuda_code
         assert (
             "float reduced = cgl_cuda_shfl_down_sync_float"
-            "(4294967295, partial, 16);" in cuda_code
+            "(4294967295u, partial, 16);" in cuda_code
         )
 
     def test_direct_shfl_down_sync_width_lowers_to_guarded_cuda_helper(self):
@@ -1605,7 +1605,7 @@ class TestCudaCodeGen:
         assert "(void)width;" in cuda_code
         assert (
             "uint reduced = cgl_cuda_shfl_down_sync_width_uint"
-            "(4294967295, partial, 1, 32);" in cuda_code
+            "(4294967295u, partial, 1, 32);" in cuda_code
         )
 
     def test_direct_shfl_down_sync_rejects_invalid_arity(self):
@@ -4146,8 +4146,9 @@ class TestCudaCodeGen:
 
         assert "__device__ inline uint3 cgl_uint3_bitCount(uint3 value)" in cuda_code
         assert (
-            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));"
-            in (cuda_code)
+            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));" in (
+                cuda_code
+            )
         )
         assert "__device__ inline uint3 cgl_int3_bitCount(int3 value)" in cuda_code
         assert "__popc(static_cast<unsigned int>(value.x))" in cuda_code

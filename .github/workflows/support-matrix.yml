@@ -13,6 +13,7 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+  merge_group:
 
 permissions:
   contents: read
@@ -24,10 +25,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -45,7 +46,7 @@ jobs:
 
       - name: Upload support matrix check reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: support-matrix-check-report
           path: |
@@ -60,10 +61,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -72,8 +73,28 @@ jobs:
 
       - name: Upload documentation probe report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-docs-report
           path: support/generated/backend-docs-report.json
           retention-days: 30
+
+  result:
+    # The one check per workflow that branch protection and the merge queue require.
+    name: Support Matrix result
+    if: always()
+    needs: [check, docs-probe]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done

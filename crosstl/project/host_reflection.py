@@ -10,9 +10,37 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
+from crosstl.project.buffer_requirements import (
+    MAX_BINDING_SIZE,
+    source_buffer_minimum_elements,
+)
 from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
+)
+from crosstl.project.storage_record_layout import (
+    MAX_STORAGE_RECORD_ARRAY_LENGTH,
+    storage_record_layout,
+)
+from crosstl.project.uniform_layout import (
+    hlsl_constant_buffer_block_layout,
+    std140_block_layout,
+)
+from crosstl.translator.codegen.stage_utils import compute_local_size
+from crosstl.translator.dispatch_region_contract import parse_dispatch_region_header
+from crosstl.translator.frozen_specializations import parse_frozen_specializations
+from crosstl.translator.metadata_preconditions import (
+    apply_metadata_preconditions,
+    parse_metadata_precondition_header,
+)
+from crosstl.translator.resource_identity import (
+    apply_resource_identities,
+    parse_resource_identities,
+)
+from crosstl.translator.resource_storage import (
+    RESOURCE_STORAGE_PREFIX,
+    apply_resource_storage,
+    parse_resource_storage_header,
 )
 
 REFLECTION_DIAGNOSTIC_PREFIX = "project.runtime-package-inspection"
@@ -161,27 +189,36 @@ def reflect_target_host_interface(
                         ),
                     ),
                 )
-            return _reflect_hlsl_source(
+            return _reflect_resource_identities(
                 artifact_path,
-                artifact_format=artifact_format or "HLSL source",
-                stage=stage,
+                _reflect_hlsl_source(
+                    artifact_path,
+                    artifact_format=artifact_format or "HLSL source",
+                    stage=stage,
+                ),
             )
         if normalized_target in {"opengl", "glsl", "webgl"}:
-            return _reflect_glsl_source(
+            return _reflect_resource_identities(
                 artifact_path,
-                parser=(
-                    "webgl-reflection"
-                    if normalized_target == "webgl"
-                    else "opengl-reflection"
+                _reflect_glsl_source(
+                    artifact_path,
+                    parser=(
+                        "webgl-reflection"
+                        if normalized_target == "webgl"
+                        else "opengl-reflection"
+                    ),
+                    artifact_format=artifact_format or "GLSL source",
+                    stage=stage,
                 ),
-                artifact_format=artifact_format or "GLSL source",
-                stage=stage,
             )
         if normalized_target in {"metal", "msl"}:
-            return _reflect_metal_source(
+            return _reflect_resource_identities(
                 artifact_path,
-                artifact_format=artifact_format or "Metal source",
-                stage=stage,
+                _reflect_metal_source(
+                    artifact_path,
+                    artifact_format=artifact_format or "Metal source",
+                    stage=stage,
+                ),
             )
         if normalized_target in {"vulkan", "spirv", "spv"}:
             return _reflect_spirv_artifact(
@@ -205,6 +242,119 @@ def reflect_target_host_interface(
             ),
         )
     return None
+
+
+def _reflect_resource_identities(artifact_path, record):
+    if record["status"] == "failed":
+        return record
+    source = artifact_path.read_text(encoding="utf-8")
+    if (
+        record["parser"] != "directx-reflection"
+        and RESOURCE_STORAGE_PREFIX.rstrip() in source
+    ):
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    "Encoded resource storage contracts require DirectX reflection.",
+                    severity="error",
+                    details={"contract": "resource-storage"},
+                ),
+            ),
+        )
+    try:
+        identities = parse_resource_identities(source)
+        apply_resource_identities(
+            record["resources"], identities, record["entryPoints"]
+        )
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    f"Resource identity reflection failed: {exc}",
+                    severity="error",
+                    details={"contract": "source-resource-identity"},
+                ),
+            ),
+        )
+    try:
+        frozen = parse_frozen_specializations(source)
+        live = record["specializationConstants"]
+        if any(
+            item["id"] == other.get("id") or item["name"] == other.get("name")
+            for item in frozen
+            for other in live
+        ):
+            raise ValueError("A frozen specialization remains runtime-specializable.")
+        record["specializationConstants"] = [*live, *frozen]
+        record["specializationConstantCount"] = len(live) + len(frozen)
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    f"Frozen specialization reflection failed: {exc}",
+                    severity="error",
+                    details={"contract": "frozen-specialization"},
+                ),
+            ),
+        )
+    try:
+        conditions = parse_metadata_precondition_header(source)
+        apply_metadata_preconditions(record["resources"], conditions)
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    f"Metadata precondition reflection failed: {exc}",
+                    severity="error",
+                    details={"contract": "metadata-precondition"},
+                ),
+            ),
+        )
+    try:
+        region = parse_dispatch_region_header(source)
+        if region is not None:
+            entries = record["entryPoints"]
+            if (
+                record["parser"] not in {"directx-reflection", "opengl-reflection"}
+                or len(entries) != 1
+                or entries[0].get("stage") != "compute"
+                or compute_local_size(entries[0].get("executionConfig"))
+                != tuple(str(n) for n in region.workgroup_size)
+            ):
+                raise ValueError(
+                    "Dispatch region differs from the reflected compute entry."
+                )
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    f"Dispatch region reflection failed: {exc}",
+                    severity="error",
+                    details={"contract": "dispatch-region"},
+                ),
+            ),
+        )
+    return record
 
 
 def _diagnostic_record(
@@ -551,6 +701,7 @@ def _reflect_metal_source(
     stage: str | None,
 ) -> dict[str, Any]:
     source = _strip_comments(_read_text(artifact_path))
+    struct_declarations = _scalar_struct_declarations(source, member_functions=True)
     entry_points = []
     resources = []
     stage_names = {
@@ -582,6 +733,9 @@ def _reflect_metal_source(
                 entry_point=entry_name,
             )
             if resource is not None:
+                layout = _metal_buffer_layout(resource, struct_declarations)
+                if layout is not None:
+                    resource["scalarLayout"] = layout
                 resources.append(resource)
 
     specialization_constants = []
@@ -613,6 +767,76 @@ def _reflect_metal_source(
     )
 
 
+def _metal_buffer_layout(
+    resource: Mapping[str, Any],
+    struct_declarations: Mapping[str, list[tuple[str, str, int | None]]],
+) -> dict[str, Any] | None:
+    if resource["kind"] not in {"buffer", "constant-buffer"}:
+        return None
+    match = re.fullmatch(
+        r"(?P<qualifiers>(?:(?:const|device|constant)\s+)+)"
+        r"(?P<type>[A-Za-z_]\w*)\s*(?P<reference>[*&])",
+        resource["type"],
+    )
+    if match is None:
+        return None
+    qualifiers = match.group("qualifiers").split()
+    if (
+        len(qualifiers) != len(set(qualifiers))
+        or len(set(qualifiers) & {"device", "constant"}) != 1
+    ):
+        return None
+    pointer = match.group("reference") == "*"
+    device_reference = not pointer and "device" in qualifiers
+    type_name = match.group("type")
+    scalar = re.fullmatch(
+        r"(bfloat|half|float|int|uint|short|ushort|int16_t|uint16_t|long|ulong|int64_t|uint64_t|bool|char|uchar|int8_t|uint8_t)([24]?)",
+        type_name,
+    )
+    if scalar is None:
+        if pointer:
+            return _struct_buffer_layout(
+                type_name, struct_declarations, storage_layout="metal-buffer"
+            )
+        if "constant" not in qualifiers:
+            return None
+        # ``constant Record&`` reads the first record of its buffer binding,
+        # so the binding must hold at least one complete record.
+        layout = _struct_buffer_layout(
+            type_name, struct_declarations, storage_layout="metal-buffer"
+        )
+        if layout is None or layout.get("elementType") != "record":
+            return None
+        layout["minimumBindingSizeBytes"] = layout["elementStrideBytes"]
+        return layout
+    base, width_text = scalar.groups()
+    base = {
+        "long": "int64_t",
+        "ulong": "uint64_t",
+        "int8_t": "char",
+        "uint8_t": "uchar",
+        "int16_t": "short",
+        "uint16_t": "ushort",
+    }.get(base, base)
+    width = int(width_text or 1)
+    if base in {"int64_t", "uint64_t", "bool"} and width != 1:
+        return None
+    size = (1 if base == "bool" else SCALAR_PHYSICAL_SIZES[base]) * width
+    layout = _physical_value_layout(
+        base,
+        vector_width=width,
+        storage_layout=(
+            "metal-buffer" if pointer or device_reference else "metal-constant"
+        ),
+        alignment_bytes=size,
+        runtime_sized=pointer,
+        block_size_bytes=None if pointer else size,
+    )
+    if device_reference:
+        layout["minimumBindingSizeBytes"] = size
+    return layout
+
+
 HLSL_NUMTHREADS_RE = re.compile(
     r"\[\s*numthreads\s*\(\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^,\]]+)\s*\)\s*\]",
     re.IGNORECASE,
@@ -640,19 +864,28 @@ HLSL_CONSTANT_RE = re.compile(
     re.IGNORECASE,
 )
 HLSL_VALUE_BLOCK_MEMBER_RE = re.compile(
-    r"\A\s*(?P<type>(?P<base>int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s+"
+    r"\A\s*(?P<type>(?P<base>float16_t|int16_t|uint16_t|int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s+"
     r"(?P<name>[A-Za-z_]\w*)\s*;\s*\Z",
     re.IGNORECASE,
 )
 HLSL_STRUCTURED_VALUE_RE = re.compile(
     r"\A(?:RW)?StructuredBuffer\s*<\s*"
-    r"(?P<type>(?P<base>int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s*>\Z",
+    r"(?P<type>(?P<base>float16_t|int16_t|uint16_t|int64_t|uint64_t|float|int|uint|bool)(?P<width>[1-4])?)\s*>\Z",
     re.IGNORECASE,
 )
 HLSL_DISPATCH_INFO_BUFFER_RE = re.compile(r"\ACrossGLDispatchInfo_*\Z")
 HLSL_DISPATCH_INFO_MEMBER_RE = re.compile(r"\AcrossglNumWorkGroups_*\Z")
 
 SCALAR_PHYSICAL_TYPES = {
+    "bfloat": "bfloat16",
+    "short": "int16",
+    "ushort": "uint16",
+    "int16_t": "int16",
+    "uint16_t": "uint16",
+    "half": "float16",
+    "float16_t": "float16",
+    "char": "int8",
+    "uchar": "uint8",
     "float": "float32",
     "int": "int32",
     "uint": "uint32",
@@ -660,6 +893,15 @@ SCALAR_PHYSICAL_TYPES = {
     "uint64_t": "uint64",
 }
 SCALAR_PHYSICAL_SIZES = {
+    "bfloat": 2,
+    "short": 2,
+    "ushort": 2,
+    "int16_t": 2,
+    "uint16_t": 2,
+    "half": 2,
+    "float16_t": 2,
+    "char": 1,
+    "uchar": 1,
     "float": 4,
     "int": 4,
     "uint": 4,
@@ -909,7 +1151,25 @@ def _is_hlsl_identifier_character(character: str) -> bool:
 def _reflect_hlsl_source(
     artifact_path: Path, *, artifact_format: str, stage: str | None
 ) -> dict[str, Any]:
-    source = _strip_comments(_read_text(artifact_path))
+    raw_source = _read_text(artifact_path)
+    try:
+        storage_contracts = parse_resource_storage_header(raw_source)
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser="directx-reflection",
+            artifact_format=artifact_format,
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    str(exc),
+                    severity="error",
+                    details={"contract": "resource-storage"},
+                ),
+            ),
+        )
+    source = _strip_comments(raw_source)
+    struct_declarations = _scalar_struct_declarations(source)
     entry_points = []
     for name, attributes in _iter_hlsl_function_declarations(source):
         reflected_stage = _hlsl_entry_stage(name, attributes, stage)
@@ -965,10 +1225,56 @@ def _reflect_hlsl_source(
             "access": _hlsl_resource_access(type_name),
         }
         scalar_layout = _hlsl_structured_value_layout(type_name)
+        if scalar_layout is None:
+            struct_match = re.fullmatch(
+                r"(?:RW)?StructuredBuffer\s*<\s*([A-Za-z_]\w*)\s*>", type_name
+            )
+            if struct_match is not None:
+                scalar_layout = _struct_buffer_layout(
+                    struct_match.group(1),
+                    struct_declarations,
+                    storage_layout="hlsl-structured-buffer",
+                )
+        if scalar_layout is None:
+            constant_match = re.fullmatch(
+                r"ConstantBuffer\s*<\s*([A-Za-z_]\w*)\s*>", type_name
+            )
+            if constant_match is not None:
+                scalar_layout = _hlsl_constant_buffer_record_layout(
+                    constant_match.group(1), struct_declarations
+                )
         if scalar_layout is not None:
             resource["scalarLayout"] = scalar_layout
         resources.append(resource)
 
+    try:
+        apply_resource_storage(resources, storage_contracts)
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser="directx-reflection",
+            artifact_format=artifact_format,
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    str(exc),
+                    severity="error",
+                    details={"contract": "resource-storage"},
+                ),
+            ),
+        )
+
+    _reflect_buffer_requirements(
+        source,
+        target="directx",
+        entry_points=entry_points,
+        resources=resources,
+        resource_names={
+            resource["name"]: resource["name"]
+            for resource in resources
+            if resource.get("scalarLayout", {}).get("runtimeSized") is True
+        },
+    )
     constants = [
         {
             "name": match.group("name"),
@@ -1001,6 +1307,34 @@ def _hlsl_entry_stage(name: str, attributes: str, stage: str | None) -> str | No
     if name == "main" and stage:
         return _stage_name(stage)
     return None
+
+
+def _reflect_buffer_requirements(
+    source: str,
+    *,
+    target: str,
+    entry_points: Sequence[Mapping[str, Any]],
+    resources: Sequence[dict[str, Any]],
+    resource_names: Mapping[str, str],
+) -> None:
+    requirements = source_buffer_minimum_elements(
+        source,
+        target=target,
+        entry_points=[entry["name"] for entry in entry_points],
+        resource_names=resource_names,
+    )
+    for resource in resources:
+        count = requirements.get(resource["name"])
+        layout = resource.get("scalarLayout")
+        if count is None or layout is None:
+            continue
+        size = (
+            layout["memberOffsetBytes"]
+            + (count - 1) * layout["elementStrideBytes"]
+            + layout["elementSizeBytes"]
+        )
+        if 0 < size <= MAX_BINDING_SIZE:
+            layout["minimumBindingSizeBytes"] = size
 
 
 def _hlsl_resource_kind(type_name: str) -> str:
@@ -1063,6 +1397,248 @@ def _hlsl_value_block_layout(
     )
 
 
+def _hlsl_constant_buffer_record_layout(
+    type_name: str,
+    declarations: Mapping[str, list[tuple[str, str, int | None]]],
+) -> dict[str, Any] | None:
+    """Lay out ``ConstantBuffer<T>`` for a struct of scalars and scalar arrays."""
+    members = declarations.get(type_name)
+    if members is None:
+        return None
+    try:
+        return hlsl_constant_buffer_block_layout(
+            type_name,
+            [
+                (base, name) if extent is None else (base, name, extent)
+                for base, name, extent in members
+            ],
+        )
+    except ValueError:
+        return None
+
+
+STRUCT_ARRAY_EXTENT_TOKEN_RE = re.compile(
+    r"\s*(?:(?P<literal>[0-9][0-9A-Za-z']*)|(?P<op>[-+*()]))"
+)
+
+
+def _struct_array_extent(text: str) -> int | None:
+    """Evaluate a literal fixed array extent such as ``4`` or ``(2 + 2)``.
+
+    Generated declarations spell template-dependent extents as literal
+    arithmetic. Anything else, including named constants, is left unproven.
+    """
+    tokens = []
+    position = 0
+    while position < len(text):
+        match = STRUCT_ARRAY_EXTENT_TOKEN_RE.match(text, position)
+        if match is None or match.end() == position:
+            if text[position:].strip():
+                return None
+            break
+        position = match.end()
+        if match.group("literal") is not None:
+            try:
+                tokens.append(parse_c_family_integral_literal(match.group("literal")))
+            except CFamilyIntegralLiteralError:
+                return None
+        else:
+            tokens.append(match.group("op"))
+    if not tokens or len(tokens) > 32:
+        return None
+    index = 0
+
+    def factor() -> int:
+        nonlocal index
+        if index >= len(tokens):
+            raise ValueError("incomplete extent")
+        token = tokens[index]
+        index += 1
+        if isinstance(token, int):
+            return token
+        if token != "(":
+            raise ValueError("unexpected extent token")
+        value = expression()
+        if index >= len(tokens) or tokens[index] != ")":
+            raise ValueError("unbalanced extent")
+        index += 1
+        return value
+
+    def term() -> int:
+        nonlocal index
+        value = factor()
+        while index < len(tokens) and tokens[index] == "*":
+            index += 1
+            value *= factor()
+        return value
+
+    def expression() -> int:
+        nonlocal index
+        value = term()
+        while index < len(tokens) and tokens[index] in {"+", "-"}:
+            operator = tokens[index]
+            index += 1
+            value = value + term() if operator == "+" else value - term()
+        return value
+
+    try:
+        value = expression()
+    except ValueError:
+        return None
+    if index != len(tokens) or not 1 <= value <= MAX_STORAGE_RECORD_ARRAY_LENGTH:
+        return None
+    return value
+
+
+STRUCT_DATA_MEMBER_RE = re.compile(
+    r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?:\[([^\[\]{};]*)\])?\s*;"
+)
+# A non-virtual member function definition: plain specifiers and return type
+# words, a name or ``operator`` spelling, one flat parameter list, Metal
+# address-space and ``const`` qualifiers, then its braced body. Constructors
+# with member initializer lists, templates and declarations without a body do
+# not match, so structs holding them keep an unproven layout.
+METAL_MEMBER_FUNCTION_HEADER_RE = re.compile(
+    r"\s*(?:[A-Za-z_]\w*\s*[*&]*\s+)*?"
+    r"(?:operator\b[^(){};:<>]*?|[A-Za-z_]\w*)"
+    r"\s*\([^(){};]*\)"
+    r"(?:\s*\b(?:const|thread|threadgroup|device|constant|noexcept)\b)*\s*\{"
+)
+METAL_MEMBER_FUNCTION_EXCLUDED_WORDS = frozenset({"virtual", "template", "friend"})
+
+
+def _metal_member_function_end(body: str, position: int) -> int | None:
+    """End of the member function definition at ``position``, if one is there.
+
+    Non-virtual member functions do not occupy storage, so they leave the
+    data members' layout unchanged.
+    """
+    header = METAL_MEMBER_FUNCTION_HEADER_RE.match(body, position)
+    if header is None:
+        return None
+    words = set(re.findall(r"[A-Za-z_]\w*", header.group(0)))
+    if words & METAL_MEMBER_FUNCTION_EXCLUDED_WORDS:
+        return None
+    function_body = _braced_body(body, header.end() - 1)
+    if function_body is None:
+        return None
+    end = header.end() + len(function_body) + 1
+    trailing = re.compile(r"\s*;").match(body, end)
+    return trailing.end() if trailing is not None else end
+
+
+def _scalar_struct_declarations(
+    source: str,
+    *,
+    member_functions: bool = False,
+) -> dict[str, list[tuple[str, str, int | None]]]:
+    """Structs whose bodies are plain scalar data members.
+
+    With ``member_functions`` (Metal), member function definitions between the
+    data members are skipped: they do not change the layout.
+    """
+    declarations = {}
+    seen = set()
+    for match in re.finditer(r"\bstruct\s+([A-Za-z_]\w*)\s*\{", source):
+        name = match.group(1)
+        if name in seen:
+            declarations.pop(name, None)
+            continue
+        seen.add(name)
+        body = _braced_body(source, match.end() - 1)
+        if body is None:
+            continue
+        if re.compile(r"\s*;").match(source, match.end() + len(body) + 1) is None:
+            continue
+        members = []
+        position = 0
+        while True:
+            member = STRUCT_DATA_MEMBER_RE.match(body, position)
+            if member is not None:
+                extent = None
+                if member.group(3) is not None:
+                    extent = _struct_array_extent(member.group(3))
+                    if extent is None:
+                        break
+                members.append((member.group(1), member.group(2), extent))
+                position = member.end()
+                continue
+            if member_functions:
+                end = _metal_member_function_end(body, position)
+                if end is not None:
+                    position = end
+                    continue
+            break
+        if body[position:].strip() or not 1 <= len(members) <= 64:
+            continue
+        types = {member[0] for member in members}
+        names = {member[1] for member in members}
+        if not types <= SCALAR_PHYSICAL_TYPES.keys() | {"bool"}:
+            continue
+        if len(names) != len(members):
+            continue
+        declarations[name] = members
+    return declarations
+
+
+def _struct_buffer_layout(
+    type_name: str,
+    declarations: Mapping[str, list[tuple[str, str, int | None]]],
+    *,
+    storage_layout: str,
+    member_name: str | None = None,
+) -> dict[str, Any] | None:
+    members = declarations.get(type_name)
+    if members is None:
+        return None
+    if len({base for base, _, _ in members}) != 1 or any(
+        base == "bool" or extent is not None for base, _, extent in members
+    ):
+        try:
+            layout = storage_record_layout(
+                type_name, members, storage_layout=storage_layout
+            )
+        except ValueError:
+            return None
+        if member_name is not None:
+            layout["memberName"] = member_name
+        return layout
+    scalar_type = members[0][0]
+    if (
+        scalar_type in {"char", "uchar", "bfloat", "short", "ushort"}
+        and storage_layout != "metal-buffer"
+    ):
+        return None
+    if scalar_type in {
+        "half",
+        "float16_t",
+        "int16_t",
+        "uint16_t",
+    } and storage_layout != (
+        "metal-buffer" if scalar_type == "half" else "hlsl-structured-buffer"
+    ):
+        return None
+    scalar_size = SCALAR_PHYSICAL_SIZES[scalar_type]
+    layout = {
+        "physicalType": type_name,
+        "elementType": SCALAR_PHYSICAL_TYPES[scalar_type],
+        "elementSizeBytes": scalar_size * len(members),
+        "elementStrideBytes": scalar_size * len(members),
+        "alignmentBytes": scalar_size,
+        "memberOffsetBytes": 0,
+        "storageLayout": storage_layout,
+        "runtimeSized": True,
+        "componentCount": len(members),
+        "structMembers": [
+            {"name": name, "physicalType": base, "offsetBytes": index * scalar_size}
+            for index, (base, name, _) in enumerate(members)
+        ],
+    }
+    if member_name is not None:
+        layout["memberName"] = member_name
+    return layout
+
+
 def _hlsl_structured_value_layout(type_name: str) -> dict[str, Any] | None:
     match = HLSL_STRUCTURED_VALUE_RE.fullmatch(type_name)
     if match is None:
@@ -1075,7 +1651,7 @@ def _hlsl_structured_value_layout(type_name: str) -> dict[str, Any] | None:
         base_type,
         vector_width=vector_width,
         storage_layout="hlsl-structured-buffer",
-        alignment_bytes=4,
+        alignment_bytes=2 if base_type in {"float16_t", "int16_t", "uint16_t"} else 4,
         runtime_sized=True,
     )
 
@@ -1167,6 +1743,7 @@ def _reflect_glsl_source(
         raw_source, artifact_path
     )
     source = _strip_comments(raw_source)
+    struct_declarations = _scalar_struct_declarations(source)
     execution_config = {}
     local_size_match = GLSL_LOCAL_SIZE_RE.search(source)
     if local_size_match:
@@ -1190,6 +1767,8 @@ def _reflect_glsl_source(
 
     resources = []
     occupied_spans = []
+    resource_names = {}
+    diagnostics = []
     for match in GLSL_BLOCK_RESOURCE_RE.finditer(source):
         occupied_spans.append(match.span())
         layout = _parse_layout(match.group("layout"))
@@ -1209,9 +1788,73 @@ def _reflect_glsl_source(
             layout_text=match.group("layout"),
             body=match.group("body"),
         )
+        if storage == "uniform":
+            layout_parts = (match.group("layout") or "").split(",")
+            qualifiers = {part.strip() for part in layout_parts if "=" not in part}
+            if (
+                qualifiers != {"std140"}
+                or not set(layout) <= {"binding", "set", "descriptor_set"}
+                or source[: match.start()].rstrip().endswith(")")
+            ):
+                scalar_layout = None
+            elif scalar_layout is None:
+                scalar_layout = _glsl_aggregate_block_layout(
+                    match.group("block"), match.group("body")
+                )
+            if scalar_layout is None:
+                diagnostics.append(
+                    ReflectionDiagnostic(
+                        REFLECTION_INCOMPLETE_OUTPUT,
+                        "Uniform block layout requires explicit std140 scalar/vector "
+                        "members or fixed-length arrays of them; matrices, nested "
+                        "types, runtime-sized arrays and member qualifiers require "
+                        "additional physical-layout support.",
+                        details={
+                            "resource": name,
+                            "reasonKind": "uniform-block-layout-unsupported",
+                        },
+                    )
+                )
+        if scalar_layout is None and storage == "buffer":
+            member = GLSL_VALUE_BLOCK_MEMBER_RE.fullmatch(match.group("body"))
+            qualifiers = {
+                part.strip()
+                for part in (match.group("layout") or "").split(",")
+                if "=" not in part
+            }
+            if (
+                member is not None
+                and member.group("runtime_array")
+                and qualifiers == {"std430"}
+                and set(layout) <= {"binding", "set", "descriptor_set"}
+                and not source[: match.start()].rstrip().endswith(")")
+            ):
+                scalar_layout = _struct_buffer_layout(
+                    member.group("type"),
+                    struct_declarations,
+                    storage_layout="std430",
+                    member_name=member.group("name"),
+                )
         if scalar_layout is not None:
             resource["scalarLayout"] = scalar_layout
+            if scalar_layout.get("runtimeSized") is True:
+                member = scalar_layout["memberName"]
+                source_name = f"{name}.{member}" if match.group("name") else member
+                resource_names[source_name] = name
         resources.append(resource)
+    for header in re.finditer(r"\buniform\s+([A-Za-z_]\w*)\s*\{", source):
+        if not any(start <= header.start() < end for start, end in occupied_spans):
+            diagnostics.append(
+                ReflectionDiagnostic(
+                    REFLECTION_INCOMPLETE_OUTPUT,
+                    "Uniform block declaration cannot be reflected; block arrays "
+                    "and nested declarations require additional physical-layout support.",
+                    details={
+                        "resource": header[1],
+                        "reasonKind": "uniform-block-layout-unsupported",
+                    },
+                )
+            )
     for match in GLSL_RESOURCE_RE.finditer(source):
         if any(start <= match.start() < end for start, end in occupied_spans):
             continue
@@ -1229,6 +1872,13 @@ def _reflect_glsl_source(
             }
         )
 
+    _reflect_buffer_requirements(
+        source,
+        target="opengl",
+        entry_points=entry_points,
+        resources=resources,
+        resource_names=resource_names,
+    )
     constants = []
     specialization_constants = []
     spec_spans = []
@@ -1274,7 +1924,7 @@ def _reflect_glsl_source(
         resources=resources,
         constants=constants,
         specialization_constants=specialization_constants,
-        diagnostics=[],
+        diagnostics=diagnostics,
     )
 
 
@@ -1320,6 +1970,16 @@ def _parse_layout(layout: str | None) -> dict[str, Any]:
 
 def _glsl_value_type_shape(type_name: str) -> tuple[str, int] | None:
     normalized_type = type_name.lower()
+    if normalized_type in {
+        "half",
+        "float16_t",
+        "bfloat",
+        "short",
+        "ushort",
+        "int16_t",
+        "uint16_t",
+    }:
+        return None
     if normalized_type in SCALAR_PHYSICAL_TYPES or normalized_type == "bool":
         return normalized_type, 1
     vector_match = GLSL_VECTOR_VALUE_RE.fullmatch(normalized_type)
@@ -1329,6 +1989,32 @@ def _glsl_value_type_shape(type_name: str) -> tuple[str, int] | None:
         GLSL_VECTOR_BASE_TYPES[vector_match.group("family").lower()],
         int(vector_match.group("width")),
     )
+
+
+def _glsl_aggregate_block_layout(type_name: str, body: str) -> dict[str, Any] | None:
+    declarations = []
+    # Full-match every declaration so unsupported syntax never becomes a partial layout.
+    parts = body.strip().split(";")
+    if parts[-1].strip():
+        return None
+    for part in parts[:-1]:
+        match = re.fullmatch(
+            r"\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?:\[([^\[\]{};]*)\])?\s*", part
+        )
+        if match is None:
+            return None
+        if match[3] is None:
+            declarations.append((match[1], match[2]))
+            continue
+        # Only literal extents are proven; runtime-sized arrays stay unsupported.
+        extent = _struct_array_extent(match[3])
+        if extent is None:
+            return None
+        declarations.append((match[1], match[2], extent))
+    try:
+        return std140_block_layout(type_name, declarations)
+    except ValueError:
+        return None
 
 
 def _glsl_scalar_block_layout(
@@ -1404,18 +2090,26 @@ def _physical_value_layout(
     element_stride_bytes: int | None = None,
 ) -> dict[str, Any]:
     normalized_type = physical_type.lower()
+    metal_boolean = normalized_type == "bool" and storage_layout in {
+        "metal-buffer",
+        "metal-constant",
+    }
     # HLSL and GLSL block-storage booleans occupy one 32-bit scalar slot.
     # Expose that physical representation to host loaders rather than a
     # language-level bool, which has no portable in-memory width.
-    if normalized_type == "bool":
+    if normalized_type == "bool" and not metal_boolean:
         normalized_type = "uint"
-    component_size_bytes = SCALAR_PHYSICAL_SIZES[normalized_type]
+    component_size_bytes = (
+        1 if metal_boolean else SCALAR_PHYSICAL_SIZES[normalized_type]
+    )
     element_size_bytes = component_size_bytes * vector_width
     layout: dict[str, Any] = {
         "physicalType": (
             normalized_type if vector_width == 1 else f"{normalized_type}{vector_width}"
         ),
-        "elementType": SCALAR_PHYSICAL_TYPES[normalized_type],
+        "elementType": (
+            "bool" if metal_boolean else SCALAR_PHYSICAL_TYPES[normalized_type]
+        ),
         "elementSizeBytes": element_size_bytes,
         "elementStrideBytes": (
             element_size_bytes if element_stride_bytes is None else element_stride_bytes
@@ -1633,8 +2327,7 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
                 "value": _literal_value(tokens[4]),
             }
         elif (
-            opcode
-            in {
+            opcode in {
                 "OpSpecConstantTrue",
                 "OpSpecConstantFalse",
                 "OpConstantTrue",

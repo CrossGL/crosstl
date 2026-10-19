@@ -580,8 +580,7 @@ class HipParser:
     def is_interleaved_function_specifier_token(self, token=None):
         token = token or self.current_token
         return token is not None and (
-            token.type
-            in {
+            token.type in {
                 "__DEVICE__",
                 "__HOST__",
                 "__GLOBAL__",
@@ -2123,8 +2122,13 @@ class HipParser:
             ):
                 if (
                     previous_significant_token is not None
-                    and previous_significant_token.type
-                    in {"IDENTIFIER", "THREADIDX", "BLOCKIDX", "BLOCKDIM", "GRIDDIM"}
+                    and previous_significant_token.type in {
+                        "IDENTIFIER",
+                        "THREADIDX",
+                        "BLOCKIDX",
+                        "BLOCKDIM",
+                        "GRIDDIM",
+                    }
                 ):
                     self.skip_balanced_brace_block()
                     previous_significant_token = self.tokens[self.pos - 1]
@@ -2924,8 +2928,7 @@ class HipParser:
         return " ".join(
             part
             for part in str(var_type).split()
-            if part
-            not in {
+            if part not in {
                 "const",
                 "volatile",
                 "__restrict__",

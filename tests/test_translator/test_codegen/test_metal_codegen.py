@@ -32,12 +32,17 @@ from crosstl.translator.ast import (
     VectorType,
     WaveOpNode,
 )
+from crosstl.translator.codegen.buffer_block_diagnostics import (
+    BufferBlockUnsupportedError,
+)
 from crosstl.translator.codegen.metal_codegen import (
     MetalCodeGen,
     MetalEntryPointSelectionError,
     MetalStructConversionError,
     UnsupportedMetalFeatureError,
 )
+from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
+from tests.metal_refusal_helpers import metal_partial_output, refused_metal
 
 
 def test_metal_ambiguous_same_arity_overloads_require_one_return_type():
@@ -186,6 +191,119 @@ def test_metal_unregistered_structure_lookalike_is_not_projected():
 
     assert "float converted = float(value);" in generated
     assert "(value).real" not in generated
+
+
+def test_metal_registered_complex_assignments_lower_implicit_conversions():
+    # MLX's complex_t converts implicitly from scalars (imag = 0) and to
+    # scalars (the real part); the plain translated struct needs both spelled.
+    shader = """
+    shader MetalComplexAssignments {
+        struct complex_t_float {
+            float real;
+            float imag;
+        }
+        compute {
+            void main(
+                uint3 tid @ gl_GlobalInvocationID,
+                device complex_t_float* values,
+                device uint* indices,
+                threadgroup uint* scratch
+            ) {
+                values[tid.x] = indices[tid.x];
+                indices[tid.x] = values[tid.x];
+                values[1] = 2.5;
+                scratch[0] = values[0];
+                values[2] = values[3];
+                indices[2] = scratch[1];
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "values[tid.x] = complex_t_float{float(indices[tid.x]), float(0)};" in generated
+    )
+    assert "indices[tid.x] = uint((values[tid.x]).real);" in generated
+    assert "values[1] = complex_t_float{float(2.5), float(0)};" in generated
+    assert "scratch[0] = uint((values[0]).real);" in generated
+    assert "values[2] = values[3];" in generated
+    assert "indices[2] = scratch[1];" in generated
+
+
+def test_metal_registered_complex_assignment_rejects_wrong_shape():
+    shader = """
+    shader MetalInvalidComplexAssignment {
+        struct complex_t_float {
+            float real;
+            int imag;
+        }
+        compute {
+            void main(device complex_t_float* values, device uint* indices) {
+                values[0] = indices[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(MetalStructConversionError) as exc_info:
+        MetalCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+    error = exc_info.value
+    assert error.destination_type == "complex_t_float"
+    assert error.source_type == "uint"
+    assert error.conversion_kind == "scalar-promotion"
+    assert error.reason == "destination-shape-mismatch"
+
+
+def test_metal_unregistered_structure_assignment_is_not_converted():
+    shader = """
+    shader MetalUnregisteredAssignment {
+        struct Pair {
+            float real;
+            float imag;
+        }
+        compute {
+            void main(device Pair* values, device uint* indices) {
+                values[0] = indices[0];
+                indices[1] = values[1];
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "values[0] = indices[0];" in generated
+    assert "indices[1] = values[1];" in generated
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    [
+        ("bfloat16(value)", "bfloat(value)"),
+        ("bfloat16(1.0) + value", "bfloat(bfloat(1.0) + value)"),
+        ("bfloat16(1.0) / (1.0 + value)", "bfloat(bfloat(1.0) / (1.0 + value))"),
+        (
+            "value > 0.0 ? bfloat16(1.0) : value",
+            "bfloat(value > 0.0 ? bfloat(1.0) : value)",
+        ),
+    ],
+)
+def test_metal_bfloat_expected_conversion_covers_the_whole_expression(
+    expression, expected
+):
+    shader = f"""shader NarrowResult {{
+        bfloat16 evaluate(float value) {{ return {expression}; }}
+    }}"""
+    generated = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert f"return {expected};" in generated
+    compile_with_metal_if_available(generated)
 
 
 def test_metal_bfloat_asuint_uses_native_width_and_compiles_warning_fatal():
@@ -373,22 +491,28 @@ def test_metal_explicit_as_type_preserves_native_narrow_vector_widths():
 
     assert (
         "uint4 unsignedWords = "
-        "uint4(as_type<ushort4>(short3(signedWords)));" in generated
+        "uint4(ushort4(uint4(as_type<ushort4>(short3(signedWords)))));" in generated
     )
     assert (
-        "uint4 unsignedBytes = uint4(as_type<uchar4>(char3(signedBytes)));" in generated
+        "uint4 unsignedBytes = uint4(uchar4(uint4(as_type<uchar4>(char3(signedBytes)))));"
+        in generated
     )
     assert (
         "uint4 unsignedByteAliases = "
-        "uint4(as_type<uchar4>(char3(signedByteAliases)));" in generated
+        "uint4(uchar4(uint4(as_type<uchar4>(char3(signedByteAliases)))));" in generated
     )
     assert (
         "uint4 unsignedWordAliases = "
-        "uint4(as_type<ushort4>(short3(signedWordAliases)));" in generated
+        "uint4(ushort4(uint4(as_type<ushort4>(short3(signedWordAliases)))));"
+        in generated
     )
-    assert "uint4 halfAliasBits = uint4(as_type<ushort4>(halfAliases));" in generated
     assert (
-        "uint4 bfloatAliasBits = uint4(as_type<ushort4>(bfloatAliases));" in generated
+        "uint4 halfAliasBits = uint4(ushort4(uint4(as_type<ushort4>(halfAliases))));"
+        in generated
+    )
+    assert (
+        "uint4 bfloatAliasBits = uint4(ushort4(uint4(as_type<ushort4>(bfloatAliases))));"
+        in generated
     )
     assert "int8_t3" not in generated
     assert "uint8_t4" not in generated
@@ -877,18 +1001,16 @@ def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
     shader_path = tmp_path / "input-attachment.frag"
     shader_path.write_text(shader)
 
-    generated_code = crosstl.translate(
+    refusal = refused_metal(
+        crosstl.translate,
         str(shader_path),
         backend="metal",
         format_output=False,
         source_backend="opengl",
     )
 
-    assert "unsupported Metal input attachment declaration" in generated_code
-    assert "unsupported Metal input attachment load" in generated_code
-    assert "constant subpassInput sceneColor" not in generated_code
-    assert "subpassLoad(sceneColor)" not in generated_code
-    assert "float4(0)" in generated_code
+    assert "input attachment declaration: 'sceneColor' uses subpassInput" in refusal
+    assert "input attachment load: subpassLoad requires" in refusal
 
 
 def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
@@ -936,6 +1058,25 @@ def test_binary_expression_precedence_preserves_grouping_in_metal():
     ) in generated_code
     assert "float t = -nearPoint.y / farPoint.y - nearPoint.y;" not in generated_code
     assert "float3(t) * farPoint - nearPoint" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    [
+        ("(left + right).y", "(left + right).y"),
+        ("(choose ? left : right).y", "(choose ? left : right).y"),
+        ("(-left).y", "(-left).y"),
+    ],
+)
+def test_metal_member_selection_preserves_expression_grouping(expression, expected):
+    shader = f"""shader MemberGrouping {{
+        float select_member(vec2 left, vec2 right, bool choose) {{
+            return {expression};
+        }}
+    }}"""
+    generated = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert f"return {expected};" in generated
+    compile_with_metal_if_available(generated)
 
 
 def test_metal_reconstructs_retained_source_union_layout_and_compiles():
@@ -2659,6 +2800,46 @@ def test_metal_relative_shuffle_intrinsics_round_trip_to_simd_shuffle():
     assert "WaveShuffle" not in generated_code
 
 
+def test_metal_bfloat_lane_moves_preserve_bits_through_ushort():
+    # Metal's SIMD-group shuffles reject bfloat operands; MLX's bf16 overloads
+    # move the ushort representation instead, which keeps NaN payloads intact.
+    shader = """
+    shader MetalBfloatShuffle {
+        compute {
+            void main(uint lane @gl_SubgroupInvocationID) {
+                bfloat16 value = bfloat16(float(lane));
+                bfloat16 filled = WaveShuffleAndFillUp(value, -bfloat16(1.0), 1u);
+                bfloat16 read = WaveReadLaneAt(filled, 31u);
+                bfloat16 shuffled = WaveReadLaneAt(read, lane);
+                bfloat16 down = WaveShuffleDown(shuffled, 2u);
+                bfloat16 first = WaveReadLaneFirst(down);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "as_type<bfloat>(simd_shuffle_and_fill_up(as_type<ushort>(value), "
+        "as_type<ushort>(" in generated_code
+    )
+    assert "as_type<bfloat>(simd_broadcast(as_type<ushort>(filled), ushort(31u)))" in (
+        generated_code
+    )
+    assert "as_type<bfloat>(simd_shuffle(as_type<ushort>(read), ushort(lane)))" in (
+        generated_code
+    )
+    assert "as_type<bfloat>(simd_shuffle_down(as_type<ushort>(shuffled)" in (
+        generated_code
+    )
+    assert "as_type<bfloat>(simd_broadcast_first(as_type<ushort>(down)))" in (
+        generated_code
+    )
+    assert "unsupported Metal wave intrinsic" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_relative_shuffle_result_type_supports_nested_bitcast():
     shader = """
     shader MetalRelativeShuffleBitcast {
@@ -2760,12 +2941,9 @@ def test_metal_shuffle_and_fill_up_diagnoses_invalid_arguments(expression, diagn
     }}
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
+    refusal = refused_metal(generate_code, parse_code(tokenize_code(shader)))
 
-    assert (
-        "unsupported Metal wave intrinsic: WaveShuffleAndFillUp " + diagnostic
-        in generated_code
-    )
+    assert "wave intrinsic: WaveShuffleAndFillUp " + diagnostic in refusal
 
 
 def test_metal_wave_op_ir_nodes_lower_to_simdgroup_intrinsics():
@@ -3034,14 +3212,15 @@ def test_metal_wave_lane_helper_calls_diagnose_non_compute_contexts():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
+    generated_code, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(shader))
+    )
 
     assert "uint helperLane(uint crossglWaveLaneIndex)" in generated_code
     assert "return crossglWaveLaneIndex;" in generated_code
     assert (
-        "uint lane = 0u /* unsupported Metal wave helper call: function "
-        "'helperLane' requires compute-stage thread_index_in_simdgroup value */;"
-        in generated_code
+        "wave helper call: function 'helperLane' requires compute-stage "
+        "thread_index_in_simdgroup value" in refusal
     )
     assert "[[thread_index_in_simdgroup]]" not in generated_code
 
@@ -3072,11 +3251,12 @@ def test_metal_wave_match_threads_lane_count_and_diagnoses_unavailable_contexts(
     )
     assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
     assert (
-        "uint4 direct = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
-        in (generated_code)
+        "uint4 direct = __crossgl_metal_wave_match(value, crossglWaveLaneCount);" in (
+            generated_code
+        )
     )
     assert "uint4 helper = helperMatch(value, crossglWaveLaneCount);" in generated_code
-    assert "unsupported Metal wave intrinsic: WaveMatch" not in generated_code
+    assert "wave intrinsic: WaveMatch" not in generated_code
 
     fragment_shader = """
     shader MetalWaveMatchFragmentDiagnostics {
@@ -3093,13 +3273,14 @@ def test_metal_wave_match_threads_lane_count_and_diagnoses_unavailable_contexts(
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(fragment_shader)))
+    generated_code, refusal_2 = metal_partial_output(
+        generate_code, parse_code(tokenize_code(fragment_shader))
+    )
 
     assert "uint4 helperMatch(uint seed, uint crossglWaveLaneCount)" in generated_code
     assert (
-        "uint4 mask = uint4(0) /* unsupported Metal wave helper call: function "
-        "'helperMatch' requires compute-stage threads_per_simdgroup value */;"
-        in generated_code
+        "wave helper call: function 'helperMatch' requires compute-stage "
+        "threads_per_simdgroup value" in refusal_2
     )
     assert "[[threads_per_simdgroup]]" not in generated_code
 
@@ -3218,7 +3399,7 @@ def test_metal_wave_multi_prefix_threads_lane_context_and_diagnoses_unavailable_
         "helperVector(lanes, mask, crossglWaveLaneIndex, crossglWaveLaneCount).x"
         in generated_code
     )
-    assert "unsupported Metal wave intrinsic: WaveMultiPrefix" not in generated_code
+    assert "wave intrinsic: WaveMultiPrefix" not in generated_code
 
     fragment_shader = """
     shader MetalWaveMultiPrefixFragmentDiagnostics {
@@ -3237,21 +3418,21 @@ def test_metal_wave_multi_prefix_threads_lane_context_and_diagnoses_unavailable_
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(fragment_shader)))
+    generated_code, refusal_2 = metal_partial_output(
+        generate_code, parse_code(tokenize_code(fragment_shader))
+    )
 
     assert (
         "uint helperMulti(uint seed, uint4 mask, uint crossglWaveLaneIndex, "
         "uint crossglWaveLaneCount)" in generated_code
     )
     assert (
-        "uint prefix = 0u /* unsupported Metal wave helper call: function "
-        "'helperMulti' requires compute-stage thread_index_in_simdgroup and "
-        "threads_per_simdgroup value */;" in generated_code
+        "wave helper call: function 'helperMulti' requires compute-stage "
+        "thread_index_in_simdgroup and threads_per_simdgroup value" in refusal_2
     )
     assert (
-        "uint direct = /* unsupported Metal wave intrinsic: WaveMultiPrefixSum "
-        "requires compute-stage thread_index_in_simdgroup and "
-        "threads_per_simdgroup values */ 0u;" in generated_code
+        "wave intrinsic: WaveMultiPrefixSum requires compute-stage "
+        "thread_index_in_simdgroup and threads_per_simdgroup values" in refusal_2
     )
     assert "[[thread_index_in_simdgroup]]" not in generated_code
     assert "[[threads_per_simdgroup]]" not in generated_code
@@ -3285,69 +3466,58 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
+    generated_code, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(shader))
+    )
 
+    assert "wave intrinsic: WaveActiveSum expects 1 arguments, got 0" in refusal
     assert (
-        "uint missing = /* unsupported Metal wave intrinsic: WaveActiveSum "
-        "expects 1 arguments, got 0 */ 0u;" in generated_code
+        "wave intrinsic: WaveActiveAllEqual value argument must be numeric "
+        "scalar or vector, got float2x2" in refusal
     )
     assert (
-        "bool badEqualMatrix = /* unsupported Metal wave intrinsic: "
-        "WaveActiveAllEqual value argument must be numeric scalar or vector, "
-        "got float2x2 */ false;" in generated_code
+        "wave intrinsic: WaveActiveAnyTrue predicate argument must be "
+        "scalar bool, got uint" in refusal
     )
     assert (
-        "bool badAnyValue = /* unsupported Metal wave intrinsic: "
-        "WaveActiveAnyTrue predicate argument must be scalar bool, got uint */ "
-        "false;" in generated_code
+        "wave intrinsic: WaveActiveBallot predicate argument must be scalar"
+        " bool, got bool2" in refusal
     )
     assert (
-        "uint4 badBallotVector = /* unsupported Metal wave intrinsic: "
-        "WaveActiveBallot predicate argument must be scalar bool, got bool2 */ "
-        "uint4(0);" in generated_code
+        "wave intrinsic: WaveMatch value argument must be numeric scalar, "
+        "got bool" in refusal
     )
     assert (
-        "uint4 badMatchBool = /* unsupported Metal wave intrinsic: "
-        "WaveMatch value argument must be numeric scalar, got bool */ uint4(0);"
-        in generated_code
+        "wave intrinsic: WaveMatch value argument must be numeric scalar, "
+        "got uint2" in refusal
     )
     assert (
-        "uint4 badMatchVector = /* unsupported Metal wave intrinsic: "
-        "WaveMatch value argument must be numeric scalar, got uint2 */ uint4(0);"
-        in generated_code
+        "wave intrinsic: WaveMultiPrefixSum value argument must be numeric "
+        "scalar or vector, got bool" in refusal
     )
     assert (
-        "uint badMultiBool = /* unsupported Metal wave intrinsic: "
-        "WaveMultiPrefixSum value argument must be numeric scalar or vector, got bool */ "
-        "0u;" in generated_code
+        "wave intrinsic: WaveMultiPrefixSum value argument must be numeric "
+        "scalar or vector, got float2x2" in refusal
     )
     assert (
-        "float2x2 badMultiMatrix = /* unsupported Metal wave intrinsic: "
-        "WaveMultiPrefixSum value argument must be numeric scalar or vector, got float2x2 */ "
-        "float2x2(0);" in generated_code
+        "wave intrinsic: WaveMultiPrefixSum mask argument must be uint4, "
+        "got uint" in refusal
     )
     assert (
-        "uint badMultiMask = /* unsupported Metal wave intrinsic: "
-        "WaveMultiPrefixSum mask argument must be uint4, got uint */ 0u;"
-        in generated_code
+        "wave intrinsic: WaveMultiPrefixCountBits predicate argument must "
+        "be scalar bool, got uint" in refusal
     )
     assert (
-        "uint badMultiCount = /* unsupported Metal wave intrinsic: "
-        "WaveMultiPrefixCountBits predicate argument must be scalar bool, got uint */ "
-        "0u;" in generated_code
+        "wave intrinsic: WaveMultiPrefixBitAnd value argument must be "
+        "integer scalar or vector, got bool" in refusal
     )
     assert (
-        "uint badMultiBit = /* unsupported Metal wave intrinsic: "
-        "WaveMultiPrefixBitAnd value argument must be integer scalar or vector, got bool */ "
-        "0u;" in generated_code
+        "wave intrinsic: WaveReadLaneAt lane index must be scalar int or "
+        "uint, got float2" in refusal
     )
     assert (
-        "uint badLane = /* unsupported Metal wave intrinsic: WaveReadLaneAt "
-        "lane index must be scalar int or uint, got float2 */ 0u;" in generated_code
-    )
-    assert (
-        "uint badQuad = /* unsupported Metal wave intrinsic: QuadReadLaneAt "
-        "quad lane index must be in the range 0 to 3, got 4 */ 0u;" in generated_code
+        "wave intrinsic: QuadReadLaneAt quad lane index must be in the "
+        "range 0 to 3, got 4" in refusal
     )
     assert "WaveActiveSum()" not in generated_code
     assert "WaveActiveAllEqual(matrixValue)" not in generated_code
@@ -3416,7 +3586,7 @@ def test_metal_wave_prefix_ops_lower_to_simd_prefix_exclusive():
     assert "WaveActiveCountBits(" not in generated_code
 
 
-def test_metal_wave_read_lane_at_lowers_to_simd_broadcast():
+def test_metal_wave_read_lane_at_preserves_dynamic_lane_indices():
     shader = """
     shader MetalWaveReadLaneAt {
         compute {
@@ -3435,9 +3605,7 @@ def test_metal_wave_read_lane_at_lowers_to_simd_broadcast():
 
     assert "uint fromLane3 = simd_broadcast(value, ushort(3u));" in generated_code
     assert "uint fromFirst = simd_broadcast_first(value);" in generated_code
-    assert (
-        "uint fromDynamic = simd_broadcast(value, ushort(laneIdx));" in generated_code
-    )
+    assert "uint fromDynamic = simd_shuffle(value, ushort(laneIdx));" in generated_code
     assert "WaveReadLaneAt(" not in generated_code
     assert "WaveReadLaneFirst(" not in generated_code
 
@@ -4424,18 +4592,12 @@ def test_metal_readonly_raw_buffer_stores_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
-    assert (
-        "/* unsupported Metal raw buffer store: readonly buffer 'payload' cannot be written */"
-        in generated_code
-    )
-    assert (
-        "/* unsupported Metal raw buffer store: readonly buffer 'values' cannot be written */"
-        in generated_code
-    )
+    assert "raw buffer store: readonly buffer 'payload' cannot be written" in refusal
+    assert "raw buffer store: readonly buffer 'values' cannot be written" in refusal
     assert "payload->value = 1.0;" not in generated_code
     assert "values[0] = 2.0;" not in generated_code
 
@@ -4473,8 +4635,8 @@ def test_metal_readonly_raw_buffer_qualifiers_propagate_to_helpers():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert (
@@ -4491,14 +4653,8 @@ def test_metal_readonly_raw_buffer_qualifiers_propagate_to_helpers():
         "const device float* values [[buffer(1)]], "
         "constant uint& index [[buffer(2)]])"
     ) in generated_code
-    assert (
-        "/* unsupported Metal raw buffer store: readonly buffer 'payload' cannot be written */"
-        in generated_code
-    )
-    assert (
-        "/* unsupported Metal raw buffer store: readonly buffer 'values' cannot be written */"
-        in generated_code
-    )
+    assert "raw buffer store: readonly buffer 'payload' cannot be written" in refusal
+    assert "raw buffer store: readonly buffer 'values' cannot be written" in refusal
     assert "payload->value = 1.0;" not in generated_code
     assert "values[0] = 2.0;" not in generated_code
 
@@ -4525,8 +4681,8 @@ def test_metal_readonly_raw_buffer_calls_to_mutable_helpers_emit_diagnostic():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert (
@@ -4536,9 +4692,9 @@ def test_metal_readonly_raw_buffer_calls_to_mutable_helpers_emit_diagnostic():
         generated_code
     )
     assert (
-        "/* unsupported Metal raw buffer call: readonly buffer 'payload' cannot be "
-        "passed to mutable parameter 'payload' of 'mutate' */"
-    ) in generated_code
+        "raw buffer call: readonly buffer 'payload' cannot be passed to "
+        "mutable parameter 'payload' of 'mutate'" in refusal
+    )
     assert "mutate(payload, values);" not in generated_code
 
 
@@ -4577,6 +4733,46 @@ def test_metal_readonly_call_preserves_same_arity_const_overload():
     compile_with_metal_if_available(generated_code)
 
 
+@pytest.mark.parametrize("readonly", [False, True])
+def test_metal_const_owner_pointer_call_uses_pointee_access(readonly):
+    shader = """
+    shader MemberPointerAccess {
+        struct Cursor { QUALIFIER device int* values; };
+        void mutate(device int* values) { values[0] += 3; }
+        void inspect(const Cursor& cursor) {
+            mutate(cursor.values);
+            mutate(&cursor.values[1]);
+        }
+        compute { void main() {} }
+    }
+    """.replace("QUALIFIER", "const" if readonly else "")
+    ast = parse_code(tokenize_code(shader))
+    if readonly:
+        refusal = refused_metal(MetalCodeGen().generate_stage, ast, "compute")
+        assert (
+            "parameter call: readonly parameter 'cursor' cannot be passed to mutable "
+            "parameter 'values' of 'mutate'" in refusal
+        )
+    else:
+        generated = MetalCodeGen().generate_stage(ast, "compute")
+        compile_with_metal_if_available(generated)
+
+
+def test_metal_const_owner_pointer_slot_remains_readonly():
+    shader = """
+    shader MemberPointerSlot {
+        struct Cursor { device int* values; };
+        void rebind(device int* * values) {}
+        void inspect(const Cursor& cursor) { rebind(&cursor.values); }
+        compute { void main() {} }
+    }
+    """
+    refusal = refused_metal(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
+    )
+    assert "parameter call" in refusal
+
+
 def test_metal_const_reference_helper_parameters_are_readonly():
     shader = """
     shader MetalConstReferenceHelpers {
@@ -4607,22 +4803,19 @@ def test_metal_const_reference_helper_parameters_are_readonly():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert "float readPayload(const thread Payload& payload)" in generated_code
     assert "void rejectWrite(const thread Payload& payload)" in generated_code
     assert "void mutate(thread Payload& payload)" in generated_code
     assert "return payload.value;" in generated_code
+    assert "parameter store: parameter 'payload' is const-qualified" in refusal
     assert (
-        "/* unsupported Metal parameter store: parameter 'payload' is "
-        "const-qualified */"
-    ) in generated_code
-    assert (
-        "/* unsupported Metal parameter call: readonly parameter 'payload' "
-        "cannot be passed to mutable parameter 'payload' of 'mutate' */"
-    ) in generated_code
+        "parameter call: readonly parameter 'payload' cannot be passed to "
+        "mutable parameter 'payload' of 'mutate'" in refusal
+    )
     assert "payload.value = 1.0;" not in generated_code
     assert "mutate(payload);" not in generated_code
     assert "float value = readPayload(payload);" in generated_code
@@ -4677,8 +4870,8 @@ def test_metal_const_pointer_and_array_helper_parameters_are_readonly():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert "float readPointer(const thread Payload* payload)" in generated_code
@@ -4686,22 +4879,16 @@ def test_metal_const_pointer_and_array_helper_parameters_are_readonly():
     assert "void mutatePointer(thread Payload* payload)" in generated_code
     assert "float readArray(const thread float values[], int index)" in generated_code
     assert "void rejectArrayWrite(const thread float values[])" in generated_code
+    assert "parameter store: parameter 'payload' is const-qualified" in refusal
+    assert "parameter store: parameter 'values' is const-qualified" in refusal
     assert (
-        "/* unsupported Metal parameter store: parameter 'payload' is "
-        "const-qualified */"
-    ) in generated_code
+        "parameter call: readonly parameter 'payload' cannot be passed to "
+        "mutable parameter 'payload' of 'mutatePointer'" in refusal
+    )
     assert (
-        "/* unsupported Metal parameter store: parameter 'values' is "
-        "const-qualified */"
-    ) in generated_code
-    assert (
-        "/* unsupported Metal parameter call: readonly parameter 'payload' "
-        "cannot be passed to mutable parameter 'payload' of 'mutatePointer' */"
-    ) in generated_code
-    assert (
-        "/* unsupported Metal parameter call: readonly parameter 'values' "
-        "cannot be passed to mutable parameter 'values' of 'mutateArray' */"
-    ) in generated_code
+        "parameter call: readonly parameter 'values' cannot be passed to "
+        "mutable parameter 'values' of 'mutateArray'" in refusal
+    )
     assert "PointerAccessNode" not in generated_code
     assert "payload->value = 1.0;" not in generated_code
     assert "mutatePointer(payload);" not in generated_code
@@ -4738,20 +4925,19 @@ def test_metal_const_threadgroup_pointer_alias_rejects_writes_and_mutable_calls(
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert "const threadgroup Payload* alias = &scratch;" in generated_code
     assert "float value = readValue(alias);" in generated_code
     assert (
-        "/* unsupported Metal parameter store: parameter 'alias' is "
-        "const-qualified local alias */"
-    ) in generated_code
+        "parameter store: parameter 'alias' is const-qualified local alias" in refusal
+    )
     assert (
-        "/* unsupported Metal parameter call: readonly parameter 'alias' "
-        "cannot be passed to mutable parameter 'payload' of 'mutate' */"
-    ) in generated_code
+        "parameter call: readonly parameter 'alias' cannot be passed to "
+        "mutable parameter 'payload' of 'mutate'" in refusal
+    )
     assert "alias->value = value;" not in generated_code
     assert "mutate(alias);" not in generated_code
 
@@ -4780,8 +4966,8 @@ def test_metal_const_pointee_pointer_values_can_rebind_and_advance():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert (
@@ -4792,14 +4978,10 @@ def test_metal_const_pointee_pointer_values_can_rebind_and_advance():
     assert generated_code.count("cursor = replacement;") == 2
     assert generated_code.count("cursor += 1;") == 2
     assert generated_code.count("cursor++;") == 2
+    assert "parameter store: parameter 'cursor' is const-qualified" in refusal
     assert (
-        "/* unsupported Metal parameter store: parameter 'cursor' is "
-        "const-qualified */"
-    ) in generated_code
-    assert (
-        "/* unsupported Metal parameter store: parameter 'cursor' is "
-        "const-qualified local alias */"
-    ) in generated_code
+        "parameter store: parameter 'cursor' is const-qualified local alias" in refusal
+    )
     assert "cursor[0] = 3.0;" not in generated_code
     assert "cursor[0] = 4.0;" not in generated_code
 
@@ -4830,20 +5012,17 @@ def test_metal_readonly_device_pointer_alias_rejects_writes_and_mutable_calls():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert "const device Payload* alias = payload;" in generated_code
     assert "float value = readValue(alias);" in generated_code
+    assert "parameter store: parameter 'alias' is readonly local alias" in refusal
     assert (
-        "/* unsupported Metal parameter store: parameter 'alias' is "
-        "readonly local alias */"
-    ) in generated_code
-    assert (
-        "/* unsupported Metal parameter call: readonly parameter 'alias' "
-        "cannot be passed to mutable parameter 'payload' of 'mutate' */"
-    ) in generated_code
+        "parameter call: readonly parameter 'alias' cannot be passed to "
+        "mutable parameter 'payload' of 'mutate'" in refusal
+    )
     assert "alias->value = value;" not in generated_code
     assert "mutate(alias);" not in generated_code
 
@@ -4870,20 +5049,19 @@ def test_metal_const_local_array_rejects_writes_and_mutable_calls():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert "const float values[2] = {1.0, 2.0};" in generated_code
     assert "float value = readValue(values, 1);" in generated_code
     assert (
-        "/* unsupported Metal parameter store: parameter 'values' is "
-        "const-qualified local array */"
-    ) in generated_code
+        "parameter store: parameter 'values' is const-qualified local array" in refusal
+    )
     assert (
-        "/* unsupported Metal parameter call: readonly parameter 'values' "
-        "cannot be passed to mutable parameter 'values' of 'mutate' */"
-    ) in generated_code
+        "parameter call: readonly parameter 'values' cannot be passed to "
+        "mutable parameter 'values' of 'mutate'" in refusal
+    )
     assert "values[0] = value;" not in generated_code
     assert "mutate(values);" not in generated_code
 
@@ -4929,8 +5107,8 @@ def test_metal_constant_pointer_and_reference_aliases_reject_writes_and_mutable_
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert "constant Payload* pointerAlias = pointerPayload;" in generated_code
@@ -4938,21 +5116,21 @@ def test_metal_constant_pointer_and_reference_aliases_reject_writes_and_mutable_
     assert "float pointerValue = readPointer(pointerAlias);" in generated_code
     assert "float referenceValue = readReference(referenceAlias);" in generated_code
     assert (
-        "/* unsupported Metal parameter store: parameter 'pointerAlias' is "
-        "constant address-space local alias */"
-    ) in generated_code
+        "parameter store: parameter 'pointerAlias' is constant "
+        "address-space local alias" in refusal
+    )
     assert (
-        "/* unsupported Metal parameter store: parameter 'referenceAlias' is "
-        "constant address-space local alias */"
-    ) in generated_code
+        "parameter store: parameter 'referenceAlias' is constant "
+        "address-space local alias" in refusal
+    )
     assert (
-        "/* unsupported Metal parameter call: readonly parameter 'pointerAlias' "
-        "cannot be passed to mutable parameter 'payload' of 'mutatePointer' */"
-    ) in generated_code
+        "parameter call: readonly parameter 'pointerAlias' cannot be passed"
+        " to mutable parameter 'payload' of 'mutatePointer'" in refusal
+    )
     assert (
-        "/* unsupported Metal parameter call: readonly parameter 'referenceAlias' "
-        "cannot be passed to mutable parameter 'payload' of 'mutateReference' */"
-    ) in generated_code
+        "parameter call: readonly parameter 'referenceAlias' cannot be "
+        "passed to mutable parameter 'payload' of 'mutateReference'" in refusal
+    )
     assert "pointerAlias->value = pointerValue;" not in generated_code
     assert "referenceAlias.value = referenceValue;" not in generated_code
     assert "mutatePointer(pointerAlias);" not in generated_code
@@ -4981,20 +5159,20 @@ def test_metal_nested_constant_local_array_rejects_writes_and_mutable_calls():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "compute"
     )
 
     assert "const float values[2][2] = {{1.0, 2.0}, {3.0, 4.0}};" in generated_code
     assert "float value = readValue(values, 1, 0);" in generated_code
     assert (
-        "/* unsupported Metal parameter store: parameter 'values' is "
-        "constant-qualified local array */"
-    ) in generated_code
+        "parameter store: parameter 'values' is constant-qualified local "
+        "array" in refusal
+    )
     assert (
-        "/* unsupported Metal parameter call: readonly parameter 'values' "
-        "cannot be passed to mutable parameter 'values' of 'mutate' */"
-    ) in generated_code
+        "parameter call: readonly parameter 'values' cannot be passed to "
+        "mutable parameter 'values' of 'mutate'" in refusal
+    )
     assert "values[0][1] = value;" not in generated_code
     assert "mutate(values);" not in generated_code
 
@@ -5028,8 +5206,8 @@ def test_metal_constant_scalar_vector_locals_reject_writes_and_index_resources()
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(shader)), "fragment"
     )
 
     assert "const float scale = 2.0;" in generated_code
@@ -5042,14 +5220,8 @@ def test_metal_constant_scalar_vector_locals_reject_writes_and_index_resources()
     assert "array<texture2d<float>, 4> textures [[texture(0)]]" in generated_code
     assert "array<sampler, 4> samplers [[sampler(0)]]" in generated_code
     assert "textures[LAYER].sample(samplers[LAYER], uv)" in generated_code
-    assert (
-        "/* unsupported Metal parameter store: parameter 'scale' is "
-        "constant-qualified local */"
-    ) in generated_code
-    assert (
-        "/* unsupported Metal parameter store: parameter 'bias' is "
-        "constant-qualified local */"
-    ) in generated_code
+    assert "parameter store: parameter 'scale' is constant-qualified local" in refusal
+    assert "parameter store: parameter 'bias' is constant-qualified local" in refusal
     assert "scale = value;" not in generated_code
     assert "bias.x = value;" not in generated_code
 
@@ -5079,25 +5251,15 @@ def test_metal_incompatible_helper_address_spaces_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(shader)), "compute"
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="requires threadgroup"
+    ) as error:
+        MetalCodeGen().generate_stage(parse_code(tokenize_code(shader)), "compute")
+    assert error.value.operation == "useThreadgroup"
+    assert error.value.reason == "incompatible-pointer-address-space"
+    assert (
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-
-    assert "void useThreadgroup(threadgroup Payload& scratch)" in generated_code
-    assert "void useDevice(device Payload& payload)" in generated_code
-    assert "threadgroup Payload scratch;" in generated_code
-    assert (
-        "/* unsupported Metal address-space call: argument 'payload' uses device "
-        "address space but parameter 'scratch' of 'useThreadgroup' requires "
-        "threadgroup */"
-    ) in generated_code
-    assert (
-        "/* unsupported Metal address-space call: argument 'scratch' uses "
-        "threadgroup address space but parameter 'payload' of 'useDevice' "
-        "requires device */"
-    ) in generated_code
-    assert "useThreadgroup(payload[0]);" not in generated_code
-    assert "useDevice(scratch);" not in generated_code
 
 
 def test_metal_parameter_address_space_qualifiers_reject_conflicts():
@@ -5192,21 +5354,52 @@ def test_metal_precise_functions_and_locals_disable_contraction():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert generated_code.count("#pragma clang fp contract(off)") == 2
-    assert generated_code.count("#pragma clang fp contract(fast)") == 2
+    assert "#pragma clang fp contract(fast)" not in generated_code
+    assert "\n#pragma clang fp contract(" not in generated_code
+    assert generated_code.count("#pragma clang fp reassociate(off)") == 2
+    assert "#pragma clang fp reassociate(on)" not in generated_code
+    directives = (
+        "{\n    #pragma clang fp contract(off)\n"
+        "    #pragma clang fp reassociate(off)\n"
+    )
     assert (
-        "#pragma clang fp contract(off)\n"
-        "float stableProduct(float left, float right)"
+        "float stableProduct(float left, float right) " + directives
     ) in generated_code
     assert (
-        "#pragma clang fp contract(off)\n"
-        "float scopedProduct(float left, float right)"
+        "float scopedProduct(float left, float right) " + directives
     ) in generated_code
     assert (
-        "#pragma clang fp contract(off)\n"
-        "float relaxedProduct(float left, float right)"
+        "float relaxedProduct(float left, float right) " + directives
     ) not in generated_code
     assert "[[precise]]" not in generated_code
     compile_with_metal_if_available(generated_code)
+
+
+@pytest.mark.parametrize("annotation", ("function", "local"))
+def test_metal_precise_entry_point_directives_stay_inside_body(annotation):
+    function_annotation = "@precise" if annotation == "function" else ""
+    local_annotation = "@precise" if annotation == "local" else ""
+    shader = f"""
+    shader PreciseEntry {{
+        compute {{
+            {function_annotation}
+            void main(uint3 tid @ gl_GlobalInvocationID) {{
+                float value {local_annotation} = float(tid.x) * 1.25;
+            }}
+        }}
+    }}
+    """
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+    assert generated.count("    #pragma clang fp contract(off)") == 1
+    assert "\n#pragma clang fp contract(" not in generated
+    assert "contract(fast)" not in generated
+    assert (
+        "{\n    #pragma clang fp contract(off)\n"
+        "    #pragma clang fp reassociate(off)\n"
+    ) in generated
+    compile_with_metal_if_available(generated)
 
 
 def test_metal_float16_matrix_ir_aliases_map_to_half_matrices():
@@ -5283,30 +5476,33 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int signedScalar(int input)" in generated_code
-    assert "int one = int(1);" in generated_code
+    assert "int one = int(char(int(char(int(1)))));" in generated_code
     assert "uint unsignedScalar(uint input)" in generated_code
-    assert "uint one = uint(1u);" in generated_code
+    assert "uint one = uint(uchar(uint(uchar(uint(1u)))));" in generated_code
     assert "int2 signedPair(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
     assert "uint3 unsignedTriple(uint3 input)" in generated_code
-    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert (
+        "uint3 inc = uint3(uchar3(uint3(uchar3(uint3(1u, 2u, 3u)))));" in generated_code
+    )
     assert "int2 signedShort(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "int2 inc = int2(short2(int2(short2(int2(1, 2)))));" in generated_code
+    assert "return int2(short2(input + inc));" in generated_code
     assert "uint3 unsignedShort(uint3 input)" in generated_code
-    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert (
+        "uint3 inc = uint3(ushort3(uint3(ushort3(uint3(1u, 2u, 3u)))));"
+        in generated_code
+    )
+    assert "return uint3(ushort3(input + inc));" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
-    assert "int4 inc = int4(1, 2, 3, 4);" in generated_code
+    assert "int4 inc = int4(char4(int4(char4(int4(1, 2, 3, 4)))));" in generated_code
     assert "uint2 unsignedChar(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert "uint2 inc = uint2(uchar2(uint2(uchar2(uint2(1u, 2u)))));" in generated_code
     for invalid_token in (
         "int8",
         "uint8",
         "i8vec2",
         "u8vec3",
-        "short2",
-        "ushort3",
-        "char4",
-        "uchar2",
     ):
         assert invalid_token not in generated_code
 
@@ -5368,13 +5564,20 @@ def test_metal_generic_vector_constructors_emit_metal_names():
     assert "double2 precisePair(double2 input)" in generated_code
     assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert (
+        "uint4 inc = uint4(uchar4(uint4(uchar4(uint4(1u, 2u, 3u, 4u)))));"
+        in generated_code
+    )
     assert "int3 signedShorts(int3 input)" in generated_code
-    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "int3 inc = int3(short3(int3(short3(int3(1, 2, 3)))));" in generated_code
+    assert "return int3(short3(input + inc));" in generated_code
     assert "uint2 unsignedShorts(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert (
+        "uint2 inc = uint2(ushort2(uint2(ushort2(uint2(1u, 2u)))));" in generated_code
+    )
+    assert "return uint2(ushort2(input + inc));" in generated_code
     assert "int3 signedInts(int3 input)" in generated_code
     assert "int3 inc = int3(1, 2, 3);" in generated_code
     assert "uint4 unsignedInts(uint4 input)" in generated_code
@@ -5573,7 +5776,7 @@ def test_metal_signed_int64_minimum_literal_compiles_warning_fatal():
     shader SignedInt64Minimum {
         compute {
             void main(RWStructuredBuffer<int64_t> output @buffer(0)) {
-                output[0] = int64_t(-9223372036854775808);
+                output[0] = int64_t(-9223372036854775807l - 1l);
             }
         }
     }
@@ -5583,7 +5786,8 @@ def test_metal_signed_int64_minimum_literal_compiles_warning_fatal():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "int64_t((-9223372036854775807L - 1L))" in generated_code
+    assert "-9223372036854775807l" in generated_code
+    assert "- 1l" in generated_code
     assert "-9223372036854775808" not in generated_code
     compile_with_metal_if_available(generated_code)
 
@@ -5804,8 +6008,8 @@ def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "int bytes[2];" in generated_code
-    assert "uint words[3];" in generated_code
+    assert "char bytes[2];" in generated_code
+    assert "ushort words[3];" in generated_code
     assert "int64_t signedValue;" in generated_code
     assert "uint64_t offsets[2];" in generated_code
     assert "constant int globalBytes[2] = {};" in generated_code
@@ -5838,7 +6042,6 @@ def test_metal_program_scope_value_globals_use_constant_address_space_and_initia
 
         compute {
             void main() {
-                initializedScale = 3.0;
                 float value = initializedScale + missingBias.x + float(counters[0]);
             }
         }
@@ -5848,23 +6051,31 @@ def test_metal_program_scope_value_globals_use_constant_address_space_and_initia
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "constant float initializedScale = 2.0;" in generated_code
-    assert (
-        "/* unsupported Metal program-scope global initializer: 'missingBias' "
-        "needs an initializer in the constant address space; using zero initializer */"
-        in generated_code
-    )
+    # Uninitialised value globals are zero-initialised, as HLSL static globals are.
     assert "constant float2 missingBias = float2(0);" in generated_code
-    assert (
-        "/* unsupported Metal program-scope global initializer: 'counters' needs "
-        "an initializer in the constant address space; using zero initializer */"
-        in generated_code
-    )
     assert "constant int counters[2] = {};" in generated_code
+
+
+def test_metal_program_scope_value_global_stores_are_refused():
+    shader = """
+    shader MetalProgramScopeGlobalStore {
+        float initializedScale = 2.0;
+
+        compute {
+            void main() {
+                initializedScale = 3.0;
+                float value = initializedScale;
+            }
+        }
+    }
+    """
+
+    refusal = refused_metal(generate_code, parse_code(tokenize_code(shader)))
+
     assert (
-        "/* unsupported Metal program-scope global store: global 'initializedScale' "
-        "is emitted in the constant address space */" in generated_code
+        "program-scope global store: global 'initializedScale' is emitted "
+        "in the constant address space" in refusal
     )
-    assert "initializedScale = 3.0;" not in generated_code
 
 
 def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():
@@ -5890,7 +6101,7 @@ def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "int bytes[2][3];" in generated_code
+    assert "char bytes[2][3];" in generated_code
     assert "uint64_t offsets[2][3];" in generated_code
     assert "uint bumpNested(uint values[2][3], int row, int col)" in generated_code
     assert "uint grid[2][3];" in generated_code
@@ -5913,20 +6124,98 @@ def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():
         assert invalid_token not in generated_code
 
 
-def test_metal_array_return_aliases_are_rejected_with_clear_diagnostic():
+def test_metal_array_returns_use_value_arrays_and_compile():
+    # MLX binary_two.metal returns metal::array<T, 2> from DivMod; Metal
+    # cannot return C arrays, so array results travel as array<T, N>.
     shader = """
     shader AliasReturnArraySmoke {
-        uint64_t[2] makeCounters() {
+        uint64_t[2] makeCounters(uint64_t first) {
             uint64_t counters[2];
+            counters[0] = first;
+            counters[1] = first + 1;
             return counters;
+        }
+        int[2][3] makeGrid(int seed) {
+            return makeGridCopy(seed);
+        }
+        int[2][3] makeGridCopy(int seed) {
+            int[2][3] grid;
+            for (int row = 0; row < 2; row++) {
+                for (int col = 0; col < 3; col++) {
+                    grid[row][col] = seed + row * 3 + col;
+                }
+            }
+            return grid;
+        }
+        compute {
+            void main(
+                RWStructuredBuffer<uint64_t> output @buffer(0),
+                uint3 tid @ gl_GlobalInvocationID) {
+                uint64_t[2] values = makeCounters(uint64_t(tid.x));
+                int[2][3] grid = makeGrid(int(tid.x));
+                int scratch[2];
+                scratch[0] = grid[1][2];
+                scratch[1] = grid[0][1];
+                output[tid.x] = values[0] + values[1] + uint64_t(scratch[0] + scratch[1]);
+            }
         }
     }
     """
 
-    with pytest.raises(
-        ValueError, match="Metal output does not support C-style array return"
-    ):
-        generate_code(parse_code(tokenize_code(shader)))
+    generated = generate_code(parse_code(tokenize_code(shader)))
+    compact = re.sub(r"\s+", " ", generated)
+    assert "array<uint64_t, 2> makeCounters(uint64_t first) {" in compact
+    assert "array<uint64_t, 2> counters;" in compact
+    assert "array<array<int, 3>, 2> makeGrid(int seed) {" in compact
+    assert "array<array<int, 3>, 2> grid;" in compact
+    assert "array<uint64_t, 2> values = makeCounters(" in compact
+    assert "array<array<int, 3>, 2> grid = makeGrid(" in compact
+    # Locals that never hold an array result keep their C-array spelling.
+    assert "int scratch[2];" in compact
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"], capture_output=True, check=False, text=True
+    )
+    if lookup.returncode != 0:
+        pytest.skip("Metal compiler is not available")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(generated, encoding="utf-8")
+        result = subprocess.run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                "-c",
+                str(source_path),
+                "-o",
+                str(output_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if result.returncode != 0 and _missing_metal_toolchain(result):
+            pytest.skip("Metal toolchain is not installed")
+        assert result.returncode == 0, result.stderr
+        assert output_path.stat().st_size > 0
+
+
+def test_metal_unsized_array_returns_are_rejected_with_clear_diagnostic():
+    codegen = MetalCodeGen()
+    assert codegen.metal_value_array_type("float[4]") == "array<float, 4>"
+    assert codegen.metal_value_array_type("float[2][3]") == (
+        "array<array<float, 3>, 2>"
+    )
+    assert codegen.metal_value_array_type("float[]") is None
+    assert codegen.metal_value_array_type("float[4][]") is None
+    assert codegen.metal_value_array_type("float") is None
 
 
 def test_metal_fixed_width_nested_cbuffer_array_aliases_map_to_valid_types():
@@ -5986,8 +6275,8 @@ def test_metal_structured_buffer_fixed_width_aliases_map_to_device_pointers():
     assert "device ushort* counts" in generated_code
     assert "const device int64_t* signedValues" in generated_code
     assert "device uint64_t* offsets" in generated_code
-    assert "uint count = counts[index];" in generated_code
-    assert "counts[index] = count + uint(1u);" in generated_code
+    assert "uint count = uint(ushort(counts[index]));" in generated_code
+    assert "counts[index] = count + uint(ushort(uint(1u)));" in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
 
@@ -6029,8 +6318,8 @@ def test_metal_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
         "uint64_t combine(uint which, uint index, array<device ushort*, 2> counts, array<const device uint64_t*, 2> offsets)"
         in generated_code
     )
-    assert "return localCounts[which][index];" in generated_code
-    assert "counts[which][index] = count + uint(1u);" in generated_code
+    assert "return uint(ushort(localCounts[which][index]));" in generated_code
+    assert "counts[which][index] = count + uint(ushort(uint(1u)));" in generated_code
     assert "device ushort* localCounts" not in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
@@ -6072,9 +6361,9 @@ def test_metal_unsized_structured_buffer_arrays_infer_helper_size():
         "uint64_t readOffset(array<const device uint64_t*, 2> localOffsets, uint index)"
         in generated_code
     )
-    assert "return localCounts[2][index];" in generated_code
+    assert "return uint(ushort(localCounts[2][index]));" in generated_code
     assert "return localOffsets[1][index];" in generated_code
-    assert "uint count = readCount(counts, index);" in generated_code
+    assert "uint count = uint(ushort(readCount(counts, index)));" in generated_code
     assert "uint64_t offset = readOffset(offsets, index);" in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
@@ -6095,7 +6384,9 @@ def test_metal_readonly_structured_buffer_array_rejects_mutable_helper_call():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
+    generated_code, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(shader))
+    )
 
     assert "array<const device uint*, 2> values" in generated_code
     assert "void mutate(array<device uint*, 2> localValues, uint index)" in (
@@ -6103,7 +6394,7 @@ def test_metal_readonly_structured_buffer_array_rejects_mutable_helper_call():
     )
     assert (
         "readonly parameter 'values' cannot be passed to mutable parameter "
-        "'localValues' of 'mutate'" in generated_code
+        "'localValues' of 'mutate'" in refusal
     )
     assert "mutate(values, index);" not in generated_code
 
@@ -6196,9 +6487,12 @@ def test_metal_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
     assert (
         "uint readMid(array<device ushort*, 3> midCounts, uint index)" in generated_code
     )
-    assert "return leafCounts[2][index];" in generated_code
-    assert "return readLeaf(midCounts, index);" in generated_code
-    assert "return readMid(counts, index) + afterCounts[index];" in generated_code
+    assert "return uint(ushort(leafCounts[2][index]));" in generated_code
+    assert "return uint(ushort(readLeaf(midCounts, index)));" in generated_code
+    assert (
+        "return uint(ushort(readMid(counts, index) + afterCounts[index]));"
+        in generated_code
+    )
     assert "array<device ushort*, 1> counts" not in generated_code
     assert "uint16_t" not in generated_code
 
@@ -6256,7 +6550,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
 
     assert "device uchar* aliasBlock" in generated_code
     assert (
-        "uint word = (*reinterpret_cast<const device uint*>(aliasBlock + 4));"
+        "uint word = uint(ushort((*reinterpret_cast<const device uint*>(aliasBlock + 4))));"
         in generated_code
     )
     assert (
@@ -6265,7 +6559,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
     )
     assert "void writeAlias(uint index, uint word, uint64_t offset" in generated_code
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(word);"
+        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(uint(ushort(word)));"
         in generated_code
     )
     assert (
@@ -6273,7 +6567,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(1u)));"
+        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(ushort(uint(1u)))))));"
         in generated_code
     )
     assert "unsupported Metal GLSL buffer block" not in generated_code
@@ -6402,7 +6696,7 @@ def test_metal_glsl_buffer_block_atomic_compare_helpers_cover_signed_and_paramet
     assert "atomic_compare_exchange_strong_explicit" not in generated_code
 
 
-def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_emit_diagnostics():
+def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_are_refused():
     scalar_layout_shader = """
     shader ScalarGlslBufferBlockMetal {
         struct ScalarBlock {
@@ -6421,21 +6715,13 @@ def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_emit_diagnos
     }
     """
 
-    scalar_layout_code = generate_code(parse_code(tokenize_code(scalar_layout_shader)))
-
-    assert (
-        "unsupported Metal GLSL buffer block ScalarBlock scalarBlock "
-        "(scalar, binding = 11)"
-    ) in scalar_layout_code
-    assert "device uchar* scalarBlock" not in scalar_layout_code
-    assert (
-        "float value = 0 /* unsupported Metal GLSL buffer block access scalarBlock: "
-        "no target-side fallback declaration emitted */;"
-    ) in scalar_layout_code
-    assert (
-        "/* unsupported Metal GLSL buffer block assignment scalarBlock: "
-        "no target-side fallback declaration emitted */;"
-    ) in scalar_layout_code
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: ScalarBlock\b.*unsupported layout scalar: "
+        r"Metal device pointer offset lowering currently supports std140 and std430 only",
+    ) as error:
+        generate_code(parse_code(tokenize_code(scalar_layout_shader)))
+    assert error.value.code == "project.translate.metal-buffer-block-unsupported"
 
     unsupported_type_shader = """
     shader UnsupportedGlslBufferTypeMetal {
@@ -6454,24 +6740,13 @@ def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_emit_diagnos
     }
     """
 
-    unsupported_type_code = generate_code(
-        parse_code(tokenize_code(unsupported_type_shader))
-    )
-
-    assert (
-        "unsupported Metal GLSL buffer block DoubleBlock doubleBlock "
-        "(std430, binding = 12); unsupported member value: type is not supported "
-        "by Metal pointer/offset lowering"
-    ) in unsupported_type_code
-    assert "device uchar* doubleBlock" not in unsupported_type_code
-    assert (
-        "double value = 0 /* unsupported Metal GLSL buffer block access doubleBlock: "
-        "no target-side fallback declaration emitted */;"
-    ) in unsupported_type_code
-    assert (
-        "/* unsupported Metal GLSL buffer block assignment doubleBlock: "
-        "no target-side fallback declaration emitted */;"
-    ) in unsupported_type_code
+    # MSL has no double type (MSL specification, section 2.1), so the block is refused.
+    with pytest.raises(
+        BufferBlockUnsupportedError,
+        match=r"GLSL buffer block declaration: DoubleBlock\b.*unsupported member value: "
+        r"type is not supported by Metal pointer/offset lowering",
+    ):
+        generate_code(parse_code(tokenize_code(unsupported_type_shader)))
 
 
 def test_structured_buffer_operations_lower_to_device_buffer():
@@ -7053,14 +7328,14 @@ def test_metal_global_function_constants_emit_msl_attributes_and_default_diagnos
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(code), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(code), "fragment"
     )
 
     assert (
-        "/* unsupported Metal function constant default: 'useFast' initializers "
-        "are not allowed by MSL */"
-    ) in generated_code
+        "function constant default: 'useFast' initializers are not allowed "
+        "by MSL" in refusal
+    )
     assert "constant bool useFast [[function_constant(0)]];" in generated_code
     assert "constant int mode [[function_constant(1)]];" in generated_code
     assert "constant float scale [[function_constant(2)]];" in generated_code
@@ -8447,10 +8722,8 @@ def test_generic_enum_match_expression_initializes_vector_local():
     assert "float3 actual = __crossgl_match_subject_0.Ok_0;" in generated_code
     assert "value = actual;" in generated_code
     assert "value = fallback;" in generated_code
-    assert (
-        "value = float3(0) /* fallback for generated Metal: no wildcard arm "
-        "handles remaining cases */;" in generated_code
-    )
+    # The arms cover every variant; Metal still needs the local assigned on the path no arm takes.
+    assert "value = float3(0);" in generated_code
     assert "float value = MatchNode" not in generated_code
     assert "MatchNode(" not in generated_code
 
@@ -9061,14 +9334,13 @@ def test_metal_ray_payload_helper_rejects_thread_reference_parameter():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "void tint(thread Payload& payload)" in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires thread") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "tint"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "unsupported Metal address-space call: argument 'payload' uses ray_data "
-        "address space but parameter 'payload' of 'tint' requires thread"
-    ) in generated
-    assert "tint(payload);" not in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
+    )
 
 
 def test_metal_ray_payload_helper_accepts_ray_data_reference_parameter():
@@ -9250,13 +9522,15 @@ def test_metal_trace_ray_rejects_non_acceleration_structure_argument():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "unsupported Metal ray tracing intrinsic: TraceRay acceleration "
-        "structure - acceleration structure argument 'payload' has type "
-        "'Payload' but TraceRay requires an acceleration_structure resource"
-    ) in generated
+        "ray tracing intrinsic: TraceRay acceleration structure - "
+        "acceleration structure argument 'payload' has type 'Payload' but "
+        "TraceRay requires an acceleration_structure resource" in refusal
+    )
     assert "intersect(__crossgl_ray_0, payload" not in generated
 
 
@@ -9327,35 +9601,34 @@ def test_metal_acceleration_structure_arrays_emit_compile_safe_diagnostics():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "unsupported Metal ray tracing resource: arrays of "
-        "acceleration_structure are not valid Metal buffer parameters "
-        "(topLevelAS)"
-    ) in generated
+        "ray tracing resource: arrays of acceleration_structure are not "
+        "valid Metal buffer parameters (topLevelAS)" in refusal
+    )
     assert (
-        "unsupported Metal ray tracing resource: arrays of "
-        "acceleration_structure are not valid Metal buffer parameters "
-        "(primitiveAS)"
-    ) in generated
+        "ray tracing resource: arrays of acceleration_structure are not "
+        "valid Metal buffer parameters (primitiveAS)" in refusal
+    )
     assert (
-        "unsupported Metal ray tracing resource: arrays of "
-        "acceleration_structure are not valid Metal buffer parameters "
-        "(paramAS)"
-    ) in generated
+        "ray tracing resource: arrays of acceleration_structure are not "
+        "valid Metal buffer parameters (paramAS)" in refusal
+    )
     assert (
         "acceleration structure argument 'topLevelAS' uses an "
         "acceleration_structure array"
-    ) in generated
+    ) in refusal
     assert (
         "acceleration structure argument 'primitiveAS' uses an "
         "acceleration_structure array"
-    ) in generated
+    ) in refusal
     assert (
         "acceleration structure argument 'paramAS' uses an "
         "acceleration_structure array"
-    ) in generated
+    ) in refusal
     assert "array<instance_acceleration_structure" not in generated
     assert "array<primitive_acceleration_structure" not in generated
     assert ".intersect(" not in generated
@@ -9430,18 +9703,20 @@ def test_metal_acceleration_structure_array_helper_aliases_emit_diagnostics():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
-    assert ("unsupported acceleration_structure array 'scenes'") in generated
-    assert ("unsupported acceleration_structure array 'primitives'") in generated
+    assert ("unsupported acceleration_structure array 'scenes'") in refusal
+    assert ("unsupported acceleration_structure array 'primitives'") in refusal
     assert (
         "acceleration structure argument 'sceneAlias' uses an "
         "acceleration_structure array"
-    ) in generated
+    ) in refusal
     assert (
         "acceleration structure argument 'primitiveElement' uses an "
         "acceleration_structure array"
-    ) in generated
+    ) in refusal
     assert "void shootInstance(int idx, float3 origin, float3 direction)" in generated
     assert "void shootPrimitive(int idx, float3 origin, float3 direction)" in generated
     assert "shootInstance(0, float3(0.0), float3(0.0, 0.0, 1.0));" in generated
@@ -9624,16 +9899,18 @@ def test_metal_trace_ray_payload_reference_aliases_track_address_space():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "thread Payload& threadAlias = payload;" in generated
     assert "device Payload& deviceAlias = external[0];" in generated
     assert "intersectionFunctions, threadAlias);" in generated
     assert (
-        "unsupported Metal ray tracing intrinsic: TraceRay payload - payload "
-        "forwarding requires a thread-local payload lvalue; payload "
-        "'deviceAlias' uses device address space"
-    ) in generated
+        "ray tracing intrinsic: TraceRay payload - payload forwarding "
+        "requires a thread-local payload lvalue; payload 'deviceAlias' uses"
+        " device address space" in refusal
+    )
     assert "intersectionFunctions, deviceAlias);" not in generated
 
 
@@ -9775,7 +10052,9 @@ def test_metal_trace_ray_payload_member_and_indexed_lvalues():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "intersectionFunctions, wrapper.payload);" in generated
     assert "intersectionFunctions, payloads[0]);" in generated
@@ -9784,19 +10063,19 @@ def test_metal_trace_ray_payload_member_and_indexed_lvalues():
     assert (
         "payload forwarding requires a thread-local struct payload lvalue; "
         "payload 'payloads' has pointer or array type"
-    ) in generated
+    ) in refusal
     assert (
         "payload forwarding requires a thread-local struct payload lvalue; "
         "payload 'wrapper.payloads' has pointer or array type"
-    ) in generated
+    ) in refusal
     assert (
         "payload forwarding requires a thread-local struct payload lvalue; "
         "payload 'pointer' has pointer or array type"
-    ) in generated
+    ) in refusal
     assert (
         "payload forwarding requires a mutable thread-local struct payload "
         "lvalue; payload 'constWrapper.payload' is const-qualified"
-    ) in generated
+    ) in refusal
     assert "intersectionFunctions, constWrapper.payload);" not in generated
     assert "intersectionFunctions, payloads);" not in generated
     assert "intersectionFunctions, wrapper.payloads);" not in generated
@@ -9832,13 +10111,15 @@ def test_metal_trace_ray_rejects_device_pointer_dereference_payload():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "unsupported Metal ray tracing intrinsic: TraceRay payload - payload "
-        "forwarding requires a thread-local payload lvalue; payload '*external' "
-        "uses device address space"
-    ) in generated
+        "ray tracing intrinsic: TraceRay payload - payload forwarding "
+        "requires a thread-local payload lvalue; payload '*external' uses "
+        "device address space" in refusal
+    )
     assert "intersectionFunctions, *external);" not in generated
 
 
@@ -9947,22 +10228,24 @@ def test_metal_trace_ray_payload_type_must_match_declared_interface():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "intersectionFunctions, payload);" in generated
     assert "intersectionFunctions, wrapper.payload);" in generated
     assert (
         "ray payload argument 'other' has type 'OtherPayload' but declared "
         "ray payload interface expects 'Payload'"
-    ) in generated
+    ) in refusal
     assert (
         "ray payload argument 'wrapper.other' has type 'OtherPayload' but "
         "declared ray payload interface expects 'Payload'"
-    ) in generated
+    ) in refusal
     assert (
         "ray payload argument 'others' has type 'OtherPayload' but declared "
         "ray payload interface expects 'Payload'"
-    ) in generated
+    ) in refusal
     assert "intersectionFunctions, other);" not in generated
     assert "intersectionFunctions, wrapper.other);" not in generated
     assert "intersectionFunctions, others[0]);" not in generated
@@ -10105,16 +10388,18 @@ def test_metal_trace_ray_payload_without_intersection_table_emits_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
         "__crossgl_intersector_1.intersect(__crossgl_ray_0, topLevelAS, 255);"
         in generated
     )
     assert (
-        "unsupported Metal ray tracing intrinsic: TraceRay payload - "
-        "payload forwarding requires a compatible intersection_function_table"
-    ) in generated
+        "ray tracing intrinsic: TraceRay payload - payload forwarding "
+        "requires a compatible intersection_function_table" in refusal
+    )
     assert "intersectionFunctions, payload" not in generated
 
 
@@ -10147,7 +10432,9 @@ def test_metal_trace_ray_rejects_non_thread_payload_parameter():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "kernel void kernel_main(device Payload& payload" in generated
     assert (
@@ -10157,7 +10444,7 @@ def test_metal_trace_ray_rejects_non_thread_payload_parameter():
     assert (
         "payload forwarding requires a thread-local payload lvalue; "
         "ray payload parameters use a non-thread address space"
-    ) in generated
+    ) in refusal
     assert "intersectionFunctions, payload" not in generated
 
 
@@ -10453,12 +10740,14 @@ def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
-    assert "unsupported Metal ray tracing intrinsic: IgnoreHit" in generated
-    assert "unsupported Metal ray tracing intrinsic: AcceptHitAndEndSearch" in generated
-    assert "unsupported Metal ray tracing intrinsic: ReportHit" in generated
-    assert "unsupported Metal ray tracing intrinsic: CallShader" in generated
+    assert "ray tracing intrinsic: IgnoreHit" in refusal
+    assert "ray tracing intrinsic: AcceptHitAndEndSearch" in refusal
+    assert "ray tracing intrinsic: ReportHit" in refusal
+    assert "ray tracing intrinsic: CallShader" in refusal
     assert "IgnoreHit();" not in generated
     assert "AcceptHitAndEndSearch();" not in generated
     assert "ReportHit(" not in generated
@@ -10615,12 +10904,14 @@ def test_metal_callshader_rejects_non_table_explicit_argument():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "unsupported Metal ray tracing intrinsic: CallShader - explicit table "
-        "argument 'data' must be a visible_function_table resource"
-    ) in generated
+        "ray tracing intrinsic: CallShader - explicit table argument 'data'"
+        " must be a visible_function_table resource" in refusal
+    )
     assert "data[0](data);" not in generated
 
 
@@ -10667,13 +10958,13 @@ def test_metal_callshader_rejects_non_thread_callable_data_alias():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "device CallableData& deviceAlias = external[0];" in generated
-    assert (
-        "unsupported Metal ray tracing intrinsic: CallShader callable data" in generated
-    )
-    assert "callable data 'deviceAlias' uses device address space" in generated
+    assert "ray tracing intrinsic: CallShader callable data" in refusal
+    assert "callable data 'deviceAlias' uses device address space" in refusal
     assert "callables[0](deviceAlias);" not in generated
 
 
@@ -10698,12 +10989,14 @@ def test_metal_callshader_rejects_mismatched_callable_data_type():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
         "visible_function_table expects callable data 'OtherData' but argument "
         "'data' has 'CallableData'"
-    ) in generated
+    ) in refusal
     assert "callables[0](data);" not in generated
 
 
@@ -10729,12 +11022,14 @@ def test_metal_callshader_rejects_pointer_and_array_callable_data_lvalues():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "thread CallableData* alias = &data;" in generated
     assert "CallableData values[2];" in generated
-    assert "callable data 'alias' has pointer or array type" in generated
-    assert "callable data 'values' has pointer or array type" in generated
+    assert "callable data 'alias' has pointer or array type" in refusal
+    assert "callable data 'values' has pointer or array type" in refusal
     assert "callables[0](alias);" not in generated
     assert "callables[1](values);" not in generated
     assert "callables[2](values[1]);" in generated
@@ -10757,13 +11052,15 @@ def test_metal_callshader_rejects_device_pointer_dereference_callable_data():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "unsupported Metal ray tracing intrinsic: CallShader callable data - "
-        "callable data forwarding requires a thread-local callable-data lvalue; "
-        "callable data '*external' uses device address space"
-    ) in generated
+        "ray tracing intrinsic: CallShader callable data - callable data "
+        "forwarding requires a thread-local callable-data lvalue; callable "
+        "data '*external' uses device address space" in refusal
+    )
     assert "callables[0](*external);" not in generated
 
 
@@ -10831,16 +11128,16 @@ def test_metal_callshader_rejects_readonly_callable_data_member_lvalue():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "void invoke(const thread Wrapper& wrapper" in generated
-    assert (
-        "unsupported Metal ray tracing intrinsic: CallShader callable data" in generated
-    )
+    assert "ray tracing intrinsic: CallShader callable data" in refusal
     assert (
         "callable data forwarding requires a mutable thread-local callable-data "
         "lvalue; callable data 'wrapper.data' is const-qualified"
-    ) in generated
+    ) in refusal
     assert "callables[0](wrapper.data);" not in generated
 
 
@@ -10999,10 +11296,12 @@ def test_metal_arrayed_visible_function_table_emits_compile_safe_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "arrays of visible_function_table are not valid Metal buffer parameters" in (
-        generated
+        refusal
     )
     assert "array<visible_function_table" not in generated
     assert "callables[0][shaderIndex](data)" not in generated
@@ -11026,14 +11325,16 @@ def test_metal_arrayed_intersection_function_table_emits_compile_safe_diagnostic
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
         "arrays of intersection_function_table are not valid Metal buffer parameters"
-        in generated
+        in refusal
     )
     assert "array<intersection_function_table" not in generated
-    assert "return 0 /* unsupported Metal ray tracing resource:" in generated
+    assert "ray tracing resource:" in refusal
     assert "intersectionFunctions[0].size()" not in generated
 
 
@@ -11052,10 +11353,12 @@ def test_metal_arrayed_visible_function_table_parameter_emits_compile_safe_diagn
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "arrays of visible_function_table are not valid Metal buffer parameters" in (
-        generated
+        refusal
     )
     assert (
         "visible_function_table<void(thread CallableData&)> callables [[buffer(1)]]"
@@ -11077,17 +11380,19 @@ def test_metal_arrayed_intersection_function_table_parameter_emits_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
         "arrays of intersection_function_table are not valid Metal buffer parameters"
-        in generated
+        in refusal
     )
     assert (
         "intersection_function_table<instancing> intersectionFunctions [[buffer(3)]]"
         not in (generated)
     )
-    assert "uint count = 0 /* unsupported Metal ray tracing resource:" in generated
+    assert "ray tracing resource:" in refusal
     assert "intersectionFunctions[0].size()" not in generated
 
 
@@ -11129,24 +11434,26 @@ def test_metal_ray_function_table_array_helper_aliases_emit_diagnostics():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
         "arrays of visible_function_table are not valid Metal buffer parameters"
-        in generated
+        in refusal
     )
     assert (
         "arrays of intersection_function_table are not valid Metal buffer parameters"
-        in generated
+        in refusal
     )
     assert (
         "local visible_function_table alias 'tableAlias' cannot be initialized "
         "from unsupported visible_function_table array 'tables'"
-    ) in generated
+    ) in refusal
     assert (
         "local intersection_function_table alias 'tableAlias' cannot be "
         "initialized from unsupported intersection_function_table array 'tables'"
-    ) in generated
+    ) in refusal
     assert "void invoke(uint shaderIndex, thread CallableData& data)" in generated
     assert "uint tableSize(uint idx)" in generated
     assert "invoke(0u, data);" in generated
@@ -11157,7 +11464,7 @@ def test_metal_ray_function_table_array_helper_aliases_emit_diagnostics():
     assert "tableAlias = tables" not in generated
     assert "tableAlias[shaderIndex]" not in generated
     assert "tableAlias[idx].size()" not in generated
-    assert "return 0 /* unsupported Metal ray tracing resource:" in generated
+    assert "ray tracing resource:" in refusal
 
 
 def test_ray_intersection_stage_lowers_to_metal_intersection_attribute():
@@ -11542,7 +11849,9 @@ def test_metal_const_object_payload_rejects_object_data_writes():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
         "[[object, max_total_threads_per_threadgroup(32)]] void object_main("
@@ -11550,9 +11859,9 @@ def test_metal_const_object_payload_rejects_object_data_writes():
         "mesh_grid_properties _crossglMeshGrid)"
     ) in generated
     assert (
-        "/* unsupported Metal mesh payload store: mesh payload 'payload' is "
-        "const-qualified object_data */"
-    ) in generated
+        "mesh payload store: mesh payload 'payload' is const-qualified "
+        "object_data" in refusal
+    )
     assert "payload.color = float4(1.0, 0.0, 0.0, 1.0);" not in generated
     assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(1, 1, 1));" in generated
     assert "DispatchMesh" not in generated
@@ -11590,26 +11899,13 @@ def test_metal_mesh_object_payload_helper_address_space_and_const_writes():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "object_data Payload& payload [[payload]]" in generated
-    assert "const object_data Payload& payload [[payload]]" in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires thread") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "mutate"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        generated.count(
-            "/* unsupported Metal address-space call: argument 'payload' uses "
-            "object_data address space but parameter 'localPayload' of 'mutate' "
-            "requires thread */"
-        )
-        == 2
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert "payload.color = float4(1.0, 0.0, 0.0, 1.0);" in generated
-    assert (
-        "/* unsupported Metal mesh payload store: mesh payload 'payload' is const "
-        "object_data in mesh stages */"
-    ) in generated
-    assert "payload.color = float4(0.0, 1.0, 0.0, 1.0);" not in generated
-    assert "mutate(payload);" not in generated
-    assert "float4 color = payload.color;" in generated
 
 
 def test_metal_mesh_object_payload_local_reference_aliases_use_object_data():
@@ -11640,15 +11936,17 @@ def test_metal_mesh_object_payload_local_reference_aliases_use_object_data():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "object_data Payload& alias = payload;" in generated
     assert "const object_data Payload& alias = payload;" in generated
     assert "alias.color = float4(1.0, 0.0, 0.0, 1.0);" in generated
     assert (
-        "/* unsupported Metal mesh payload store: mesh payload 'alias' is const "
-        "object_data in mesh stages */"
-    ) in generated
+        "mesh payload store: mesh payload 'alias' is const object_data in "
+        "mesh stages" in refusal
+    )
     assert "alias.color = float4(0.0, 1.0, 0.0, 1.0);" not in generated
     assert "\n    Payload& alias = payload;" not in generated
     assert "\n    thread Payload& alias = payload;" not in generated
@@ -11681,18 +11979,19 @@ def test_metal_object_payload_explicit_thread_alias_is_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "/* unsupported Metal address-space local alias: initializer 'payload' "
-        "uses object_data address space but local 'alias' was declared thread; "
-        "using read-only object_data alias */"
-    ) in generated
+        "address-space local alias: initializer 'payload' uses object_data "
+        "address space but local 'alias' was declared thread" in refusal
+    )
     assert "const object_data Payload& alias = payload;" in generated
     assert (
-        "/* unsupported Metal mesh payload store: mesh payload 'alias' is "
-        "read-only object_data after address-space mismatch */"
-    ) in generated
+        "mesh payload store: mesh payload 'alias' is read-only object_data "
+        "after address-space mismatch" in refusal
+    )
     assert "alias.color = float4(1.0, 0.0, 0.0, 1.0);" not in generated
     assert "\n    thread Payload& alias = payload;" not in generated
     assert "\n    Payload& alias = payload;" not in generated
@@ -11726,15 +12025,17 @@ def test_metal_mesh_object_payload_local_pointer_aliases_use_object_data():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "object_data Payload* alias = &payload;" in generated
     assert "const object_data Payload* alias = &payload;" in generated
     assert "alias->color = float4(1.0, 0.0, 0.0, 1.0);" in generated
     assert (
-        "/* unsupported Metal mesh payload store: mesh payload 'alias' is const "
-        "object_data in mesh stages */"
-    ) in generated
+        "mesh payload store: mesh payload 'alias' is const object_data in "
+        "mesh stages" in refusal
+    )
     assert "alias->color = float4(0.0, 1.0, 0.0, 1.0);" not in generated
     assert "\n    Payload* alias = payload;" not in generated
     assert "float4 color = alias->color;" in generated
@@ -11779,7 +12080,9 @@ def test_metal_object_payload_pointer_aliases_forward_to_object_data_helpers():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "void tint(object_data Payload* payload)" in generated
     assert "float read(const object_data Payload* payload)" in generated
@@ -11789,12 +12092,12 @@ def test_metal_object_payload_pointer_aliases_forward_to_object_data_helpers():
     assert generated.count("tint(alias);") == 1
     assert generated.count("float value = read(alias);") == 2
     assert (
-        "/* unsupported Metal mesh payload call: mesh payload 'alias' is const "
-        "object_data in mesh stages and cannot be passed to mutable parameter "
-        "'payload' of 'tint' */"
-    ) in generated
+        "mesh payload call: mesh payload 'alias' is const object_data in "
+        "mesh stages and cannot be passed to mutable parameter 'payload' of"
+        " 'tint'" in refusal
+    )
     assert "float4 color = alias->color + float4(value);" in generated
-    assert "unsupported Metal address-space call" not in generated
+    assert "address-space call" not in refusal
 
 
 def test_metal_object_payload_struct_member_pointer_lvalues_track_object_data():
@@ -11842,7 +12145,9 @@ def test_metal_object_payload_struct_member_pointer_lvalues_track_object_data():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "struct Wrapper" in generated
     assert "object_data Payload* ptr;" in generated
@@ -11850,16 +12155,16 @@ def test_metal_object_payload_struct_member_pointer_lvalues_track_object_data():
     assert generated.count("tint(wrapper.ptr);") == 1
     assert generated.count("float value = read(wrapper.ptr);") == 2
     assert (
-        "/* unsupported Metal mesh payload alias: mesh payload 'wrapper.ptr' "
-        "cannot store const object_data in mesh stages */"
-    ) in generated
+        "mesh payload alias: mesh payload 'wrapper.ptr' cannot store const "
+        "object_data in mesh stages" in refusal
+    )
     assert (
-        "/* unsupported Metal mesh payload call: mesh payload 'wrapper.ptr' is "
-        "const object_data in mesh stages and cannot be passed to mutable "
-        "parameter 'payload' of 'tint' */"
-    ) in generated
+        "mesh payload call: mesh payload 'wrapper.ptr' is const object_data"
+        " in mesh stages and cannot be passed to mutable parameter "
+        "'payload' of 'tint'" in refusal
+    )
     assert "float4 color = wrapper.ptr->color + float4(value);" in generated
-    assert "unsupported Metal address-space call" not in generated
+    assert "address-space call" not in refusal
 
 
 def test_metal_object_payload_explicit_thread_pointer_alias_is_diagnostic():
@@ -11888,18 +12193,19 @@ def test_metal_object_payload_explicit_thread_pointer_alias_is_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "/* unsupported Metal address-space local alias: initializer 'payload' "
-        "uses object_data address space but local 'alias' was declared thread; "
-        "using read-only object_data alias */"
-    ) in generated
+        "address-space local alias: initializer 'payload' uses object_data "
+        "address space but local 'alias' was declared thread" in refusal
+    )
     assert "const object_data Payload* alias = &payload;" in generated
     assert (
-        "/* unsupported Metal mesh payload store: mesh payload 'alias' is "
-        "read-only object_data after address-space mismatch */"
-    ) in generated
+        "mesh payload store: mesh payload 'alias' is read-only object_data "
+        "after address-space mismatch" in refusal
+    )
     assert "alias->color = float4(1.0, 0.0, 0.0, 1.0);" not in generated
     assert "\n    thread Payload* alias = payload;" not in generated
     assert "\n    Payload* alias = payload;" not in generated
@@ -12106,12 +12412,14 @@ def test_metal_mesh_dispatch_helper_call_without_stage_context_is_diagnostic():
         };
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "/* unsupported Metal mesh dispatch helper call: function 'issue' "
-        "requires an object_data payload context */"
-    ) in generated
+        "mesh dispatch helper call: function 'issue' requires an "
+        "object_data payload context" in refusal
+    )
     assert "issue(payload);" not in generated
     assert "DispatchMesh" not in generated
 
@@ -12141,12 +12449,13 @@ def test_metal_dispatch_mesh_without_grid_context_is_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "/* unsupported Metal mesh dispatch: DispatchMesh requires "
-        "mesh_grid_properties context */"
-    ) in generated
+        "mesh dispatch: DispatchMesh requires mesh_grid_properties context" in refusal
+    )
     assert "DispatchMesh(" not in generated
     assert "_crossglMeshGrid.set_threadgroups_per_grid" not in generated
 
@@ -12180,16 +12489,18 @@ def test_metal_mesh_dispatch_helper_from_mesh_stage_without_grid_context_is_diag
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "/* unsupported Metal mesh dispatch helper call: function 'issue' "
-        "requires mesh_grid_properties context */"
-    ) in generated
+        "mesh dispatch helper call: function 'issue' requires "
+        "mesh_grid_properties context" in refusal
+    )
     assert (
-        "unsupported Metal address-space call: argument 'payload' uses "
-        "object_data address space"
-    ) not in generated
+        "address-space call: argument 'payload' uses object_data address "
+        "space" not in refusal
+    )
     assert "issue(payload);" not in generated
     assert "DispatchMesh(" not in generated
 
@@ -12753,46 +13064,48 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "object_data MeshPayload& _crossglMeshPayload [[payload]]" in generated
     assert "device MeshPayload* devicePayloads [[buffer(0)]]" in generated
     assert "constant MeshPayload* constantPayloads [[buffer(1)]]" in generated
     assert "device PayloadBlock* deviceBlocks [[buffer(2)]]" in generated
     assert (
-        "/* unsupported Metal mesh payload dispatch: payload argument must be a "
-        "threadgroup lvalue */"
-    ) in generated
+        "mesh payload dispatch: payload argument must be a threadgroup "
+        "lvalue" in refusal
+    )
     assert (
-        "/* unsupported Metal mesh payload dispatch: payload argument "
-        "'threadPayload' uses thread address space; DispatchMesh payload requires "
-        "a threadgroup lvalue */"
-    ) in generated
+        "mesh payload dispatch: payload argument 'threadPayload' uses "
+        "thread address space; DispatchMesh payload requires a threadgroup "
+        "lvalue" in refusal
+    )
     assert (
-        "/* unsupported Metal mesh payload dispatch: payload argument "
-        "'devicePayloads[0]' uses device address space; DispatchMesh payload "
-        "requires a threadgroup lvalue */"
-    ) in generated
+        "mesh payload dispatch: payload argument 'devicePayloads[0]' uses "
+        "device address space; DispatchMesh payload requires a threadgroup "
+        "lvalue" in refusal
+    )
     assert (
-        "/* unsupported Metal mesh payload dispatch: payload argument "
-        "'constantPayloads[0]' uses constant address space; DispatchMesh payload "
-        "requires a threadgroup lvalue */"
-    ) in generated
+        "mesh payload dispatch: payload argument 'constantPayloads[0]' uses"
+        " constant address space; DispatchMesh payload requires a "
+        "threadgroup lvalue" in refusal
+    )
     assert (
-        "/* unsupported Metal mesh payload dispatch: payload argument "
-        "'deviceBlocks[0].active' uses device address space; DispatchMesh payload "
-        "requires a threadgroup lvalue */"
-    ) in generated
+        "mesh payload dispatch: payload argument 'deviceBlocks[0].active' "
+        "uses device address space; DispatchMesh payload requires a "
+        "threadgroup lvalue" in refusal
+    )
     assert (
-        "/* unsupported Metal mesh payload dispatch: payload argument 'alias' "
-        "has pointer or array type; DispatchMesh payload requires a threadgroup "
-        "value lvalue */"
-    ) in generated
+        "mesh payload dispatch: payload argument 'alias' has pointer or "
+        "array type; DispatchMesh payload requires a threadgroup value "
+        "lvalue" in refusal
+    )
     assert (
-        "/* unsupported Metal mesh payload dispatch: payload argument 'payloads' "
-        "has pointer or array type; DispatchMesh payload requires a threadgroup "
-        "value lvalue */"
-    ) in generated
+        "mesh payload dispatch: payload argument 'payloads' has pointer or "
+        "array type; DispatchMesh payload requires a threadgroup value "
+        "lvalue" in refusal
+    )
     assert "_crossglMeshPayload = makePayload();" not in generated
     assert "_crossglMeshPayload = threadPayload;" not in generated
     assert "_crossglMeshPayload = devicePayloads[0];" not in generated
@@ -13883,14 +14196,14 @@ def test_metal_object_stage_dispatch_mesh_rejects_malformed_grid_arguments():
         }
     }
     """
-    scalar_generated = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(scalar_code)), "object"
+    scalar_generated, refusal_1 = metal_partial_output(
+        MetalCodeGen().generate_stage, parse_code(tokenize_code(scalar_code)), "object"
     )
 
     assert (
-        "unsupported Metal mesh dispatch: DispatchMesh grid argument "
-        "must be a uint3-compatible vector"
-    ) in scalar_generated
+        "mesh dispatch: DispatchMesh grid argument must be a "
+        "uint3-compatible vector" in refusal_1
+    )
     assert "set_threadgroups_per_grid(2)" not in scalar_generated
 
     vector_component_code = """
@@ -13902,14 +14215,16 @@ def test_metal_object_stage_dispatch_mesh_rejects_malformed_grid_arguments():
         }
     }
     """
-    vector_component_generated = MetalCodeGen().generate_stage(
-        parse_code(tokenize_code(vector_component_code)), "object"
+    vector_component_generated, refusal_2 = metal_partial_output(
+        MetalCodeGen().generate_stage,
+        parse_code(tokenize_code(vector_component_code)),
+        "object",
     )
 
     assert (
-        "unsupported Metal mesh dispatch: DispatchMesh grid component "
-        "argument 1 must be a scalar integer"
-    ) in vector_component_generated
+        "mesh dispatch: DispatchMesh grid component argument 1 must be a "
+        "scalar integer" in refusal_2
+    )
     assert "set_threadgroups_per_grid(uint3(uint3" not in vector_component_generated
 
 
@@ -14618,22 +14933,13 @@ def test_metal_threadgroup_atomic_pointer_aliases_preserve_address_space():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "threadgroup atomic_int* alias = scratch + index;" in generated
-    assert "thread atomic_int* alias = scratch + index;" not in generated
-    assert "int oldValue = bumpThreadgroup(alias, 1);" in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires device") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpDevice"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "int nextValue = atomic_fetch_add_explicit(alias + 1, oldValue, memory_order_relaxed);"
-        in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert (
-        "int rejected = 0 /* unsupported Metal address-space call: argument "
-        "'alias' uses threadgroup address space but parameter 'counters' of "
-        "'bumpDevice' requires device */;"
-    ) in generated
-    assert "atomic_store_explicit(alias, rejected, memory_order_relaxed);" in generated
-    assert "bumpDevice(alias + 2" not in generated
 
 
 def test_metal_threadgroup_atomic_ternary_pointer_aliases_preserve_address_space():
@@ -14705,27 +15011,15 @@ def test_metal_mixed_address_space_ternary_pointer_alias_emits_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="requires threadgroup"
+    ) as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpThreadgroup"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "/* unsupported Metal address-space local alias: initializer branches "
-        "'scratch' (threadgroup) and 'counters' (device) use different address "
-        "spaces; using uninitialized thread alias */"
-    ) in generated
-    assert "thread atomic_int* alias;" in generated
-    assert "thread atomic_int* alias = useShared" not in generated
-    assert (
-        "int rejected = 0 /* unsupported Metal address-space call: argument "
-        "'alias' uses thread address space but parameter 'counters' of "
-        "'bumpThreadgroup' requires threadgroup */;"
-    ) in generated
-    assert (
-        "int directRejected = 0 /* unsupported Metal address-space call: "
-        "argument '<expr>' mixes branches 'scratch' (threadgroup) and "
-        "'counters' (device) but parameter 'counters' of 'bumpThreadgroup' "
-        "requires threadgroup */;"
-    ) in generated
-    assert "bumpThreadgroup(useShared ? scratch" not in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
+    )
 
 
 @pytest.mark.parametrize("stride_type", ["int", "uint", "int64", "uint64"])
@@ -14767,9 +15061,11 @@ def test_metal_pointer_offset_rejects_noninteger_scalar_references(stride_type):
         }}
     }}
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
-    assert "unsupported Metal pointer offset assignment" in generated
+    assert "pointer offset assignment" in refusal
     assert "cursor += stride;" not in generated
 
 
@@ -14804,20 +15100,22 @@ def test_metal_mixed_address_space_pointer_assignment_emits_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "threadgroup atomic_int* alias = scratchA + index;" in generated
     assert "alias = useA ? scratchA + index : scratchB + index;" in generated
     assert "int first = bumpThreadgroup(alias, 1);" in generated
     assert (
-        "/* unsupported Metal address-space assignment: value branches "
-        "'scratchA' (threadgroup) and 'counters' (device) use different "
-        "address spaces; assignment to 'alias' requires threadgroup */"
-    ) in generated
+        "address-space assignment: value branches 'scratchA' (threadgroup) "
+        "and 'counters' (device) use different address spaces; assignment "
+        "to 'alias' requires threadgroup" in refusal
+    )
     assert (
-        "/* unsupported Metal address-space assignment: value 'counters' uses "
-        "device address space but target 'alias' uses threadgroup */"
-    ) in generated
+        "address-space assignment: value 'counters' uses device address "
+        "space but target 'alias' uses threadgroup" in refusal
+    )
     assert "alias = useShared ? scratchA + index : counters + index;" not in generated
     assert "alias = counters + index;" not in generated
     assert "int second = bumpThreadgroup(alias, first);" in generated
@@ -14857,32 +15155,15 @@ def test_metal_mixed_address_space_ternary_reference_alias_emits_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="requires threadgroup"
+    ) as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "useThreadgroup"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "threadgroup Payload& alias = useA ? scratchA[index] : scratchB[index];"
-        in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert "useThreadgroup(alias, 1.0);" in generated
-    assert (
-        "/* unsupported Metal address-space local alias: initializer branches "
-        "'scratchA' (threadgroup) and 'payloads' (device) use different address "
-        "spaces; using uninitialized thread value */"
-    ) in generated
-    assert "thread Payload mixedAlias;" in generated
-    assert "thread Payload& mixedAlias = useShared" not in generated
-    assert (
-        "/* unsupported Metal address-space call: argument 'mixedAlias' uses "
-        "thread address space but parameter 'payload' of 'useThreadgroup' "
-        "requires threadgroup */"
-    ) in generated
-    assert (
-        "/* unsupported Metal address-space call: argument '<expr>' mixes "
-        "branches 'scratchA' (threadgroup) and 'payloads' (device) but "
-        "parameter 'payload' of 'useThreadgroup' requires threadgroup */"
-    ) in generated
-    assert "useThreadgroup(mixedAlias, 2.0);" not in generated
-    assert "useThreadgroup(useShared ? scratchA" not in generated
 
 
 def test_metal_struct_pointer_member_atomics_preserve_member_address_space():
@@ -14941,29 +15222,14 @@ def test_metal_struct_pointer_member_atomics_preserve_member_address_space():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "device atomic_int* deviceCounters;" in generated
-    assert "threadgroup atomic_int* sharedCounters;" in generated
-    assert "deviceCounters [[device]]" not in generated
-    assert "sharedCounters [[threadgroup]]" not in generated
-    assert "int deviceOld = bumpDevice(bank.deviceCounters + index, 1);" in generated
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="requires threadgroup"
+    ) as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpThreadgroup"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "int rejectedThread = 0 /* unsupported Metal address-space call: "
-        "argument 'bank.deviceCounters' uses device address space but parameter "
-        "'counters' of 'bumpThreadgroup' requires threadgroup */;"
-    ) in generated
-    assert (
-        "int sharedOld = bumpThreadgroup(bank.sharedCounters + index, rejectedThread);"
-        in generated
-    )
-    assert (
-        "atomic_store_explicit(&bank.deviceCounters[index], sharedOld, memory_order_relaxed);"
-        in generated
-    )
-    assert (
-        "atomic_store_explicit(&bank.sharedCounters[index], deviceOld, memory_order_relaxed);"
-        in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
 
 
@@ -15025,41 +15291,13 @@ def test_metal_nested_pointer_member_atomic_aliases_preserve_address_space():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "threadgroup atomic_int* sharedCounters;" in generated
-    assert "device atomic_int* deviceCounters;" in generated
-    assert "thread OuterBank* bankPtr = &bank;" in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires device") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpDevice"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "threadgroup atomic_int* sharedAlias = bankPtr->inner.sharedCounters + index;"
-        in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert (
-        "device atomic_int* deviceAlias = bankPtr->inner.deviceCounters + index;"
-        in generated
-    )
-    assert "int sharedOld = bumpThreadgroup(sharedAlias, 1);" in generated
-    assert (
-        "int rejectedShared = 0 /* unsupported Metal address-space call: "
-        "argument 'sharedAlias' uses threadgroup address space but parameter "
-        "'counters' of 'bumpDevice' requires device */;"
-    ) in generated
-    assert "int deviceOld = bumpDevice(deviceAlias, rejectedShared);" in generated
-    assert (
-        "int rejectedDevice = 0 /* unsupported Metal address-space call: "
-        "argument 'deviceAlias' uses device address space but parameter "
-        "'counters' of 'bumpThreadgroup' requires threadgroup */;"
-    ) in generated
-    assert (
-        "atomic_store_explicit(sharedAlias, rejectedDevice, memory_order_relaxed);"
-        in generated
-    )
-    assert (
-        "atomic_store_explicit(deviceAlias, sharedOld + deviceOld, memory_order_relaxed);"
-        in generated
-    )
-    assert "bumpDevice(sharedAlias + 1" not in generated
-    assert "bumpThreadgroup(deviceAlias + 1" not in generated
 
 
 def test_metal_reference_member_pointer_address_spaces_preserve_diagnostics():
@@ -15103,23 +15341,13 @@ def test_metal_reference_member_pointer_address_spaces_preserve_diagnostics():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "thread Bank& ref = bank;" in generated
-    assert "Bank & ref = bank;" not in generated
+    with pytest.raises(UnsupportedMetalFeatureError, match="requires device") as error:
+        generate_code(parse_code(tokenize_code(code)))
+    assert error.value.operation == "bumpDevice"
+    assert error.value.reason == "incompatible-pointer-address-space"
     assert (
-        "int sharedOld = bumpThreadgroup(ref.sharedCounters + index, 1);" in generated
+        error.value.project_diagnostic_code == "project.translate.unsupported-feature"
     )
-    assert (
-        "int deviceOld = bumpDevice(ref.deviceCounters + index, sharedOld);"
-        in generated
-    )
-    assert (
-        "int rejected = 0 /* unsupported Metal address-space call: argument "
-        "'ref.sharedCounters' uses threadgroup address space but parameter "
-        "'counters' of 'bumpDevice' requires device */;"
-    ) in generated
-    assert "bumpDevice(ref.sharedCounters + index" not in generated
 
 
 def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values():
@@ -15285,7 +15513,9 @@ def test_metal_device_atomic_compare_exchange_preserves_expected_address_space()
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
         "bool claimDevice(device atomic_uint* counters, thread uint* expectedValues, "
@@ -15297,10 +15527,10 @@ def test_metal_device_atomic_compare_exchange_preserves_expected_address_space()
         "memory_order_relaxed);"
     ) in generated
     assert (
-        "return false /* unsupported Metal atomic compare-exchange expected pointer: "
-        "expected storage 'expectedValues' uses device address space; Metal requires "
-        "thread storage */;"
-    ) in generated
+        "atomic compare-exchange expected pointer: expected storage "
+        "'expectedValues' uses device address space; Metal requires thread "
+        "storage" in refusal
+    )
     assert (
         "bool directClaimed = atomic_compare_exchange_weak_explicit(&counters[index], "
         "&expected, 3u, memory_order_relaxed, memory_order_relaxed);"
@@ -15402,7 +15632,9 @@ def test_metal_struct_pointer_member_compare_exchange_expected_storage():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "thread uint* threadExpected;" in generated
     assert "device uint* deviceExpected;" in generated
@@ -15421,15 +15653,15 @@ def test_metal_struct_pointer_member_compare_exchange_expected_storage():
         in generated
     )
     assert (
-        "bool rejectedDirect = false /* unsupported Metal atomic compare-exchange "
-        "expected pointer: expected storage 'bank.deviceExpected' uses device "
-        "address space; Metal requires thread storage */;"
-    ) in generated
+        "atomic compare-exchange expected pointer: expected storage "
+        "'bank.deviceExpected' uses device address space; Metal requires "
+        "thread storage" in refusal
+    )
     assert (
-        "return false /* unsupported Metal atomic compare-exchange expected pointer: "
-        "expected storage 'expectedValues' uses device address space; Metal requires "
-        "thread storage */;"
-    ) in generated
+        "atomic compare-exchange expected pointer: expected storage "
+        "'expectedValues' uses device address space; Metal requires thread "
+        "storage" in refusal
+    )
     assert (
         "atomic_compare_exchange_weak_explicit(counters + index, bank.deviceExpected + index"
         not in generated
@@ -15691,23 +15923,21 @@ def test_glsl_fragment_subgroup_builtins_emit_metal_diagnostics(tmp_path):
         encoding="utf-8",
     )
 
-    generated = crosstl.translate(
+    refusal = refused_metal(
+        crosstl.translate,
         str(shader_path),
         backend="metal",
         format_output=False,
     )
 
-    assert "fragment uint4 fragment_main()" in generated
-    assert "unsupported Metal GLSL subgroup builtin: gl_SubgroupSize" in generated
     assert (
-        "unsupported Metal GLSL subgroup builtin: gl_SubgroupInvocationID" in generated
+        "GLSL subgroup builtin: gl_SubgroupSize requires compute-stage "
+        "threads_per_simdgroup value" in refusal
     )
-    assert "requires compute-stage threads_per_simdgroup value" in generated
-    assert "requires compute-stage thread_index_in_simdgroup value" in generated
-    assert "[[threads_per_simdgroup]]" not in generated
-    assert "[[thread_index_in_simdgroup]]" not in generated
-    assert "uint4(gl_SubgroupSize" not in generated
-    assert "gl_SubgroupInvocationID, 0" not in generated
+    assert (
+        "GLSL subgroup builtin: gl_SubgroupInvocationID requires compute-stage "
+        "thread_index_in_simdgroup value" in refusal
+    )
 
 
 def test_graphics_builtin_parameter_semantics_roundtrip():
@@ -16345,8 +16575,8 @@ def test_metal_raytrace_and_mesh_intrinsics():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated = generate_code(ast)
-    assert "unsupported Metal ray tracing intrinsic: TraceRay" in generated
+    generated, refusal = metal_partial_output(generate_code, ast)
+    assert "ray tracing intrinsic: TraceRay" in refusal
     assert "TraceRay();" not in generated
     assert "SetMeshOutputCounts" in generated
 
@@ -16812,7 +17042,7 @@ def test_metal_array_handling(array_test_data):
 
     struct Material {
         float values[4];  // Fixed-size array
-        vec3 colors[];    // Dynamic array
+        vec3 colors[16];  // A value array needs an element count
     };
 
     cbuffer Constants {
@@ -17470,7 +17700,7 @@ def test_metal_array_member_semantics():
     code = """
     struct VertexData {
         float weights[4] @ TEXCOORD0;
-        vec3 colors[] @ COLOR;
+        vec3 colors[2] @ COLOR;
         vec4 indexedColor @ COLOR0;
     };
     """
@@ -17479,7 +17709,7 @@ def test_metal_array_member_semantics():
     generated_code = MetalCodeGen().generate(ast)
 
     assert "float weights[4] [[attribute(5)]];" in generated_code
-    assert "float3 colors[1024] [[COLOR]];" in generated_code
+    assert "float3 colors[2] [[COLOR]];" in generated_code
     assert "float4 indexedColor [[user(Color0)]];" in generated_code
 
 
@@ -24062,9 +24292,9 @@ def test_metal_texture_gather_offset_variants_use_metal_overloads():
         "tex.gather(s, uv, offset, component::w)" in generated_code
     )
     assert (
-        "float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset0, component::x).x, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset1, component::x).y, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset2, component::x).z, "
+        "float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset0, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset1, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset2, component::x).w, "
         "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset3, component::x).w)"
         in generated_code
     )
@@ -24073,9 +24303,9 @@ def test_metal_texture_gather_offset_variants_use_metal_overloads():
         in generated_code
     )
     assert (
-        "return float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[0], component::z).x, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[1], component::z).y, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[2], component::z).z, "
+        "return float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[0], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[1], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[2], component::z).w, "
         "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[3], component::z).w);"
         in generated_code
     )
@@ -24174,17 +24404,15 @@ def test_metal_cube_texture_gather_offsets_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     offset_diagnostic = (
-        "/* unsupported Metal texture gather: textureGatherOffset "
-        "offsets require 2D or 2D-array textures */ float4(0.0)"
+        "texture gather: textureGatherOffset offsets require 2D or 2D-array textures"
     )
     offsets_diagnostic = (
-        "/* unsupported Metal texture gather: textureGatherOffsets "
-        "offsets require 2D or 2D-array textures */ float4(0.0)"
+        "texture gather: textureGatherOffsets offsets require 2D or 2D-array textures"
     )
     assert "texturecube<float> cubeMap [[texture(0)]]" in generated_code
     assert "texturecube_array<float> cubeArray [[texture(1)]]" in generated_code
@@ -24197,8 +24425,8 @@ def test_metal_cube_texture_gather_offsets_emit_diagnostics():
         "float4 gatherCubeArray(texturecube_array<float> tex, sampler s, float4 cubeLayer, int2 offset, int2 offset0, int2 offset1, int2 offset2, int2 offset3, int component)"
         in generated_code
     )
-    assert generated_code.count(offset_diagnostic) == 4
-    assert generated_code.count(offsets_diagnostic) == 4
+    assert offset_diagnostic in refusal
+    assert offsets_diagnostic in refusal
     assert ".gather(" not in generated_code
     assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
@@ -24240,14 +24468,11 @@ def test_metal_unsupported_dimension_texture_gather_emits_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported Metal texture gather: textureGather requires 2D, "
-        "2D-array, cube, or cube-array textures */ float4(0.0)"
-    )
+    diagnostic = "texture gather: textureGather requires 2D, 2D-array, cube, or cube-array textures"
     assert "texture1d<float> lineMap [[texture(0)]]" in generated_code
     assert "texture3d<float> volumeMap [[texture(1)]]" in generated_code
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
@@ -24259,7 +24484,7 @@ def test_metal_unsupported_dimension_texture_gather_emits_diagnostics():
         "float4 gatherVolume(texture3d<float> tex, sampler s, float3 volumeUv, int component)"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 6
+    assert diagnostic in refusal
     assert ".gather(" not in generated_code
     assert "textureGather(" not in generated_code
 
@@ -24331,15 +24556,15 @@ def test_metal_texture_gather_offsets_mix_literal_and_dynamic_offsets():
     }
     for component, component_option in components.items():
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(-1, 0), {component_option}).x"
+            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(-1, 0), {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), dynamic0, {component_option}).y"
+            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), dynamic0, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, -1), {component_option}).z"
+            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, -1), {component_option}).w"
             in generated_code
         )
         assert (
@@ -24421,15 +24646,15 @@ def test_metal_direct_stage_gather_offsets_use_input_members():
         "component::w",
     ]:
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset0, {component_option}).x"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset0, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset1, {component_option}).y"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset1, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset2, {component_option}).z"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset2, {component_option}).w"
             in generated_code
         )
         assert (
@@ -24511,8 +24736,8 @@ def test_metal_texture_sample_offset_variants_use_sample_offsets():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
@@ -24542,8 +24767,8 @@ def test_metal_texture_sample_offset_variants_use_sample_offsets():
         in generated_code
     )
     assert (
-        "return /* unsupported Metal texture offset: textureOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0);"
-        in generated_code
+        "texture offset: textureOffset offsets require 2D, 2D-array, or 3D "
+        "textures" in refusal
     )
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
@@ -24708,8 +24933,8 @@ def test_metal_cube_texture_sample_offsets_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "texturecube<float> cubeMap [[texture(0)]]" in generated_code
@@ -24718,40 +24943,28 @@ def test_metal_cube_texture_sample_offsets_emit_diagnostics():
     assert "depthcube_array<float> shadowArray [[texture(3)]]" in generated_code
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture offset: textureOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
-        )
-        == 4
+        "texture offset: textureOffset offsets require 2D, 2D-array, or 3D textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture offset: textureLodOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
-        )
-        == 4
+        "texture offset: textureLodOffset offsets require 2D, 2D-array, or 3D textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture offset: textureGradOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
-        )
-        == 4
+        "texture offset: textureGradOffset offsets require 2D, 2D-array, or 3D textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture compare: textureCompareOffset offsets require 2D or 2D-array depth textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareOffset offsets require 2D or 2D-array depth textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture compare: textureCompareLodOffset offsets require 2D or 2D-array depth textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareLodOffset offsets require 2D or 2D-array depth textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture compare: textureCompareGradOffset offsets require 2D or 2D-array depth textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareGradOffset offsets require 2D or 2D-array depth textures"
+        in refusal
     )
     assert ".sample(" not in generated_code
     assert ".sample_compare(" not in generated_code
@@ -24810,8 +25023,8 @@ def test_metal_unsupported_cube_offsets_and_supported_projection_thread_samplers
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert (
@@ -24844,8 +25057,8 @@ def test_metal_unsupported_cube_offsets_and_supported_projection_thread_samplers
         "cubeMap.sample(cubeMapSampler, cubeProj.xyz / cubeProj.w, level(lod))"
         in generated_code
     )
-    assert generated_code.count("unsupported Metal texture offset") == 3
-    assert generated_code.count("unsupported Metal projected texture") == 1
+    assert "texture offset" in refusal
+    assert "projected texture" in refusal
 
 
 def test_metal_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_members():
@@ -25019,8 +25232,8 @@ def test_metal_projected_texture_variants_use_sample_projection():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
@@ -25077,8 +25290,8 @@ def test_metal_projected_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "return /* unsupported Metal projected texture: textureProj requires 1D, 2D, or 3D projection coordinates */ float4(0.0);"
-        in generated_code
+        "projected texture: textureProj requires 1D, 2D, or 3D projection "
+        "coordinates" in refusal
     )
     assert "textureProj(" not in generated_code
     assert "textureProjOffset(" not in generated_code
@@ -26228,7 +26441,9 @@ def test_metal_projected_cube_shadow_compare_lowers_supported_forms():
     }
     """
 
-    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert "depthcube<float> cubeMap [[texture(0)]]" in generated_code
     assert "depthcube_array<float> cubeArray [[texture(1)]]" in generated_code
@@ -26251,10 +26466,8 @@ def test_metal_projected_cube_shadow_compare_lowers_supported_forms():
         "textureCompareProjGradOffset",
     }:
         assert (
-            generated_code.count(
-                f"/* unsupported Metal texture compare: {func_name} offsets require 2D or 2D-array depth textures */ 0.0"
-            )
-            == 1
+            f"texture compare: {func_name} offsets require 2D or 2D-array depth textures"
+            in refusal
         )
     coordinate_diagnostic_counts = {
         "textureCompareProj": 1,
@@ -26264,10 +26477,8 @@ def test_metal_projected_cube_shadow_compare_lowers_supported_forms():
     }
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported Metal texture compare: {func_name} requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates */ 0.0"
-            )
-            == count
+            f"texture compare: {func_name} requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates"
+            in refusal
         )
     assert "textureCompareProj(" not in generated_code
     assert "textureCompareProjOffset(" not in generated_code
@@ -26312,8 +26523,8 @@ def test_metal_direct_projected_cube_texture_lowers_supported_color_forms():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "texturecube<float> cubeMap [[texture(0)]]" in generated_code
@@ -26340,12 +26551,12 @@ def test_metal_direct_projected_cube_texture_lowers_supported_color_forms():
         in generated_code
     )
     assert (
-        "/* unsupported Metal projected texture: textureProjLodOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
-        in generated_code
+        "projected texture: textureProjLodOffset offsets require 2D, "
+        "2D-array, or 3D textures" in refusal
     )
     assert (
-        "/* unsupported Metal projected texture: textureProjGradOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
-        in generated_code
+        "projected texture: textureProjGradOffset offsets require 2D, "
+        "2D-array, or 3D textures" in refusal
     )
     coordinate_diagnostic_counts = {
         "textureProj": 1,
@@ -26355,10 +26566,8 @@ def test_metal_direct_projected_cube_texture_lowers_supported_color_forms():
     }
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported Metal projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
-            )
-            == count
+            f"projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates"
+            in refusal
         )
     assert "textureProj(cubeMap" not in generated_code
     assert "textureProj(cubeArray" not in generated_code
@@ -26496,8 +26705,8 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "array<texturecube<float>, 4> cubeMaps [[texture(0)]]" in generated_code
@@ -26538,8 +26747,8 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
         in generated_code
     )
     assert (
-        "/* unsupported Metal projected texture: textureProjGradOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
-        in generated_code
+        "projected texture: textureProjGradOffset offsets require 2D, "
+        "2D-array, or 3D textures" in refusal
     )
     projected_counts = {
         "textureProj": 1,
@@ -26548,10 +26757,8 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
     }
     for func_name, count in projected_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported Metal projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
-            )
-            == count
+            f"projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates"
+            in refusal
         )
     default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     assert (
@@ -26567,8 +26774,8 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
         in generated_code
     )
     assert (
-        "/* unsupported Metal texture compare: textureCompareProjGradOffset offsets require 2D or 2D-array depth textures */ 0.0"
-        in generated_code
+        "texture compare: textureCompareProjGradOffset offsets require 2D "
+        "or 2D-array depth textures" in refusal
     )
     compare_counts = {
         "textureCompareProj": 1,
@@ -26577,10 +26784,8 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
     }
     for func_name, count in compare_counts.items():
         assert (
-            generated_code.count(
-                f"/* unsupported Metal texture compare: {func_name} requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates */ 0.0"
-            )
-            == count
+            f"texture compare: {func_name} requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates"
+            in refusal
         )
     assert (
         "projectedCube(cubeMaps, input.layer, input.cubeProj, input.lod, input.ddx, input.ddy, input.offset)"
@@ -27213,15 +27418,11 @@ def test_metal_unsupported_cube_shadow_gather_compare_offsets_emit_diagnostics()
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported Metal texture gather compare: "
-        "textureGatherCompareOffset offsets require 2D or 2D-array depth textures */ "
-        "float4(0.0)"
-    )
+    diagnostic = "texture gather compare: textureGatherCompareOffset offsets require 2D or 2D-array depth textures"
     assert "depthcube<float> cubeMap [[texture(0)]]" in generated_code
     assert "depthcube_array<float> cubeArray [[texture(1)]]" in generated_code
     assert "[[sampler(" not in generated_code
@@ -27234,7 +27435,7 @@ def test_metal_unsupported_cube_shadow_gather_compare_offsets_emit_diagnostics()
         "float4 cubeArrayOffset(depthcube_array<float> tex, float4 cubeLayer, float depth, int2 offset)"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 3
+    assert diagnostic in refusal
     assert (
         "cubeOffset(cubeMap, input.direction, input.depth, input.offset)"
         in generated_code
@@ -27494,7 +27695,9 @@ def test_metal_cube_shadow_compare_offsets_report_unsupported():
     }
     """
 
-    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
     assert "depthcube<float> cubeMap [[texture(0)]]" in generated_code
     assert "depthcube_array<float> cubeArray [[texture(1)]]" in generated_code
@@ -27508,22 +27711,16 @@ def test_metal_cube_shadow_compare_offsets_report_unsupported():
         in generated_code
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture compare: textureCompareOffset offsets require 2D or 2D-array depth textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareOffset offsets require 2D or 2D-array depth textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture compare: textureCompareLodOffset offsets require 2D or 2D-array depth textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareLodOffset offsets require 2D or 2D-array depth textures"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture compare: textureCompareGradOffset offsets require 2D or 2D-array depth textures */ 0.0"
-        )
-        == 2
+        "texture compare: textureCompareGradOffset offsets require 2D or 2D-array depth textures"
+        in refusal
     )
     assert "textureCompareOffset(" not in generated_code
     assert "textureCompareLodOffset(" not in generated_code
@@ -28043,19 +28240,22 @@ def test_metal_texture_query_resource_descriptors():
             ),
         },
     }
-    assert (
+    with codegen.refusals.active():
+        assert codegen.texture_query_levels_expression("colorImage") == "0"
+        assert codegen.refusals.reasons[-1] == (
+            "texture query: textureQueryLevels on texture2d<float, access::read_write>"
+        )
+        assert codegen.texture_query_levels_expression("msTex") == "1"
+        assert (
+            codegen.texture_query_levels_expression("colorMap")
+            == "int(colorMap.get_num_mip_levels())"
+        )
+        assert codegen.texture_samples_expression("colorMap") == "0"
+        assert codegen.refusals.reasons[-1] == (
+            "texture samples query: requires multisample texture"
+        )
+    with pytest.raises(MetalLoweringRefused, match="textureQueryLevels"):
         codegen.texture_query_levels_expression("colorImage")
-        == "/* unsupported Metal texture query: textureQueryLevels on texture2d<float, access::read_write> */ 0"
-    )
-    assert codegen.texture_query_levels_expression("msTex") == "1"
-    assert (
-        codegen.texture_query_levels_expression("colorMap")
-        == "int(colorMap.get_num_mip_levels())"
-    )
-    assert (
-        codegen.texture_samples_expression("colorMap")
-        == "/* unsupported Metal texture samples query: requires multisample texture */ 0"
-    )
     assert codegen.texture_samples_expression("msArray") == (
         "int(msArray.get_num_samples())"
     )
@@ -28212,45 +28412,37 @@ def test_metal_storage_image_levels_and_lod_queries_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture query: textureQueryLevels on texture2d<float, access::read_write> */ 0"
-        )
-        == 2
+        "texture query: textureQueryLevels on texture2d<float, access::read_write>"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture query: textureQueryLevels on texture3d<float, access::read_write> */ 0"
-        )
-        == 2
+        "texture query: textureQueryLevels on texture3d<float, access::read_write>"
+        in refusal
     )
     assert (
-        "/* unsupported Metal texture query: textureQueryLevels on texture2d_array<float, access::read_write> */ 0"
-        in generated_code
+        "texture query: textureQueryLevels on texture2d_array<float, "
+        "access::read_write>" in refusal
     )
     assert (
-        "/* unsupported Metal texture query: textureQueryLevels on texture2d<uint, access::read_write> */ 0"
-        in generated_code
+        "texture query: textureQueryLevels on texture2d<uint, "
+        "access::read_write>" in refusal
     )
     assert (
-        "/* unsupported Metal texture query: textureQueryLevels on texture3d<int, access::read_write> */ 0"
-        in generated_code
+        "texture query: textureQueryLevels on texture3d<int, "
+        "access::read_write>" in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture query: textureQueryLod on texture2d<float, access::read_write> */ float2(0.0)"
-        )
-        == 2
+        "texture query: textureQueryLod on texture2d<float, access::read_write>"
+        in refusal
     )
     assert (
-        generated_code.count(
-            "/* unsupported Metal texture query: textureQueryLod on texture3d<float, access::read_write> */ float2(0.0)"
-        )
-        == 2
+        "texture query: textureQueryLod on texture3d<float, access::read_write>"
+        in refusal
     )
     assert "textureQueryLevels(" not in generated_code
     assert "textureQueryLod(" not in generated_code
@@ -28675,19 +28867,17 @@ def test_metal_non_multisample_texture_samples_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported Metal texture samples query: requires multisample texture */ 0"
-    )
+    diagnostic = "texture samples query: requires multisample texture"
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
     assert "texture2d_array<float> layerMap [[texture(1)]]" in generated_code
     assert "texturecube<float> cubeMap [[texture(2)]]" in generated_code
     assert "texturecube_array<float> cubeArray [[texture(3)]]" in generated_code
     assert "array<texture2d<float>, 4> textures" in generated_code
-    assert generated_code.count(diagnostic) == 10
+    assert diagnostic in refusal
     assert "textureSamples(" not in generated_code
     assert "get_num_samples" not in generated_code
     assert " sampler " not in generated_code
@@ -28736,13 +28926,11 @@ def test_metal_storage_image_samples_queries_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported Metal texture samples query: requires multisample texture */ 0"
-    )
+    diagnostic = "texture samples query: requires multisample texture"
     assert (
         "texture2d<float, access::read_write> colorImage [[texture(0)]]"
         in generated_code
@@ -28761,7 +28949,7 @@ def test_metal_storage_image_samples_queries_emit_diagnostics():
     assert (
         "texture3d<int, access::read_write> intVolume [[texture(4)]]" in generated_code
     )
-    assert generated_code.count(diagnostic) == 13
+    assert diagnostic in refusal
     assert "imageSamples(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "get_num_samples" not in generated_code
@@ -28826,11 +29014,11 @@ def test_metal_storage_image_sampling_and_fetch_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = "unsupported Metal storage image texture operation"
+    diagnostic = "storage image texture operation"
     assert (
         "texture2d<float, access::read_write> colorImage [[texture(0)]]"
         in generated_code
@@ -28843,7 +29031,7 @@ def test_metal_storage_image_sampling_and_fetch_emit_diagnostics():
         "texture2d_array<float, access::read_write> layerImage [[texture(2)]]"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 20
+    assert diagnostic in refusal
     for operation in {
         "texture",
         "textureLod",
@@ -28851,7 +29039,7 @@ def test_metal_storage_image_sampling_and_fetch_emit_diagnostics():
         "texelFetch",
         "texelFetchOffset",
     }:
-        assert f"{operation} on texture2d<float, access::read_write>" in generated_code
+        assert f"{operation} on texture2d<float, access::read_write>" in refusal
     assert ".sample(" not in generated_code
     assert ".read(" not in generated_code
     assert "textureLod(" not in generated_code
@@ -28919,12 +29107,12 @@ def test_metal_storage_image_compare_calls_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    comparison_diagnostic = "unsupported Metal storage image texture comparison"
-    gather_diagnostic = "unsupported Metal storage image texture operation"
+    comparison_diagnostic = "storage image texture comparison"
+    gather_diagnostic = "storage image texture operation"
     assert (
         "texture2d<float, access::read_write> colorImage [[texture(0)]]"
         in generated_code
@@ -28938,8 +29126,8 @@ def test_metal_storage_image_compare_calls_emit_diagnostics():
         in generated_code
     )
     assert "sampler compareSampler [[sampler(0)]]" in generated_code
-    assert generated_code.count(comparison_diagnostic) == 14
-    assert generated_code.count(gather_diagnostic) == 4
+    assert comparison_diagnostic in refusal
+    assert gather_diagnostic in refusal
     assert "sample_compare" not in generated_code
     assert "textureCompare(" not in generated_code
     assert "textureGatherCompare(" not in generated_code
@@ -29050,8 +29238,8 @@ def test_metal_multisample_sampling_operations_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
@@ -29073,13 +29261,11 @@ def test_metal_multisample_sampling_operations_emit_diagnostics():
         "textureGatherOffset",
     }:
         assert (
-            f"unsupported Metal multisample texture call: {func_name} on texture2d_ms<float>"
-            in generated_code
-        )
+            f"multisample texture call: {func_name} on texture2d_ms<float>"
+        ) in refusal
         assert (
-            f"unsupported Metal multisample texture call: {func_name} on texture2d_ms_array<float>"
-            in generated_code
-        )
+            f"multisample texture call: {func_name} on texture2d_ms_array<float>"
+        ) in refusal
 
     assert ".sample(" not in generated_code
     assert ".gather(" not in generated_code
@@ -29146,8 +29332,8 @@ def test_metal_multisample_compare_operations_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
@@ -29163,13 +29349,11 @@ def test_metal_multisample_compare_operations_emit_diagnostics():
         "textureCompareGradOffset",
     }:
         assert (
-            f"unsupported Metal multisample texture comparison: {func_name} on texture2d_ms<float>"
-            in generated_code
-        )
+            f"multisample texture comparison: {func_name} on texture2d_ms<float>"
+        ) in refusal
         assert (
-            f"unsupported Metal multisample texture comparison: {func_name} on texture2d_ms_array<float>"
-            in generated_code
-        )
+            f"multisample texture comparison: {func_name} on texture2d_ms_array<float>"
+        ) in refusal
 
     for func_name in {
         "textureCompareProj",
@@ -29177,19 +29361,16 @@ def test_metal_multisample_compare_operations_emit_diagnostics():
         "textureCompareProjGradOffset",
     }:
         assert (
-            f"unsupported Metal multisample texture comparison: {func_name} on texture2d_ms<float>"
-            in generated_code
-        )
+            f"multisample texture comparison: {func_name} on texture2d_ms<float>"
+        ) in refusal
 
     for func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
         assert (
-            f"unsupported Metal multisample texture gather comparison: {func_name} on texture2d_ms<float>"
-            in generated_code
-        )
+            f"multisample texture gather comparison: {func_name} on texture2d_ms<float>"
+        ) in refusal
         assert (
-            f"unsupported Metal multisample texture gather comparison: {func_name} on texture2d_ms_array<float>"
-            in generated_code
-        )
+            f"multisample texture gather comparison: {func_name} on texture2d_ms_array<float>"
+        ) in refusal
 
     assert ".sample_compare(" not in generated_code
     assert ".gather_compare(" not in generated_code
@@ -29221,8 +29402,8 @@ def test_metal_multisample_compare_diagnostics_do_not_create_implicit_samplers()
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
@@ -29231,12 +29412,12 @@ def test_metal_multisample_compare_diagnostics_do_not_create_implicit_samplers()
     assert "msArraySampler [[sampler" not in generated_code
     assert "sampler(mag_filter" not in generated_code
     assert (
-        "unsupported Metal multisample texture comparison: textureCompare on texture2d_ms<float>"
-        in generated_code
+        "multisample texture comparison: textureCompare on "
+        "texture2d_ms<float>" in refusal
     )
     assert (
-        "unsupported Metal multisample texture gather comparison: textureGatherCompare on texture2d_ms_array<float>"
-        in generated_code
+        "multisample texture gather comparison: textureGatherCompare on "
+        "texture2d_ms_array<float>" in refusal
     )
     assert ".sample_compare(" not in generated_code
     assert ".gather_compare(" not in generated_code
@@ -29273,8 +29454,8 @@ def test_metal_multisample_texture_query_lod_emits_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
@@ -29288,16 +29469,11 @@ def test_metal_multisample_texture_query_lod_emits_diagnostics():
     assert "calculate_clamped_lod" not in generated_code
     assert "textureQueryLod(" not in generated_code
     assert (
-        generated_code.count(
-            "unsupported Metal multisample texture query: textureQueryLod on texture2d_ms<float>"
-        )
-        == 2
+        "multisample texture query: textureQueryLod on texture2d_ms<float>" in refusal
     )
     assert (
-        generated_code.count(
-            "unsupported Metal multisample texture query: textureQueryLod on texture2d_ms_array<float>"
-        )
-        == 2
+        "multisample texture query: textureQueryLod on texture2d_ms_array<float>"
+        in refusal
     )
 
 
@@ -29333,14 +29509,11 @@ def test_metal_multisample_texel_fetch_offsets_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = (
-        "/* unsupported Metal texel fetch offset: "
-        "multisample textures do not support offsets */ float4(0.0)"
-    )
+    diagnostic = "texel fetch offset: multisample textures do not support offsets"
     assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
     assert "texture2d_ms_array<float> msArray [[texture(1)]]" in generated_code
     assert (
@@ -29351,7 +29524,7 @@ def test_metal_multisample_texel_fetch_offsets_emit_diagnostics():
         "float4 offsetArray(texture2d_ms_array<float> tex, int3 pixelLayer, int sampleIndex, int2 offset)"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 4
+    assert diagnostic in refusal
     assert "texelFetchOffset(" not in generated_code
     assert ".read(" not in generated_code
 
@@ -29394,8 +29567,8 @@ def test_metal_cube_texel_fetches_emit_diagnostics():
     }
     """
 
-    generated_code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
+    generated_code, refusal = metal_partial_output(
+        MetalCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
     assert "texturecube<float> cubeMap [[texture(0)]]" in generated_code
@@ -29408,30 +29581,10 @@ def test_metal_cube_texel_fetches_emit_diagnostics():
         "float4 fetchCubeArray(texturecube_array<float> tex, int4 cubeLayerCoord, int lod, int3 offset)"
         in generated_code
     )
-    assert (
-        generated_code.count(
-            "unsupported Metal texel fetch: texelFetch on texturecube<float>"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "unsupported Metal texel fetch: texelFetchOffset on texturecube<float>"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "unsupported Metal texel fetch: texelFetch on texturecube_array<float>"
-        )
-        == 2
-    )
-    assert (
-        generated_code.count(
-            "unsupported Metal texel fetch: texelFetchOffset on texturecube_array<float>"
-        )
-        == 2
-    )
+    assert "texel fetch: texelFetch on texturecube<float>" in refusal
+    assert "texel fetch: texelFetchOffset on texturecube<float>" in refusal
+    assert "texel fetch: texelFetch on texturecube_array<float>" in refusal
+    assert "texel fetch: texelFetchOffset on texturecube_array<float>" in refusal
     assert ".read(" not in generated_code
     assert "texelFetch(" not in generated_code
     assert "texelFetchOffset(" not in generated_code
@@ -30914,8 +31067,9 @@ def test_metal_struct_member_resource_array_alias_texture_ops_preserve_metadata(
     assert "texture2d<float> texAlias = pack.textures[layer];" in generated_code
     assert "sampler sampAlias = pack.texturesSampler[layer];" in generated_code
     assert (
-        "float4 implicitColor = texAlias.sample(pack.texturesSampler[layer], uv);"
-        in (generated_code)
+        "float4 implicitColor = texAlias.sample(pack.texturesSampler[layer], uv);" in (
+            generated_code
+        )
     )
     assert (
         "int2 dims = int2(texAlias.get_width(uint(1)), "
@@ -31989,7 +32143,7 @@ def test_metal_sampler_1d_array_sampling_and_queries():
     """
 
     ast = crosstl.translator.parse(shader)
-    generated_code = MetalCodeGen().generate(ast)
+    generated_code, refusal = metal_partial_output(MetalCodeGen().generate, ast)
 
     assert "texture1d_array<float> lineArray [[texture(0)]]" in generated_code
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
@@ -31998,9 +32152,8 @@ def test_metal_sampler_1d_array_sampling_and_queries():
         in generated_code
     )
     assert (
-        "int2 dims = /* unsupported Metal texture size query: textureSize on "
-        "texture1d_array<float> requires a compile-time literal mip level */ "
-        "int2(0);" in generated_code
+        "texture size query: textureSize on texture1d_array<float> requires"
+        " a compile-time literal mip level" in refusal
     )
     assert (
         "int2 literalDims = int2(tex.get_width(uint(0)), tex.get_array_size());"
@@ -32009,14 +32162,10 @@ def test_metal_sampler_1d_array_sampling_and_queries():
     assert "int(tex.get_num_mip_levels())" in generated_code
     assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y))" in generated_code
     assert (
-        "/* unsupported Metal texture sampling: textureLod on "
-        "texture1d_array<float> supports only implicit sampling */ float4(0.0)"
-        in generated_code
+        "texture sampling: textureLod on texture1d_array<float> supports "
+        "only implicit sampling" in refusal
     )
-    assert (
-        "float2 lodInfo = /* unsupported Metal texture query: "
-        "textureQueryLod on texture1d_array<float> */ float2(0.0);" in generated_code
-    )
+    assert "texture query: textureQueryLod on texture1d_array<float>" in refusal
     assert "tex.read(uint(pixelLayer.x), uint(pixelLayer.y), uint(0))" in generated_code
     assert (
         "tex.read(uint((pixelLayer.x + offset)), uint(pixelLayer.y), uint(0))"
@@ -32067,7 +32216,7 @@ def test_metal_sampler_1d_sampling_options_emit_target_diagnostics():
     """
 
     ast = crosstl.translator.parse(shader)
-    generated_code = MetalCodeGen().generate(ast)
+    generated_code, refusal = metal_partial_output(MetalCodeGen().generate, ast)
 
     assert "texture1d<float> lineMap [[texture(0)]]" in generated_code
     assert "tex.sample(samp, u)" in generated_code
@@ -32075,32 +32224,32 @@ def test_metal_sampler_1d_sampling_options_emit_target_diagnostics():
     assert "tex.read(uint(pixel), uint(0))" in generated_code
     assert "tex.read(uint((pixel + offset)), uint(0))" in generated_code
     assert (
-        "/* unsupported Metal texture sampling: texture on texture1d<float> "
-        "supports only implicit sampling */ float4(0.0)" in generated_code
+        "texture sampling: texture on texture1d<float> supports only "
+        "implicit sampling" in refusal
     )
     assert (
-        "/* unsupported Metal texture sampling: textureLod on texture1d<float> "
-        "supports only implicit sampling */ float4(0.0)" in generated_code
+        "texture sampling: textureLod on texture1d<float> supports only "
+        "implicit sampling" in refusal
     )
     assert (
-        "/* unsupported Metal texture sampling: textureGrad on texture1d<float> "
-        "supports only implicit sampling */ float4(0.0)" in generated_code
+        "texture sampling: textureGrad on texture1d<float> supports only "
+        "implicit sampling" in refusal
     )
     assert (
-        "/* unsupported Metal projected texture: textureProj bias is not "
-        "supported for Metal 1D textures */ float4(0.0)" in generated_code
+        "projected texture: textureProj bias is not supported for Metal 1D "
+        "textures" in refusal
     )
     assert (
-        "/* unsupported Metal projected texture: textureProjLod explicit LOD is "
-        "not supported for Metal 1D textures */ float4(0.0)" in generated_code
+        "projected texture: textureProjLod explicit LOD is not supported "
+        "for Metal 1D textures" in refusal
     )
     assert (
-        "/* unsupported Metal texel fetch: texelFetch on texture1d<float> "
-        "requires a compile-time literal mip level */ float4(0.0)" in generated_code
+        "texel fetch: texelFetch on texture1d<float> requires a "
+        "compile-time literal mip level" in refusal
     )
     assert (
-        "/* unsupported Metal texture offset: textureOffset offsets require 2D, "
-        "2D-array, or 3D textures */ float4(0.0)" in generated_code
+        "texture offset: textureOffset offsets require 2D, 2D-array, or 3D "
+        "textures" in refusal
     )
     assert "level(lod)" not in generated_code
     assert "gradient2d" not in generated_code
@@ -32266,7 +32415,7 @@ def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
     """
 
     ast = crosstl.translator.parse(shader)
-    generated_code = MetalCodeGen().generate(ast)
+    generated_code, refusal = metal_partial_output(MetalCodeGen().generate, ast)
 
     assert (
         "texture2d_ms<float, access::read> colorImage [[texture(0)]]" in generated_code
@@ -32306,8 +32455,8 @@ def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
         in generated_code
     )
     assert (
-        "uint aliasAtomicOld = /* unsupported Metal multisample image atomic: imageAtomicAdd on texture2d_ms<uint, access::read> */ 0u;"
-        in generated_code
+        "multisample image atomic: imageAtomicAdd on texture2d_ms<uint, "
+        "access::read>" in refusal
     )
     assert (
         "texture2d_ms_array<float, access::read> imageAlias = image;" in generated_code
@@ -32320,18 +32469,9 @@ def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
         "return chainedImageAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
         in generated_code
     )
-    assert (
-        "unsupported Metal multisample image store: imageStore on texture2d_ms<float"
-        in generated_code
-    )
-    assert (
-        "unsupported Metal multisample image store: imageStore on texture2d_ms<uint"
-        in generated_code
-    )
-    assert (
-        "unsupported Metal multisample image atomic: imageAtomicAdd on texture2d_ms<uint"
-        in generated_code
-    )
+    assert "multisample image store: imageStore on texture2d_ms<float" in refusal
+    assert "multisample image store: imageStore on texture2d_ms<uint" in refusal
+    assert "multisample image atomic: imageAtomicAdd on texture2d_ms<uint" in refusal
     assert "texture2d_ms<float, access::read_write>" not in generated_code
     assert "texture2d_ms<uint, access::read_write>" not in generated_code
     assert "texture2d_ms_array<float, access::read_write>" not in generated_code
@@ -32376,7 +32516,7 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
     """
 
     ast = crosstl.translator.parse(shader)
-    generated_code = MetalCodeGen().generate(ast)
+    generated_code, refusal = metal_partial_output(MetalCodeGen().generate, ast)
 
     assert (
         "texture2d_ms_array<float, access::read> layered [[texture(0)]]"
@@ -32418,24 +32558,18 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
         "uint aliasedCount = counterAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex)).x;"
         in generated_code
     )
-    diagnostic_prefix = "un" + "supported Metal multisample image"
+    diagnostic_prefix = "multisample image"
     assert (
         f"{diagnostic_prefix} store: imageStore on texture2d_ms_array<float, access::read>"
-        in generated_code
+        in refusal
     )
     assert (
         f"{diagnostic_prefix} store: imageStore on texture2d_ms_array<uint, access::read>"
-        in generated_code
+        in refusal
     )
     assert (
-        "uint atomicOld = /* "
         f"{diagnostic_prefix} atomic: imageAtomicAdd on "
-        "texture2d_ms_array<uint, access::read> */ 0u;" in generated_code
-    )
-    assert (
-        "uint aliasAtomicOld = /* "
-        f"{diagnostic_prefix} atomic: imageAtomicAdd on "
-        "texture2d_ms_array<uint, access::read> */ 0u;" in generated_code
+        "texture2d_ms_array<uint, access::read>" in refusal
     )
     assert "texture2d_ms_array<float, access::read_write>" not in generated_code
     assert "texture2d_ms_array<uint, access::read_write>" not in generated_code
@@ -33542,12 +33676,14 @@ def test_metal_ray_tracing_report_hit_emits_unsupported_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
-    assert "unsupported Metal ray tracing intrinsic: ReportHit" in generated
+    assert "ray tracing intrinsic: ReportHit" in refusal
     assert (
         "intersection acceptance is expressed through the Metal intersection return value"
-        in generated
+        in refusal
     )
     assert "ReportHit(1.0, 0, attr);" not in generated
 
@@ -33572,12 +33708,14 @@ def test_metal_ray_tracing_ignore_and_accept_hit_emit_diagnostics():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
-    assert "unsupported Metal ray tracing intrinsic: AcceptHitAndEndSearch" in generated
-    assert "Metal hit acceptance is controlled by intersection results" in generated
-    assert "unsupported Metal ray tracing intrinsic: IgnoreHit" in generated
-    assert "Metal does not expose a direct ignore-intersection intrinsic" in generated
+    assert "ray tracing intrinsic: AcceptHitAndEndSearch" in refusal
+    assert "Metal hit acceptance is controlled by intersection results" in refusal
+    assert "ray tracing intrinsic: IgnoreHit" in refusal
+    assert "Metal does not expose a direct ignore-intersection intrinsic" in refusal
     assert "AcceptHitAndEndSearch();" not in generated
     assert "IgnoreHit();" not in generated
 
@@ -33599,7 +33737,9 @@ def test_metal_ray_query_operations_lower_to_compile_safe_helpers():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert "using namespace metal::raytracing;" in generated
     assert "struct CglRayDesc" in generated
@@ -33648,12 +33788,14 @@ def test_metal_mesh_dispatch_without_grid_context_emits_diagnostic():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
+    generated, refusal = metal_partial_output(
+        generate_code, parse_code(tokenize_code(code))
+    )
 
     assert (
-        "unsupported Metal mesh payload dispatch: payload argument 'payload' "
-        "uses thread address space"
-    ) in generated
+        "mesh payload dispatch: payload argument 'payload' uses thread "
+        "address space" in refusal
+    )
     assert "set_threadgroups_per_grid" in generated
     assert "object_data Payload& payload [[payload]]" in generated
 

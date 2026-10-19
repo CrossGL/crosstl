@@ -92,8 +92,7 @@ def test_subgroup_width_rules_emit_exact_directx_contract(tmp_path, with_workgro
         "wave64": 64,
     }
     assert all(
-        entry["subgroupWidthRule"]
-        == {
+        entry["subgroupWidthRule"] == {
             "expression": "WIDTH",
             "path": 'project.subgroup_width_rules["shaders/wave.metal"]',
             "sourcePattern": "shaders/wave.metal",

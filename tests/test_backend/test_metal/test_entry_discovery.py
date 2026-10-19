@@ -1,9 +1,13 @@
+import os
 import textwrap
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from crosstl.backend.Metal.preprocessor import (
+    ENTRY_DISCOVERY_CACHE_LIMIT,
     MetalPreprocessor,
+    _discover_preprocessed_metal_entries,
     _unresolved_metal_host_name_diagnostics,
     discover_metal_entry_points,
 )
@@ -12,6 +16,113 @@ from crosstl.translator.entry_discovery import (
     ENTRY_DISCOVERY_UNAVAILABLE,
 )
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+
+
+@pytest.fixture(autouse=True)
+def isolated_entry_discovery_cache():
+    _discover_preprocessed_metal_entries.cache_clear()
+    yield
+    _discover_preprocessed_metal_entries.cache_clear()
+
+
+def test_entry_discovery_reuses_expanded_text_without_retaining_path(monkeypatch):
+    calls = []
+    original = MetalPreprocessor._find_template_functions
+
+    def counted(self, source):
+        calls.append(source)
+        return original(self, source)
+
+    monkeypatch.setattr(MetalPreprocessor, "_find_template_functions", counted)
+    first = discover_metal_entry_points(
+        "kernel void first() {}", file_path="first.metal"
+    )
+    initial_calls = len(calls)
+    assert initial_calls > 0
+    second = discover_metal_entry_points(
+        "kernel void NAME() {}", file_path="second.metal", defines={"NAME": "first"}
+    )
+    assert len(calls) == initial_calls
+    assert second.entries == first.entries
+    assert first.source_path == "first.metal"
+    assert second.source_path == "second.metal"
+    assert _discover_preprocessed_metal_entries.cache_info().hits == 1
+
+
+def test_entry_discovery_cache_is_bounded_and_evicts_old_sources():
+    for index in range(ENTRY_DISCOVERY_CACHE_LIMIT + 1):
+        discover_metal_entry_points(f"kernel void entry_{index}() {{}}")
+    info = _discover_preprocessed_metal_entries.cache_info()
+    assert info.currsize == info.maxsize == ENTRY_DISCOVERY_CACHE_LIMIT
+    assert info.misses == ENTRY_DISCOVERY_CACHE_LIMIT + 1
+    discover_metal_entry_points("kernel void entry_0() {}")
+    assert _discover_preprocessed_metal_entries.cache_info().misses == info.misses + 1
+
+
+def test_entry_discovery_does_not_cache_failed_analysis(monkeypatch):
+    original = MetalPreprocessor._find_template_functions
+    calls = []
+
+    def fail_once(self, source):
+        calls.append(source)
+        if len(calls) == 1:
+            raise ValueError("analysis failed")
+        return original(self, source)
+
+    monkeypatch.setattr(MetalPreprocessor, "_find_template_functions", fail_once)
+    source = "kernel void recovered() {}"
+    with pytest.raises(ValueError, match="analysis failed"):
+        discover_metal_entry_points(source)
+    assert _discover_preprocessed_metal_entries.cache_info().currsize == 0
+    assert [entry.name for entry in discover_metal_entry_points(source).entries] == [
+        "recovered"
+    ]
+
+
+def test_cached_discovery_diagnostics_are_detached_across_threads():
+    source = "[[host_name(UNRESOLVED)]] kernel void function() {}"
+    original = discover_metal_entry_points(source)
+    assert original.diagnostics[0].details == {"expression": "UNRESOLVED"}
+
+    def discover(index):
+        result = discover_metal_entry_points(source, file_path=f"entry_{index}.metal")
+        result.diagnostics[0].details["expression"] = str(index)
+        return result
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(discover, range(16)))
+    for index, result in enumerate(results):
+        assert result.source_path == f"entry_{index}.metal"
+        assert result.diagnostics[0].details == {"expression": str(index)}
+    assert discover_metal_entry_points(source) == original
+
+
+def test_cached_discovery_reads_changed_header_with_unchanged_stat(tmp_path):
+    header = tmp_path / "entry.h"
+    header.write_text("kernel void first() {}", encoding="utf-8")
+    source = '#include "entry.h"'
+    path = str(tmp_path / "source.metal")
+    first = discover_metal_entry_points(source, file_path=path)
+    stat = header.stat()
+    header.write_text("kernel void later() {}", encoding="utf-8")
+    os.utime(header, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert header.stat().st_size == stat.st_size
+    later = discover_metal_entry_points(source, file_path=path)
+    assert [entry.name for entry in first.entries] == ["first"]
+    assert [entry.name for entry in later.entries] == ["later"]
+
+
+def test_cached_discovery_keeps_preprocessing_errors_visible(tmp_path):
+    header = tmp_path / "entry.h"
+    header.write_text("kernel void first() {}", encoding="utf-8")
+    source = '#include "entry.h"'
+    options = {"strict_preprocessor": True}
+    path = str(tmp_path / "source.metal")
+    first = discover_metal_entry_points(source, file_path=path, source_options=options)
+    assert [entry.name for entry in first.entries] == ["first"]
+    header.write_text("#error header rejected", encoding="utf-8")
+    with pytest.raises(SyntaxError, match="header rejected"):
+        discover_metal_entry_points(source, file_path=path, source_options=options)
 
 
 def test_discovers_direct_included_and_host_named_metal_entries(tmp_path):

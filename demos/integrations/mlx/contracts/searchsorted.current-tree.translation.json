@@ -1,0 +1,493 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-searchsorted-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/searchsorted.metal",
+    "sourceSha256": "40c41784560f48d230879ed82dfb6b9317c9a9ab4603e53549510fa0e88024fb",
+    "header": "mlx/backend/metal/kernels/searchsorted.h",
+    "headerSha256": "4e80cde60cf0d79cee2e630a86e517b8d77589ba93eca3312d8e2c607963d093"
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "searchsorted_bool__left",
+    "searchsorted_bool__right",
+    "searchsorted_uint8_left",
+    "searchsorted_uint8_right",
+    "searchsorted_uint16_left",
+    "searchsorted_uint16_right",
+    "searchsorted_uint32_left",
+    "searchsorted_uint32_right",
+    "searchsorted_uint64_left",
+    "searchsorted_uint64_right",
+    "searchsorted_int8_left",
+    "searchsorted_int8_right",
+    "searchsorted_int16_left",
+    "searchsorted_int16_right",
+    "searchsorted_int32_left",
+    "searchsorted_int32_right",
+    "searchsorted_int64_left",
+    "searchsorted_int64_right",
+    "searchsorted_float16_left",
+    "searchsorted_float16_right",
+    "searchsorted_float32_left",
+    "searchsorted_float32_right",
+    "searchsorted_bfloat16_left",
+    "searchsorted_bfloat16_right",
+    "searchsorted_complex64_left",
+    "searchsorted_complex64_right"
+  ],
+  "artifacts": {
+    "directx": {
+      "searchsorted_bool__left": {
+        "sha256": "776edd9fb044b7c4a50615ba0de61e2c6e9f74ec0b730f958a9f35c56ebb91ff",
+        "sizeBytes": 2723
+      },
+      "searchsorted_bool__right": {
+        "sha256": "ef1f9f20454fe01cee429fcd78f75338620c8b9361c8599905cd888ee73f908e",
+        "sizeBytes": 2725
+      },
+      "searchsorted_uint8_left": {
+        "sha256": "20e78ddc3418acc00c83feb46bc85659305549b0efbc1794f858f55daa819674",
+        "sizeBytes": 2855
+      },
+      "searchsorted_uint8_right": {
+        "sha256": "0e207f6953999b546d2238100e46315574279234b9b685bc2b57403987823dd4",
+        "sizeBytes": 2857
+      },
+      "searchsorted_uint16_left": {
+        "sha256": "9f05701bbb43a609160acb8b85fc94cbe403efa5b5d1081882bd3e2165b691f1",
+        "sizeBytes": 2837
+      },
+      "searchsorted_uint16_right": {
+        "sha256": "a8cbf9771a7e979661526875604b1ad17c31a89485d69b8de718afd7463f9cac",
+        "sizeBytes": 2839
+      },
+      "searchsorted_uint32_left": {
+        "sha256": "19720367fe9cb9ad4ec2a969582362daf93b86e90a0d7e6ebc6963b4aa50be9f",
+        "sizeBytes": 2783
+      },
+      "searchsorted_uint32_right": {
+        "sha256": "e20e66e18a86fecdfcc852f06c6905197b3d13db4f5ca331ebd560735b69af18",
+        "sizeBytes": 2785
+      },
+      "searchsorted_uint64_left": {
+        "sha256": "dc41eceaabaf23b00dd905ca73cecde26e6a454edf807cafd9ed3865384cbafe",
+        "sizeBytes": 2827
+      },
+      "searchsorted_uint64_right": {
+        "sha256": "60cada9c292b664cf6a1b2bc699a0c42c453ead46d3b43112c504d1cc559f4a7",
+        "sizeBytes": 2829
+      },
+      "searchsorted_int8_left": {
+        "sha256": "18bc064da85eb7df165a8aad12509824251b55f2aa4d7fc1853a018e36d20885",
+        "sizeBytes": 2892
+      },
+      "searchsorted_int8_right": {
+        "sha256": "ff1e4e78c98923f6c8bfe3d882cf42ed44fe712f7b2f7f97822a4352befd9d27",
+        "sizeBytes": 2894
+      },
+      "searchsorted_int16_left": {
+        "sha256": "26d44b192c0c422c4ea5e7788fb458887daac26568b6f1ca566cc424db180753",
+        "sizeBytes": 2808
+      },
+      "searchsorted_int16_right": {
+        "sha256": "1c928955a60896902a956ab5743880f20361d8725c6e4631bb1f5e6103054ea2",
+        "sizeBytes": 2810
+      },
+      "searchsorted_int32_left": {
+        "sha256": "4a784b42656a67be137d0aed6c6b6e65f5cb1d6a696ec4aa19183d9076cb27b6",
+        "sizeBytes": 2754
+      },
+      "searchsorted_int32_right": {
+        "sha256": "ff753a3c56aad5b2fa29bcffaf2a0063324458acea9d6005c9fd749fcdfca1a8",
+        "sizeBytes": 2756
+      },
+      "searchsorted_int64_left": {
+        "sha256": "f59d385bfd0513b9be3c9783cc51b5075ce34b19f6e9971c9f22788b1af0c476",
+        "sizeBytes": 2798
+      },
+      "searchsorted_int64_right": {
+        "sha256": "a425784f1fc8519873ab625f4795283c728bb1cb6b483fc046c130cb997c9c99",
+        "sizeBytes": 2800
+      },
+      "searchsorted_float16_left": {
+        "sha256": "8c1d5701d6d6032c391f89037d57fd7f652fd5774e78f38720d2e613f4de2565",
+        "sizeBytes": 3163
+      },
+      "searchsorted_float16_right": {
+        "sha256": "d8f2493325e849a38c0f1cf595718a7a3d391399bf7d1f8fd00793a22fcf611d",
+        "sizeBytes": 3165
+      },
+      "searchsorted_float32_left": {
+        "sha256": "36c63eaa8fba289b71cbef05d180a20d0bd170467b870516d0898f94944df60e",
+        "sizeBytes": 2921
+      },
+      "searchsorted_float32_right": {
+        "sha256": "7d9d165c7111349bb1de6f676a2803521b85c527af4cb20b8f0e7c879e746a99",
+        "sizeBytes": 2923
+      },
+      "searchsorted_bfloat16_left": {
+        "sha256": "0b25fc9969db9256edeb06d0a8b18ce60b2f53621517ea625fcf34b4a9ab0f3d",
+        "sizeBytes": 3380
+      },
+      "searchsorted_bfloat16_right": {
+        "sha256": "c137b897ccbd1f941318aaa447fe552b234b1ed9de18a19dc9f3f7720e645c21",
+        "sizeBytes": 3382
+      },
+      "searchsorted_complex64_left": {
+        "sha256": "24851e00e979141025abcba72fa5ceca80ffec6c4c1e5c83c61fc68ab7186a10",
+        "sizeBytes": 3825
+      },
+      "searchsorted_complex64_right": {
+        "sha256": "2d784a3b84b67c72249c2b1e54f7a388f8b082aa1d85cdbf73e6abfb7bbb19cd",
+        "sizeBytes": 3827
+      }
+    },
+    "opengl": {
+      "searchsorted_bool__left": {
+        "sha256": "183ea52096db69dfd38f2f3c029083fb0dedd2690096eaca5fa9dbe40b356db0",
+        "sizeBytes": 2732
+      },
+      "searchsorted_bool__right": {
+        "sha256": "47356a8f0eb13c88d75a37c4768e3deed9893ad8dd29339b499b8ea6e996b950",
+        "sizeBytes": 2730
+      },
+      "searchsorted_uint8_left": {
+        "sha256": "316a71fe73228cb88596ed776f932c7b87d4cf6448e1a084e9039fa2b6b4da09",
+        "sizeBytes": 2816
+      },
+      "searchsorted_uint8_right": {
+        "sha256": "14646badd9589f26c8f4e10b0f19f5ad5d0fe099194c2234247c2be6e2068132",
+        "sizeBytes": 2814
+      },
+      "searchsorted_uint16_left": {
+        "sha256": "61194ac0d0b5d67f036cf5800c26ed84a58cd163a34897855b03e5b238d1aac0",
+        "sizeBytes": 2832
+      },
+      "searchsorted_uint16_right": {
+        "sha256": "3d5a0ce745ee35d439bb480547a7dae437baa68f90a0c1dea2f871d14cdf25d7",
+        "sizeBytes": 2830
+      },
+      "searchsorted_uint32_left": {
+        "sha256": "bbf8354ceee426bf9f0217d6f61a9f09b832a9ca2984b97981804c093344910a",
+        "sizeBytes": 2774
+      },
+      "searchsorted_uint32_right": {
+        "sha256": "18ef6f43ccc76cab32d0362cf8214b8181d3c1cb494f2266cfd5b0a9ad35d72b",
+        "sizeBytes": 2772
+      },
+      "searchsorted_uint64_left": {
+        "sha256": "0b85c1ec0f983a2a1c2b1059ce9869ff6aed7979909ac4472b8ece79ac82be03",
+        "sizeBytes": 2822
+      },
+      "searchsorted_uint64_right": {
+        "sha256": "788324f50caec4f52c63201b2228603e2c30f87ca7b6b9b80c75b6bfef92ef76",
+        "sizeBytes": 2820
+      },
+      "searchsorted_int8_left": {
+        "sha256": "7892e7a425bc509764683bf2f3aa9d96c33703696249b7fcc29c0fd004f34921",
+        "sizeBytes": 2780
+      },
+      "searchsorted_int8_right": {
+        "sha256": "ef0a3be44660257cac836c10ddc99a6164358eb376fb135339471d1fee526c42",
+        "sizeBytes": 2778
+      },
+      "searchsorted_int16_left": {
+        "sha256": "e1f8d83dcae32177d0c52580b1ec1af0bcb5c9d4c298a395dd8fbc79ff6c5af5",
+        "sizeBytes": 2796
+      },
+      "searchsorted_int16_right": {
+        "sha256": "3fe40133a96cfe5e019117b0448e5d5cf18f76559259488eaf46e4634d4bb480",
+        "sizeBytes": 2794
+      },
+      "searchsorted_int32_left": {
+        "sha256": "390dc78856cfdb0467d98c4ad53379c5dd8a32d405d62e69147f6c56f6f81f6f",
+        "sizeBytes": 2748
+      },
+      "searchsorted_int32_right": {
+        "sha256": "2de7924aaa76d51cd36caa8d8aa9a441b560c87ff7bc3d571fcadf9ca3572b4a",
+        "sizeBytes": 2746
+      },
+      "searchsorted_int64_left": {
+        "sha256": "3d9fbf009961ffe3bd1484032db47db69b2f877f64d894804bb647d8ad41602f",
+        "sizeBytes": 2796
+      },
+      "searchsorted_int64_right": {
+        "sha256": "68e9025016865742ab54fb37a4eb49cfda96c60fb349a7614c883a638088b803",
+        "sizeBytes": 2794
+      },
+      "searchsorted_float16_left": {
+        "sha256": "2cf61a3dadc267077446778a32201d508bbc8d2eca6fb2b2e42ff2a124c155f7",
+        "sizeBytes": 2915
+      },
+      "searchsorted_float16_right": {
+        "sha256": "d419438a48898204861f4b6afff2d7cf2c59099d1949c21affaf7e24f5050c63",
+        "sizeBytes": 2913
+      },
+      "searchsorted_float32_left": {
+        "sha256": "60c44e3e1c5544d1235553901cf80d880e1f6b3aa56f16b1da0786cc8a2b81a4",
+        "sizeBytes": 2927
+      },
+      "searchsorted_float32_right": {
+        "sha256": "f9beea76116848c85004658df43566480f272225f30e4fe21d11161cc5a4f75a",
+        "sizeBytes": 2925
+      },
+      "searchsorted_bfloat16_left": {
+        "sha256": "0600416c36bd11e497a1726a3f663e0ff2c1bebaeac403be00c0fd724820f61e",
+        "sizeBytes": 2989
+      },
+      "searchsorted_bfloat16_right": {
+        "sha256": "246908d85d1191f80e6a9a7bc0e7afc8a7abe7904b6c243527653d877ec2020e",
+        "sizeBytes": 2987
+      },
+      "searchsorted_complex64_left": {
+        "sha256": "d971cdaec701a19fe09c0319fa67edb1d88b77d31552fb3115671d5a9e03db83",
+        "sizeBytes": 3821
+      },
+      "searchsorted_complex64_right": {
+        "sha256": "97c0e42faf4de881c30ea70830dd2a5f37df1262870940d8cda28460a7a29c8b",
+        "sizeBytes": 3819
+      }
+    },
+    "metal": {
+      "searchsorted_bool__left": {
+        "sha256": "a0bdd527ef82f72bc42cdba9d0fd0799afbb6ddc838724cf8e09494b1d8524ac",
+        "sizeBytes": 1352
+      },
+      "searchsorted_bool__right": {
+        "sha256": "87a05b0729fa37d75eba964dc8d0cd4da69bc827a896908ef8a691ebf0dac374",
+        "sizeBytes": 1350
+      },
+      "searchsorted_uint8_left": {
+        "sha256": "b244740db34697c3c9160cadde6638233a40347bcfa2df220649ca11cab30cab",
+        "sizeBytes": 1478
+      },
+      "searchsorted_uint8_right": {
+        "sha256": "9f3c566195d5c094c5b45e74526a0e4888bc3519b7752251ba3425ce503299eb",
+        "sizeBytes": 1476
+      },
+      "searchsorted_uint16_left": {
+        "sha256": "be26b1003d7d8af73979922ca5c43a56b7a07720bcca3da9cea5b141a6a26edb",
+        "sizeBytes": 1500
+      },
+      "searchsorted_uint16_right": {
+        "sha256": "40be6ba5bacaf23636b6b01dd437be2d18e6d57034d1aa2b385e14140c16beaa",
+        "sizeBytes": 1498
+      },
+      "searchsorted_uint32_left": {
+        "sha256": "1e93ed2e844aa769b13d5b14e49908d5ebc54526dd9a3867f972932e0ff1e744",
+        "sizeBytes": 1388
+      },
+      "searchsorted_uint32_right": {
+        "sha256": "76c617cba24dee5a7b3b63c74f92346a90d819e30662606690e668c90df58e92",
+        "sizeBytes": 1386
+      },
+      "searchsorted_uint64_left": {
+        "sha256": "64a5846743889f0f0386901e4a14ed0ee0246c3999e5d5e24655a2eae228166a",
+        "sizeBytes": 1435
+      },
+      "searchsorted_uint64_right": {
+        "sha256": "0a432baf72f225552510ac223ce0e8f990b64a2644604ebbc5fa3eeccd8c61d0",
+        "sizeBytes": 1433
+      },
+      "searchsorted_int8_left": {
+        "sha256": "2c8ec10193a32493eba73e1a0aa121e60f88d1e0ee6b12e7a06d67033013209a",
+        "sizeBytes": 1444
+      },
+      "searchsorted_int8_right": {
+        "sha256": "e10c50d9b3d9ba24424d5ecc6578f861d1ba5b073e5ca380006a4ebd7430b0f8",
+        "sizeBytes": 1442
+      },
+      "searchsorted_int16_left": {
+        "sha256": "5efe223bdfef5a72ff2b5f4dcccae1afb61fbeb1e403cc56b4a7943d93c3549e",
+        "sizeBytes": 1466
+      },
+      "searchsorted_int16_right": {
+        "sha256": "3f24dc160525be401f4e22fba63f0d4c17d6539a211f37c30a00b9bf1e62d2a5",
+        "sizeBytes": 1464
+      },
+      "searchsorted_int32_left": {
+        "sha256": "d7bff5bd69ebc368af98e3b3d11a9f4ae57c7061f9f29ec8aa8c70a738df61dc",
+        "sizeBytes": 1369
+      },
+      "searchsorted_int32_right": {
+        "sha256": "f8ddccd26e909dad6f9b8ccadf6f799ed60d7377a6a0668fbf201949092e11e6",
+        "sizeBytes": 1367
+      },
+      "searchsorted_int64_left": {
+        "sha256": "098c0bc1325e3e5056929c0268acfe2b0b4d2ecdfee5f3e6b18865acf6c34e16",
+        "sizeBytes": 1415
+      },
+      "searchsorted_int64_right": {
+        "sha256": "6796d5578e71438cd560d69481f29cd5015462f37c8d60de20e96d7fcc380167",
+        "sizeBytes": 1413
+      },
+      "searchsorted_float16_left": {
+        "sha256": "1db3f0b6adce612ba3a61c0ea2f27dc745b9635315bb4ce627204e0233a74622",
+        "sizeBytes": 1533
+      },
+      "searchsorted_float16_right": {
+        "sha256": "03d0a38ee4a36c7a5b96605881c2cea8e210fcfe02b54c7d85c6a3991526807c",
+        "sizeBytes": 1531
+      },
+      "searchsorted_float32_left": {
+        "sha256": "b7eab6cb056163a9370c80eaf93cc9b4ba62dcfdd799ac75f90c11a95d087b89",
+        "sizeBytes": 1543
+      },
+      "searchsorted_float32_right": {
+        "sha256": "9ecfda1660873d969a47ad1a150078a48bb0791849f507f09e8893a401d6bbf1",
+        "sizeBytes": 1541
+      },
+      "searchsorted_bfloat16_left": {
+        "sha256": "64e6a9e7f41222e3410661b5b559ba0bbe06407e883287c3b5776c56157be322",
+        "sizeBytes": 1608
+      },
+      "searchsorted_bfloat16_right": {
+        "sha256": "743178bd2ede97ce56c595ac7c09f3e4b6c72f4148cb11d0bad08cc33c0e6d3d",
+        "sizeBytes": 1606
+      },
+      "searchsorted_complex64_left": {
+        "sha256": "358568869a5189ec0373ad5d7549ed78ff0ff6f42e5b77d3ece0e76e56e007d5",
+        "sizeBytes": 2272
+      },
+      "searchsorted_complex64_right": {
+        "sha256": "69020d6d86d31743f5bae0818a9dc86debbee5333f8da53ddbe214cad302bec2",
+        "sizeBytes": 2270
+      }
+    }
+  },
+  "validationContract": {
+    "workgroupSize": [
+      1,
+      1,
+      1
+    ],
+    "indexRangeAssertions": {
+      "opengl": [
+        {
+          "expression": "int64(mid) * a_stride",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "expression": "offset",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      ],
+      "metal": [],
+      "directx": []
+    },
+    "cases": {
+      "single": {
+        "length": 1,
+        "stride": 1,
+        "grid": [
+          48,
+          1,
+          1
+        ]
+      },
+      "odd": {
+        "length": 33,
+        "stride": 1,
+        "grid": [
+          8,
+          3,
+          2
+        ]
+      },
+      "strided": {
+        "length": 40,
+        "stride": 2,
+        "grid": [
+          4,
+          4,
+          3
+        ]
+      }
+    },
+    "queriesPerCase": 48,
+    "outputGuardCount": 16,
+    "observedInputCount": 4,
+    "elementTypes": {
+      "metal": {
+        "bool_": "bool",
+        "uint8": "uint8",
+        "uint16": "uint16",
+        "uint32": "uint32",
+        "uint64": "uint64",
+        "int8": "int8",
+        "int16": "int16",
+        "int32": "int32",
+        "int64": "int64",
+        "float16": "float16",
+        "float32": "float32",
+        "bfloat16": "bfloat16",
+        "complex64": "float32"
+      },
+      "opengl": {
+        "bool_": "uint32",
+        "uint8": "uint32",
+        "uint16": "uint32",
+        "uint32": "uint32",
+        "uint64": "uint64",
+        "int8": "int32",
+        "int16": "int32",
+        "int32": "int32",
+        "int64": "int64",
+        "float16": "float32",
+        "float32": "float32",
+        "bfloat16": "float32",
+        "complex64": "float32"
+      },
+      "directx": {
+        "bool_": "uint32",
+        "uint8": "uint32",
+        "uint16": "uint16",
+        "uint32": "uint32",
+        "uint64": "uint64",
+        "int8": "int32",
+        "int16": "int16",
+        "int32": "int32",
+        "int64": "int64",
+        "float16": "uint16",
+        "float32": "float32",
+        "bfloat16": "uint16",
+        "complex64": "float32"
+      }
+    },
+    "compilerValidationRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "runtimeRequiredInCi": [
+      "metal",
+      "opengl",
+      "directx"
+    ],
+    "upstreamMetallibParityTargets": [
+      "metal"
+    ]
+  },
+  "scope": {
+    "coveredEntryCount": 26,
+    "runtimeCoveredEntryCount": 26,
+    "caseCountPerEntry": 3,
+    "queryCountByTarget": {
+      "metal": 3744,
+      "opengl": 3744,
+      "directx": 3744
+    },
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

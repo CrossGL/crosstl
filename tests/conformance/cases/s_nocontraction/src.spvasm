@@ -1,0 +1,105 @@
+; SPIR-V
+; NoContraction forbids fusing the multiply into the subtraction. Generated from g_precise by glslang.
+; Version: 1.3
+; Generator: Khronos Glslang Reference Front End; 11
+; Bound: 60
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %4 "main" %11
+               OpExecutionMode %4 LocalSize 64 1 1
+               OpSource GLSL 450
+               OpName %4 "main"
+               OpName %8 "i"
+               OpName %11 "gl_GlobalInvocationID"
+               OpName %18 "a"
+               OpName %20 "Inp"
+               OpMemberName %20 0 "abc"
+               OpName %22 ""
+               OpName %31 "b"
+               OpName %38 "c"
+               OpName %45 "r"
+               OpName %52 "Outp"
+               OpMemberName %52 0 "o"
+               OpName %54 ""
+               OpDecorate %11 BuiltIn GlobalInvocationId
+               OpDecorate %19 ArrayStride 4
+               OpDecorate %20 Block
+               OpMemberDecorate %20 0 Offset 0
+               OpDecorate %22 Binding 0
+               OpDecorate %22 DescriptorSet 0
+               OpDecorate %48 NoContraction
+               OpDecorate %50 NoContraction
+               OpDecorate %51 ArrayStride 4
+               OpDecorate %52 Block
+               OpMemberDecorate %52 0 Offset 0
+               OpDecorate %54 Binding 1
+               OpDecorate %54 DescriptorSet 0
+               OpDecorate %59 BuiltIn WorkgroupSize
+          %2 = OpTypeVoid
+          %3 = OpTypeFunction %2
+          %6 = OpTypeInt 32 0
+          %7 = OpTypePointer Function %6
+          %9 = OpTypeVector %6 3
+         %10 = OpTypePointer Input %9
+         %11 = OpVariable %10 Input
+         %12 = OpConstant %6 0
+         %13 = OpTypePointer Input %6
+         %16 = OpTypeFloat 32
+         %17 = OpTypePointer Function %16
+         %19 = OpTypeRuntimeArray %16
+         %20 = OpTypeStruct %19
+         %21 = OpTypePointer StorageBuffer %20
+         %22 = OpVariable %21 StorageBuffer
+         %23 = OpTypeInt 32 1
+         %24 = OpConstant %23 0
+         %25 = OpConstant %6 3
+         %28 = OpTypePointer StorageBuffer %16
+         %34 = OpConstant %6 1
+         %41 = OpConstant %6 2
+         %51 = OpTypeRuntimeArray %16
+         %52 = OpTypeStruct %51
+         %53 = OpTypePointer StorageBuffer %52
+         %54 = OpVariable %53 StorageBuffer
+         %58 = OpConstant %6 64
+         %59 = OpConstantComposite %9 %58 %34 %34
+          %4 = OpFunction %2 None %3
+          %5 = OpLabel
+          %8 = OpVariable %7 Function
+         %18 = OpVariable %17 Function
+         %31 = OpVariable %17 Function
+         %38 = OpVariable %17 Function
+         %45 = OpVariable %17 Function
+         %14 = OpAccessChain %13 %11 %12
+         %15 = OpLoad %6 %14
+               OpStore %8 %15
+         %26 = OpLoad %6 %8
+         %27 = OpIMul %6 %25 %26
+         %29 = OpAccessChain %28 %22 %24 %27
+         %30 = OpLoad %16 %29
+               OpStore %18 %30
+         %32 = OpLoad %6 %8
+         %33 = OpIMul %6 %25 %32
+         %35 = OpIAdd %6 %33 %34
+         %36 = OpAccessChain %28 %22 %24 %35
+         %37 = OpLoad %16 %36
+               OpStore %31 %37
+         %39 = OpLoad %6 %8
+         %40 = OpIMul %6 %25 %39
+         %42 = OpIAdd %6 %40 %41
+         %43 = OpAccessChain %28 %22 %24 %42
+         %44 = OpLoad %16 %43
+               OpStore %38 %44
+         %46 = OpLoad %16 %18
+         %47 = OpLoad %16 %31
+         %48 = OpFMul %16 %46 %47
+         %49 = OpLoad %16 %38
+         %50 = OpFSub %16 %48 %49
+               OpStore %45 %50
+         %55 = OpLoad %6 %8
+         %56 = OpLoad %16 %45
+         %57 = OpAccessChain %28 %54 %24 %55
+               OpStore %57 %56
+               OpReturn
+               OpFunctionEnd

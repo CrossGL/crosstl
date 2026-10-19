@@ -3086,11 +3086,12 @@ def test_modulo_codegen():
 
         assert "int a = (10 % 3);" in generated_code
         assert "float b = (10.0 % 3.0);" in generated_code
-        assert "let wrapped = mod(5.0, 2.0);" in generated_code
-        assert "let wrapped_math = mod(5.0, 2.0);" in generated_code
+        # math.fmod truncates (sign of x); CrossGL mod is floored.
+        assert "let wrapped = fmod(5.0, 2.0);" in generated_code
+        assert "let wrapped_math = fmod(5.0, 2.0);" in generated_code
         assert "int c = 10;" in generated_code
         assert "c %= 3;" in generated_code
-        assert "fmod(" not in generated_code
+        assert " mod(" not in generated_code
         assert "math.fmod(" not in generated_code
     except SyntaxError:
         pytest.fail("Modulo parsing or code generation not implemented.")
@@ -3181,7 +3182,7 @@ def test_mojo_from_import_alias_math_and_simd_builtins_lower_to_crossgl():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let wrapped = mod(5.0, 2.0);" in generated_code
+    assert "let wrapped = fmod(5.0, 2.0);" in generated_code
     assert "let projected = dot(lhs, rhs);" in generated_code
     assert "let normal = normalize(lhs);" in generated_code
     assert "wrap(" not in generated_code

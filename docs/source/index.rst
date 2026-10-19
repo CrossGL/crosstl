@@ -13,6 +13,7 @@ systems-language targets.
    architecture
    translation-pipeline
    project-porting
+   artifact-contract-refresh
    lexer
    ast
    codegen-utilities
@@ -22,6 +23,7 @@ systems-language targets.
    examples
    extending
    doxygen
+   adr/index
 
 .. toctree::
    :maxdepth: 2

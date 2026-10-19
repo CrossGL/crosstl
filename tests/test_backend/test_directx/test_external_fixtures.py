@@ -674,7 +674,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "type symmetry_t = LuminairePlanesSymmetry;",
             "symmetry_t symmetry;",
-            "const uint i0 = symmetry == symmetry_t::ISOTROPIC ? 0 : 1;",
+            "const uint i0 = symmetry == symmetry_t::ISOTROPIC ? 0u : 1u;",
         ),
     ),
     ExternalFixture(
@@ -1102,7 +1102,7 @@ EXTERNAL_FIXTURES = [
             "uint4x4 b;",
             "uint3x4 c;",
             "u16vec3 d;",
-            "uint64_t2 e;",
+            "u64vec2 e;",
         ),
     ),
     ExternalFixture(
@@ -1484,7 +1484,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "@ register(u0)",
             "imageStore(OutputTexture, pos, textureLod(InputTexture, samLinearClamp, pp, 0.0));",
-            "uvec2 gxy = LocalThreadId.xy + uvec2(WorkGroupId.x << 4, WorkGroupId.y << 4);",
+            "uvec2 gxy = LocalThreadId.xy + uvec2(WorkGroupId.x << 4u, WorkGroupId.y << 4u);",
         ),
     ),
     ExternalFixture(

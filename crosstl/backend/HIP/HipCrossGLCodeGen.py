@@ -2924,8 +2924,7 @@ class HipToCrossGLConverter:
                 )
                 comment = f"// HIP stream {action}: {stream}"
                 if (
-                    name
-                    in {
+                    name in {
                         "hipStreamCreateWithFlags",
                         "hipStreamCreateWithPriority",
                     }
@@ -8365,8 +8364,7 @@ class HipToCrossGLConverter:
         if function_name == "__byte_perm" and len(args) == 3:
             return self.format_hip_byte_perm(args[0], args[1], args[2])
         if (
-            function_name
-            in {
+            function_name in {
                 "__funnelshift_l",
                 "__funnelshift_lc",
                 "__funnelshift_r",
@@ -8444,8 +8442,13 @@ class HipToCrossGLConverter:
             return f"clamp({args[0]}, 0.0f, 1.0f)"
 
         if (
-            function_name
-            in {"__fdividef", "__fdiv_rd", "__fdiv_rn", "__fdiv_ru", "__fdiv_rz"}
+            function_name in {
+                "__fdividef",
+                "__fdiv_rd",
+                "__fdiv_rn",
+                "__fdiv_ru",
+                "__fdiv_rz",
+            }
             and len(args) == 2
         ):
             return f"({args[0]} / {args[1]})"
@@ -10213,9 +10216,9 @@ class HipToCrossGLConverter:
             "fmaf": "fma",
             "__fmaf_rn": "fma",
             "__fma_rn": "fma",
-            "fmodf": "mod",
-            "fminf": "min",
-            "fmaxf": "max",
+            "fmodf": "fmod",
+            "fminf": "fmin",
+            "fmaxf": "fmax",
             "lerp": "mix",
             "floorf": "floor",
             "ceilf": "ceil",
@@ -10229,9 +10232,9 @@ class HipToCrossGLConverter:
             "exp": "exp",
             "fabs": "abs",
             "rsqrt": "inversesqrt",
-            "fmod": "mod",
-            "fmin": "min",
-            "fmax": "max",
+            "fmod": "fmod",
+            "fmin": "fmin",
+            "fmax": "fmax",
             "floor": "floor",
             "ceil": "ceil",
             "bool": "bool",

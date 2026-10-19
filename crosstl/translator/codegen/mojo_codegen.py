@@ -1388,8 +1388,7 @@ class MojoCodeGen:
         self.scalar_constructor_map = {
             name: mapped
             for name, mapped in self.type_mapping.items()
-            if mapped
-            in {
+            if mapped in {
                 "Bool",
                 "Float16",
                 "Float32",
@@ -1715,13 +1714,11 @@ class MojoCodeGen:
                 code += "# Compute Shader\n"
                 code += self.generate_function(func, shader_type="compute")
             elif (
-                qualifier
-                in {
+                qualifier in {
                     "geometry",
                     "tessellation_control",
                     "tessellation_evaluation",
-                }
-                | MOJO_MESH_STAGE_TYPES
+                } | MOJO_MESH_STAGE_TYPES
             ):
                 code += f"# {qualifier.title()} Shader\n"
                 code += self.generate_function(func, shader_type=qualifier)
@@ -2912,10 +2909,12 @@ class MojoCodeGen:
             )
         if (
             aliases == self.function_return_resource_aliases.get(func.name)
-            and static_aliases
-            == self.function_return_resource_static_aliases.get(func.name)
-            and field_aliases
-            == self.function_return_resource_field_aliases.get(func.name)
+            and static_aliases == self.function_return_resource_static_aliases.get(
+                func.name
+            )
+            and field_aliases == self.function_return_resource_field_aliases.get(
+                func.name
+            )
             and static_field_aliases
             == self.function_return_resource_static_field_aliases.get(func.name)
         ):
@@ -11963,8 +11962,7 @@ class MojoCodeGen:
         ):
             return None
         if (
-            helper_base
-            in {
+            helper_base in {
                 "sample_proj_lod",
                 "sample_proj_lod_offset",
                 "sample_proj_grad",
@@ -11974,8 +11972,7 @@ class MojoCodeGen:
         ):
             return None
         if (
-            helper_base
-            in {
+            helper_base in {
                 "texture_compare",
                 "texture_compare_offset",
                 "texture_compare_lod",

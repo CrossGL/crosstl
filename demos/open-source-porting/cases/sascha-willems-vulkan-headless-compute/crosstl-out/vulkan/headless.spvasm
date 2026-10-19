@@ -58,8 +58,8 @@ OpDecorate %52 BuiltIn GlobalInvocationId
 %29 = OpVariable %26 Function
 %30 = OpVariable %26 Function
 %38 = OpVariable %26 Function
-%21 = OpBitcast %4 %18
-%22 = OpSLessThanEqual %3 %21 %20
+%21 = OpBitcast %9 %20
+%22 = OpULessThanEqual %3 %18 %21
 OpSelectionMerge %23 None
 OpBranchConditional %22 %24 %25
 %24 = OpLabel

@@ -3,13 +3,13 @@
   "kind": "crosstl-mlx-current-tree-arg-reduce-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "d9add9d11f3154111a4c85f267ec2fd307ecd18e",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
     "source": "mlx/backend/metal/kernels/arg_reduce.metal",
     "sourceSha256": "036a586af92b869a94f0b67e54590abf935e87f99290db46daed86cd8941e429"
   },
   "corpusCensus": {
-    "metalUnitCount": 42,
-    "entryCount": 17478,
+    "metalUnitCount": 49,
+    "entryCount": 17832,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -41,296 +41,296 @@
   "artifacts": {
     "directx": {
       "argmin_bool_": {
-        "sha256": "9b6eca3aa715896d7cdf4ce3465c96777a5b20d089862ef01baf07f223fc2676",
-        "sizeBytes": 8741
+        "sha256": "f3505cdf87bb4de46d143b50fb0cac5f1ef84d0b9dd1186607e7b3f4ceba0df7",
+        "sizeBytes": 12005
       },
       "argmax_bool_": {
-        "sha256": "a4320903ca7fc56c363946695ac43f2ffb45d0ad85acaee09f0e507639b20b2e",
-        "sizeBytes": 8743
+        "sha256": "98a8422d3eeedaed7ff586c5847bf1d4829d33959d55efa42e61a868906fc644",
+        "sizeBytes": 12007
       },
       "argmin_uint8": {
-        "sha256": "42ed837ee36b995b138e18b61251083fbd4401ea777c37b54b3beb33ea77e0de",
-        "sizeBytes": 6690
+        "sha256": "cac0b1b8857e4c40372a83b7b7ceacc4e031c134e37543f9c324278e0d30d193",
+        "sizeBytes": 10043
       },
       "argmax_uint8": {
-        "sha256": "b072c5bef3c99e82f7e8b58183e2d814991d179687cbed711fa1e29ee129cc6a",
-        "sizeBytes": 6686
+        "sha256": "8808a95c1e47f9b0d5c60b836be60c70b7ea546fe4c8a68bcd45f85797976442",
+        "sizeBytes": 10039
       },
       "argmin_uint16": {
-        "sha256": "66068689426dffad2564eda40ba11467c269401fc892c2d4743fdcf5efed31b4",
-        "sizeBytes": 7126
+        "sha256": "f32df27016c2dab2187a8e0dbb529adc9c3053ea355286de85d0dad42d34b794",
+        "sizeBytes": 11128
       },
       "argmax_uint16": {
-        "sha256": "d41655607b8bc651f4b3a391011cb8f023ca4dd242710a7bcd118685d37e10b9",
-        "sizeBytes": 7118
+        "sha256": "655c0d0e6ffa96fe1b4eb32edc2b8901cc32a824755ce679fa67ea8c5d2d81aa",
+        "sizeBytes": 11120
       },
       "argmin_uint32": {
-        "sha256": "85f52e6cc3f8ae8b3428e7e7460b1a3fdc3a69cf1a55d033984d5d24a94ca6df",
-        "sizeBytes": 6709
+        "sha256": "4be7a03ad62cf8d6d10fcb1b76a6ddcc678c0b29066d6f60d1837fff0c2d8582",
+        "sizeBytes": 10409
       },
       "argmax_uint32": {
-        "sha256": "5245ebe5b423e586e866036ace1d8ddab6951d8e7ebf1f0f0ded470cf586db62",
-        "sizeBytes": 6689
+        "sha256": "95147763ae2c6e4ae665abf1cc10dc3ef0c5ff706bfb3c9dceaaa8a3b4299e38",
+        "sizeBytes": 10387
       },
       "argmin_uint64": {
-        "sha256": "a9603d8967aebdb67920f2c25c7cfa1a36b0e663ef0f8db7a3a9b543e6f3897a",
-        "sizeBytes": 9034
+        "sha256": "f7881eb41cd8f1cd350c7cb8e97991bcf12e62e55444903cde693a4d7fdb1a4b",
+        "sizeBytes": 13600
       },
       "argmax_uint64": {
-        "sha256": "1d00bf4e89e0a5e3e50708ea92edcd410f45d73e0ea43b9109d6d487b5a001f6",
-        "sizeBytes": 8990
+        "sha256": "de380ced1954e96508c2c0d908e12cb259c8b93fb39f87aa43a8c9ed090e53fb",
+        "sizeBytes": 13562
       },
       "argmin_int8": {
-        "sha256": "871d0bd231fd4a844ffb047cbcb649246a5067c122e88b86bc1d21ce3d251012",
-        "sizeBytes": 6978
+        "sha256": "d24eacd8dfb92b1f16ef2998ccc366c257696c18eb6c7d4ff773500e3e8dd02a",
+        "sizeBytes": 10445
       },
       "argmax_int8": {
-        "sha256": "a5edb61ee04828f255a755f7d8e8b9fe4a37197f01b375cf6b0db6445519cbd4",
-        "sizeBytes": 6980
+        "sha256": "f60f6c47cbf68ad523f6f6af24d66804a7b13039d725428f4c8bf7b2cd8e6663",
+        "sizeBytes": 10447
       },
       "argmin_int16": {
-        "sha256": "352632c957c26bed94e9adfe1d3c2cea4470852b80d589b6bfce24e2570f6186",
-        "sizeBytes": 7052
+        "sha256": "71757209b10e0f98f53614e926ea838410bd91f16b218efea0bfb9f789815457",
+        "sizeBytes": 11033
       },
       "argmax_int16": {
-        "sha256": "664a0b39119a171fd06988d9d180424c9c311ff1f776da4726b9fa954975b03a",
-        "sizeBytes": 7054
+        "sha256": "42d050b2d53bfd431ab08bdc2c56bd9495b5c8b23992419d744f5877ed5ec260",
+        "sizeBytes": 11035
       },
       "argmin_int32": {
-        "sha256": "7afcc44299a8526a95b8a68f075289d0d391e2f3eaa60b604083358b79fb0e07",
-        "sizeBytes": 6972
+        "sha256": "749b8d8a52b94878aa3f7325283499322c41684c1ae9ce9e08940bc6b47415c6",
+        "sizeBytes": 10937
       },
       "argmax_int32": {
-        "sha256": "249f5e5dca802869f6842bb8b5d9b0a8f814c9628b041e963d472fda9165db6c",
-        "sizeBytes": 6976
+        "sha256": "d6fd4859c5088daae2a4f961b706afbd1862ed517cecc8036c659900fa5bfda8",
+        "sizeBytes": 10943
       },
       "argmin_int64": {
-        "sha256": "86cb622d330f427f449a8fc4e7c5d9dc232322859aa410160db34d864f918916",
-        "sizeBytes": 8963
+        "sha256": "f16edad6a65fac97c76d476529d14c68d81e3a4ced6d6f979a7fb29112e0168d",
+        "sizeBytes": 13510
       },
       "argmax_int64": {
-        "sha256": "8a575b4cccdf65f9fd52cf068505cae387f1f726edf6a3ac4ac7be9d1b03b6c7",
-        "sizeBytes": 8965
+        "sha256": "f93bacd4eaefb4946082f55a50cd8fcf2b53991c1f11c77756f280849efd76c8",
+        "sizeBytes": 13528
       },
       "argmin_float16": {
-        "sha256": "94219f02373811fcf39fe3062c3e624d332019673b29f2d15b69458fcb59933e",
-        "sizeBytes": 6842
+        "sha256": "2c10826d82749b2f21faacab5ce21947c423c62b2dd3507052e88b8835a92a03",
+        "sizeBytes": 11322
       },
       "argmax_float16": {
-        "sha256": "30891177b7a79922c54e08803cf8af7104de900ed2918c6f10355e1f228da857",
-        "sizeBytes": 6844
+        "sha256": "27600fbfbdc699b9d479cff30cc2c7e263df5c4c91c6effd5dffd8abdab740c0",
+        "sizeBytes": 11324
       },
       "argmin_float32": {
-        "sha256": "982c090fb7001d557976cebaae61d392a4ade3db3bc116e71a32f1708a92d9f8",
-        "sizeBytes": 7625
+        "sha256": "9a23e557a9d9c179c545e1f8bba40e09950e5f730269ef9f7035e33793362339",
+        "sizeBytes": 10820
       },
       "argmax_float32": {
-        "sha256": "44deffd7bb7baf3df53cdf1a509588123a2028f226b17abc5aa8bbd4a6063780",
-        "sizeBytes": 7627
+        "sha256": "37a90d0e9c00dfbfc8ec8c531c80fbf1d1c28a98acd27dd3800f9d44e798082d",
+        "sizeBytes": 10882
       },
       "argmin_bfloat16": {
-        "sha256": "fc486b3bcbbcaaa07f4b86794b15107bf71c8c82a7bd6bdf26e4139d84b56f9b",
-        "sizeBytes": 8144
+        "sha256": "00dbc073da2edaee393801fb61e014156af4053cc10c6c651bfdb876315d395f",
+        "sizeBytes": 11394
       },
       "argmax_bfloat16": {
-        "sha256": "454b48d309341a7e2e6a333cc24f9b2b3d98fe3f6e72276140bad6b4da80da88",
-        "sizeBytes": 8204
+        "sha256": "0acc69a3d57f3056afc0924623f924eb4d426a63cfdd261d91929c1539d7982b",
+        "sizeBytes": 11454
       }
     },
     "opengl": {
       "argmin_bool_": {
-        "sha256": "8fcc570c24a8fc3692b2df1324a2897839992e311a909da9c9349fa4f750b756",
-        "sizeBytes": 7843
+        "sha256": "7088fc8e44db7b0f6f953a12d62fdca8651323215559b288d8dd0fc6c46c56b0",
+        "sizeBytes": 11274
       },
       "argmax_bool_": {
-        "sha256": "1c782526027fe46a22e4b27c7517748ffd2c8447f86fbb2a87c24db2648b6905",
-        "sizeBytes": 7845
+        "sha256": "2eb5ed4c0495d8e3c89ffbd4a728a4335936e8194684a0fc322b7fdec64b95e4",
+        "sizeBytes": 11276
       },
       "argmin_uint8": {
-        "sha256": "3789491c0fe6b0c60e6b16e8ae565d547ab5b416146a9feeb881c1a99bbf4c0a",
-        "sizeBytes": 7634
+        "sha256": "e0ec30c02cba37284bba5a3f7578066b734e91f8ed6ce7cbe4fb09cb96b8c2e8",
+        "sizeBytes": 11068
       },
       "argmax_uint8": {
-        "sha256": "61784ed7517b40bab351bad20407454fc661a51fd81c360f88de0f9d0f7a9874",
-        "sizeBytes": 7630
+        "sha256": "bb578d14c33fb5afcbc36d18372241c2bdff6c45d75f70f084ae2412e3567c33",
+        "sizeBytes": 11064
       },
       "argmin_uint16": {
-        "sha256": "e1f1f2e95903d13c32bf2513d1430f6fce23a618a482352d2bb30da3e838bb5c",
-        "sizeBytes": 7693
+        "sha256": "1c65e97966f0c728de0f1d9e50921b8c6ba3dbcfdb2a520065cd5ac342cb35b6",
+        "sizeBytes": 11144
       },
       "argmax_uint16": {
-        "sha256": "1d8b2b9a3f579ad9a9acaede3888fae2b29458aacf2d2e0e6c62953f9662ea3e",
-        "sizeBytes": 7685
+        "sha256": "620b59906deaf0119f228a970ebdfa2bb9599a48aedbad8f2b4b9d692acc8571",
+        "sizeBytes": 11136
       },
       "argmin_uint32": {
-        "sha256": "ae710523b1692c8d7be6d48311d07f388e1f8af0989da495440e14024a7ae5f4",
-        "sizeBytes": 7579
+        "sha256": "f5cbc5e9c0d4ec75808d89b788345e8c2d10d0955e61ee46835f0fc9c7cb9094",
+        "sizeBytes": 11030
       },
       "argmax_uint32": {
-        "sha256": "816dd8c8b95018f364f6ac7b6c9aef86b4459fb4240ca2a78b501739a1bacba0",
-        "sizeBytes": 7559
+        "sha256": "4335a4309d8537f9352a9076fc81f5c9a86c04e3f5dc15bb92a294724c3c0a17",
+        "sizeBytes": 11010
       },
       "argmin_uint64": {
-        "sha256": "3d437ae9d74ee1c52f605f5b9be0c576b8d2a241656b9e0943dd62e48822bf68",
-        "sizeBytes": 8342
+        "sha256": "57a7408157b9cfd1525242a7e77b7f837b168417d8e4eddb280d4a9922615eb9",
+        "sizeBytes": 11793
       },
       "argmax_uint64": {
-        "sha256": "052cd1ae53122aa96bd95d94cf589236eaeef8c5afff6abb3e394a1aa0467872",
-        "sizeBytes": 8300
+        "sha256": "312305c09b9285c9121cfabfb4d18f47ab359976bfa5f1b1b1e56378558bac9c",
+        "sizeBytes": 11755
       },
       "argmin_int8": {
-        "sha256": "6f36dfdfbd74cce02181e87d430b3d0ce424b3bd557b59c34eb5e0990092a8ae",
-        "sizeBytes": 7932
+        "sha256": "c87e2c9aac22e151b6ca457c9d4706dc81604b0502237f4ad20a722fded30b61",
+        "sizeBytes": 11464
       },
       "argmax_int8": {
-        "sha256": "15b8b1864587ca8291e6f0f40b1dc768cbac3ffcbb84b36fb4d7fe05edb4c587",
-        "sizeBytes": 7938
+        "sha256": "fce920bb3914facf1e284c58303bf32840633e5b27e500729d57524bfd860fdc",
+        "sizeBytes": 11470
       },
       "argmin_int16": {
-        "sha256": "b1e740224e5104c6bb5f31a52eccc733a1964d62ea44ee9a78750f6a37e21231",
-        "sizeBytes": 7991
+        "sha256": "7953ec3c435223a8f685a4d4b39290164ab248f1416fe90541fe4d3efb550f4e",
+        "sizeBytes": 11540
       },
       "argmax_int16": {
-        "sha256": "5745a484cd5f934b16fa77001beae46e5b5b6c3ed768444765316643a15127de",
-        "sizeBytes": 7997
+        "sha256": "c9841eaaa4beba89ef344f0ba0b24b8b0a0812366c8ce4d54eea0c16e7bbea66",
+        "sizeBytes": 11546
       },
       "argmin_int32": {
-        "sha256": "bcd8f70148f40e1025cd8e87d99c8b2d574bc05e4072f1a2f85168aa67db33d1",
-        "sizeBytes": 7905
+        "sha256": "1a719e8d3d8260d73170e030b72ce737e5135a882cb53b47e0626540db8dc739",
+        "sizeBytes": 11454
       },
       "argmax_int32": {
-        "sha256": "57d6879c5247587652ff99732a2b0ac5b848f471cfc0c015ca6806b8a3edaaff",
-        "sizeBytes": 7913
+        "sha256": "f4ffbe52138cf2bae3367f9ac8bde4fee26a7e1ceebc8353793b39ffb43aad20",
+        "sizeBytes": 11462
       },
       "argmin_int64": {
-        "sha256": "7ad3a1b4001ceec958a7e572f9f5c54efcfc420b23a955893a71e5c1264c87cb",
-        "sizeBytes": 8287
+        "sha256": "d4fb0622380afdca8a99f397ae36891cb9e70e27a2f71669275641855c167e93",
+        "sizeBytes": 11719
       },
       "argmax_int64": {
-        "sha256": "449ec891dfd9c355e9806cc42b72bf478f293651e3d8e3fab922c2e55be23a6d",
-        "sizeBytes": 8293
+        "sha256": "b5be3a6e122267c7c1c3fbac809b76684a4d671e6041f0a29e51ba3b5fc24797",
+        "sizeBytes": 11739
       },
       "argmin_float16": {
-        "sha256": "5591f0d48daf2a1cf546b0f82bf047da9472acdb1e8252530088eba7b760293f",
-        "sizeBytes": 7726
+        "sha256": "08221bb0847b28c607cdc87f54f30a6faa0b9abafa025a3ca9b0f14e701112f2",
+        "sizeBytes": 12680
       },
       "argmax_float16": {
-        "sha256": "9aa80e7436b4d4253f72e206a536250ae7b76144e37b7970fac7fe0f0a8a0e1a",
-        "sizeBytes": 7732
+        "sha256": "d1ddd908a66308e69fa0a8a7906f23eb00b16b7e74f25d862e5f183bc6c59136",
+        "sizeBytes": 12686
       },
       "argmin_float32": {
-        "sha256": "14fcee01e9c7f5b5bb05a32262e6c3932cf80ea8bdd50582f26ae77f8976d320",
-        "sizeBytes": 7750
+        "sha256": "a301401508473b846cd0b90993cb03631c270f590ea4020f246d96a5f1c62c9d",
+        "sizeBytes": 11333
       },
       "argmax_float32": {
-        "sha256": "4b0595da819da2efaa81672604182e87f870b6fde30cb255bbcf434d2ddc7e21",
-        "sizeBytes": 7756
+        "sha256": "055ab02c5efac3d28728d0d39fc8f2262bd4d5dfb8fba36240d182a6c4ff2219",
+        "sizeBytes": 11339
       },
       "argmin_bfloat16": {
-        "sha256": "77104705bd5981225d23ed627bf62d239fef60a6d74ea8d27684e52043ac1e1e",
-        "sizeBytes": 7974
+        "sha256": "9f0a6282b1d382a7eb2d863168c5b00ed3bf53a027c7e47d1cb60b99d1bbd1a1",
+        "sizeBytes": 11954
       },
       "argmax_bfloat16": {
-        "sha256": "ec1977efd5fb41e24de63817977c6f386bd01a6296b288459d8f66775ac0c50f",
-        "sizeBytes": 7980
+        "sha256": "ebc5fd1520a1e8dd10c05706de821314da39f15f88dd1cc7555bb0e494b7bba7",
+        "sizeBytes": 11960
       }
     },
     "metal": {
       "argmin_bool_": {
-        "sha256": "02ae43a54bd28570f69b3733745c690c02685afdf3591e5f7bfd5acc531cf4af",
-        "sizeBytes": 4923
+        "sha256": "f7d76d9cde4a9fd6bc950a329cf426240c579a8982e1c79a13222510618346f7",
+        "sizeBytes": 7995
       },
       "argmax_bool_": {
-        "sha256": "cda6ef6fc99842bca63546bceb052d062e73de01ed93c3183f462bd90dd4e98a",
-        "sizeBytes": 4925
+        "sha256": "eae2860b807a42eec7e8bf1b57cc607ef3f49f28cb648a90409bcb8e8083cab8",
+        "sizeBytes": 7997
       },
       "argmin_uint8": {
-        "sha256": "c1dcd224bda22c06fe25c90689be79dac5277a87c7f7416530168789ea43e727",
-        "sizeBytes": 4117
+        "sha256": "ca564449bb92f7babcf6515a1e7575a1c8f0f317761020b190c4ce9270b75863",
+        "sizeBytes": 7265
       },
       "argmax_uint8": {
-        "sha256": "9542580180bad0a0b201099151a93aa59fe1ef71b7e0b9760f71f122473c37ca",
-        "sizeBytes": 4113
+        "sha256": "7691d90a9c2e1a346b4b381d70d2005e6dcb56e5010f1f51ee6d3e04ae7f1f1b",
+        "sizeBytes": 7261
       },
       "argmin_uint16": {
-        "sha256": "e07ecb0f8bcfb12505e946b86a55ec1672ee86f9575d747af1e248e905415b16",
-        "sizeBytes": 4158
+        "sha256": "407a1115d94d8f29d5da8cfc99799501c57f28f2701caa485fd47655a270e04c",
+        "sizeBytes": 7343
       },
       "argmax_uint16": {
-        "sha256": "b5cfbd64a6f95b082d0db194718c563efd9c53a6002321712bf79c17332bfc50",
-        "sizeBytes": 4150
+        "sha256": "86d5dc4bea7d1aa930c2b566428f9b1c38619c45abfa08aadb1936ed477c35e1",
+        "sizeBytes": 7335
       },
       "argmin_uint32": {
-        "sha256": "f48065265af057f5477bdab5ed6d5232fa9d267b65af8693f5d6c9304053c58e",
-        "sizeBytes": 4160
+        "sha256": "b40dbbca4906a7b1005ad8a03965756450087b911c40585aadb64281827c775c",
+        "sizeBytes": 7161
       },
       "argmax_uint32": {
-        "sha256": "fe8276460c6399e82bf55ae0f44aa8cdfd77073ff47a279373074aec2a334d1a",
-        "sizeBytes": 4142
+        "sha256": "c3abc144d3333bb7a1d97d4c45ca93e1419a37b31fad62f65f1f3ab14851ad26",
+        "sizeBytes": 7141
       },
       "argmin_uint64": {
-        "sha256": "716042ba37fa828f4d5988d0737b3d00156964c38a13dfa969065c7a960b65f4",
-        "sizeBytes": 5112
+        "sha256": "49fe5ad571c3832cdb4d09cd55b5bfd2d7e4cec0ef39d27a8cfad43c4b1683f0",
+        "sizeBytes": 8210
       },
       "argmax_uint64": {
-        "sha256": "39513c295098950b3ea2c1a7ed975d384dc9e44280af159c361b05b8270bba76",
-        "sizeBytes": 5074
+        "sha256": "e8f6ebe9156f4ec94057b5ec134f8c1b73a3e275ae120591aa8c51181eebf981",
+        "sizeBytes": 8172
       },
       "argmin_int8": {
-        "sha256": "f7785b93901d5b1a2c6b9370a5c87fded5a1d1d809129bf987e5a002b3036b6c",
-        "sizeBytes": 4075
+        "sha256": "2d581a12d6f04e4d0d39fecd7f86d632d55b1f15a83944b8244180555bca7cd7",
+        "sizeBytes": 7175
       },
       "argmax_int8": {
-        "sha256": "e2d4170d03a9c5c1603118c181c97e5de3e39def46d63405dd4d2f471f9c9dad",
-        "sizeBytes": 4077
+        "sha256": "1f1bdd9c59e0cac454bf26323904779dae4bda1467d9807b5e651825d89997aa",
+        "sizeBytes": 7177
       },
       "argmin_int16": {
-        "sha256": "98aaad1ec921acd02ba7626f70dcc7ad64e0daad042d6098019ff2ff09fb39d5",
-        "sizeBytes": 4116
+        "sha256": "a919d7301887243d76ecb6e1f08b389d7b904e63e0bd693173194cc18a4f7405",
+        "sizeBytes": 7253
       },
       "argmax_int16": {
-        "sha256": "a8b012bdabcdd1ade236f6460a53abf3e1090948e54fc28a972d1e1029286466",
-        "sizeBytes": 4118
+        "sha256": "6c48f210d5a8c698a4f90ba0fc11e54ba151259c881478e0b62d71051db4ba2e",
+        "sizeBytes": 7255
       },
       "argmin_int32": {
-        "sha256": "1303af3b44a5a6e2f8a860e7a9840ce2de6ed8ea846c34bac40cb528eb82b582",
-        "sizeBytes": 4118
+        "sha256": "3bff201a301e8b5111d36ee97f0ef325c477a6a4fe8878c930389c1d29ef10f7",
+        "sizeBytes": 7095
       },
       "argmax_int32": {
-        "sha256": "9b17151107a518cbf5db58def922848b983da5555c61956c1242f9d21babc1b5",
-        "sizeBytes": 4120
+        "sha256": "c790cb1262fd1c93d4e08b6dfb7f5d08b7e23566dbbaf5ebf09ab9ee0a57f4c7",
+        "sizeBytes": 7099
       },
       "argmin_int64": {
-        "sha256": "71d7c03cf2fb66d82fb944e302d49b0542c0cfe033ac32b4522d1f73c8934a15",
-        "sizeBytes": 5068
+        "sha256": "0406a653f17d159a5152d0205b434180e52d1512d163c0ed976918e1cc8cb53e",
+        "sizeBytes": 8142
       },
       "argmax_int64": {
-        "sha256": "f75a4b6ae0fdd783d204638012314e00d85eb03bec441d192fbe340b227babca",
-        "sizeBytes": 5086
+        "sha256": "9bf0ea15ace7f309d680ee67cb053fd662b53a6b113ad85329f94383fafa8e62",
+        "sizeBytes": 8154
       },
       "argmin_float16": {
-        "sha256": "623a6bbb83613892520a68ce7d33b3793f8c34e3121c9a4b16a8ad6417867103",
-        "sizeBytes": 3980
+        "sha256": "607547feaa9cb6b8cd33257f4c2d66e404e5d9de593e94cc6b417c60b7469f22",
+        "sizeBytes": 6970
       },
       "argmax_float16": {
-        "sha256": "94c4a3d37c10f093fd1556b8e4c2747d0266cb7aee281455182a6db58fc9c03e",
-        "sizeBytes": 3982
+        "sha256": "f1e1220dc661ec91759a9e876e51d2de21866fc852a3f2026a9684788c62e1c4",
+        "sizeBytes": 6972
       },
       "argmin_float32": {
-        "sha256": "955ededf34bbf85d26c24b75da7d9a8f2d394eb359af0898a81c379e5ae2205e",
-        "sizeBytes": 4000
+        "sha256": "daebed04961834537bc93089b49b64c64526b5f5d8588f21a8f5a04810a0dbf0",
+        "sizeBytes": 6990
       },
       "argmax_float32": {
-        "sha256": "1a9f08f4a607e9f1f45ee95da2d08fd753fac967073f081f6c3bb2d2d3c39d4c",
-        "sizeBytes": 4002
+        "sha256": "159e1eaf36336752ef9efab54e9aa9cb2daaebdb1a5224f3c6242f02c8d84a46",
+        "sizeBytes": 6992
       },
       "argmin_bfloat16": {
-        "sha256": "02197cbd75af21ec86bf9151c7caba697168f0662bea23f3ebe6f219eb8f56e0",
-        "sizeBytes": 4184
+        "sha256": "6889bde8be463785e55b64806e6dd69e6d4a0831b1fa96914f3d4bb4f5568fe5",
+        "sizeBytes": 7196
       },
       "argmax_bfloat16": {
-        "sha256": "d77f0d264519f6b9868dfe6741013878368044ab3cf10e2a8925730fc2836ae2",
-        "sizeBytes": 4194
+        "sha256": "bc4d57221950a893761ab9fe47517fbcad344ea201009d70da5967517e56d86f",
+        "sizeBytes": 7206
       }
     }
   },
@@ -386,7 +386,19 @@
         ],
         "runtimeEntries": [
           "argmin_float32",
-          "argmax_float32"
+          "argmax_float32",
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
         ]
       },
       "opengl": {
@@ -423,7 +435,19 @@
         ],
         "runtimeEntries": [
           "argmin_float32",
-          "argmax_float32"
+          "argmax_float32",
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
         ]
       },
       "metal": {
@@ -460,10 +484,61 @@
         ],
         "runtimeEntries": [
           "argmin_float32",
-          "argmax_float32"
+          "argmax_float32",
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
         ]
       }
-    }
+    },
+    "indexRangeAssertions": [],
+    "metadataPreconditions": [
+      {
+        "parameter": "shape",
+        "element": 0,
+        "minimum": 2,
+        "maximum": 2
+      },
+      {
+        "parameter": "in_strides",
+        "element": 0,
+        "minimum": 31,
+        "maximum": 258
+      },
+      {
+        "parameter": "out_strides",
+        "element": 0,
+        "minimum": 1,
+        "maximum": 1
+      },
+      {
+        "parameter": "ndim",
+        "minimum": 1,
+        "maximum": 1
+      },
+      {
+        "parameter": "axis_stride",
+        "minimum": 1,
+        "maximum": 2
+      },
+      {
+        "parameter": "axis_size",
+        "minimum": 31,
+        "maximum": 129
+      }
+    ],
+    "outputGuardCount": 32,
+    "observedInputCount": 7,
+    "preserveResourceOrigins": true
   },
   "runtimeMatrix": {
     "scope": "representative-float32-numerical-parity",
@@ -472,12 +547,101 @@
       "argmax_float32"
     ],
     "caseCount": 16,
-    "note": "All 24 entries require deterministic translation and native compiler validation; numerical runtime parity remains the two float32 entries."
+    "note": "All 24 entries require deterministic translation and native compiler validation. All three targets require two float32 and twelve signed/unsigned 16/32/64-bit integer entries. DirectX uses exact-width software subgroups, including resolved two-word 64-bit wrappers. Required execution is distinct from whole-corpus coverage and unchanged upstream suite execution.",
+    "integerCases": {
+      "entries": [
+        "argmin_uint16",
+        "argmax_uint16",
+        "argmin_int16",
+        "argmax_int16",
+        "argmin_uint32",
+        "argmax_uint32",
+        "argmin_int32",
+        "argmax_int32",
+        "argmin_uint64",
+        "argmax_uint64",
+        "argmin_int64",
+        "argmax_int64"
+      ],
+      "axisSizes": [
+        31,
+        32,
+        33,
+        129
+      ],
+      "axisStrides": [
+        1,
+        2
+      ],
+      "extremaAndLowestIndexTies": true,
+      "entriesByTarget": {
+        "metal": [
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
+        ],
+        "opengl": [
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
+        ],
+        "directx": [
+          "argmin_uint16",
+          "argmax_uint16",
+          "argmin_int16",
+          "argmax_int16",
+          "argmin_uint32",
+          "argmax_uint32",
+          "argmin_int32",
+          "argmax_int32",
+          "argmin_uint64",
+          "argmax_uint64",
+          "argmin_int64",
+          "argmax_int64"
+        ]
+      },
+      "caseCountByTarget": {
+        "metal": 96,
+        "opengl": 96,
+        "directx": 96
+      },
+      "upstreamMetallibParityTargets": [
+        "metal"
+      ]
+    },
+    "totalCaseCountByTarget": {
+      "metal": 112,
+      "opengl": 112,
+      "directx": 112
+    }
   },
   "scope": {
     "coveredEntryCount": 24,
-    "runtimeCoveredEntryCount": 2,
-    "completeCorpusEntryCount": 17478,
+    "runtimeCoveredEntryCount": 14,
+    "runtimeCoveredEntryCountByTarget": {
+      "metal": 14,
+      "opengl": 14,
+      "directx": 14
+    },
+    "completeCorpusEntryCount": 17832,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

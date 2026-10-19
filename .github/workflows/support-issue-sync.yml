@@ -21,6 +21,7 @@ on:
     branches:
       - main
     paths:
+      - ".github/ci-coverage-migrations.json"
       - ".github/workflows/backend-tests.yml"
       - ".github/workflows/demo.yml"
       - ".github/workflows/docs.yml"
@@ -93,15 +94,15 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install test dependency
-        run: python -m pip install pytest pypdf
+        run: python -m pip install pytest pypdf "PyYAML>=6,<7"
 
       - name: Validate support matrix artifacts
         run: python tools/support_matrix.py check --output support/generated/support-matrix-check.json
@@ -117,7 +118,7 @@ jobs:
 
       - name: Upload support matrix check report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: support-matrix-check-report
           path: |
@@ -148,12 +149,13 @@ jobs:
           python tools/ci_coverage.py compare
           --baseline support/generated/ci-coverage-base-report.json
           --current support/generated/ci-coverage-report.json
+          --workflow-migrations .github/ci-coverage-migrations.json
           --output support/generated/ci-coverage-comparison.json
           --fail-on-shrink
 
       - name: Upload CI coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-coverage-report
           path: |
@@ -169,7 +171,7 @@ jobs:
       - name: Download test failure summaries
         if: github.event_name == 'workflow_run'
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
@@ -222,7 +224,7 @@ jobs:
 
       - name: Upload support signal reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: support-signal-reports
           path: |
@@ -369,7 +371,7 @@ jobs:
 
       - name: Upload support issue sync reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: support-issue-sync-reports
           path: |

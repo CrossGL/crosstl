@@ -2696,7 +2696,8 @@ def test_cuda_math_api_qualified_scalar_math_aliases_codegen_reparse():
 
     assert_crossgl_reparse(crossgl)
     assert "var roots: f32 = (sqrt(x) + inversesqrt(y));" in crossgl
-    assert "var extrema: f32 = (min(x, y) + max(x, y));" in crossgl
+    # C99 fminf/fmaxf return the non-NaN operand, which CrossGL min/max do not promise.
+    assert "var extrema: f32 = (fmin(x, y) + fmax(x, y));" in crossgl
     assert "var magnitude: f32 = abs(x);" in crossgl
     assert "var fused: f32 = fma(x, y, z);" in crossgl
     for raw_name in {
@@ -2731,7 +2732,8 @@ def test_cuda_math_api_namespace_alias_scalar_math_codegen_reparse():
     crossgl = cuda_to_crossgl(source)
 
     assert_crossgl_reparse(crossgl)
-    assert "var extrema: f32 = (min(x, y) + max(x, y));" in crossgl
+    # C99 fminf/fmaxf return the non-NaN operand, which CrossGL min/max do not promise.
+    assert "var extrema: f32 = (fmin(x, y) + fmax(x, y));" in crossgl
     assert "var fused: f32 = fma(x, y, z);" in crossgl
     for raw_name in {
         "cstd::",
@@ -3163,12 +3165,10 @@ def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():
 
     assert_crossgl_reparse(crossgl)
     assert "return WaveActiveSum(mySum);" in crossgl
-    assert (
-        "/* cuda warp intrinsic __reduce_add_sync(mask, mySum) not directly "
-        "supported in CrossGL */ 0"
-    ) in crossgl
+    # The partial-mask reduction stays a CUDA call for each target to emulate or refuse; it is never a constant.
+    assert "mySum = __reduce_add_sync(mask, mySum);" in crossgl
+    assert "not directly supported" not in crossgl
     assert "__reduce_add_sync(0xffffffffu, mySum);" not in crossgl
-    assert "__reduce_add_sync(mask, mySum);" not in crossgl
 
 
 def test_cuda_samples_reduction_multiblock_cg_tile_reduce_codegen_reparse():

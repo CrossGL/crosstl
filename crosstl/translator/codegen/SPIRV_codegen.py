@@ -50,12 +50,14 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..diagnostics import TranslationDiagnostic
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
     parse_array_type,
 )
+from .call_graph import validate_recursion_free
 from .enum_utils import (
     collect_generic_enum_specializations,
     collect_generic_enum_struct_definitions,
@@ -89,6 +91,14 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .spirv_dead_types import drop_unused_runtime_array_structs
+from .spirv_default_uniforms import SpirvDefaultUniformMixin
+from .spirv_float_semantics import SpirvFloatSemanticsMixin
+from .spirv_local_references import SpirvLocalReferenceMixin
+from .spirv_math_polyfills import SpirvMathPolyfillMixin
+from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
+from .spirv_matrix_constructors import one_argument_matrix_columns
+from .spirv_refusals import SpirvRefusals
 
 
 class SpirvType:
@@ -163,6 +173,42 @@ class UnsupportedSPIRVFeatureError(ValueError):
         self.source_location = source_location
 
 
+CALLEE_IDENTIFIER = re.compile(r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*")
+INDIRECT_CALL_DETAIL = (
+    "Vulkan SPIR-V has no function pointers, so a call through a function table "
+    "or other callee expression cannot be lowered"
+)
+
+
+class SPIRVBuiltinLoweringError(UnsupportedSPIRVFeatureError):
+    """Raised when a call has no SPIR-V lowering that preserves its meaning.
+
+    Covers calls to names that are neither declared functions nor supported
+    built-ins, and built-in calls whose operand count or types have no defined
+    lowering. Emitting a default value instead would be silently wrong output.
+    """
+
+    project_diagnostic_code = "project.translate.vulkan-builtin-unsupported"
+
+    def __init__(
+        self,
+        function_name: str,
+        detail: str,
+        *,
+        reason: str = "invalid-operands",
+        source_location=None,
+    ):
+        self.function_name = function_name
+        self.detail = detail
+        self.reason = reason
+        super().__init__(
+            f"builtin:{function_name}",
+            f"Cannot lower call to '{function_name}' to SPIR-V: {detail}",
+            missing_capabilities=(f"spirv.builtin.{function_name}",),
+            source_location=source_location,
+        )
+
+
 class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
     """Raised when Vulkan SPIR-V cannot preserve an atomic fence contract."""
 
@@ -196,7 +242,13 @@ class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
         )
 
 
-class VulkanSPIRVCodeGen:
+class VulkanSPIRVCodeGen(
+    SpirvDefaultUniformMixin,
+    SpirvFloatSemanticsMixin,
+    SpirvLocalReferenceMixin,
+    SpirvMathPolyfillMixin,
+    SpirvMatrixBuiltinMixin,
+):
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     POINTER_OFFSET_RESET_MARKER_PREFIX = "; __crosstl_pointer_offset_reset_"
@@ -271,6 +323,9 @@ class VulkanSPIRVCodeGen:
     UNSIGNED_INTEGER_TYPES = {"uint", "u64"}
     INTEGER_TYPE_NAMES = SIGNED_INTEGER_TYPES | UNSIGNED_INTEGER_TYPES
     BFLOAT16_TYPE_NAME = "bfloat16"
+    # Internal binary operator for GLSL's floored `mod` (OpFMod/OpSMod); the
+    # source-level `%` operator is the truncated remainder.
+    FLOORED_MOD_OPERATOR = "FLOORED_MOD"
 
     def __init__(
         self,
@@ -302,6 +357,7 @@ class VulkanSPIRVCodeGen:
         """Reset per-module SPIR-V ids, declarations, and symbol caches."""
         self.next_id = 1
         self.code_lines = []
+        self.refusals = SpirvRefusals()
         self.decorations = []
         self.required_extensions = set()
 
@@ -498,6 +554,14 @@ class VulkanSPIRVCodeGen:
     def emit(self, instruction: str):
         """Add a SPIR-V instruction to the code."""
         self.code_lines.append(instruction)
+
+    def refuse_lowering(self, reason: str):
+        """Record a construct with no faithful SPIR-V lowering; :meth:`generate` raises once the module is done.
+
+        The caller may still return a placeholder so that generation can reach every other refusal in the
+        module, but no module is returned while a refusal is pending.
+        """
+        self.refusals.record(reason)
 
     def require_capability(self, capability: str):
         """Request a SPIR-V capability for instructions emitted later."""
@@ -1051,7 +1115,7 @@ class VulkanSPIRVCodeGen:
             if operator == "/":
                 return "UDiv" if is_unsigned else "SDiv"
             if operator == "%":
-                return "UMod" if is_unsigned else "SMod"
+                return "UMod" if is_unsigned else "SRem"
             if operator in {"&", "|", "^"}:
                 return {
                     "&": "BitwiseAnd",
@@ -1353,9 +1417,9 @@ class VulkanSPIRVCodeGen:
         if spec_id is not None:
             scalar_value = self.coerce_scalar_constant_value(value, type_id)
             if scalar_value is None:
-                self.emit(
-                    f"; WARNING: SPIR-V specialization constant {name} requires "
-                    "a scalar literal default; emitting a plain constant fallback"
+                self.refuse_lowering(
+                    f"SPIR-V specialization constant {name} requires "
+                    "a scalar literal default"
                 )
             else:
                 constant_id = self.register_specialization_constant(
@@ -1556,29 +1620,26 @@ class VulkanSPIRVCodeGen:
         """Store a value to a variable."""
         readonly_builtin_name = self.readonly_builtin_pointer_names.get(variable_id.id)
         if readonly_builtin_name is not None:
-            self.emit(
-                f"; WARNING: cannot assign to read-only SPIR-V builtin "
-                f"{readonly_builtin_name}"
+            self.refuse_lowering(
+                f"cannot assign to read-only SPIR-V builtin " f"{readonly_builtin_name}"
             )
             return
         readonly_pointer_name = self.readonly_pointer_names.get(variable_id.id)
         if readonly_pointer_name is not None:
-            self.emit(
-                f"; WARNING: cannot assign to read-only SPIR-V pointer "
-                f"{readonly_pointer_name}"
+            self.refuse_lowering(
+                f"cannot assign to read-only SPIR-V pointer " f"{readonly_pointer_name}"
             )
             return
 
         metadata = self.storage_buffer_access_metadata_for_pointer(variable_id)
         if metadata is not None and metadata.get("readonly"):
-            self.emit("; WARNING: storage buffer store requires a writable buffer")
+            self.refuse_lowering("storage buffer store requires a writable buffer")
             return
 
         target_type = self.pointer_pointee_type(variable_id)
         if self.type_contains_runtime_array(target_type):
-            self.emit(
-                "; WARNING: runtime-array aggregate values cannot be stored "
-                "as SPIR-V values"
+            self.refuse_lowering(
+                "runtime-array aggregate values cannot be stored " "as SPIR-V values"
             )
             return
 
@@ -1589,7 +1650,7 @@ class VulkanSPIRVCodeGen:
         """Load a value from a variable."""
         storage_metadata = self.storage_buffer_access_metadata_for_pointer(variable_id)
         if storage_metadata is not None and storage_metadata.get("writeonly"):
-            self.emit("; WARNING: storage buffer load requires a readable buffer")
+            self.refuse_lowering("storage buffer load requires a readable buffer")
             return self.default_value_for_type(result_type)
 
         if self.type_contains_runtime_array(result_type):
@@ -2214,13 +2275,32 @@ class VulkanSPIRVCodeGen:
             return "float"
         if self.BFLOAT16_TYPE_NAME in normalized:
             return "float"
-        if any(self.integer_type_width(name) == 64 for name in normalized):
-            if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
-                return "u64"
-            return "i64"
-        if "int" in normalized:
-            return "int"
-        return "uint"
+        return self.usual_arithmetic_integer_type_name(normalized)
+
+    def usual_arithmetic_integer_type_name(self, normalized: List[str]) -> str:
+        """Apply the C/C++ usual arithmetic conversions to 32/64-bit integer types.
+
+        Two operands of the same signedness convert to the wider type. Otherwise
+        the unsigned operand wins unless the signed operand is strictly wider, so
+        ``int < uint`` compares as unsigned (C++ [expr.arith.conv], HLSL and
+        GLSL 4.00 implicit int-to-uint conversion) while ``long < uint`` stays
+        signed 64-bit.
+        """
+        result = normalized[0] if normalized else "int"
+        for name in normalized[1:]:
+            if name == result:
+                continue
+            result_width = self.integer_type_width(result) or 32
+            name_width = self.integer_type_width(name) or 32
+            result_unsigned = result in self.UNSIGNED_INTEGER_TYPES
+            if result_unsigned == (name in self.UNSIGNED_INTEGER_TYPES):
+                result = name if name_width > result_width else result
+                continue
+            unsigned, signed = (result, name) if result_unsigned else (name, result)
+            unsigned_width = self.integer_type_width(unsigned) or 32
+            signed_width = self.integer_type_width(signed) or 32
+            result = unsigned if unsigned_width >= signed_width else signed
+        return result
 
     def promoted_bitwise_integer_type_name(
         self, type_names: List[str]
@@ -2228,13 +2308,7 @@ class VulkanSPIRVCodeGen:
         normalized = [self.normalize_primitive_name(name) for name in type_names]
         if any(name not in self.INTEGER_TYPE_NAMES for name in normalized):
             return None
-        if any(self.integer_type_width(name) == 64 for name in normalized):
-            if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
-                return "u64"
-            return "i64"
-        if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
-            return "uint"
-        return "int"
+        return self.usual_arithmetic_integer_type_name(normalized)
 
     def ternary_result_type(self, true_value: SpirvId, false_value: SpirvId) -> SpirvId:
         true_type = self.value_types.get(true_value.id) or self.ensure_registered_type(
@@ -2410,10 +2484,7 @@ class VulkanSPIRVCodeGen:
         if converted_type_name in self.INTEGER_TYPE_NAMES:
             return converted
 
-        self.emit(
-            "; WARNING: OpAccessChain index could not be converted to an integer; "
-            "using 0"
-        )
+        self.refuse_lowering("OpAccessChain index could not be converted to an integer")
         return self.register_constant(0, int_type)
 
     def composite_extract(
@@ -3102,7 +3173,7 @@ class VulkanSPIRVCodeGen:
         result_type = self.ensure_registered_type(result_type)
         result_component_type = self.scalar_or_vector_component_type(result_type.type)
         if (
-            op in {"+", "-", "*", "MULTIPLY", "/", "%"}
+            op in {"+", "-", "*", "MULTIPLY", "/", "%", self.FLOORED_MOD_OPERATOR}
             and result_component_type == self.BFLOAT16_TYPE_NAME
         ):
             result_vector = self.vector_component_type_and_count(
@@ -3127,11 +3198,18 @@ class VulkanSPIRVCodeGen:
             "*": ("OpFMul", "OpIMul", "OpIMul"),
             "MULTIPLY": ("OpFMul", "OpIMul", "OpIMul"),
             "/": ("OpFDiv", "OpSDiv", "OpUDiv"),
-            "%": ("OpFMod", "OpSMod", "OpUMod"),
+            # C, C++, MSL and HLSL `%` (and C `fmod`) truncate the quotient, so the
+            # remainder takes the sign of the dividend: OpSRem/OpFRem. OpSMod and
+            # OpFMod take the sign of the divisor and only implement GLSL's
+            # floored `mod`, which callers request with FLOORED_MOD_OPERATOR.
+            "%": ("OpFRem", "OpSRem", "OpUMod"),
+            self.FLOORED_MOD_OPERATOR: ("OpFMod", "OpSMod", "OpUMod"),
         }
         comparison_ops = {
             "==": ("OpFOrdEqual", "OpIEqual", "OpIEqual"),
-            "!=": ("OpFOrdNotEqual", "OpINotEqual", "OpINotEqual"),
+            # `!=` is true when either operand is NaN in GLSL (glslang emits the unordered
+            # form), HLSL (DXIL fcmp une) and MSL (C++), so `x != x` stays a NaN test.
+            "!=": ("OpFUnordNotEqual", "OpINotEqual", "OpINotEqual"),
             "<": ("OpFOrdLessThan", "OpSLessThan", "OpULessThan"),
             ">": ("OpFOrdGreaterThan", "OpSGreaterThan", "OpUGreaterThan"),
             "<=": ("OpFOrdLessThanEqual", "OpSLessThanEqual", "OpULessThanEqual"),
@@ -3254,8 +3332,20 @@ class VulkanSPIRVCodeGen:
                 result_type, left, right
             )
             spv_op = shift_op
+            if (
+                op == ">>"
+                and self.scalar_or_vector_component_type(result_type.type)
+                in self.SIGNED_INTEGER_TYPES
+            ):
+                # C++20/MSL, HLSL and GLSL shift a signed left operand right
+                # arithmetically (sign-extending); OpShiftRightLogical would
+                # zero-fill and turn -8 >> 1 into a large positive value.
+                spv_op = "OpShiftRightArithmetic"
         else:
             spv_op = f"Op{op}"
+
+        if spv_op == "OpFRem":
+            return self.emit_truncated_float_remainder(result_type, left, right)
 
         id_value = self.get_id()
         self.emit(f"%{id_value} = {spv_op} %{result_type.id} %{left.id} %{right.id}")
@@ -3424,7 +3514,7 @@ class VulkanSPIRVCodeGen:
         return converted
 
     def unsupported_matrix_operation(self, op: str, fallback_type: SpirvId) -> SpirvId:
-        self.emit(f"; WARNING: matrix operation '{op}' is not supported for operands")
+        self.refuse_lowering(f"matrix operation '{op}' is not supported for operands")
         return self.default_value_for_type(self.ensure_registered_type(fallback_type))
 
     def componentwise_matrix_operation(
@@ -3579,6 +3669,7 @@ class VulkanSPIRVCodeGen:
             "OpFMul",
             "OpFDiv",
             "OpFMod",
+            "OpFRem",
             "OpFNegate",
             "OpDot",
             "OpMatrixTimesScalar",
@@ -4396,9 +4487,8 @@ class VulkanSPIRVCodeGen:
                 result_type = self.register_vector_type(bool_type, component_count)
                 operand = self.convert_value_to_type(operand, result_type)
                 if not self.value_has_type(operand, result_type):
-                    self.emit(
-                        "; WARNING: logical not requires a bool scalar or vector "
-                        "operand; using default value"
+                    self.refuse_lowering(
+                        "logical not requires a bool scalar or vector " "operand"
                     )
                     return self.default_value_for_type(result_type)
             else:
@@ -4715,7 +4805,7 @@ class VulkanSPIRVCodeGen:
         if self.integer_value_component_count(lod_id) == 1:
             return True
 
-        self.emit(f"; WARNING: {function_name} requires a scalar integer LOD operand")
+        self.refuse_lowering(f"{function_name} requires a scalar integer LOD operand")
         return False
 
     def resource_query_lod_default_value(self) -> SpirvId:
@@ -4751,8 +4841,8 @@ class VulkanSPIRVCodeGen:
         if actual_count is not None and actual_count >= required_count:
             return True
 
-        self.emit(
-            f"; WARNING: {function_name} requires a {required_count}-component "
+        self.refuse_lowering(
+            f"{function_name} requires a {required_count}-component "
             "floating-point coordinate operand"
         )
         return False
@@ -4846,7 +4936,7 @@ class VulkanSPIRVCodeGen:
         result_type = self.resource_access_result_type(metadata)
         offsets, component_id = self.texture_gather_offsets_arguments(extra_args)
         if len(offsets) != 4:
-            self.emit("; WARNING: textureGatherOffsets requires four offset operands")
+            self.refuse_lowering("textureGatherOffsets requires four offset operands")
             return self.default_value_for_type(result_type)
 
         if component_id is None:
@@ -4908,7 +4998,7 @@ class VulkanSPIRVCodeGen:
             else None
         )
         if image_type is None:
-            self.emit("; WARNING: Could not determine image type for sampled image")
+            self.refuse_lowering("Could not determine image type for sampled image")
             return None
 
         id_value = self.get_id()
@@ -4938,8 +5028,8 @@ class VulkanSPIRVCodeGen:
 
         required_arg_count = coord_index + 2 + extra_arg_count
         if len(args) < required_arg_count:
-            self.emit(
-                f"; WARNING: {function_name} requires a shadow texture, "
+            self.refuse_lowering(
+                f"{function_name} requires a shadow texture, "
                 "coordinate, depth, and operation operands"
             )
             return None
@@ -4950,24 +5040,26 @@ class VulkanSPIRVCodeGen:
         extra_args = args[coord_index + 2 : required_arg_count]
         metadata = self.resource_metadata_for_value(sampled_image_id)
         if not metadata or metadata.get("kind") != "sampled_image":
-            self.emit(
-                f"; WARNING: {function_name} requires a shadow sampled image operand"
+            self.refuse_lowering(
+                f"{function_name} requires a shadow sampled image operand"
             )
             return None
         if not self.validate_non_multisample_sampled_image(function_name, metadata):
             return None
         if int(metadata.get("depth", 0)) != 1:
-            self.emit(
-                f"; WARNING: {function_name} requires a shadow sampled image operand"
+            self.refuse_lowering(
+                f"{function_name} requires a shadow sampled image operand"
             )
             return None
         if len(args) > required_arg_count:
-            self.emit(self.shadow_compare_excess_operand_warning(function_name))
+            self.refuse_lowering(
+                self.shadow_compare_excess_operand_reason(function_name)
+            )
             return None
 
         return sampled_image_id, coord_id, depth_id, extra_args
 
-    def shadow_compare_excess_operand_warning(self, function_name: str) -> str:
+    def shadow_compare_excess_operand_reason(self, function_name: str) -> str:
         extra_operands = {
             "textureCompare": "",
             "textureCompareOffset": "offset",
@@ -4986,12 +5078,12 @@ class VulkanSPIRVCodeGen:
         }[function_name]
         if extra_operands:
             return (
-                f"; WARNING: {function_name} accepts only texture, optional "
+                f"{function_name} accepts only texture, optional "
                 "sampler, coordinate, depth, and "
                 f"{extra_operands} operands"
             )
         return (
-            f"; WARNING: {function_name} accepts only texture, optional sampler, "
+            f"{function_name} accepts only texture, optional sampler, "
             "coordinate, and depth operands"
         )
 
@@ -5008,8 +5100,8 @@ class VulkanSPIRVCodeGen:
 
         required_arg_count = coord_index + 1 + extra_arg_count
         if len(args) < required_arg_count:
-            self.emit(
-                f"; WARNING: {function_name} requires a texture, coordinate, "
+            self.refuse_lowering(
+                f"{function_name} requires a texture, coordinate, "
                 "and operation operands"
             )
             return None
@@ -5020,8 +5112,8 @@ class VulkanSPIRVCodeGen:
         metadata = self.resource_metadata_for_value(sampled_image_id)
         if metadata and metadata.get("kind") == "texture":
             if sampler_id is None:
-                self.emit(
-                    f"; WARNING: {function_name} requires a sampler for separate "
+                self.refuse_lowering(
+                    f"{function_name} requires a sampler for separate "
                     "texture operands"
                 )
                 return None
@@ -5033,7 +5125,7 @@ class VulkanSPIRVCodeGen:
             metadata = self.resource_metadata_for_value(sampled_image_id)
 
         if not metadata or metadata.get("kind") != "sampled_image":
-            self.emit(f"; WARNING: {function_name} requires a sampled image operand")
+            self.refuse_lowering(f"{function_name} requires a sampled image operand")
             return None
 
         return sampled_image_id, coord_id, extra_args, metadata
@@ -5076,7 +5168,7 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         sampler_metadata = self.resource_metadata_for_value(sampler_id)
         if not sampler_metadata or sampler_metadata.get("kind") != "sampler":
-            self.emit(f"; WARNING: {function_name} requires a sampler operand")
+            self.refuse_lowering(f"{function_name} requires a sampler operand")
             return None
 
         image_type_id = texture_metadata.get("image_type_id")
@@ -5086,8 +5178,8 @@ class VulkanSPIRVCodeGen:
             image_type_id, texture_metadata
         )
         if sampled_image_type is None:
-            self.emit(
-                f"; WARNING: {function_name} could not construct a sampled image "
+            self.refuse_lowering(
+                f"{function_name} could not construct a sampled image "
                 "from separate texture and sampler operands"
             )
             return None
@@ -5145,7 +5237,7 @@ class VulkanSPIRVCodeGen:
         metadata["type_name"] = sampled_image_type.type.base_type
         return metadata
 
-    def sampled_texture_excess_operand_warning(self, function_name: str) -> str:
+    def sampled_texture_excess_operand_reason(self, function_name: str) -> str:
         operation_operands = {
             "textureLod": "LOD",
             "textureLodOffset": "LOD and offset",
@@ -5158,7 +5250,7 @@ class VulkanSPIRVCodeGen:
             "texelFetchOffset": "LOD/sample and offset",
         }[function_name]
         return (
-            f"; WARNING: {function_name} accepts only texture, optional sampler, "
+            f"{function_name} accepts only texture, optional sampler, "
             "coordinate, and "
             f"{operation_operands} operands"
         )
@@ -5182,12 +5274,11 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, bias_id: SpirvId
     ) -> Optional[str]:
         if not self.is_scalar_numeric_value(bias_id):
-            self.emit(f"; WARNING: {function_name} requires a scalar numeric bias")
+            self.refuse_lowering(f"{function_name} requires a scalar numeric bias")
             return None
         if self.requires_explicit_lod_sampling():
-            self.emit(
-                f"; WARNING: {function_name} bias is not valid for explicit-lod "
-                "SPIR-V sampling"
+            self.refuse_lowering(
+                f"{function_name} bias is not valid for explicit-lod " "SPIR-V sampling"
             )
             return None
         return f"Bias %{bias_id.id}"
@@ -5222,8 +5313,8 @@ class VulkanSPIRVCodeGen:
             return True
 
         coordinate_kind = "integer" if integer else "floating-point"
-        self.emit(
-            f"; WARNING: {function_name} requires a {expected_count}-component "
+        self.refuse_lowering(
+            f"{function_name} requires a {expected_count}-component "
             f"{coordinate_kind} coordinate operand"
         )
         return False
@@ -5232,7 +5323,7 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, metadata
     ) -> bool:
         if metadata and metadata.get("multisampled"):
-            self.emit(f"; WARNING: {function_name} is not valid for multisample images")
+            self.refuse_lowering(f"{function_name} is not valid for multisample images")
             return False
         return True
 
@@ -5242,8 +5333,8 @@ class VulkanSPIRVCodeGen:
         if self.floating_value_component_count(lod_id) == 1:
             return True
 
-        self.emit(
-            f"; WARNING: {function_name} requires a scalar floating-point LOD operand"
+        self.refuse_lowering(
+            f"{function_name} requires a scalar floating-point LOD operand"
         )
         return False
 
@@ -5253,8 +5344,8 @@ class VulkanSPIRVCodeGen:
         if self.floating_value_component_count(depth_id) == 1:
             return True
 
-        self.emit(
-            f"; WARNING: {function_name} requires a scalar floating-point depth operand"
+        self.refuse_lowering(
+            f"{function_name} requires a scalar floating-point depth operand"
         )
         return False
 
@@ -5264,8 +5355,8 @@ class VulkanSPIRVCodeGen:
         if self.integer_value_component_count(operand_id) == 1:
             return True
 
-        self.emit(
-            f"; WARNING: {function_name} requires a scalar integer {operand_name} operand"
+        self.refuse_lowering(
+            f"{function_name} requires a scalar integer {operand_name} operand"
         )
         return False
 
@@ -5276,8 +5367,8 @@ class VulkanSPIRVCodeGen:
         if self.floating_value_component_count(gradient_id) == expected_count:
             return True
 
-        self.emit(
-            f"; WARNING: {function_name} requires a {expected_count}-component "
+        self.refuse_lowering(
+            f"{function_name} requires a {expected_count}-component "
             f"floating-point {operand_name} gradient operand"
         )
         return False
@@ -5286,8 +5377,8 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, metadata, offset_id: SpirvId
     ) -> bool:
         if metadata and metadata.get("dim") == "Cube":
-            self.emit(
-                f"; WARNING: {function_name} offsets are not valid for cube images"
+            self.refuse_lowering(
+                f"{function_name} offsets are not valid for cube images"
             )
             return False
 
@@ -5295,8 +5386,8 @@ class VulkanSPIRVCodeGen:
         if self.integer_value_component_count(offset_id) == expected_count:
             return True
 
-        self.emit(
-            f"; WARNING: {function_name} requires a {expected_count}-component "
+        self.refuse_lowering(
+            f"{function_name} requires a {expected_count}-component "
             "integer offset operand"
         )
         return False
@@ -5307,8 +5398,8 @@ class VulkanSPIRVCodeGen:
         if self.integer_value_component_count(component_id) == 1:
             return True
 
-        self.emit(
-            f"; WARNING: {function_name} requires a scalar integer component operand"
+        self.refuse_lowering(
+            f"{function_name} requires a scalar integer component operand"
         )
         return False
 
@@ -5328,23 +5419,23 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         vector_info = self.vector_component_type_and_count(coord_id.type.base_type)
         if vector_info is None:
-            self.emit(
-                f"; WARNING: {function_name} requires a projected vector coordinate"
+            self.refuse_lowering(
+                f"{function_name} requires a projected vector coordinate"
             )
             return None
 
         component_type_name, source_count = vector_info
         if component_type_name not in {"float", "double"}:
-            self.emit(
-                f"; WARNING: {function_name} requires a floating-point projected coordinate"
+            self.refuse_lowering(
+                f"{function_name} requires a floating-point projected coordinate"
             )
             return None
 
         axis_count = self.projected_coordinate_axes(metadata)
         output_count = axis_count + (1 if metadata and metadata.get("arrayed") else 0)
         if source_count < output_count + 1:
-            self.emit(
-                f"; WARNING: {function_name} requires a projection component after "
+            self.refuse_lowering(
+                f"{function_name} requires a projection component after "
                 "the texture coordinate"
             )
             return None
@@ -5397,9 +5488,8 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         if len(args) < 3:
-            self.emit(
-                f"; WARNING: {function_name} requires image, coordinate, "
-                "and value operands"
+            self.refuse_lowering(
+                f"{function_name} requires image, coordinate, " "and value operands"
             )
             return self.register_constant(0, self.register_primitive_type("uint"))
 
@@ -5407,8 +5497,8 @@ class VulkanSPIRVCodeGen:
         coord_id = args[1]
         metadata = self.resource_metadata_for_pointer(image_pointer)
         if not metadata or metadata.get("kind") != "storage_image":
-            self.emit(
-                f"; WARNING: {function_name} requires a storage image pointer operand"
+            self.refuse_lowering(
+                f"{function_name} requires a storage image pointer operand"
             )
             return self.register_constant(0, self.register_primitive_type("uint"))
 
@@ -5419,14 +5509,14 @@ class VulkanSPIRVCodeGen:
             function_name, is_multisampled
         )
         if len(args) > len(expected_operands):
-            self.emit(
-                f"; WARNING: {function_name} accepts only "
+            self.refuse_lowering(
+                f"{function_name} accepts only "
                 f"{self.image_atomic_operand_description(function_name, is_multisampled)}"
             )
             return self.default_value_for_type(result_type)
 
         if metadata.get("readonly") or metadata.get("writeonly"):
-            self.emit(f"; WARNING: {function_name} requires a read-write storage image")
+            self.refuse_lowering(f"{function_name} requires a read-write storage image")
             return self.default_value_for_type(result_type)
 
         if not self.validate_storage_image_coordinate(
@@ -5435,19 +5525,19 @@ class VulkanSPIRVCodeGen:
             return self.default_value_for_type(result_type)
 
         if component_type_name not in {"int", "uint"}:
-            self.emit(f"; WARNING: {function_name} requires an integer storage image")
+            self.refuse_lowering(f"{function_name} requires an integer storage image")
             return self.register_constant(0, self.register_primitive_type("uint"))
 
         if int(metadata.get("component_count", 1)) != 1:
-            self.emit(
-                f"; WARNING: {function_name} requires a scalar storage image format"
+            self.refuse_lowering(
+                f"{function_name} requires a scalar storage image format"
             )
             return self.register_constant(0, self.register_primitive_type("uint"))
 
         value_arg_index = 2
         if is_multisampled:
             if len(args) < 4:
-                self.emit(f"; WARNING: {function_name} requires a sample operand")
+                self.refuse_lowering(f"{function_name} requires a sample operand")
                 return self.register_constant(
                     0, self.register_primitive_type(component_type_name)
                 )
@@ -5460,8 +5550,8 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "imageAtomicCompSwap":
             if len(args) <= value_arg_index + 1:
-                self.emit(
-                    f"; WARNING: {function_name} requires compare and value operands"
+                self.refuse_lowering(
+                    f"{function_name} requires compare and value operands"
                 )
                 return self.register_constant(
                     0, self.register_primitive_type(component_type_name)
@@ -5560,19 +5650,19 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         if len(args) < 2:
-            self.emit(f"; WARNING: {function_name} requires target and value operands")
+            self.refuse_lowering(f"{function_name} requires target and value operands")
             return self.register_constant(0, self.register_primitive_type("uint"))
 
         expected_arg_count = 3 if function_name == "atomicCompSwap" else 2
         if len(args) > expected_arg_count:
             if function_name == "atomicCompSwap":
-                self.emit(
-                    f"; WARNING: {function_name} accepts only target, compare, "
+                self.refuse_lowering(
+                    f"{function_name} accepts only target, compare, "
                     "and value operands"
                 )
             else:
-                self.emit(
-                    f"; WARNING: {function_name} accepts only target and value operands"
+                self.refuse_lowering(
+                    f"{function_name} accepts only target and value operands"
                 )
             return self.default_value_for_buffer_atomic_failure(function_name, args)
 
@@ -5583,18 +5673,18 @@ class VulkanSPIRVCodeGen:
                 target_pointer.type.base_type.replace("ptr_", "", 1)
             )
         if target_type is None:
-            self.emit(f"; WARNING: {function_name} requires an addressable target")
+            self.refuse_lowering(f"{function_name} requires an addressable target")
             return self.default_value_for_buffer_atomic_failure(function_name, args)
 
         metadata = self.storage_buffer_access_metadata_for_pointer(target_pointer)
         if metadata is None:
-            self.emit(f"; WARNING: {function_name} requires a storage buffer target")
+            self.refuse_lowering(f"{function_name} requires a storage buffer target")
             return self.default_value_for_buffer_atomic_failure(
                 function_name, args, target_type
             )
         if metadata.get("readonly") or metadata.get("writeonly"):
-            self.emit(
-                f"; WARNING: {function_name} requires a read-write storage buffer"
+            self.refuse_lowering(
+                f"{function_name} requires a read-write storage buffer"
             )
             return self.default_value_for_buffer_atomic_failure(
                 function_name, args, target_type
@@ -5602,23 +5692,22 @@ class VulkanSPIRVCodeGen:
 
         type_name = self.normalize_primitive_name(target_type.type.base_type)
         if self.vector_type_info_from_type(target_type) is not None:
-            self.emit(
-                f"; WARNING: {function_name} requires a scalar int or uint buffer member"
+            self.refuse_lowering(
+                f"{function_name} requires a scalar int or uint buffer member"
             )
             return self.default_value_for_buffer_atomic_failure(
                 function_name, args, target_type
             )
         if self.matrix_type_info_from_type(target_type) is not None:
-            self.emit(
-                f"; WARNING: {function_name} requires a scalar int or uint buffer member"
+            self.refuse_lowering(
+                f"{function_name} requires a scalar int or uint buffer member"
             )
             return self.default_value_for_buffer_atomic_failure(
                 function_name, args, target_type
             )
         if type_name not in {"int", "uint"}:
-            self.emit(
-                f"; WARNING: {function_name} currently supports only int or uint "
-                "buffer members"
+            self.refuse_lowering(
+                f"{function_name} currently supports only int or uint " "buffer members"
             )
             return self.default_value_for_buffer_atomic_failure(
                 function_name, args, target_type
@@ -5626,8 +5715,8 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "atomicCompSwap":
             if len(args) < 3:
-                self.emit(
-                    f"; WARNING: {function_name} requires compare and value operands"
+                self.refuse_lowering(
+                    f"{function_name} requires compare and value operands"
                 )
                 return self.default_value_for_buffer_atomic_failure(
                     function_name, args, target_type
@@ -5776,8 +5865,8 @@ class VulkanSPIRVCodeGen:
         sampled_image_id, coord_id, extra_args, metadata = sample_args
         result_type = self.resource_access_result_type(metadata)
         if len(extra_args) > self.projected_texture_max_operand_counts(function_name):
-            self.emit(
-                f"; WARNING: {function_name} accepts only texture, optional "
+            self.refuse_lowering(
+                f"{function_name} accepts only texture, optional "
                 "sampler, coordinate, and "
                 f"{self.projected_texture_operand_description(function_name)} operands"
             )
@@ -5955,19 +6044,18 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "buffer_append":
             if len(args) < 2:
-                self.emit("; WARNING: buffer_append requires buffer and value operands")
+                self.refuse_lowering("buffer_append requires buffer and value operands")
                 return None
             if len(args) > 2:
-                self.emit(
-                    "; WARNING: buffer_append accepts only buffer and value operands"
+                self.refuse_lowering(
+                    "buffer_append accepts only buffer and value operands"
                 )
                 return None
 
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is None:
-                self.emit(
-                    "; WARNING: buffer_append requires an AppendStructuredBuffer "
-                    "operand"
+                self.refuse_lowering(
+                    "buffer_append requires an AppendStructuredBuffer " "operand"
                 )
                 return None
             return self.process_structured_buffer_append_call(
@@ -5976,19 +6064,18 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "buffer_consume":
             if not args:
-                self.emit("; WARNING: buffer_consume requires a buffer operand")
+                self.refuse_lowering("buffer_consume requires a buffer operand")
                 return self.register_constant(
                     0.0, self.register_primitive_type("float")
                 )
             if len(args) > 1:
-                self.emit("; WARNING: buffer_consume accepts only a buffer operand")
+                self.refuse_lowering("buffer_consume accepts only a buffer operand")
                 return self.default_value_for_buffer_load_failure(args)
 
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is None:
-                self.emit(
-                    "; WARNING: buffer_consume requires a ConsumeStructuredBuffer "
-                    "operand"
+                self.refuse_lowering(
+                    "buffer_consume requires a ConsumeStructuredBuffer " "operand"
                 )
                 return self.default_value_for_buffer_load_failure(args)
             return self.process_structured_buffer_consume_call(
@@ -5997,17 +6084,16 @@ class VulkanSPIRVCodeGen:
 
         if function_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
             if not args:
-                self.emit(f"; WARNING: {function_name} requires a buffer operand")
+                self.refuse_lowering(f"{function_name} requires a buffer operand")
                 return self.structured_buffer_counter_default_value()
             if len(args) > 1:
-                self.emit(f"; WARNING: {function_name} accepts only a buffer operand")
+                self.refuse_lowering(f"{function_name} accepts only a buffer operand")
                 return self.structured_buffer_counter_default_value()
 
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is None:
-                self.emit(
-                    f"; WARNING: {function_name} requires an RWStructuredBuffer "
-                    "operand"
+                self.refuse_lowering(
+                    f"{function_name} requires an RWStructuredBuffer " "operand"
                 )
                 return self.structured_buffer_counter_default_value()
             return self.process_structured_buffer_counter_method_call(
@@ -6020,19 +6106,18 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "buffer_dimensions":
             if not args:
-                self.emit("; WARNING: buffer_dimensions requires a buffer operand")
+                self.refuse_lowering("buffer_dimensions requires a buffer operand")
                 return self.structured_buffer_dimensions_default_value()
             if len(args) > 1:
-                self.emit(
-                    "; WARNING: buffer_dimensions expression form accepts only a "
-                    "buffer operand"
+                self.refuse_lowering(
+                    "buffer_dimensions expression form accepts only a " "buffer operand"
                 )
                 return self.structured_buffer_dimensions_default_value()
 
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is None:
-                self.emit(
-                    "; WARNING: buffer_dimensions requires a structured or "
+                self.refuse_lowering(
+                    "buffer_dimensions requires a structured or "
                     "byte-address buffer operand"
                 )
                 return self.structured_buffer_dimensions_default_value()
@@ -6042,18 +6127,18 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "buffer_load":
             if len(args) < 2:
-                self.emit("; WARNING: buffer_load requires buffer and index operands")
+                self.refuse_lowering("buffer_load requires buffer and index operands")
                 return self.default_value_for_buffer_load_failure(args)
 
             if len(args) > 2:
-                self.emit(
-                    "; WARNING: buffer_load accepts only buffer and index operands"
+                self.refuse_lowering(
+                    "buffer_load accepts only buffer and index operands"
                 )
                 return self.default_value_for_buffer_load_failure(args)
 
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is not None and metadata.get("writeonly"):
-                self.emit("; WARNING: buffer_load requires a readable buffer")
+                self.refuse_lowering("buffer_load requires a readable buffer")
                 return self.default_value_for_buffer_load_failure(args)
             if (
                 metadata is not None
@@ -6064,12 +6149,12 @@ class VulkanSPIRVCodeGen:
                     "RWStructuredBuffer",
                 }
             ):
-                self.emit("; WARNING: buffer_load requires a StructuredBuffer operand")
+                self.refuse_lowering("buffer_load requires a StructuredBuffer operand")
                 return self.default_value_for_buffer_load_failure(args)
 
             element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
             if element_pointer is None:
-                self.emit("; WARNING: buffer_load requires a StructuredBuffer operand")
+                self.refuse_lowering("buffer_load requires a StructuredBuffer operand")
                 return self.default_value_for_buffer_load_failure(args)
 
             element_type = self.variable_value_types[element_pointer.id]
@@ -6077,40 +6162,39 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "buffer_store":
             if len(args) < 3:
-                self.emit(
-                    "; WARNING: buffer_store requires buffer, index, and value operands"
+                self.refuse_lowering(
+                    "buffer_store requires buffer, index, and value operands"
                 )
                 return None
 
             if len(args) > 3:
-                self.emit(
-                    "; WARNING: buffer_store accepts only buffer, index, and "
-                    "value operands"
+                self.refuse_lowering(
+                    "buffer_store accepts only buffer, index, and " "value operands"
                 )
                 return None
 
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is None:
-                self.emit(
-                    "; WARNING: buffer_store requires an RWStructuredBuffer operand"
+                self.refuse_lowering(
+                    "buffer_store requires an RWStructuredBuffer operand"
                 )
                 return None
             if (
                 not metadata.get("byte_address")
                 and metadata.get("buffer_kind") != "RWStructuredBuffer"
             ):
-                self.emit(
-                    "; WARNING: buffer_store requires an RWStructuredBuffer operand"
+                self.refuse_lowering(
+                    "buffer_store requires an RWStructuredBuffer operand"
                 )
                 return None
             if metadata.get("readonly"):
-                self.emit("; WARNING: buffer_store requires an RWStructuredBuffer")
+                self.refuse_lowering("buffer_store requires an RWStructuredBuffer")
                 return None
 
             element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
             if element_pointer is None:
-                self.emit(
-                    "; WARNING: buffer_store requires an RWStructuredBuffer operand"
+                self.refuse_lowering(
+                    "buffer_store requires an RWStructuredBuffer operand"
                 )
                 return None
 
@@ -6119,7 +6203,7 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "subpassLoad":
             if not args:
-                self.emit("; WARNING: subpassLoad requires an input attachment operand")
+                self.refuse_lowering("subpassLoad requires an input attachment operand")
                 result_type = self.register_vector_type(
                     self.register_primitive_type("float"), 4
                 )
@@ -6128,7 +6212,7 @@ class VulkanSPIRVCodeGen:
             image_id = args[0]
             metadata = self.resource_metadata_for_value(image_id)
             if not metadata or metadata.get("kind") != "input_attachment":
-                self.emit("; WARNING: subpassLoad requires a subpassInput operand")
+                self.refuse_lowering("subpassLoad requires a subpassInput operand")
                 result_type = self.register_vector_type(
                     self.register_primitive_type("float"), 4
                 )
@@ -6138,9 +6222,8 @@ class VulkanSPIRVCodeGen:
             image_operands = ""
             if metadata.get("multisampled"):
                 if len(args) < 2:
-                    self.emit(
-                        "; WARNING: subpassLoad on subpassInputMS requires "
-                        "a sample operand"
+                    self.refuse_lowering(
+                        "subpassLoad on subpassInputMS requires " "a sample operand"
                     )
                     return self.default_value_for_type(result_type)
                 if not self.validate_storage_image_sample("subpassLoad", args[1]):
@@ -6158,7 +6241,7 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "imageLoad":
             if len(args) < 2:
-                self.emit("; WARNING: imageLoad requires image and coordinate operands")
+                self.refuse_lowering("imageLoad requires image and coordinate operands")
                 return self.register_constant(
                     0.0, self.register_primitive_type("float")
                 )
@@ -6166,14 +6249,14 @@ class VulkanSPIRVCodeGen:
             image_id, coord_id = args[0], args[1]
             metadata = self.resource_metadata_for_value(image_id)
             if not metadata or metadata.get("kind") != "storage_image":
-                self.emit("; WARNING: imageLoad requires a storage image operand")
+                self.refuse_lowering("imageLoad requires a storage image operand")
                 return self.register_constant(
                     0.0, self.register_primitive_type("float")
                 )
 
             result_type = self.resource_access_result_type(metadata)
             if metadata.get("writeonly"):
-                self.emit("; WARNING: imageLoad requires a readable storage image")
+                self.refuse_lowering("imageLoad requires a readable storage image")
                 return self.default_value_for_type(result_type)
 
             if not self.validate_storage_image_coordinate(
@@ -6184,7 +6267,7 @@ class VulkanSPIRVCodeGen:
             image_operands = ""
             if metadata.get("multisampled"):
                 if len(args) < 3:
-                    self.emit("; WARNING: imageLoad requires a sample operand")
+                    self.refuse_lowering("imageLoad requires a sample operand")
                     return self.default_value_for_type(result_type)
                 if not self.validate_storage_image_sample(function_name, args[2]):
                     return self.default_value_for_type(result_type)
@@ -6203,18 +6286,18 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "imageStore":
             if len(args) < 3:
-                self.emit(
-                    "; WARNING: imageStore requires image, coordinate, and value operands"
+                self.refuse_lowering(
+                    "imageStore requires image, coordinate, and value operands"
                 )
                 return None
 
             image_id, coord_id, texel_id = args[0], args[1], args[2]
             metadata = self.resource_metadata_for_value(image_id)
             if not metadata or metadata.get("kind") != "storage_image":
-                self.emit("; WARNING: imageStore requires a storage image operand")
+                self.refuse_lowering("imageStore requires a storage image operand")
                 return None
             if metadata.get("readonly"):
-                self.emit("; WARNING: imageStore requires a writable storage image")
+                self.refuse_lowering("imageStore requires a writable storage image")
                 return None
 
             if not self.validate_storage_image_coordinate(
@@ -6226,7 +6309,7 @@ class VulkanSPIRVCodeGen:
             image_operands = ""
             if metadata.get("multisampled"):
                 if len(args) < 4:
-                    self.emit("; WARNING: imageStore requires a sample operand")
+                    self.refuse_lowering("imageStore requires a sample operand")
                     return None
                 sample_id, texel_id = args[2], args[3]
                 if not self.validate_storage_image_sample(function_name, sample_id):
@@ -6259,8 +6342,8 @@ class VulkanSPIRVCodeGen:
 
             result_type = self.resource_access_result_type(metadata)
             if len(extra_args) > 1:
-                self.emit(
-                    f"; WARNING: {function_name} accepts only texture, optional "
+                self.refuse_lowering(
+                    f"{function_name} accepts only texture, optional "
                     "sampler, coordinate, and optional bias operands"
                 )
                 return self.default_value_for_type(result_type)
@@ -6461,8 +6544,8 @@ class VulkanSPIRVCodeGen:
 
             result_type = self.resource_access_result_type(metadata)
             if len(extra_args) > 2:
-                self.emit(
-                    "; WARNING: textureOffset accepts only texture, optional "
+                self.refuse_lowering(
+                    "textureOffset accepts only texture, optional "
                     "sampler, coordinate, offset, and optional bias operands"
                 )
                 return self.default_value_for_type(result_type)
@@ -6526,8 +6609,8 @@ class VulkanSPIRVCodeGen:
 
             if function_name == "textureGather":
                 if len(extra_args) > 1:
-                    self.emit(
-                        "; WARNING: textureGather accepts only texture, optional "
+                    self.refuse_lowering(
+                        "textureGather accepts only texture, optional "
                         "sampler, coordinate, and optional component operands"
                     )
                     return self.default_value_for_type(result_type)
@@ -6541,8 +6624,8 @@ class VulkanSPIRVCodeGen:
                 offset_id = None
             elif function_name == "textureGatherOffsets":
                 if len(extra_args) not in {1, 2, 4, 5}:
-                    self.emit(
-                        self.sampled_texture_excess_operand_warning(function_name)
+                    self.refuse_lowering(
+                        self.sampled_texture_excess_operand_reason(function_name)
                     )
                     return self.default_value_for_type(result_type)
                 return self.emit_texture_gather_offsets(
@@ -6554,8 +6637,8 @@ class VulkanSPIRVCodeGen:
                 )
             else:
                 if len(extra_args) > 2:
-                    self.emit(
-                        "; WARNING: textureGatherOffset accepts only texture, "
+                    self.refuse_lowering(
+                        "textureGatherOffset accepts only texture, "
                         "optional sampler, coordinate, offset, and optional "
                         "component operands"
                     )
@@ -6598,11 +6681,13 @@ class VulkanSPIRVCodeGen:
             offset_id = extra_args[1] if function_name == "texelFetchOffset" else None
             result_type = self.resource_access_result_type(metadata)
             if len(extra_args) > required_extra_count:
-                self.emit(self.sampled_texture_excess_operand_warning(function_name))
+                self.refuse_lowering(
+                    self.sampled_texture_excess_operand_reason(function_name)
+                )
                 return self.default_value_for_type(result_type)
 
             if metadata.get("dim") == "Cube":
-                self.emit(f"; WARNING: {function_name} is not valid for cube images")
+                self.refuse_lowering(f"{function_name} is not valid for cube images")
                 return self.default_value_for_type(result_type)
 
             if not self.validate_sampled_texture_coordinate(
@@ -6620,8 +6705,8 @@ class VulkanSPIRVCodeGen:
                 return self.default_value_for_type(result_type)
 
             if metadata.get("multisampled") and offset_id is not None:
-                self.emit(
-                    "; WARNING: texelFetchOffset is not valid for multisample images"
+                self.refuse_lowering(
+                    "texelFetchOffset is not valid for multisample images"
                 )
                 return self.default_value_for_type(result_type)
             if (
@@ -6656,7 +6741,7 @@ class VulkanSPIRVCodeGen:
 
         if function_name in {"textureSize", "imageSize"}:
             if not args:
-                self.emit(f"; WARNING: {function_name} requires an image operand")
+                self.refuse_lowering(f"{function_name} requires an image operand")
                 return self.register_constant(0, self.register_primitive_type("int"))
 
             resource_id = args[0]
@@ -6665,8 +6750,8 @@ class VulkanSPIRVCodeGen:
                 "sampled_image" if function_name == "textureSize" else "storage_image"
             )
             if not metadata or metadata.get("kind") != expected_kind:
-                self.emit(
-                    f"; WARNING: {function_name} requires a {expected_kind} operand"
+                self.refuse_lowering(
+                    f"{function_name} requires a {expected_kind} operand"
                 )
                 return self.resource_query_size_default_value(metadata)
 
@@ -6676,13 +6761,12 @@ class VulkanSPIRVCodeGen:
 
             result_type = self.resource_query_size_result_type(metadata)
             if function_name == "imageSize" and len(args) > 1:
-                self.emit("; WARNING: imageSize accepts only an image operand")
+                self.refuse_lowering("imageSize accepts only an image operand")
                 return self.default_value_for_type(result_type)
 
             if function_name == "textureSize" and len(args) > 2:
-                self.emit(
-                    "; WARNING: textureSize accepts only texture and optional "
-                    "LOD operands"
+                self.refuse_lowering(
+                    "textureSize accepts only texture and optional " "LOD operands"
                 )
                 return self.default_value_for_type(result_type)
 
@@ -6714,11 +6798,11 @@ class VulkanSPIRVCodeGen:
 
         if function_name in {"textureSamples", "imageSamples"}:
             if not args:
-                self.emit(f"; WARNING: {function_name} requires an image operand")
+                self.refuse_lowering(f"{function_name} requires an image operand")
                 return self.register_constant(0, self.register_primitive_type("int"))
 
             if len(args) > 1:
-                self.emit(f"; WARNING: {function_name} accepts only an image operand")
+                self.refuse_lowering(f"{function_name} accepts only an image operand")
                 return self.register_constant(0, self.register_primitive_type("int"))
 
             resource_id = args[0]
@@ -6729,13 +6813,13 @@ class VulkanSPIRVCodeGen:
                 else "storage_image"
             )
             if not metadata or metadata.get("kind") != expected_kind:
-                self.emit(
-                    f"; WARNING: {function_name} requires a {expected_kind} operand"
+                self.refuse_lowering(
+                    f"{function_name} requires a {expected_kind} operand"
                 )
                 return self.register_constant(0, self.register_primitive_type("int"))
 
             if metadata.get("dim") != "2D" or not metadata.get("multisampled"):
-                self.emit(f"; WARNING: {function_name} requires a multisample 2D image")
+                self.refuse_lowering(f"{function_name} requires a multisample 2D image")
                 return self.register_constant(0, self.register_primitive_type("int"))
 
             image_id = self.image_operand_for_query(resource_id, metadata)
@@ -6754,26 +6838,26 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "textureQueryLevels":
             if not args:
-                self.emit("; WARNING: textureQueryLevels requires a texture operand")
+                self.refuse_lowering("textureQueryLevels requires a texture operand")
                 return self.register_constant(0, self.register_primitive_type("int"))
 
             if len(args) > 1:
-                self.emit(
-                    "; WARNING: textureQueryLevels accepts only a texture operand"
+                self.refuse_lowering(
+                    "textureQueryLevels accepts only a texture operand"
                 )
                 return self.register_constant(0, self.register_primitive_type("int"))
 
             sampled_image_id = args[0]
             metadata = self.resource_metadata_for_value(sampled_image_id)
             if not metadata or metadata.get("kind") != "sampled_image":
-                self.emit(
-                    "; WARNING: textureQueryLevels requires a sampled image operand"
+                self.refuse_lowering(
+                    "textureQueryLevels requires a sampled image operand"
                 )
                 return self.register_constant(0, self.register_primitive_type("int"))
 
             if metadata.get("multisampled"):
-                self.emit(
-                    "; WARNING: textureQueryLevels requires a non-multisample "
+                self.refuse_lowering(
+                    "textureQueryLevels requires a non-multisample "
                     "sampled image operand"
                 )
                 return self.register_constant(0, self.register_primitive_type("int"))
@@ -6793,8 +6877,8 @@ class VulkanSPIRVCodeGen:
 
         if function_name == "textureQueryLod":
             if len(args) < 2:
-                self.emit(
-                    "; WARNING: textureQueryLod requires texture and coordinate operands"
+                self.refuse_lowering(
+                    "textureQueryLod requires texture and coordinate operands"
                 )
                 return self.resource_query_lod_default_value()
 
@@ -6805,21 +6889,21 @@ class VulkanSPIRVCodeGen:
             if sampler_metadata and sampler_metadata.get("kind") == "sampler":
                 sampler_id = args[1]
                 if len(args) < 3:
-                    self.emit(
-                        "; WARNING: textureQueryLod requires a coordinate operand "
+                    self.refuse_lowering(
+                        "textureQueryLod requires a coordinate operand "
                         "after the sampler"
                     )
                     return self.resource_query_lod_default_value()
                 if len(args) > 3:
-                    self.emit(
-                        "; WARNING: textureQueryLod accepts only texture, sampler, "
+                    self.refuse_lowering(
+                        "textureQueryLod accepts only texture, sampler, "
                         "and coordinate operands"
                     )
                     return self.resource_query_lod_default_value()
                 coord_id = args[2]
             elif len(args) > 2:
-                self.emit(
-                    "; WARNING: textureQueryLod accepts only texture and coordinate "
+                self.refuse_lowering(
+                    "textureQueryLod accepts only texture and coordinate "
                     "operands unless the second operand is a sampler"
                 )
                 return self.resource_query_lod_default_value()
@@ -6827,8 +6911,8 @@ class VulkanSPIRVCodeGen:
             metadata = self.resource_metadata_for_value(sampled_image_id)
             if metadata and metadata.get("kind") == "texture":
                 if sampler_id is None:
-                    self.emit(
-                        "; WARNING: textureQueryLod requires a sampler for separate "
+                    self.refuse_lowering(
+                        "textureQueryLod requires a sampler for separate "
                         "texture operands"
                     )
                     return self.resource_query_lod_default_value()
@@ -6840,7 +6924,7 @@ class VulkanSPIRVCodeGen:
                 metadata = self.resource_metadata_for_value(sampled_image_id)
 
             if not metadata or metadata.get("kind") != "sampled_image":
-                self.emit("; WARNING: textureQueryLod requires a sampled image operand")
+                self.refuse_lowering("textureQueryLod requires a sampled image operand")
                 return self.resource_query_lod_default_value()
 
             if not self.validate_non_multisample_sampled_image(function_name, metadata):
@@ -6889,7 +6973,9 @@ class VulkanSPIRVCodeGen:
             sampled_image_id, coord_id, extra_args, metadata = sample_args
             result_type = self.resource_access_result_type(metadata)
             if len(extra_args) > extra_arg_count:
-                self.emit(self.sampled_texture_excess_operand_warning(function_name))
+                self.refuse_lowering(
+                    self.sampled_texture_excess_operand_reason(function_name)
+                )
                 return self.default_value_for_type(result_type)
             if not self.validate_non_multisample_sampled_image(function_name, metadata):
                 return self.default_value_for_type(result_type)
@@ -7279,9 +7365,9 @@ class VulkanSPIRVCodeGen:
     def unsupported_lambda_default_value(
         self, context: str, result_type=None
     ) -> SpirvId:
-        self.emit(
-            "; WARNING: SPIR-V backend does not support CrossGL "
-            f"lambda expressions in {context}; using a default value"
+        self.refuse_lowering(
+            "SPIR-V backend does not support CrossGL "
+            f"lambda expressions in {context}"
         )
         if result_type is None:
             result_type = self.register_primitive_type("float")
@@ -7291,26 +7377,10 @@ class VulkanSPIRVCodeGen:
         self, category: str, operation: str
     ) -> SpirvId:
         result_type = self.represented_ir_diagnostic_result_type(category, operation)
-        result_type_label = self.diagnostic_type_label(result_type)
-        self.emit(
-            f"; WARNING: SPIR-V backend does not lower {category} operation "
-            f"{operation} yet; using a default {result_type_label} value"
+        self.refuse_lowering(
+            f"SPIR-V backend does not lower {category} operation {operation} yet"
         )
         return self.default_value_for_type(result_type)
-
-    def diagnostic_type_label(self, type_id: SpirvId) -> str:
-        vector_info = self.vector_component_type_and_count(type_id.type.base_type)
-        if vector_info is not None:
-            component_type, count = vector_info
-            vector_prefixes = {
-                "float": "vec",
-                "double": "dvec",
-                "int": "ivec",
-                "uint": "uvec",
-                "bool": "bvec",
-            }
-            return f"{vector_prefixes.get(component_type, 'vec')}{count}"
-        return type_id.type.base_type
 
     def represented_ir_diagnostic_result_type(
         self, category: str, operation: str
@@ -7366,8 +7436,8 @@ class VulkanSPIRVCodeGen:
         if allowed_models is None:
             return False
         if self.current_execution_model is None:
-            self.emit(
-                f"; WARNING: SPIR-V ray tracing operation {operation} requires "
+            self.refuse_lowering(
+                f"SPIR-V ray tracing operation {operation} requires "
                 "a ray tracing stage context"
             )
             return False
@@ -7375,8 +7445,8 @@ class VulkanSPIRVCodeGen:
             return True
 
         allowed = ", ".join(sorted(allowed_models))
-        self.emit(
-            f"; WARNING: SPIR-V ray tracing operation {operation} is only valid "
+        self.refuse_lowering(
+            f"SPIR-V ray tracing operation {operation} is only valid "
             f"in {allowed} stages"
         )
         return False
@@ -7392,8 +7462,8 @@ class VulkanSPIRVCodeGen:
         else:
             value = self.process_expression(expr)
         if value is None:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} acceleration structure argument "
+            self.refuse_lowering(
+                f"SPIR-V {operation} acceleration structure argument "
                 "could not be evaluated"
             )
             return None
@@ -7405,8 +7475,8 @@ class VulkanSPIRVCodeGen:
             else value.type.base_type
         )
         if not self.is_acceleration_structure_type_name(type_name):
-            self.emit(
-                f"; WARNING: SPIR-V {operation} acceleration structure argument "
+            self.refuse_lowering(
+                f"SPIR-V {operation} acceleration structure argument "
                 f"must be accelerationStructureEXT, got {type_name}"
             )
             return None
@@ -7418,9 +7488,8 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         value = self.process_expression(expr)
         if value is None:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument could not be "
-                "evaluated"
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument could not be " "evaluated"
             )
             return None
 
@@ -7428,16 +7497,15 @@ class VulkanSPIRVCodeGen:
             value.type
         )
         if self.vector_component_type_and_count(value_type.type.base_type) is not None:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument must be a "
-                "32-bit integer scalar"
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument must be a " "32-bit integer scalar"
             )
             return None
 
         component_type = self.normalize_primitive_name(value_type.type.base_type)
         if component_type not in {"int", "uint"}:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument must be a "
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument must be a "
                 f"32-bit integer scalar, got {component_type}"
             )
             return None
@@ -7449,9 +7517,8 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         value = self.process_expression(expr)
         if value is None:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument could not be "
-                "evaluated"
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument could not be " "evaluated"
             )
             return None
 
@@ -7459,16 +7526,16 @@ class VulkanSPIRVCodeGen:
             value.type
         )
         if self.vector_component_type_and_count(value_type.type.base_type) is not None:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument must be a "
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument must be a "
                 "32-bit floating-point scalar"
             )
             return None
 
         component_type = self.normalize_primitive_name(value_type.type.base_type)
         if component_type not in {"float", "double", "int", "uint"}:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument must be a "
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument must be a "
                 f"32-bit floating-point scalar, got {component_type}"
             )
             return None
@@ -7480,9 +7547,8 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         value = self.process_expression(expr)
         if value is None:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument could not be "
-                "evaluated"
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument could not be " "evaluated"
             )
             return None
 
@@ -7491,8 +7557,8 @@ class VulkanSPIRVCodeGen:
         value = self.convert_value_to_type(value, vec3_type)
         vector_info = self.vector_component_type_and_count(value.type.base_type)
         if vector_info != ("float", 3):
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument must be a "
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument must be a "
                 "32-bit floating-point vec3"
             )
             return None
@@ -7504,9 +7570,8 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[MemberAccessNode]:
         ray_desc_pointer = self.variable_pointer_from_expression(ray_desc_expr)
         if ray_desc_pointer is None:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} RayDesc argument must be an "
-                "addressable value"
+            self.refuse_lowering(
+                f"SPIR-V {operation} RayDesc argument must be an " "addressable value"
             )
             return None
 
@@ -7520,9 +7585,8 @@ class VulkanSPIRVCodeGen:
                 return MemberAccessNode(ray_desc_expr, field_name)
 
         expected = "/".join(field_names)
-        self.emit(
-            f"; WARNING: SPIR-V {operation} RayDesc argument does not provide "
-            f"{expected}"
+        self.refuse_lowering(
+            f"SPIR-V {operation} RayDesc argument does not provide " f"{expected}"
         )
         return None
 
@@ -7576,16 +7640,15 @@ class VulkanSPIRVCodeGen:
     ) -> Tuple[Optional[SpirvId], Optional[SpirvId]]:
         pointer = self.variable_pointer_from_expression(expr)
         if pointer is None:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument must be an "
-                "addressable value"
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument must be an " "addressable value"
             )
             return None, None
 
         value_type = self.pointer_pointee_type(pointer)
         if value_type is None:
-            self.emit(
-                f"; WARNING: SPIR-V {operation} {role} argument has no value type"
+            self.refuse_lowering(
+                f"SPIR-V {operation} {role} argument has no value type"
             )
             return None, None
 
@@ -7750,8 +7813,8 @@ class VulkanSPIRVCodeGen:
             )
         if len(arguments) not in expected_counts:
             expected = self.format_expected_argument_counts(expected_counts)
-            self.emit(
-                f"; WARNING: SPIR-V ray tracing operation {operation} requires "
+            self.refuse_lowering(
+                f"SPIR-V ray tracing operation {operation} requires "
                 f"{expected} arguments"
             )
             return self.ray_tracing_default_value(operation)
@@ -8205,8 +8268,8 @@ class VulkanSPIRVCodeGen:
     def acceleration_structure_value_from_expression(self, expr) -> Optional[SpirvId]:
         value = self.process_expression(expr)
         if value is None:
-            self.emit(
-                "; WARNING: SPIR-V RayQuery.TraceRayInline acceleration structure "
+            self.refuse_lowering(
+                "SPIR-V RayQuery.TraceRayInline acceleration structure "
                 "argument could not be evaluated"
             )
             return None
@@ -8218,8 +8281,8 @@ class VulkanSPIRVCodeGen:
             else value.type.base_type
         )
         if not self.is_acceleration_structure_type_name(type_name):
-            self.emit(
-                "; WARNING: SPIR-V RayQuery.TraceRayInline acceleration structure "
+            self.refuse_lowering(
+                "SPIR-V RayQuery.TraceRayInline acceleration structure "
                 f"argument must be accelerationStructureEXT, got {type_name}"
             )
             return None
@@ -8229,8 +8292,8 @@ class VulkanSPIRVCodeGen:
     def ray_query_uint_operand(self, expr, role: str) -> Optional[SpirvId]:
         value = self.process_expression(expr)
         if value is None:
-            self.emit(
-                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+            self.refuse_lowering(
+                f"SPIR-V RayQuery.TraceRayInline {role} argument "
                 "could not be evaluated"
             )
             return None
@@ -8239,16 +8302,16 @@ class VulkanSPIRVCodeGen:
             value.type
         )
         if self.vector_component_type_and_count(value_type.type.base_type) is not None:
-            self.emit(
-                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+            self.refuse_lowering(
+                f"SPIR-V RayQuery.TraceRayInline {role} argument "
                 "must be a 32-bit integer scalar"
             )
             return None
 
         component_type = self.normalize_primitive_name(value_type.type.base_type)
         if component_type not in {"int", "uint"}:
-            self.emit(
-                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+            self.refuse_lowering(
+                f"SPIR-V RayQuery.TraceRayInline {role} argument "
                 f"must be a 32-bit integer scalar, got {component_type}"
             )
             return None
@@ -8260,9 +8323,8 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         value = self.process_expression(expr)
         if value is None:
-            self.emit(
-                f"; WARNING: SPIR-V RayQuery.{operation} {role} argument "
-                "could not be evaluated"
+            self.refuse_lowering(
+                f"SPIR-V RayQuery.{operation} {role} argument " "could not be evaluated"
             )
             return None
 
@@ -8270,16 +8332,16 @@ class VulkanSPIRVCodeGen:
             value.type
         )
         if self.vector_component_type_and_count(value_type.type.base_type) is not None:
-            self.emit(
-                f"; WARNING: SPIR-V RayQuery.{operation} {role} argument "
+            self.refuse_lowering(
+                f"SPIR-V RayQuery.{operation} {role} argument "
                 "must be a 32-bit floating-point scalar"
             )
             return None
 
         component_type = self.normalize_primitive_name(value_type.type.base_type)
         if component_type not in {"float", "double", "int", "uint"}:
-            self.emit(
-                f"; WARNING: SPIR-V RayQuery.{operation} {role} argument "
+            self.refuse_lowering(
+                f"SPIR-V RayQuery.{operation} {role} argument "
                 f"must be a 32-bit floating-point scalar, got {component_type}"
             )
             return None
@@ -8289,8 +8351,8 @@ class VulkanSPIRVCodeGen:
     def ray_query_vec3_operand(self, expr, role: str) -> Optional[SpirvId]:
         value = self.process_expression(expr)
         if value is None:
-            self.emit(
-                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+            self.refuse_lowering(
+                f"SPIR-V RayQuery.TraceRayInline {role} argument "
                 "could not be evaluated"
             )
             return None
@@ -8300,8 +8362,8 @@ class VulkanSPIRVCodeGen:
         value = self.convert_value_to_type(value, vec3_type)
         vector_info = self.vector_component_type_and_count(value.type.base_type)
         if vector_info != ("float", 3):
-            self.emit(
-                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+            self.refuse_lowering(
+                f"SPIR-V RayQuery.TraceRayInline {role} argument "
                 "must be a 32-bit floating-point vec3"
             )
             return None
@@ -8313,8 +8375,8 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[MemberAccessNode]:
         ray_desc_pointer = self.variable_pointer_from_expression(ray_desc_expr)
         if ray_desc_pointer is None:
-            self.emit(
-                "; WARNING: SPIR-V RayQuery.TraceRayInline RayDesc argument "
+            self.refuse_lowering(
+                "SPIR-V RayQuery.TraceRayInline RayDesc argument "
                 "must be an addressable value"
             )
             return None
@@ -8329,8 +8391,8 @@ class VulkanSPIRVCodeGen:
                 return MemberAccessNode(ray_desc_expr, field_name)
 
         expected = "/".join(field_names)
-        self.emit(
-            "; WARNING: SPIR-V RayQuery.TraceRayInline RayDesc argument "
+        self.refuse_lowering(
+            "SPIR-V RayQuery.TraceRayInline RayDesc argument "
             f"does not provide {expected}"
         )
         return None
@@ -8453,8 +8515,8 @@ class VulkanSPIRVCodeGen:
         if isinstance(expected_counts, int):
             expected_counts = {expected_counts}
         if len(arguments) not in expected_counts:
-            self.emit(
-                f"; WARNING: SPIR-V RayQuery.{operation} requires "
+            self.refuse_lowering(
+                f"SPIR-V RayQuery.{operation} requires "
                 f"{self.format_expected_argument_counts(expected_counts)} arguments"
             )
             if operation == "TraceRayInline":
@@ -8530,9 +8592,8 @@ class VulkanSPIRVCodeGen:
 
         arguments = getattr(expr, "arguments", []) or []
         if len(arguments) != 2:
-            self.emit(
-                "; WARNING: SPIR-V mesh SetMeshOutputCounts requires exactly "
-                "2 arguments"
+            self.refuse_lowering(
+                "SPIR-V mesh SetMeshOutputCounts requires exactly " "2 arguments"
             )
             return self.register_constant(0, self.register_primitive_type("uint"))
 
@@ -8540,8 +8601,8 @@ class VulkanSPIRVCodeGen:
         vertex_count = self.process_expression(arguments[0])
         primitive_count = self.process_expression(arguments[1])
         if vertex_count is None or primitive_count is None:
-            self.emit(
-                "; WARNING: SPIR-V mesh SetMeshOutputCounts requires count operands"
+            self.refuse_lowering(
+                "SPIR-V mesh SetMeshOutputCounts requires count operands"
             )
             return self.register_constant(0, uint_type)
         if not self.validate_mesh_count_operands(
@@ -8588,8 +8649,8 @@ class VulkanSPIRVCodeGen:
             and requested_vertices is not None
             and requested_vertices > vertex_limit
         ):
-            self.emit(
-                "; WARNING: SPIR-V mesh SetMeshOutputCounts vertex count "
+            self.refuse_lowering(
+                "SPIR-V mesh SetMeshOutputCounts vertex count "
                 "exceeds declared max_vertices"
             )
             valid = False
@@ -8599,8 +8660,8 @@ class VulkanSPIRVCodeGen:
             and requested_primitives is not None
             and requested_primitives > primitive_limit
         ):
-            self.emit(
-                "; WARNING: SPIR-V mesh SetMeshOutputCounts primitive count "
+            self.refuse_lowering(
+                "SPIR-V mesh SetMeshOutputCounts primitive count "
                 "exceeds declared max_primitives"
             )
             valid = False
@@ -8623,15 +8684,15 @@ class VulkanSPIRVCodeGen:
                 and literal < 0
                 for argument in argument_exprs
             ):
-                self.emit(
-                    f"; WARNING: SPIR-V mesh {operation} {count_label} operands "
+                self.refuse_lowering(
+                    f"SPIR-V mesh {operation} {count_label} operands "
                     "must be non-negative integer values"
                 )
                 return False
             return True
 
-        self.emit(
-            f"; WARNING: SPIR-V mesh {operation} {count_label} operands must be "
+        self.refuse_lowering(
+            f"SPIR-V mesh {operation} {count_label} operands must be "
             "scalar integer values"
         )
         return False
@@ -8642,14 +8703,14 @@ class VulkanSPIRVCodeGen:
         """Lower represented mesh output helper calls to SPIR-V Output stores."""
         uint_type = self.register_primitive_type("uint")
         if self.current_execution_model != "MeshEXT":
-            self.emit(
-                f"; WARNING: SPIR-V mesh {function_name} is only valid in mesh stages"
+            self.refuse_lowering(
+                f"SPIR-V mesh {function_name} is only valid in mesh stages"
             )
             return self.register_constant(0, uint_type)
 
         if len(args) != 2:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {function_name} requires exactly 2 arguments"
+            self.refuse_lowering(
+                f"SPIR-V mesh {function_name} requires exactly 2 arguments"
             )
             return self.register_constant(0, uint_type)
 
@@ -8665,15 +8726,14 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         """Lower geometry stream-control calls to SPIR-V instructions."""
         if self.current_execution_model != "Geometry":
-            self.emit(
-                f"; WARNING: SPIR-V geometry {function_name} is only valid in "
-                "geometry stages"
+            self.refuse_lowering(
+                f"SPIR-V geometry {function_name} is only valid in " "geometry stages"
             )
             return None
 
         if args:
-            self.emit(
-                f"; WARNING: SPIR-V geometry {function_name} requires no arguments"
+            self.refuse_lowering(
+                f"SPIR-V geometry {function_name} requires no arguments"
             )
             return None
 
@@ -8688,7 +8748,7 @@ class VulkanSPIRVCodeGen:
         """Lower SetVertex(index, value) to a Position builtin output store."""
         index = self.process_expression(args[0])
         if index is None:
-            self.emit("; WARNING: SPIR-V mesh SetVertex requires an index operand")
+            self.refuse_lowering("SPIR-V mesh SetVertex requires an index operand")
             return
 
         position_value = self.mesh_vertex_position_value(args[1])
@@ -8713,7 +8773,7 @@ class VulkanSPIRVCodeGen:
         """Lower SetPrimitive(index, value) to primitive-index builtin output."""
         index = self.process_expression(args[0])
         if index is None:
-            self.emit("; WARNING: SPIR-V mesh SetPrimitive requires an index operand")
+            self.refuse_lowering("SPIR-V mesh SetPrimitive requires an index operand")
             return
 
         primitive_output, element_type = self.ensure_mesh_primitive_index_output(
@@ -8724,13 +8784,13 @@ class VulkanSPIRVCodeGen:
 
         value = self.process_expression(args[1])
         if value is None:
-            self.emit("; WARNING: SPIR-V mesh SetPrimitive requires a value operand")
+            self.refuse_lowering("SPIR-V mesh SetPrimitive requires a value operand")
             return
 
         value = self.convert_value_to_type(value, element_type)
         if not self.value_has_type(value, element_type):
-            self.emit(
-                "; WARNING: SPIR-V mesh SetPrimitive value does not match "
+            self.refuse_lowering(
+                "SPIR-V mesh SetPrimitive value does not match "
                 f"{element_type.type.base_type}"
             )
             return
@@ -8781,9 +8841,8 @@ class VulkanSPIRVCodeGen:
         if literal_index is None:
             return True
         if literal_index < 0:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {diagnostic_name} literal index "
-                "must be non-negative"
+            self.refuse_lowering(
+                f"SPIR-V mesh {diagnostic_name} literal index " "must be non-negative"
             )
             return False
 
@@ -8792,8 +8851,8 @@ class VulkanSPIRVCodeGen:
             return True
 
         limit_label = "vertex" if role == "vertices" else "primitive"
-        self.emit(
-            f"; WARNING: SPIR-V mesh {diagnostic_name} literal index exceeds "
+        self.refuse_lowering(
+            f"SPIR-V mesh {diagnostic_name} literal index exceeds "
             f"the declared mesh {limit_label} output limit"
         )
         return False
@@ -8816,8 +8875,8 @@ class VulkanSPIRVCodeGen:
                 self.mesh_vertex_output_limit is not None
                 and minimum_size > self.mesh_vertex_output_limit
             ):
-                self.emit(
-                    "; WARNING: SPIR-V mesh SetVertex literal index exceeds the "
+                self.refuse_lowering(
+                    "SPIR-V mesh SetVertex literal index exceeds the "
                     "declared mesh vertex output limit"
                 )
                 return None
@@ -8986,8 +9045,8 @@ class VulkanSPIRVCodeGen:
 
         info = self.mesh_primitive_index_builtin_info()
         if info is None:
-            self.emit(
-                "; WARNING: SPIR-V mesh SetPrimitive requires point, line, or "
+            self.refuse_lowering(
+                "SPIR-V mesh SetPrimitive requires point, line, or "
                 "triangle output topology"
             )
             return None, None
@@ -9001,8 +9060,8 @@ class VulkanSPIRVCodeGen:
         if cached is not None:
             variable, cached_type, cached_limit = cached
             if minimum_size > cached_limit:
-                self.emit(
-                    "; WARNING: SPIR-V mesh SetPrimitive literal index exceeds the "
+                self.refuse_lowering(
+                    "SPIR-V mesh SetPrimitive literal index exceeds the "
                     "declared mesh primitive output limit"
                 )
                 return None, None
@@ -9047,13 +9106,13 @@ class VulkanSPIRVCodeGen:
         """Return a vec4 position value for SetVertex."""
         value = self.process_expression(expr)
         if value is None:
-            self.emit("; WARNING: SPIR-V mesh SetVertex requires a value operand")
+            self.refuse_lowering("SPIR-V mesh SetVertex requires a value operand")
             return None
 
         position = self.mesh_vertex_position_from_value(value)
         if position is None:
-            self.emit(
-                "; WARNING: SPIR-V mesh SetVertex value must be a vec3, vec4, "
+            self.refuse_lowering(
+                "SPIR-V mesh SetVertex value must be a vec3, vec4, "
                 "or struct with a position member"
             )
         return position
@@ -9101,7 +9160,7 @@ class VulkanSPIRVCodeGen:
         info, index_expr, member_name, member_component = access
         index = self.process_expression(index_expr)
         if index is None:
-            self.emit("; WARNING: SPIR-V mesh output assignment requires an index")
+            self.refuse_lowering("SPIR-V mesh output assignment requires an index")
             return True
 
         literal_index = self.literal_int_argument(index_expr)
@@ -9118,9 +9177,8 @@ class VulkanSPIRVCodeGen:
         if member_component is not None:
             member_info = info["members"].get(member_name)
             if member_info is None:
-                self.emit(
-                    f"; WARNING: SPIR-V mesh output {info['name']} has no "
-                    f"member {member_name}"
+                self.refuse_lowering(
+                    f"SPIR-V mesh output {info['name']} has no " f"member {member_name}"
                 )
                 return True
             if not self.validate_mesh_output_member_component_target(
@@ -9145,9 +9203,8 @@ class VulkanSPIRVCodeGen:
         if member_name is not None:
             member_info = info["members"].get(member_name)
             if member_info is None:
-                self.emit(
-                    f"; WARNING: SPIR-V mesh output {info['name']} has no "
-                    f"member {member_name}"
+                self.refuse_lowering(
+                    f"SPIR-V mesh output {info['name']} has no " f"member {member_name}"
                 )
                 return True
             member_type = member_info["type"]
@@ -9167,8 +9224,8 @@ class VulkanSPIRVCodeGen:
         element_type = info["element_type"]
         value = self.convert_value_to_type(value, element_type)
         if not self.value_has_type(value, element_type):
-            self.emit(
-                f"; WARNING: SPIR-V mesh {info['name']} output assignment value "
+            self.refuse_lowering(
+                f"SPIR-V mesh {info['name']} output assignment value "
                 f"does not match {element_type.type.base_type}"
             )
             return True
@@ -9194,8 +9251,8 @@ class VulkanSPIRVCodeGen:
         if swizzle_info is not None:
             component_indices, _, _ = swizzle_info
             if len(set(component_indices)) != len(component_indices):
-                self.emit(
-                    f"; WARNING: Cannot assign to vector swizzle {component_name} "
+                self.refuse_lowering(
+                    f"Cannot assign to vector swizzle {component_name} "
                     "with duplicate components"
                 )
                 return False
@@ -9208,13 +9265,13 @@ class VulkanSPIRVCodeGen:
             self.vector_component_type_and_count(member_type.type.base_type) is not None
             and len(component_name) > 1
         ):
-            self.emit(
-                f"; WARNING: Invalid vector swizzle {component_name} "
+            self.refuse_lowering(
+                f"Invalid vector swizzle {component_name} "
                 f"for {member_type.type.base_type}"
             )
         else:
-            self.emit(
-                f"; WARNING: SPIR-V mesh output {member_name} has no "
+            self.refuse_lowering(
+                f"SPIR-V mesh output {member_name} has no "
                 f"vector component {component_name}"
             )
         return False
@@ -9234,7 +9291,7 @@ class VulkanSPIRVCodeGen:
         info, index_expr, member_name, member_component = access
         index = self.process_expression(index_expr)
         if index is None:
-            self.emit("; WARNING: SPIR-V mesh output assignment requires an index")
+            self.refuse_lowering("SPIR-V mesh output assignment requires an index")
             return True
 
         literal_index = self.literal_int_argument(index_expr)
@@ -9244,23 +9301,21 @@ class VulkanSPIRVCodeGen:
             return True
 
         if info["role"] == "indices":
-            self.emit(
-                "; WARNING: Compound assignment to SPIR-V mesh indices output "
-                "cannot be lowered"
+            self.refuse_lowering(
+                "Compound assignment to SPIR-V mesh indices output " "cannot be lowered"
             )
             return True
         if member_name is None:
-            self.emit(
-                "; WARNING: Compound assignment to whole SPIR-V mesh output "
+            self.refuse_lowering(
+                "Compound assignment to whole SPIR-V mesh output "
                 "elements cannot be lowered"
             )
             return True
 
         member_info = info["members"].get(member_name)
         if member_info is None:
-            self.emit(
-                f"; WARNING: SPIR-V mesh output {info['name']} has no "
-                f"member {member_name}"
+            self.refuse_lowering(
+                f"SPIR-V mesh output {info['name']} has no " f"member {member_name}"
             )
             return True
         if member_component is not None:
@@ -9338,8 +9393,8 @@ class VulkanSPIRVCodeGen:
         if swizzle_info is not None:
             component_indices, component_type, swizzle_type = swizzle_info
             if len(set(component_indices)) != len(component_indices):
-                self.emit(
-                    f"; WARNING: Cannot assign to vector swizzle {component_name} "
+                self.refuse_lowering(
+                    f"Cannot assign to vector swizzle {component_name} "
                     "with duplicate components"
                 )
                 return True
@@ -9403,13 +9458,13 @@ class VulkanSPIRVCodeGen:
                 is not None
                 and len(component_name) > 1
             ):
-                self.emit(
-                    f"; WARNING: Invalid vector swizzle {component_name} "
+                self.refuse_lowering(
+                    f"Invalid vector swizzle {component_name} "
                     f"for {member_type.type.base_type}"
                 )
             else:
-                self.emit(
-                    f"; WARNING: SPIR-V mesh output {member_name} has no "
+                self.refuse_lowering(
+                    f"SPIR-V mesh output {member_name} has no "
                     f"vector component {component_name}"
                 )
             return True
@@ -9605,8 +9660,8 @@ class VulkanSPIRVCodeGen:
     ):
         builtin_info = self.mesh_primitive_index_builtin_info()
         if builtin_info is None:
-            self.emit(
-                "; WARNING: SPIR-V mesh SetPrimitive requires point, line, or "
+            self.refuse_lowering(
+                "SPIR-V mesh SetPrimitive requires point, line, or "
                 "triangle output topology"
             )
             return
@@ -9617,8 +9672,8 @@ class VulkanSPIRVCodeGen:
             return
         value = self.convert_value_to_type(value, element_type)
         if not self.value_has_type(value, element_type):
-            self.emit(
-                "; WARNING: SPIR-V mesh indices output assignment value does not "
+            self.refuse_lowering(
+                "SPIR-V mesh indices output assignment value does not "
                 f"match {element_type.type.base_type}"
             )
             return
@@ -9650,8 +9705,8 @@ class VulkanSPIRVCodeGen:
         ):
             value = self.mesh_vertex_position_from_value(value)
             if value is None:
-                self.emit(
-                    "; WARNING: SPIR-V mesh vertex output position assignment "
+                self.refuse_lowering(
+                    "SPIR-V mesh vertex output position assignment "
                     "requires a vec3, vec4, or struct with a position member"
                 )
                 return
@@ -9682,8 +9737,8 @@ class VulkanSPIRVCodeGen:
 
         value = self.convert_value_to_type(value, member_type)
         if not self.value_has_type(value, member_type):
-            self.emit(
-                f"; WARNING: SPIR-V mesh output {member_name} assignment value "
+            self.refuse_lowering(
+                f"SPIR-V mesh output {member_name} assignment value "
                 f"does not match {member_type.type.base_type}"
             )
             return
@@ -9720,8 +9775,8 @@ class VulkanSPIRVCodeGen:
         if swizzle_info is not None:
             component_indices, component_type, _ = swizzle_info
             if len(set(component_indices)) != len(component_indices):
-                self.emit(
-                    f"; WARNING: Cannot assign to vector swizzle {component_name} "
+                self.refuse_lowering(
+                    f"Cannot assign to vector swizzle {component_name} "
                     "with duplicate components"
                 )
                 return
@@ -9748,13 +9803,13 @@ class VulkanSPIRVCodeGen:
                 is not None
                 and len(component_name) > 1
             ):
-                self.emit(
-                    f"; WARNING: Invalid vector swizzle {component_name} "
+                self.refuse_lowering(
+                    f"Invalid vector swizzle {component_name} "
                     f"for {member_type.type.base_type}"
                 )
             else:
-                self.emit(
-                    f"; WARNING: SPIR-V mesh output {member_name} has no "
+                self.refuse_lowering(
+                    f"SPIR-V mesh output {member_name} has no "
                     f"vector component {component_name}"
                 )
             return
@@ -9833,8 +9888,8 @@ class VulkanSPIRVCodeGen:
 
         arguments = getattr(expr, "arguments", []) or []
         if len(arguments) not in {3, 4}:
-            self.emit(
-                "; WARNING: SPIR-V mesh DispatchMesh requires exactly 3 arguments, "
+            self.refuse_lowering(
+                "SPIR-V mesh DispatchMesh requires exactly 3 arguments, "
                 "or 4 with a task payload"
             )
             return self.register_constant(0, self.register_primitive_type("uint"))
@@ -9844,8 +9899,8 @@ class VulkanSPIRVCodeGen:
         for argument in arguments[:3]:
             group_count = self.process_expression(argument)
             if group_count is None:
-                self.emit(
-                    "; WARNING: SPIR-V mesh DispatchMesh requires group-count operands"
+                self.refuse_lowering(
+                    "SPIR-V mesh DispatchMesh requires group-count operands"
                 )
                 return self.register_constant(0, uint_type)
             if not self.validate_mesh_count_operands(
@@ -9861,8 +9916,8 @@ class VulkanSPIRVCodeGen:
         if len(arguments) == 4:
             payload_pointer = self.dispatch_mesh_payload_pointer(arguments[3])
             if payload_pointer is None:
-                self.emit(
-                    "; WARNING: SPIR-V mesh DispatchMesh payload argument requires "
+                self.refuse_lowering(
+                    "SPIR-V mesh DispatchMesh payload argument requires "
                     "taskPayloadSharedEXT storage"
                 )
                 return self.register_constant(0, uint_type)
@@ -9893,8 +9948,8 @@ class VulkanSPIRVCodeGen:
         if target_type is not None:
             payload_value = self.convert_value_to_type(payload_value, target_type)
             if not self.value_has_type(payload_value, target_type):
-                self.emit(
-                    "; WARNING: SPIR-V mesh DispatchMesh payload argument type "
+                self.refuse_lowering(
+                    "SPIR-V mesh DispatchMesh payload argument type "
                     f"{payload_value.type.base_type} does not match "
                     f"{target_type.type.base_type}"
                 )
@@ -9936,8 +9991,8 @@ class VulkanSPIRVCodeGen:
                 return matches[0]
             if len(matches) > 1:
                 names = ", ".join(sorted(variable.name or "" for variable in matches))
-                self.emit(
-                    "; WARNING: SPIR-V mesh DispatchMesh payload target is "
+                self.refuse_lowering(
+                    "SPIR-V mesh DispatchMesh payload target is "
                     f"ambiguous for {payload_type.type.base_type}: {names}"
                 )
                 return None
@@ -9946,9 +10001,8 @@ class VulkanSPIRVCodeGen:
             return next(iter(self.task_payload_shared_variables.values()))
 
         names = ", ".join(sorted(self.task_payload_shared_variables))
-        self.emit(
-            "; WARNING: SPIR-V mesh DispatchMesh payload target is ambiguous: "
-            f"{names}"
+        self.refuse_lowering(
+            "SPIR-V mesh DispatchMesh payload target is ambiguous: " f"{names}"
         )
         return None
 
@@ -9996,7 +10050,9 @@ class VulkanSPIRVCodeGen:
             return [component_arg] * component_count
 
         flattened_args = []
+        before_last_argument = 0
         for arg in args:
+            before_last_argument = len(flattened_args)
             vector_info = self.vector_component_type_and_count(arg.type.base_type)
             if vector_info is None:
                 flattened_args.append(
@@ -10019,19 +10075,22 @@ class VulkanSPIRVCodeGen:
                 )
 
         if len(flattened_args) < component_count:
-            self.emit(
-                f"; WARNING: Constructor {function_name} expected {component_count} "
-                f"components but got {len(flattened_args)}; padding with defaults"
+            self.refuse_lowering(
+                f"Constructor {function_name} expected {component_count} "
+                f"components but got {len(flattened_args)}"
             )
             default_value = self.default_value_for_type(component_type)
             flattened_args.extend(
                 [default_value] * (component_count - len(flattened_args))
             )
         elif len(flattened_args) > component_count:
-            self.emit(
-                f"; WARNING: Constructor {function_name} expected {component_count} "
-                f"components but got {len(flattened_args)}; truncating extra components"
-            )
+            # GLSL 4.60 section 5.4.2 drops the unused components of the last argument
+            # (vec2(v3)); an argument that contributes nothing is an error.
+            if before_last_argument >= component_count:
+                self.refuse_lowering(
+                    f"Constructor {function_name} expected {component_count} "
+                    f"components but got {len(flattened_args)}"
+                )
             flattened_args = flattened_args[:component_count]
 
         return flattened_args
@@ -10039,21 +10098,15 @@ class VulkanSPIRVCodeGen:
     def convert_vector_constructor_scalar(
         self, value: SpirvId, component_type: SpirvId, function_name: str
     ) -> SpirvId:
+        # Numeric lanes convert to bool by comparing against zero (GLSL 4.60 section 5.4.1),
+        # which convert_scalar_to_type does.
         target_type = self.normalize_primitive_name(component_type.type.base_type)
-        source_type = self.normalize_primitive_name(value.type.base_type)
-        if target_type == "bool" and source_type != "bool":
-            self.emit(
-                f"; WARNING: Constructor {function_name} cannot convert "
-                f"{source_type} component to {target_type}; using default value"
-            )
-            return self.default_value_for_type(component_type)
-
         converted_value = self.convert_scalar_to_type(value, component_type)
         source_type = self.normalize_primitive_name(converted_value.type.base_type)
         if source_type != target_type:
-            self.emit(
-                f"; WARNING: Constructor {function_name} cannot convert "
-                f"{source_type} component to {target_type}; using default value"
+            self.refuse_lowering(
+                f"Constructor {function_name} cannot convert "
+                f"{source_type} component to {target_type}"
             )
             return self.default_value_for_type(component_type)
 
@@ -10067,25 +10120,29 @@ class VulkanSPIRVCodeGen:
         component_count: int,
     ) -> List[SpirvId]:
         flattened_args = []
+        before_last_argument = 0
         for arg in args:
+            before_last_argument = len(flattened_args)
             flattened_args.extend(
                 self.flatten_matrix_constructor_arg(function_name, arg, component_type)
             )
 
         if len(flattened_args) < component_count:
-            self.emit(
-                f"; WARNING: Constructor {function_name} expected {component_count} "
-                f"components but got {len(flattened_args)}; padding with defaults"
+            self.refuse_lowering(
+                f"Constructor {function_name} expected {component_count} "
+                f"components but got {len(flattened_args)}"
             )
             default_value = self.default_value_for_type(component_type)
             flattened_args.extend(
                 [default_value] * (component_count - len(flattened_args))
             )
         elif len(flattened_args) > component_count:
-            self.emit(
-                f"; WARNING: Constructor {function_name} expected {component_count} "
-                f"components but got {len(flattened_args)}; truncating extra components"
-            )
+            # As for vectors, only the last argument may contribute unused components.
+            if before_last_argument >= component_count:
+                self.refuse_lowering(
+                    f"Constructor {function_name} expected {component_count} "
+                    f"components but got {len(flattened_args)}"
+                )
             flattened_args = flattened_args[:component_count]
 
         return flattened_args
@@ -10310,9 +10367,8 @@ class VulkanSPIRVCodeGen:
             return None
 
         if args:
-            self.emit(
-                f"; WARNING: synchronization builtin '{function_name}' "
-                "requires 0 operands"
+            self.refuse_lowering(
+                f"synchronization builtin '{function_name}' " "requires 0 operands"
             )
             return self.register_constant(0, self.register_primitive_type("int"))
 
@@ -10327,8 +10383,8 @@ class VulkanSPIRVCodeGen:
             function_name in workgroup_synchronization_functions
             and not self.can_emit_workgroup_synchronization()
         ):
-            self.emit(
-                f"; WARNING: synchronization builtin '{function_name}' requires "
+            self.refuse_lowering(
+                f"synchronization builtin '{function_name}' requires "
                 "a workgroup-capable execution model; current execution model: "
                 f"{self.current_execution_model_label()}"
             )
@@ -10416,7 +10472,7 @@ class VulkanSPIRVCodeGen:
         for argument in argument_exprs:
             value = self.process_expression(argument)
             if value is None:
-                self.emit(f"; WARNING: Failed to evaluate argument for {operation}")
+                self.refuse_lowering(f"Failed to evaluate argument for {operation}")
                 value = self.default_value_for_type(
                     self.register_primitive_type("uint")
                 )
@@ -10424,21 +10480,21 @@ class VulkanSPIRVCodeGen:
 
         if operation == "WaveGetLaneCount":
             if args:
-                self.emit("; WARNING: WaveGetLaneCount takes no arguments")
+                self.refuse_lowering("WaveGetLaneCount takes no arguments")
                 return self.wave_result_default(operation, args)
             builtin = self.ensure_compute_builtin("gl_SubgroupSize")
             return self.get_variable_value(builtin) if builtin is not None else None
 
         if operation == "WaveGetLaneIndex":
             if args:
-                self.emit("; WARNING: WaveGetLaneIndex takes no arguments")
+                self.refuse_lowering("WaveGetLaneIndex takes no arguments")
                 return self.wave_result_default(operation, args)
             builtin = self.ensure_compute_builtin("gl_SubgroupInvocationID")
             return self.get_variable_value(builtin) if builtin is not None else None
 
         if operation == "WaveIsFirstLane":
             if args:
-                self.emit("; WARNING: WaveIsFirstLane takes no arguments")
+                self.refuse_lowering("WaveIsFirstLane takes no arguments")
                 return self.wave_result_default(operation, args)
             self.require_group_non_uniform("GroupNonUniformVote")
             bool_type = self.register_primitive_type("bool")
@@ -10504,14 +10560,14 @@ class VulkanSPIRVCodeGen:
         }:
             return self.call_group_non_uniform_quad(operation, argument_exprs, args)
 
-        self.emit(f"; WARNING: {operation} is not supported by the SPIR-V backend yet")
+        self.refuse_lowering(f"{operation} is not supported by the SPIR-V backend yet")
         return self.wave_result_default(operation, args)
 
     def call_group_non_uniform_arithmetic(
         self, operation: str, args: List[SpirvId]
     ) -> SpirvId:
         if len(args) != 1:
-            self.emit(f"; WARNING: {operation} requires exactly one argument")
+            self.refuse_lowering(f"{operation} requires exactly one argument")
             return self.wave_result_default(operation, args)
 
         source_result_type = self.ensure_registered_type(args[0].type)
@@ -10595,8 +10651,8 @@ class VulkanSPIRVCodeGen:
         }
         opcode = arithmetic_ops[operation].get(component_type)
         if opcode is None:
-            self.emit(
-                f"; WARNING: {operation} requires a compatible arithmetic or "
+            self.refuse_lowering(
+                f"{operation} requires a compatible arithmetic or "
                 f"bitwise operand; got {result_type.type.base_type}"
             )
             return self.wave_result_default(operation, args)
@@ -10652,12 +10708,12 @@ class VulkanSPIRVCodeGen:
         self, operation: str, args: List[SpirvId]
     ) -> SpirvId:
         if len(args) != 1:
-            self.emit(f"; WARNING: {operation} requires exactly one bool argument")
+            self.refuse_lowering(f"{operation} requires exactly one bool argument")
             return self.wave_result_default(operation, args)
 
         bool_type = self.register_primitive_type("bool")
         if args[0].type.base_type != "bool":
-            self.emit(f"; WARNING: {operation} requires a scalar bool argument")
+            self.refuse_lowering(f"{operation} requires a scalar bool argument")
             return self.wave_result_default(operation, args)
 
         self.require_group_non_uniform("GroupNonUniformVote")
@@ -10680,11 +10736,11 @@ class VulkanSPIRVCodeGen:
         uint_type = self.register_primitive_type("uint")
         ballot_type = self.register_vector_type(uint_type, 4)
         if len(args) != 1:
-            self.emit(f"; WARNING: {operation} requires exactly one bool argument")
+            self.refuse_lowering(f"{operation} requires exactly one bool argument")
             return self.wave_result_default(operation, args)
 
         if args[0].type.base_type != "bool":
-            self.emit(f"; WARNING: {operation} requires a scalar bool argument")
+            self.refuse_lowering(f"{operation} requires a scalar bool argument")
             return self.wave_result_default(operation, args)
 
         self.require_group_non_uniform("GroupNonUniformBallot")
@@ -10703,7 +10759,7 @@ class VulkanSPIRVCodeGen:
         self, operation: str, args: List[SpirvId]
     ) -> SpirvId:
         if len(args) != 2:
-            self.emit(f"; WARNING: {operation} requires value and lane arguments")
+            self.refuse_lowering(f"{operation} requires value and lane arguments")
             return self.wave_result_default(operation, args)
 
         result_type = self.ensure_registered_type(args[0].type)
@@ -10731,7 +10787,7 @@ class VulkanSPIRVCodeGen:
         self, operation: str, args: List[SpirvId]
     ) -> SpirvId:
         if len(args) != 1:
-            self.emit(f"; WARNING: {operation} requires exactly one argument")
+            self.refuse_lowering(f"{operation} requires exactly one argument")
             return self.wave_result_default(operation, args)
 
         result_type = self.ensure_registered_type(args[0].type)
@@ -10756,7 +10812,7 @@ class VulkanSPIRVCodeGen:
         # ShuffleDown/Up need the GroupNonUniformShuffleRelative capability;
         # ShuffleXor lives under GroupNonUniformShuffle.
         if len(args) != 2:
-            self.emit(f"; WARNING: {operation} requires value and delta arguments")
+            self.refuse_lowering(f"{operation} requires value and delta arguments")
             return self.wave_result_default(operation, args)
 
         result_type = self.ensure_registered_type(args[0].type)
@@ -10793,8 +10849,8 @@ class VulkanSPIRVCodeGen:
         self, operation: str, args: List[SpirvId]
     ) -> SpirvId:
         if len(args) != 3:
-            self.emit(
-                f"; WARNING: {operation} requires exactly three arguments "
+            self.refuse_lowering(
+                f"{operation} requires exactly three arguments "
                 "(value, fill, and delta)"
             )
             return self.wave_result_default(operation, args)
@@ -10807,8 +10863,8 @@ class VulkanSPIRVCodeGen:
             fill.type
         )
         if result_type.type.base_type != fill_type.type.base_type:
-            self.emit(
-                f"; WARNING: {operation} requires compatible value and fill types"
+            self.refuse_lowering(
+                f"{operation} requires compatible value and fill types"
             )
             return self.wave_result_default(operation, args)
 
@@ -10824,8 +10880,8 @@ class VulkanSPIRVCodeGen:
             "double",
             *self.INTEGER_TYPE_NAMES,
         }:
-            self.emit(
-                f"; WARNING: {operation} requires a scalar or vector Boolean, "
+            self.refuse_lowering(
+                f"{operation} requires a scalar or vector Boolean, "
                 "integer, or floating-point value"
             )
             return self.wave_result_default(operation, args)
@@ -10838,13 +10894,13 @@ class VulkanSPIRVCodeGen:
             or self.normalize_primitive_name(delta_type.type.base_type)
             not in self.INTEGER_TYPE_NAMES
         ):
-            self.emit(f"; WARNING: {operation} requires a scalar integer delta")
+            self.refuse_lowering(f"{operation} requires a scalar integer delta")
             return self.wave_result_default(operation, args)
 
         uint_type = self.register_primitive_type("uint")
         delta = self.convert_scalar_to_type(delta_value, uint_type)
         if not self.value_has_type(delta, uint_type):
-            self.emit(f"; WARNING: {operation} requires a scalar integer delta")
+            self.refuse_lowering(f"{operation} requires a scalar integer delta")
             return self.wave_result_default(operation, args)
 
         self.require_group_non_uniform("GroupNonUniformShuffleRelative")
@@ -10878,7 +10934,7 @@ class VulkanSPIRVCodeGen:
 
     def call_group_non_uniform_partition(self, args: List[SpirvId]) -> SpirvId:
         if len(args) != 1:
-            self.emit("; WARNING: WaveMatch requires exactly one argument")
+            self.refuse_lowering("WaveMatch requires exactly one argument")
             return self.wave_result_default("WaveMatch", args)
 
         uint_type = self.register_primitive_type("uint")
@@ -10898,7 +10954,7 @@ class VulkanSPIRVCodeGen:
         self, operation: str, args: List[SpirvId]
     ) -> SpirvId:
         if len(args) != 2:
-            self.emit(f"; WARNING: {operation} requires value and ballot arguments")
+            self.refuse_lowering(f"{operation} requires value and ballot arguments")
             return self.wave_result_default(operation, args)
 
         result_type = self.ensure_registered_type(args[0].type)
@@ -10931,14 +10987,14 @@ class VulkanSPIRVCodeGen:
         }
         opcode = arithmetic_ops[operation].get(component_type)
         if opcode is None:
-            self.emit(
-                f"; WARNING: {operation} requires a compatible arithmetic or "
+            self.refuse_lowering(
+                f"{operation} requires a compatible arithmetic or "
                 f"bitwise operand; got {result_type.type.base_type}"
             )
             return self.wave_result_default(operation, args)
 
         if self.vector_component_type_and_count(args[1].type.base_type) != ("uint", 4):
-            self.emit(f"; WARNING: {operation} requires a uvec4 ballot argument")
+            self.refuse_lowering(f"{operation} requires a uvec4 ballot argument")
             return self.wave_result_default(operation, args)
 
         self.require_group_non_uniform("GroupNonUniformArithmetic")
@@ -10958,13 +11014,13 @@ class VulkanSPIRVCodeGen:
         self, operation: str, lane: SpirvId
     ) -> Optional[SpirvId]:
         if self.vector_component_type_and_count(lane.type.base_type) is not None:
-            self.emit(f"; WARNING: {operation} requires a scalar lane index")
+            self.refuse_lowering(f"{operation} requires a scalar lane index")
             return None
 
         uint_type = self.register_primitive_type("uint")
         converted = self.convert_scalar_to_type(lane, uint_type)
         if converted.type.base_type != "uint":
-            self.emit(f"; WARNING: {operation} requires an integer lane index")
+            self.refuse_lowering(f"{operation} requires an integer lane index")
             return None
         return converted
 
@@ -10977,7 +11033,7 @@ class VulkanSPIRVCodeGen:
             "QuadReadAcrossDiagonal",
         }:
             if len(args) != 1:
-                self.emit(f"; WARNING: {operation} requires exactly one argument")
+                self.refuse_lowering(f"{operation} requires exactly one argument")
                 return self.wave_result_default(operation, args)
 
             directions = {
@@ -11002,15 +11058,14 @@ class VulkanSPIRVCodeGen:
             return spirv_id
 
         if len(args) != 2:
-            self.emit("; WARNING: QuadReadLaneAt requires value and lane arguments")
+            self.refuse_lowering("QuadReadLaneAt requires value and lane arguments")
             return self.wave_result_default(operation, args)
 
         result_type = self.ensure_registered_type(args[0].type)
         lane_value = self.literal_integer_value(argument_exprs[1], "uint")
         if lane_value is None or not 0 <= lane_value <= 3:
-            self.emit(
-                "; WARNING: QuadReadLaneAt requires a literal lane index "
-                "between 0 and 3"
+            self.refuse_lowering(
+                "QuadReadLaneAt requires a literal lane index " "between 0 and 3"
             )
             return self.wave_result_default(operation, args)
 
@@ -11189,7 +11244,7 @@ class VulkanSPIRVCodeGen:
             self.BFLOAT16_TYPE_NAME if operation == "asbfloat16" else "uint"
         )
         if len(args) != 1:
-            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            self.refuse_lowering(f"{function_name} requires exactly one operand")
             return self.default_value_for_type(result_type)
 
         source_type_name = self.normalize_primitive_name(args[0].type.base_type)
@@ -11197,9 +11252,8 @@ class VulkanSPIRVCodeGen:
             if source_type_name == self.BFLOAT16_TYPE_NAME:
                 return args[0]
             if source_type_name not in self.INTEGER_TYPE_NAMES:
-                self.emit(
-                    "; WARNING: asbfloat16 requires a 16-bit integer bit-pattern "
-                    "operand"
+                self.refuse_lowering(
+                    "asbfloat16 requires a 16-bit integer bit-pattern " "operand"
                 )
                 return self.default_value_for_type(result_type)
             opcode = (
@@ -11209,7 +11263,7 @@ class VulkanSPIRVCodeGen:
             )
         else:
             if source_type_name != self.BFLOAT16_TYPE_NAME:
-                self.emit("; WARNING: asuint16 requires a bfloat16 bit-pattern operand")
+                self.refuse_lowering("asuint16 requires a bfloat16 bit-pattern operand")
                 return self.default_value_for_type(result_type)
             opcode = "OpUConvert"
 
@@ -11266,7 +11320,7 @@ class VulkanSPIRVCodeGen:
             return None
 
         if len(args) != 1:
-            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            self.refuse_lowering(f"{function_name} requires exactly one operand")
             result_type = self.register_primitive_type(target_component_name)
             return self.default_value_for_type(result_type)
 
@@ -11278,9 +11332,8 @@ class VulkanSPIRVCodeGen:
             return None
 
         if not self.bitcast_builtin_source_is_valid(source_type):
-            self.emit(
-                f"; WARNING: {function_name} requires a 32-bit numeric scalar "
-                "or vector operand"
+            self.refuse_lowering(
+                f"{function_name} requires a 32-bit numeric scalar " "or vector operand"
             )
             return self.default_value_for_type(result_type)
 
@@ -11360,7 +11413,7 @@ class VulkanSPIRVCodeGen:
             return None
 
         if len(args) != 1:
-            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            self.refuse_lowering(f"{function_name} requires exactly one operand")
             result_type = self.integer_bit_builtin_result_type(normalized_name, None)
             return self.default_value_for_type(result_type)
 
@@ -11372,9 +11425,8 @@ class VulkanSPIRVCodeGen:
             return None
 
         if not self.integer_bit_builtin_operand_is_valid(args[0]):
-            self.emit(
-                f"; WARNING: {function_name} requires an integer scalar or vector "
-                "operand"
+            self.refuse_lowering(
+                f"{function_name} requires an integer scalar or vector " "operand"
             )
             return self.default_value_for_type(result_type)
 
@@ -11450,6 +11502,18 @@ class VulkanSPIRVCodeGen:
         if integer_bit_call is not None:
             return integer_bit_call
 
+        float_semantics_call = self.call_float_semantics_function(function_name, args)
+        if float_semantics_call is not None:
+            return float_semantics_call
+
+        math_polyfill_call = self.call_math_polyfill_function(function_name, args)
+        if math_polyfill_call is not None:
+            return math_polyfill_call
+
+        matrix_builtin_call = self.call_matrix_builtin_function(function_name, args)
+        if matrix_builtin_call is not None:
+            return matrix_builtin_call
+
         exact_operand_counts = {
             "min": 2,
             "max": 2,
@@ -11469,16 +11533,11 @@ class VulkanSPIRVCodeGen:
         expected_operand_count = exact_operand_counts.get(function_name)
         if expected_operand_count is not None and len(args) != expected_operand_count:
             operand_label = "operand" if expected_operand_count == 1 else "operands"
-            self.emit(
-                f"; WARNING: {function_name} requires "
-                f"{expected_operand_count} {operand_label}"
+            raise self.builtin_lowering_error(
+                function_name,
+                f"{function_name} requires "
+                f"{expected_operand_count} {operand_label}",
             )
-            fallback_type = self.register_primitive_type("float")
-            if function_name in {"length", "distance"}:
-                fallback_type = self.metric_result_type(args)
-            elif args:
-                fallback_type = self.ensure_registered_type(args[0].type)
-            return self.default_value_for_type(fallback_type)
 
         if function_name == "mix" and len(args) == 3:
             bool_mix = self.call_bool_mix_function(args)
@@ -11503,126 +11562,105 @@ class VulkanSPIRVCodeGen:
             absolute = self.call_abs_function(args[0])
             if absolute is not None:
                 return absolute
-            self.emit(
-                "; WARNING: abs requires floating-point or signed integer "
-                "scalar or vector operand"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "abs requires floating-point or signed integer "
+                "scalar or vector operand",
             )
 
         if function_name == "pow" and len(args) == 2:
             power = self.call_pow_function(args)
             if power is not None:
                 return power
-            self.emit(
-                "; WARNING: pow requires compatible 32-bit floating-point "
-                "scalar or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "pow requires compatible 32-bit floating-point "
+                "scalar or vector operands",
             )
 
         if function_name == "fma" and len(args) == 3:
             fused = self.call_fma_function(args)
             if fused is not None:
                 return fused
-            self.emit(
-                "; WARNING: fma requires compatible floating-point scalar "
-                "or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "fma requires compatible floating-point scalar " "or vector operands",
             )
 
         if function_name == "faceforward" and len(args) == 3:
             faced = self.call_faceforward_function(args)
             if faced is not None:
                 return faced
-            self.emit(
-                "; WARNING: faceforward requires compatible floating-point "
-                "scalar or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "faceforward requires compatible floating-point "
+                "scalar or vector operands",
             )
 
         if function_name == "refract" and len(args) == 3:
             refracted = self.call_refract_function(args)
             if refracted is not None:
                 return refracted
-            self.emit(
-                "; WARNING: refract requires matching floating-point incident "
-                "and normal operands plus scalar eta"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "refract requires matching floating-point incident "
+                "and normal operands plus scalar eta",
             )
 
         if function_name == "length" and len(args) == 1:
             measured = self.call_length_function(args[0])
             if measured is not None:
                 return measured
-            self.emit(
-                "; WARNING: length requires floating-point scalar or vector operand"
+            raise self.builtin_lowering_error(
+                function_name,
+                "length requires floating-point scalar or vector operand",
             )
-            return self.default_value_for_type(self.metric_result_type(args))
 
         if function_name == "distance" and len(args) == 2:
             measured = self.call_distance_function(args)
             if measured is not None:
                 return measured
-            self.emit(
-                "; WARNING: distance requires matching floating-point scalar "
-                "or vector operands"
+            raise self.builtin_lowering_error(
+                function_name,
+                "distance requires matching floating-point scalar "
+                "or vector operands",
             )
-            return self.default_value_for_type(self.metric_result_type(args))
 
         if function_name == "normalize" and len(args) == 1:
             normalized = self.call_normalize_function(args[0])
             if normalized is not None:
                 return normalized
-            self.emit(
-                "; WARNING: normalize requires floating-point scalar or vector operand"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "normalize requires floating-point scalar or vector operand",
             )
 
         if function_name == "reflect" and len(args) == 2:
             reflected = self.call_reflect_function(args)
             if reflected is not None:
                 return reflected
-            self.emit(
-                "; WARNING: reflect requires matching floating-point scalar "
-                "or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "reflect requires matching floating-point scalar " "or vector operands",
             )
 
         if function_name == "step" and len(args) == 2:
             stepped = self.call_step_smoothstep_function("Step", args, 1)
             if stepped is not None:
                 return stepped
-            self.emit(
-                "; WARNING: step requires compatible floating-point scalar "
-                "or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[1].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "step requires compatible floating-point scalar " "or vector operands",
             )
 
         if function_name == "smoothstep" and len(args) == 3:
             smoothed = self.call_step_smoothstep_function("SmoothStep", args, 2)
             if smoothed is not None:
                 return smoothed
-            self.emit(
-                "; WARNING: smoothstep requires compatible floating-point "
-                "scalar or vector operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[2].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "smoothstep requires compatible floating-point "
+                "scalar or vector operands",
             )
 
         if (
@@ -11634,21 +11672,19 @@ class VulkanSPIRVCodeGen:
             min_max_clamp = self.call_min_max_clamp_function(function_name, args)
             if min_max_clamp is not None:
                 return min_max_clamp
-            self.emit(
-                f"; WARNING: {function_name} requires compatible scalar or "
-                "vector numeric operands"
-            )
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                f"{function_name} requires compatible scalar or "
+                "vector numeric operands",
             )
 
         if function_name == "mix" and len(args) == 3:
             numeric_mix = self.call_numeric_mix_function(args)
             if numeric_mix is not None:
                 return numeric_mix
-            self.emit("; WARNING: mix requires compatible value operands and selector")
-            return self.default_value_for_type(
-                self.ensure_registered_type(args[0].type)
+            raise self.builtin_lowering_error(
+                function_name,
+                "mix requires compatible value operands and selector",
             )
 
         vector_info = self.vector_component_type_and_count(function_name)
@@ -11726,6 +11762,18 @@ class VulkanSPIRVCodeGen:
                     col_vectors.append(
                         self.composite_construct(vector_type, col_components)
                     )
+            elif len(args) == 1 and (
+                col_vectors := one_argument_matrix_columns(
+                    self,
+                    function_name,
+                    args[0],
+                    component_type,
+                    vector_type,
+                    cols,
+                    rows,
+                )
+            ):
+                pass
             else:
                 components = self.flatten_matrix_constructor_components(
                     function_name, args, component_type, cols * rows
@@ -11744,10 +11792,10 @@ class VulkanSPIRVCodeGen:
         # Special case for dot product - use OpDot instead of OpExtInst
         elif function_name == "dot" and len(args) == 2:
             if not self.dot_operands_are_valid(args):
-                self.emit(
-                    "; WARNING: dot requires matching floating-point vector operands"
+                raise self.builtin_lowering_error(
+                    function_name,
+                    "dot requires matching floating-point vector operands",
                 )
-                return self.default_value_for_type(self.dot_result_type(args))
 
             component_type = self.scalar_or_vector_component_type(args[0].type)
             result_type = self.register_primitive_type(component_type)
@@ -11764,7 +11812,10 @@ class VulkanSPIRVCodeGen:
 
         elif function_name in {"fmod", "mod"} and len(args) == 2:
             result_type = self.ensure_registered_type(args[0].type)
-            return self.binary_operation("%", result_type, args[0], args[1])
+            # `fmod` is C's truncated remainder (sign of x); `mod` is GLSL's
+            # floored x - y * floor(x / y) (sign of y).
+            operator = "%" if function_name == "fmod" else self.FLOORED_MOD_OPERATOR
+            return self.binary_operation(operator, result_type, args[0], args[1])
 
         # GLSL standard library functions
         else:
@@ -11780,6 +11831,9 @@ class VulkanSPIRVCodeGen:
                 "sinh": "Sinh",
                 "cosh": "Cosh",
                 "tanh": "Tanh",
+                "asinh": "Asinh",
+                "acosh": "Acosh",
+                "atanh": "Atanh",
                 "exp": "Exp",
                 "log": "Log",
                 "exp2": "Exp2",
@@ -11806,12 +11860,15 @@ class VulkanSPIRVCodeGen:
                 "atan2" if function_name == "atan" and len(args) == 2 else function_name
             )
             if std450_function_name not in glsl_std450_map:
-                self.emit(
-                    f"; WARNING: SPIR-V backend cannot lower unknown function "
-                    f"'{function_name}'; using default value"
-                )
-                return self.default_value_for_type(
-                    self.unknown_function_fallback_type(args)
+                if not CALLEE_IDENTIFIER.fullmatch(function_name):
+                    raise self.builtin_lowering_error(
+                        function_name, INDIRECT_CALL_DETAIL, reason="indirect-call"
+                    )
+                raise self.builtin_lowering_error(
+                    function_name,
+                    "it is neither a declared function nor a built-in with a "
+                    "SPIR-V lowering",
+                    reason="unknown-function",
                 )
 
             unary_std450_functions = {
@@ -11824,6 +11881,9 @@ class VulkanSPIRVCodeGen:
                 "sinh",
                 "cosh",
                 "tanh",
+                "asinh",
+                "acosh",
+                "atanh",
                 "exp",
                 "log",
                 "exp2",
@@ -11858,22 +11918,17 @@ class VulkanSPIRVCodeGen:
                 and len(args) != expected_operand_count
             ):
                 operand_label = "operand" if expected_operand_count == 1 else "operands"
-                self.emit(
-                    f"; WARNING: {function_name} requires "
-                    f"{expected_operand_count} {operand_label}"
+                raise self.builtin_lowering_error(
+                    function_name,
+                    f"{function_name} requires "
+                    f"{expected_operand_count} {operand_label}",
                 )
-                fallback_type = float_type
-                if args and std450_function_name not in {"length", "distance"}:
-                    fallback_type = self.ensure_registered_type(args[0].type)
-                return self.default_value_for_type(fallback_type)
 
             vector_math_diagnostic = self.vector_math_operand_diagnostic(
                 std450_function_name, args
             )
             if vector_math_diagnostic is not None:
-                warning, fallback_type = vector_math_diagnostic
-                self.emit(warning)
-                return self.default_value_for_type(fallback_type)
+                raise self.builtin_lowering_error(function_name, vector_math_diagnostic)
 
             result_type = float_type.type
 
@@ -11889,6 +11944,9 @@ class VulkanSPIRVCodeGen:
                     "sinh",
                     "cosh",
                     "tanh",
+                    "asinh",
+                    "acosh",
+                    "atanh",
                     "exp",
                     "log",
                     "exp2",
@@ -11986,20 +12044,19 @@ class VulkanSPIRVCodeGen:
             return None
 
         if len(args) != 1:
-            self.emit(f"; WARNING: {function_name} requires 1 operand")
+            self.refuse_lowering(f"{function_name} requires 1 operand")
             return self.register_constant(0.0, self.register_primitive_type("float"))
 
         result_type = self.ensure_registered_type(args[0].type)
         if not self.derivative_operand_is_valid(args[0]):
-            self.emit(
-                f"; WARNING: {function_name} requires floating-point scalar "
-                "or vector operand"
+            self.refuse_lowering(
+                f"{function_name} requires floating-point scalar " "or vector operand"
             )
             return self.default_value_for_type(result_type)
 
         if not self.can_emit_derivative_function():
-            self.emit(
-                f"; WARNING: derivative builtin '{function_name}' requires Fragment "
+            self.refuse_lowering(
+                f"derivative builtin '{function_name}' requires Fragment "
                 "or compute-derivative-capable execution model; current execution "
                 f"model: {self.current_execution_model_label()}"
             )
@@ -12024,14 +12081,12 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         primitive_name = self.normalize_primitive_name(function_name)
         if (
-            primitive_name
-            not in {
+            primitive_name not in {
                 "bool",
                 "float",
                 "double",
                 self.BFLOAT16_TYPE_NAME,
-            }
-            | self.INTEGER_TYPE_NAMES
+            } | self.INTEGER_TYPE_NAMES
         ):
             return None
 
@@ -12039,16 +12094,15 @@ class VulkanSPIRVCodeGen:
         if not args:
             return self.default_value_for_type(target_type)
         if len(args) != 1:
-            self.emit(
-                f"; WARNING: Constructor {function_name} expected 1 component "
-                f"but got {len(args)}; using first component"
+            self.refuse_lowering(
+                f"Constructor {function_name} expected 1 component "
+                f"but got {len(args)}"
             )
 
         value = args[0]
         if self.vector_component_type_and_count(value.type.base_type) is not None:
-            self.emit(
-                f"; WARNING: Constructor {function_name} requires a scalar operand; "
-                "using default value"
+            self.refuse_lowering(
+                f"Constructor {function_name} requires a scalar operand"
             )
             return self.default_value_for_type(target_type)
 
@@ -12058,9 +12112,8 @@ class VulkanSPIRVCodeGen:
         ) == self.normalize_primitive_name(target_type.type.base_type):
             return converted
 
-        self.emit(
-            f"; WARNING: Constructor {function_name} cannot convert "
-            f"{value.type.base_type}; using default value"
+        self.refuse_lowering(
+            f"Constructor {function_name} cannot convert " f"{value.type.base_type}"
         )
         return self.default_value_for_type(target_type)
 
@@ -12082,85 +12135,55 @@ class VulkanSPIRVCodeGen:
 
     def vector_math_operand_diagnostic(
         self, function_name: str, args: List[SpirvId]
-    ) -> Optional[Tuple[str, SpirvId]]:
+    ) -> Optional[str]:
         if self.is_float32_unary_std450_function(
             function_name
         ) and not self.float32_scalar_or_vector_operand_is_valid(args[0]):
             return (
-                f"; WARNING: {function_name} requires 32-bit floating-point "
-                "scalar or vector operand",
-                self.ensure_registered_type(args[0].type),
+                f"{function_name} requires 32-bit floating-point "
+                "scalar or vector operand"
             )
 
         if function_name == "length" and not self.metric_operand_is_valid(args[0]):
-            return (
-                "; WARNING: length requires floating-point scalar or vector operand",
-                self.metric_result_type(args),
-            )
+            return "length requires floating-point scalar or vector operand"
 
         if function_name == "distance" and not self.distance_operands_are_valid(args):
             return (
-                "; WARNING: distance requires matching floating-point scalar "
-                "or vector operands",
-                self.metric_result_type(args),
+                "distance requires matching floating-point scalar " "or vector operands"
             )
 
         if function_name == "normalize" and not self.metric_operand_is_valid(args[0]):
-            return (
-                "; WARNING: normalize requires floating-point scalar or vector operand",
-                self.ensure_registered_type(args[0].type),
-            )
+            return "normalize requires floating-point scalar or vector operand"
 
         if function_name == "atan2" and not self.atan2_operands_are_valid(args):
             return (
-                "; WARNING: atan2 requires matching 32-bit floating-point "
-                "scalar or vector operands",
-                self.ensure_registered_type(args[0].type),
+                "atan2 requires matching 32-bit floating-point "
+                "scalar or vector operands"
             )
 
         if function_name == "cross" and not self.cross_operands_are_valid(args):
             return (
-                "; WARNING: cross requires matching 3-component "
-                "floating-point vector operands",
-                self.cross_result_type(args),
+                "cross requires matching 3-component " "floating-point vector operands"
             )
 
         if function_name == "reflect" and not self.reflect_operands_are_valid(args):
             return (
-                "; WARNING: reflect requires matching floating-point scalar "
-                "or vector operands",
-                self.ensure_registered_type(args[0].type),
+                "reflect requires matching floating-point scalar " "or vector operands"
             )
 
         if function_name == "refract" and not self.refract_operands_are_valid(args):
             return (
-                "; WARNING: refract requires matching floating-point incident "
-                "and normal operands plus scalar eta",
-                self.ensure_registered_type(args[0].type),
+                "refract requires matching floating-point incident "
+                "and normal operands plus scalar eta"
             )
 
         return None
 
-    def unknown_function_fallback_type(self, args: List[SpirvId]) -> SpirvId:
-        if not args:
-            return self.register_primitive_type("float")
-
-        source_type = self.ensure_registered_type(args[0].type)
-        component_type = self.scalar_or_vector_component_type(source_type.type)
-        primitive_type = self.normalize_primitive_name(component_type)
-        if (
-            primitive_type
-            in {
-                "float",
-                "double",
-                "bool",
-                self.BFLOAT16_TYPE_NAME,
-            }
-            | self.INTEGER_TYPE_NAMES
-        ):
-            return source_type
-
-        return self.register_primitive_type("float")
+    def builtin_lowering_error(
+        self, function_name: str, detail: str, *, reason: str = "invalid-operands"
+    ) -> SPIRVBuiltinLoweringError:
+        """Return the typed refusal for a call with no meaning-preserving lowering."""
+        return SPIRVBuiltinLoweringError(function_name, detail, reason=reason)
 
     def is_float32_unary_std450_function(self, function_name: str) -> bool:
         return function_name in {
@@ -12173,6 +12196,9 @@ class VulkanSPIRVCodeGen:
             "sinh",
             "cosh",
             "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
             "exp",
             "log",
             "exp2",
@@ -12299,14 +12325,14 @@ class VulkanSPIRVCodeGen:
                 constructor_args.append(self.default_value_for_type(member_type))
 
         if len(args) < len(members):
-            self.emit(
-                f"; WARNING: Constructor {struct_name} expected {len(members)} "
-                f"members but got {len(args)}; padding with defaults"
+            self.refuse_lowering(
+                f"Constructor {struct_name} expected {len(members)} "
+                f"members but got {len(args)}"
             )
         elif len(args) > len(members):
-            self.emit(
-                f"; WARNING: Constructor {struct_name} expected {len(members)} "
-                f"members but got {len(args)}; truncating extra arguments"
+            self.refuse_lowering(
+                f"Constructor {struct_name} expected {len(members)} "
+                f"members but got {len(args)}"
             )
 
         return constructor_args
@@ -12779,10 +12805,7 @@ class VulkanSPIRVCodeGen:
         return_type = self.current_spirv_return_type()
         if return_type is not None and return_type.type.base_type != "void":
             function_name = self.current_function_name or "<unknown>"
-            self.emit(
-                f"; WARNING: Bare return in non-void function {function_name}; "
-                "using default return value"
-            )
+            self.refuse_lowering(f"Bare return in non-void function {function_name}")
             default_value = self.default_value_for_type(return_type)
             self.create_return_value(default_value)
             return
@@ -13541,8 +13564,8 @@ class VulkanSPIRVCodeGen:
         if actual_components == expected_components:
             return True
 
-        self.emit(
-            f"; WARNING: {function_name} requires a {expected_components}-component "
+        self.refuse_lowering(
+            f"{function_name} requires a {expected_components}-component "
             f"integer coordinate for {metadata.get('type_name', 'storage image')}"
         )
         return False
@@ -13553,8 +13576,8 @@ class VulkanSPIRVCodeGen:
         if self.integer_value_component_count(sample_id) == 1:
             return True
 
-        self.emit(
-            f"; WARNING: {function_name} requires a scalar integer sample operand"
+        self.refuse_lowering(
+            f"{function_name} requires a scalar integer sample operand"
         )
         return False
 
@@ -13575,8 +13598,8 @@ class VulkanSPIRVCodeGen:
         if self.value_has_type(converted, target_type):
             return converted
 
-        self.emit(
-            f"; WARNING: {function_name} {operand_name} operand does not match "
+        self.refuse_lowering(
+            f"{function_name} {operand_name} operand does not match "
             f"{target_type.type.base_type} storage image texel type"
         )
         return None
@@ -13679,6 +13702,7 @@ class VulkanSPIRVCodeGen:
             "max_vertices",
             "maxprimitives",
             "maxvertices",
+            "maybe_unused",
             "numthreads",
             "output",
             "output_control_points",
@@ -14994,7 +15018,7 @@ class VulkanSPIRVCodeGen:
         if type_str in self.struct_types:
             return self.struct_types[type_str]
         else:
-            self.emit(f"; WARNING: Unknown type {type_str}, using float as default")
+            self.refuse_lowering(f"Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
 
     def unsupported_cooperative_matrix_type_error(
@@ -16767,9 +16791,9 @@ class VulkanSPIRVCodeGen:
             components.append(self.convert_value_to_type(value, member_type))
 
         if len(positional_args) > len(members):
-            self.emit(
-                f"; WARNING: Constructor {type_name} expected {len(members)} "
-                f"members but got {len(positional_args)}; truncating extra arguments"
+            self.refuse_lowering(
+                f"Constructor {type_name} expected {len(members)} "
+                f"members but got {len(positional_args)}"
             )
 
         return self.composite_construct(struct_type, components)
@@ -17783,6 +17807,12 @@ class VulkanSPIRVCodeGen:
     def storage_layout_type(self, type_id: SpirvId, layout: str) -> SpirvId:
         if type_id.type.base_type == "bool":
             return self.register_primitive_type("uint")
+        bool_vector = self.vector_component_type_and_count(type_id.type.base_type)
+        if bool_vector is not None and bool_vector[0] == "bool":
+            # Booleans have no externally visible size; blocks hold them as 32-bit uints
+            # (GLSL 4.60 section 7.6.2.2), and loads convert back to booleans.
+            uint_type = self.register_primitive_type("uint")
+            return self.register_vector_type(uint_type, bool_vector[1])
 
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
@@ -18692,7 +18722,7 @@ class VulkanSPIRVCodeGen:
         if callee_name != "clip" or self.has_function_reference(callee_name):
             return False
         if len(args) != 1:
-            self.emit("; WARNING: SPIR-V clip discard requires exactly one operand")
+            self.refuse_lowering("SPIR-V clip discard requires exactly one operand")
             return True
 
         return self.process_clip_discard_statement(args[0])
@@ -18700,8 +18730,8 @@ class VulkanSPIRVCodeGen:
     def emit_fragment_discard(self, source_name: str) -> bool:
         """Emit OpKill for fragment discard, preserving SPIR-V stage validity."""
         if self.current_execution_model != "Fragment":
-            self.emit(
-                f"; WARNING: SPIR-V {source_name} lowers to OpKill, which is "
+            self.refuse_lowering(
+                f"SPIR-V {source_name} lowers to OpKill, which is "
                 "only valid in the Fragment execution model"
             )
             return True
@@ -18712,21 +18742,21 @@ class VulkanSPIRVCodeGen:
     def process_clip_discard_statement(self, value_expr) -> bool:
         """Lower HLSL-style clip(x) to conditional fragment discard."""
         if self.current_execution_model != "Fragment":
-            self.emit(
-                "; WARNING: SPIR-V clip lowers to OpKill, which is only valid "
+            self.refuse_lowering(
+                "SPIR-V clip lowers to OpKill, which is only valid "
                 "in the Fragment execution model"
             )
             return True
 
         value = self.process_expression(value_expr)
         if value is None:
-            self.emit("; WARNING: SPIR-V clip operand could not be evaluated")
+            self.refuse_lowering("SPIR-V clip operand could not be evaluated")
             return True
 
         condition = self.clip_discard_condition(value)
         if condition is None:
-            self.emit(
-                "; WARNING: SPIR-V clip requires a numeric scalar or vector operand"
+            self.refuse_lowering(
+                "SPIR-V clip requires a numeric scalar or vector operand"
             )
             return True
 
@@ -19055,8 +19085,8 @@ class VulkanSPIRVCodeGen:
         else:
             var_type = self.map_resource_type_with_format(var_type_source, node)
         if self.type_contains_runtime_array(var_type):
-            self.emit(
-                f"; WARNING: local variable {node.name} has a runtime-array "
+            self.refuse_lowering(
+                f"local variable {node.name} has a runtime-array "
                 "aggregate type that cannot be materialized in SPIR-V"
             )
             return
@@ -19204,6 +19234,19 @@ class VulkanSPIRVCodeGen:
         if source_metadata is None and source_storage_buffer_metadata is None:
             return False
 
+        referenced_type_name = (
+            self.referenced_value_type_name(var_type_name)
+            if var_type_source is not None
+            else None
+        )
+        if referenced_type_name is not None and isinstance(
+            initial_value, (ArrayAccessNode, MemberAccessNode)
+        ):
+            self.bind_local_storage_element_reference(
+                node.name, source_pointer, referenced_type_name
+            )
+            return True
+
         declared_alias_type_name = self.storage_buffer_resource_type_name(var_type_name)
         inferred_alias_type_name = self.storage_buffer_expression_type_name(
             initial_value
@@ -19213,6 +19256,10 @@ class VulkanSPIRVCodeGen:
         else:
             alias_type_name = declared_alias_type_name or inferred_alias_type_name
         if var_type_source is not None:
+            # A declared value type (``int s = a[i]``, ``S s = b[i]``) copies
+            # the element; it must never alias the source storage.
+            if self.declared_type_name_is_value(var_type_name):
+                return False
             base_type_name = self.array_base_type_name(var_type_name)
             if not (
                 self.is_resource_type_name(base_type_name)
@@ -19506,6 +19553,8 @@ class VulkanSPIRVCodeGen:
         self, node: VariableNode, default_storage_class: str = "Private"
     ) -> SpirvId:
         """Process a module-scope CrossGL variable declaration."""
+        if self.is_default_uniform_node(node):
+            return self.default_uniform_block
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         var_type_name = self.type_name_from_value(var_type_source)
         if self.is_glsl_buffer_block_node(node):
@@ -20058,9 +20107,9 @@ class VulkanSPIRVCodeGen:
     def patch_control_point_count(self, value, context: str) -> int:
         control_points = self.literal_int_argument(value)
         if control_points is None or control_points <= 0:
-            self.emit(
-                f"; WARNING: SPIR-V tessellation patch type {context} requires a "
-                "positive integer control-point count; using 1"
+            self.refuse_lowering(
+                f"SPIR-V tessellation patch type {context} requires a "
+                "positive integer control-point count"
             )
             return 1
         return control_points
@@ -20118,8 +20167,8 @@ class VulkanSPIRVCodeGen:
         )
         param_name = getattr(param, "name", "patch")
         if storage_class is None:
-            self.emit(
-                f"; WARNING: SPIR-V {patch_info['patch_type']} parameter "
+            self.refuse_lowering(
+                f"SPIR-V {patch_info['patch_type']} parameter "
                 f"{param_name} is only valid in tessellation entry points"
             )
             return None
@@ -20147,16 +20196,16 @@ class VulkanSPIRVCodeGen:
         if not arguments:
             return None
         if len(arguments) != 1:
-            self.emit(
-                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+            self.refuse_lowering(
+                "SPIR-V tessellation_control patchconstantfunc "
                 "requires exactly one function name"
             )
             return None
 
         function_name = self.attribute_value_to_string(arguments[0])
         if not function_name:
-            self.emit(
-                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+            self.refuse_lowering(
+                "SPIR-V tessellation_control patchconstantfunc "
                 "requires a function name"
             )
             return None
@@ -20212,8 +20261,8 @@ class VulkanSPIRVCodeGen:
 
             if patch_info is not None:
                 if patch_info["patch_type"] != "InputPatch":
-                    self.emit(
-                        "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                    self.refuse_lowering(
+                        "SPIR-V tessellation_control patchconstantfunc "
                         f"parameter {param_name} must use InputPatch<T, N>"
                     )
                     arguments.append(self.default_value_for_type(param_type))
@@ -20221,8 +20270,8 @@ class VulkanSPIRVCodeGen:
 
                 source_variable = self.matching_patch_interface_variable(patch_info)
                 if source_variable is None:
-                    self.emit(
-                        "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                    self.refuse_lowering(
+                        "SPIR-V tessellation_control patchconstantfunc "
                         f"parameter {param_name} has no matching InputPatch "
                         "entry-point parameter"
                     )
@@ -20242,8 +20291,8 @@ class VulkanSPIRVCodeGen:
                 arguments.append(builtin_argument)
                 continue
 
-            self.emit(
-                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+            self.refuse_lowering(
+                "SPIR-V tessellation_control patchconstantfunc "
                 f"parameter {param_name} has no supported SPIR-V source"
             )
             arguments.append(self.default_value_for_type(param_type))
@@ -20286,8 +20335,8 @@ class VulkanSPIRVCodeGen:
     ):
         builtin_size = self.tessellation_patch_builtin_size(builtin_name)
         if builtin_size is None or component_index >= builtin_size:
-            self.emit(
-                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+            self.refuse_lowering(
+                "SPIR-V tessellation_control patchconstantfunc "
                 f"{builtin_name} component {component_index} is out of range"
             )
             return
@@ -20447,8 +20496,8 @@ class VulkanSPIRVCodeGen:
             )
 
         if not stored_any:
-            self.emit(
-                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+            self.refuse_lowering(
+                "SPIR-V tessellation_control patchconstantfunc "
                 f"'{function_name}' returned no tessellation factor semantics"
             )
 
@@ -20465,24 +20514,24 @@ class VulkanSPIRVCodeGen:
             return
         function_signature = self.resolve_function_signature(function_name)
         if function_signature is None:
-            self.emit(
-                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+            self.refuse_lowering(
+                "SPIR-V tessellation_control patchconstantfunc "
                 f"'{function_name}' does not reference a generated function"
             )
             return
 
         return_type, _param_types = function_signature
         if return_type.type.base_type == "void":
-            self.emit(
-                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+            self.refuse_lowering(
+                "SPIR-V tessellation_control patchconstantfunc "
                 f"'{function_name}' requires a non-void return type"
             )
             return
 
         patch_function = self.function_nodes.get(function_name)
         if patch_function is None:
-            self.emit(
-                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+            self.refuse_lowering(
+                "SPIR-V tessellation_control patchconstantfunc "
                 f"'{function_name}' has no available function definition"
             )
             return
@@ -20561,9 +20610,8 @@ class VulkanSPIRVCodeGen:
         )
         array_info = self.split_outer_array_type(type_name)
         if array_info is None:
-            self.emit(
-                f"; WARNING: SPIR-V mesh output parameter {param_name} must be "
-                "an array type"
+            self.refuse_lowering(
+                f"SPIR-V mesh output parameter {param_name} must be " "an array type"
             )
             element_type_name = type_name
             element_count = None
@@ -20694,6 +20742,18 @@ class VulkanSPIRVCodeGen:
 
         if self.is_task_payload_shared_node(node):
             return "TaskPayloadWorkgroupEXT"
+        # Module- and stage-scope GLSL `shared`, HLSL `groupshared` and MSL `threadgroup` variables are one copy
+        # per workgroup; Private storage would give every invocation its own copy.
+        workgroup_names = {"shared", "groupshared", "threadgroup", "workgroup"}
+        if attribute_names & workgroup_names or qualifiers & workgroup_names:
+            if getattr(node, "initial_value", None) is not None:
+                raise UnsupportedSPIRVFeatureError(
+                    "workgroup variable initializer",
+                    f"SPIR-V workgroup variable '{node.name}' cannot take an initializer",
+                    missing_capabilities=("spirv.workgroup_storage.initializer",),
+                    source_location=getattr(node, "source_location", None),
+                )
+            return "Workgroup"
         if attribute_names & {"input", "in"} or qualifiers & {"input", "in"}:
             return "Input"
         if attribute_names & {"output", "out"} or qualifiers & {"output", "out"}:
@@ -22526,8 +22586,8 @@ class VulkanSPIRVCodeGen:
 
             required_label = image_access_requirement_label(required_access)
             actual_label = image_access_diagnostic_name(actual_access)
-            self.emit(
-                f"; WARNING: function call '{func_name}' requires {required_label} "
+            self.refuse_lowering(
+                f"function call '{func_name}' requires {required_label} "
                 "storage image access for argument "
                 f"{self.expression_debug_name(args[index])} passed to parameter "
                 f"{param_name}: got {actual_label}"
@@ -22573,8 +22633,8 @@ class VulkanSPIRVCodeGen:
 
             required_label = image_access_requirement_label(required_access)
             actual_label = image_access_diagnostic_name(actual_access)
-            self.emit(
-                f"; WARNING: function call '{func_name}' requires {required_label} "
+            self.refuse_lowering(
+                f"function call '{func_name}' requires {required_label} "
                 "storage buffer access for argument "
                 f"{self.expression_debug_name(arg)} passed to parameter "
                 f"{param_name}: got {actual_label}"
@@ -22748,8 +22808,8 @@ class VulkanSPIRVCodeGen:
                     rejection_reasons={id(function_node): rejection_reason},
                 )
             if len(effective_call_args) < len(parameters):
-                self.emit(
-                    f"; WARNING: function call '{func_name}' requires "
+                self.refuse_lowering(
+                    f"function call '{func_name}' requires "
                     f"{len(parameters)} arguments"
                 )
                 return self.default_value_for_function(function_node)
@@ -22880,8 +22940,8 @@ class VulkanSPIRVCodeGen:
                     raise self.unsupported_null_pointer_argument_error(arg)
                 pointer_arg = self.variable_pointer_from_expression(arg)
                 if pointer_arg is None:
-                    self.emit(
-                        f"; WARNING: function call '{func_name}' requires a "
+                    self.refuse_lowering(
+                        f"function call '{func_name}' requires a "
                         f"storage buffer argument for parameter {param_name}"
                     )
                     return None
@@ -22892,8 +22952,8 @@ class VulkanSPIRVCodeGen:
                         storage_buffer_type_name, actual_type_name
                     )
                 ):
-                    self.emit(
-                        f"; WARNING: function call '{func_name}' requires "
+                    self.refuse_lowering(
+                        f"function call '{func_name}' requires "
                         f"{storage_buffer_type_name} storage buffer type for "
                         "argument "
                         f"{self.expression_debug_name(arg)} "
@@ -22980,7 +23040,7 @@ class VulkanSPIRVCodeGen:
                 expected_type=expected_type,
             )
             if arg_value is None:
-                self.emit(f"; WARNING: Failed to evaluate argument for {func_name}")
+                self.refuse_lowering(f"Failed to evaluate argument for {func_name}")
                 return None
             if expected_type is not None:
                 arg_value = self.convert_value_to_type(arg_value, expected_type)
@@ -24118,6 +24178,44 @@ class VulkanSPIRVCodeGen:
         self.structured_buffer_metadata[access.id] = access_metadata
         return access
 
+    def process_block_member_length_call(self, expr):
+        """``block.member.length()`` (GLSL 4.60 section 4.1.9) as an int.
+
+        A runtime array's length is ``OpArrayLength`` on the block variable; a sized array's is its size.
+        """
+        callee = getattr(expr, "function", None)
+        if not (
+            isinstance(callee, MemberAccessNode)
+            and callee.member == "length"
+            and not (getattr(expr, "args", None) or [])
+            and isinstance(callee.object_expr, MemberAccessNode)
+        ):
+            return False, None
+        array_expr = callee.object_expr
+        block_pointer = self.variable_pointer_from_expression(array_expr.object_expr)
+        if block_pointer is None:
+            return False, None
+        member_info = self.struct_member_info(
+            self.struct_type_name_from_pointer(block_pointer), array_expr.member
+        )
+        array_info = (
+            self.array_type_info_from_type(member_info[1]) if member_info else None
+        )
+        if array_info is None:
+            return False, None
+        int_type = self.register_primitive_type("int")
+        if array_info[1] is not None:
+            return True, self.register_constant(int(array_info[1]), int_type)
+        uint_type = self.register_primitive_type("uint")
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpArrayLength %{uint_type.id} %{block_pointer.id} "
+            f"{member_info[0]}"
+        )
+        self.value_types[id_value] = uint_type
+        length = SpirvId(id_value, uint_type.type)
+        return True, self.convert_value_to_type(length, int_type)
+
     def single_struct_buffer_zero_index_alias(
         self, buffer_pointer: SpirvId, index_expr
     ) -> Optional[SpirvId]:
@@ -24163,7 +24261,7 @@ class VulkanSPIRVCodeGen:
         )
         block_type = metadata.get("block_type") if metadata is not None else None
         if block_type is None:
-            self.emit(f"; WARNING: {diagnostic_name} requires a buffer block operand")
+            self.refuse_lowering(f"{diagnostic_name} requires a buffer block operand")
             return self.structured_buffer_dimensions_default_value()
 
         uint_type = self.register_primitive_type("uint")
@@ -24188,25 +24286,23 @@ class VulkanSPIRVCodeGen:
     ) -> bool:
         target_pointer = self.assignable_pointer_from_expression(target_expr)
         if target_pointer is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} output operand must be an assignable "
+            self.refuse_lowering(
+                f"{diagnostic_name} output operand must be an assignable "
                 "integer target"
             )
             return False
 
         target_type = self.pointer_pointee_type(target_pointer)
         if target_type is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} output operand type could not be "
-                "determined"
+            self.refuse_lowering(
+                f"{diagnostic_name} output operand type could not be " "determined"
             )
             return False
 
         target_type_name = self.normalize_primitive_name(target_type.type.base_type)
         if target_type_name not in {"int", "uint"}:
-            self.emit(
-                f"; WARNING: {diagnostic_name} output operand must be an integer "
-                "target"
+            self.refuse_lowering(
+                f"{diagnostic_name} output operand must be an integer " "target"
             )
             return False
 
@@ -24221,27 +24317,26 @@ class VulkanSPIRVCodeGen:
         diagnostic_name = "buffer_dimensions"
         args = list(getattr(expr, "args", []) or [])
         if not args:
-            self.emit("; WARNING: buffer_dimensions requires a buffer operand")
+            self.refuse_lowering("buffer_dimensions requires a buffer operand")
             return self.structured_buffer_dimensions_default_value()
         if len(args) > 2:
-            self.emit(
-                "; WARNING: buffer_dimensions accepts only buffer and optional "
-                "output operands"
+            self.refuse_lowering(
+                "buffer_dimensions accepts only buffer and optional " "output operands"
             )
             return self.structured_buffer_dimensions_default_value()
 
         buffer_pointer = self.variable_pointer_from_expression(args[0])
         if buffer_pointer is None:
-            self.emit(
-                "; WARNING: buffer_dimensions requires a structured or byte-address "
+            self.refuse_lowering(
+                "buffer_dimensions requires a structured or byte-address "
                 "buffer operand"
             )
             return self.structured_buffer_dimensions_default_value()
 
         metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
         if metadata is None:
-            self.emit(
-                "; WARNING: buffer_dimensions requires a structured or byte-address "
+            self.refuse_lowering(
+                "buffer_dimensions requires a structured or byte-address "
                 "buffer operand"
             )
             return self.structured_buffer_dimensions_default_value()
@@ -24263,9 +24358,8 @@ class VulkanSPIRVCodeGen:
         diagnostic_name: str,
     ) -> SpirvId:
         if len(args) > 1:
-            self.emit(
-                f"; WARNING: {diagnostic_name} accepts only an optional output "
-                "operand"
+            self.refuse_lowering(
+                f"{diagnostic_name} accepts only an optional output " "operand"
             )
             return self.structured_buffer_dimensions_default_value()
 
@@ -24387,18 +24481,18 @@ class VulkanSPIRVCodeGen:
         diagnostic_name: str,
     ) -> Tuple[bool, Optional[SpirvId]]:
         if len(args) < 1:
-            self.emit(f"; WARNING: {diagnostic_name} requires a value operand")
+            self.refuse_lowering(f"{diagnostic_name} requires a value operand")
             return True, None
         if len(args) > 1:
-            self.emit(f"; WARNING: {diagnostic_name} accepts only a value operand")
+            self.refuse_lowering(f"{diagnostic_name} accepts only a value operand")
             return True, None
         if metadata.get("buffer_kind") != "AppendStructuredBuffer":
-            self.emit(
-                f"; WARNING: {diagnostic_name} requires an AppendStructuredBuffer"
+            self.refuse_lowering(
+                f"{diagnostic_name} requires an AppendStructuredBuffer"
             )
             return True, None
         if metadata.get("readonly"):
-            self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a writable buffer")
             return True, None
 
         value = (
@@ -24407,13 +24501,13 @@ class VulkanSPIRVCodeGen:
             else self.process_expression(args[0])
         )
         if value is None:
-            self.emit(f"; WARNING: {diagnostic_name} value could not be evaluated")
+            self.refuse_lowering(f"{diagnostic_name} value could not be evaluated")
             return True, None
         value = self.convert_value_to_type(value, metadata["element_type"])
 
         counter_pointer = self.structured_buffer_counter_pointer(buffer_pointer)
         if counter_pointer is None:
-            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a counter buffer")
             return True, None
 
         one = self.register_constant(1, self.register_primitive_type("uint"))
@@ -24422,9 +24516,8 @@ class VulkanSPIRVCodeGen:
         )
         element_pointer = self.structured_buffer_element_pointer(buffer_pointer, index)
         if element_pointer is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} requires an AppendStructuredBuffer "
-                "element"
+            self.refuse_lowering(
+                f"{diagnostic_name} requires an AppendStructuredBuffer " "element"
             )
             return True, None
 
@@ -24439,20 +24532,20 @@ class VulkanSPIRVCodeGen:
         diagnostic_name: str,
     ) -> Tuple[bool, Optional[SpirvId]]:
         if args:
-            self.emit(f"; WARNING: {diagnostic_name} accepts no operands")
+            self.refuse_lowering(f"{diagnostic_name} accepts no operands")
             return True, self.structured_buffer_default_value(metadata)
         if metadata.get("buffer_kind") != "ConsumeStructuredBuffer":
-            self.emit(
-                f"; WARNING: {diagnostic_name} requires a ConsumeStructuredBuffer"
+            self.refuse_lowering(
+                f"{diagnostic_name} requires a ConsumeStructuredBuffer"
             )
             return True, self.structured_buffer_default_value(metadata)
         if metadata.get("writeonly"):
-            self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a readable buffer")
             return True, self.structured_buffer_default_value(metadata)
 
         counter_pointer = self.structured_buffer_counter_pointer(buffer_pointer)
         if counter_pointer is None:
-            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a counter buffer")
             return True, self.structured_buffer_default_value(metadata)
 
         uint_type = self.register_primitive_type("uint")
@@ -24463,9 +24556,8 @@ class VulkanSPIRVCodeGen:
         index = self.binary_operation("-", uint_type, old_count, one)
         element_pointer = self.structured_buffer_element_pointer(buffer_pointer, index)
         if element_pointer is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} requires a ConsumeStructuredBuffer "
-                "element"
+            self.refuse_lowering(
+                f"{diagnostic_name} requires a ConsumeStructuredBuffer " "element"
             )
             return True, self.structured_buffer_default_value(metadata)
 
@@ -24481,21 +24573,21 @@ class VulkanSPIRVCodeGen:
         increment: bool,
     ) -> Tuple[bool, SpirvId]:
         if args:
-            self.emit(f"; WARNING: {diagnostic_name} accepts no operands")
+            self.refuse_lowering(f"{diagnostic_name} accepts no operands")
             return True, self.structured_buffer_counter_default_value()
         if metadata.get("buffer_kind") != "RWStructuredBuffer":
-            self.emit(f"; WARNING: {diagnostic_name} requires an RWStructuredBuffer")
+            self.refuse_lowering(f"{diagnostic_name} requires an RWStructuredBuffer")
             return True, self.structured_buffer_counter_default_value()
         if metadata.get("readonly") or metadata.get("writeonly"):
-            self.emit(f"; WARNING: {diagnostic_name} requires a read-write buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a read-write buffer")
             return True, self.structured_buffer_counter_default_value()
         if not self.ensure_structured_buffer_counter_metadata(metadata):
-            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a counter buffer")
             return True, self.structured_buffer_counter_default_value()
 
         counter_pointer = self.structured_buffer_counter_pointer(buffer_pointer)
         if counter_pointer is None:
-            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a counter buffer")
             return True, self.structured_buffer_counter_default_value()
 
         uint_type = self.register_primitive_type("uint")
@@ -24572,35 +24664,33 @@ class VulkanSPIRVCodeGen:
         if method_name == "Load":
             diagnostic_name = "StructuredBuffer.Load"
             if len(args) < 1:
-                self.emit(f"; WARNING: {diagnostic_name} requires an index operand")
+                self.refuse_lowering(f"{diagnostic_name} requires an index operand")
                 return True, self.structured_buffer_default_value(metadata)
             if len(args) > 1:
-                self.emit(f"; WARNING: {diagnostic_name} accepts only an index operand")
+                self.refuse_lowering(f"{diagnostic_name} accepts only an index operand")
                 return True, self.structured_buffer_default_value(metadata)
             if metadata.get("writeonly"):
-                self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+                self.refuse_lowering(f"{diagnostic_name} requires a readable buffer")
                 return True, self.structured_buffer_default_value(metadata)
             if metadata.get("buffer_kind") not in {
                 "StructuredBuffer",
                 "RWStructuredBuffer",
             }:
-                self.emit(
-                    f"; WARNING: {diagnostic_name} requires a StructuredBuffer "
-                    "element"
+                self.refuse_lowering(
+                    f"{diagnostic_name} requires a StructuredBuffer " "element"
                 )
                 return True, self.structured_buffer_default_value(metadata)
 
             index = self.process_expression(args[0])
             if index is None:
-                self.emit(f"; WARNING: {diagnostic_name} index could not be evaluated")
+                self.refuse_lowering(f"{diagnostic_name} index could not be evaluated")
                 return True, self.structured_buffer_default_value(metadata)
             element_pointer = self.structured_buffer_element_pointer(
                 buffer_pointer, index
             )
             if element_pointer is None:
-                self.emit(
-                    f"; WARNING: {diagnostic_name} requires a StructuredBuffer "
-                    "element"
+                self.refuse_lowering(
+                    f"{diagnostic_name} requires a StructuredBuffer " "element"
                 )
                 return True, self.structured_buffer_default_value(metadata)
 
@@ -24609,36 +24699,36 @@ class VulkanSPIRVCodeGen:
 
         diagnostic_name = "RWStructuredBuffer.Store"
         if len(args) < 2:
-            self.emit(f"; WARNING: {diagnostic_name} requires index and value operands")
+            self.refuse_lowering(f"{diagnostic_name} requires index and value operands")
             return True, None
         if len(args) > 2:
-            self.emit(
-                f"; WARNING: {diagnostic_name} accepts only index and value operands"
+            self.refuse_lowering(
+                f"{diagnostic_name} accepts only index and value operands"
             )
             return True, None
         if metadata.get("readonly"):
-            self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a writable buffer")
             return True, None
         if metadata.get("buffer_kind") != "RWStructuredBuffer":
-            self.emit(
-                f"; WARNING: {diagnostic_name} requires an RWStructuredBuffer element"
+            self.refuse_lowering(
+                f"{diagnostic_name} requires an RWStructuredBuffer element"
             )
             return True, None
 
         index = self.process_expression(args[0])
         if index is None:
-            self.emit(f"; WARNING: {diagnostic_name} index could not be evaluated")
+            self.refuse_lowering(f"{diagnostic_name} index could not be evaluated")
             return True, None
         element_pointer = self.structured_buffer_element_pointer(buffer_pointer, index)
         if element_pointer is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} requires an RWStructuredBuffer element"
+            self.refuse_lowering(
+                f"{diagnostic_name} requires an RWStructuredBuffer element"
             )
             return True, None
 
         value = self.process_expression(args[1])
         if value is None:
-            self.emit(f"; WARNING: {diagnostic_name} value could not be evaluated")
+            self.refuse_lowering(f"{diagnostic_name} value could not be evaluated")
             return True, None
 
         self.store_to_variable(element_pointer, value)
@@ -24777,8 +24867,8 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         value = self.process_expression(expr)
         if value is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} {role} operand could not be evaluated"
+            self.refuse_lowering(
+                f"{diagnostic_name} {role} operand could not be evaluated"
             )
             return None
 
@@ -24786,26 +24876,25 @@ class VulkanSPIRVCodeGen:
             value.id
         ) or self.find_registered_type_by_base(value.type.base_type)
         if value_type is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} {role} operand type could not be "
-                "determined"
+            self.refuse_lowering(
+                f"{diagnostic_name} {role} operand type could not be " "determined"
             )
             return None
 
         if self.vector_type_info_from_type(value_type) is not None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} {role} operand must be a scalar integer"
+            self.refuse_lowering(
+                f"{diagnostic_name} {role} operand must be a scalar integer"
             )
             return None
         if self.matrix_type_info_from_type(value_type) is not None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} {role} operand must be a scalar integer"
+            self.refuse_lowering(
+                f"{diagnostic_name} {role} operand must be a scalar integer"
             )
             return None
 
         type_name = self.normalize_primitive_name(value_type.type.base_type)
         if type_name not in {"int", "uint"}:
-            self.emit(f"; WARNING: {diagnostic_name} {role} operand must be an integer")
+            self.refuse_lowering(f"{diagnostic_name} {role} operand must be an integer")
             return None
 
         return self.convert_value_to_type(value, self.register_primitive_type("uint"))
@@ -24815,35 +24904,34 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         original_pointer = self.assignable_pointer_from_expression(expr)
         if original_pointer is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} original operand must be an "
+            self.refuse_lowering(
+                f"{diagnostic_name} original operand must be an "
                 "assignable scalar uint target"
             )
             return None
 
         original_type = self.pointer_pointee_type(original_pointer)
         if original_type is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} original operand type could not be "
-                "determined"
+            self.refuse_lowering(
+                f"{diagnostic_name} original operand type could not be " "determined"
             )
             return None
 
         if self.vector_type_info_from_type(original_type) is not None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} original operand must be scalar uint"
+            self.refuse_lowering(
+                f"{diagnostic_name} original operand must be scalar uint"
             )
             return None
         if self.matrix_type_info_from_type(original_type) is not None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} original operand must be scalar uint"
+            self.refuse_lowering(
+                f"{diagnostic_name} original operand must be scalar uint"
             )
             return None
 
         type_name = self.normalize_primitive_name(original_type.type.base_type)
         if type_name != "uint":
-            self.emit(
-                f"; WARNING: {diagnostic_name} original operand must be scalar uint"
+            self.refuse_lowering(
+                f"{diagnostic_name} original operand must be scalar uint"
             )
             return None
 
@@ -24882,7 +24970,7 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         offset_type_name = self.normalize_primitive_name(byte_offset.type.base_type)
         if offset_type_name not in {"int", "uint"}:
-            self.emit("; WARNING: ByteAddressBuffer byte offset must be an integer")
+            self.refuse_lowering("ByteAddressBuffer byte offset must be an integer")
             return None
 
         uint_type = self.register_primitive_type("uint")
@@ -24893,7 +24981,7 @@ class VulkanSPIRVCodeGen:
     def byte_address_buffer_element_index(self, offset_expr) -> Optional[SpirvId]:
         byte_offset = self.process_expression(offset_expr)
         if byte_offset is None:
-            self.emit("; WARNING: ByteAddressBuffer byte offset could not be evaluated")
+            self.refuse_lowering("ByteAddressBuffer byte offset could not be evaluated")
             return None
 
         return self.byte_address_buffer_element_index_from_value(byte_offset)
@@ -24917,7 +25005,7 @@ class VulkanSPIRVCodeGen:
     ) -> SpirvId:
         metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
         if metadata is not None and metadata.get("writeonly"):
-            self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a readable buffer")
             return self.byte_address_default_value(component_count)
 
         uint_type = self.register_primitive_type("uint")
@@ -24964,19 +25052,19 @@ class VulkanSPIRVCodeGen:
         )
         vector_info = self.vector_component_type_and_count(value_type_name)
         if vector_info is None or vector_info[1] != component_count:
-            self.emit(
-                f"; WARNING: {diagnostic_name} requires a uvec{component_count} value"
+            self.refuse_lowering(
+                f"{diagnostic_name} requires a uvec{component_count} value"
             )
             return
         if vector_info[0] not in {"int", "uint"}:
-            self.emit(f"; WARNING: {diagnostic_name} requires an integer vector value")
+            self.refuse_lowering(f"{diagnostic_name} requires an integer vector value")
             return
 
         vector_type = self.byte_address_value_type(component_count)
         value = self.convert_value_to_type(value, vector_type)
         if not self.value_has_type(value, vector_type):
-            self.emit(
-                f"; WARNING: {diagnostic_name} value could not be converted to "
+            self.refuse_lowering(
+                f"{diagnostic_name} value could not be converted to "
                 f"uvec{component_count}"
             )
             return
@@ -24992,21 +25080,20 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId], component_count: int
     ) -> SpirvId:
         if len(args) < 2:
-            self.emit(
-                f"; WARNING: {function_name} requires buffer and byte offset operands"
+            self.refuse_lowering(
+                f"{function_name} requires buffer and byte offset operands"
             )
             return self.byte_address_default_value(component_count)
         if len(args) > 2:
-            self.emit(
-                f"; WARNING: {function_name} accepts only buffer and byte offset "
-                "operands"
+            self.refuse_lowering(
+                f"{function_name} accepts only buffer and byte offset " "operands"
             )
             return self.byte_address_default_value(component_count)
 
         metadata = self.structured_buffer_metadata_for_pointer(args[0])
         if metadata is None or not metadata.get("byte_address"):
-            self.emit(
-                f"; WARNING: {function_name} requires a ByteAddressBuffer operand"
+            self.refuse_lowering(
+                f"{function_name} requires a ByteAddressBuffer operand"
             )
             return self.byte_address_default_value(component_count)
 
@@ -25022,26 +25109,25 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId], component_count: int
     ) -> None:
         if len(args) < 3:
-            self.emit(
-                f"; WARNING: {function_name} requires buffer, byte offset, and "
-                "value operands"
+            self.refuse_lowering(
+                f"{function_name} requires buffer, byte offset, and " "value operands"
             )
             return None
         if len(args) > 3:
-            self.emit(
-                f"; WARNING: {function_name} accepts only buffer, byte offset, and "
+            self.refuse_lowering(
+                f"{function_name} accepts only buffer, byte offset, and "
                 "value operands"
             )
             return None
 
         metadata = self.structured_buffer_metadata_for_pointer(args[0])
         if metadata is None or not metadata.get("byte_address"):
-            self.emit(
-                f"; WARNING: {function_name} requires an RWByteAddressBuffer operand"
+            self.refuse_lowering(
+                f"{function_name} requires an RWByteAddressBuffer operand"
             )
             return None
         if metadata.get("readonly"):
-            self.emit(f"; WARNING: {function_name} requires a writable buffer")
+            self.refuse_lowering(f"{function_name} requires a writable buffer")
             return None
 
         element_index = self.byte_address_buffer_element_index_from_value(args[1])
@@ -25066,13 +25152,13 @@ class VulkanSPIRVCodeGen:
             return self.byte_address_interlocked_default_value()
 
         if len(args) < info["min_args"]:
-            self.emit(f"; WARNING: {diagnostic_name} requires {info['required']}")
+            self.refuse_lowering(f"{diagnostic_name} requires {info['required']}")
             return self.byte_address_interlocked_default_value()
         if len(args) > info["max_args"]:
-            self.emit(f"; WARNING: {diagnostic_name} accepts only {info['accepted']}")
+            self.refuse_lowering(f"{diagnostic_name} accepts only {info['accepted']}")
             return self.byte_address_interlocked_default_value()
         if metadata.get("readonly") or metadata.get("writeonly"):
-            self.emit(f"; WARNING: {diagnostic_name} requires a read-write buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a read-write buffer")
             return self.byte_address_interlocked_default_value()
 
         element_index = self.byte_address_buffer_element_index(args[0])
@@ -25101,8 +25187,8 @@ class VulkanSPIRVCodeGen:
             buffer_pointer, element_index
         )
         if target_pointer is None:
-            self.emit(
-                f"; WARNING: {diagnostic_name} requires a byte-address buffer element"
+            self.refuse_lowering(
+                f"{diagnostic_name} requires a byte-address buffer element"
             )
             return self.byte_address_interlocked_default_value()
 
@@ -25159,10 +25245,10 @@ class VulkanSPIRVCodeGen:
         if load_width is not None:
             diagnostic_name = f"ByteAddressBuffer.{method_name}"
             if len(args) < 1:
-                self.emit(f"; WARNING: {diagnostic_name} requires a byte offset")
+                self.refuse_lowering(f"{diagnostic_name} requires a byte offset")
                 return True, self.byte_address_default_value(load_width)
             if len(args) > 1:
-                self.emit(f"; WARNING: {diagnostic_name} accepts only a byte offset")
+                self.refuse_lowering(f"{diagnostic_name} accepts only a byte offset")
                 return True, self.byte_address_default_value(load_width)
 
             element_index = self.byte_address_buffer_element_index(args[0])
@@ -25174,18 +25260,17 @@ class VulkanSPIRVCodeGen:
 
         diagnostic_name = f"RWByteAddressBuffer.{method_name}"
         if len(args) < 2:
-            self.emit(
-                f"; WARNING: {diagnostic_name} requires byte offset and value operands"
+            self.refuse_lowering(
+                f"{diagnostic_name} requires byte offset and value operands"
             )
             return True, None
         if len(args) > 2:
-            self.emit(
-                f"; WARNING: {diagnostic_name} accepts only byte offset and value "
-                "operands"
+            self.refuse_lowering(
+                f"{diagnostic_name} accepts only byte offset and value " "operands"
             )
             return True, None
         if metadata.get("readonly"):
-            self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
+            self.refuse_lowering(f"{diagnostic_name} requires a writable buffer")
             return True, None
 
         element_index = self.byte_address_buffer_element_index(args[0])
@@ -25194,7 +25279,7 @@ class VulkanSPIRVCodeGen:
 
         value = self.process_expression(args[1])
         if value is None:
-            self.emit(f"; WARNING: {diagnostic_name} value could not be evaluated")
+            self.refuse_lowering(f"{diagnostic_name} value could not be evaluated")
             return True, None
 
         self.store_byte_address_buffer_value(
@@ -25591,7 +25676,7 @@ class VulkanSPIRVCodeGen:
         return False
 
     def runtime_array_aggregate_fallback(self, reason: str) -> SpirvId:
-        self.emit(f"; WARNING: {reason}")
+        self.refuse_lowering(f"{reason}")
         return self.register_constant(0.0, self.register_primitive_type("float"))
 
     def vector_type_info_from_type(self, vector_type: Optional[SpirvId]):
@@ -25839,6 +25924,28 @@ class VulkanSPIRVCodeGen:
 
         return None
 
+    def process_vector_list_constructor(self, expr, *, constant=False):
+        if not isinstance(expr, ConstructorNode) or not getattr(
+            expr, "is_braced_constructor", False
+        ):
+            return None
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        vector_info = self.vector_component_type_and_count(type_name)
+        if vector_info is None:
+            return None
+        if expr.named_arguments or len(expr.arguments) > vector_info[1]:
+            raise UnsupportedSPIRVFeatureError(
+                "vector-list-initialization",
+                f"Vector initializer for {type_name} requires at most "
+                f"{vector_info[1]} positional components",
+                source_location=getattr(expr, "source_location", None),
+            )
+        return self.process_array_literal(
+            ArrayLiteralNode(list(expr.arguments)),
+            self.map_crossgl_type(expr.constructor_type),
+            constant=constant,
+        )
+
     def process_constant_expression(
         self,
         expr,
@@ -25846,6 +25953,10 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         if isinstance(expr, ArrayLiteralNode):
             return self.process_array_literal(expr, target_type, constant=True)
+
+        vector_list = self.process_vector_list_constructor(expr, constant=True)
+        if vector_list is not None:
+            return vector_list
 
         converted_literal = self.constant_literal_for_type(expr, target_type)
         if converted_literal is not None:
@@ -25955,14 +26066,14 @@ class VulkanSPIRVCodeGen:
                 values.append(self.default_value_for_type(member_type))
 
         if len(args) < len(members):
-            self.emit(
-                f"; WARNING: Constructor {struct_name} expected {len(members)} "
-                f"members but got {len(args)}; padding with defaults"
+            self.refuse_lowering(
+                f"Constructor {struct_name} expected {len(members)} "
+                f"members but got {len(args)}"
             )
         elif len(args) > len(members):
-            self.emit(
-                f"; WARNING: Constructor {struct_name} expected {len(members)} "
-                f"members but got {len(args)}; truncating extra arguments"
+            self.refuse_lowering(
+                f"Constructor {struct_name} expected {len(members)} "
+                f"members but got {len(args)}"
             )
 
         return self.register_composite_constant(target_type, values)
@@ -26122,16 +26233,16 @@ class VulkanSPIRVCodeGen:
             else index.type.base_type
         )
         if index_type_name not in {"int", "uint"}:
-            self.emit(
-                f"; WARNING: {diagnostic_subject} "
+            self.refuse_lowering(
+                f"{diagnostic_subject} "
                 f"index requires a scalar integer value, got {index.type.base_type}"
             )
             return False
 
         literal_index = self.literal_int_argument(index_expr)
         if literal_index is not None and not 0 <= literal_index < size:
-            self.emit(
-                f"; WARNING: {diagnostic_subject} "
+            self.refuse_lowering(
+                f"{diagnostic_subject} "
                 f"index {literal_index} out of range; valid range is 0..{size - 1}"
             )
             return False
@@ -26360,7 +26471,7 @@ class VulkanSPIRVCodeGen:
                 else None
             )
             if target_pointer is None or target_type is None:
-                self.emit("; WARNING: Could not determine match assignment target type")
+                self.refuse_lowering("Could not determine match assignment target type")
                 return
             self.process_match_expression_assignment(
                 node.value, target_pointer, target_type
@@ -26401,23 +26512,19 @@ class VulkanSPIRVCodeGen:
 
         if isinstance(target, str):
             if target in self.resource_alias_variables:
-                self.emit(
-                    f"; WARNING: cannot assign to SPIR-V descriptor resource alias "
-                    f"{target}"
+                self.refuse_lowering(
+                    f"cannot assign to SPIR-V descriptor resource alias " f"{target}"
                 )
                 return
 
             var_id = self.ensure_assignable_pointer_for_name(target)
+            if var_id is None and target in self.cbuffer_members:
+                # GLSL 4.60 section 4.3.5 and HLSL constant buffers: uniforms are read-only.
+                self.refuse_lowering(f"cannot assign to read-only uniform {target}")
+                return
             if var_id is None:
-                var_type = self.primitive_types["float"]
-                if hasattr(rhs_value, "type"):
-                    var_type = (
-                        self.find_registered_type_by_base(rhs_value.type.base_type)
-                        or var_type
-                    )
-
-                var_id = self.create_variable(var_type, "Function", target)
-                self.local_variables[target] = var_id
+                self.refuse_lowering(f"cannot assign to undeclared variable {target}")
+                return
 
             self.store_to_variable(var_id, rhs_value)
 
@@ -26439,8 +26546,8 @@ class VulkanSPIRVCodeGen:
                 return
 
             struct_type = self.struct_type_name_from_pointer(base_pointer)
-            self.emit(
-                f"; WARNING: Could not find member {member_name} in {struct_type}"
+            self.refuse_lowering(
+                f"Could not find member {member_name} in {struct_type}"
             )
 
         elif (
@@ -26462,16 +26569,16 @@ class VulkanSPIRVCodeGen:
             )
 
             if access is None or element_type is None:
-                self.emit(
-                    "; WARNING: Could not determine array element type for "
+                self.refuse_lowering(
+                    "Could not determine array element type for "
                     f"{self.diagnostic_expression(target.array)}"
                 )
                 return
 
             self.store_to_variable(access, rhs_value)
         else:
-            self.emit(
-                f"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}"
+            self.refuse_lowering(
+                f"Unsupported LHS type in assignment: {type(target).__name__}"
             )
 
     def process_compound_assignment(
@@ -26479,10 +26586,10 @@ class VulkanSPIRVCodeGen:
     ):
         spv_operator = self.compound_assignment_operator(operator)
         if spv_operator is None:
-            self.emit(f"; WARNING: Unsupported compound assignment operator {operator}")
+            self.refuse_lowering(f"Unsupported compound assignment operator {operator}")
             return
         if isinstance(node.value, ArrayLiteralNode):
-            self.emit("; WARNING: Compound array literal assignment is unsupported")
+            self.refuse_lowering("Compound array literal assignment is unsupported")
             return
 
         if self.process_mesh_output_compound_assignment(
@@ -26541,8 +26648,8 @@ class VulkanSPIRVCodeGen:
             target_pointer = self.assignable_pointer_from_expression(target)
 
         if target_pointer is None:
-            self.emit(
-                f"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}"
+            self.refuse_lowering(
+                f"Unsupported LHS type in assignment: {type(target).__name__}"
             )
             return
 
@@ -26552,7 +26659,7 @@ class VulkanSPIRVCodeGen:
                 target_pointer.type.base_type.replace("ptr_", "", 1)
             )
         if target_type is None:
-            self.emit("; WARNING: Could not determine compound assignment type")
+            self.refuse_lowering("Could not determine compound assignment type")
             return
 
         if target_is_precise:
@@ -26645,8 +26752,8 @@ class VulkanSPIRVCodeGen:
         if self.vector_swizzle_info(vector_type_name, member_name) is not None:
             return False
 
-        self.emit(
-            f"; WARNING: Invalid vector swizzle {member_name} for {vector_type_name}"
+        self.refuse_lowering(
+            f"Invalid vector swizzle {member_name} for {vector_type_name}"
         )
         return True
 
@@ -26659,8 +26766,8 @@ class VulkanSPIRVCodeGen:
 
         vector_type, member_indices, member_type, _ = update_info
         if len(set(member_indices)) != len(member_indices):
-            self.emit(
-                f"; WARNING: Cannot assign to vector swizzle {member_name} "
+            self.refuse_lowering(
+                f"Cannot assign to vector swizzle {member_name} "
                 "with duplicate components"
             )
             return True
@@ -26688,15 +26795,15 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[List[SpirvId]]:
         source_vector_info = self.vector_component_type_and_count(value.type.base_type)
         if source_vector_info is None:
-            self.emit(
-                f"; WARNING: Cannot assign scalar value to vector swizzle {member_name}"
+            self.refuse_lowering(
+                f"Cannot assign scalar value to vector swizzle {member_name}"
             )
             return None
 
         source_component_type_name, source_component_count = source_vector_info
         if source_component_count != component_count:
-            self.emit(
-                f"; WARNING: Cannot assign {source_component_count}-component vector "
+            self.refuse_lowering(
+                f"Cannot assign {source_component_count}-component vector "
                 f"to {component_count}-component swizzle {member_name}"
             )
             return None
@@ -26713,8 +26820,8 @@ class VulkanSPIRVCodeGen:
                 component_value.type.base_type
             )
             if converted_type_name != target_type_name:
-                self.emit(
-                    f"; WARNING: Cannot assign {converted_type_name} value to "
+                self.refuse_lowering(
+                    f"Cannot assign {converted_type_name} value to "
                     f"vector swizzle {member_name} of type {target_type_name}"
                 )
                 return None
@@ -26736,8 +26843,8 @@ class VulkanSPIRVCodeGen:
 
         vector_type, member_indices, member_type, swizzle_type = update_info
         if len(set(member_indices)) != len(member_indices):
-            self.emit(
-                f"; WARNING: Cannot assign to vector swizzle {member_name} "
+            self.refuse_lowering(
+                f"Cannot assign to vector swizzle {member_name} "
                 "with duplicate components"
             )
             return True
@@ -26749,9 +26856,15 @@ class VulkanSPIRVCodeGen:
             rhs_value = self.process_expression(value_expr)
             if rhs_value is None:
                 return True
-            rhs_components = self.convert_vector_swizzle_assignment_components(
-                rhs_value, member_type, len(member_indices), member_name
-            )
+            if self.is_scalar_numeric_value(rhs_value):
+                # `v.xy op= s` applies the scalar to every selected component
+                # (GLSL 4.60 section 5.9; HLSL scalar promotion).
+                scalar = self.convert_scalar_to_type(rhs_value, member_type)
+                rhs_components = [scalar] * len(member_indices)
+            else:
+                rhs_components = self.convert_vector_swizzle_assignment_components(
+                    rhs_value, member_type, len(member_indices), member_name
+                )
             if rhs_components is None:
                 return True
 
@@ -26780,8 +26893,8 @@ class VulkanSPIRVCodeGen:
         self, value: SpirvId, member_type: SpirvId, member_name: str
     ) -> Optional[SpirvId]:
         if self.vector_component_type_and_count(value.type.base_type) is not None:
-            self.emit(
-                f"; WARNING: Cannot assign composite value to vector component {member_name}"
+            self.refuse_lowering(
+                f"Cannot assign composite value to vector component {member_name}"
             )
             return None
 
@@ -26789,8 +26902,8 @@ class VulkanSPIRVCodeGen:
         source_type = self.normalize_primitive_name(component_value.type.base_type)
         target_type = self.normalize_primitive_name(member_type.type.base_type)
         if source_type != target_type:
-            self.emit(
-                f"; WARNING: Cannot assign {source_type} value to vector component "
+            self.refuse_lowering(
+                f"Cannot assign {source_type} value to vector component "
                 f"{member_name} of type {target_type}"
             )
             return None
@@ -27134,8 +27247,8 @@ class VulkanSPIRVCodeGen:
         element_type, sequence_size = sequence_info
         sequence_size = self.for_in_sequence_size(sequence_size)
         if sequence_size is None:
-            self.emit(
-                "; WARNING: for-in over dynamically sized sequence requires "
+            self.refuse_lowering(
+                "for-in over dynamically sized sequence requires "
                 "a compile-time length"
             )
             return True
@@ -27900,12 +28013,12 @@ class VulkanSPIRVCodeGen:
         if self.loop_merge_labels:
             self.create_branch(self.loop_merge_labels[-1])
             return
-        self.emit("; WARNING: break used outside a loop or switch")
+        self.refuse_lowering("break used outside a loop or switch")
 
     def process_continue(self, node: ContinueNode):
         """Process a CrossGL continue statement."""
         if not self.loop_continue_labels:
-            self.emit("; WARNING: continue used outside a loop")
+            self.refuse_lowering("continue used outside a loop")
             return
         self.create_branch(self.loop_continue_labels[-1])
 
@@ -27921,7 +28034,7 @@ class VulkanSPIRVCodeGen:
         else:
             variable_id = self.variable_pointer_from_expression(node.operand)
         if variable_id is None:
-            self.emit("; WARNING: increment target is not assignable")
+            self.refuse_lowering("increment target is not assignable")
             int_type = self.register_primitive_type("int")
             return self.register_constant(0, int_type)
 
@@ -27977,12 +28090,12 @@ class VulkanSPIRVCodeGen:
 
     def process_non_uniform_function_call(self, function_name, args) -> SpirvId:
         if len(args) != 1:
-            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            self.refuse_lowering(f"{function_name} requires exactly one operand")
             return self.register_constant(0, self.register_primitive_type("int"))
 
         value = self.process_expression(args[0])
         if value is None:
-            self.emit(f"; WARNING: {function_name} operand could not be evaluated")
+            self.refuse_lowering(f"{function_name} operand could not be evaluated")
             return self.register_constant(0, self.register_primitive_type("int"))
 
         result_type = self.value_types.get(value.id) or self.ensure_registered_type(
@@ -28176,7 +28289,7 @@ class VulkanSPIRVCodeGen:
                     except ValueError:
                         pass
 
-                self.emit(f"; WARNING: Unknown variable {expr}")
+                self.refuse_lowering(f"Unknown variable {expr}")
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
@@ -28242,7 +28355,7 @@ class VulkanSPIRVCodeGen:
                 if builtin_limit is not None:
                     return builtin_limit
 
-                self.emit(f"; WARNING: Unknown variable {expr.name}")
+                self.refuse_lowering(f"Unknown variable {expr.name}")
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
@@ -28253,7 +28366,7 @@ class VulkanSPIRVCodeGen:
             index = self.process_expression(expr.index)
 
             if index is None:
-                self.emit(f"; WARNING: Failed to evaluate array access")
+                self.refuse_lowering(f"Failed to evaluate array access")
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
@@ -28268,8 +28381,8 @@ class VulkanSPIRVCodeGen:
             )
 
             if access is None or element_type is None:
-                self.emit(
-                    "; WARNING: Could not determine array element type for "
+                self.refuse_lowering(
+                    "Could not determine array element type for "
                     f"{self.diagnostic_expression(expr.array)}"
                 )
                 element_type = self.primitive_types["float"]
@@ -28388,11 +28501,14 @@ class VulkanSPIRVCodeGen:
             return self.process_mesh_operation(expr)
 
         elif isinstance(expr, ConstructorNode):
+            vector_list = self.process_vector_list_constructor(expr)
+            if vector_list is not None:
+                return vector_list
             constructed = self.process_struct_constructor_node(expr)
             if constructed is not None:
                 return constructed
-            self.emit(
-                f"; WARNING: Unsupported constructor {self.convert_type_node_to_string(expr.constructor_type)}"
+            self.refuse_lowering(
+                f"Unsupported constructor {self.convert_type_node_to_string(expr.constructor_type)}"
             )
             return None
 
@@ -28407,6 +28523,12 @@ class VulkanSPIRVCodeGen:
             )
             if handled_byte_address_call:
                 return byte_address_result
+
+            handled_length_call, length_result = self.process_block_member_length_call(
+                expr
+            )
+            if handled_length_call:
+                return length_result
 
             handled_structured_buffer_call, structured_buffer_result = (
                 self.process_structured_buffer_method_call(expr)
@@ -28564,8 +28686,8 @@ class VulkanSPIRVCodeGen:
                     allow_array_temporary=arg_index in temporary_array_arguments,
                 )
                 if arg_value is None:
-                    self.emit(
-                        f"; WARNING: Failed to evaluate argument for {callee_name or callee_expr}"
+                    self.refuse_lowering(
+                        f"Failed to evaluate argument for {callee_name or callee_expr}"
                     )
                     has_errors = True
                     float_type = self.register_primitive_type("float")
@@ -28577,8 +28699,8 @@ class VulkanSPIRVCodeGen:
             ):
                 stage_object = self.local_variables.get(stage_object_name)
                 if stage_object is None:
-                    self.emit(
-                        "; WARNING: Failed to evaluate stage object argument "
+                    self.refuse_lowering(
+                        "Failed to evaluate stage object argument "
                         f"{stage_object_name} for {callee_name or callee_expr}"
                     )
                     has_errors = True
@@ -28600,10 +28722,12 @@ class VulkanSPIRVCodeGen:
                 return SpirvId(id_value, vector_type.type)
 
             if callee_name is None:
-                # Non-identifier callee (e.g., function table call) not supported in SPIR-V path
-                self.emit("; WARNING: Unsupported callee expression in SPIR-V backend")
-                float_type = self.register_primitive_type("float")
-                return self.register_constant(0.0, float_type)
+                raise SPIRVBuiltinLoweringError(
+                    "<expression>",
+                    INDIRECT_CALL_DETAIL,
+                    reason="indirect-call",
+                    source_location=getattr(expr, "source_location", None),
+                )
 
             if not self.validate_function_image_access_arguments(
                 callee_name, expr.args
@@ -28666,18 +28790,18 @@ class VulkanSPIRVCodeGen:
                 self.vector_component_type_and_count(struct_type) is not None
                 and len(member_name) > 1
             ):
-                self.emit(
-                    f"; WARNING: Invalid vector swizzle {member_name} for {struct_type}"
+                self.refuse_lowering(
+                    f"Invalid vector swizzle {member_name} for {struct_type}"
                 )
                 return None
 
-            self.emit(
-                f"; WARNING: Could not find member {member_name} in {struct_type}"
+            self.refuse_lowering(
+                f"Could not find member {member_name} in {struct_type}"
             )
             return None
 
         else:
-            self.emit(f"; WARNING: Unknown expression type {type(expr).__name__}")
+            self.refuse_lowering(f"Unknown expression type {type(expr).__name__}")
             return None
 
     def register_input(
@@ -29054,8 +29178,8 @@ class VulkanSPIRVCodeGen:
         execution_model = self.current_stage_builtin_execution_model()
 
         if execution_model is not None and execution_model not in execution_models:
-            self.emit(
-                f"; WARNING: SPIR-V builtin {name} is only valid in "
+            self.refuse_lowering(
+                f"SPIR-V builtin {name} is only valid in "
                 f"{self.stage_builtin_execution_label(execution_models)} stages"
             )
             return None
@@ -29064,8 +29188,8 @@ class VulkanSPIRVCodeGen:
             return storage_spec
 
         if execution_model is None:
-            self.emit(
-                f"; WARNING: SPIR-V builtin {name} requires a single "
+            self.refuse_lowering(
+                f"SPIR-V builtin {name} requires a single "
                 "tessellation execution model to choose Input or Output storage"
             )
             return None
@@ -29115,8 +29239,11 @@ class VulkanSPIRVCodeGen:
                 return
         if (
             self.include_resource_interface_variables
-            and variable.type.storage_class
-            in {"StorageBuffer", "Uniform", "UniformConstant"}
+            and variable.type.storage_class in {
+                "StorageBuffer",
+                "Uniform",
+                "UniformConstant",
+            }
             and any(
                 global_variable.id == variable.id
                 for global_variable in self.global_variables.values()
@@ -29611,7 +29738,10 @@ class VulkanSPIRVCodeGen:
             try:
                 dimension = int(value)
             except (TypeError, ValueError):
-                dimension = None
+                # A named compile-time constant (`local_size_x = TILE_SIZE`) sizes the workgroup too.
+                dimension = evaluate_literal_int_expression(
+                    value, self.literal_int_constants
+                )
 
         if dimension is not None and dimension > 0:
             return dimension
@@ -29619,10 +29749,10 @@ class VulkanSPIRVCodeGen:
         warning_key = (id(stage), source, axis)
         if warning_key not in self.local_size_warning_keys:
             self.local_size_warning_keys.add(warning_key)
-            self.emit(
-                "; WARNING: SPIR-V LocalSize "
+            self.refuse_lowering(
+                "SPIR-V LocalSize "
                 f"{axis} dimension from {source} must be a positive integer "
-                "literal; using 1"
+                "literal"
             )
         return 1
 
@@ -29717,10 +29847,7 @@ class VulkanSPIRVCodeGen:
         literal = self.literal_int_argument(value)
         if literal is not None and literal > 0:
             return literal
-        self.emit(
-            f"; WARNING: SPIR-V {context} must be a positive integer literal; "
-            f"using {default}"
-        )
+        self.refuse_lowering(f"SPIR-V {context} must be a positive integer literal")
         return default
 
     def stage_positive_int_metadata(
@@ -29836,9 +29963,9 @@ class VulkanSPIRVCodeGen:
         if normalized in mode_map:
             return mode_map[normalized]
         if normalized is not None:
-            self.emit(
-                "; WARNING: SPIR-V geometry outputtopology must be point, "
-                f"line_strip, or triangle_strip; using points: {normalized}"
+            self.refuse_lowering(
+                "SPIR-V geometry outputtopology must be point, "
+                f"line_strip, or triangle_strip: {normalized}"
             )
         for flag in self.stage_layout_flag_names(stage, "out"):
             if flag in mode_map:
@@ -29912,9 +30039,9 @@ class VulkanSPIRVCodeGen:
                 if normalized in mode_map:
                     return mode_map[normalized]
                 if attribute_name == "domain" and normalized is not None:
-                    self.emit(
-                        "; WARNING: SPIR-V tessellation domain must be "
-                        f"triangle, quads, or isolines; using triangles: {normalized}"
+                    self.refuse_lowering(
+                        "SPIR-V tessellation domain must be "
+                        f"triangle, quads, or isolines: {normalized}"
                     )
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
@@ -29938,10 +30065,10 @@ class VulkanSPIRVCodeGen:
             if normalized in mode_map:
                 return mode_map[normalized]
             if normalized is not None:
-                self.emit(
-                    "; WARNING: SPIR-V tessellation partitioning must be "
-                    "integer, fractional_even, or fractional_odd; using equal "
-                    f"spacing: {normalized}"
+                self.refuse_lowering(
+                    "SPIR-V tessellation partitioning must be "
+                    "integer, fractional_even, or fractional_odd: "
+                    f"{normalized}"
                 )
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
@@ -30189,6 +30316,12 @@ class VulkanSPIRVCodeGen:
             return result
 
         body = self.ordered_function_body_lines(body)
+        debug_names, annotations, declarations = drop_unused_runtime_array_structs(
+            debug_names,
+            annotations,
+            declarations,
+            entry_points + execution_modes + global_variables + body,
+        )
 
         return (
             header_lines
@@ -30305,12 +30438,29 @@ class VulkanSPIRVCodeGen:
         )
 
     def generate(self, ast):
-        """Generate SPIR-V code from a CrossGL AST."""
+        """Generate SPIR-V code from a CrossGL AST.
+
+        Raises :class:`SpirvLoweringRefused` listing every construct that has no faithful lowering.
+        """
         if not isinstance(ast, ShaderNode):
-            return "; Error: Not a shader node"
+            raise TypeError(
+                f"SPIR-V generation needs a ShaderNode, got {type(ast).__name__}"
+            )
 
+        validate_recursion_free(ast, "vulkan")
         self.reset_generation_state()
+        try:
+            module = self._generate_module(ast)
+        except (TranslationDiagnostic, UnsupportedSPIRVFeatureError):
+            raise
+        except Exception as error:
+            # A placeholder left by an earlier refusal can break later lowering; report the refusal.
+            self.refusals.raise_pending(cause=error)
+            raise
+        self.refusals.raise_pending()
+        return module
 
+    def _generate_module(self, ast):
         self.emit("; SPIR-V")
         self.emit("; Version: 1.0")
         self.emit("; Generator: CrossGL Vulkan SPIR-V Generator")
@@ -30477,6 +30627,7 @@ class VulkanSPIRVCodeGen:
 
         for cbuffer in getattr(ast, "cbuffers", []) or []:
             self.process_cbuffer_declaration(cbuffer)
+        self.declare_default_uniform_block(ast)
 
         for var in getattr(ast, "global_variables", []):
             declaration = self.spirv_specialization_constant_declaration_node(var)
@@ -30486,6 +30637,8 @@ class VulkanSPIRVCodeGen:
             ):
                 continue
             self.process_global_variable_declaration(var)
+        if not getattr(ast, "stages", None):
+            self.bind_default_uniform_block()
 
         top_level_entries = []
         helper_functions = []
@@ -30548,6 +30701,7 @@ class VulkanSPIRVCodeGen:
                     self.current_execution_model = previous_execution_model
                     self.current_stage = previous_stage
 
+            self.bind_default_uniform_block()
             self.entry_point_resource_binding_baseline = self.resource_binding_state()
 
             processed_local_functions = set()

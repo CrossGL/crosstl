@@ -23,6 +23,7 @@ from .DirectxAst import (
     FunctionNode,
     IfNode,
     IncludeNode,
+    IntegerLiteral,
     MemberAccessNode,
     PragmaNode,
     ReturnNode,
@@ -4111,6 +4112,14 @@ class HLSLParser:
             return float("inf")
         if "#" in value:
             return float("nan")
+        integer_suffix = re.search(r"[uUlL]+$", value)
+        if integer_suffix is not None:
+            stripped = value[: integer_suffix.start()]
+            base = {"HEX_NUMBER": 16, "BINARY_NUMBER": 2, "OCT_NUMBER": 8}.get(
+                token_type, 10
+            )
+            if base != 10 or not any(c in stripped for c in ".eE"):
+                return IntegerLiteral(int(stripped, base), integer_suffix.group())
         if token_type == "HEX_NUMBER":
             stripped = re.sub(r"[uUlL]+$", "", value)
             return int(stripped, 16)

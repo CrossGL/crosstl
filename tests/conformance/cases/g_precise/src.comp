@@ -1,0 +1,14 @@
+#version 450
+// Hazard F1: `precise` forbids contracting a*b - c into fma(a, b, -c) (GLSL 4.60 §4.7 precise qualifier).
+// With c = fl(a*b), the unfused result is exactly 0; a fused result equals the rounding error of a*b.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { float abc[]; };
+layout(std430, binding = 1) buffer Outp { float o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    float a = abc[3u * i];
+    float b = abc[3u * i + 1u];
+    float c = abc[3u * i + 2u];
+    precise float r = a * b - c;
+    o[i] = r;
+}

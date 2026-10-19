@@ -14,6 +14,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLIndexTypeError,
 )
 from crosstl.translator.codegen.index_range_contracts import (
+    INDEX_RANGE_ASSERTED,
     INDEX_RANGE_STATIC,
     OPENGL_INDEX_PROFILE,
     WEBGL_INDEX_PROFILE,
@@ -111,6 +112,97 @@ def test_profiles_publish_backend_neutral_32_bit_scalar_contracts():
     )
     assert (accepted.action, accepted.target_type.name) == ("convert", "uint")
     assert (rejected.action, rejected.reason) == ("reject", "index-range-unproven")
+
+
+@pytest.mark.parametrize("profile", [OPENGL_INDEX_PROFILE, WEBGL_INDEX_PROFILE])
+@pytest.mark.parametrize("bits", [32, 64])
+def test_relative_index_narrowing_uses_a_checked_complete_address(profile, bits):
+    decision = decide_index_narrowing(
+        source_signed=True,
+        source_bits=bits,
+        source_width=1,
+        profile=profile,
+        value_range=IntegerRange(-2, -1),
+        base_range=IntegerRange(2, 4),
+        target_signed=True,
+        indexed_extent=4,
+    )
+    assert decision.accepted
+    assert decision.action == ("identity" if bits == 32 else "convert")
+    assert decision.source_range == IntegerRange(-2, -1)
+    assert decision.target_type.name == "int"
+
+
+@pytest.mark.parametrize(
+    "base,index,extent,signed",
+    [
+        (IntegerRange(2, 4), None, None, True),
+        (IntegerRange(0, 1), IntegerRange(-2, -1), None, True),
+        (IntegerRange(2, 4), IntegerRange(-2, -1), 3, True),
+        (IntegerRange(2, 4), IntegerRange(-2, -1), 0, True),
+        (IntegerRange(2147483648, 2147483648), IntegerRange(-2, -1), None, True),
+        (IntegerRange(2, 4), IntegerRange(2147483645, 2147483647), None, True),
+        (IntegerRange(2, 4), IntegerRange(-2147483649, -1), None, True),
+        (IntegerRange(2, 4), IntegerRange(-2, -1), None, False),
+        (IntegerRange(2, 4, INDEX_RANGE_ASSERTED), IntegerRange(-2, -1), None, True),
+        (IntegerRange(2, 4), IntegerRange(-2, -1, INDEX_RANGE_ASSERTED), None, True),
+    ],
+)
+def test_relative_index_requires_checked_representable_operands(
+    base, index, extent, signed
+):
+    decision = decide_index_narrowing(
+        source_signed=signed,
+        source_bits=64,
+        source_width=1,
+        profile=OPENGL_INDEX_PROFILE,
+        value_range=index,
+        base_range=base,
+        target_signed=True,
+        indexed_extent=extent,
+    )
+    assert not decision.accepted
+    assert decision.reason == "composed-pointer-index-range-unproven"
+
+
+@pytest.mark.parametrize("base_min", range(6))
+@pytest.mark.parametrize("index_min", range(-6, 3))
+def test_relative_index_decision_covers_every_composed_endpoint(base_min, index_min):
+    base = IntegerRange(base_min, base_min + 1)
+    index = IntegerRange(index_min, index_min + 1)
+    decision = decide_index_narrowing(
+        source_signed=True,
+        source_bits=64,
+        source_width=1,
+        profile=OPENGL_INDEX_PROFILE,
+        value_range=index,
+        base_range=base,
+        target_signed=True,
+        indexed_extent=8,
+    )
+    expected = all(
+        0 <= b + i < 8
+        for b in range(base.minimum, base.maximum + 1)
+        for i in range(index.minimum, index.maximum + 1)
+    )
+    assert decision.accepted is expected
+
+
+@pytest.mark.parametrize("profile", [OPENGL_INDEX_PROFILE, WEBGL_INDEX_PROFILE])
+@pytest.mark.parametrize("bounds", [(-3, -1), (-1, -1), (-1, 0), (-1, 5)])
+def test_negative_range_diagnostic_does_not_claim_unproved_invalidity(profile, bounds):
+    decision = decide_index_narrowing(
+        source_signed=True,
+        source_bits=64,
+        source_width=1,
+        profile=profile,
+        value_range=IntegerRange(*bounds),
+    )
+    assert not decision.accepted
+    assert decision.reason == (
+        "negative-index" if bounds[1] < 0 else "index-range-may-be-negative"
+    )
+    assert decision.range_status == ("out-of-range" if bounds[1] < 0 else "unproven")
 
 
 def test_opengl_fails_closed_for_unproven_wide_runtime_index():
@@ -383,23 +475,26 @@ def test_opengl_preserves_side_effecting_component_and_resource_indices(tmp_path
 
 
 @pytest.mark.parametrize(
-    ("declaration", "index", "reason"),
+    ("declaration", "index", "reason", "status"),
     [
         (
             "int64_t index = -int64_t(gl_LocalInvocationID.x & 1u);",
             "index",
-            "negative-index",
+            "index-range-may-be-negative",
+            "unproven",
         ),
         (
             "uint64_t index = uint64_t(gl_LocalInvocationID.x) & uint64_t(7u);",
             "index",
             "index-range-out-of-bounds",
+            "out-of-range",
         ),
         (
             "u64vec2 indices = u64vec2(uint64_t(0u), "
             "uint64_t(gl_LocalInvocationID.x) & uint64_t(7u));",
             "indices.y",
             "index-range-out-of-bounds",
+            "out-of-range",
         ),
     ],
 )
@@ -407,6 +502,7 @@ def test_opengl_rejects_static_flow_ranges_outside_index_contract(
     declaration,
     index,
     reason,
+    status,
 ):
     shader = f"""
     shader InvalidStaticIndexProof {{
@@ -423,7 +519,7 @@ def test_opengl_rejects_static_flow_ranges_outside_index_contract(
 
     diagnostic = exc_info.value
     assert diagnostic.reason == reason
-    assert diagnostic.range_status == "out-of-range"
+    assert diagnostic.range_status == status
 
 
 @pytest.mark.parametrize("container", ["block", "loop"])

@@ -8,6 +8,7 @@ import pytest
 import crosstl
 import crosstl.translator
 import crosstl.translator.codegen as codegen
+from crosstl.translator.diagnostics import TranslationDiagnostic
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_ROOT = ROOT / "examples"
@@ -25,6 +26,10 @@ WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS = (
     ("gpu_computing/MatrixMultiplication.cgl", "webgl"),
 )
 WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES = set(WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS)
+# The warp-optimized kernel exchanges values with __shfl_down_sync after a lane-dependent break. WGSL rejects the
+# workgroup barrier that emulates a warp shuffle outside uniform control flow (WGSL section 15.2), and its subgroups
+# have an implementation-chosen size, so the shuffle is refused with a typed diagnostic.
+CUDA_WARP_EXAMPLE_DIAGNOSTICS = (("gpu_computing/MatrixMultiplication.cgl", "wgsl"),)
 
 MOJO_PLACEHOLDER_MARKERS = (
     "# CrossGL builtin placeholders",
@@ -71,6 +76,7 @@ FULL_BACKEND_EXAMPLE_CASES = tuple(
     for relative_path in FULL_BACKEND_EXAMPLES
     for backend in codegen.backend_names()
     if (relative_path, backend) not in WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES
+    and (relative_path, backend) not in CUDA_WARP_EXAMPLE_DIAGNOSTICS
     and (relative_path, backend) not in MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS
 )
 
@@ -202,6 +208,17 @@ def test_webgl_compute_examples_report_actionable_diagnostics(relative_path, bac
         crosstl.translate(
             str(_example_path(relative_path)), backend=backend, format_output=False
         )
+
+
+@pytest.mark.parametrize("relative_path,backend", CUDA_WARP_EXAMPLE_DIAGNOSTICS)
+def test_cuda_warp_examples_report_typed_refusals(relative_path, backend):
+    with pytest.raises(TranslationDiagnostic) as raised:
+        crosstl.translate(
+            str(_example_path(relative_path)), backend=backend, format_output=False
+        )
+    assert raised.value.code == (
+        f"project.translate.{backend}-cuda-warp-intrinsic-unsupported"
+    )
 
 
 @pytest.mark.parametrize(

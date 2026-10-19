@@ -83,6 +83,36 @@ RMS_NORM_OPENGL_VARIANTS = (
         "workgroupSize": [64, 1, 1],
     },
 )
+# OpenGL lowers each rebased storage pointer to a signed int logical offset,
+# so the size_t row rebase and every composed access must fit [0, 2^31 - 1].
+# The row rebase is the only wide offset; the remaining keys are the complete
+# pointer accesses and the in-row loop indices that compose with it. These are
+# caller-trusted host obligations: MLX dispatches one threadgroup per row of
+# a contiguous input, so each access is an element index into that input.
+RMS_NORM_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
+    {
+        "source": MLX_RMS_NORM_SOURCE,
+        "expression": expression,
+        "minimum": 0,
+        "maximum": (1 << 31) - 1,
+    }
+    for expression in (
+        "gid * uint64(axis_size) + lid * RMS_N_READS",
+        "x + i",
+        "out_ + i",
+        "g + i",
+        "gx + i",
+        "gw + i",
+        "i + r",
+        "r + i",
+        "x + i + r",
+        "x + r + i",
+        "out_ + r + i",
+        "g + i + r",
+        "gx + i + r",
+        "gw + i + r",
+    )
+)
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/rms-norm-specialization"
 
 
@@ -304,6 +334,7 @@ def _project_config(
         }
     else:
         configured_variants = RMS_NORM_OPENGL_VARIANTS
+        common["index_range_assertions"] = RMS_NORM_OPENGL_INDEX_RANGE_ASSERTIONS
     variants = {
         variant["name"]: {"workgroup_size": variant["workgroupSize"]}
         for variant in configured_variants
@@ -483,13 +514,17 @@ def _validate_common_artifact(
         f"{target} artifact identity or status is incorrect",
     )
     _require(
-        artifact.get("sourceHash")
-        == {"algorithm": "sha256", "value": MLX_RMS_NORM_SHA256},
+        artifact.get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": MLX_RMS_NORM_SHA256,
+        },
         f"{target} report did not retain the pinned source hash",
     )
     _require(
-        artifact.get("provenance")
-        == {"pipeline": expected_pipeline, "intermediate": "crossgl"},
+        artifact.get("provenance") == {
+            "pipeline": expected_pipeline,
+            "intermediate": "crossgl",
+        },
         f"{target} report did not retain Metal-to-CrossGL project provenance",
     )
     path = _artifact_path(artifact, mlx_root)
@@ -617,8 +652,7 @@ def _execution_entries(
     _require(
         isinstance(execution, Mapping)
         and set(execution) == expected_execution_keys
-        and execution.get("provenance")
-        == {
+        and execution.get("provenance") == {
             "kind": "project-variant",
             "path": f"project.variants.{variant_name}.workgroup_size",
             "variant": variant_name,
@@ -864,8 +898,9 @@ def _representative_directx_entry_point(
     )
     if workgroup_size is not None:
         _require(
-            compute_entries[0].get("executionConfig")
-            == {"numthreads": list(workgroup_size)},
+            compute_entries[0].get("executionConfig") == {
+                "numthreads": list(workgroup_size)
+            },
             "DirectX RMSNorm representative reflection workgroup size changed",
         )
     return str(compute_entries[0]["name"])
@@ -1172,8 +1207,7 @@ def _opengl_evidence(
         artifact.get("variant") == variant_name
         and isinstance(source_entry, str)
         and source_entry in RMS_NORM_HOST_ENTRY_POINTS
-        and entry_point
-        == {
+        and entry_point == {
             "source": source_entry,
             "target": "main",
             "stage": "compute",
@@ -1465,6 +1499,15 @@ def _check_opengl(
         RMS_NORM_OPENGL_VARIANTS,
         target="opengl",
     )
+    project = payload.get("project")
+    _require(
+        isinstance(project, Mapping)
+        and project.get("indexRangeAssertionCount")
+        == len(RMS_NORM_OPENGL_INDEX_RANGE_ASSERTIONS)
+        and project.get("indexRangeAssertions")
+        == [dict(assertion) for assertion in RMS_NORM_OPENGL_INDEX_RANGE_ASSERTIONS],
+        "OpenGL report did not record the RMSNorm index-range assertions",
+    )
     artifacts_by_identity: dict[tuple[str, str], Mapping[str, Any]] = {}
     for artifact in artifacts:
         variant_name = artifact.get("variant")
@@ -1548,6 +1591,9 @@ def _check_opengl(
         "report": _relpath(report_path, mlx_root),
         "artifactCount": len(artifacts),
         "artifactCountPerVariant": RMS_NORM_EXPECTED_ENTRY_POINT_COUNT,
+        "indexRangeAssertions": [
+            dict(assertion) for assertion in RMS_NORM_OPENGL_INDEX_RANGE_ASSERTIONS
+        ],
         "subgroupWidthContract": {
             "sourceRequiredWidth": RMS_NORM_SUBGROUP_WIDTH,
             "projectRuleConfigured": False,

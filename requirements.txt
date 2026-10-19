@@ -1,5 +1,6 @@
 gast
 pytest
+PyYAML>=6,<7
 hypothesis>=6.82
 numpy
 jinja2

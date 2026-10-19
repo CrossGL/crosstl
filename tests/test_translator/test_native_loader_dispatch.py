@@ -12,6 +12,7 @@ from crosstl.project.native_loader_dispatch import (
     build_native_loader_dispatch_request,
 )
 from crosstl.project.runtime_verification import (
+    RuntimeAllocationView,
     RuntimeDispatchGeometry,
     RuntimeExecutionRequest,
     RuntimeValue,
@@ -219,6 +220,100 @@ def _build(tmp_path, target="directx", **overrides):
     )
 
 
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_native_loader_preserves_explicit_allocation_views(tmp_path, target):
+    inputs = {
+        name: RuntimeValue(
+            name=name, **value, allocation=RuntimeAllocationView(name, 16, 16, 48)
+        )
+        for name, value in _inputs().items()
+    }
+    outputs = {
+        name: RuntimeValue(
+            name=name, **value, allocation=RuntimeAllocationView(name, 8, 16, 32)
+        )
+        for name, value in _outputs().items()
+    }
+    request = _build(tmp_path, target, input_values=inputs, output_values=outputs)
+    expected = {**inputs, **outputs}
+    for resource in request.execution_plan.resource_bindings:
+        assert resource.allocation == expected[resource.binding.name].allocation
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("typed", (False, True))
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("encoded", (False, True))
+def test_native_loader_owns_caller_payloads(tmp_path, target, typed, nested, encoded):
+    words = [0, 0x80000000, 0x7FC12345, 0x7F800000] if encoded else [1.0, 2.0, 3.0, 4.0]
+    payload = [words[:2], words[2:]] if nested else words[:]
+    original = copy.deepcopy(payload)
+    specification = {
+        "dtype": "float32",
+        "shape": [2, 2] if nested else [4],
+        "values": payload,
+    }
+    if encoded:
+        specification["encoding"] = "ieee754-binary32"
+    inputs = {
+        "input_values": (
+            RuntimeValue(name="input_values", **specification)
+            if typed
+            else specification
+        )
+    }
+    outputs = {
+        "output_values": (
+            RuntimeValue(name="output_values", **specification)
+            if typed
+            else specification
+        )
+    }
+    first = _build(tmp_path, target, input_values=inputs, output_values=outputs)
+    if nested:
+        payload[0][0] = 9
+    else:
+        payload[0] = 9
+    for value in (*first.fixture.inputs, *first.fixture.expected_outputs):
+        assert value.values == original
+        assert value.values is not payload
+    for resource in first.execution_plan.resource_bindings:
+        assert resource.value.values == original
+    directory = tmp_path / "second"
+    directory.mkdir()
+    second = _build(directory, target, input_values=inputs, output_values=outputs)
+    assert second.fixture.inputs[0].values == payload
+    assert first.fixture.inputs[0].values == original
+
+
+def test_native_loader_validates_the_owned_payload(tmp_path, monkeypatch):
+    from crosstl.project import native_loader_dispatch
+
+    inputs = _inputs()
+    original = copy.deepcopy(inputs["input_values"]["values"])
+    validate = native_loader_dispatch._validate_buffer_values
+
+    def observe(values, **kwargs):
+        if kwargs["role"] == "input":
+            inputs["input_values"]["values"][0] = "changed during validation"
+        return validate(values, **kwargs)
+
+    monkeypatch.setattr(native_loader_dispatch, "_validate_buffer_values", observe)
+    request = _build(tmp_path, input_values=inputs)
+    assert request.fixture.inputs[0].values == original
+    assert request.execution_plan.resource_bindings[0].value.values == original
+
+
+@pytest.mark.parametrize("allocation", ({}, 0, "buffer"))
+def test_native_loader_rejects_invalid_allocation_objects(tmp_path, allocation):
+    inputs = {
+        name: RuntimeValue(name=name, **value, allocation=allocation)
+        for name, value in _inputs().items()
+    }
+    with pytest.raises(NativeLoaderDispatchError, match="value-allocation-invalid"):
+        _build(tmp_path, input_values=inputs)
+
+
 @pytest.mark.parametrize(
     ("target", "entry_point", "namespaces", "artifact_format"),
     [
@@ -239,8 +334,7 @@ def test_builds_preflighted_native_runtime_request(
 
     assert isinstance(request, RuntimeExecutionRequest)
     assert (
-        request.artifact_path
-        == (
+        request.artifact_path == (
             tmp_path
             / f"artifacts/{target}/copy.{'hlsl' if target == 'directx' else 'comp'}"
         ).resolve()
@@ -251,8 +345,9 @@ def test_builds_preflighted_native_runtime_request(
     assert request.artifact_identity is not None
     assert request.artifact_identity.size_bytes == len(artifact_bytes)
     assert (
-        request.artifact_identity.hash_value
-        == hashlib.sha256(artifact_bytes).hexdigest()
+        request.artifact_identity.hash_value == hashlib.sha256(
+            artifact_bytes
+        ).hexdigest()
     )
     assert request.artifact_identity.hash_algorithm == "sha256"
     assert request.artifact_identity.artifact_id == f"copy:{target}"
@@ -648,8 +743,9 @@ def test_builds_preflighted_compiled_native_runtime_request(
 
     digest = hashlib.sha256(artifact_bytes).hexdigest()
     assert (
-        request.artifact_path
-        == (tmp_path / f"artifacts/{target}/copy.{extension}").resolve()
+        request.artifact_path == (
+            tmp_path / f"artifacts/{target}/copy.{extension}"
+        ).resolve()
     )
     assert request.artifact["artifactFormat"] == artifact_format
     assert request.artifact["sizeBytes"] == len(artifact_bytes)
@@ -1301,6 +1397,54 @@ def test_rejects_incomplete_or_incompatible_physical_layouts(
         _build(tmp_path, "opengl", descriptor=descriptor)
 
     assert caught.value.code.endswith(f".{code}")
+
+
+def _raw_descriptor(tmp_path, target="directx"):
+    descriptor = _write_descriptor(tmp_path, target)
+    for binding, type_name in zip(
+        descriptor["bindings"], ("ByteAddressBuffer", "RWByteAddressBuffer")
+    ):
+        binding["type"] = type_name
+        binding["scalarLayout"] = None
+    descriptor["scalarLayout"]["bindings"] = []
+    return descriptor
+
+
+def test_builds_raw_word_buffer_request_without_inventing_a_scalar_layout(tmp_path):
+    descriptor = _raw_descriptor(tmp_path)
+    inputs, outputs = _inputs(), _outputs()
+    inputs["input_values"].update(dtype="uint32", values=[0, 1, 0x80000000, 0xFFFFFFFF])
+    outputs["output_values"]["dtype"] = "uint32"
+    request = _build(
+        tmp_path, descriptor=descriptor, input_values=inputs, output_values=outputs
+    )
+    assert not request.execution_plan.diagnostics
+    for resource in request.execution_plan.resource_bindings:
+        assert resource.binding.metadata["byteStride"] == 0
+        assert "scalarLayout" not in resource.binding.metadata
+
+
+@pytest.mark.parametrize("dtype", ("float32", "int32", "uint16", "uint64"))
+def test_raw_loader_requires_explicit_unsigned_words(tmp_path, dtype):
+    inputs = _inputs()
+    inputs["input_values"].update(dtype=dtype, values=[0, 1, 2, 3])
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, descriptor=_raw_descriptor(tmp_path), input_values=inputs)
+    assert caught.value.code.endswith(".resource-layout-mismatch")
+
+
+def test_raw_loader_rejects_a_contradictory_scalar_layout(tmp_path):
+    descriptor = _write_descriptor(tmp_path)
+    descriptor["bindings"][0]["type"] = "ByteAddressBuffer"
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, descriptor=descriptor)
+    assert caught.value.code.endswith(".resource-layout-mismatch")
+
+
+def test_raw_layout_exception_does_not_apply_to_other_targets(tmp_path):
+    with pytest.raises(NativeLoaderDispatchError) as caught:
+        _build(tmp_path, "opengl", descriptor=_raw_descriptor(tmp_path, "opengl"))
+    assert caught.value.code.endswith(".resource-layout-unsupported")
 
 
 def test_missing_scalar_layout_remains_fail_closed(tmp_path):

@@ -297,18 +297,18 @@ def _translated_artifact(
         and artifact.get("sourceBackend") == "metal"
         and artifact.get("target") == "directx"
         and artifact.get("status") == "translated"
-        and artifact.get("sourceHash")
-        == {
+        and artifact.get("sourceHash") == {
             "algorithm": "sha256",
             "value": PINNED_FILE_SHA256[MLX_COPY_SOURCE],
         }
-        and artifact.get("provenance")
-        == {"pipeline": "entry-scoped-translate", "intermediate": "crossgl"},
+        and artifact.get("provenance") == {
+            "pipeline": "entry-scoped-translate",
+            "intermediate": "crossgl",
+        },
         "DirectX artifact provenance does not match pinned copy.metal",
     )
     _require(
-        artifact.get("entryPoint")
-        == {
+        artifact.get("entryPoint") == {
             "source": MLX_COPY_ENTRY_POINT,
             "target": "CSMain",
             "stage": "compute",
@@ -348,8 +348,7 @@ def _translated_artifact(
         "copy specialization reachability accounting must report one specialization",
     )
     _require(
-        artifact.get("bfloat16Lowering")
-        == {
+        artifact.get("bfloat16Lowering") == {
             "status": "exact",
             "approximationUsed": False,
             "registerRepresentation": "uint-low-16-bits",
@@ -367,8 +366,10 @@ def _translated_artifact(
     )
     _require(
         artifact_path.suffix == ".hlsl"
-        and artifact.get("generatedHash")
-        == {"algorithm": "sha256", "value": _sha256(artifact_path)}
+        and artifact.get("generatedHash") == {
+            "algorithm": "sha256",
+            "value": _sha256(artifact_path),
+        }
         and artifact.get("generatedSizeBytes") == artifact_path.stat().st_size,
         "generated HLSL identity does not match the project report",
     )

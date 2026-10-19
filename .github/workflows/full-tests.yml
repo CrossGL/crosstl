@@ -11,22 +11,33 @@ on:
     branches:
       - main
   workflow_dispatch:
+  merge_group:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Hosted runners have taken 33 to 59 minutes for the whole suite.
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install dependencies
@@ -39,7 +50,7 @@ jobs:
       - name: Run complete test suite
         run: |
           mkdir -p support/generated
-          python -m pytest tests --durations=25 -n auto --junitxml support/generated/full-tests-pytest.xml
+          python -m pytest tests demos/integrations --durations=25 -n auto --junitxml support/generated/full-tests-pytest.xml
 
       - name: Write complete test failure summary
         if: always()
@@ -53,7 +64,7 @@ jobs:
       - name: Upload complete test failure summary
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: full-test-failure-summary
           path: |
@@ -74,11 +85,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install optional shader validators
@@ -209,7 +225,7 @@ jobs:
       - name: Upload shader validator failure summary
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: shader-validator-failure-summary-${{ matrix.os }}
           path: |
@@ -246,11 +262,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install adapter toolchain
@@ -369,11 +390,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install DirectX Shader Compiler
@@ -422,11 +448,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install GLSL and SPIR-V tools
@@ -472,7 +503,7 @@ jobs:
       - name: Install CUDA compiler
         id: install_cuda
         continue-on-error: true
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: ${{ env.CUDA_VERSION }}
           method: network
@@ -490,7 +521,7 @@ jobs:
 
       - name: Retry CUDA compiler install after repository sync
         if: steps.install_cuda.outcome == 'failure'
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: ${{ env.CUDA_VERSION }}
           method: network
@@ -579,6 +610,7 @@ jobs:
           mkdir -p support/generated
           python -m pytest -q -n auto \
             tests/test_translator/test_codegen/test_external_shader_validators.py \
+            tests/test_translator/test_preprocessor \
             --junitxml support/generated/compiler-smoke-linux-pytest.xml \
             -rs
 
@@ -594,7 +626,7 @@ jobs:
       - name: Upload compiler smoke failure summary
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compiler-smoke-linux-failure-summary
           path: |
@@ -611,11 +643,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.12"
 
       - name: Install GLSL validator
@@ -642,6 +679,7 @@ jobs:
             tests/test_translator/test_codegen/test_external_shader_validators.py \
             tests/test_translator/test_codegen/test_shader_validation.py \
             tests/test_translator/test_codegen/test_metal_codegen.py \
+            tests/test_translator/test_preprocessor/test_dialects.py \
             -k "metal" \
             --junitxml support/generated/compiler-smoke-macos-pytest.xml \
             -rs
@@ -658,7 +696,7 @@ jobs:
       - name: Upload Metal compiler smoke failure summary
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compiler-smoke-macos-failure-summary
           path: |
@@ -667,3 +705,23 @@ jobs:
             support/generated/compiler-smoke-macos-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
+
+  result:
+    # The one check per workflow that branch protection and the merge queue require.
+    name: Complete Test Suite result
+    if: always()
+    needs: [pytest, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done

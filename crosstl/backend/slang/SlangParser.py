@@ -256,8 +256,7 @@ class SlangParser:
             elif declaration_token == "ENUM":
                 enums.append(self.parse_enum())
             elif (
-                declaration_token
-                in {
+                declaration_token in {
                     "TYPEDEF",
                     "TYPEALIAS",
                 }
@@ -1666,8 +1665,7 @@ class SlangParser:
                 continue
             declaration_token = self.peek_declaration_token_type()
             if (
-                declaration_token
-                in {
+                declaration_token in {
                     "TYPEDEF",
                     "TYPEALIAS",
                 }

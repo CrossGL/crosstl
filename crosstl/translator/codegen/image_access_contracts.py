@@ -11,6 +11,7 @@ from ..validation import (
     texture_intrinsic_max_argument_count,
     texture_intrinsic_min_argument_count,
 )
+from .lowering_refusals import refuse_unsupported
 
 IMAGE_ATOMIC_INTRINSIC_NAMES = {
     "imageAtomicAdd",
@@ -682,28 +683,34 @@ def storage_image_atomic_zero_value(component_type):
 def unsupported_image_atomic_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported storage image atomic fallback expression."""
-    return (
-        f"/* unsupported {backend_name} image atomic resource call: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported storage image atomic and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "image atomic resource call",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
 def unsupported_multisample_image_atomic_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported multisample image atomic fallback expression."""
-    return (
-        f"/* unsupported {backend_name} multisample image atomic: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported multisample image atomic and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "multisample image atomic",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
 def unsupported_multisample_image_store_expression(backend_name, resource_type):
-    """Return an unsupported multisample image store fallback expression."""
-    return (
-        f"/* unsupported {backend_name} multisample image store: "
-        f"imageStore on {resource_type} */ ((void)0)"
+    """Refuse an unsupported multisample image store and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "multisample image store",
+        f"imageStore on {resource_type}",
+        "((void)0)",
     )
 
 
@@ -859,15 +866,17 @@ def resource_query_method_size_descriptor(return_type, dimensions):
 def unsupported_texture_query_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported texture query fallback expression."""
-    return (
-        f"/* unsupported {backend_name} texture query: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported texture query and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "texture query",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
 def unsupported_texture_query_lod_expression(backend_name, resource_type):
-    """Return an unsupported textureQueryLod fallback expression."""
+    """Refuse an unsupported textureQueryLod and return a placeholder in its place."""
     return unsupported_texture_query_expression(
         backend_name,
         "textureQueryLod",
@@ -877,7 +886,7 @@ def unsupported_texture_query_lod_expression(backend_name, resource_type):
 
 
 def unsupported_texture_query_levels_expression(backend_name, resource_type):
-    """Return an unsupported textureQueryLevels fallback expression."""
+    """Refuse an unsupported textureQueryLevels and return a placeholder in its place."""
     return unsupported_texture_query_expression(
         backend_name,
         "textureQueryLevels",
@@ -889,15 +898,17 @@ def unsupported_texture_query_levels_expression(backend_name, resource_type):
 def unsupported_multisample_texture_query_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported multisample texture query fallback expression."""
-    return (
-        f"/* unsupported {backend_name} multisample texture query: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported multisample texture query and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "multisample texture query",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
 def unsupported_multisample_texture_query_lod_expression(backend_name, resource_type):
-    """Return an unsupported multisample textureQueryLod fallback expression."""
+    """Refuse an unsupported multisample textureQueryLod and return a placeholder in its place."""
     return unsupported_multisample_texture_query_expression(
         backend_name,
         "textureQueryLod",
@@ -937,15 +948,17 @@ def texture_samples_query_requirement_name(backend_name):
 def unsupported_texture_samples_query_expression(
     backend_name, multisample_resource_name
 ):
-    """Return an unsupported texture samples fallback expression."""
-    return (
-        f"/* unsupported {backend_name} texture samples query: "
-        f"requires multisample {multisample_resource_name} */ 0"
+    """Refuse an unsupported texture samples and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "texture samples query",
+        f"requires multisample {multisample_resource_name}",
+        "0",
     )
 
 
 def unsupported_texture_samples_query_call_expression(backend_name):
-    """Return an unsupported textureSamples fallback expression."""
+    """Refuse an unsupported textureSamples and return a placeholder in its place."""
     return unsupported_texture_samples_query_expression(
         backend_name, texture_samples_query_requirement_name(backend_name)
     )
@@ -954,10 +967,12 @@ def unsupported_texture_samples_query_call_expression(backend_name):
 def unsupported_multisample_texture_call_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported multisample texture-call fallback expression."""
-    return (
-        f"/* unsupported {backend_name} multisample texture call: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported multisample texture-call and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "multisample texture call",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
@@ -976,10 +991,12 @@ def unsupported_multisample_texture_call_vector_expression(
 def unsupported_multisample_texture_compare_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported multisample texture comparison fallback expression."""
-    return (
-        f"/* unsupported {backend_name} multisample texture comparison: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported multisample texture comparison and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "multisample texture comparison",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
@@ -998,10 +1015,12 @@ def unsupported_multisample_texture_compare_scalar_expression(
 def unsupported_multisample_texture_gather_compare_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported multisample texture gather-compare fallback expression."""
-    return (
-        f"/* unsupported {backend_name} multisample texture gather comparison: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported multisample texture gather-compare and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "multisample texture gather comparison",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
@@ -1020,10 +1039,12 @@ def unsupported_multisample_texture_gather_compare_vector_expression(
 def unsupported_storage_image_texture_comparison_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported storage-image texture comparison fallback."""
-    return (
-        f"/* unsupported {backend_name} storage image texture comparison: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported storage-image texture comparison and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "storage image texture comparison",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
@@ -1042,10 +1063,12 @@ def unsupported_storage_image_texture_comparison_scalar_expression(
 def unsupported_storage_image_texture_operation_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported storage-image texture operation fallback."""
-    return (
-        f"/* unsupported {backend_name} storage image texture operation: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported storage-image texture operation and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "storage image texture operation",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
@@ -1960,10 +1983,12 @@ def is_texture_implicit_sampler_operation(operation):
 def unsupported_texel_fetch_expression(
     backend_name, operation, resource_type, zero_value
 ):
-    """Return an unsupported texel fetch fallback expression."""
-    return (
-        f"/* unsupported {backend_name} texel fetch: "
-        f"{operation} on {resource_type} */ {zero_value}"
+    """Refuse an unsupported texel fetch and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "texel fetch",
+        f"{operation} on {resource_type}",
+        zero_value,
     )
 
 
@@ -2037,17 +2062,19 @@ def texel_fetch_zero_value(backend_name):
 
 
 def unsupported_cube_texel_fetch_expression(backend_name, operation, resource_type):
-    """Return an unsupported cube texel fetch fallback expression."""
+    """Refuse an unsupported cube texel fetch and return a placeholder in its place."""
     return unsupported_texel_fetch_expression(
         backend_name, operation, resource_type, texel_fetch_zero_value(backend_name)
     )
 
 
 def unsupported_texel_fetch_offset_expression(backend_name, reason, zero_value):
-    """Return an unsupported texel-fetch offset fallback expression."""
-    return (
-        f"/* unsupported {backend_name} texel fetch offset: "
-        f"{reason} */ {zero_value}"
+    """Refuse an unsupported texel-fetch offset and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "texel fetch offset",
+        f"{reason}",
+        zero_value,
     )
 
 
@@ -2061,7 +2088,7 @@ def texel_fetch_offset_multisample_reason(backend_name, texture_type=None):
 def unsupported_multisample_texel_fetch_offset_expression(
     backend_name, texture_type=None
 ):
-    """Return an unsupported multisample texelFetchOffset fallback expression."""
+    """Refuse an unsupported multisample texelFetchOffset and return a placeholder in its place."""
     return unsupported_texel_fetch_offset_expression(
         backend_name,
         texel_fetch_offset_multisample_reason(backend_name, texture_type),
@@ -2070,10 +2097,12 @@ def unsupported_multisample_texel_fetch_offset_expression(
 
 
 def unsupported_texture_offset_expression(backend_name, operation, reason, zero_value):
-    """Return an unsupported texture offset fallback expression."""
-    return (
-        f"/* unsupported {backend_name} texture offset: "
-        f"{operation} {reason} */ {zero_value}"
+    """Refuse an unsupported texture offset and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "texture offset",
+        f"{operation} {reason}",
+        zero_value,
     )
 
 
@@ -2087,10 +2116,12 @@ def unsupported_texture_offset_call_expression(backend_name, operation, reason):
 def unsupported_projected_texture_expression(
     backend_name, operation, reason, zero_value
 ):
-    """Return an unsupported projected texture fallback expression."""
-    return (
-        f"/* unsupported {backend_name} projected texture: "
-        f"{operation} {reason} */ {zero_value}"
+    """Refuse an unsupported projected texture and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "projected texture",
+        f"{operation} {reason}",
+        zero_value,
     )
 
 
@@ -2102,10 +2133,12 @@ def unsupported_projected_texture_call_expression(backend_name, operation, reaso
 
 
 def unsupported_texture_compare_expression(backend_name, operation, reason, zero_value):
-    """Return an unsupported texture compare fallback expression."""
-    return (
-        f"/* unsupported {backend_name} texture compare: "
-        f"{operation} {reason} */ {zero_value}"
+    """Refuse an unsupported texture compare and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "texture compare",
+        f"{operation} {reason}",
+        zero_value,
     )
 
 
@@ -2117,10 +2150,12 @@ def unsupported_texture_compare_scalar_expression(backend_name, operation, reaso
 
 
 def unsupported_texture_gather_expression(backend_name, operation, reason, zero_value):
-    """Return an unsupported texture gather fallback expression."""
-    return (
-        f"/* unsupported {backend_name} texture gather: "
-        f"{operation} {reason} */ {zero_value}"
+    """Refuse an unsupported texture gather and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "texture gather",
+        f"{operation} {reason}",
+        zero_value,
     )
 
 
@@ -2134,10 +2169,12 @@ def unsupported_texture_gather_call_expression(backend_name, operation, reason):
 def unsupported_texture_gather_compare_expression(
     backend_name, operation, reason, zero_value
 ):
-    """Return an unsupported texture gather-compare fallback expression."""
-    return (
-        f"/* unsupported {backend_name} texture gather compare: "
-        f"{operation} {reason} */ {zero_value}"
+    """Refuse an unsupported texture gather-compare and return a placeholder in its place."""
+    return refuse_unsupported(
+        backend_name,
+        "texture gather compare",
+        f"{operation} {reason}",
+        zero_value,
     )
 
 
@@ -2524,8 +2561,7 @@ def image_multisample_sample_argument_index(
     Returns the sample-index argument position when the call has one.
     """
     if (
-        func_name
-        not in {
+        func_name not in {
             "imageLoad",
             "imageStore",
             "imageAtomicCompSwap",

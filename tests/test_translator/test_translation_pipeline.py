@@ -66,13 +66,56 @@ NATIVE_SOURCE_SNIPPETS = {
     ),
     "mojo": ("shader.mojo", "fn main() -> None:\n    return\n"),
     "rust": ("shader.rs", "fn main() { let x: f32 = 1.0; }"),
+    # SPIR-V assembly of a GLSL compute shader writing 1.0 to buffer element gl_GlobalInvocationID.x (glslang -V,
+    # spirv-dis). Vulkan GLSL has no gl_FragColor (GL_KHR_vulkan_glsl), so a fragment snippet using it is not
+    # Vulkan input.
     "vulkan": (
         "shader.spvasm",
         """
-        void main() {
-            vec4 color = vec4(1.0, 0.0, 0.0, 1.0);
-            gl_FragColor = color;
-        }
+        OpCapability Shader
+        %1 = OpExtInstImport "GLSL.std.450"
+        OpMemoryModel Logical GLSL450
+        OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
+        OpExecutionMode %main LocalSize 1 1 1
+        OpName %main "main"
+        OpName %Out "Out"
+        OpMemberName %Out 0 "data"
+        OpName %outp "outp"
+        OpName %gl_GlobalInvocationID "gl_GlobalInvocationID"
+        OpDecorate %_runtimearr_float ArrayStride 4
+        OpDecorate %Out BufferBlock
+        OpMemberDecorate %Out 0 Offset 0
+        OpDecorate %outp Binding 0
+        OpDecorate %outp DescriptorSet 0
+        OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+        OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize
+        %void = OpTypeVoid
+        %3 = OpTypeFunction %void
+        %float = OpTypeFloat 32
+        %_runtimearr_float = OpTypeRuntimeArray %float
+        %Out = OpTypeStruct %_runtimearr_float
+        %_ptr_Uniform_Out = OpTypePointer Uniform %Out
+        %outp = OpVariable %_ptr_Uniform_Out Uniform
+        %int = OpTypeInt 32 1
+        %int_0 = OpConstant %int 0
+        %uint = OpTypeInt 32 0
+        %v3uint = OpTypeVector %uint 3
+        %_ptr_Input_v3uint = OpTypePointer Input %v3uint
+        %gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+        %uint_0 = OpConstant %uint 0
+        %_ptr_Input_uint = OpTypePointer Input %uint
+        %float_1 = OpConstant %float 1
+        %_ptr_Uniform_float = OpTypePointer Uniform %float
+        %uint_1 = OpConstant %uint 1
+        %gl_WorkGroupSize = OpConstantComposite %v3uint %uint_1 %uint_1 %uint_1
+        %main = OpFunction %void None %3
+        %5 = OpLabel
+        %19 = OpAccessChain %_ptr_Input_uint %gl_GlobalInvocationID %uint_0
+        %20 = OpLoad %uint %19
+        %23 = OpAccessChain %_ptr_Uniform_float %outp %int_0 %20
+        OpStore %23 %float_1
+        OpReturn
+        OpFunctionEnd
         """,
     ),
 }
@@ -104,7 +147,7 @@ NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
     ),
 }
 
-WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS = frozenset({"cuda", "hip", "opencl"})
+WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS = frozenset({"cuda", "hip", "opencl", "vulkan"})
 WEBGL_NATIVE_COMPUTE_EXTENSION_ALIAS_DIAGNOSTICS = frozenset(
     {"cuda_header", "cuda_long", "opencl_long"}
 )
@@ -665,13 +708,13 @@ def test_metal_vertex_struct_return_preserves_view_dir_outputs(tmp_path):
 
     _assert_generated_output_is_usable(opengl)
     assert "out vec3 viewDir;" in opengl
-    assert "viewDir = vec3(normalize" in opengl
+    assert "viewDir = crossgl_round_half3(vec3(normalize" in opengl
     assert "xhalf" not in opengl
     assert "f16vec3" not in opengl
 
     _assert_generated_output_is_usable(directx)
     assert "float16_t3 viewDir: TEXCOORD0;" in directx
-    assert "out_.viewDir = float16_t3(normalize" in directx
+    assert "out_.viewDir = __crossgl_round_half3(float3(normalize" in directx
     assert "return out_;" in directx
     assert "return Output(float16_t3(0));" not in directx
 

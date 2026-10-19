@@ -821,7 +821,7 @@ def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store():
         "var dstTexture: texture_storage_2d<rgba32uint, write>;"
     ) in generated
     assert (
-        "textureStore(dstTexture, vec2<i32>(1, 2), " "vec4<u32>(3, 4, 5, 6));"
+        "textureStore(dstTexture, vec2<i32>(1, 2), " "vec4<u32>(3u, 4u, 5u, 6u));"
     ) in generated
     assert "imageStore" not in generated
 
@@ -1644,13 +1644,37 @@ def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms(
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_maps_buffer_lengths_to_array_length():
+    # WGSL section 17.11: arrayLength reports a runtime-sized array's element count.
+    shader = """
+    shader WGSLBufferLengths {
+        struct Block {
+            uint head;
+            int items[];
+        };
+        StructuredBuffer<float> values;
+        Block block @glsl_buffer_block(std430) @set(0) @binding(1) @readonly;
+        compute {
+            void main() {
+                uint count = buffer_dimensions(values);
+                int items = block.items.length();
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "arrayLength(&values)" in generated
+    assert "i32(arrayLength(&block.items))" in generated
+    assert "buffer_dimensions" not in generated
+    assert ".length()" not in generated
+
+
 @pytest.mark.parametrize(
     ("statement", "expected"),
     [
-        (
-            "buffer_dimensions(values);",
-            "does not support storage buffer helper buffer_dimensions yet",
-        ),
         (
             "values.GetDimensions();",
             "does not support storage buffer member helper GetDimensions yet",
@@ -2668,7 +2692,7 @@ def test_wgsl_codegen_lowers_switch_default_case():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert "case 0:" in generated
+    assert "case 0u:" in generated
     assert "default: {" in generated
     assert "case : {" not in generated
 
@@ -2692,7 +2716,7 @@ def test_wgsl_codegen_adds_missing_switch_default_case():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert "case 0:" in generated
+    assert "case 0u:" in generated
     assert "default: {\n            break;\n        }" in generated
 
 

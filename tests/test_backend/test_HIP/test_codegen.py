@@ -1288,8 +1288,10 @@ class TestHipCodeGen:
         assert codegen.convert_hip_builtin_function("sqrtf") == "sqrt"
         assert codegen.convert_hip_builtin_function("sinf") == "sin"
         assert codegen.convert_hip_builtin_function("cosf") == "cos"
-        assert codegen.convert_hip_builtin_function("fmodf") == "mod"
-        assert codegen.convert_hip_builtin_function("fmod") == "mod"
+        assert codegen.convert_hip_builtin_function("fmodf") == "fmod"
+        assert codegen.convert_hip_builtin_function("fmod") == "fmod"
+        assert codegen.convert_hip_builtin_function("fminf") == "fmin"
+        assert codegen.convert_hip_builtin_function("fmaxf") == "fmax"
         assert codegen.convert_hip_builtin_function("atan2f") == "atan2"
         assert codegen.convert_hip_builtin_function("asinf") == "asin"
         assert codegen.convert_hip_builtin_function("acosf") == "acos"
@@ -1304,7 +1306,7 @@ class TestHipCodeGen:
             codegen.convert_hip_builtin_function("__syncthreads") == "workgroupBarrier"
         )
 
-    def test_fmod_builtins_convert_to_crossgl_mod(self):
+    def test_fmod_builtins_convert_to_crossgl_fmod(self):
         code = """
         __global__ void wrap(float* out, float x) {
             out[0] = fmodf(x, 1.0f);
@@ -1319,9 +1321,10 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "out[0] = mod(x, 1.0f);" in result
-        assert "out[1] = mod(x, 2.0);" in result
-        assert "fmod" not in result
+        # C fmod truncates (result has the sign of x); CrossGL mod is floored.
+        assert "out[0] = fmod(x, 1.0f);" in result
+        assert "out[1] = fmod(x, 2.0);" in result
+        assert " mod(" not in result
 
     def test_atan2_builtins_convert_to_crossgl_atan2(self):
         code = """
@@ -1392,8 +1395,9 @@ class TestHipCodeGen:
 
         assert "var count: u64 = 0;" in result
         assert "var roots: f32 = ((sqrt(x) + sqrt(y)) + inversesqrt(z));" in result
-        assert "var extrema: f32 = (min(x, y) + max(y, z));" in result
-        assert "var alias_extrema: f32 = (min(x, z) + max(y, z));" in result
+        # C99 fminf/fmaxf return the non-NaN operand, unlike CrossGL min/max.
+        assert "var extrema: f32 = (fmin(x, y) + fmax(y, z));" in result
+        assert "var alias_extrema: f32 = (fmin(x, z) + fmax(y, z));" in result
         assert "var magnitude: f32 = abs(x);" in result
         assert "var fused: f32 = fma(x, y, z);" in result
         for raw_name in {

@@ -110,7 +110,7 @@ Run all three native reference gates:
 
 ```bash
 /private/tmp/mlx-native-venv/bin/python \
-  demos/integrations/mlx/run_mlx_native_metal.py \
+  demos/integrations/mlx/run_native_metal.py \
   --mlx-root /private/tmp/mlx-metal-source \
   --mlx-python-root /private/tmp/mlx-full \
   --output-dir /private/tmp/mlx-native-metal-evidence \

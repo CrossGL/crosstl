@@ -1,0 +1,12 @@
+#version 450
+// Hazard I3: loop bound computed with signed overflow; wrapping makes the loop run zero times.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { int a[]; };
+layout(std430, binding = 1) buffer Outp { int o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    int start = a[i];
+    int count = 0;
+    for (int k = start; k < start + 4; ++k) { count += 1; }
+    o[i] = count;
+}

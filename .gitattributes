@@ -1,0 +1,2 @@
+# Preserve checksum-pinned scan references across platform checkouts.
+demos/integrations/mlx/tests/fixtures/scan*_reference.json text eol=lf

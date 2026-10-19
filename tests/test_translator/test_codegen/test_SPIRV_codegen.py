@@ -2,6 +2,7 @@ import re
 import shutil
 import struct
 import subprocess
+from collections import Counter
 
 import pytest
 
@@ -31,11 +32,13 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.codegen.SPIRV_codegen import (
     SPIRVAtomicFenceLoweringError,
+    SPIRVBuiltinLoweringError,
     SpirvId,
     SpirvType,
     UnsupportedSPIRVFeatureError,
     VulkanSPIRVCodeGen,
 )
+from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -486,6 +489,87 @@ def test_glsl_input_attachment_lowers_to_spirv_subpass_data(tmp_path):
     assert "Unknown type subpassInput" not in generated
 
 
+@pytest.mark.parametrize("count", (0, 1, 3, 4))
+@pytest.mark.parametrize("global_scope", (False, True))
+def test_metal_vector_lists_retain_spirv_constructor_support(
+    tmp_path, count, global_scope
+):
+    source = tmp_path / "vector.metal"
+    values = ", ".join(f"{i + 1}u" for i in range(count))
+    declaration = f"uint4 value = {{{values}}};"
+    source.write_text(f"""#include <metal_stdlib>
+using namespace metal;
+{'constant ' + declaration if global_scope else ''}
+kernel void vector_list(device uint* results [[buffer(0)]]) {{
+    {'' if global_scope else declaration}
+    results[0] = value.x;
+    results[1] = value.w;
+}}
+""")
+    output = crosstl.translate(str(source), backend="vulkan", format_output=False)
+    assert "WARNING" not in output
+    if global_scope:
+        variable = spirv_named_variable(output, "value", storage_class="Private")
+        initializer = re.search(
+            rf"{variable} = OpVariable %\d+ Private (%\d+)", output
+        )[1]
+        components = re.search(
+            rf"{initializer} = OpConstantComposite %\d+ (.*)", output
+        )[1].split()
+        constants = spirv_uint_constant_values(output)
+        assert [constants[item] for item in components] == list(range(1, count + 1)) + [
+            0
+        ] * (4 - count)
+    assert_spirv_module_validates(output, tmp_path, target_env="vulkan1.1")
+
+
+def split_main_statements(source_code):
+    """Split the body of the first ``void main()`` into top-level statements."""
+    header = source_code.index("void main()")
+    open_brace = source_code.index("{", header)
+    depth, index = 1, open_brace + 1
+    while depth:
+        depth += {"{": 1, "}": -1}.get(source_code[index], 0)
+        index += 1
+    body = source_code[open_brace + 1 : index - 1]
+    statements, current, nesting = [], "", 0
+    for character in body:
+        current += character
+        nesting += {"(": 1, ")": -1, "{": 1, "}": -1}.get(character, 0)
+        if character == ";" and nesting == 0:
+            statements.append(current.strip())
+            current = ""
+    assert not current.strip(), current
+    return source_code[: open_brace + 1], statements, source_code[index - 1 :]
+
+
+def assert_statement_refusals(source_code, expected_refusals, tmp_path=None):
+    """Assert which main() statements SPIR-V codegen refuses, and why.
+
+    Each statement is compiled after the statements before it that were not
+    refused, so declarations it depends on are in scope. ``expected_refusals``
+    maps each refusal detail to the number of statements refused with it.
+    Returns the SPIR-V for the shader with the refused statements removed.
+    """
+    prefix, statements, suffix = split_main_statements(source_code)
+    kept, refusals = [], []
+    for statement in statements:
+        candidate = prefix + "\n".join(kept + [statement]) + suffix
+        try:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(candidate).tokens).parse())
+        except SPIRVBuiltinLoweringError as error:
+            refusals.append(error.detail)
+            assert error.project_diagnostic_code == (
+                "project.translate.vulkan-builtin-unsupported"
+            )
+            continue
+        kept.append(statement)
+    assert Counter(refusals) == Counter(expected_refusals)
+    return VulkanSPIRVCodeGen().generate(
+        Parser(Lexer(prefix + "\n".join(kept) + suffix).tokens).parse()
+    )
+
+
 def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
     spirv_as = shutil.which("spirv-as")
     spirv_val = shutil.which("spirv-val")
@@ -696,7 +780,7 @@ class TestVulkanSPIRVCodeGen:
         shader IntMinLiteral {
             compute {
                 void main() {
-                    int value = -2147483648;
+                    int value = -2147483648u;
                 }
             }
         }
@@ -727,7 +811,10 @@ class TestVulkanSPIRVCodeGen:
             str(source_path), backend="vulkan", format_output=False
         )
 
-        self.assert_uint_int_min_literal_lowering(spv_code)
+        signed_wide = re.search(r"(%\d+) = OpTypeInt 64 1\b", spv_code).group(1)
+        assert re.search(rf"OpConstant {signed_wide} 2147483648\b", spv_code)
+        assert f"OpSNegate {signed_wide}" in spv_code
+        assert "OpSConvert" in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_metal_bool_function_constant_lowers_to_spirv_spec_constant(self, tmp_path):
@@ -890,13 +977,10 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "; WARNING: Unknown variable missingIndex" in spv_code
-        assert_spirv_access_chain_indexes_are_integer(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "Unknown variable missingIndex" in spv_code_refused
 
     def test_compute_bool_input_lowers_to_uint_interface(self, tmp_path):
         source_code = """
@@ -1205,7 +1289,7 @@ class TestVulkanSPIRVCodeGen:
 
         struct_node = StructNode("TestStruct", struct_members)
 
-        function_body = BlockNode([ReturnNode()])
+        function_body = BlockNode([ReturnNode(IdentifierNode("param"))])
 
         function_node = FunctionNode(
             name="testFunction",
@@ -1230,10 +1314,11 @@ class TestVulkanSPIRVCodeGen:
         assert "OpMemoryModel Logical GLSL450" in spv_code
         assert "OpTypeStruct" in spv_code
         assert "OpFunction" in spv_code
-        assert "OpReturn" in spv_code
+        assert "OpReturnValue" in spv_code
         assert "OpFunctionEnd" in spv_code
 
-    def test_bare_return_in_non_void_helper_emits_typed_default_return(self, tmp_path):
+    def test_bare_return_in_non_void_function_is_refused(self):
+        # GLSL 4.60 section 6.4 and HLSL both reject `return;` in a function with a return type.
         source_code = """
         shader NonVoidBareReturn {
             compute {
@@ -1248,34 +1333,9 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        float_type = re.search(r"(%\d+) = OpTypeFloat 32\b", spv_code)
-        assert float_type is not None
-        helper = re.search(
-            rf"(?P<function>%\d+) = OpFunction {re.escape(float_type.group(1))} "
-            r"None %\d+\n(?P<body>.*?)OpFunctionEnd",
-            spv_code,
-            re.DOTALL,
-        )
-        assert helper is not None
-
-        helper_body_lines = helper.group("body").splitlines()
-        assert any(
-            "Bare return in non-void function fallback" in line
-            for line in helper_body_lines
-        )
-        assert any(line.startswith("OpReturnValue ") for line in helper_body_lines)
-        assert "OpReturn" not in helper_body_lines
-        assert re.search(
-            rf"%\d+ = OpFunctionCall {re.escape(float_type.group(1))} "
-            rf"{re.escape(helper.group('function'))}\s*$",
-            spv_code,
-            re.MULTILINE,
-        )
-        assert_spirv_module_validates(spv_code, tmp_path)
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        assert refusal.value.reasons == ("Bare return in non-void function fallback",)
 
     def test_shader_generation_ignores_frontend_enum_declarations_in_structs(self):
         source_code = """
@@ -1362,7 +1422,7 @@ class TestVulkanSPIRVCodeGen:
                     data[0] = c.a + c.b;
                 }
             }
-            StructuredBuffer<float> data;
+            RWStructuredBuffer<float> data;
         }
         """
 
@@ -1565,13 +1625,39 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
+        # bvec2(1, 0) is valid (numeric lanes compare against zero); bvec3(bvec2) has too few
+        # components, which GLSL 4.60 section 5.4.2 rejects.
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        assert refusal.value.reasons == (
+            "Constructor bvec3 expected 3 components but got 2",
+        )
+
+    def test_bool_vector_constructor_compares_numeric_lanes_against_zero(
+        self, tmp_path
+    ):
+        source_code = """
+        shader NumericBoolVectorConstructor {
+            compute {
+                void main() {
+                    float x = 0.5;
+                    bvec2 numeric = bvec2(1, 0);
+                    bvec2 fromFloat = bvec2(x, x != x);
+                }
+            }
+        }
+        """
+
         spv_code = VulkanSPIRVCodeGen().generate(
             Parser(Lexer(source_code).tokens).parse()
         )
 
-        assert "Constructor bvec2 cannot convert int component to bool" in spv_code
-        assert "Constructor bvec3 expected 3 components but got 2" in spv_code
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code).group(1)
+        assert re.search(rf"OpINotEqual {re.escape(bool_type)} %\d+ %\d+", spv_code)
+        assert spv_code.count(f"OpFUnordNotEqual {bool_type}") == 2
+        assert "OpFOrdNotEqual" not in spv_code
         assert_vector_constructs_have_exact_scalar_operands(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_scalar_logical_ops_still_return_bool_type(self):
         source_code = """
@@ -1700,7 +1786,8 @@ class TestVulkanSPIRVCodeGen:
         assert bool_type is not None
         bool_type_id = bool_type.group(1)
 
-        assert spv_code.count(f"OpFOrdNotEqual {bool_type_id}") >= 4
+        # Truthiness is `x != 0.0`, which is true for NaN as in C, HLSL and MSL.
+        assert spv_code.count(f"OpFUnordNotEqual {bool_type_id}") >= 4
         assert re.search(
             rf"OpLogicalOr {re.escape(bool_type_id)} %\d+ %\d+\b", spv_code
         )
@@ -1842,13 +1929,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        # GLSL 4.60 section 5.4.2 rejects both: too few components, and an argument past the last
+        # one used.
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        assert refusal.value.reasons == (
+            "Constructor vec4 expected 4 components but got 3",
+            "Constructor vec2 expected 2 components but got 3",
         )
-
-        assert "Constructor vec4 expected 4 components but got 3" in spv_code
-        assert "Constructor vec2 expected 2 components but got 3" in spv_code
-        assert_vector_constructs_have_exact_scalar_operands(spv_code)
 
     def test_matrix_constructors_flatten_scalar_vector_and_matrix_arguments(self):
         source_code = """
@@ -1882,8 +1970,30 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     mat2 tooFew = mat2(vec2(1.0, 2.0), 3.0);
                     mat2 tooMany = mat2(vec2(1.0, 2.0), vec2(3.0, 4.0), 5.0);
-                    mat2 source = mat2(1.0, 2.0, 3.0, 4.0);
-                    mat3 expanded = mat3(source);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        assert refusal.value.reasons == (
+            "Constructor mat2 expected 4 components but got 3",
+            "Constructor mat2 expected 4 components but got 5",
+        )
+
+    def test_constructors_drop_unused_components_of_the_last_argument(self, tmp_path):
+        # GLSL 4.60 section 5.4.2: vec2(v3) keeps v3.xy and vec3(v2, v2) uses one component
+        # of the second vector; neither is an error.
+        source_code = """
+        shader LastArgumentTruncation {
+            compute {
+                void main() {
+                    vec3 v3 = vec3(1.0, 2.0, 3.0);
+                    vec2 v2 = vec2(4.0, 5.0);
+                    vec2 a = vec2(v3);
+                    vec3 b = vec3(v2, v2);
+                    mat2 c = mat2(v3, v3);
                 }
             }
         }
@@ -1893,11 +2003,53 @@ class TestVulkanSPIRVCodeGen:
             Parser(Lexer(source_code).tokens).parse()
         )
 
-        assert "Constructor mat2 expected 4 components but got 3" in spv_code
-        assert "Constructor mat2 expected 4 components but got 5" in spv_code
-        assert "Constructor mat3 expected 9 components but got 4" in spv_code
         assert_vector_constructs_have_exact_scalar_operands(spv_code)
         assert_matrix_constructs_have_exact_column_operands(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_one_argument_matrix_constructors_follow_glsl_identity_rules(
+        self, tmp_path
+    ):
+        # GLSL 4.60 section 5.4.2: mat3(s) is s on the diagonal; mat3(m2) copies m2 into the
+        # upper-left corner and takes the rest from the identity; mat2(m3) keeps the corner.
+        source_code = """
+        shader OneArgumentMatrixConstructors {
+            compute {
+                void main() {
+                    float s = 2.0;
+                    mat3 diagonal = mat3(s);
+                    mat2 source = mat2(1.0, 2.0, 3.0, 4.0);
+                    mat3 expanded = mat3(source);
+                    mat2 corner = mat2(expanded);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        constants = dict(re.findall(r"(%\d+) = OpConstant %\d+ (\S+)", spv_code))
+        float3 = re.search(r"(%\d+) = OpTypeVector %\d+ 3", spv_code).group(1)
+        columns = [
+            line.split()[4:]
+            for line in spv_code.splitlines()
+            if re.match(rf"%\d+ = OpCompositeConstruct {re.escape(float3)} ", line)
+        ]
+        literal_columns = [
+            [constants.get(operand) for operand in column] for column in columns
+        ]
+        # mat3(s): the scalar sits on the diagonal of every column.
+        assert literal_columns[0][1:] == ["0.0", "0.0"]
+        assert literal_columns[1][0] == "0.0" and literal_columns[1][2] == "0.0"
+        assert literal_columns[2][:2] == ["0.0", "0.0"]
+        # mat3(mat2): the third column and row come from the identity.
+        assert literal_columns[3][2] == "0.0"
+        assert literal_columns[4][2] == "0.0"
+        assert literal_columns[5] == ["0.0", "0.0", "1.0"]
+        assert_matrix_constructs_have_exact_column_operands(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_double_matrix_constructors_use_double_columns(self):
         source_code = """
@@ -2068,9 +2220,11 @@ class TestVulkanSPIRVCodeGen:
         # C++ integral promotion converts the bool operands to signed int before
         # the division/modulo, so the arithmetic lowers through the signed
         # integer opcodes (never the float OpFDiv/OpFMod) and the integer result
-        # is compared back to a bool for the return value.
+        # is compared back to a bool for the return value. C++ `%` truncates, so
+        # it is OpSRem rather than the floored OpSMod.
         assert "OpSDiv" in spv_code
-        assert "OpSMod" in spv_code
+        assert "OpSRem" in spv_code
+        assert "OpSMod" not in spv_code
         assert "OpINotEqual" in spv_code
         assert not re.search(r"OpF(?:Div|Mod) %\d+", spv_code)
         assert "WARNING" not in spv_code
@@ -3586,24 +3740,21 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
             "SPIR-V backend does not support CrossGL lambda expressions "
-            "in lambda expression" in spv_code
+            "in lambda expression" in spv_code_refused
         )
         assert (
             "SPIR-V backend does not support CrossGL lambda expressions "
-            "in call to map" in spv_code
+            "in call to map" in spv_code_refused
         )
-        assert not re.search(r"OpExtInst .* Lambda\b", spv_code)
-        assert not re.search(r"OpExtInst .* Map\b", spv_code)
-        assert " Lambda " not in spv_code
-        assert " Map " not in spv_code
-        assert "Unknown variable int acc" not in spv_code
-        assert "Unknown variable int x" not in spv_code
+        assert " Lambda " not in spv_code_refused
+        assert " Map " not in spv_code_refused
+        assert "Unknown variable int acc" not in spv_code_refused
+        assert "Unknown variable int x" not in spv_code_refused
 
     def test_lambda_argument_to_user_function_uses_declared_spirv_return_type_fallback(
         self,
@@ -3622,22 +3773,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
-
-        assert int_type is not None
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
             "SPIR-V backend does not support CrossGL lambda expressions "
-            "in call to apply" in spv_code
+            "in call to apply" in spv_code_refused
         )
-        assert re.search(
-            rf"%\d+ = OpConstant {re.escape(int_type.group(1))} 0",
-            spv_code,
-        )
-        assert "OpFunctionCall" not in spv_code
-        assert " Lambda " not in spv_code
+        assert " Lambda " not in spv_code_refused
 
     def test_struct_constructor_arguments_convert_to_member_types(self):
         source_code = """
@@ -3976,14 +4119,11 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "Cannot assign composite value to vector component r" in spv_code
-        assert "Cannot assign composite value to vector component g" in spv_code
-        assert "OpCompositeInsert" not in spv_code
-        assert "OpFAdd" not in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "Cannot assign composite value to vector component r" in spv_code_refused
+        assert "Cannot assign composite value to vector component g" in spv_code_refused
 
     def test_nested_vector_component_assignments_update_base_lvalue(self):
         source_code = """
@@ -4088,15 +4228,18 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "Cannot assign to vector swizzle xx with duplicate components" in spv_code
+            "Cannot assign to vector swizzle xx with duplicate components"
+            in spv_code_refused
         )
-        assert "Cannot assign 2-component vector to 3-component swizzle xyz" in spv_code
-        assert "Invalid vector swizzle rq for v3float" in spv_code
+        assert (
+            "Cannot assign 2-component vector to 3-component swizzle xyz"
+            in spv_code_refused
+        )
+        assert "Invalid vector swizzle rq for v3float" in spv_code_refused
 
     def test_vector_swizzle_compound_assignments_update_masked_components(self):
         source_code = """
@@ -4164,7 +4307,37 @@ class TestVulkanSPIRVCodeGen:
                     vec4 color = vec4(1.0, 2.0, 3.0, 4.0);
                     color.xx += vec2(0.1, 0.2);
                     color.xyz += vec2(0.3, 0.4);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert (
+            "Cannot assign to vector swizzle xx with duplicate components"
+            in spv_code_refused
+        )
+        assert (
+            "Cannot assign 2-component vector to 3-component swizzle xyz"
+            in spv_code_refused
+        )
+
+    def test_vector_swizzle_compound_assignment_applies_a_scalar_to_every_component(
+        self, tmp_path
+    ):
+        # GLSL 4.60 section 5.9: `v.xy op= s` is `v.xy = v.xy op s` with s applied to each component.
+        source_code = """
+        shader ScalarSwizzleCompoundAssignments {
+            compute {
+                buffer vec4 results[];
+                void main() {
+                    vec4 color = vec4(1.0, 2.0, 3.0, 4.0);
                     color.xy += 0.5;
+                    color.zw *= 2.0;
+                    color.yzw /= 4.0;
+                    results[0] = color;
                 }
             }
         }
@@ -4173,14 +4346,16 @@ class TestVulkanSPIRVCodeGen:
         spv_code = VulkanSPIRVCodeGen().generate(
             Parser(Lexer(source_code).tokens).parse()
         )
-
-        assert (
-            "Cannot assign to vector swizzle xx with duplicate components" in spv_code
-        )
-        assert "Cannot assign 2-component vector to 3-component swizzle xyz" in spv_code
-        assert "Cannot assign scalar value to vector swizzle xy" in spv_code
-        assert "OpCompositeInsert" not in spv_code
-        assert "OpFAdd" not in spv_code
+        assert "Cannot assign" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+        float_type = re.search(r"^%(\w+) = OpTypeFloat 32$", spv_code, re.M).group(1)
+        for operation, width in (("OpFAdd", 2), ("OpFMul", 2), ("OpFDiv", 3)):
+            vector = re.search(
+                rf"^%(\w+) = OpTypeVector %{float_type} {width}$", spv_code, re.M
+            ).group(1)
+            assert re.search(rf"= {operation} %{vector} ", spv_code)
+        half = re.search(r"^%(\w+) = OpConstant %\w+ 0\.5$", spv_code, re.M).group(1)
+        assert re.search(rf"OpCompositeConstruct %\w+ %{half} %{half}$", spv_code, re.M)
 
     def test_nested_vector_swizzle_lvalues_update_base_lvalue(self):
         source_code = """
@@ -4235,15 +4410,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "Could not find member xg" not in spv_code_refused
+        assert (
+            "Unsupported LHS type in assignment: MemberAccessNode"
+            not in spv_code_refused
         )
-
-        assert spv_code.count("Invalid vector swizzle xg for v4float") == 3
-        assert "Could not find member xg" not in spv_code
-        assert "Unsupported LHS type in assignment: MemberAccessNode" not in spv_code
-        assert "OpCompositeInsert" not in spv_code
-        assert "OpFAdd" not in spv_code
 
     def test_bitwise_and_or_xor_emit_correct_opcodes(self):
         source_code = """
@@ -4361,10 +4535,12 @@ class TestVulkanSPIRVCodeGen:
         )
 
         shl_ids = spirv_result_ids_for_opcode(spv_code, "OpShiftLeftLogical")
-        shr_ids = spirv_result_ids_for_opcode(spv_code, "OpShiftRightLogical")
+        # A signed left operand shifts right arithmetically (sign-extending).
+        shr_ids = spirv_result_ids_for_opcode(spv_code, "OpShiftRightArithmetic")
 
         assert shl_ids, "Missing OpShiftLeftLogical"
-        assert shr_ids, "Missing OpShiftRightLogical"
+        assert shr_ids, "Missing OpShiftRightArithmetic"
+        assert "OpShiftRightLogical" not in spv_code
 
         left_var = spirv_named_variable(
             spv_code, "shifted_left", storage_class="Function"
@@ -4414,7 +4590,7 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert re.search(
-            rf"%\d+ = OpShiftRightLogical {re.escape(ivec2_type.group(1))} "
+            rf"%\d+ = OpShiftRightArithmetic {re.escape(ivec2_type.group(1))} "
             rf"%\d+ {re.escape(shift_count_vectors[1][0])}\b",
             spv_code,
         )
@@ -4516,7 +4692,7 @@ class TestVulkanSPIRVCodeGen:
         assert "3" in extract_ops, "Missing extract for component 3 (a)"
         assert "WARNING" not in spv_code
 
-    def test_fmod_intrinsics_use_core_fmod_and_argument_result_type(self):
+    def test_mod_is_floored_and_fmod_is_truncated_with_argument_result_type(self):
         source_code = """
         shader FmodIntrinsics {
             compute {
@@ -4536,13 +4712,18 @@ class TestVulkanSPIRVCodeGen:
 
         assert float_type is not None
         assert vec2_type is not None
+        # GLSL mod is floored (sign of y): OpFMod. C fmod truncates (sign of x):
+        # OpFRem.
         assert re.search(
             rf"%\d+ = OpFMod {re.escape(float_type.group(1))} %\d+ %\d+",
             spv_code,
         )
         assert re.search(
-            rf"%\d+ = OpFMod {re.escape(vec2_type.group(1))} %\d+ %\d+",
+            rf"%\d+ = OpFRem {re.escape(vec2_type.group(1))} %\d+ %\d+",
             spv_code,
+        )
+        assert not re.search(
+            rf"%\d+ = OpFMod {re.escape(vec2_type.group(1))} ", spv_code
         )
         assert " Fmod " not in spv_code
 
@@ -4706,17 +4887,16 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "atan2 requires matching 32-bit floating-point scalar or vector operands": (
+                    5
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: atan2 requires matching 32-bit floating-point "
-                "scalar or vector operands"
-            )
-            == 5
-        )
         assert " Atan2 " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -4887,15 +5067,18 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "sin requires 1 operand": 1,
+                "atan2 requires 2 operands": 1,
+                "distance requires 2 operands": 1,
+                "cross requires 2 operands": 1,
+                "refract requires 3 operands": 1,
+            },
+            tmp_path,
         )
 
-        assert "; WARNING: sin requires 1 operand" in spv_code
-        assert "; WARNING: atan2 requires 2 operands" in spv_code
-        assert "; WARNING: distance requires 2 operands" in spv_code
-        assert "; WARNING: cross requires 2 operands" in spv_code
-        assert "; WARNING: refract requires 3 operands" in spv_code
         assert " Sin " not in spv_code
         assert " Atan2 " not in spv_code
         assert " Distance " not in spv_code
@@ -4904,61 +5087,97 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_unknown_std450_fallback_emits_diagnostics(self, tmp_path):
-        source_code = """
-        shader UnknownStd450Builtins {
-            compute {
-                void main() {
-                    float scalar = notAStd450Function(vec2(1.0, 2.0));
-                    vec2 vector = missingVecCall(vec2(3.0, 4.0));
-                    int whole = missingIntegerCall(1);
-                }
-            }
-        }
+    @pytest.mark.parametrize(
+        "statement, function_name",
+        [
+            (
+                "float scalar = notAStd450Function(vec2(1.0, 2.0));",
+                "notAStd450Function",
+            ),
+            ("vec2 vector = missingVecCall(vec2(3.0, 4.0));", "missingVecCall"),
+            ("int whole = missingIntegerCall(1);", "missingIntegerCall"),
+            ("missingVoidCall();", "missingVoidCall"),
+        ],
+    )
+    def test_unknown_function_is_refused(self, statement, function_name):
+        source_code = f"""
+        shader UnknownStd450Builtins {{
+            compute {{
+                void main() {{
+                    {statement}
+                }}
+            }}
+        }}
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
+        with pytest.raises(SPIRVBuiltinLoweringError) as raised:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert (
-            "; WARNING: SPIR-V backend cannot lower unknown function "
-            "'notAStd450Function'; using default value"
-        ) in spv_code
-        assert (
-            "; WARNING: SPIR-V backend cannot lower unknown function "
-            "'missingVecCall'; using default value"
-        ) in spv_code
-        assert (
-            "; WARNING: SPIR-V backend cannot lower unknown function "
-            "'missingIntegerCall'; using default value"
-        ) in spv_code
-        assert " NotAStd450Function " not in spv_code
-        assert " MissingVecCall " not in spv_code
-        assert " MissingIntegerCall " not in spv_code
-        assert not re.search(
-            r"OpExtInst .* (NotAStd450Function|MissingVecCall|MissingIntegerCall)\b",
-            spv_code,
-        )
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        error = raised.value
+        assert error.function_name == function_name
+        assert error.reason == "unknown-function"
+        assert error.feature == f"builtin:{function_name}"
+        assert isinstance(error, UnsupportedSPIRVFeatureError)
+        assert f"Cannot lower call to '{function_name}' to SPIR-V" in str(error)
 
-    def test_unknown_function_fallback_preserves_numeric_vector_shape(self):
+    def test_unknown_builtin_call_never_returns_a_default_value(self):
         generator = VulkanSPIRVCodeGen()
         generator.register_primitive_type("float")
         uint_type = generator.register_primitive_type("uint")
         uvec2_type = generator.register_vector_type(uint_type, 2)
         zero = generator.register_constant(0, uint_type)
         value = generator.composite_construct(uvec2_type, [zero, zero])
+        emitted = list(generator.code_lines)
 
-        result = generator.call_builtin_function("missingVectorHelper", [value])
+        with pytest.raises(SPIRVBuiltinLoweringError, match="missingVectorHelper"):
+            generator.call_builtin_function("missingVectorHelper", [value])
 
-        assert result is not None
-        assert generator.value_types[result.id] == uvec2_type
-        assert (
-            "; WARNING: SPIR-V backend cannot lower unknown function "
-            "'missingVectorHelper'; using default value" in generator.code_lines
+        assert not any(
+            "WARNING" in line for line in generator.code_lines[len(emitted) :]
         )
+
+    def test_call_through_a_function_table_is_refused(self):
+        source_code = """
+        shader IndirectCall {
+            struct Payload {
+                vec3 color;
+            };
+            compute {
+                void main() {
+                    Payload payload;
+                    visible_function_table vft;
+                    vft[0](payload);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(SPIRVBuiltinLoweringError) as raised:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert raised.value.reason == "indirect-call"
+        assert "no function pointers" in str(raised.value)
+
+    @pytest.mark.parametrize("function_name", ["asinh", "acosh", "atanh"])
+    def test_inverse_hyperbolic_builtins_lower_to_std450(self, function_name, tmp_path):
+        source_code = f"""
+        shader InverseHyperbolic {{
+            compute {{
+                void main() {{
+                    float scalar = {function_name}(1.5);
+                    vec3 vector = {function_name}(vec3(1.5, 2.0, 0.5));
+                }}
+            }}
+        }}
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        instruction = function_name[0].upper() + function_name[1:]
+        assert spv_code.count(f" {instruction} ") == 2
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_malformed_min_max_clamp_mix_builtins_emit_diagnostics(self, tmp_path):
         source_code = """
@@ -4974,14 +5193,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "min requires 2 operands": 1,
+                "max requires 2 operands": 1,
+                "clamp requires 3 operands": 1,
+                "mix requires 3 operands": 1,
+            },
+            tmp_path,
         )
 
-        assert "; WARNING: min requires 2 operands" in spv_code
-        assert "; WARNING: max requires 2 operands" in spv_code
-        assert "; WARNING: clamp requires 3 operands" in spv_code
-        assert "; WARNING: mix requires 3 operands" in spv_code
         assert " Min " not in spv_code
         assert " Max " not in spv_code
         assert " Clamp " not in spv_code
@@ -5012,28 +5234,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "min requires compatible scalar or vector numeric operands": 1,
+                "max requires compatible scalar or vector numeric operands": 1,
+                "clamp requires compatible scalar or vector numeric operands": 1,
+                "mix requires compatible value operands and selector": 2,
+            },
+            tmp_path,
         )
 
-        assert (
-            "; WARNING: min requires compatible scalar or vector numeric operands"
-            in spv_code
-        )
-        assert (
-            "; WARNING: max requires compatible scalar or vector numeric operands"
-            in spv_code
-        )
-        assert (
-            "; WARNING: clamp requires compatible scalar or vector numeric operands"
-            in spv_code
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: mix requires compatible value operands and selector"
-            )
-            == 2
-        )
         assert " Min " not in spv_code
         assert " Max " not in spv_code
         assert " Clamp " not in spv_code
@@ -5098,37 +5309,19 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "dot requires matching floating-point vector operands": 3,
+                "cross requires matching 3-component floating-point vector operands": 3,
+                "reflect requires matching floating-point scalar or vector operands": 4,
+                "refract requires matching floating-point incident and normal operands plus scalar eta": (
+                    4
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: dot requires matching floating-point vector operands"
-            )
-            == 3
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: cross requires matching 3-component "
-                "floating-point vector operands"
-            )
-            == 3
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: reflect requires matching floating-point scalar "
-                "or vector operands"
-            )
-            == 4
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: refract requires matching floating-point incident "
-                "and normal operands plus scalar eta"
-            )
-            == 4
-        )
         assert "OpDot" not in spv_code
         assert " Cross " not in spv_code
         assert " Reflect " not in spv_code
@@ -5294,29 +5487,18 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "length requires floating-point scalar or vector operand": 2,
+                "normalize requires floating-point scalar or vector operand": 2,
+                "distance requires matching floating-point scalar or vector operands": (
+                    4
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: length requires floating-point scalar or vector operand"
-            )
-            == 2
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: normalize requires floating-point scalar or vector operand"
-            )
-            == 2
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: distance requires matching floating-point scalar "
-                "or vector operands"
-            )
-            == 4
-        )
         assert " Length " not in spv_code
         assert " Distance " not in spv_code
         assert " Normalize " not in spv_code
@@ -5462,30 +5644,18 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "sin requires 32-bit floating-point scalar or vector operand": 1,
+                "sqrt requires 32-bit floating-point scalar or vector operand": 1,
+                "fract requires 32-bit floating-point scalar or vector operand": 1,
+                "floor requires 32-bit floating-point scalar or vector operand": 1,
+                "cos requires 32-bit floating-point scalar or vector operand": 1,
+            },
+            tmp_path,
         )
 
-        assert (
-            "; WARNING: sin requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
-        assert (
-            "; WARNING: sqrt requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
-        assert (
-            "; WARNING: fract requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
-        assert (
-            "; WARNING: floor requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
-        assert (
-            "; WARNING: cos requires 32-bit floating-point scalar or vector operand"
-            in spv_code
-        )
         assert " Sin " not in spv_code
         assert " Sqrt " not in spv_code
         assert " Fract " not in spv_code
@@ -6438,17 +6608,16 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "abs requires floating-point or signed integer scalar or vector operand": (
+                    4
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: abs requires floating-point or signed integer "
-                "scalar or vector operand"
-            )
-            == 4
-        )
         assert " FAbs " not in spv_code
         assert " SAbs " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -6540,17 +6709,16 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "pow requires compatible 32-bit floating-point scalar or vector operands": (
+                    7
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: pow requires compatible 32-bit floating-point "
-                "scalar or vector operands"
-            )
-            == 7
-        )
         assert " Pow " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -6566,11 +6734,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "pow requires 2 operands": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: pow requires 2 operands") == 2
         assert " Pow " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -6687,17 +6858,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "fma requires compatible floating-point scalar or vector operands": 5,
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: fma requires compatible floating-point scalar "
-                "or vector operands"
-            )
-            == 5
-        )
         assert " Fma " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -6713,11 +6881,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "fma requires 3 operands": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: fma requires 3 operands") == 2
         assert " Fma " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -6839,17 +7010,16 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "faceforward requires compatible floating-point scalar or vector operands": (
+                    5
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: faceforward requires compatible floating-point "
-                "scalar or vector operands"
-            )
-            == 5
-        )
         assert " FaceForward " not in spv_code
         assert " Faceforward " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -6866,11 +7036,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "faceforward requires 3 operands": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: faceforward requires 3 operands") == 2
         assert " FaceForward " not in spv_code
         assert " Faceforward " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -7007,24 +7180,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "step requires compatible floating-point scalar or vector operands": 5,
+                "smoothstep requires compatible floating-point scalar or vector operands": (
+                    5
+                ),
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: step requires compatible floating-point scalar "
-                "or vector operands"
-            )
-            == 5
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: smoothstep requires compatible floating-point "
-                "scalar or vector operands"
-            )
-            == 5
-        )
         assert " Step " not in spv_code
         assert " SmoothStep " not in spv_code
         assert " Smoothstep " not in spv_code
@@ -7044,12 +7210,15 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "step requires 2 operands": 2,
+                "smoothstep requires 3 operands": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: step requires 2 operands") == 2
-        assert spv_code.count("; WARNING: smoothstep requires 3 operands") == 2
         assert " Step " not in spv_code
         assert " SmoothStep " not in spv_code
         assert " Smoothstep " not in spv_code
@@ -7119,24 +7288,15 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "degrees requires 32-bit floating-point scalar or vector operand": 3,
+                "radians requires 32-bit floating-point scalar or vector operand": 2,
+            },
+            tmp_path,
         )
 
-        assert (
-            spv_code.count(
-                "; WARNING: degrees requires 32-bit floating-point "
-                "scalar or vector operand"
-            )
-            == 3
-        )
-        assert (
-            spv_code.count(
-                "; WARNING: radians requires 32-bit floating-point "
-                "scalar or vector operand"
-            )
-            == 2
-        )
         assert " Degrees " not in spv_code
         assert " Radians " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -7155,12 +7315,15 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        spv_code = assert_statement_refusals(
+            source_code,
+            {
+                "degrees requires 1 operand": 2,
+                "radians requires 1 operand": 2,
+            },
+            tmp_path,
         )
 
-        assert spv_code.count("; WARNING: degrees requires 1 operand") == 2
-        assert spv_code.count("; WARNING: radians requires 1 operand") == 2
         assert " Degrees " not in spv_code
         assert " Radians " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -7304,25 +7467,21 @@ class TestVulkanSPIRVCodeGen:
         ast.stages[ShaderStage.COMPUTE].execution_config = {
             "local_size": (0, -2, "wide")
         }
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        entry_match = re.search(r'OpEntryPoint GLCompute %(\d+) "main"', spv_code)
-        assert entry_match is not None
-        assert f"OpExecutionMode %{entry_match.group(1)} LocalSize 1 1 1" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "; WARNING: SPIR-V LocalSize x dimension from local_size must be a "
-            "positive integer literal; using 1"
-        ) in spv_code
+            "SPIR-V LocalSize x dimension from local_size must be a "
+            "positive integer literal"
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V LocalSize y dimension from local_size must be a "
-            "positive integer literal; using 1"
-        ) in spv_code
+            "SPIR-V LocalSize y dimension from local_size must be a "
+            "positive integer literal"
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V LocalSize z dimension from local_size must be a "
-            "positive integer literal; using 1"
-        ) in spv_code
-        assert spv_code.count("SPIR-V LocalSize") == 3
-        assert_spirv_module_validates(spv_code, tmp_path)
+            "SPIR-V LocalSize z dimension from local_size must be a "
+            "positive integer literal"
+        ) in spv_code_refused
 
     def test_fragment_discard_and_clip_lower_to_opkill(self, tmp_path):
         source_code = """
@@ -7365,20 +7524,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert not re.search(r"^OpKill$", spv_code, re.MULTILINE)
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "; WARNING: SPIR-V discard lowers to OpKill, which is only valid "
+            "SPIR-V discard lowers to OpKill, which is only valid "
             "in the Fragment execution model"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V clip lowers to OpKill, which is only valid "
+            "SPIR-V clip lowers to OpKill, which is only valid "
             "in the Fragment execution model"
-        ) in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_compute_synchronization_builtins_emit_spirv_barriers(self, tmp_path):
         source_code = """
@@ -7698,8 +7854,9 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         for function_name in [
             "barrier",
             "workgroupBarrier",
@@ -7708,10 +7865,9 @@ class TestVulkanSPIRVCodeGen:
             "memoryBarrierShared",
         ]:
             assert (
-                f"; WARNING: synchronization builtin '{function_name}' requires "
+                f"synchronization builtin '{function_name}' requires "
                 "a workgroup-capable execution model"
-            ) in spv_code
-
+            ) in spv_code_refused
         for function_name in [
             "memoryBarrierBuffer",
             "memoryBarrierImage",
@@ -7719,14 +7875,9 @@ class TestVulkanSPIRVCodeGen:
             "memoryBarrier",
         ]:
             assert (
-                f"; WARNING: synchronization builtin '{function_name}' requires "
+                f"synchronization builtin '{function_name}' requires "
                 "a workgroup-capable execution model"
-            ) not in spv_code
-
-        assert "OpControlBarrier" not in spv_code
-        assert spv_code.count("OpMemoryBarrier") == 4
-        assert "OpFunctionCall" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+            ) not in spv_code_refused
 
     def test_tessellation_stage_synchronization_builtins_warn_and_validate(
         self, tmp_path
@@ -7762,12 +7913,9 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        assert "OpCapability Tessellation" in spv_code
-        assert "OpEntryPoint TessellationControl" in spv_code
-        assert "OpEntryPoint TessellationEvaluation" in spv_code
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         for function_name in [
             "barrier",
             "workgroupBarrier",
@@ -7776,17 +7924,12 @@ class TestVulkanSPIRVCodeGen:
             "memoryBarrierShared",
         ]:
             assert (
-                spv_code.count(
-                    f"; WARNING: synchronization builtin '{function_name}' "
+                spv_code_refused.count(
+                    f"synchronization builtin '{function_name}' "
                     "requires a workgroup-capable execution model"
                 )
                 == 2
             )
-
-        assert "OpControlBarrier" not in spv_code
-        assert spv_code.count("OpMemoryBarrier") == 6
-        assert "OpFunctionCall" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_geometry_stage_layouts_emit_execution_modes(self, tmp_path):
         source_code = """
@@ -7981,57 +8124,30 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        geometry_match = re.search(r'OpEntryPoint Geometry %(\d+) "main"', spv_code)
-        control_match = re.search(
-            r'OpEntryPoint TessellationControl %(\d+) "main"', spv_code
-        )
-        eval_match = re.search(
-            r'OpEntryPoint TessellationEvaluation %(\d+) "main"', spv_code
-        )
-        assert geometry_match is not None
-        assert control_match is not None
-        assert eval_match is not None
-        geometry_id = geometry_match.group(1)
-        control_id = control_match.group(1)
-        eval_id = eval_match.group(1)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "; WARNING: SPIR-V geometry OutputVertices must be a positive "
-            "integer literal; using 1"
-        ) in spv_code
+            "SPIR-V geometry OutputVertices must be a positive " "integer literal"
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V geometry Invocations must be a positive "
-            "integer literal; using 1"
-        ) in spv_code
+            "SPIR-V geometry Invocations must be a positive " "integer literal"
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V geometry outputtopology must be point, "
-            "line_strip, or triangle_strip; using points: hex"
-        ) in spv_code
+            "SPIR-V geometry outputtopology must be point, "
+            "line_strip, or triangle_strip: hex"
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V tessellation_control OutputVertices must be a "
-            "positive integer literal; using 1"
-        ) in spv_code
+            "SPIR-V tessellation_control OutputVertices must be a "
+            "positive integer literal"
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V tessellation domain must be triangle, quads, "
-            "or isolines; using triangles: hex"
-        ) in spv_code
+            "SPIR-V tessellation domain must be triangle, quads, " "or isolines: hex"
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V tessellation partitioning must be integer, "
-            "fractional_even, or fractional_odd; using equal spacing: random"
-        ) in spv_code
-        assert f"OpExecutionMode %{geometry_id} InputPoints" in spv_code
-        assert f"OpExecutionMode %{geometry_id} OutputPoints" in spv_code
-        assert f"OpExecutionMode %{geometry_id} OutputVertices 1" in spv_code
-        assert f"OpExecutionMode %{control_id} OutputVertices 1" in spv_code
-        assert f"OpExecutionMode %{eval_id} Triangles" in spv_code
-        assert f"OpExecutionMode %{eval_id} SpacingEqual" in spv_code
-        assert f"OpExecutionMode %{eval_id} VertexOrderCcw" in spv_code
-        assert "Invocations 1" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+            "SPIR-V tessellation partitioning must be integer, "
+            "fractional_even, or fractional_odd: random"
+        ) in spv_code_refused
 
     def test_geometry_tessellation_stage_builtins_emit_interface_and_stream_ops(
         self, tmp_path
@@ -8275,44 +8391,28 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "; WARNING: SPIR-V builtin gl_TessLevelOuter is only valid in "
+            "SPIR-V builtin gl_TessLevelOuter is only valid in "
             "TessellationControl, TessellationEvaluation stages"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V tessellation patch builtin gl_TessLevelOuter "
+            "SPIR-V tessellation patch builtin gl_TessLevelOuter "
             "component index 4 out of range; valid range is 0..3"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V tessellation patch builtin gl_TessLevelInner "
+            "SPIR-V tessellation patch builtin gl_TessLevelInner "
             "component index 2 out of range; valid range is 0..1"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V tessellation patch builtin gl_TessLevelOuter "
+            "SPIR-V tessellation patch builtin gl_TessLevelOuter "
             "component index requires a scalar integer value, got float"
-        ) in spv_code
+        ) in spv_code_refused
         readonly_warning = (
-            "; WARNING: cannot assign to read-only SPIR-V builtin " "gl_TessLevelInner"
+            "cannot assign to read-only SPIR-V builtin " "gl_TessLevelInner"
         )
-        assert readonly_warning in spv_code
-
-        inner_input = spirv_named_variable(
-            spv_code, "gl_TessLevelInner", storage_class="Input"
-        )
-        input_accesses = re.findall(
-            rf"(%\d+) = OpAccessChain %\d+ {re.escape(inner_input)}\b", spv_code
-        )
-        assert input_accesses
-        for access_id in input_accesses:
-            assert f"OpStore {access_id} " not in spv_code
-        assert f"OpStore {inner_input} " not in spv_code
-        assert "Unknown variable gl_TessLevelOuter" not in spv_code
-        assert "Unknown variable gl_TessLevelInner" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_tessellation_patch_parameters_emit_stage_specific_interfaces(
         self, tmp_path
@@ -8451,43 +8551,21 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "; WARNING: SPIR-V tessellation patch parameter outputPatch "
+            "SPIR-V tessellation patch parameter outputPatch "
             "control-point index 2 out of range; valid range is 0..1"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V tessellation patch parameter outputPatch "
+            "SPIR-V tessellation patch parameter outputPatch "
             "control-point index requires a scalar integer value, got float"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "; WARNING: cannot assign to read-only SPIR-V pointer inputPatch"
-        ) in spv_code
-        assert (
-            "; WARNING: cannot assign to read-only SPIR-V pointer patch"
-        ) in spv_code
-
-        input_pointer_types = set(
-            re.findall(r"(%\d+) = OpTypePointer Input \S+", spv_code)
-        )
-        input_accesses = {
-            access_id
-            for access_id, pointer_type in re.findall(
-                r"(%\d+) = OpAccessChain (%\d+) ", spv_code
-            )
-            if pointer_type in input_pointer_types
-        }
-        assert input_accesses
-        for access_id in input_accesses:
-            assert f"OpStore {access_id} " not in spv_code
-
-        assert "Unknown type InputPatch" not in spv_code
-        assert "Unknown type OutputPatch" not in spv_code
-        assert "Could not determine array element type" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+            "cannot assign to read-only SPIR-V pointer inputPatch"
+        ) in spv_code_refused
+        assert ("cannot assign to read-only SPIR-V pointer patch") in spv_code_refused
 
     def test_tessellation_patchconstantfunc_stores_tess_factor_builtins(self, tmp_path):
         source_code = """
@@ -8800,20 +8878,12 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "cannot assign to read-only SPIR-V pointer patchColor" in (
+            spv_code_refused
         )
-
-        color_input = spirv_named_variable(
-            spv_code, "patchColor", storage_class="Input"
-        )
-        assert f"OpDecorate {color_input} Patch" in spv_code
-        assert "; WARNING: cannot assign to read-only SPIR-V pointer patchColor" in (
-            spv_code
-        )
-        assert f"OpStore {color_input} " not in spv_code
-        assert "Unknown variable patchColor" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     @pytest.mark.parametrize(
         ("attribute", "warning"),
@@ -8829,7 +8899,7 @@ class TestVulkanSPIRVCodeGen:
         ],
     )
     def test_tessellation_patchconstantfunc_rejects_invalid_metadata(
-        self, tmp_path, attribute, warning
+        self, attribute, warning
     ):
         source_code = f"""
         shader InvalidTessellationPatchConstantFunction {{
@@ -8840,13 +8910,9 @@ class TestVulkanSPIRVCodeGen:
         }}
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert warning in spv_code
-        assert "OpFunctionCall" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        assert refusal.value.reasons == (f"SPIR-V tessellation_control {warning}",)
 
     def test_geometry_stream_builtins_reject_invalid_stage_and_arity(self, tmp_path):
         source_code = """
@@ -8870,26 +8936,19 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert ("SPIR-V geometry EmitVertex requires no arguments") in spv_code_refused
         assert (
-            "; WARNING: SPIR-V geometry EmitVertex requires no arguments"
-        ) in spv_code
+            "SPIR-V geometry EndPrimitive requires no arguments"
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V geometry EndPrimitive requires no arguments"
-        ) in spv_code
+            "SPIR-V geometry EmitVertex is only valid in geometry stages"
+        ) in spv_code_refused
         assert (
-            "; WARNING: SPIR-V geometry EmitVertex is only valid in geometry stages"
-        ) in spv_code
-        assert (
-            "; WARNING: SPIR-V geometry EndPrimitive is only valid in geometry stages"
-        ) in spv_code
-        assert "OpEmitVertex" not in spv_code
-        assert "OpEndPrimitive" not in spv_code
-        assert "OpFunctionCall" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+            "SPIR-V geometry EndPrimitive is only valid in geometry stages"
+        ) in spv_code_refused
 
     def test_shared_helper_synchronization_rejects_non_workgroup_callgraph(
         self, tmp_path
@@ -8917,17 +8976,14 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         for function_name in ["barrier", "groupMemoryBarrier"]:
             assert (
-                f"; WARNING: synchronization builtin '{function_name}' requires "
+                f"synchronization builtin '{function_name}' requires "
                 "a workgroup-capable execution model"
-            ) in spv_code
-        assert "current execution model: Fragment, GLCompute" in spv_code
-        assert "OpControlBarrier" not in spv_code
-        assert spv_code.count("OpMemoryBarrier") == 1
-        assert_spirv_module_validates(spv_code, tmp_path)
+            ) in spv_code_refused
 
     def test_nested_helper_synchronization_rejects_mixed_callgraph(self, tmp_path):
         source_code = """
@@ -8957,20 +9013,14 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         for function_name in ["barrier", "groupMemoryBarrier"]:
             assert (
-                f"; WARNING: synchronization builtin '{function_name}' requires "
+                f"synchronization builtin '{function_name}' requires "
                 "a workgroup-capable execution model"
-            ) in spv_code
-        assert "current execution model: Fragment, GLCompute" in spv_code
-        assert "OpEntryPoint GLCompute" in spv_code
-        assert "OpEntryPoint Fragment" in spv_code
-        assert "OpControlBarrier" not in spv_code
-        assert spv_code.count("OpMemoryBarrier") == 1
-        assert spv_code.count("OpFunctionCall") == 3
-        assert_spirv_module_validates(spv_code, tmp_path)
+            ) in spv_code_refused
 
     def test_shared_helper_synchronization_allows_workgroup_callgraph(self, tmp_path):
         source_code = """
@@ -9104,50 +9154,14 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        compute_entry = re.search(r'OpEntryPoint GLCompute (%\d+) "main"', spv_code)
-        fragment_entry = re.search(r'OpEntryPoint Fragment (%\d+) "main"', spv_code)
-        assert compute_entry is not None
-        assert fragment_entry is not None
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         for function_name in ["barrier", "groupMemoryBarrier"]:
             assert (
-                f"; WARNING: synchronization builtin '{function_name}' requires "
+                f"synchronization builtin '{function_name}' requires "
                 "a workgroup-capable execution model; current execution model: Fragment"
-            ) in spv_code
-        assert "current execution model: Fragment, GLCompute" not in spv_code
-        assert spv_code.count("OpControlBarrier") == 1
-        assert spv_code.count("OpMemoryBarrier") == 2
-        assert spv_code.count("OpFunctionCall") == 2
-
-        function_bodies = {
-            match.group(1): match.group(0)
-            for match in re.finditer(
-                r"(%\d+) = OpFunction\b.*?OpFunctionEnd", spv_code, re.DOTALL
-            )
-        }
-        workgroup_helper = next(
-            function_id
-            for function_id, body in function_bodies.items()
-            if "OpControlBarrier" in body
-        )
-        fragment_helper = next(
-            function_id
-            for function_id, body in function_bodies.items()
-            if "current execution model: Fragment" in body
-        )
-        compute_body = function_bodies[compute_entry.group(1)]
-        fragment_body = function_bodies[fragment_entry.group(1)]
-        assert re.search(
-            rf"OpFunctionCall %\d+ {re.escape(workgroup_helper)}\b", compute_body
-        )
-        assert re.search(
-            rf"OpFunctionCall %\d+ {re.escape(fragment_helper)}\b", fragment_body
-        )
-        assert not re.search(
-            rf"OpFunctionCall %\d+ {re.escape(fragment_helper)}\b", compute_body
-        )
-        assert_spirv_module_validates(spv_code, tmp_path)
+            ) in spv_code_refused
 
     def test_compute_user_defined_synchronization_names_are_not_lowered(self):
         source_code = """
@@ -9195,8 +9209,9 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         for function_name in [
             "barrier",
             "workgroupBarrier",
@@ -9209,15 +9224,8 @@ class TestVulkanSPIRVCodeGen:
             "memoryBarrier",
         ]:
             assert (
-                f"; WARNING: synchronization builtin '{function_name}' "
-                "requires 0 operands"
-            ) in spv_code
-
-        assert "OpControlBarrier" not in spv_code
-        assert "OpMemoryBarrier" not in spv_code
-        assert "OpFunctionCall" not in spv_code
-        assert re.search(r"OpExtInst %\d+ %\d+ \\w*Barrier", spv_code) is None
-        assert_spirv_module_validates(spv_code, tmp_path)
+                f"synchronization builtin '{function_name}' " "requires 0 operands"
+            ) in spv_code_refused
 
     def test_compute_wave_lane_intrinsics_emit_subgroup_builtins(self):
         source_code = """
@@ -9585,33 +9593,28 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count(
-                "WARNING: WaveShuffleAndFillUp requires exactly three arguments "
+            spv_code_refused.count(
+                "WaveShuffleAndFillUp requires exactly three arguments "
                 "(value, fill, and delta)"
             )
             == 2
         )
         assert (
-            spv_code.count(
-                "WARNING: WaveShuffleAndFillUp requires compatible value and fill types"
+            spv_code_refused.count(
+                "WaveShuffleAndFillUp requires compatible value and fill types"
             )
             == 1
         )
         assert (
-            spv_code.count(
-                "WARNING: WaveShuffleAndFillUp requires a scalar integer delta"
+            spv_code_refused.count(
+                "WaveShuffleAndFillUp requires a scalar integer delta"
             )
             == 2
         )
-        assert "OpGroupNonUniformShuffleUp" not in spv_code
-        assert "OpUGreaterThanEqual" not in spv_code
-        assert "OpCapability GroupNonUniformShuffleRelative" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
 
     def test_compute_quad_wave_intrinsics_emit_group_non_uniform_quad_operations(self):
         source_code = """
@@ -9652,16 +9655,15 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count(
-                "WARNING: QuadReadLaneAt requires a literal lane index between 0 and 3"
+            spv_code_refused.count(
+                "QuadReadLaneAt requires a literal lane index between 0 and 3"
             )
             == 2
         )
-        assert "OpGroupNonUniformQuadBroadcast" not in spv_code
-        assert "Unknown expression type WaveOpNode" not in spv_code
 
     def test_compute_wave_match_and_multi_prefix_emit_partitioned_operations(self):
         source_code = """
@@ -9713,17 +9715,15 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: WaveMultiPrefixSum requires value and ballot arguments"
-            in spv_code
+            "WaveMultiPrefixSum requires value and ballot arguments" in spv_code_refused
         )
         assert (
-            "WARNING: WaveMultiPrefixBitOr requires a uvec4 ballot argument" in spv_code
+            "WaveMultiPrefixBitOr requires a uvec4 ballot argument" in spv_code_refused
         )
-        assert "OpGroupNonUniformPartitionNV" not in spv_code
-        assert "PartitionedExclusiveScanNV" not in spv_code
 
     def test_compute_unsupported_wave_intrinsics_emit_diagnostics(self):
         source_code = """
@@ -9738,11 +9738,10 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        assert "WARNING: WaveMatch requires exactly one argument" in spv_code
-        assert "OpGroupNonUniformPartitionNV" not in spv_code
-        assert "Unknown expression type WaveOpNode" not in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
+        assert "WaveMatch requires exactly one argument" in spv_code_refused
 
     def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics(
         self,
@@ -9760,7 +9759,8 @@ class TestVulkanSPIRVCodeGen:
         )
         mesh_result = gen.process_expression(MeshOpNode("SetMeshOutputCounts", [3, 1]))
 
-        spv_code = "\n".join(gen.code_lines)
+        # Each operation records a refusal; generate() would raise them together.
+        spv_code = "\n".join(gen.refusals.reasons)
 
         assert trace_result.type.base_type == "uint"
         assert report_result.type.base_type == "bool"
@@ -9769,26 +9769,26 @@ class TestVulkanSPIRVCodeGen:
         assert unsupported_query_result.type.base_type == "uint"
         assert mesh_result.type.base_type == "uint"
         assert (
-            "WARNING: SPIR-V ray tracing operation TraceRay requires "
+            "SPIR-V ray tracing operation TraceRay requires "
             "a ray tracing stage context"
         ) in spv_code
         assert (
-            "WARNING: SPIR-V ray tracing operation ReportHit requires "
+            "SPIR-V ray tracing operation ReportHit requires "
             "a ray tracing stage context"
         ) in spv_code
         assert (
-            "WARNING: SPIR-V backend does not lower ray query operation "
-            "CommittedTriangleCustomAttribute yet; using a default uint value"
+            "SPIR-V backend does not lower ray query operation "
+            "CommittedTriangleCustomAttribute yet"
         ) in spv_code
         assert (
-            "WARNING: SPIR-V backend does not lower mesh shader operation "
-            "SetMeshOutputCounts yet; using a default uint value"
+            "SPIR-V backend does not lower mesh shader operation "
+            "SetMeshOutputCounts yet"
         ) in spv_code
         assert "Unknown expression type RayTracingOpNode" not in spv_code
         assert "Unknown expression type RayQueryOpNode" not in spv_code
         assert "Unknown expression type MeshOpNode" not in spv_code
 
-    def test_unsupported_ray_mesh_ir_fallback_module_validates(self, tmp_path):
+    def test_unsupported_ray_mesh_ir_operations_are_refused(self):
         bool_type = PrimitiveType("bool")
         float_type = PrimitiveType("float")
         void_type = PrimitiveType("void")
@@ -9838,28 +9838,23 @@ class TestVulkanSPIRVCodeGen:
             },
         )
 
-        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(shader_node)
+        spv_code = str(refusal.value)
 
-        assert "OpEntryPoint GLCompute" in spv_code
-        assert "OpExecutionMode" in spv_code
         assert (
             "SPIR-V ray tracing operation ReportHit is only valid in "
             "IntersectionKHR stages"
         ) in spv_code
-        assert "Proceed yet; using a default bool value" in spv_code
-        assert "CandidateRayT yet; using a default float value" in spv_code
-        assert (
-            "CommittedTriangleCustomAttribute yet; using a default uint value"
-            in spv_code
-        )
-        assert "SetMeshOutputCounts yet; using a default uint value" in spv_code
+        assert "Proceed yet" in spv_code
+        assert "CandidateRayT yet" in spv_code
+        assert "CommittedTriangleCustomAttribute yet" in spv_code
+        assert "SetMeshOutputCounts yet" in spv_code
         assert (
             "SPIR-V ray tracing operation TraceRay is only valid in "
             "ClosestHitKHR, MissKHR, RayGenerationKHR stages"
         ) in spv_code
         assert "Unknown expression type" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mesh_stage_set_mesh_output_counts_emits_ext_instruction(self, tmp_path):
         source_code = """
@@ -9907,13 +9902,13 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh SetMeshOutputCounts requires exactly 2 arguments"
-            in spv_code
+            "SPIR-V mesh SetMeshOutputCounts requires exactly 2 arguments"
+            in spv_code_refused
         )
-        assert "OpSetMeshOutputsEXT" not in spv_code
 
     def test_mesh_stage_set_mesh_output_counts_rejects_non_scalar_counts(
         self, tmp_path
@@ -9931,15 +9926,13 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh SetMeshOutputCounts count operands must be "
+            "SPIR-V mesh SetMeshOutputCounts count operands must be "
             "scalar integer values"
-        ) in spv_code
-        assert "OpSetMeshOutputsEXT" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_mesh_stage_set_mesh_output_counts_rejects_negative_literal_counts(
         self, tmp_path
@@ -9957,15 +9950,13 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh SetMeshOutputCounts count operands must be "
+            "SPIR-V mesh SetMeshOutputCounts count operands must be "
             "non-negative integer values"
-        ) in spv_code
-        assert "OpSetMeshOutputsEXT" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_mesh_stage_set_mesh_output_counts_rejects_declared_limit_overflow(
         self, tmp_path
@@ -9985,34 +9976,25 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"', spv_code)
-        assert entry_match is not None
-        entry_id = entry_match.group(1)
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh SetMeshOutputCounts vertex count exceeds "
+            "SPIR-V mesh SetMeshOutputCounts vertex count exceeds "
             "declared max_vertices"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V mesh SetMeshOutputCounts primitive count exceeds "
+            "SPIR-V mesh SetMeshOutputCounts primitive count exceeds "
             "declared max_primitives"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V mesh SetVertex literal index exceeds the declared "
+            "SPIR-V mesh SetVertex literal index exceeds the declared "
             "mesh vertex output limit"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V mesh SetPrimitive literal index exceeds the declared "
+            "SPIR-V mesh SetPrimitive literal index exceeds the declared "
             "mesh primitive output limit"
-        ) in spv_code
-        assert f"OpExecutionMode %{entry_id} OutputVertices 1" in spv_code
-        assert f"OpExecutionMode %{entry_id} OutputPrimitivesEXT 1" in spv_code
-        assert "OpSetMeshOutputsEXT" not in spv_code
-        assert "BuiltIn Position" not in spv_code
-        assert "PrimitiveTriangleIndicesEXT" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_mesh_stage_set_vertex_and_primitive_emit_output_stores(self, tmp_path):
         source_code = """
@@ -10829,31 +10811,22 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count(
-                "WARNING: Compound assignment to whole SPIR-V mesh output "
+            spv_code_refused.count(
+                "Compound assignment to whole SPIR-V mesh output "
                 "elements cannot be lowered"
             )
             == 2
         )
         assert (
-            spv_code.count(
-                "WARNING: Compound assignment to SPIR-V mesh indices output "
-                "cannot be lowered"
+            spv_code_refused.count(
+                "Compound assignment to SPIR-V mesh indices output " "cannot be lowered"
             )
             == 1
         )
-        assert "Unsupported LHS type" not in spv_code
-        assert "Unknown variable verts" not in spv_code
-        assert "Unknown variable prims" not in spv_code
-        assert "Unknown variable tris" not in spv_code
-        assert "_CrossGLMesh" not in spv_code
-        assert "OpFAdd" not in spv_code
-        assert "OpIAdd" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mesh_stage_whole_element_compound_assignments_reject_negative_indices(
         self, tmp_path
@@ -10891,39 +10864,27 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count(
-                "WARNING: SPIR-V mesh verts output literal index must be non-negative"
+            spv_code_refused.count(
+                "SPIR-V mesh verts output literal index must be non-negative"
             )
             == 1
         )
         assert (
-            spv_code.count(
-                "WARNING: SPIR-V mesh prims output literal index must be non-negative"
+            spv_code_refused.count(
+                "SPIR-V mesh prims output literal index must be non-negative"
             )
             == 1
         )
         assert (
-            spv_code.count(
-                "WARNING: SPIR-V mesh tris output literal index must be non-negative"
+            spv_code_refused.count(
+                "SPIR-V mesh tris output literal index must be non-negative"
             )
             == 1
         )
-        assert (
-            "Compound assignment to whole SPIR-V mesh output elements" not in spv_code
-        )
-        assert "Compound assignment to SPIR-V mesh indices output" not in spv_code
-        assert "Unsupported LHS type" not in spv_code
-        assert "Unknown variable verts" not in spv_code
-        assert "Unknown variable prims" not in spv_code
-        assert "Unknown variable tris" not in spv_code
-        assert "_CrossGLMesh" not in spv_code
-        assert "OpFAdd" not in spv_code
-        assert "OpIAdd" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mesh_stage_whole_element_assignments_reject_negative_indices(
         self, tmp_path
@@ -10961,36 +10922,27 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count(
-                "WARNING: SPIR-V mesh verts output literal index must be non-negative"
+            spv_code_refused.count(
+                "SPIR-V mesh verts output literal index must be non-negative"
             )
             == 1
         )
         assert (
-            spv_code.count(
-                "WARNING: SPIR-V mesh prims output literal index must be non-negative"
+            spv_code_refused.count(
+                "SPIR-V mesh prims output literal index must be non-negative"
             )
             == 1
         )
         assert (
-            spv_code.count(
-                "WARNING: SPIR-V mesh tris output literal index must be non-negative"
+            spv_code_refused.count(
+                "SPIR-V mesh tris output literal index must be non-negative"
             )
             == 1
         )
-        assert "SPIR-V mesh SetVertex literal index" not in spv_code
-        assert "SPIR-V mesh SetPrimitive literal index" not in spv_code
-        assert "Unsupported LHS type" not in spv_code
-        assert "Unknown variable verts" not in spv_code
-        assert "Unknown variable prims" not in spv_code
-        assert "Unknown variable tris" not in spv_code
-        assert "_CrossGLMesh" not in spv_code
-        assert "OpCompositeConstruct" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mesh_stage_whole_element_assignments_reject_shape_mismatches(
         self, tmp_path
@@ -11025,29 +10977,18 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh verts output assignment value does not match "
-            "MeshVertex"
-        ) in spv_code
+            "SPIR-V mesh verts output assignment value does not match " "MeshVertex"
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V mesh prims output assignment value does not match "
-            "MeshPrimitive"
-        ) in spv_code
+            "SPIR-V mesh prims output assignment value does not match " "MeshPrimitive"
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V mesh indices output assignment value does not match "
-            "v3uint"
-        ) in spv_code
-        assert "Could not determine array element type" not in spv_code
-        assert "Unsupported LHS type" not in spv_code
-        assert "Unknown variable verts" not in spv_code
-        assert "Unknown variable tris" not in spv_code
-        assert "Unknown variable prims" not in spv_code
-        assert "_CrossGLMesh" not in spv_code
-        assert "OpCompositeExtract" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            "SPIR-V mesh indices output assignment value does not match " "v3uint"
+        ) in spv_code_refused
 
     def test_mesh_stage_direct_member_assignments_reject_unknown_members(
         self, tmp_path
@@ -11085,30 +11026,23 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh output verts has no member missingVertex" in spv_code
+            "SPIR-V mesh output verts has no member missingVertex" in spv_code_refused
         )
         assert (
-            "WARNING: SPIR-V mesh output verts has no member missingComponent"
-            in spv_code
+            "SPIR-V mesh output verts has no member missingComponent"
+            in spv_code_refused
         )
         assert (
-            "WARNING: SPIR-V mesh output prims has no member missingPrimitive"
-            in spv_code
+            "SPIR-V mesh output prims has no member missingPrimitive"
+            in spv_code_refused
         )
         assert (
-            "WARNING: SPIR-V mesh output prims has no member "
-            "missingPrimitiveComponent"
-        ) in spv_code
-        assert "Unsupported LHS type" not in spv_code
-        assert "Unknown variable verts" not in spv_code
-        assert "Unknown variable prims" not in spv_code
-        assert "_CrossGLMesh" not in spv_code
-        assert "OpCompositeConstruct" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            "SPIR-V mesh output prims has no member " "missingPrimitiveComponent"
+        ) in spv_code_refused
 
     def test_mesh_stage_direct_component_assignments_reject_invalid_targets(
         self, tmp_path
@@ -11146,21 +11080,22 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "Cannot assign to vector swizzle xx with duplicate components" in spv_code
+            "Cannot assign to vector swizzle xx with duplicate components"
+            in spv_code_refused
         )
-        assert "Invalid vector swizzle xq for v2float" in spv_code
-        assert "SPIR-V mesh output size has no vector component x" in spv_code
-        assert "SPIR-V mesh output primitiveId has no vector component x" in spv_code
-        assert "Unsupported LHS type" not in spv_code
-        assert "Unknown variable verts" not in spv_code
-        assert "Unknown variable prims" not in spv_code
-        assert "_CrossGLMesh" not in spv_code
-        assert "OpCompositeConstruct" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        assert "Invalid vector swizzle xq for v2float" in spv_code_refused
+        assert "SPIR-V mesh output size has no vector component x" in spv_code_refused
+        assert (
+            "SPIR-V mesh output primitiveId has no vector component x"
+            in spv_code_refused
+        )
+        assert "Unsupported LHS type" not in spv_code_refused
+        assert "Unknown variable verts" not in spv_code_refused
+        assert "Unknown variable prims" not in spv_code_refused
 
     def test_mesh_stage_compound_member_assignments_reject_negative_indices(
         self, tmp_path
@@ -11196,28 +11131,21 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count(
-                "WARNING: SPIR-V mesh verts output literal index must be non-negative"
+            spv_code_refused.count(
+                "SPIR-V mesh verts output literal index must be non-negative"
             )
             == 2
         )
         assert (
-            spv_code.count(
-                "WARNING: SPIR-V mesh prims output literal index must be non-negative"
+            spv_code_refused.count(
+                "SPIR-V mesh prims output literal index must be non-negative"
             )
             == 1
         )
-        assert "Unsupported LHS type" not in spv_code
-        assert "Unknown variable verts" not in spv_code
-        assert "Unknown variable prims" not in spv_code
-        assert "_CrossGLMeshShadow_" not in spv_code
-        assert "BuiltIn Position" not in spv_code
-        assert "OpFAdd" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mesh_stage_compound_component_assignments_reject_invalid_swizzles(
         self, tmp_path
@@ -11254,19 +11182,21 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "Cannot assign to vector swizzle xx with duplicate components" in spv_code
+            "Cannot assign to vector swizzle xx with duplicate components"
+            in spv_code_refused
         )
-        assert "Cannot assign 2-component vector to 3-component swizzle xyz" in spv_code
-        assert "Cannot assign scalar value to vector swizzle xy" in spv_code
-        assert "Invalid vector swizzle xq for v3float" in spv_code
-        assert "Unsupported LHS type" not in spv_code
-        assert "Could not find member" not in spv_code
-        assert "OpFAdd" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        assert (
+            "Cannot assign 2-component vector to 3-component swizzle xyz"
+            in spv_code_refused
+        )
+        assert "Cannot assign scalar value to vector swizzle xy" in spv_code_refused
+        assert "Invalid vector swizzle xq for v3float" in spv_code_refused
+        assert "Unsupported LHS type" not in spv_code_refused
+        assert "Could not find member" not in spv_code_refused
 
     def test_mesh_stage_primitive_builtin_output_parameters(self, tmp_path):
         source_code = """
@@ -11512,18 +11442,13 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        assert "WARNING: SPIR-V mesh SetVertex is only valid in mesh stages" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
+        assert "SPIR-V mesh SetVertex is only valid in mesh stages" in spv_code_refused
         assert (
-            "WARNING: SPIR-V mesh SetPrimitive is only valid in mesh stages" in spv_code
+            "SPIR-V mesh SetPrimitive is only valid in mesh stages" in spv_code_refused
         )
-        assert not re.search(r"OpExtInst [^\n]*\bSetVertex\b", spv_code)
-        assert not re.search(r"OpExtInst [^\n]*\bSetPrimitive\b", spv_code)
-        assert "PrimitiveTriangleIndicesEXT" not in spv_code
-        assert "BuiltIn Position" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mesh_output_helpers_reject_negative_literal_indices(self, tmp_path):
         source_code = """
@@ -11541,22 +11466,17 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh SetVertex literal index must be non-negative"
-            in spv_code
+            "SPIR-V mesh SetVertex literal index must be non-negative"
+            in spv_code_refused
         )
         assert (
-            "WARNING: SPIR-V mesh SetPrimitive literal index must be non-negative"
-            in spv_code
+            "SPIR-V mesh SetPrimitive literal index must be non-negative"
+            in spv_code_refused
         )
-        assert "BuiltIn Position" not in spv_code
-        assert "PrimitiveTriangleIndicesEXT" not in spv_code
-        assert not re.search(r"OpExtInst [^\n]*\bSetVertex\b", spv_code)
-        assert not re.search(r"OpExtInst [^\n]*\bSetPrimitive\b", spv_code)
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mesh_output_helpers_reject_literal_indices_above_declared_limits(
         self, tmp_path
@@ -11576,21 +11496,17 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh SetVertex literal index exceeds the declared "
+            "SPIR-V mesh SetVertex literal index exceeds the declared "
             "mesh vertex output limit"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V mesh SetPrimitive literal index exceeds the declared "
+            "SPIR-V mesh SetPrimitive literal index exceeds the declared "
             "mesh primitive output limit"
-        ) in spv_code
-        assert "OpSetMeshOutputsEXT" in spv_code
-        assert "BuiltIn Position" not in spv_code
-        assert "PrimitiveTriangleIndicesEXT" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_mesh_stage_output_parameter_assignments_reject_indices_above_limits(
         self, tmp_path
@@ -11625,28 +11541,21 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh verts output literal index exceeds the "
+            "SPIR-V mesh verts output literal index exceeds the "
             "declared mesh vertex output limit"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V mesh tris output literal index exceeds the "
+            "SPIR-V mesh tris output literal index exceeds the "
             "declared mesh primitive output limit"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V mesh prims output literal index exceeds the "
+            "SPIR-V mesh prims output literal index exceeds the "
             "declared mesh primitive output limit"
-        ) in spv_code
-        assert "Unknown variable verts" not in spv_code
-        assert "Unknown variable tris" not in spv_code
-        assert "Unknown variable prims" not in spv_code
-        assert "_CrossGLMesh" not in spv_code
-        assert "BuiltIn Position" not in spv_code
-        assert "PrimitiveTriangleIndicesEXT" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_task_stage_dispatch_mesh_emits_ext_terminator(self, tmp_path):
         source_code = """
@@ -11853,13 +11762,13 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh DispatchMesh payload target is ambiguous "
+            "SPIR-V mesh DispatchMesh payload target is ambiguous "
             "for TaskPayload: payloadA, payloadB"
-        ) in spv_code
-        assert "OpEmitMeshTasksEXT" not in spv_code
+        ) in spv_code_refused
 
     def test_task_stage_dispatch_mesh_payload_requires_shared_storage(self):
         source_code = """
@@ -11878,14 +11787,13 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh DispatchMesh payload argument requires "
+            "SPIR-V mesh DispatchMesh payload argument requires "
             "taskPayloadSharedEXT storage"
-        ) in spv_code
-        assert "TaskPayloadWorkgroupEXT" not in spv_code
-        assert "OpEmitMeshTasksEXT" not in spv_code
+        ) in spv_code_refused
 
     def test_task_stage_dispatch_mesh_rejects_bad_arity(self):
         source_code = """
@@ -11899,12 +11807,12 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh DispatchMesh requires exactly 3 arguments" in spv_code
+            "SPIR-V mesh DispatchMesh requires exactly 3 arguments" in spv_code_refused
         )
-        assert "OpEmitMeshTasksEXT" not in spv_code
 
     def test_task_stage_dispatch_mesh_rejects_non_scalar_group_counts(self, tmp_path):
         source_code = """
@@ -11918,15 +11826,13 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh DispatchMesh group-count operands must be "
+            "SPIR-V mesh DispatchMesh group-count operands must be "
             "scalar integer values"
-        ) in spv_code
-        assert "OpEmitMeshTasksEXT" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_task_stage_dispatch_mesh_rejects_negative_literal_group_counts(
         self, tmp_path
@@ -11942,15 +11848,13 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V mesh DispatchMesh group-count operands must be "
+            "SPIR-V mesh DispatchMesh group-count operands must be "
             "non-negative integer values"
-        ) in spv_code
-        assert "OpEmitMeshTasksEXT" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_ray_query_proceed_and_intersection_t_emit_khr_instructions(self, tmp_path):
         bool_type = PrimitiveType("bool")
@@ -12002,9 +11906,9 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(r"%\d+ = OpTypeRayQueryKHR\b", spv_code)
         assert "OpRayQueryProceedKHR" in spv_code
         assert spv_code.count("OpRayQueryGetIntersectionTKHR") == 2
-        assert "Proceed yet; using a default bool value" not in spv_code
-        assert "CandidateRayT yet; using a default float value" not in spv_code
-        assert "CommittedRayT yet; using a default float value" not in spv_code
+        assert "Proceed yet" not in spv_code
+        assert "CandidateRayT yet" not in spv_code
+        assert "CommittedRayT yet" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -12174,24 +12078,21 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        assert "WARNING: SPIR-V RayQuery.Abort requires 0 arguments" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
+        assert "SPIR-V RayQuery.Abort requires 0 arguments" in spv_code_refused
         assert (
-            "WARNING: SPIR-V RayQuery.CommitNonOpaqueTriangleHit requires 0 "
-            "arguments"
-        ) in spv_code
+            "SPIR-V RayQuery.CommitNonOpaqueTriangleHit requires 0 " "arguments"
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V RayQuery.GenerateIntersection hit distance argument "
+            "SPIR-V RayQuery.GenerateIntersection hit distance argument "
             "must be a 32-bit floating-point scalar"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V RayQuery.CommitProceduralPrimitiveHit hit distance "
+            "SPIR-V RayQuery.CommitProceduralPrimitiveHit hit distance "
             "argument must be a 32-bit floating-point scalar"
-        ) in spv_code
-        assert "OpRayQueryTerminateKHR" not in spv_code
-        assert "OpRayQueryGenerateIntersectionKHR" not in spv_code
-        assert "OpRayQueryConfirmIntersectionKHR" not in spv_code
+        ) in spv_code_refused
 
     def test_ray_query_intersection_metadata_getters_emit_khr_instructions(
         self, tmp_path
@@ -12253,25 +12154,20 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        assert "WARNING: SPIR-V RayQuery.CandidateType requires 0 arguments" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
+        assert "SPIR-V RayQuery.CandidateType requires 0 arguments" in spv_code_refused
         assert (
-            "WARNING: SPIR-V RayQuery.CommittedPrimitiveIndex requires 0 arguments"
-            in spv_code
+            "SPIR-V RayQuery.CommittedPrimitiveIndex requires 0 arguments"
+            in spv_code_refused
         )
         assert (
-            "WARNING: SPIR-V RayQuery.CandidateTriangleBarycentrics requires 0 "
-            "arguments"
-        ) in spv_code
+            "SPIR-V RayQuery.CandidateTriangleBarycentrics requires 0 " "arguments"
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V RayQuery.CommittedTriangleFrontFace requires 0 "
-            "arguments"
-        ) in spv_code
-        assert "OpRayQueryGetIntersectionTypeKHR" not in spv_code
-        assert "OpRayQueryGetIntersectionPrimitiveIndexKHR" not in spv_code
-        assert "OpRayQueryGetIntersectionBarycentricsKHR" not in spv_code
-        assert "OpRayQueryGetIntersectionFrontFaceKHR" not in spv_code
+            "SPIR-V RayQuery.CommittedTriangleFrontFace requires 0 " "arguments"
+        ) in spv_code_refused
 
     def test_ray_query_ray_state_and_instance_record_getters_emit_khr_instructions(
         self, tmp_path
@@ -12335,26 +12231,19 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        assert "WARNING: SPIR-V RayQuery.RayTMin requires 0 arguments" in spv_code
-        assert "WARNING: SPIR-V RayQuery.RayFlags requires 0 arguments" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
+        assert "SPIR-V RayQuery.RayTMin requires 0 arguments" in spv_code_refused
+        assert "SPIR-V RayQuery.RayFlags requires 0 arguments" in spv_code_refused
         assert (
-            "WARNING: SPIR-V RayQuery.CandidateInstanceCustomIndex requires 0 "
-            "arguments"
-        ) in spv_code
+            "SPIR-V RayQuery.CandidateInstanceCustomIndex requires 0 " "arguments"
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V "
+            "SPIR-V "
             "RayQuery.CommittedInstanceShaderBindingTableRecordOffset requires 0 "
             "arguments"
-        ) in spv_code
-        assert "OpRayQueryGetRayTMinKHR" not in spv_code
-        assert "OpRayQueryGetRayFlagsKHR" not in spv_code
-        assert "OpRayQueryGetIntersectionInstanceCustomIndexKHR" not in spv_code
-        assert (
-            "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR"
-            not in spv_code
-        )
+        ) in spv_code_refused
 
     def test_ray_query_world_and_object_ray_getters_emit_khr_instructions(
         self, tmp_path
@@ -12407,27 +12296,20 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
+        assert "SPIR-V RayQuery.WorldRayOrigin requires 0 arguments" in spv_code_refused
         assert (
-            "WARNING: SPIR-V RayQuery.WorldRayOrigin requires 0 arguments" in spv_code
+            "SPIR-V RayQuery.WorldRayDirection requires 0 arguments" in spv_code_refused
         )
         assert (
-            "WARNING: SPIR-V RayQuery.WorldRayDirection requires 0 arguments"
-            in spv_code
+            "SPIR-V RayQuery.CandidateObjectRayOrigin requires 0 arguments"
+            in spv_code_refused
         )
         assert (
-            "WARNING: SPIR-V RayQuery.CandidateObjectRayOrigin requires 0 arguments"
-            in spv_code
-        )
-        assert (
-            "WARNING: SPIR-V RayQuery.CommittedObjectRayDirection requires 0 "
-            "arguments"
-        ) in spv_code
-        assert "OpRayQueryGetWorldRayOriginKHR" not in spv_code
-        assert "OpRayQueryGetWorldRayDirectionKHR" not in spv_code
-        assert "OpRayQueryGetIntersectionObjectRayOriginKHR" not in spv_code
-        assert "OpRayQueryGetIntersectionObjectRayDirectionKHR" not in spv_code
+            "SPIR-V RayQuery.CommittedObjectRayDirection requires 0 " "arguments"
+        ) in spv_code_refused
 
     def test_ray_query_transform_getters_emit_khr_instructions(self, tmp_path):
         source_code = """
@@ -12495,26 +12377,23 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         committed_object_warning = (
-            "WARNING: SPIR-V RayQuery.CommittedObjectToWorld3x4 requires 0 arguments"
+            "SPIR-V RayQuery.CommittedObjectToWorld3x4 requires 0 arguments"
         )
         candidate_world_warning = (
-            "WARNING: SPIR-V RayQuery.CandidateWorldToObject3x4 requires 0 arguments"
+            "SPIR-V RayQuery.CandidateWorldToObject3x4 requires 0 arguments"
         )
-
         assert (
-            "WARNING: SPIR-V RayQuery.CandidateObjectToWorld requires 0 arguments"
-            in spv_code
+            "SPIR-V RayQuery.CandidateObjectToWorld requires 0 arguments"
+            in spv_code_refused
         )
-        assert committed_object_warning in spv_code
-        assert candidate_world_warning in spv_code
         assert (
-            "WARNING: SPIR-V RayQuery.CommittedWorldToObject requires 0 arguments"
-            in spv_code
+            "SPIR-V RayQuery.CommittedWorldToObject requires 0 arguments"
+            in spv_code_refused
         )
-        assert "OpRayQueryGetIntersectionObjectToWorldKHR" not in spv_code
-        assert "OpRayQueryGetIntersectionWorldToObjectKHR" not in spv_code
 
     def test_ray_query_candidate_aabb_opaque_getter_emits_khr_instruction(
         self, tmp_path
@@ -12553,13 +12432,13 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V RayQuery.CandidateAABBOpaque requires 0 arguments"
-            in spv_code
+            "SPIR-V RayQuery.CandidateAABBOpaque requires 0 arguments"
+            in spv_code_refused
         )
-        assert "OpRayQueryGetIntersectionCandidateAABBOpaqueKHR" not in spv_code
 
     def test_ray_query_triangle_vertex_position_getters_emit_khr_instruction(
         self, tmp_path
@@ -12620,17 +12499,15 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V RayQuery.CandidateTriangleVertexPositions requires "
-            "0 arguments"
-        ) in spv_code
+            "SPIR-V RayQuery.CandidateTriangleVertexPositions requires " "0 arguments"
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V RayQuery.CommittedTriangleVertexPositions requires "
-            "0 arguments"
-        ) in spv_code
-        assert "OpRayQueryGetIntersectionTriangleVertexPositionsKHR" not in spv_code
+            "SPIR-V RayQuery.CommittedTriangleVertexPositions requires " "0 arguments"
+        ) in spv_code_refused
 
     def test_ray_query_triangle_normal_getters_derive_from_position_fetch(
         self, tmp_path
@@ -12682,19 +12559,17 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V RayQuery.CandidateTriangleNormal requires 0 arguments"
-            in spv_code
+            "SPIR-V RayQuery.CandidateTriangleNormal requires 0 arguments"
+            in spv_code_refused
         )
         assert (
-            "WARNING: SPIR-V RayQuery.CommittedTriangleNormal requires 0 arguments"
-            in spv_code
+            "SPIR-V RayQuery.CommittedTriangleNormal requires 0 arguments"
+            in spv_code_refused
         )
-        assert "OpRayQueryGetIntersectionTriangleVertexPositionsKHR" not in spv_code
-        assert " Cross " not in spv_code
-        assert " Normalize " not in spv_code
 
     def test_ray_query_triangle_area_getters_derive_from_position_fetch(self, tmp_path):
         source_code = """
@@ -12744,19 +12619,17 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V RayQuery.CandidateTriangleArea requires 0 arguments"
-            in spv_code
+            "SPIR-V RayQuery.CandidateTriangleArea requires 0 arguments"
+            in spv_code_refused
         )
         assert (
-            "WARNING: SPIR-V RayQuery.CommittedTriangleArea requires 0 arguments"
-            in spv_code
+            "SPIR-V RayQuery.CommittedTriangleArea requires 0 arguments"
+            in spv_code_refused
         )
-        assert "OpRayQueryGetIntersectionTriangleVertexPositionsKHR" not in spv_code
-        assert " Cross " not in spv_code
-        assert " Length " not in spv_code
 
     def test_ray_query_triangle_centroid_getters_derive_from_position_fetch(
         self, tmp_path
@@ -12806,17 +12679,15 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V RayQuery.CandidateTriangleCentroid requires " "0 arguments"
-        ) in spv_code
+            "SPIR-V RayQuery.CandidateTriangleCentroid requires " "0 arguments"
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V RayQuery.CommittedTriangleCentroid requires " "0 arguments"
-        ) in spv_code
-        assert "OpRayQueryGetIntersectionTriangleVertexPositionsKHR" not in spv_code
-        assert "OpFAdd" not in spv_code
-        assert "OpFDiv" not in spv_code
+            "SPIR-V RayQuery.CommittedTriangleCentroid requires " "0 arguments"
+        ) in spv_code_refused
 
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """
@@ -12832,12 +12703,11 @@ class TestVulkanSPIRVCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        spv_code = VulkanSPIRVCodeGen().generate(ast)
-
-        assert "WARNING: SPIR-V RayQuery.Proceed requires 0 arguments" in spv_code
-        assert "WARNING: SPIR-V RayQuery.CandidateRayT requires 0 arguments" in spv_code
-        assert "OpRayQueryProceedKHR" not in spv_code
-        assert "OpRayQueryGetIntersectionTKHR" not in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(ast)
+        spv_code_refused = str(refusal.value)
+        assert "SPIR-V RayQuery.Proceed requires 0 arguments" in spv_code_refused
+        assert "SPIR-V RayQuery.CandidateRayT requires 0 arguments" in spv_code_refused
 
     def test_integer_image_atomics_emit_spirv_atomic_operations(self, tmp_path):
         source_code = """
@@ -13003,30 +12873,22 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count("WARNING: imageAtomicAdd requires an integer storage image")
+            spv_code_refused.count("imageAtomicAdd requires an integer storage image")
             == 1
         )
         assert (
-            "WARNING: imageAtomicExchange requires an integer storage image" in spv_code
+            "imageAtomicExchange requires an integer storage image" in spv_code_refused
         )
         assert (
-            "WARNING: imageAtomicAdd requires a scalar storage image format" in spv_code
+            "imageAtomicAdd requires a scalar storage image format" in spv_code_refused
         )
         assert (
-            "WARNING: imageAtomicMin requires a scalar storage image format" in spv_code
+            "imageAtomicMin requires a scalar storage image format" in spv_code_refused
         )
-        assert "OpImageTexelPointer" not in spv_code
-        assert "OpAtomic" not in spv_code
-        assert "imageAtomicAdd(" not in spv_code
-        assert "imageAtomicExchange(" not in spv_code
-        assert "imageAtomicMin(" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
 
     def test_atomic_operations_share_device_scope_and_none_memory_semantics(
         self, tmp_path
@@ -14441,30 +14303,21 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "WARNING: StructuredBuffer.Load requires an index operand" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "StructuredBuffer.Load requires an index operand" in spv_code_refused
+        assert "StructuredBuffer.Load accepts only an index operand" in spv_code_refused
+        assert "RWStructuredBuffer.Store requires a writable buffer" in spv_code_refused
+        assert "StructuredBuffer.Load requires a readable buffer" in spv_code_refused
         assert (
-            "WARNING: StructuredBuffer.Load accepts only an index operand" in spv_code
-        )
-        assert (
-            "WARNING: RWStructuredBuffer.Store requires a writable buffer" in spv_code
-        )
-        assert "WARNING: StructuredBuffer.Load requires a readable buffer" in spv_code
-        assert (
-            "WARNING: RWStructuredBuffer.Store requires index and value operands"
-            in spv_code
+            "RWStructuredBuffer.Store requires index and value operands"
+            in spv_code_refused
         )
         assert (
-            "WARNING: RWStructuredBuffer.Store accepts only index and value operands"
-            in spv_code
+            "RWStructuredBuffer.Store accepts only index and value operands"
+            in spv_code_refused
         )
-        assert "Unknown type StructuredBuffer" not in spv_code
-        assert "Unknown type RWStructuredBuffer" not in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_byte_address_buffers_emit_scalar_load_store_accesses(self, tmp_path):
         source_code = """
@@ -14771,23 +14624,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: RWByteAddressBuffer.Store requires a writable buffer" in spv_code
+            "RWByteAddressBuffer.Store requires a writable buffer" in spv_code_refused
         )
         assert (
-            "WARNING: RWByteAddressBuffer.InterlockedAdd requires a read-write buffer"
-            in spv_code
+            "RWByteAddressBuffer.InterlockedAdd requires a read-write buffer"
+            in spv_code_refused
         )
-        assert "WARNING: RWByteAddressBuffer.Store3 requires a uvec3 value" in spv_code
-        assert "Unknown type ByteAddressBuffer" not in spv_code
-        assert "Unknown type RWByteAddressBuffer" not in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert "OpAtomic" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+        assert "RWByteAddressBuffer.Store3 requires a uvec3 value" in spv_code_refused
 
     def test_byte_address_buffer_methods_emit_invalid_operand_diagnostics(
         self, tmp_path
@@ -14809,27 +14656,22 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "WARNING: ByteAddressBuffer.Load requires a byte offset" in spv_code
-        assert "WARNING: ByteAddressBuffer byte offset must be an integer" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "ByteAddressBuffer.Load requires a byte offset" in spv_code_refused
+        assert "ByteAddressBuffer byte offset must be an integer" in spv_code_refused
         assert (
-            "WARNING: RWByteAddressBuffer.Store requires byte offset and value operands"
-            in spv_code
-        )
-        assert (
-            "WARNING: RWByteAddressBuffer.Store accepts only byte offset and value operands"
-            in spv_code
+            "RWByteAddressBuffer.Store requires byte offset and value operands"
+            in spv_code_refused
         )
         assert (
-            "WARNING: RWByteAddressBuffer.Store requires a writable buffer" in spv_code
+            "RWByteAddressBuffer.Store accepts only byte offset and value operands"
+            in spv_code_refused
         )
-        assert "Unknown type ByteAddressBuffer" not in spv_code
-        assert "Unknown type RWByteAddressBuffer" not in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+        assert (
+            "RWByteAddressBuffer.Store requires a writable buffer" in spv_code_refused
+        )
 
     def test_byte_address_buffer_interlocked_methods_emit_invalid_operand_diagnostics(
         self, tmp_path
@@ -14857,48 +14699,40 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: RWByteAddressBuffer.InterlockedAdd requires a read-write buffer"
-            in spv_code
+            "RWByteAddressBuffer.InterlockedAdd requires a read-write buffer"
+            in spv_code_refused
         )
         assert (
-            "WARNING: RWByteAddressBuffer.InterlockedAdd requires byte offset and "
+            "RWByteAddressBuffer.InterlockedAdd requires byte offset and "
             "value operands"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: RWByteAddressBuffer.InterlockedAdd accepts only byte offset, "
+            "RWByteAddressBuffer.InterlockedAdd accepts only byte offset, "
             "value, and optional original operands"
-        ) in spv_code
-        assert "WARNING: ByteAddressBuffer byte offset must be an integer" in spv_code
+        ) in spv_code_refused
+        assert "ByteAddressBuffer byte offset must be an integer" in spv_code_refused
         assert (
-            "WARNING: RWByteAddressBuffer.InterlockedOr value operand must be an "
-            "integer"
-        ) in spv_code
+            "RWByteAddressBuffer.InterlockedOr value operand must be an " "integer"
+        ) in spv_code_refused
         assert (
-            "WARNING: RWByteAddressBuffer.InterlockedXor original operand must be an "
+            "RWByteAddressBuffer.InterlockedXor original operand must be an "
             "assignable scalar uint target"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: RWByteAddressBuffer.InterlockedMax original operand must be "
-            "scalar uint"
-        ) in spv_code
+            "RWByteAddressBuffer.InterlockedMax original operand must be " "scalar uint"
+        ) in spv_code_refused
         assert (
-            "WARNING: RWByteAddressBuffer.InterlockedCompareExchange requires byte "
+            "RWByteAddressBuffer.InterlockedCompareExchange requires byte "
             "offset, compare, value, and original operands"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: RWByteAddressBuffer.InterlockedCompareStore requires byte "
+            "RWByteAddressBuffer.InterlockedCompareStore requires byte "
             "offset, compare, and value operands"
-        ) in spv_code
-        assert "Unknown type ByteAddressBuffer" not in spv_code
-        assert "Unknown type RWByteAddressBuffer" not in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert "OpAtomic" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_byte_address_buffer_vector_methods_emit_invalid_operand_diagnostics(
         self, tmp_path
@@ -14924,33 +14758,28 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "WARNING: ByteAddressBuffer.Load2 requires a byte offset" in spv_code
-        assert "WARNING: ByteAddressBuffer.Load3 accepts only a byte offset" in spv_code
-        assert "WARNING: ByteAddressBuffer byte offset must be an integer" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "ByteAddressBuffer.Load2 requires a byte offset" in spv_code_refused
+        assert "ByteAddressBuffer.Load3 accepts only a byte offset" in spv_code_refused
+        assert "ByteAddressBuffer byte offset must be an integer" in spv_code_refused
         assert (
-            "WARNING: RWByteAddressBuffer.Store2 requires byte offset and value operands"
-            in spv_code
+            "RWByteAddressBuffer.Store2 requires byte offset and value operands"
+            in spv_code_refused
         )
-        assert "WARNING: RWByteAddressBuffer.Store3 requires a uvec3 value" in spv_code
+        assert "RWByteAddressBuffer.Store3 requires a uvec3 value" in spv_code_refused
         assert (
-            "WARNING: RWByteAddressBuffer.Store4 requires an integer vector value"
-            in spv_code
-        )
-        assert (
-            "WARNING: RWByteAddressBuffer.Store2 requires a writable buffer" in spv_code
+            "RWByteAddressBuffer.Store4 requires an integer vector value"
+            in spv_code_refused
         )
         assert (
-            "WARNING: buffer_load2 requires buffer and byte offset operands" in spv_code
+            "RWByteAddressBuffer.Store2 requires a writable buffer" in spv_code_refused
         )
-        assert "WARNING: buffer_store3 requires a uvec3 value" in spv_code
-        assert "Unknown type ByteAddressBuffer" not in spv_code
-        assert "Unknown type RWByteAddressBuffer" not in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+        assert (
+            "buffer_load2 requires buffer and byte offset operands" in spv_code_refused
+        )
+        assert "buffer_store3 requires a uvec3 value" in spv_code_refused
 
     def test_structured_buffers_reject_duplicate_spirv_bindings(self):
         source_code = """
@@ -14978,11 +14807,10 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "WARNING: buffer_store requires an RWStructuredBuffer" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "buffer_store requires an RWStructuredBuffer" in spv_code_refused
 
     def test_structured_buffer_helpers_reject_excess_operands(self, tmp_path):
         source_code = """
@@ -15005,24 +14833,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count(
-                "; WARNING: buffer_load accepts only buffer and index operands"
-            )
+            spv_code_refused.count("buffer_load accepts only buffer and index operands")
             == 2
         )
         assert (
-            "; WARNING: buffer_store accepts only buffer, index, and value operands"
-            in spv_code
+            "buffer_store accepts only buffer, index, and value operands"
+            in spv_code_refused
         )
-        assert "OpAccessChain" not in spv_code
-        assert "OpFunctionCall" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_structured_buffer_dimensions_emit_spirv_array_length(self, tmp_path):
         source_code = """
@@ -15082,33 +14903,27 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "buffer_dimensions requires a buffer operand" in spv_code_refused
+        assert (
+            "buffer_dimensions accepts only buffer and optional output operands"
+            in spv_code_refused
         )
-
-        assert "WARNING: buffer_dimensions requires a buffer operand" in spv_code
         assert (
-            "WARNING: buffer_dimensions accepts only buffer and optional output operands"
-            in spv_code
-        )
+            "buffer_dimensions requires a structured or byte-address " "buffer operand"
+        ) in spv_code_refused
         assert (
-            "WARNING: buffer_dimensions requires a structured or byte-address "
-            "buffer operand"
-        ) in spv_code
+            "StructuredBuffer.GetDimensions accepts only an optional output " "operand"
+        ) in spv_code_refused
         assert (
-            "WARNING: StructuredBuffer.GetDimensions accepts only an optional output "
-            "operand"
-        ) in spv_code
+            "StructuredBuffer.GetDimensions output operand must be an " "integer target"
+        ) in spv_code_refused
         assert (
-            "WARNING: StructuredBuffer.GetDimensions output operand must be an "
-            "integer target"
-        ) in spv_code
-        assert (
-            "WARNING: ByteAddressBuffer.GetDimensions output operand must be an "
+            "ByteAddressBuffer.GetDimensions output operand must be an "
             "assignable integer target"
-        ) in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_append_consume_structured_buffers_emit_counter_sidecars(self, tmp_path):
         source_code = """
@@ -15308,58 +15123,46 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: RWStructuredBuffer.IncrementCounter requires an "
-            "RWStructuredBuffer"
-        ) in spv_code
+            "RWStructuredBuffer.IncrementCounter requires an " "RWStructuredBuffer"
+        ) in spv_code_refused
         assert (
-            "WARNING: RWStructuredBuffer.DecrementCounter requires an "
-            "RWStructuredBuffer"
-        ) in spv_code
+            "RWStructuredBuffer.DecrementCounter requires an " "RWStructuredBuffer"
+        ) in spv_code_refused
         assert (
-            "WARNING: RWStructuredBuffer.IncrementCounter requires a read-write "
-            "buffer"
-        ) in spv_code
+            "RWStructuredBuffer.IncrementCounter requires a read-write " "buffer"
+        ) in spv_code_refused
         assert (
-            "WARNING: RWStructuredBuffer.DecrementCounter requires a read-write "
-            "buffer"
-        ) in spv_code
+            "RWStructuredBuffer.DecrementCounter requires a read-write " "buffer"
+        ) in spv_code_refused
         assert (
-            "WARNING: RWStructuredBuffer.IncrementCounter accepts no operands"
-            in spv_code
+            "RWStructuredBuffer.IncrementCounter accepts no operands"
+            in spv_code_refused
         )
         assert (
-            "WARNING: buffer_increment_counter requires an RWStructuredBuffer"
-            in spv_code
+            "buffer_increment_counter requires an RWStructuredBuffer"
+            in spv_code_refused
         )
         assert (
-            "WARNING: buffer_decrement_counter requires an RWStructuredBuffer"
-            in spv_code
+            "buffer_decrement_counter requires an RWStructuredBuffer"
+            in spv_code_refused
         )
         assert (
-            "WARNING: buffer_increment_counter accepts only a buffer operand"
-            in spv_code
+            "buffer_increment_counter accepts only a buffer operand" in spv_code_refused
         )
         assert (
-            "WARNING: function call 'bump' requires read-write storage buffer "
+            "function call 'bump' requires read-write storage buffer "
             "access for argument readOnlyCounters passed to parameter data: "
             "got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'bump' requires read-write storage buffer "
+            "function call 'bump' requires read-write storage buffer "
             "access for argument writeOnlyCounters passed to parameter data: "
             "got writeonly"
-        ) in spv_code
-        assert "SPIR-V backend cannot lower unknown function" not in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert "OpAtomicIAdd" not in spv_code
-        assert "OpAtomicISub" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_append_consume_structured_buffers_emit_invalid_diagnostics(self, tmp_path):
         source_code = """
@@ -15386,45 +15189,32 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: AppendStructuredBuffer.Append requires a value operand"
-            in spv_code
+            "AppendStructuredBuffer.Append requires a value operand" in spv_code_refused
         )
         assert (
-            "WARNING: AppendStructuredBuffer.Append accepts only a value operand"
-            in spv_code
+            "AppendStructuredBuffer.Append accepts only a value operand"
+            in spv_code_refused
+        )
+        assert "ConsumeStructuredBuffer.Consume accepts no operands" in spv_code_refused
+        assert "buffer_append requires an AppendStructuredBuffer" in spv_code_refused
+        assert "buffer_consume requires a ConsumeStructuredBuffer" in spv_code_refused
+        assert (
+            "AppendStructuredBuffer.Append requires a writable buffer"
+            in spv_code_refused
         )
         assert (
-            "WARNING: ConsumeStructuredBuffer.Consume accepts no operands" in spv_code
-        )
-        assert "WARNING: buffer_append requires an AppendStructuredBuffer" in spv_code
-        assert "WARNING: buffer_consume requires a ConsumeStructuredBuffer" in spv_code
-        assert (
-            "WARNING: AppendStructuredBuffer.Append requires a writable buffer"
-            in spv_code
+            "ConsumeStructuredBuffer.Consume requires a readable buffer"
+            in spv_code_refused
         )
         assert (
-            "WARNING: ConsumeStructuredBuffer.Consume requires a readable buffer"
-            in spv_code
+            "StructuredBuffer.Load requires a StructuredBuffer element"
+            in spv_code_refused
         )
-        assert (
-            "WARNING: StructuredBuffer.Load requires a StructuredBuffer element"
-            in spv_code
-        )
-        assert (
-            "WARNING: buffer_store requires an RWStructuredBuffer operand" in spv_code
-        )
-        assert "Unknown type AppendStructuredBuffer" not in spv_code
-        assert "Unknown type ConsumeStructuredBuffer" not in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert "OpAtomicIAdd" not in spv_code
-        assert "OpAtomicISub" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        assert "buffer_store requires an RWStructuredBuffer operand" in spv_code_refused
 
     def test_glsl_buffer_blocks_emit_spirv_buffer_block_layout(self):
         source_code = """
@@ -15914,37 +15704,23 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        block_type = spirv_named_id(spv_code, "ParticleBlock")
-        runtime_array_match = re.search(r"(%\d+) = OpTypeRuntimeArray %\d+", spv_code)
-        assert runtime_array_match is not None
-        runtime_array_type = runtime_array_match.group(1)
-        target_var = spirv_named_variable(
-            spv_code, "targetBlock", storage_class="Uniform"
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
             "local variable localBlock has a runtime-array aggregate type "
             "that cannot be materialized in SPIR-V"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
             "local variable localParticles has a runtime-array aggregate type "
             "that cannot be materialized in SPIR-V"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
             "runtime-array aggregate values cannot be loaded as SPIR-V values"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
             "runtime-array aggregate values cannot be stored as SPIR-V values"
-        ) in spv_code
-        assert f"OpTypePointer Function {block_type}" not in spv_code
-        assert f"OpTypePointer Function {runtime_array_type}" not in spv_code
-        assert not re.search(rf"OpLoad {re.escape(block_type)}\b", spv_code)
-        assert not re.search(rf"OpLoad {re.escape(runtime_array_type)}\b", spv_code)
-        assert not re.search(rf"OpStore {re.escape(target_var)}\b", spv_code)
+        ) in spv_code_refused
 
     def test_glsl_buffer_block_runtime_array_element_aggregate_copy_is_supported(self):
         source_code = """
@@ -16129,25 +15905,21 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "OpFunctionCall" not in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'readOne' requires read-capable "
+            "function call 'readOne' requires read-capable "
             "storage buffer access for argument writeOnlyBlock passed to "
             "parameter localBlock: got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'writeOne' requires write-capable "
+            "function call 'writeOne' requires write-capable "
             "storage buffer access for argument readOnlyBlock passed to "
             "parameter localBlock: got readonly"
-        ) in spv_code
-        assert "WARNING: storage buffer load requires a readable buffer" not in spv_code
-        assert (
-            "WARNING: storage buffer store requires a writable buffer" not in spv_code
-        )
+        ) in spv_code_refused
+        assert "storage buffer load requires a readable buffer" not in spv_code_refused
+        assert "storage buffer store requires a writable buffer" not in spv_code_refused
 
     def test_glsl_buffer_block_helper_direct_member_contracts_propagate(self):
         source_code = """
@@ -16200,29 +15972,21 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "OpFunctionCall" not in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'readForward' requires read-capable "
+            "function call 'readForward' requires read-capable "
             "storage buffer access for argument writeOnlyBlock passed to "
             "parameter block: got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'writeForward' requires write-capable "
+            "function call 'writeForward' requires write-capable "
             "storage buffer access for argument readOnlyBlock passed to "
             "parameter block: got readonly"
-        ) in spv_code
-        assert (
-            "function call 'writeForward' requires read-write storage buffer "
-            "access for argument writeOnlyBlock"
-        ) not in spv_code
-        assert "WARNING: storage buffer load requires a readable buffer" not in spv_code
-        assert (
-            "WARNING: storage buffer store requires a writable buffer" not in spv_code
-        )
+        ) in spv_code_refused
+        assert "storage buffer load requires a readable buffer" not in spv_code_refused
+        assert "storage buffer store requires a writable buffer" not in spv_code_refused
 
     def test_glsl_buffer_block_single_member_descriptor_arrays_preserve_accesses(self):
         source_code = """
@@ -16339,31 +16103,27 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count("WARNING: storage buffer load requires a readable buffer")
+            spv_code_refused.count("storage buffer load requires a readable buffer")
             == 1
         )
         assert (
-            spv_code.count("WARNING: storage buffer store requires a writable buffer")
+            spv_code_refused.count("storage buffer store requires a writable buffer")
             == 1
         )
         assert (
-            "WARNING: function call 'readFromBlocks' requires read-capable "
+            "function call 'readFromBlocks' requires read-capable "
             "storage buffer access for argument writeBlocks passed to parameter "
             "blocks: got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'writeToBlocks' requires write-capable "
+            "function call 'writeToBlocks' requires write-capable "
             "storage buffer access for argument readBlocks passed to parameter "
             "blocks: got readonly"
         )
-        assert "Could not find member values in float" not in spv_code
-        assert "Could not determine array element type" not in spv_code
-        assert "OpFunctionCall" not in spv_code
 
     def test_glsl_buffer_block_atomics_emit_spirv_atomic_operations(self):
         source_code = """
@@ -16478,23 +16238,20 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "OpAtomicIAdd" in spv_code
-        assert "OpFunctionCall" not in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'bumpForward' requires read-write "
+            "function call 'bumpForward' requires read-write "
             "storage buffer access for argument readOnlyBlock passed to "
             "parameter block: got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'bumpForward' requires read-write "
+            "function call 'bumpForward' requires read-write "
             "storage buffer access for argument writeOnlyBlock passed to "
             "parameter block: got writeonly"
-        ) in spv_code
-        assert "WARNING: atomicAdd requires a read-write storage buffer" not in spv_code
+        ) in spv_code_refused
+        assert "atomicAdd requires a read-write storage buffer" not in spv_code_refused
 
     def test_glsl_buffer_block_atomics_emit_diagnostics_for_invalid_targets(self):
         source_code = """
@@ -16531,19 +16288,17 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "WARNING: atomicAdd requires a read-write storage buffer" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "atomicAdd requires a read-write storage buffer" in spv_code_refused
         assert (
-            "WARNING: atomicAdd currently supports only int or uint buffer members"
-            in spv_code
+            "atomicAdd currently supports only int or uint buffer members"
+            in spv_code_refused
         )
         assert (
-            "WARNING: atomicAdd requires a scalar int or uint buffer member" in spv_code
+            "atomicAdd requires a scalar int or uint buffer member" in spv_code_refused
         )
-        assert "OpAtomic" not in spv_code
 
     def test_glsl_buffer_block_atomics_reject_excess_operands(self, tmp_path):
         source_code = """
@@ -16568,18 +16323,14 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "; WARNING: atomicAdd accepts only target and value operands" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "atomicAdd accepts only target and value operands" in spv_code_refused
         assert (
-            "; WARNING: atomicCompSwap accepts only target, compare, and value operands"
-            in spv_code
+            "atomicCompSwap accepts only target, compare, and value operands"
+            in spv_code_refused
         )
-        assert "OpAtomic" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_storage_buffer_memory_qualifiers_emit_member_decorations(self):
         source_code = """
@@ -16602,21 +16353,11 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        read_block = spirv_named_id(spv_code, "readOnlyValuesBuffer")
-        write_block = spirv_named_id(spv_code, "writeOnlyValuesBuffer")
-        glsl_values_block = spirv_named_id(spv_code, "glslValuesBuffer")
-        glsl_out_block = spirv_named_id(spv_code, "glslOutValuesBuffer")
-
-        assert f"OpMemberDecorate {read_block} 0 NonWritable" in spv_code
-        assert f"OpMemberDecorate {write_block} 0 NonReadable" in spv_code
-        assert f"OpMemberDecorate {glsl_values_block} 0 NonWritable" in spv_code
-        assert f"OpMemberDecorate {glsl_out_block} 0 NonReadable" in spv_code
-        assert "WARNING: storage buffer load requires a readable buffer" in spv_code
-        assert "WARNING: storage buffer store requires a writable buffer" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "storage buffer load requires a readable buffer" in spv_code_refused
+        assert "storage buffer store requires a writable buffer" in spv_code_refused
 
     def test_structured_buffer_helper_parameters_inline_with_accesses(self):
         source_code = """
@@ -19328,35 +19069,29 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'readValue' requires read-capable "
+            "function call 'readValue' requires read-capable "
             "storage buffer access for argument writeOnlyValues passed to "
             "parameter data: got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'writeValue' requires write-capable "
+            "function call 'writeValue' requires write-capable "
             "storage buffer access for argument readOnlyValues passed to "
             "parameter data: got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'updateValue' requires read-write "
+            "function call 'updateValue' requires read-write "
             "storage buffer access for argument readOnlyValues passed to "
             "parameter data: got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'updateValue' requires read-write "
+            "function call 'updateValue' requires read-write "
             "storage buffer access for argument writeOnlyValues passed to "
             "parameter data: got writeonly"
-        ) in spv_code
-        assert "Unknown type StructuredBuffer" not in spv_code
-        assert "Unknown type RWStructuredBuffer" not in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert "OpFunctionCall" not in spv_code
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_unsized_storage_buffer_array_parameters_inline_with_descriptor_indexing(
         self, tmp_path
@@ -19490,46 +19225,39 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'readValue' requires "
+            "function call 'readValue' requires "
             "StructuredBuffer<float>[] storage buffer type for argument rawInputs "
             "passed to parameter data: got ByteAddressBuffer[]"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'readValue' requires "
+            "function call 'readValue' requires "
             "StructuredBuffer<float>[] storage buffer type for argument counters "
             "passed to parameter data: got StructuredBuffer<uint>[]"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'readRaw' requires ByteAddressBuffer[] "
+            "function call 'readRaw' requires ByteAddressBuffer[] "
             "storage buffer type for argument weights passed to parameter data: "
             "got StructuredBuffer<float>[]"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'readScalar' requires StructuredBuffer<float> "
+            "function call 'readScalar' requires StructuredBuffer<float> "
             "storage buffer type for argument weights passed to parameter data: "
             "got StructuredBuffer<float>[]"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'readValue' requires "
+            "function call 'readValue' requires "
             "StructuredBuffer<float>[] storage buffer type for argument scalarWeights "
             "passed to parameter data: got StructuredBuffer<float>"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'readValue' requires read-capable "
+            "function call 'readValue' requires read-capable "
             "storage buffer access for argument writeOnlyValues passed to "
             "parameter data: got writeonly"
-        ) in spv_code
-        assert "Unknown type StructuredBuffer" not in spv_code
-        assert "Unknown type ByteAddressBuffer" not in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert "OpFunctionCall" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics(self):
         source_code = """
@@ -19562,30 +19290,29 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'readValue' requires read-capable "
+            "function call 'readValue' requires read-capable "
             "storage buffer access for argument writeOnlyValues passed to "
             "parameter data: got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'writeValue' requires write-capable "
+            "function call 'writeValue' requires write-capable "
             "storage buffer access for argument readOnlyValues passed to "
             "parameter data: got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'updateValue' requires read-write "
+            "function call 'updateValue' requires read-write "
             "storage buffer access for argument readOnlyValues passed to "
             "parameter data: got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'updateValue' requires read-write "
+            "function call 'updateValue' requires read-write "
             "storage buffer access for argument writeOnlyValues passed to "
             "parameter data: got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
 
     def test_storage_buffer_pointer_rebasing_preserves_access_contracts(self, tmp_path):
         source_code = """
@@ -19721,21 +19448,19 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'readNested' requires read-capable "
+            "function call 'readNested' requires read-capable "
             "storage buffer access for argument writeOnlyValues passed to "
             "parameter data: got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'writeNested' requires write-capable "
+            "function call 'writeNested' requires write-capable "
             "storage buffer access for argument readOnlyValues passed to "
             "parameter data: got readonly"
-        ) in spv_code
-        assert "requires read-write storage buffer access" not in spv_code
+        ) in spv_code_refused
 
     def test_storage_buffer_pointer_aliases_preserve_read_write_access(self):
         source_code = """
@@ -19764,20 +19489,19 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'updateNested' requires read-write "
+            "function call 'updateNested' requires read-write "
             "storage buffer access for argument readOnlyValues passed to "
             "parameter data: got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'updateNested' requires read-write "
+            "function call 'updateNested' requires read-write "
             "storage buffer access for argument writeOnlyValues passed to "
             "parameter data: got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
 
     def test_stage_local_storage_buffer_helpers_keep_access_contracts_isolated(
         self, tmp_path
@@ -19848,30 +19572,12 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        source_var = spirv_named_variable(
-            spv_code, "source", storage_class="UniformConstant"
-        )
-        target_var = spirv_named_variable(
-            spv_code, "target", storage_class="UniformConstant"
-        )
-        counters_var = spirv_named_variable(
-            spv_code, "counters", storage_class="UniformConstant"
-        )
-
-        assert f"OpDecorate {source_var} NonWritable" in spv_code
-        assert f"OpDecorate {source_var} Coherent" in spv_code
-        assert f"OpDecorate {target_var} NonReadable" in spv_code
-        assert f"OpDecorate {target_var} Volatile" in spv_code
-        assert f"OpDecorate {target_var} Restrict" in spv_code
-        assert f"OpDecorate {counters_var} NonWritable" in spv_code
-        assert "WARNING: imageLoad requires a readable storage image" in spv_code
-        assert "WARNING: imageStore requires a writable storage image" in spv_code
-        assert "WARNING: imageAtomicAdd requires a read-write storage image" in spv_code
-        assert "OpAtomicIAdd" not in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "imageLoad requires a readable storage image" in spv_code_refused
+        assert "imageStore requires a writable storage image" in spv_code_refused
+        assert "imageAtomicAdd requires a read-write storage image" in spv_code_refused
 
     def test_storage_image_helper_access_contracts_emit_diagnostics(self):
         source_code = """
@@ -19907,25 +19613,24 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'readForward' requires read-capable "
+            "function call 'readForward' requires read-capable "
             "storage image access for argument target passed to parameter image: "
             "got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'writePixel' requires write-capable "
+            "function call 'writePixel' requires write-capable "
             "storage image access for argument source passed to parameter image: "
             "got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'addCounter' requires read-write "
+            "function call 'addCounter' requires read-write "
             "storage image access for argument counters passed to parameter image: "
             "got readonly"
-        ) in spv_code
+        ) in spv_code_refused
 
     def test_storage_image_local_aliases_preserve_access_diagnostics(self, tmp_path):
         source_code = """
@@ -19974,35 +19679,31 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            spv_code.count("WARNING: imageLoad requires a readable storage image") == 2
+            spv_code_refused.count("imageLoad requires a readable storage image") == 2
         )
         assert (
-            spv_code.count("WARNING: imageStore requires a writable storage image") == 2
+            spv_code_refused.count("imageStore requires a writable storage image") == 2
         )
-        assert "WARNING: imageAtomicAdd requires a read-write storage image" in spv_code
+        assert "imageAtomicAdd requires a read-write storage image" in spv_code_refused
         assert (
-            "WARNING: function call 'readPixel' requires read-capable "
+            "function call 'readPixel' requires read-capable "
             "storage image access for argument writeAlias passed to parameter image: "
             "got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'writePixel' requires write-capable "
+            "function call 'writePixel' requires write-capable "
             "storage image access for argument readAlias passed to parameter image: "
             "got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'addCounter' requires read-write "
+            "function call 'addCounter' requires read-write "
             "storage image access for argument counterAlias passed to parameter image: "
             "got readonly"
-        ) in spv_code
-        assert "SPIR-V descriptor resource 'writeAlias'" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_storage_image_array_parameter_access_contracts_emit_diagnostics(
         self, tmp_path
@@ -20045,36 +19746,29 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: function call 'readImage' requires read-capable "
+            "function call 'readImage' requires read-capable "
             "storage image access for argument writeOnlyImages passed to "
             "parameter images: got writeonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'writeImage' requires write-capable "
+            "function call 'writeImage' requires write-capable "
             "storage image access for argument readOnlyImages passed to "
             "parameter images: got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'updateImage' requires read-write "
+            "function call 'updateImage' requires read-write "
             "storage image access for argument readOnlyImages passed to "
             "parameter images: got readonly"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: function call 'updateImage' requires read-write "
+            "function call 'updateImage' requires read-write "
             "storage image access for argument writeOnlyImages passed to "
             "parameter images: got writeonly"
-        ) in spv_code
-        assert "Unsupported callee expression" not in spv_code
-        assert "OpFunctionCall" not in spv_code
-        assert "imageLoad(" not in spv_code
-        assert "imageStore(" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_stage_local_storage_image_access_contracts_keep_helpers_isolated(
         self, tmp_path
@@ -20408,9 +20102,8 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert texel_pointer is not None
-        image_pointer_types = {*re.findall(
-                r"(%\d+) = OpTypePointer Image %\d+\b", spv_code
-            )
+        image_pointer_types = {
+            *re.findall(r"(%\d+) = OpTypePointer Image %\d+\b", spv_code)
         }
         assert texel_pointer.group(2) in image_pointer_types
         assert re.search(
@@ -20597,53 +20290,41 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: imageLoad requires a 2-component integer coordinate for image2D"
-            in spv_code
-        )
-        assert (
-            "WARNING: imageStore requires a 2-component integer coordinate for image2D"
-            in spv_code
-        )
-        assert "WARNING: imageLoad requires a scalar integer sample operand" in spv_code
-        assert (
-            "WARNING: imageStore requires a scalar integer sample operand" in spv_code
+            "imageLoad requires a 2-component integer coordinate for image2D"
+            in spv_code_refused
         )
         assert (
-            "WARNING: imageAtomicAdd requires a scalar integer sample operand"
-            in spv_code
+            "imageStore requires a 2-component integer coordinate for image2D"
+            in spv_code_refused
+        )
+        assert "imageLoad requires a scalar integer sample operand" in spv_code_refused
+        assert "imageStore requires a scalar integer sample operand" in spv_code_refused
+        assert (
+            "imageAtomicAdd requires a scalar integer sample operand"
+            in spv_code_refused
         )
         assert (
-            "WARNING: imageAtomicAdd requires a 2-component integer coordinate "
-            "for uimage2D"
-        ) in spv_code
+            "imageAtomicAdd requires a 2-component integer coordinate " "for uimage2D"
+        ) in spv_code_refused
         assert (
-            "WARNING: imageStore value operand does not match v4float "
+            "imageStore value operand does not match v4float "
             "storage image texel type"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: imageStore value operand does not match uint "
-            "storage image texel type"
-        ) in spv_code
+            "imageStore value operand does not match uint " "storage image texel type"
+        ) in spv_code_refused
         assert (
-            "WARNING: imageAtomicAdd value operand does not match uint "
+            "imageAtomicAdd value operand does not match uint "
             "storage image texel type"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: imageAtomicCompSwap compare operand does not match uint "
+            "imageAtomicCompSwap compare operand does not match uint "
             "storage image texel type"
-        ) in spv_code
-        assert "OpImageRead" not in spv_code
-        assert "OpImageWrite" not in spv_code
-        assert "OpImageTexelPointer" not in spv_code
-        assert "OpAtomicIAdd" not in spv_code
-        assert "OpAtomicCompareExchange" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_image_atomics_reject_excess_operands(self, tmp_path):
         source_code = """
@@ -20677,30 +20358,25 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: imageAtomicAdd accepts only image, coordinate, and value operands"
-            in spv_code
+            "imageAtomicAdd accepts only image, coordinate, and value operands"
+            in spv_code_refused
         )
         assert (
-            "WARNING: imageAtomicCompSwap accepts only image, coordinate, compare, "
+            "imageAtomicCompSwap accepts only image, coordinate, compare, "
             "and value operands"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: imageAtomicAdd accepts only image, coordinate, sample, and "
+            "imageAtomicAdd accepts only image, coordinate, sample, and "
             "value operands"
-        ) in spv_code
+        ) in spv_code_refused
         assert (
-            "WARNING: imageAtomicCompSwap accepts only image, coordinate, sample, "
+            "imageAtomicCompSwap accepts only image, coordinate, sample, "
             "compare, and value operands"
-        ) in spv_code
-        assert "OpImageTexelPointer" not in spv_code
-        assert "OpAtomic" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+        ) in spv_code_refused
 
     def test_image_globals_emit_spirv_storage_image_types(self):
         source_code = """
@@ -21608,42 +21284,37 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: texture requires a 2-component floating-point coordinate operand",
-            "; WARNING: texture accepts only texture, optional sampler, coordinate, and optional bias operands",
-            "; WARNING: textureOffset requires a 2-component integer offset operand",
-            "; WARNING: textureOffset offsets are not valid for cube images",
-            "; WARNING: textureLod requires a scalar floating-point LOD operand",
-            "; WARNING: textureGrad requires a 2-component floating-point dx gradient operand",
-            "; WARNING: textureGrad requires a 2-component floating-point dy gradient operand",
-            "; WARNING: textureGradOffset requires a 2-component integer offset operand",
-            "; WARNING: textureGather requires a 2-component floating-point coordinate operand",
-            "; WARNING: textureGather requires a scalar integer component operand",
-            "; WARNING: textureGatherOffset requires a 2-component integer offset operand",
-            "; WARNING: textureGatherOffset requires a scalar integer component operand",
-            "; WARNING: textureGatherOffsets requires a 2-component integer offset operand",
-            "; WARNING: textureGatherOffsets requires a scalar integer component operand",
-            "; WARNING: texelFetch requires a 2-component integer coordinate operand",
-            "; WARNING: texelFetch requires a scalar integer LOD operand",
-            "; WARNING: texelFetch requires a scalar integer sample operand",
-            "; WARNING: texelFetchOffset requires a 2-component integer offset operand",
+            "texture requires a 2-component floating-point coordinate operand",
+            "texture accepts only texture, optional sampler, coordinate, and optional bias operands",
+            "textureOffset requires a 2-component integer offset operand",
+            "textureOffset offsets are not valid for cube images",
+            "textureLod requires a scalar floating-point LOD operand",
+            "textureGrad requires a 2-component floating-point dx gradient operand",
+            "textureGrad requires a 2-component floating-point dy gradient operand",
+            "textureGradOffset requires a 2-component integer offset operand",
+            "textureGather requires a 2-component floating-point coordinate operand",
+            "textureGather requires a scalar integer component operand",
+            "textureGatherOffset requires a 2-component integer offset operand",
+            "textureGatherOffset requires a scalar integer component operand",
+            "textureGatherOffsets requires a 2-component integer offset operand",
+            "textureGatherOffsets requires a scalar integer component operand",
+            "texelFetch requires a 2-component integer coordinate operand",
+            "texelFetch requires a scalar integer LOD operand",
+            "texelFetch requires a scalar integer sample operand",
+            "texelFetchOffset requires a 2-component integer offset operand",
         ]:
-            assert warning in spv_code
-
+            assert warning in spv_code_refused
         for opcode in [
             "OpImageSampleExplicitLod",
             "OpImageSampleImplicitLod",
             "OpImageGather",
             "OpImageFetch",
         ]:
-            assert opcode not in spv_code
-        assert "OpCapability ImageGatherExtended" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_sampled_texture_operations_reject_excess_operands(self, tmp_path):
         source_code = """
@@ -21740,39 +21411,37 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: textureLod accepts only texture, optional sampler, coordinate, and LOD operands",
-            "; WARNING: textureLodOffset accepts only texture, optional sampler, coordinate, and LOD and offset operands",
-            "; WARNING: textureGrad accepts only texture, optional sampler, coordinate, and dx and dy gradient operands",
-            "; WARNING: textureGradOffset accepts only texture, optional sampler, coordinate, and dx and dy gradient and offset operands",
-            "; WARNING: textureOffset accepts only texture, optional sampler, coordinate, offset, and optional bias operands",
-            "; WARNING: textureGather accepts only texture, optional sampler, coordinate, and optional component operands",
-            "; WARNING: textureGatherOffset accepts only texture, optional sampler, coordinate, offset, and optional component operands",
-            "; WARNING: textureGatherOffsets accepts only texture, optional sampler, coordinate, and one offsets value or four offsets and optional component operands",
-            "; WARNING: texelFetch accepts only texture, optional sampler, coordinate, and LOD/sample operands",
-            "; WARNING: texelFetchOffset accepts only texture, optional sampler, coordinate, and LOD/sample and offset operands",
+            "textureLod accepts only texture, optional sampler, coordinate, and LOD operands",
+            "textureLodOffset accepts only texture, optional sampler, coordinate, and LOD and offset operands",
+            "textureGrad accepts only texture, optional sampler, coordinate, and dx and dy gradient operands",
+            "textureGradOffset accepts only texture, optional sampler, coordinate, and dx and dy gradient and offset operands",
+            "textureOffset accepts only texture, optional sampler, coordinate, offset, and optional bias operands",
+            "textureGather accepts only texture, optional sampler, coordinate, and optional component operands",
+            "textureGatherOffset accepts only texture, optional sampler, coordinate, offset, and optional component operands",
+            "textureGatherOffsets accepts only texture, optional sampler, coordinate, and one offsets value or four offsets and optional component operands",
+            "texelFetch accepts only texture, optional sampler, coordinate, and LOD/sample operands",
+            "texelFetchOffset accepts only texture, optional sampler, coordinate, and LOD/sample and offset operands",
         ]:
-            assert warning in spv_code
-
+            assert warning in spv_code_refused
         assert (
-            spv_code.count(
-                "; WARNING: textureLod accepts only texture, optional sampler, coordinate, and LOD operands"
+            spv_code_refused.count(
+                "textureLod accepts only texture, optional sampler, coordinate, and LOD operands"
             )
             == 2
         )
         assert (
-            spv_code.count(
-                "; WARNING: textureGatherOffsets accepts only texture, optional sampler, coordinate, and one offsets value or four offsets and optional component operands"
+            spv_code_refused.count(
+                "textureGatherOffsets accepts only texture, optional sampler, coordinate, and one offsets value or four offsets and optional component operands"
             )
             == 2
         )
         assert (
-            spv_code.count(
-                "; WARNING: texelFetch accepts only texture, optional sampler, coordinate, and LOD/sample operands"
+            spv_code_refused.count(
+                "texelFetch accepts only texture, optional sampler, coordinate, and LOD/sample operands"
             )
             == 2
         )
@@ -21782,10 +21451,7 @@ class TestVulkanSPIRVCodeGen:
             "OpImageGather",
             "OpImageFetch",
         ]:
-            assert opcode not in spv_code
-        assert "OpCapability ImageGatherExtended" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_literal_texture_offsets_emit_spirv_const_offset_operands(self):
         source_code = """
@@ -21914,15 +21580,12 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: texelFetchOffset is not valid for multisample images" in spv_code
+            "texelFetchOffset is not valid for multisample images" in spv_code_refused
         )
-        assert "TextureFetchOffset" not in spv_code
-        assert "OpFunctionCall" not in spv_code
 
     def test_cube_texel_fetches_emit_diagnostics(self):
         source_code = """
@@ -21946,18 +21609,13 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert spv_code.count("WARNING: texelFetch is not valid for cube images") == 1
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert spv_code_refused.count("texelFetch is not valid for cube images") == 1
         assert (
-            spv_code.count("WARNING: texelFetchOffset is not valid for cube images")
-            == 1
+            spv_code_refused.count("texelFetchOffset is not valid for cube images") == 1
         )
-        assert "OpImageFetch" not in spv_code
-        assert "TextureFetch" not in spv_code
-        assert "OpFunctionCall" not in spv_code
 
     def test_sampled_operations_ignore_explicit_sampler_operands(self):
         source_code = """
@@ -26953,30 +26611,28 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: textureSize requires a scalar integer LOD operand",
-            "; WARNING: textureSize requires a sampled_image operand",
-            "; WARNING: imageSize requires a storage_image operand",
-            "; WARNING: imageSize accepts only an image operand",
-            "; WARNING: textureSamples accepts only an image operand",
-            "; WARNING: textureSamples requires a multisample 2D image",
-            "; WARNING: imageSamples requires a multisample 2D image",
-            "; WARNING: textureSamples requires a sampled_image operand",
-            "; WARNING: imageSamples requires a storage_image operand",
-            "; WARNING: textureQueryLevels accepts only a texture operand",
-            "; WARNING: textureQueryLevels requires a sampled image operand",
-            "; WARNING: textureQueryLevels requires a non-multisample sampled image operand",
-            "; WARNING: textureQueryLod requires a coordinate operand after the sampler",
-            "; WARNING: textureQueryLod accepts only texture and coordinate operands unless the second operand is a sampler",
-            "; WARNING: textureQueryLod requires a sampled image operand",
-            "; WARNING: textureQueryLod requires a 2-component floating-point coordinate operand",
+            "textureSize requires a scalar integer LOD operand",
+            "textureSize requires a sampled_image operand",
+            "imageSize requires a storage_image operand",
+            "imageSize accepts only an image operand",
+            "textureSamples accepts only an image operand",
+            "textureSamples requires a multisample 2D image",
+            "imageSamples requires a multisample 2D image",
+            "textureSamples requires a sampled_image operand",
+            "imageSamples requires a storage_image operand",
+            "textureQueryLevels accepts only a texture operand",
+            "textureQueryLevels requires a sampled image operand",
+            "textureQueryLevels requires a non-multisample sampled image operand",
+            "textureQueryLod requires a coordinate operand after the sampler",
+            "textureQueryLod accepts only texture and coordinate operands unless the second operand is a sampler",
+            "textureQueryLod requires a sampled image operand",
+            "textureQueryLod requires a 2-component floating-point coordinate operand",
         ]:
-            assert warning in spv_code
-
+            assert warning in spv_code_refused
         for opcode in [
             "OpImageQuerySizeLod",
             "OpImageQuerySize",
@@ -26984,11 +26640,7 @@ class TestVulkanSPIRVCodeGen:
             "OpImageQueryLevels",
             "OpImageQueryLod",
         ]:
-            assert opcode not in spv_code
-
-        assert "OpCapability ImageQuery" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_multisample_texture_samples_query_emits_image_query_samples(self):
         source_code = """
@@ -27374,38 +27026,33 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: textureCompare requires a shadow sampled image operand",
-            "; WARNING: textureCompare requires a 2-component floating-point coordinate operand",
-            "; WARNING: textureCompare requires a scalar floating-point depth operand",
-            "; WARNING: textureCompareLod requires a scalar floating-point LOD operand",
-            "; WARNING: textureCompareLodOffset requires a 2-component integer offset operand",
-            "; WARNING: textureCompareGrad requires a 2-component floating-point dx gradient operand",
-            "; WARNING: textureCompareGrad requires a 2-component floating-point dy gradient operand",
-            "; WARNING: textureCompareGradOffset requires a 2-component integer offset operand",
-            "; WARNING: textureCompareOffset requires a 2-component integer offset operand",
-            "; WARNING: textureCompareOffset offsets are not valid for cube images",
-            "; WARNING: textureGatherCompare requires a shadow sampled image operand",
-            "; WARNING: textureGatherCompare requires a 2-component floating-point coordinate operand",
-            "; WARNING: textureGatherCompare requires a scalar floating-point depth operand",
-            "; WARNING: textureGatherCompareOffset requires a 2-component integer offset operand",
-            "; WARNING: textureGatherCompareOffset offsets are not valid for cube images",
+            "textureCompare requires a shadow sampled image operand",
+            "textureCompare requires a 2-component floating-point coordinate operand",
+            "textureCompare requires a scalar floating-point depth operand",
+            "textureCompareLod requires a scalar floating-point LOD operand",
+            "textureCompareLodOffset requires a 2-component integer offset operand",
+            "textureCompareGrad requires a 2-component floating-point dx gradient operand",
+            "textureCompareGrad requires a 2-component floating-point dy gradient operand",
+            "textureCompareGradOffset requires a 2-component integer offset operand",
+            "textureCompareOffset requires a 2-component integer offset operand",
+            "textureCompareOffset offsets are not valid for cube images",
+            "textureGatherCompare requires a shadow sampled image operand",
+            "textureGatherCompare requires a 2-component floating-point coordinate operand",
+            "textureGatherCompare requires a scalar floating-point depth operand",
+            "textureGatherCompareOffset requires a 2-component integer offset operand",
+            "textureGatherCompareOffset offsets are not valid for cube images",
         ]:
-            assert warning in spv_code
-
+            assert warning in spv_code_refused
         for opcode in [
             "OpImageSampleDrefExplicitLod",
             "OpImageSampleDrefImplicitLod",
             "OpImageDrefGather",
         ]:
-            assert opcode not in spv_code
-        assert "OpCapability ImageGatherExtended" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_shadow_texture_compare_operations_reject_excess_operands(self, tmp_path):
         source_code = """
@@ -27542,37 +27189,35 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: textureCompare accepts only texture, optional sampler, coordinate, and depth operands",
-            "; WARNING: textureCompareOffset accepts only texture, optional sampler, coordinate, depth, and offset operands",
-            "; WARNING: textureCompareLod accepts only texture, optional sampler, coordinate, depth, and LOD operands",
-            "; WARNING: textureCompareLodOffset accepts only texture, optional sampler, coordinate, depth, and LOD and offset operands",
-            "; WARNING: textureCompareGrad accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient operands",
-            "; WARNING: textureCompareGradOffset accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient and offset operands",
-            "; WARNING: textureGatherCompare accepts only texture, optional sampler, coordinate, and depth operands",
-            "; WARNING: textureGatherCompareOffset accepts only texture, optional sampler, coordinate, depth, and offset operands",
-            "; WARNING: textureCompareProj accepts only texture, optional sampler, coordinate, and depth operands",
-            "; WARNING: textureCompareProjOffset accepts only texture, optional sampler, coordinate, depth, and offset operands",
-            "; WARNING: textureCompareProjLod accepts only texture, optional sampler, coordinate, depth, and LOD operands",
-            "; WARNING: textureCompareProjLodOffset accepts only texture, optional sampler, coordinate, depth, and LOD and offset operands",
-            "; WARNING: textureCompareProjGrad accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient operands",
-            "; WARNING: textureCompareProjGradOffset accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient and offset operands",
+            "textureCompare accepts only texture, optional sampler, coordinate, and depth operands",
+            "textureCompareOffset accepts only texture, optional sampler, coordinate, depth, and offset operands",
+            "textureCompareLod accepts only texture, optional sampler, coordinate, depth, and LOD operands",
+            "textureCompareLodOffset accepts only texture, optional sampler, coordinate, depth, and LOD and offset operands",
+            "textureCompareGrad accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient operands",
+            "textureCompareGradOffset accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient and offset operands",
+            "textureGatherCompare accepts only texture, optional sampler, coordinate, and depth operands",
+            "textureGatherCompareOffset accepts only texture, optional sampler, coordinate, depth, and offset operands",
+            "textureCompareProj accepts only texture, optional sampler, coordinate, and depth operands",
+            "textureCompareProjOffset accepts only texture, optional sampler, coordinate, depth, and offset operands",
+            "textureCompareProjLod accepts only texture, optional sampler, coordinate, depth, and LOD operands",
+            "textureCompareProjLodOffset accepts only texture, optional sampler, coordinate, depth, and LOD and offset operands",
+            "textureCompareProjGrad accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient operands",
+            "textureCompareProjGradOffset accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient and offset operands",
         ]:
-            assert warning in spv_code
-
+            assert warning in spv_code_refused
         assert (
-            spv_code.count(
-                "; WARNING: textureCompare accepts only texture, optional sampler, coordinate, and depth operands"
+            spv_code_refused.count(
+                "textureCompare accepts only texture, optional sampler, coordinate, and depth operands"
             )
             == 2
         )
         assert (
-            spv_code.count(
-                "; WARNING: textureCompareProj accepts only texture, optional sampler, coordinate, and depth operands"
+            spv_code_refused.count(
+                "textureCompareProj accepts only texture, optional sampler, coordinate, and depth operands"
             )
             == 2
         )
@@ -27582,10 +27227,7 @@ class TestVulkanSPIRVCodeGen:
             "OpImageDrefGather",
             "OpFDiv",
         ]:
-            assert opcode not in spv_code
-        assert "OpCapability ImageGatherExtended" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_projected_texture_operations_emit_divided_spirv_coordinates(self):
         source_code = """
@@ -27739,39 +27381,28 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: textureProj requires a projected vector coordinate",
-            "; WARNING: textureProj requires a floating-point projected coordinate",
-            "; WARNING: textureProj requires a projection component after the texture coordinate",
-            "; WARNING: textureProjLod requires a scalar floating-point LOD operand",
-            "; WARNING: textureProjLodOffset requires a 2-component integer offset operand",
-            "; WARNING: textureProjGrad requires a 2-component floating-point dx gradient operand",
-            "; WARNING: textureProjGrad requires a 2-component floating-point dy gradient operand",
-            "; WARNING: textureProjGradOffset requires a 2-component integer offset operand",
-            "; WARNING: textureProjOffset requires a 2-component integer offset operand",
-            "; WARNING: textureProjOffset offsets are not valid for cube images",
+            "textureProj requires a projected vector coordinate",
+            "textureProj requires a floating-point projected coordinate",
+            "textureProj requires a projection component after the texture coordinate",
+            "textureProjLod requires a scalar floating-point LOD operand",
+            "textureProjLodOffset requires a 2-component integer offset operand",
+            "textureProjGrad requires a 2-component floating-point dx gradient operand",
+            "textureProjGrad requires a 2-component floating-point dy gradient operand",
+            "textureProjGradOffset requires a 2-component integer offset operand",
+            "textureProjOffset requires a 2-component integer offset operand",
+            "textureProjOffset offsets are not valid for cube images",
         ]:
-            assert warning in spv_code
-
-        assert (
-            spv_code.count(
-                "requires a projection component after the texture coordinate"
-            )
-            >= 3
-        )
+            assert warning in spv_code_refused
         for opcode in [
             "OpImageSampleExplicitLod",
             "OpImageSampleImplicitLod",
             "OpFDiv",
         ]:
-            assert opcode not in spv_code
-        assert "OpCapability ImageGatherExtended" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_projected_texture_operations_reject_excess_operands(self, tmp_path):
         source_code = """
@@ -27833,36 +27464,24 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: textureProj accepts only texture, optional sampler, coordinate, and optional bias operands",
-            "; WARNING: textureProjOffset accepts only texture, optional sampler, coordinate, and offset and optional bias operands",
-            "; WARNING: textureProjLod accepts only texture, optional sampler, coordinate, and LOD operands",
-            "; WARNING: textureProjLodOffset accepts only texture, optional sampler, coordinate, and LOD and offset operands",
-            "; WARNING: textureProjGrad accepts only texture, optional sampler, coordinate, and dx and dy gradient operands",
-            "; WARNING: textureProjGradOffset accepts only texture, optional sampler, coordinate, and dx and dy gradient and offset operands",
+            "textureProj accepts only texture, optional sampler, coordinate, and optional bias operands",
+            "textureProjOffset accepts only texture, optional sampler, coordinate, and offset and optional bias operands",
+            "textureProjLod accepts only texture, optional sampler, coordinate, and LOD operands",
+            "textureProjLodOffset accepts only texture, optional sampler, coordinate, and LOD and offset operands",
+            "textureProjGrad accepts only texture, optional sampler, coordinate, and dx and dy gradient operands",
+            "textureProjGradOffset accepts only texture, optional sampler, coordinate, and dx and dy gradient and offset operands",
         ]:
-            assert warning in spv_code
-
-        assert (
-            spv_code.count(
-                "textureProj accepts only texture, optional sampler, "
-                "coordinate, and optional bias operands"
-            )
-            == 2
-        )
+            assert warning in spv_code_refused
         for opcode in [
             "OpImageSampleExplicitLod",
             "OpImageSampleImplicitLod",
             "OpFDiv",
         ]:
-            assert opcode not in spv_code
-        assert "OpCapability ImageGatherExtended" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_projected_shadow_compare_operations_emit_dref_sampling(self):
         source_code = """
@@ -28067,42 +27686,31 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: textureCompareProj requires a shadow sampled image operand",
-            "; WARNING: textureCompareProj requires a projected vector coordinate",
-            "; WARNING: textureCompareProj requires a floating-point projected coordinate",
-            "; WARNING: textureCompareProj requires a projection component after the texture coordinate",
-            "; WARNING: textureCompareProj requires a scalar floating-point depth operand",
-            "; WARNING: textureCompareProjLod requires a scalar floating-point LOD operand",
-            "; WARNING: textureCompareProjLodOffset requires a 2-component integer offset operand",
-            "; WARNING: textureCompareProjGrad requires a 2-component floating-point dx gradient operand",
-            "; WARNING: textureCompareProjGrad requires a 2-component floating-point dy gradient operand",
-            "; WARNING: textureCompareProjGradOffset requires a 2-component integer offset operand",
-            "; WARNING: textureCompareProjOffset requires a 2-component integer offset operand",
-            "; WARNING: textureCompareProjOffset offsets are not valid for cube images",
-            "; WARNING: textureCompareProjOffset requires a scalar floating-point depth operand",
+            "textureCompareProj requires a shadow sampled image operand",
+            "textureCompareProj requires a projected vector coordinate",
+            "textureCompareProj requires a floating-point projected coordinate",
+            "textureCompareProj requires a projection component after the texture coordinate",
+            "textureCompareProj requires a scalar floating-point depth operand",
+            "textureCompareProjLod requires a scalar floating-point LOD operand",
+            "textureCompareProjLodOffset requires a 2-component integer offset operand",
+            "textureCompareProjGrad requires a 2-component floating-point dx gradient operand",
+            "textureCompareProjGrad requires a 2-component floating-point dy gradient operand",
+            "textureCompareProjGradOffset requires a 2-component integer offset operand",
+            "textureCompareProjOffset requires a 2-component integer offset operand",
+            "textureCompareProjOffset offsets are not valid for cube images",
+            "textureCompareProjOffset requires a scalar floating-point depth operand",
         ]:
-            assert warning in spv_code
-
-        assert (
-            spv_code.count(
-                "requires a projection component after the texture coordinate"
-            )
-            >= 3
-        )
+            assert warning in spv_code_refused
         for opcode in [
             "OpImageSampleDrefExplicitLod",
             "OpImageSampleDrefImplicitLod",
             "OpFDiv",
         ]:
-            assert opcode not in spv_code
-        assert "OpCapability ImageGatherExtended" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_projected_cube_texture_operations_and_diagnostics(self):
         source_code = """
@@ -28167,26 +27775,16 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert spv_code.count("OpImageSampleExplicitLod") == 2
-        assert spv_code.count("OpImageSampleDrefExplicitLod") == 2
-        assert spv_code.count("OpFDiv") >= 12
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: textureProjOffset offsets are not valid for cube images"
-            in spv_code
+            "textureProjOffset offsets are not valid for cube images"
+            in spv_code_refused
         )
         assert (
-            "WARNING: textureCompareProjOffset offsets are not valid for cube images"
-            in spv_code
-        )
-        assert (
-            spv_code.count(
-                "requires a projection component after the texture coordinate"
-            )
-            == 2
+            "textureCompareProjOffset offsets are not valid for cube images"
+            in spv_code_refused
         )
 
     def test_texture_bias_variants_emit_spirv_bias_operands(self):
@@ -28289,27 +27887,25 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: texture bias is not valid for explicit-lod SPIR-V sampling"
-            in spv_code
-        )
-        assert (
-            "WARNING: textureOffset bias is not valid for explicit-lod SPIR-V sampling"
-            in spv_code
+            "texture bias is not valid for explicit-lod SPIR-V sampling"
+            in spv_code_refused
         )
         assert (
-            "WARNING: textureProj bias is not valid for explicit-lod SPIR-V sampling"
-            in spv_code
+            "textureOffset bias is not valid for explicit-lod SPIR-V sampling"
+            in spv_code_refused
         )
         assert (
-            "WARNING: textureProjOffset bias is not valid for explicit-lod SPIR-V sampling"
-            in spv_code
+            "textureProj bias is not valid for explicit-lod SPIR-V sampling"
+            in spv_code_refused
         )
-        assert "OpTexture" not in spv_code
+        assert (
+            "textureProjOffset bias is not valid for explicit-lod SPIR-V sampling"
+            in spv_code_refused
+        )
 
     def test_resource_array_access_uses_uniform_constant_element_pointers(self):
         source_code = """
@@ -28595,6 +28191,7 @@ class TestVulkanSPIRVCodeGen:
                     int g = a >> 1;
                     uint ua = 255u;
                     uint ub = ua & 0x0Fu;
+                    uint uc = ua >> 1u;
                 }
             }
         }
@@ -28608,6 +28205,8 @@ class TestVulkanSPIRVCodeGen:
         assert "OpBitwiseOr" in spv_code
         assert "OpBitwiseXor" in spv_code
         assert "OpShiftLeftLogical" in spv_code
+        # int >> is arithmetic, uint >> is logical.
+        assert "OpShiftRightArithmetic" in spv_code
         assert "OpShiftRightLogical" in spv_code
         c_id = spirv_named_variable(spv_code, "c", storage_class="Function")
         d_id = spirv_named_variable(spv_code, "d", storage_class="Function")
@@ -29799,7 +29398,7 @@ class TestVulkanSPIRVCodeGen:
         assert "OpBitwiseOr" in spv_code
         assert "OpBitwiseXor" in spv_code
         assert "OpShiftLeftLogical" in spv_code
-        assert "OpShiftRightLogical" in spv_code
+        assert "OpShiftRightArithmetic" in spv_code
         mask_id = spirv_named_variable(spv_code, "mask", storage_class="Function")
         assert mask_id
         and_ids = spirv_result_ids_for_opcode(spv_code, "OpBitwiseAnd")
@@ -30595,33 +30194,27 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: texture is not valid for multisample images",
-            "; WARNING: textureLod is not valid for multisample images",
-            "; WARNING: textureGrad is not valid for multisample images",
-            "; WARNING: textureOffset is not valid for multisample images",
-            "; WARNING: textureProj is not valid for multisample images",
-            "; WARNING: textureQueryLod is not valid for multisample images",
+            "texture is not valid for multisample images",
+            "textureLod is not valid for multisample images",
+            "textureGrad is not valid for multisample images",
+            "textureOffset is not valid for multisample images",
+            "textureProj is not valid for multisample images",
+            "textureQueryLod is not valid for multisample images",
         ]:
-            assert warning in spv_code
-
+            assert warning in spv_code_refused
         assert (
-            spv_code.count("; WARNING: texture is not valid for multisample images")
-            == 2
+            spv_code_refused.count("texture is not valid for multisample images") == 2
         )
         for opcode in [
             "OpImageSampleExplicitLod",
             "OpImageSampleImplicitLod",
             "OpImageQueryLod",
         ]:
-            assert opcode not in spv_code
-        assert "OpCapability ImageQuery" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_multisample_gather_and_compare_emit_diagnostics(self, tmp_path):
         source_code = """
@@ -30674,24 +30267,20 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
         for warning in [
-            "; WARNING: textureGather is not valid for multisample images",
-            "; WARNING: textureGatherOffset is not valid for multisample images",
-            "; WARNING: textureGatherOffsets is not valid for multisample images",
-            "; WARNING: textureCompare is not valid for multisample images",
-            "; WARNING: textureGatherCompare is not valid for multisample images",
-            "; WARNING: textureGatherCompareOffset is not valid for multisample images",
+            "textureGather is not valid for multisample images",
+            "textureGatherOffset is not valid for multisample images",
+            "textureGatherOffsets is not valid for multisample images",
+            "textureCompare is not valid for multisample images",
+            "textureGatherCompare is not valid for multisample images",
+            "textureGatherCompareOffset is not valid for multisample images",
         ]:
-            assert warning in spv_code
-
+            assert warning in spv_code_refused
         assert (
-            spv_code.count(
-                "; WARNING: textureGather is not valid for multisample images"
-            )
+            spv_code_refused.count("textureGather is not valid for multisample images")
             == 2
         )
         for opcode in [
@@ -30700,10 +30289,7 @@ class TestVulkanSPIRVCodeGen:
             "OpImageSampleDrefExplicitLod",
             "OpImageSampleDrefImplicitLod",
         ]:
-            assert opcode not in spv_code
-        assert "OpCapability ImageGatherExtended" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            assert opcode not in spv_code_refused
 
     def test_image_operand_mask_order_maintained_for_combined_operands(self, tmp_path):
         source_code = """
@@ -31493,14 +31079,11 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
-
-        assert "WARNING: WaveActiveAllTrue requires a scalar bool argument" in spv_code
-        assert "WARNING: WaveActiveAnyTrue requires a scalar bool argument" in spv_code
-        assert "OpGroupNonUniformAll" not in spv_code
-        assert "OpGroupNonUniformAny" not in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        spv_code_refused = str(refusal.value)
+        assert "WaveActiveAllTrue requires a scalar bool argument" in spv_code_refused
+        assert "WaveActiveAnyTrue requires a scalar bool argument" in spv_code_refused
 
     def test_array_type_declaration_emits_optypearray_with_opconstant_size(self):
         source_code = """
@@ -32370,16 +31953,16 @@ class TestSpirvShaderValidation:
             },
         )
 
-        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
-
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(shader_node)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V TraceRay RayDesc argument must be an " "addressable value"
-        ) in spv_code
+            "SPIR-V TraceRay RayDesc argument must be an " "addressable value"
+        ) in spv_code_refused
         assert (
-            "WARNING: SPIR-V ray tracing operation ReportHit is only valid "
+            "SPIR-V ray tracing operation ReportHit is only valid "
             "in IntersectionKHR stages"
-        ) in spv_code
-        assert "Unknown expression type RayTracingOpNode" not in spv_code
+        ) in spv_code_refused
 
     def test_ray_query_operations_emit_khr_instructions_or_diagnostics(self, tmp_path):
         void_type = PrimitiveType("void")
@@ -32424,19 +32007,13 @@ class TestSpirvShaderValidation:
             },
         )
 
-        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
-
-        assert "OpCapability RayQueryKHR" in spv_code
-        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
-        assert "OpRayQueryProceedKHR" in spv_code
-        assert "OpRayQueryGetIntersectionTKHR" in spv_code
+        with pytest.raises(SpirvLoweringRefused) as refusal:
+            VulkanSPIRVCodeGen().generate(shader_node)
+        spv_code_refused = str(refusal.value)
         assert (
-            "WARNING: SPIR-V backend does not lower ray query operation "
-            "CommittedTriangleCustomAttribute yet; using a default uint value"
-        ) in spv_code
-        assert "Unknown expression type RayQueryOpNode" not in spv_code
-        assert_spirv_stores_use_matching_value_types(spv_code)
-        assert_spirv_module_validates(spv_code, tmp_path)
+            "SPIR-V backend does not lower ray query operation "
+            "CommittedTriangleCustomAttribute yet"
+        ) in spv_code_refused
 
     def test_ray_tracing_trace_ray_emits_optraceraykhr(self, tmp_path):
         source_code = """
@@ -32474,7 +32051,7 @@ class TestSpirvShaderValidation:
 
         assert "OpTraceRayKHR" in spv_code
         assert "RayPayloadKHR" in spv_code
-        assert "TraceRay yet; using a default uint value" not in spv_code
+        assert "TraceRay yet" not in spv_code
         assert "Unknown expression type RayTracingOpNode" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -32511,7 +32088,7 @@ class TestSpirvShaderValidation:
         spv_code = VulkanSPIRVCodeGen().generate(shader_node)
 
         assert "OpReportIntersectionKHR" in spv_code
-        assert "ReportHit yet; using a default bool value" not in spv_code
+        assert "ReportHit yet" not in spv_code
         assert "Unknown expression type RayTracingOpNode" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)

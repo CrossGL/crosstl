@@ -1,0 +1,332 @@
+name: Conformance
+
+# Translation conformance and differential execution (tests/conformance). Every cell of the hazard suite is
+# translated, checked by the target's native validator and executed on the runtimes provisioned here, then
+# compared with the committed scoreboard for this CI profile; a cell that regresses, goes missing or loses its
+# runtime fails the job. Pull requests run the fixture cases on the Linux leg. Pushes to main, the merge queue,
+# the nightly schedule, manual runs and pull requests labelled "ci:full" also run the macOS and Windows legs; the
+# merge queue, the nightly schedule and "ci:full" add the seeded held-out kernels, and a manual run takes their
+# number as an input. The legs job (tests/conformance/ci_plan.py) skips every other job for a pull request or
+# merge group that changes none of the conformance paths, and "Conformance result" is the one check to require.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PYTHONUNBUFFERED: "1"
+  PYTHONHASHSEED: "0"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "crosstl/**"
+      - "tests/conformance/**"
+      - ".github/workflows/conformance.yml"
+      - ".github/actions/install-linux-dxc/**"
+      - ".github/actions/install-shader-validators/**"
+      - "pyproject.toml"
+      - "requirements.txt"
+  # Pull requests always run this workflow, so that its result check can be required; the legs job skips every
+  # other job when no path under tests/conformance/ci_plan.py's PATHS changed.
+  pull_request:
+  # The merge queue validates the exact commit that lands on main with the full tier.
+  merge_group:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+    inputs:
+      heldout:
+        description: Held-out kernels generated per family and language (0 runs the fixtures only)
+        default: "6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conformance-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  harness:
+    name: Conformance harness unit tests
+    needs: legs
+    if: needs.legs.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CrossTL and harness dependencies
+        run: python -m pip install -e . numpy==2.5.4 pytest==9.1.1 PyYAML==6.0.3 hypothesis==6.170.1 z3-solver==4.15.4.0
+      - name: Harness and inventory unit tests
+        run: python -m pytest -q --no-header -p no:warnings --tb=short -rfE tests/conformance
+      - name: Rule table SMT check (every entry sound, docs/source/adr/0001-rule-carrying.md)
+        run: python -m tests.conformance.rule_table_smt
+      - name: Inventories match their pinned specifications
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m tests.conformance.inventory.spirv --fetch --check
+          python -m tests.conformance.inventory.glsl --fetch --check
+          python -m tests.conformance.inventory.hlsl --fetch --check
+          python -m tests.conformance.inventory >> "$GITHUB_STEP_SUMMARY"
+
+  legs:
+    name: Select conformance legs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.select.outputs.run }}
+      legs: ${{ steps.select.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select legs
+        id: select
+        env:
+          # macOS and Windows runners are scarce, so a pull request runs them only while it is labelled ci:full.
+          FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          LINUX_LEGS: >-
+            [{"name": "Linux Mesa lavapipe and llvmpipe", "os": "ubuntu-24.04", "targets": "glsl,spirv,hlsl",
+            "runtimes": "vulkan-lavapipe,opengl-llvmpipe", "extra": "", "developer_dir": ""}]
+          # Windows Server 2022's D3D12 runtime creates compute pipelines only up to cs_6_5 (shader models 6.6 and
+          # later need a newer runtime than the in-box one), so the Windows leg runs on Server 2025.
+          HOSTED_LEGS: >-
+            [{"name": "macOS Metal", "os": "xcode-27", "targets": "metal", "runtimes": "metal-apple",
+            "extra": "pyobjc-framework-Metal==12.2.2", "developer_dir": "/Applications/Xcode_27.1.app/Contents/Developer"},
+            {"name": "Windows Direct3D 12 WARP", "os": "windows-2025", "targets": "hlsl", "runtimes": "d3d12-warp",
+            "extra": "compushady==0.17.5", "developer_dir": ""}]
+        run: >-
+          python3 -m tests.conformance.ci_plan --workflow conformance --event "$GITHUB_EVENT_NAME"
+          --base "$BASE" --head "$HEAD" --full "$FULL"
+
+  native:
+    name: Conformance (${{ matrix.name }})
+    needs: legs
+    if: needs.legs.outputs.run == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.legs.outputs.legs) }}
+    env:
+      CROSSTL_CONFORMANCE_MESA: container
+      DEVELOPER_DIR: ${{ matrix.developer_dir }}
+      CROSSTL_CONFORMANCE_CACHE: ${{ github.workspace }}/../conformance-cache
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Select tier and scoreboard profile
+        env:
+          HELDOUT_INPUT: ${{ github.event.inputs.heldout }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: |
+          set -euo pipefail
+          heldout=0
+          if [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$GITHUB_EVENT_NAME" = merge_group ] || [ "$FULL_LABEL" = true ]; then
+            heldout=6
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            heldout="$HELDOUT_INPUT"
+          fi
+          case "$heldout" in ''|*[!0-9]*) echo "heldout must be a non-negative integer" >&2; exit 1;; esac
+          profile="$(python -c "import platform; print(f'ci-{platform.system()}-{platform.machine()}'.lower())")"
+          out="$RUNNER_TEMP/conformance"
+          mkdir -p "$out"
+          {
+            echo "CROSSTL_CONFORMANCE_PROFILE=$profile"
+            echo "CONFORMANCE_HELDOUT=$heldout"
+            echo "CONFORMANCE_OUT=$out"
+            echo "CONFORMANCE_SCOREBOARD=tests/conformance/scoreboards/$profile.json"
+          } >> "$GITHUB_ENV"
+          echo "Profile $profile, held-out kernels per family: $heldout"
+
+      - name: Install pinned Linux DXC
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-linux-dxc
+        with:
+          pinned: "true"
+
+      - name: Install pinned glslang and SPIRV-Tools
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-shader-validators
+
+      - name: Build the pinned Mesa container
+        if: runner.os == 'Linux'
+        run: docker build -q -t crosstl-conformance-mesa:1 -f tests/conformance/docker/mesa/Dockerfile tests/conformance
+
+      - name: Prepare the Metal toolchain
+        if: runner.os == 'macOS'
+        run: python tools/ensure_metal_toolchain.py
+
+      - name: Install pinned Windows DXC
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $dxcUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "DXC download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $actualSha256."
+          }
+          Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
+          $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |
+            Where-Object { $_.FullName -match "\\bin\\x64\\dxc.exe$" } |
+            Select-Object -First 1
+          if ($null -eq $dxc) {
+            throw "dxc.exe not found in release archive."
+          }
+          $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install CrossTL and harness dependencies
+        env:
+          EXTRA: ${{ matrix.extra }}
+        run: python -m pip install -e . numpy==2.5.4 pytest==9.1.1 ${EXTRA:+"$EXTRA"}
+
+      # The in-box WARP of the runner image predates current shader models. D3D12 loads d3d10warp.dll from the
+      # application directory first, so the pinned redistributable is placed next to python.exe and the
+      # adapter then refuses any other WARP build (CROSSTL_CONFORMANCE_WARP_VERSION).
+      - name: Install pinned WARP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          $warpUri = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg"
+          $warpSha256 = "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $warpUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "WARP download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $warpSha256) {
+            throw "WARP package checksum mismatch: expected $warpSha256, got $actualSha256."
+          }
+          Expand-Archive -Path $archive -DestinationPath $warpRoot -Force
+          $pythonDir = python -c "import os, sys; print(os.path.dirname(sys.executable))"
+          Copy-Item -Path (Join-Path $warpRoot "build/native/bin/x64/d3d10warp.dll") -Destination $pythonDir -Force
+          "CROSSTL_CONFORMANCE_WARP_VERSION=1.0.21.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Record toolchains
+        run: |
+          set -euo pipefail
+          python -m tests.conformance.toolchains --markdown | tee "$CONFORMANCE_OUT/toolchains.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Required runtimes reproduce their reference oracle
+        env:
+          CROSSTL_CONFORMANCE_NATIVE: "1"
+          CROSSTL_CONFORMANCE_REQUIRE: ${{ matrix.runtimes }}
+        run: python -m pytest -q --no-header -p no:warnings --tb=short -rfEP tests/conformance/test_native_runtimes.py
+
+      # Later steps still run after a reference failure, so the uploaded artifact explains it.
+      - name: Translated route against the scoreboard
+        id: translated
+        if: ${{ !cancelled() }}
+        env:
+          TARGETS: ${{ matrix.targets }}
+          RUNTIMES: ${{ matrix.runtimes }}
+        run: >-
+          python -m tests.conformance.runner --output "$CONFORMANCE_OUT/translated"
+          --targets "$TARGETS" --runtimes "$RUNTIMES" --configs strict,relaxed
+          --heldout-per-family "$CONFORMANCE_HELDOUT" --baseline "$CONFORMANCE_SCOREBOARD"
+
+      - name: Reference route against the scoreboard
+        if: ${{ !cancelled() }}
+        env:
+          TARGETS: ${{ matrix.targets }}
+          RUNTIMES: ${{ matrix.runtimes }}
+        run: >-
+          python -m tests.conformance.runner --output "$CONFORMANCE_OUT/reference" --reference
+          --targets "$TARGETS" --runtimes "$RUNTIMES"
+          --heldout-per-family "$CONFORMANCE_HELDOUT" --baseline "$CONFORMANCE_SCOREBOARD"
+
+      - name: Candidate scoreboard for this profile
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          candidate="$CONFORMANCE_OUT/$CROSSTL_CONFORMANCE_PROFILE.json"
+          if [ -f "$CONFORMANCE_SCOREBOARD" ]; then cp "$CONFORMANCE_SCOREBOARD" "$candidate"; fi
+          results=()
+          for route in translated reference; do
+            if [ -f "$CONFORMANCE_OUT/$route/results.jsonl" ]; then results+=("$CONFORMANCE_OUT/$route/results.jsonl"); fi
+          done
+          if [ "${#results[@]}" -gt 0 ]; then
+            python -m tests.conformance.scoreboard "${results[@]}" --write "$candidate"
+            echo "Candidate scoreboard: $candidate (artifact conformance-$CROSSTL_CONFORMANCE_PROFILE)"
+          fi
+
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-${{ env.CROSSTL_CONFORMANCE_PROFILE }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.CONFORMANCE_OUT }}/*.json
+            ${{ env.CONFORMANCE_OUT }}/toolchains.md
+            ${{ env.CONFORMANCE_OUT }}/*/run.json
+            ${{ env.CONFORMANCE_OUT }}/*/results.jsonl
+
+  result:
+    # The one check per workflow that branch protection and the merge queue can require.
+    name: Conformance result
+    if: always()
+    needs: [harness, legs, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done

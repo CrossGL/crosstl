@@ -9,34 +9,54 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  merge_group:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test-examples:
     name: Test Examples - Python ${{ matrix.python-version }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.runner || matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
         os: [ubuntu-latest, windows-latest, macOS-latest]
         exclude:
-          - python-version: "3.8"
+          - python-version: "3.11"
             os: windows-latest
-        include:
-          - python-version: "3.9"
+          - python-version: "3.12"
             os: windows-latest
-            runner: windows-2022
+          - python-version: "3.14"
+            os: windows-latest
+          - python-version: "3.15"
+            os: windows-latest
+          - python-version: "3.11"
+            os: macOS-latest
+          - python-version: "3.12"
+            os: macOS-latest
+          - python-version: "3.14"
+            os: macOS-latest
+          - python-version: "3.15"
+            os: macOS-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: ${{ matrix.python-version }}
 
       - name: Install CrossTL
@@ -108,7 +128,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10"]
+        python-version: ["3.11"]
         combination:
           # Graphics category - Core backends (working shaders)
           - {
@@ -303,11 +323,16 @@ jobs:
             }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
@@ -353,11 +378,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: "3.11"
 
       - name: Install dependencies
@@ -447,3 +477,23 @@ jobs:
           if len(successful_backends) != len(backends):
               raise SystemExit(1)
           "
+
+  result:
+    # The one check per workflow that branch protection and the merge queue require.
+    name: Examples Test result
+    if: always()
+    needs: [test-examples, backend-specific, stability-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done

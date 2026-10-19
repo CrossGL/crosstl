@@ -2437,8 +2437,7 @@ class CudaToCrossGLConverter:
                 )
                 comment = f"// CUDA stream {action}: {stream}"
                 if (
-                    name
-                    in {
+                    name in {
                         "cudaStreamCreateWithFlags",
                         "cudaStreamCreateWithPriority",
                     }
@@ -3403,8 +3402,7 @@ class CudaToCrossGLConverter:
                     f"exec: {args[0]}, node: {args[1]}, params: {args[2]}"
                 )
                 if (
-                    name
-                    in {
+                    name in {
                         "cuGraphExecMemcpyNodeSetParams",
                         "cuGraphExecMemsetNodeSetParams",
                     }
@@ -4994,11 +4992,10 @@ class CudaToCrossGLConverter:
         return f"({predicate} != 0)"
 
     def format_unsupported_cuda_warp_intrinsic(self, function_name, args):
-        args_text = ", ".join(args)
-        return (
-            f"(/* cuda warp intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
-        )
+        # A warp intrinsic with no wave-intrinsic equivalent stays a CUDA call in CrossGL: the CUDA target emits
+        # it natively, and crosstl.translator.semantics.warp emulates or refuses it for every other target. It was
+        # replaced by the constant 0.
+        return f"{function_name}({', '.join(args)})"
 
     def format_cuda_block_sync_vote_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):
@@ -5025,8 +5022,7 @@ class CudaToCrossGLConverter:
             function_name = function_name[2:]
 
         if (
-            function_name
-            in {
+            function_name in {
                 "__float2half",
                 "__float2half_rn",
                 "__float2half_rd",
@@ -5288,8 +5284,13 @@ class CudaToCrossGLConverter:
         if function_name == "__saturatef" and len(args) == 1:
             return f"clamp({args[0]}, 0.0f, 1.0f)"
         if (
-            function_name
-            in {"__fdividef", "__fdiv_rd", "__fdiv_rn", "__fdiv_ru", "__fdiv_rz"}
+            function_name in {
+                "__fdividef",
+                "__fdiv_rd",
+                "__fdiv_rn",
+                "__fdiv_ru",
+                "__fdiv_rz",
+            }
             and len(args) == 2
         ):
             return f"({args[0]} / {args[1]})"
@@ -5314,8 +5315,7 @@ class CudaToCrossGLConverter:
         ):
             return f"(1.0f / {args[0]})"
         if (
-            function_name
-            in {
+            function_name in {
                 "__fmaf_rd",
                 "__fmaf_rn",
                 "__fmaf_ru",
@@ -6962,9 +6962,9 @@ class CudaToCrossGLConverter:
             "truncf": "trunc",
             "atan2f": "atan2",
             "fmaf": "fma",
-            "fmodf": "mod",
-            "fminf": "min",
-            "fmaxf": "max",
+            "fmodf": "fmod",
+            "fminf": "fmin",
+            "fmaxf": "fmax",
             "lerp": "mix",
             "floorf": "floor",
             "ceilf": "ceil",
@@ -6979,9 +6979,9 @@ class CudaToCrossGLConverter:
             "rsqrt": "inversesqrt",
             "rint": "round",
             "nearbyint": "round",
-            "fmod": "mod",
-            "fmin": "min",
-            "fmax": "max",
+            "fmod": "fmod",
+            "fmin": "fmin",
+            "fmax": "fmax",
             "__threadfence": "memoryBarrier",
             "__threadfence_block": "memoryBarrier",
             "__threadfence_system": "memoryBarrier",

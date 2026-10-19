@@ -1009,8 +1009,7 @@ class VulkanParser:
                 }
             elif (
                 result_id
-                and opcode
-                in {
+                and opcode in {
                     "OpTypeCooperativeMatrixKHR",
                     "OpTypeCooperativeMatrixNV",
                 }
@@ -1836,8 +1835,7 @@ class VulkanParser:
 
             if (
                 result_id
-                and opcode
-                in {
+                and opcode in {
                     "OpImageQueryFormat",
                     "OpImageQueryOrder",
                 }
@@ -5583,8 +5581,7 @@ class VulkanParser:
         for result_id, opcode, operands, _line_number in raw_instructions:
             if (
                 result_id
-                and opcode
-                in {
+                and opcode in {
                     "OpAccessChain",
                     "OpInBoundsAccessChain",
                     "OpPtrAccessChain",
@@ -5606,8 +5603,7 @@ class VulkanParser:
                 continue
 
             if (
-                opcode
-                in {
+                opcode in {
                     "OpStore",
                     "OpCopyMemory",
                     "OpCopyMemorySized",
@@ -6440,8 +6436,7 @@ class VulkanParser:
         self, operation, operands, names, constants, types
     ):
         if (
-            operation
-            in {
+            operation in {
                 "CooperativeMatrixLengthKHR",
                 "CooperativeMatrixLengthNV",
             }

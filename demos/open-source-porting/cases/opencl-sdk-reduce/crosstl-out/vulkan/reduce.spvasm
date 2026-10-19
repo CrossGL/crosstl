@@ -1104,7 +1104,7 @@ OpDecorate %4166 BuiltIn NumWorkgroups
 %4127 = OpConstant %4 1022
 %4131 = OpConstant %4 1023
 %4139 = OpTypeFunction %29 %29 %29
-%4146 = OpTypePointer Private %26
+%4146 = OpTypePointer Workgroup %26
 %4148 = OpTypeFunction %2
 %4151 = OpTypeVector %29 3
 %4152 = OpTypePointer Input %4151
@@ -1114,12 +1114,12 @@ OpDecorate %4166 BuiltIn NumWorkgroups
 %4172 = OpConstant %29 2
 %4176 = OpTypePointer Uniform %9
 %4196 = OpTypePointer Uniform %4
-%4200 = OpTypePointer Private %4
+%4200 = OpTypePointer Workgroup %4
 %4202 = OpConstant %29 264
 %12 = OpVariable %11 Uniform
 %16 = OpVariable %15 Uniform
 %19 = OpVariable %18 Uniform
-%4147 = OpVariable %4146 Private
+%4147 = OpVariable %4146 Workgroup
 %4153 = OpVariable %4152 Input
 %4162 = OpVariable %4152 Input
 %4166 = OpVariable %4152 Input
@@ -5308,8 +5308,8 @@ OpStore %4203 %4204
 OpBranch %4205
 %4205 = OpLabel
 %4209 = OpLoad %29 %4203
-%4210 = OpBitcast %4 %4209
-%4211 = OpINotEqual %3 %4210 %39
+%4210 = OpBitcast %29 %39
+%4211 = OpINotEqual %3 %4209 %4210
 OpLoopMerge %4208 %4207 None
 OpBranchConditional %4211 %4206 %4208
 %4206 = OpLabel
@@ -13541,8 +13541,8 @@ OpStore %4203 %10381
 OpBranch %4205
 %4208 = OpLabel
 %10382 = OpLoad %29 %4155
-%10383 = OpBitcast %4 %10382
-%10384 = OpIEqual %3 %10383 %39
+%10383 = OpBitcast %29 %39
+%10384 = OpIEqual %3 %10382 %10383
 OpSelectionMerge %10385 None
 OpBranchConditional %10384 %10386 %10387
 %10386 = OpLabel

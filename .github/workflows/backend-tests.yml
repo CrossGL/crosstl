@@ -10,14 +10,47 @@ on:
   pull_request:
     branches:
       - main
+  merge_group:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  python-versions:
+    name: Select Python versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.select.outputs.versions }}
+    steps:
+      - name: Select Python versions
+        id: select
+        env:
+          # Pushes to main and pull requests labelled ci:full test every supported
+          # version; other pull requests test the oldest and the newest.
+          FULL_PYTHON_VERSIONS: '["3.11", "3.12", "3.13", "3.14", "3.15"]'
+          PULL_REQUEST_PYTHON_VERSIONS: '["3.11", "3.15"]'
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: |
+          if [ "$FULL" = "true" ]; then
+            echo "versions=$FULL_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
+          else
+            echo "versions=$PULL_REQUEST_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
-    runs-on: ${{ matrix.runner || matrix.OS }}
+    needs: python-versions
+    # The pinned Xcode 27.1 toolchain the Metal step selects is only on the
+    # xcode-27 image; macOS-latest images carry Xcode 26.
+    runs-on: ${{ matrix.OS == 'macOS-latest' && 'xcode-27' || matrix.OS }}
     timeout-minutes: 45
+    env:
+      # Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
+      PYTEST_XDIST_AUTO_NUM_WORKERS: ${{ matrix.OS == 'macOS-latest' && '3' || '4' }}
     strategy:
       matrix:
         backend:
@@ -32,26 +65,35 @@ jobs:
             "CUDA",
             "HIP",
           ]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
         OS: [ubuntu-latest, windows-latest, macOS-latest]
         exclude:
-          - python-version: "3.8"
-            OS: windows-latest
+          - OS: windows-latest
+          - OS: macOS-latest
         include:
-          - python-version: "3.9"
+          - backend: all
+            python-version: "3.13"
             OS: windows-latest
-            runner: windows-2022
+          - backend: all
+            python-version: "3.13"
+            OS: macOS-latest
+
       fail-fast: false
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
         id: setup_python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         continue-on-error: true
         with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
           python-version: ${{ matrix.python-version }}
 
       - name: Classify Python setup failure
@@ -70,19 +112,49 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
+      - name: Verify Metal 4.1 toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          export DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer
+          diagnose_metal_failure() {
+            local status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "::group::Metal toolchain failure diagnostics"
+              xcodebuild -showComponent MetalToolchain -json || true
+              xcrun --sdk macosx --find metal || true
+              mount || true
+              echo "::endgroup::"
+            fi
+            exit "$status"
+          }
+          trap diagnose_metal_failure EXIT
+          test -d "$DEVELOPER_DIR"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          xcodebuild -version
+          python tools/ensure_metal_toolchain.py
+          xcrun --sdk macosx metal -std=metal4.1 -x metal -fsyntax-only /dev/null
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install -r requirements.txt
+          pip install -r requirements.txt pytest-xdist
 
       - name: Run backend tests
         id: run_backend_tests
         shell: bash
         run: |
           mkdir -p support/generated
-          python -m pytest tests/test_backend/test_${{ matrix.backend }} \
-            --junitxml support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+          if [ "${{ matrix.backend }}" == "all" ]; then
+            python -m pytest tests/test_backend -n auto \
+              --junitxml support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+          else
+            python -m pytest tests/test_backend/test_${{ matrix.backend }} -n auto \
+              --junitxml support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+          fi
 
       - name: Write backend test failure summary
         if: failure() && steps.run_backend_tests.outcome == 'failure'
@@ -96,7 +168,7 @@ jobs:
 
       - name: Upload backend test failure summary
         if: failure() && steps.run_backend_tests.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-tests-failure-summary-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}
           path: |
@@ -105,3 +177,23 @@ jobs:
             support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
+
+  result:
+    # The one check per workflow that branch protection and the merge queue require.
+    name: Backend Tests result
+    if: always()
+    needs: [python-versions, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with '$result'."; exit 1 ;;
+            esac
+          done
