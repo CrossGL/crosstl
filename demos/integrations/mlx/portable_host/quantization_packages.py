@@ -41,6 +41,12 @@ INDEX_EXPRESSIONS = (
     "index",
     "index / pack_factor",
     "i",
+    # Wide pointer rebases need complete-offset bounds for each later subscript:
+    # the generic loop, the unrolled 3-, 5- and 6-bit writes and packed reads.
+    "out_ + i",
+    "w + offset * bytes_per_pack",
+    *(f"out_ + {index}" for index in range(8)),
+    *(f"w + {index}" for index in range(5)),
 )
 
 

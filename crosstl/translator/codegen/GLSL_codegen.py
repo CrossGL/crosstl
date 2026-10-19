@@ -131,6 +131,7 @@ from .array_utils import (
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .call_effects import builtin_argument_write_indices
+from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
 from .entry_selection import entry_type_references
 from .enum_utils import (
@@ -10463,14 +10464,20 @@ class GLSLCodeGen(
                     source_types[node.name] = binding["source_type"]
             return source_types
 
-        def checked_interval(expression, intervals):
+        def checked_interval(expression, intervals, destination_type=None):
             source_types = lexical_source_types(expression)
             if source_types is None:
                 return None
             with self.glsl_lexical_source_type_scope(source_types):
-                return self.glsl_checked_private_pointer_interval(
+                interval = self.glsl_checked_private_pointer_interval(
                     expression, intervals, constants
                 )
+                if interval is None and destination_type is not None:
+                    # Unsigned wrap is exact modulo the destination width.
+                    interval = self.glsl_congruent_storage_interval(
+                        expression, intervals, constants, destination_type
+                    )
+                return interval
 
         def checked_components(expression, vector_type, intervals):
             source_types = lexical_source_types(expression)
@@ -11378,7 +11385,8 @@ class GLSLCodeGen(
                     )
                     clear_interval_targets(intervals, {name})
                     interval = self.glsl_integer_storage_interval(
-                        checked_interval(initial_value, intervals), variable_type
+                        checked_interval(initial_value, intervals, variable_type),
+                        variable_type,
                     )
                     if (
                         interval is None
@@ -11434,7 +11442,9 @@ class GLSLCodeGen(
                     target, (str, IdentifierNode, VariableNode)
                 ):
                     target_type = expression_source_type(target)
-                    assigned_interval = checked_interval(assigned, intervals)
+                    assigned_interval = checked_interval(
+                        assigned, intervals, target_type
+                    )
                     assigned_components = (
                         checked_components(
                             assigned,
@@ -11455,7 +11465,9 @@ class GLSLCodeGen(
                         replacement = assigned_interval
                     elif operator in {"+=", "-="} and current and assigned_interval:
                         replacement = checked_interval(
-                            BinaryOpNode(target, operator[0], assigned), intervals
+                            BinaryOpNode(target, operator[0], assigned),
+                            intervals,
+                            target_type,
                         )
                     else:
                         replacement = None
@@ -52431,6 +52443,28 @@ complex64_t crossgl_complex64_mod_assign(
         bits = info["narrow"]["bits"] if info["narrow"] else info["bits"]
         converted = convert_integer_intervals([interval], bits, info["family"] == "int")
         return converted[0][0], converted[-1][1]
+
+    def glsl_congruent_storage_interval(
+        self, expression, intervals, constants, source_type
+    ):
+        """Bound wrapped unsigned ring arithmetic stored into ``source_type``.
+
+        The result is mathematical; callers apply the destination conversion.
+        """
+        info = self.glsl_value_type_info(source_type)
+        if info is None or info["width"] != 1 or info["family"] not in {"int", "uint"}:
+            return None
+        bits = info["narrow"]["bits"] if info["narrow"] else info["bits"]
+        return congruent_ring_interval(
+            expression,
+            bits,
+            bounds=lambda node: self.glsl_private_pointer_interval(
+                node, intervals, constants
+            ),
+            domain=lambda node: self.glsl_integer_type_domain(node, allow_wide=True),
+            operator=lambda node: self.map_operator(node.op),
+            walk=self.walk_ast,
+        )
 
     def glsl_integer_cast_interval(
         self,
