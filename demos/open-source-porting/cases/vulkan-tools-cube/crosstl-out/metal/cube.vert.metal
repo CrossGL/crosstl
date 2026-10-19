@@ -8,8 +8,8 @@ struct buf {
     float4 attr[12 * 3];
 };
 struct VertexOutput {
-    float4 texcoord [[attribute(0)]];
-    float3 frag_pos [[attribute(1)]];
+    float4 texcoord [[user(locn0)]];
+    float3 frag_pos [[user(locn1)]];
     float4 gl_Position [[position]];
 };
 // Constant Buffers

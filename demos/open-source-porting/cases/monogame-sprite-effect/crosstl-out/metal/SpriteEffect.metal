@@ -4,8 +4,8 @@ using namespace metal;
 
 struct VSOutput {
     float4 position [[position]];
-    float4 color [[attribute(0)]];
-    float2 texCoord [[attribute(5)]];
+    float4 color [[user(COLOR0)]];
+    float2 texCoord [[user(TEXCOORD0)]];
 };
 // Constant Buffers
 struct HlslProgramConstants {

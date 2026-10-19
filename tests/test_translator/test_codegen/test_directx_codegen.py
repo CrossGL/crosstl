@@ -20762,7 +20762,9 @@ def test_hlsl_bit_count_lowers_to_countbits_intrinsic():
 
     # Microsoft HLSL docs list countbits(value) for uint scalar/vector inputs.
     # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/countbits
-    assert "uint3 vectorCounts = countbits(mask);" in generated_code
+    # CrossGL bitCount follows GLSL 4.60 section 8.8: `genIType bitCount(genUType)`,
+    # so the inferred local is signed even though countbits returns uint.
+    assert "int3 vectorCounts = countbits(mask);" in generated_code
     assert "uint countbits_ = tid.x;" in generated_code
     assert "uint scalarCount = (countbits(tid.x) + countbits_);" in generated_code
     assert "bitCount(" not in generated_code
@@ -20816,8 +20818,10 @@ def test_hlsl_first_bit_builtins_lower_to_native_intrinsics():
 
     # Microsoft HLSL exposes firstbitlow/firstbithigh for scalar and vector
     # integer operands, rather than GLSL's findLSB/findMSB spelling.
-    assert "uint3 lowBits = firstbitlow(mask);" in generated_code
-    assert "uint highBit = firstbithigh(tid.x);" in generated_code
+    # CrossGL findLSB/findMSB follow GLSL 4.60 section 8.8 (`genIType findLSB(genUType)`),
+    # so a zero input still reads as -1 through the signed local.
+    assert "int3 lowBits = firstbitlow(mask);" in generated_code
+    assert "int highBit = firstbithigh(tid.x);" in generated_code
     assert "int3 signedHighBits = firstbithigh(signedMask);" in generated_code
     assert "uint firstbitlow_ = tid.x;" in generated_code
     assert "uint firstbithigh_ = tid.y;" in generated_code

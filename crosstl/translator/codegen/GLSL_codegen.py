@@ -132,6 +132,11 @@ from .array_utils import (
 )
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
+from .builtin_result_types import (
+    GLSL_FAMILY,
+    component_access_type,
+    inferred_value_type,
+)
 from .call_effects import builtin_argument_write_indices
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
@@ -378,6 +383,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .operator_spellings import map_c_family_operator
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     same_scalar_lane_view,
@@ -385,6 +391,7 @@ from .pointer_reinterpret import (
 )
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases
+from .relational_builtins import glsl_vector_logical_not
 from .resource_aggregates import lower_resource_aggregates
 from .resource_arrays import (
     collect_resource_array_size_hints,
@@ -24704,10 +24711,16 @@ class GLSLCodeGen(LoweringRefusalMixin):
             var_type = getattr(stmt, "vtype", None)
         var_type_name = self.type_name_string(var_type)
         if var_type_name in {None, "auto"}:
-            inferred_type = self.expression_result_type(
-                getattr(stmt, "initial_value", None)
+            inferred_type = inferred_value_type(
+                self, getattr(stmt, "initial_value", None), GLSL_FAMILY
             )
-            return self.type_name_string(inferred_type) or "float"
+            if inferred_type is not None:
+                return inferred_type
+            return self.refuse_lowering(
+                f"local declaration: the type of '{getattr(stmt, 'name', '?')}' is not "
+                "written and cannot be inferred from its initializer",
+                "float",
+            )
         return var_type_name
 
     def glsl_identifier_requires_escape(self, name, extra_reserved=()):
@@ -35805,7 +35818,9 @@ complex64_t crossgl_complex64_mod_assign(
                 return array_type.rstrip()[:-1].strip()
             if self.is_structured_buffer_type(array_type):
                 return self.structured_buffer_source_element_type(array_type)
-            component_type = self.vector_component_type(array_type)
+            component_type = self.vector_component_type(
+                array_type
+            ) or component_access_type(array_type, GLSL_FAMILY)
             if component_type is not None:
                 return component_type
             return array_type
@@ -38681,6 +38696,9 @@ complex64_t crossgl_complex64_mod_assign(
                     return narrow_update
                 operand = self.generate_glsl_buffer_block_mutation_target(expr.operand)
             elif op == "!":
+                vector_not = glsl_vector_logical_not(self, expr.operand)
+                if vector_not is not None:
+                    return vector_not
                 operand = self.generate_glsl_boolean_context(expr.operand)
             else:
                 operand = self.generate_expression_with_expected(
@@ -43948,7 +43966,10 @@ complex64_t crossgl_complex64_mod_assign(
             narrow = self.glsl_narrow_integer_contract(type_name)
             if narrow is not None and narrow["width"] > 1:
                 return ("int" if narrow["signed"] else "uint") + str(narrow["bits"])
-            component_type = self.vector_component_type(type_name)
+            # A vector subscript selects a component and a matrix subscript a column (GLSL 4.60 section 5.6).
+            component_type = self.vector_component_type(
+                type_name
+            ) or component_access_type(type_name, GLSL_FAMILY)
             if component_type is not None:
                 return component_type
             return type_name
@@ -56314,39 +56335,8 @@ complex64_t crossgl_complex64_mod_assign(
         return f"@{source}"
 
     def map_operator(self, op):
-        op_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "BITWISE_XOR": "^",
-            "LESS_THAN": "<",
-            "GREATER_THAN": ">",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "AND": "&&",
-            "OR": "||",
-            "EQUALS": "=",
-            "MOD": "%",
-            "BITWISE_OR": "|",
-            "BITWISE_AND": "&",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "ASSIGN_AND": "&=",
-            "LOGICAL_AND": "&&",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-        }
-        return op_map.get(op, op)
+        """Spell a CrossGL operator; an operator CrossGL does not define is refused."""
+        return map_c_family_operator(op, self.LOWERING_REFUSAL_TYPE.label)
 
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to the corresponding GLSL builtin or layout."""
