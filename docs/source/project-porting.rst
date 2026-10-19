@@ -2870,7 +2870,7 @@ The same selected-entry pipeline translates all 4,122 binary entries to
 standalone OpenGL ``main`` artifacts. The schema-v2
 ``binary.opengl-translation.json`` contract preserves all 18 shapes, 11 kernel
 templates, 24 operators, 25 input/output type pairs, and 6,026 exact
-materializations. It pins 18,740,485 generated GLSL bytes
+materializations. It pins 18,732,199 generated GLSL bytes
 and 19,106 reflected resources across exact three-, four-, five-, and
 seven-resource target interfaces. Scalar forms expose three storage buffers;
 size-bounded forms add an entry-scoped size uniform block; fixed generalized
@@ -2971,7 +2971,7 @@ standalone OpenGL ``main`` artifacts. The compact schema-v2
 ``reduce.opengl-translation.json`` contract preserves the 39 shapes, nine
 kernel templates, six operator families, 44 concrete operator types, and 13
 input/output types while pinning 9,216 exact materializations,
-45,932,130 generated GLSL bytes, and 25,088 resources across
+45,283,816 generated GLSL bytes, and 25,088 resources across
 scalar-layout-aware one- through twelve-resource target ABIs.
 All source bodies and resource interfaces have complete reference comparisons;
 an earlier 85-entry pipeline review covers its edit patterns and ABI shapes.

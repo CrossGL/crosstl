@@ -10043,7 +10043,9 @@ def test_glsl_private_pointer_if_keeps_unsigned_wraparound_branches():
 
     assert "float read_selected(inout float values[8], int values_base)" in generated
     assert "return values[(values_base + int(7))];" in generated
-    assert "return values[(values_base + int(0))];" in generated
+    # The increment wraps the selector to zero, so the checked intervals refute
+    # the else guard. Modeling the sum as 2**32 would refute the taken branch.
+    assert "return values[(values_base + int(0))];" not in generated
 
 
 def test_glsl_private_pointer_view_rejects_unresolved_address_base():

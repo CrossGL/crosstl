@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 
 from crosstl.project import build_native_loader_dispatch_request, translate_project
-from crosstl.translator.ast import ForNode
+from crosstl.translator.ast import ForNode, IfNode
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from tests.runtime_helpers import _validate
 from tests.test_translator.test_loop_updates import _execute
@@ -580,4 +580,224 @@ def test_tight_tiled_layout_executes_natively(tmp_path, reverse, width):
     ]["details"]
     assert len(details["metadataPreconditions"]) == 8
     assert len(details["inputObservations"]) == 6
+    assert all(item["unchanged"] for item in details["inputObservations"].values())
+
+
+REFUTED_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+kernel void tail_sum(const device uint* in [[buffer(0)]],
+                     device uint* out [[buffer(1)]],
+                     constant size_t& in_size [[buffer(2)]],
+                     constant size_t& row_size [[buffer(3)]],
+                     uint3 gid [[threadgroup_position_in_grid]],
+                     uint3 lid [[thread_position_in_threadgroup]],
+                     uint3 lsize [[threads_per_threadgroup]]) {
+    uint total = 0;
+    long start = gid.y * long(row_size);
+    long actual = (start + row_size <= in_size) ? row_size : in_size - start;
+    long blocks = actual / (lsize.x * 4);
+    int extra = actual - blocks * (lsize.x * 4);
+    extra -= lid.x * 4;
+    start += lid.x * 4;
+    in += start;
+    if (extra >= 4) {
+        blocks++;
+        extra = 0;
+    }
+    for (long b = 0; b < blocks; b++) {
+        for (int i = 0; i < 4; i++) {
+            total += in[i];
+        }
+        in += lsize.x * 4;
+    }
+    TAIL
+    out[gid.y * lsize.x + lid.x] = total;
+}
+"""
+REFUTED_LOOP = "for (int i = 0; i < extra; i++) { total += in[i]; }"
+# Each tail reads through the advanced wide pointer only where ``extra > 0``.
+# When the row is an exact multiple of the block, the checked intervals refute
+# that guard, so the reads need no composed-offset proof and are not emitted.
+REFUTED_TAILS = {
+    "then": f"if (extra > 0) {{ {REFUTED_LOOP} }}",
+    "else": f"if (extra <= 0) {{ total += 1u; }} else {{ {REFUTED_LOOP} }}",
+    "else-if": (
+        f"if (extra < -64) {{ total += 2u; }} else if (extra > 0) {{ {REFUTED_LOOP} }}"
+    ),
+    "chained": (
+        "if (extra <= 0) { total += 1u; } "
+        f"else if (extra > 0) {{ {REFUTED_LOOP} }} else {{ total += 2u; }}"
+    ),
+}
+REFUTED_WIDTH = 4
+REFUTED_ROWS = 1
+
+
+def _refuted_source(case):
+    return REFUTED_SOURCE.replace("TAIL", REFUTED_TAILS[case])
+
+
+def _refuted_config(root, target, case, row):
+    conditions = [
+        dict(entryPoint="tail_sum", parameter=name, minimum=value, maximum=value)
+        for name, value in (("in_size", REFUTED_ROWS * row), ("row_size", row))
+    ]
+    config = _config(
+        root,
+        target,
+        source=_refuted_source(case),
+        entries=("tail_sum",),
+        conditions=conditions,
+    )
+    options = dict(config.source_options["metal"])
+    if target != "metal":
+        (region,) = plan_dispatch_regions(
+            (REFUTED_WIDTH, REFUTED_ROWS, 1), (REFUTED_WIDTH, 1, 1)
+        )
+        options["target_options"] = {target: dict(dispatch_region=region.to_json())}
+    return replace(
+        config,
+        workgroup_size=(REFUTED_WIDTH, 1, 1),
+        source_options={"metal": options},
+    )
+
+
+def _refuted_reference(case, words, row):
+    """Evaluate the kernel's source semantics for every invocation."""
+
+    result = []
+    for group in range(REFUTED_ROWS):
+        for lane in range(REFUTED_WIDTH):
+            total = 0
+            start = group * row
+            actual = row if start + row <= REFUTED_ROWS * row else 0
+            blocks = actual // (REFUTED_WIDTH * 4)
+            extra = actual - blocks * REFUTED_WIDTH * 4 - lane * 4
+            position = start + lane * 4
+            if extra >= 4:
+                blocks, extra = blocks + 1, 0
+            for _ in range(blocks):
+                total += sum(words[position : position + 4])
+                position += REFUTED_WIDTH * 4
+            tail = sum(words[position : position + max(extra, 0)])
+            if case == "then":
+                total += tail
+            elif case == "else":
+                total += 1 if extra <= 0 else tail
+            elif case == "else-if":
+                total += 2 if extra < -64 else tail if extra > 0 else 0
+            else:
+                total += 1 if extra <= 0 else tail
+            result.append(total & 0xFFFFFFFF)
+    return result
+
+
+@pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
+@pytest.mark.parametrize("case", REFUTED_TAILS)
+@pytest.mark.parametrize("row,refuted", [(16, True), (17, False), (32, True)])
+def test_refuted_branch_reads_need_no_offset_proof(
+    tmp_path, target, case, row, refuted
+):
+    config = _refuted_config(tmp_path, target, case, row)
+    report = translate_project(config, format_output=False).to_json()
+    assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+    assert not config.index_range_assertions
+    if target != "opengl":
+        return
+    (artifact,) = report["artifacts"]
+    generated = (tmp_path / artifact["path"]).read_text()
+    # Only the refuted tail loop is removed; the reachable block loop and the
+    # reachable sibling branches are emitted unchanged.
+    assert ("(i < extra)" in generated) is not refuted
+    assert "(i < 4)" in generated
+    assert ("1u" in generated) is (case in {"else", "chained"})
+
+
+def test_refuted_branch_keeps_bodies_reached_by_another_iteration():
+    generator = _generator(
+        "void run(int tile) { int total = 0; "
+        "for (int i = 0; i < 2; ++i) { if (i == 1) { total += 1; } "
+        "if (tile > 3) { total += 2; } } }"
+    )
+    function = generator.function_definitions["run"]
+    generator.glsl_workgroup_proof_initial_intervals = lambda _function: {
+        "tile": (0, 1)
+    }
+    generator.annotate_glsl_control_flow_intervals(function)
+    branches = [
+        node for node in generator.walk_ast(function.body) if isinstance(node, IfNode)
+    ]
+    marked = [
+        getattr(statement, "_glsl_checked_unreachable", False)
+        for branch in branches
+        for statement in getattr(branch.if_body, "statements", branch.if_body)
+    ]
+    # ``i == 1`` is false on the first replayed iteration only, while
+    # ``tile > 3`` is false on every iteration.
+    assert marked == [False, True]
+
+
+@pytest.mark.parametrize("case", REFUTED_TAILS)
+@pytest.mark.parametrize("row", [16, 17])
+def test_refuted_branch_tails_execute_natively(tmp_path, case, row):
+    if os.environ.get("CROSTL_REQUIRE_METADATA_PRECONDITIONS") != "1":
+        pytest.skip(
+            "set CROSTL_REQUIRE_METADATA_PRECONDITIONS=1 for native metadata checks"
+        )
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    config = _refuted_config(tmp_path, target, case, row)
+    _, package, (descriptor,) = _packages(config)
+    words = [17 + 13 * i for i in range(REFUTED_ROWS * row)]
+    expected = _refuted_reference(case, words, row) + [GUARD] * 4
+    data = {
+        "in": ("uint32", words),
+        "out": ("uint32", [GUARD] * len(expected)),
+        "in_size": ("uint64", [REFUTED_ROWS * row]),
+        "row_size": ("uint64", [row]),
+    }
+    source_bindings = [
+        binding
+        for binding in descriptor["bindings"]
+        if "executionInput" not in binding["provenance"]
+    ]
+    assert {
+        binding["provenance"]["sourceResource"]["parameter"]
+        for binding in source_bindings
+    } == set(data)
+    inputs, outputs = {}, {}
+    for binding in source_bindings:
+        name = binding["provenance"]["sourceResource"]["parameter"]
+        dtype, items = data[name]
+        inputs[binding["name"]] = dict(dtype=dtype, shape=[len(items)], values=items)
+        if name == "out":
+            outputs[binding["name"]] = dict(
+                dtype=dtype, shape=[len(expected)], values=expected
+            )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        dict(workgroupCount=[1, REFUTED_ROWS, 1], workgroupSize=[REFUTED_WIDTH, 1, 1]),
+        observe_inputs=[
+            binding["name"]
+            for binding in source_bindings
+            if binding["access"] == "read"
+        ],
+    )
+    assert not request.execution_plan.diagnostics
+    native = tmp_path / "native"
+    native.mkdir()
+    _execute(
+        request,
+        outputs,
+        native,
+        validate=_validate,
+        original_source=_refuted_source(case),
+        original_entry="tail_sum",
+    )
+    details = json.loads((native / "evidence.json").read_text())["records"][
+        "generated"
+    ]["details"]
+    assert len(details["metadataPreconditions"]) == 2
     assert all(item["unchanged"] for item in details["inputObservations"].values())
