@@ -1,0 +1,86 @@
+; SPIR-V
+; OpArrayLength reads a runtime array's element count from the bound buffer (SPIR-V 1.6, OpArrayLength). Generated from g_buffer_count by glslang.
+; Version: 1.3
+; Generator: Khronos Glslang Reference Front End; 11
+; Bound: 47
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
+               OpExecutionMode %main LocalSize 64 1 1
+               OpSource GLSL 450
+               OpName %main "main"
+               OpName %i "i"
+               OpName %gl_GlobalInvocationID "gl_GlobalInvocationID"
+               OpName %n "n"
+               OpName %Inp "Inp"
+               OpMemberName %Inp 0 "a"
+               OpName %inp "inp"
+               OpName %Outp "Outp"
+               OpMemberName %Outp 0 "o"
+               OpName %outp "outp"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpDecorate %_runtimearr_int ArrayStride 4
+               OpDecorate %Inp Block
+               OpMemberDecorate %Inp 0 NonWritable
+               OpMemberDecorate %Inp 0 Offset 0
+               OpDecorate %inp NonWritable
+               OpDecorate %inp Binding 0
+               OpDecorate %inp DescriptorSet 0
+               OpDecorate %_runtimearr_int_0 ArrayStride 4
+               OpDecorate %Outp Block
+               OpMemberDecorate %Outp 0 Offset 0
+               OpDecorate %outp Binding 1
+               OpDecorate %outp DescriptorSet 0
+               OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+%_ptr_Function_uint = OpTypePointer Function %uint
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+     %uint_0 = OpConstant %uint 0
+%_ptr_Input_uint = OpTypePointer Input %uint
+        %int = OpTypeInt 32 1
+%_ptr_Function_int = OpTypePointer Function %int
+%_runtimearr_int = OpTypeRuntimeArray %int
+        %Inp = OpTypeStruct %_runtimearr_int
+%_ptr_StorageBuffer_Inp = OpTypePointer StorageBuffer %Inp
+        %inp = OpVariable %_ptr_StorageBuffer_Inp StorageBuffer
+%_runtimearr_int_0 = OpTypeRuntimeArray %int
+       %Outp = OpTypeStruct %_runtimearr_int_0
+%_ptr_StorageBuffer_Outp = OpTypePointer StorageBuffer %Outp
+       %outp = OpVariable %_ptr_StorageBuffer_Outp StorageBuffer
+      %int_0 = OpConstant %int 0
+     %uint_1 = OpConstant %uint 1
+%_ptr_StorageBuffer_int = OpTypePointer StorageBuffer %int
+     %int_16 = OpConstant %int 16
+    %uint_64 = OpConstant %uint 64
+%gl_WorkGroupSize = OpConstantComposite %v3uint %uint_64 %uint_1 %uint_1
+       %main = OpFunction %void None %3
+          %5 = OpLabel
+          %i = OpVariable %_ptr_Function_uint Function
+          %n = OpVariable %_ptr_Function_int Function
+         %14 = OpAccessChain %_ptr_Input_uint %gl_GlobalInvocationID %uint_0
+         %15 = OpLoad %uint %14
+               OpStore %i %15
+         %23 = OpArrayLength %uint %inp 0
+         %24 = OpBitcast %int %23
+               OpStore %n %24
+         %30 = OpLoad %uint %i
+         %31 = OpLoad %uint %i
+         %33 = OpIAdd %uint %31 %uint_1
+         %34 = OpLoad %int %n
+         %35 = OpBitcast %uint %34
+         %36 = OpUMod %uint %33 %35
+         %38 = OpAccessChain %_ptr_StorageBuffer_int %inp %int_0 %36
+         %39 = OpLoad %int %38
+         %40 = OpLoad %int %n
+         %42 = OpShiftLeftLogical %int %40 %int_16
+         %43 = OpIAdd %int %39 %42
+         %44 = OpAccessChain %_ptr_StorageBuffer_int %outp %int_0 %30
+               OpStore %44 %43
+               OpReturn
+               OpFunctionEnd

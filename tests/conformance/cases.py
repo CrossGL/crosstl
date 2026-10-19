@@ -448,6 +448,18 @@ def o_partial(inp, n=100, total=128):
     return out.astype(np.int32)
 
 
+def o_buffer_length(inp, header=4):
+    """The input block's array starts ``header`` elements in; its length follows from the bound size."""
+    n = len(inp) - header
+    i = np.arange(len(inp))
+    return (inp[header + i % n].astype(np.int64) + (n << 16)).astype(np.int32)
+
+
+def o_buffer_count(inp):
+    n = len(inp)
+    return (np.roll(inp, -1).astype(np.int64) + (n << 16)).astype(np.int32)
+
+
 def o_mirror(inp):
     """Each 64-element group reversed: workgroup memory is shared by the group."""
     return inp.reshape(-1, 64)[:, ::-1].reshape(-1).astype(np.int32)
@@ -1224,6 +1236,46 @@ CASES = [
         SMALL,
         np.int32,
         o_mirror,
+        threads=128,
+    ),
+    Case(
+        "g_buffer_length",
+        "H13",
+        "length() of a runtime array after a buffer block's header",
+        "GLSL 4.60 section 4.1.9: a runtime array's length follows from the buffer size",
+        SMALL,
+        np.int32,
+        o_buffer_length,
+        threads=128,
+    ),
+    Case(
+        "s_buffer_length",
+        "H13",
+        "OpArrayLength on storage blocks",
+        "SPIR-V OpArrayLength: the element count of the bound buffer's runtime array",
+        SMALL,
+        np.int32,
+        o_buffer_length,
+        threads=128,
+    ),
+    Case(
+        "g_buffer_count",
+        "H13",
+        "length() of a buffer block that holds only a runtime array",
+        "GLSL 4.60 section 4.1.9: a runtime array's length follows from the buffer size",
+        SMALL,
+        np.int32,
+        o_buffer_count,
+        threads=128,
+    ),
+    Case(
+        "s_buffer_count",
+        "H13",
+        "OpArrayLength on a storage block that holds only a runtime array",
+        "SPIR-V OpArrayLength: the element count of the bound buffer's runtime array",
+        SMALL,
+        np.int32,
+        o_buffer_count,
         threads=128,
     ),
     Case(

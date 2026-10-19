@@ -22,11 +22,15 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 516,
+        "unsupported_marker_count": 519,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "ZeroExtentArrayUnsupportedError,"
+          },
+          {
+            "path": "crosstl/translator/codegen/directx_codegen.py",
+            "text": "from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength"
           },
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -99,10 +103,6 @@
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
-          },
-          {
-            "path": "crosstl/translator/codegen/directx_codegen.py",
-            "text": "unsupported_texture_offset_operation_error,"
           }
         ]
       },
@@ -607,7 +607,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_wgsl_codegen.py"
         ],
-        "test_count": 104
+        "test_count": 105
       },
       "translator_codegen": {
         "exists": true,
@@ -636,8 +636,12 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 628,
+        "unsupported_marker_count": 630,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/metal_codegen.py",
+            "text": "from .buffer_length import BufferLengthUnsupportedError"
+          },
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
@@ -713,10 +717,6 @@
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_offset_operation_error,"
-          },
-          {
-            "path": "crosstl/translator/codegen/metal_codegen.py",
-            "text": "unsupported_texture_query_levels_expression,"
           }
         ]
       },

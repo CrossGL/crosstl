@@ -15,6 +15,10 @@ from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .lower import Lowerer, RuleInexpressibleError
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
+from .storage_blocks import (
+    SpirvArrayLengthUnsupportedError,
+    normalize_spirv_storage_blocks,
+)
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 
 __all__ = [
@@ -25,6 +29,7 @@ __all__ = [
     "RuleInexpressibleError",
     "RuleReport",
     "SOURCE_RULES",
+    "SpirvArrayLengthUnsupportedError",
     "TARGET_ENTRIES",
     "apply_rule_carrying",
 ]
@@ -58,7 +63,8 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
-    CUDA warp shuffles are emulated or refused first for targets without CUDA warps (:mod:`.warp`). Binary16 values
+    SPIR-V storage block variables are first rewritten into the hub's buffer forms (:mod:`.storage_blocks`).
+    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
     registers. The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
@@ -67,6 +73,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
     legalize_half_floats(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)

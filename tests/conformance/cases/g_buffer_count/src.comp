@@ -1,0 +1,12 @@
+#version 450
+// GLSL 4.60 section 4.1.9: a runtime-sized array's length() is set by the size of the bound buffer.
+// The input block holds only its array.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Inp { int a[]; } inp;
+layout(std430, binding = 1) buffer Outp { int o[]; } outp;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    int n = inp.a.length();
+    outp.o[i] = inp.a[(i + 1u) % uint(n)] + (n << 16);
+}

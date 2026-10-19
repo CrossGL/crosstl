@@ -17,8 +17,8 @@ from .validators import dxil_is_signed, validate
 def test_hazard_inventory_and_oracles():
     # The 66 evidence kernels, the binary16 division, square-root, fma and conversion cases, the OpenCL
     # saturated conversions to uint (round to nearest even) and to char, the HLSL and GLSL workgroup-memory
-    # exchanges, and the CUDA warp shuffles called from CrossGL.
-    assert len(CASES) == len(BY_ID) == 75
+    # exchanges, the CUDA warp shuffles called from CrossGL, and GLSL and SPIR-V runtime-array lengths.
+    assert len(CASES) == len(BY_ID) == 79
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",
