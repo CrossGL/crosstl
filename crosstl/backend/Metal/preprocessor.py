@@ -3531,12 +3531,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if resolved_code != code:
             code = resolved_code
             template_declaration_spans = self._find_template_declaration_spans(code)
-            self._source_type_alias_bindings = (
-                self._collect_local_type_alias_bindings(
-                    code,
-                    [(0, len(code))],
-                    skip_spans=template_declaration_spans,
-                )
+            self._source_type_alias_bindings = self._collect_local_type_alias_bindings(
+                code,
+                [(0, len(code))],
+                skip_spans=template_declaration_spans,
             )
             structs = self._find_concrete_struct_definitions(code)
         self._apply_explicit_member_specializations(code, structs)
@@ -3554,6 +3552,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if not structs:
             return code
+        aliased = self._rewrite_function_reference_alias_bindings(
+            code, structs, function_excluded_spans
+        )
+        if aliased != code:
+            # Captured storage adds declarations and moves every later span.
+            return self._lower_struct_member_functions_impl(aliased)
         all_struct_spans = [struct.span for struct in structs]
         local_owner_spans = [
             function.body_span
@@ -18620,6 +18624,40 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return None
         return contract.is_readonly
 
+    def _rewrite_function_reference_alias_bindings(
+        self,
+        code: str,
+        structs: List[_MetalStructDefinition],
+        excluded_spans: List[Tuple[int, int]],
+    ) -> str:
+        """Bind proven accessor aliases in entry points and free functions.
+
+        Struct method bodies bind theirs while they are lowered; this covers
+        the remaining function bodies with the same storage contract.
+        """
+        if "auto" not in code or "&" not in code:
+            return code
+        structs_by_name = {struct.name: struct for struct in structs}
+        rewrites: List[Tuple[int, int, str]] = []
+        for function in self._find_non_template_function_definitions(
+            code, excluded_spans
+        ):
+            # Include the braces so the body is its own lexical scope.
+            start, end = function.body_span[0] - 1, function.body_span[1] + 1
+            body = code[start:end]
+            rewritten = self._rewrite_local_reference_alias_bindings(
+                body,
+                {},
+                structs_by_name,
+                const_receivers=set(),
+                resolve_type_aliases=True,
+            )
+            if rewritten != body:
+                rewrites.append((start, end, rewritten))
+        if not rewrites:
+            return code
+        return self._apply_text_replacements(code, rewrites)
+
     def _rewrite_local_reference_alias_bindings(
         self,
         code: str,
@@ -18628,6 +18666,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         *,
         const_receivers: Set[str],
         implicit_receiver_contract: Optional[_MetalReceiverContract] = None,
+        resolve_type_aliases: bool = False,
     ) -> str:
         """Replace proven local aliases with their captured storage locations."""
         if "auto" not in code or "&" not in code:
@@ -18643,6 +18682,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if not bindings:
                 return working
             scopes = self._find_lexical_brace_scopes(working)
+            # Local `using` aliases name the receiver types of entry points.
+            type_aliases = (
+                self._collect_struct_type_aliases(
+                    working, set(structs_by_name), [], structs_by_name
+                )
+                if resolve_type_aliases
+                else None
+            )
             call_argument_spans = self._potential_call_argument_spans(
                 working,
                 masked,
@@ -18678,7 +18725,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     receiver_parts[0],
                     binding.start(),
                     set(structs_by_name),
-                    None,
+                    type_aliases,
                 )
                 if receiver_declaration is None:
                     receiver_type = self._resolve_declared_type_at(
@@ -18697,7 +18744,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     implicit_receiver_contract
                     if receiver_parts[0] == "self"
                     else self._receiver_contract_for_named_value(
-                        working, current_struct.name, receiver_parts[0], binding.start()
+                        working,
+                        current_struct.name,
+                        receiver_parts[0],
+                        binding.start(),
+                        type_aliases=type_aliases,
                     )
                 )
                 if receiver_contract is None:
@@ -18707,9 +18758,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     or receiver_contract.is_volatile
                 ):
                     continue
-                if not mutable_alias and receiver_parts[0] not in const_receivers:
-                    if not receiver_contract.is_readonly:
-                        continue
+                # A const alias of a writable receiver may observe later writes
+                # and index changes, so it captures its storage at the binding
+                # exactly like a mutable alias, without accepting writes.
+                captures_storage = mutable_alias or (
+                    receiver_parts[0] not in const_receivers
+                    and not receiver_contract.is_readonly
+                )
 
                 value_chain_is_valid = True
                 for member_name in receiver_parts[1:]:
@@ -18756,7 +18811,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     receiver_is_const=receiver_contract.is_readonly,
                 )
                 declarations = ""
-                if mutable_alias:
+                if captures_storage:
                     captured = self._capture_reference_accessor_storage(
                         working,
                         current_struct,
@@ -18793,7 +18848,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     storage,
                     allow_writes=mutable_alias and not receiver_contract.is_readonly,
                 )
-                if mutable_alias:
+                if captures_storage:
                     captured_names = {receiver_parts[0]}
                     if any(
                         self._declared_local_name(statement) in captured_names
@@ -18803,7 +18858,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     ):
                         continue
                 if alias_replacements is None or (
-                    not mutable_alias
+                    not captures_storage
                     and not self._reference_alias_capture_is_stable(
                         working,
                         masked,
