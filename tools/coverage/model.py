@@ -1,0 +1,121 @@
+"""Value types shared by the feature lists, probes and report."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+SCALARS = ("bool", "int", "uint", "float", "double")
+OUTCOMES = ("supported", "refused", "wrong", "untested")
+LANGUAGES = ("glsl", "hlsl", "metal", "spirv", "wgsl")
+DIRECTIONS = ("output", "input")
+
+
+@dataclass(frozen=True)
+class Type:
+    """A value type: a scalar, a vector ``(n,)`` or a matrix ``(columns, rows)``.
+
+    Any other kind of type, such as a sampler or an image, is carried as ``opaque`` with its upstream spelling; no
+    probe can be built for it yet.
+    """
+
+    scalar: str
+    shape: tuple[int, ...] = ()
+    opaque: str = ""
+
+    def __post_init__(self):
+        if not self.opaque and self.scalar not in SCALARS:
+            raise ValueError(f"unknown scalar type {self.scalar!r}")
+        if len(self.shape) > 2 or any(not 2 <= n <= 4 for n in self.shape):
+            raise ValueError(f"unsupported shape {self.shape!r}")
+
+    @classmethod
+    def other(cls, spelling: str) -> Type:
+        return cls("", (), spelling)
+
+    @property
+    def components(self) -> int:
+        count = 1
+        for n in self.shape:
+            count *= n
+        return count
+
+    def with_scalar(self, scalar: str) -> Type:
+        return Type(scalar, self.shape)
+
+
+VOID = Type.other("void")
+
+
+@dataclass(frozen=True)
+class Param:
+    type: Type
+    direction: str = "in"
+
+
+@dataclass(frozen=True)
+class Signature:
+    result: Type
+    params: tuple[Param, ...]
+
+    @property
+    def unsupported(self) -> str:
+        """The first type no probe can express yet, or an empty string."""
+        for kind in (self.result, *(p.type for p in self.params)):
+            if kind.opaque and kind != VOID:
+                return kind.opaque
+        return ""
+
+
+@dataclass(frozen=True)
+class Feature:
+    """One entry of a target language's feature list.
+
+    ``name`` is the upstream spelling and ``group`` the upstream section it comes from. ``signature`` is the overload
+    the probe uses and ``crossgl`` the CrossGL spelling of the same operation, empty when CrossGL has none; ``note``
+    then says why. ``stage`` is the shader stage the probe must run in.
+    """
+
+    language: str
+    category: str
+    name: str
+    signature: Signature | None
+    group: str = ""
+    crossgl: str = ""
+    stage: str = "compute"
+    note: str = ""
+
+    @property
+    def key(self) -> str:
+        return f"{self.language}/{self.category}/{self.name}"
+
+
+@dataclass
+class Result:
+    feature: Feature
+    direction: str
+    outcome: str
+    detail: str = ""
+    validator: str = ""
+
+    def __post_init__(self):
+        if self.outcome not in OUTCOMES:
+            raise ValueError(f"unknown outcome {self.outcome!r}")
+
+
+@dataclass
+class Score:
+    counts: dict[str, int] = field(default_factory=lambda: dict.fromkeys(OUTCOMES, 0))
+
+    def add(self, outcome: str) -> None:
+        self.counts[outcome] += 1
+
+    @property
+    def measured(self) -> int:
+        return self.counts["supported"] + self.counts["refused"] + self.counts["wrong"]
+
+    @property
+    def percent(self) -> float | None:
+        """``supported / (supported + refused + wrong)``; ``None`` when nothing was measured."""
+        if not self.measured:
+            return None
+        return 100.0 * self.counts["supported"] / self.measured
