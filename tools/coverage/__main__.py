@@ -1,7 +1,7 @@
 """Command line: ``python -m tools.coverage run [--backend B] [--direction input|output]``.
 
 ``merge`` combines the reports of runners that measured different backends, such as the Linux and macOS CI jobs, and
-rebuilds the CrossGL IR row from all of them.
+rebuilds the CrossGL IR row from all of them. ``publish`` writes what CI publishes to the ``coverage`` branch.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import features, report, runner, validators
+from . import features, publish, report, runner, validators
 from .model import DIRECTIONS
 from .upstream import UpstreamError
 
@@ -46,6 +46,16 @@ def _parser() -> argparse.ArgumentParser:
     )
     merging.add_argument("reports", nargs="+", type=Path)
     merging.add_argument("--output", type=Path, default=Path("coverage.json"))
+    publishing = commands.add_parser(
+        "publish",
+        help="write coverage.json, coverage.svg, COVERAGE.md and history.csv for the coverage branch",
+    )
+    publishing.add_argument("report", type=Path)
+    publishing.add_argument("--output-dir", type=Path, required=True)
+    publishing.add_argument(
+        "--history", type=Path, help="the previously published history.csv, if any"
+    )
+    publishing.add_argument("--repository", default="CrossGL/crosstl")
     listing = commands.add_parser(
         "features", help="print the feature list of one language"
     )
@@ -96,6 +106,16 @@ def _merge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _publish(args: argparse.Namespace) -> int:
+    previous = ""
+    if args.history and args.history.is_file():
+        previous = args.history.read_text(encoding="utf-8")
+    data = json.loads(args.report.read_text(encoding="utf-8"))
+    for path in publish.write_site(data, args.output_dir, previous, args.repository):
+        print(f"wrote {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -103,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run(args)
         if args.command == "merge":
             return _merge(args)
+        if args.command == "publish":
+            return _publish(args)
         for feature in features.load(args.backend, offline=args.offline):
             print(f"{feature.group:<44} {feature.name}")
         return 0

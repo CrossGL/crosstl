@@ -3,7 +3,9 @@ name: Coverage
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The
 # Linux job measures GLSL, HLSL, SPIR-V and WGSL with glslang, DXC, spirv-val and naga; the macOS job measures Metal
-# with xcrun metal. The report job merges both reports and adds the CrossGL IR row.
+# with xcrun metal. The report job merges both reports and adds the CrossGL IR row. On pushes to main and nightly,
+# the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart),
+# COVERAGE.md and a bounded history.csv; main itself never receives generated files.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the
@@ -209,9 +211,81 @@ jobs:
           path: coverage.json
           retention-days: 14
 
+  publish:
+    name: Publish coverage
+    needs: report
+    # Pushes to main and the nightly run publish; pull requests and the merge queue only measure.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'merge_group'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The only job with write access: it replaces the single commit of the orphan coverage branch.
+    permissions:
+      contents: write
+    concurrency:
+      group: coverage-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Publishing needs only the standard library, so nothing is installed.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: coverage
+
+      - name: Read the published coverage
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! git fetch --quiet --depth=1 origin coverage; then
+            echo "No coverage branch yet; this run creates it."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git show FETCH_HEAD:history.csv > previous-history.csv || true
+          published="$(git show FETCH_HEAD:coverage.json | python -c 'import json, sys; print(json.load(sys.stdin)["commit"])' || true)"
+          status=ahead
+          if [ -n "$published" ] && [ "$published" != "$GITHUB_SHA" ]; then
+            status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$published...$GITHUB_SHA" --jq .status || echo ahead)"
+          fi
+          # A run that finishes after a run for a newer commit must not replace the newer data.
+          if [ "$status" = behind ]; then
+            echo "The coverage branch already holds $published, which is newer than $GITHUB_SHA."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the published files
+        if: steps.published.outputs.publish == 'true'
+        run: python -m tools.coverage publish coverage.json --history previous-history.csv --output-dir "$RUNNER_TEMP/site" --repository "$GITHUB_REPOSITORY"
+
+      - name: Replace the coverage branch
+        if: steps.published.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: ${{ runner.temp }}/site
+        run: |
+          set -euo pipefail
+          git init --quiet --initial-branch=coverage
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add coverage.json coverage.svg COVERAGE.md history.csv
+          git commit --quiet -m "Coverage for ${GITHUB_SHA::12}"
+          # The branch is one commit by design, so each publication replaces it.
+          git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:coverage
+          echo "Published https://github.com/${GITHUB_REPOSITORY}/blob/coverage/COVERAGE.md" >> "$GITHUB_STEP_SUMMARY"
+
   result:
     name: Coverage result
-    needs: [plan, linux, metal, report]
+    needs: [plan, linux, metal, report, publish]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
