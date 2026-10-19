@@ -217,14 +217,9 @@ def test_every_function_is_precise(tmp_path):
     assert "    @ NumThreads(64, 1, 1)\n    @ precise\n    void Execute(" in crossgl
 
     metal = translate(ARITHMETIC_HLSL, tmp_path, "metal")
-    kernel = metal.index("kernel void Execute(")
-    assert metal.rfind("#pragma clang fp contract(off)", 0, kernel) > metal.rfind(
-        "#pragma clang fp contract(fast)", 0, kernel
-    )
-    shade = metal.index("float3 Shade(")
-    assert metal.rfind("#pragma clang fp contract(off)", 0, shade) > metal.rfind(
-        "#pragma clang fp contract(fast)", 0, shade
-    )
+    for signature in ("float3 Shade(", "kernel void Execute("):
+        body = metal.index("{\n", metal.index(signature))
+        assert metal.startswith("{\n    #pragma clang fp contract(off)\n", body)
 
 
 def test_metal_keeps_every_product_and_sum_separate(tmp_path):
@@ -497,7 +492,8 @@ def test_precise_functions_stay_precise_on_every_target(tmp_path):
     options = {"matrix_packing": "row_major"}
     metal = translate(PRECISE_FUNCTION_HLSL, tmp_path, "metal", options)
     assert (
-        "#pragma clang fp contract(off)\nfloat Stable(float a, float b, float c)"
+        "float Stable(float a, float b, float c) {\n"
+        "    #pragma clang fp contract(off)\n"
     ) in metal
     assert metal.count("#pragma clang fp contract(off)") == 1
 

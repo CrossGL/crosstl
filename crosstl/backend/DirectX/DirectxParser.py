@@ -4125,16 +4125,32 @@ class HLSLParser:
             )
             if base != 10 or not any(c in stripped for c in ".eE"):
                 return IntegerLiteral(int(stripped, base), integer_suffix.group())
-        if token_type == "HEX_NUMBER":
-            stripped = re.sub(r"[uUlL]+$", "", value)
-            return int(stripped, 16)
-        if token_type == "BINARY_NUMBER":
-            stripped = re.sub(r"[uUlL]+$", "", value)
-            return int(stripped, 2)
-        if token_type == "OCT_NUMBER":
-            stripped = re.sub(r"[uUlL]+$", "", value)
-            return int(stripped, 8)
+        if token_type in {"HEX_NUMBER", "BINARY_NUMBER", "OCT_NUMBER"}:
+            return self.unsuffixed_nondecimal_literal(token_type, value)
         stripped = re.sub(r"[fFhHuUlL]+$", "", value)
         if "." in stripped or "e" in stripped or "E" in stripped:
             return float(stripped)
         return int(stripped)
+
+    # Suffixes that spell the C type of an unsuffixed non-decimal literal.
+    NONDECIMAL_LITERAL_SUFFIXES = {
+        "int": "",
+        "uint": "u",
+        "int64_t": "l",
+        "uint64_t": "ul",
+    }
+
+    def unsuffixed_nondecimal_literal(self, token_type, value):
+        """Type an unsuffixed hex, binary or octal literal as C does.
+
+        Such a literal takes the first of int, uint, int64_t and uint64_t that
+        holds its value, so ``0xFFC00000`` is a uint rather than a wider
+        signed integer.
+        """
+        spelling = value
+        if token_type == "OCT_NUMBER":
+            spelling = "0o" + value[1:]
+        _, type_name = integer_literal_parts(spelling)
+        number = int(spelling, 0)
+        suffix = self.NONDECIMAL_LITERAL_SUFFIXES[type_name]
+        return IntegerLiteral(number, suffix) if suffix else number
