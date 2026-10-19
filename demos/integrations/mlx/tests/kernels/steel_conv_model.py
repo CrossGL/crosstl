@@ -208,7 +208,9 @@ BY_NAME = {entry.name: entry for rank in SOURCES for entry in entries(rank)}
 class Conv:
     """One 2-D or 3-D convolution in MLX's channels-last layouts.
 
-    Unset strides and dilations are one and unset paddings zero.
+    ``dilation`` spaces the filter taps and ``input_dilation`` the input
+    pixels, as if ``input_dilation - 1`` zeros sat between them. Unset strides
+    and dilations are one and unset paddings zero.
     """
 
     batch: int
@@ -221,14 +223,20 @@ class Conv:
     padding: tuple = field(default=None)
     dilation: tuple = field(default=None)
     flip: bool = False
+    input_dilation: tuple = field(default=None)
 
     def __post_init__(self):
         rank = len(self.spatial)
-        for name, default in (("stride", 1), ("padding", 0), ("dilation", 1)):
+        for name, default in (
+            ("stride", 1),
+            ("padding", 0),
+            ("dilation", 1),
+            ("input_dilation", 1),
+        ):
             if getattr(self, name) is None:
                 object.__setattr__(self, name, (default,) * rank)
         assert {len(self.kernel), len(self.stride), len(self.padding)} == {rank}
-        assert len(self.dilation) == rank
+        assert len(self.dilation) == len(self.input_dilation) == rank
 
     @property
     def rank(self):
@@ -237,9 +245,14 @@ class Conv:
     @property
     def out_spatial(self):
         return tuple(
-            (size + 2 * pad - dil * (taps - 1) - 1) // stride + 1
-            for size, taps, stride, pad, dil in zip(
-                self.spatial, self.kernel, self.stride, self.padding, self.dilation
+            ((size - 1) * idil + 2 * pad - dil * (taps - 1)) // stride + 1
+            for size, taps, stride, pad, dil, idil in zip(
+                self.spatial,
+                self.kernel,
+                self.stride,
+                self.padding,
+                self.dilation,
+                self.input_dilation,
             )
         )
 
@@ -275,7 +288,7 @@ class Conv:
             str=list(self.stride),
             pad=list(self.padding),
             kdil=list(self.dilation),
-            idil=[1] * self.rank,
+            idil=list(self.input_dilation),
             in_strides=_row_major(self.input_shape),
             wt_strides=_row_major(self.weight_shape),
             out_strides=_row_major(self.output_shape),
@@ -346,7 +359,11 @@ class Conv:
         ]
 
     def reference(self, inputs, weights):
-        """Exact channels-last outputs: every tap inside the input contributes."""
+        """Exact channels-last outputs: every tap on an input pixel contributes.
+
+        A tap lands on a pixel when its position in the dilated input is a
+        multiple of ``input_dilation`` inside the input.
+        """
         n_in = _row_major(self.input_shape)
         n_wt = _row_major(self.weight_shape)
         outputs = []
@@ -356,17 +373,23 @@ class Conv:
                     group = o // self.outputs_per_group
                     total = 0.0
                     for tap in itertools.product(*(range(k) for k in self.kernel)):
-                        position = [
+                        dilated = [
                             p * s - pad + t * d
                             for p, s, pad, t, d in zip(
                                 pixel, self.stride, self.padding, tap, self.dilation
                             )
                         ]
                         if not all(
-                            0 <= value < size
-                            for value, size in zip(position, self.spatial)
+                            value >= 0 and value % idil == 0 and value // idil < size
+                            for value, idil, size in zip(
+                                dilated, self.input_dilation, self.spatial
+                            )
                         ):
                             continue
+                        position = [
+                            value // idil
+                            for value, idil in zip(dilated, self.input_dilation)
+                        ]
                         weight_tap = [
                             k - 1 - t if self.flip else t
                             for k, t in zip(self.kernel, tap)

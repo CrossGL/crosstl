@@ -95,8 +95,8 @@ PARAMS_BYTES = {
 OUTPUTS = {8: (8, 12, 5), 32: (32, 48, 16), 64: (64, 80, 16)}
 SCOPE = (
     "Every float32, float16 and bfloat16 implicit_gemm_conv_2d and "
-    "implicit_gemm_conv_3d entry; steel_conv_general and the upstream suite "
-    "are not covered."
+    "implicit_gemm_conv_3d entry; test_current_steel_conv_general.py gates "
+    "steel_conv_general, and the upstream suite is not covered."
 )
 TARGET_OPTIONS = {
     "directx": {
