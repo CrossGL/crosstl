@@ -82,6 +82,10 @@ class _Pointer:
     readable: bool
 
 
+# CrossGL spellings of the 16-bit floating storage types.
+_NARROW_FLOAT_ELEMENTS = frozenset({"float16", "bfloat16"})
+
+
 @dataclass(frozen=True)
 class _RootPointer(_Pointer):
     identity: int
@@ -550,13 +554,19 @@ class _Lowering:
             if isinstance(element, PointerType):
                 continue
             numeric = _numeric(element)
+            # Binary16 and bfloat16 scalars keep their own element type; the
+            # target backends already lay out and convert shared 16-bit arrays.
+            narrow_float = _name(element) in _NARROW_FLOAT_ELEMENTS
             if (
                 extent is None
                 or extent <= 0
-                or numeric is None
-                or numeric.bits != 32
-                or numeric.lanes not in {1, 2, 4}
-                or numeric.kind == ArithmeticScalarKind.BOOLEAN
+                or not narrow_float
+                and (
+                    numeric is None
+                    or numeric.bits != 32
+                    or numeric.lanes not in {1, 2, 4}
+                    or numeric.kind == ArithmeticScalarKind.BOOLEAN
+                )
             ):
                 raise ResourceAggregateError("workgroup-allocation-layout", node)
             if node.initial_value is not None or qualifiers - {
@@ -1420,14 +1430,24 @@ class _Lowering:
         ):
             raise ResourceAggregateError("record-copy-layout", node)
         backing = _numeric(src.element)
+        # Copies move whole backing elements: 16-bit floating or 32-bit scalars.
+        element_bytes = (
+            2
+            if src.element in _NARROW_FLOAT_ELEMENTS
+            else (
+                4
+                if backing is not None
+                and backing.bits == 32
+                and backing.lanes == 1
+                and backing.kind != ArithmeticScalarKind.BOOLEAN
+                else None
+            )
+        )
         if (
             src.element != dst.element
-            or backing is None
-            or backing.bits != 32
-            or backing.lanes != 1
-            or backing.kind == ArithmeticScalarKind.BOOLEAN
-            or alignment > 4
-            or extent % 4
+            or element_bytes is None
+            or alignment > element_bytes
+            or extent % element_bytes
         ):
             raise ResourceAggregateError("record-copy-backing-layout", node)
         if any(
@@ -1470,7 +1490,7 @@ class _Lowering:
             )
         minimum = max(assertion.minimum for assertion in matches)
         maximum = min(assertion.maximum for assertion in matches)
-        words = extent // 4
+        words = extent // element_bytes
         if minimum > maximum or maximum - minimum + 1 < words:
             raise ResourceAggregateError(
                 "record-copy-conflicting-access-assertions", node
@@ -2292,6 +2312,52 @@ class _Lowering:
                 del candidates[name]
 
 
+def _resolve_narrow_float_aliases(ast):
+    """Spell aliases of 16-bit floating scalars by their CrossGL type.
+
+    Resource identity compares pointee names, so ``bfloat16_t*`` members must
+    match ``bfloat16`` entry buffers. Other aliases keep their spelling.
+    """
+    declared = {
+        variable.name: variable.var_type
+        for variable in getattr(ast, "global_variables", ())
+        if isinstance(variable, VariableNode) and variable.is_type_alias
+    }
+    aliases = {}
+    for name in sorted(declared):
+        target, seen = declared[name], {name}
+        while (
+            isinstance(target, (PrimitiveType, NamedType))
+            and not getattr(target, "generic_args", None)
+            and target.name in declared
+            and target.name not in seen
+        ):
+            seen.add(target.name)
+            target = declared[target.name]
+        if (
+            isinstance(target, (PrimitiveType, NamedType))
+            and not getattr(target, "generic_args", None)
+            and getattr(target, "size_bits", None) is None
+            and target.name in _NARROW_FLOAT_ELEMENTS
+        ):
+            aliases[name] = target.name
+    if not aliases:
+        return
+    declarations = {
+        id(variable.var_type)
+        for variable in ast.global_variables
+        if isinstance(variable, VariableNode) and variable.is_type_alias
+    }
+    for node in ast.walk():
+        if (
+            isinstance(node, (PrimitiveType, NamedType))
+            and id(node) not in declarations
+            and not getattr(node, "generic_args", None)
+            and node.name in aliases
+        ):
+            node.name = aliases[node.name]
+
+
 def lower_resource_aggregates(
     ast, *, storage_pointer_parameters=False, workgroup_access_assertions=()
 ):
@@ -2307,6 +2373,7 @@ def lower_resource_aggregates(
     if len(stages) != 1 or _name(stages[0].stage).lower() != "compute":
         return ast
     result = deepcopy(ast)
+    _resolve_narrow_float_aliases(result)
     entry = list(result.stages.values())[0].entry_point
     return _Lowering(
         result, entry, storage_pointer_parameters, workgroup_access_assertions

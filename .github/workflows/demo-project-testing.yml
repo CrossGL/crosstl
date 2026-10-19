@@ -1551,6 +1551,7 @@ jobs:
           CROSTL_REQUIRE_STORAGE_VECTOR_VIEWS: "1"
           CROSTL_REQUIRE_WORKGROUP_RECORD_TRANSFERS: "1"
           CROSTL_REQUIRE_WORKGROUP_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_NARROW_WORKGROUP_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_AGGREGATE_RECORD_TRANSFERS: "1"
           CROSTL_REQUIRE_RESOURCE_ALLOCATION_ORIGINS: "1"
           CROSTL_REQUIRE_STATIC_RESOURCE_AGGREGATES: "1"
@@ -1606,6 +1607,7 @@ jobs:
               tests/test_translator/test_storage_vector_views.py \
               tests/test_translator/test_workgroup_record_transfers.py \
               tests/test_translator/test_workgroup_resource_aggregates.py \
+              tests/test_translator/test_narrow_workgroup_resource_aggregates.py \
               tests/test_translator/test_aggregate_record_transfers.py \
               tests/test_translator/test_resource_allocation_origins.py \
               2>&1 | tee .mlx-portable-host/subgroup-arguments.log
