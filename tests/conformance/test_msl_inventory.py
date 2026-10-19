@@ -1,8 +1,7 @@
 """The Metal standard library derivation, on a synthetic compiler AST so it runs without the Metal toolchain."""
 
-from .inventory import load
+from .inventory import load, msl_stdlib
 from .inventory import msl as msl_inventory
-from .inventory import msl_stdlib
 
 AST = """\
 TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>

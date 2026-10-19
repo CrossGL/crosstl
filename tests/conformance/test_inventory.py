@@ -10,11 +10,12 @@ from .inventory import (
     REQUIRED_GROUPS,
     InventoryError,
     dumps,
+    load,
+    targets_for,
+    validate,
 )
 from .inventory import glsl as glsl_inventory
-from .inventory import load
 from .inventory import spirv as spirv_inventory
-from .inventory import targets_for, validate
 from .inventory.__main__ import main as report_main
 
 

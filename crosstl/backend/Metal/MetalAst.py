@@ -19,9 +19,6 @@ from ..common_ast import (
     EnumNode,
     ForNode,
     FunctionCallNode,
-)
-from ..common_ast import FunctionNode as CommonFunctionNode
-from ..common_ast import (
     IfNode,
     InitializerListNode,
     MemberAccessNode,
@@ -45,6 +42,7 @@ from ..common_ast import (
     VectorConstructorNode,
     WhileNode,
 )
+from ..common_ast import FunctionNode as CommonFunctionNode
 
 
 class BlockNode(ASTNode):

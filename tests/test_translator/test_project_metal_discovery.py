@@ -11,9 +11,8 @@ import pytest
 
 from crosstl.backend.Metal import preprocessor as metal_preprocessor
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
-from crosstl.project import ProjectConfig
+from crosstl.project import ProjectConfig, translate_project
 from crosstl.project import pipeline as project_pipeline
-from crosstl.project import translate_project
 from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointRecorder,
     load_project_translation_checkpoint,

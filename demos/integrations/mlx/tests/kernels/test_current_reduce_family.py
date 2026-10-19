@@ -58,11 +58,6 @@ from demos.integrations.mlx.tests.kernels.test_current_scan_family import (
     _below,
     _bits,
     _complex_mul,
-)
-from demos.integrations.mlx.tests.kernels.test_current_scan_family import (
-    _draws as _scan_draws,
-)
-from demos.integrations.mlx.tests.kernels.test_current_scan_family import (
     _float_add,
     _float_mul,
     _is_nan,
@@ -70,6 +65,9 @@ from demos.integrations.mlx.tests.kernels.test_current_scan_family import (
     _real,
     _signed,
     _wrap,
+)
+from demos.integrations.mlx.tests.kernels.test_current_scan_family import (
+    _draws as _scan_draws,
 )
 from demos.integrations.mlx.tests.kernels.test_current_searchsorted import (
     METAL_FORMATS,

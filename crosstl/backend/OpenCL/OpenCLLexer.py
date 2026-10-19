@@ -3,9 +3,8 @@
 import re
 from typing import Dict, List, Optional
 
-from crosstl.backend.HIP.HipLexer import SKIP_TOKENS
+from crosstl.backend.HIP.HipLexer import SKIP_TOKENS, Token
 from crosstl.backend.HIP.HipLexer import TOKENS as HIP_TOKENS
-from crosstl.backend.HIP.HipLexer import Token
 
 from .preprocessor import OpenCLPreprocessor
 

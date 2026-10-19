@@ -7,11 +7,6 @@ import pytest
 
 from demos.integrations.mlx.tests.kernels.test_current_scan import (
     MLX_COMMIT,
-)
-from demos.integrations.mlx.tests.kernels.test_current_scan import (
-    REFERENCE as SCAN_REFERENCE,
-)
-from demos.integrations.mlx.tests.kernels.test_current_scan import (
     REQUIRE_ENV,
     ROOT,
     SOURCE,
@@ -21,6 +16,9 @@ from demos.integrations.mlx.tests.kernels.test_current_scan import (
     _guard_words,
     _input_words,
     _packet,
+)
+from demos.integrations.mlx.tests.kernels.test_current_scan import (
+    REFERENCE as SCAN_REFERENCE,
 )
 from demos.integrations.mlx.tests.kernels.test_current_scan import (
     scan_package as scan_package,

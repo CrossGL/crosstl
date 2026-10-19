@@ -103,11 +103,11 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     COLUMN_ENTRIES,
     INIT_ENTRIES,
     ROW_ENTRIES,
+    variant_keys,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reduction_index,
 )
-from demos.integrations.mlx.portable_host.reduction_packages import variant_keys
 from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
 from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,

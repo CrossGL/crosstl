@@ -11,9 +11,11 @@ import pytest
 
 from demos.integrations.mlx.portable_host import (
     binary_workloads,
+    packages,
+    prepare,
+    runtime,
 )
 from demos.integrations.mlx.portable_host import bitwise_workloads as workloads
-from demos.integrations.mlx.portable_host import packages, prepare, runtime
 from demos.integrations.mlx.portable_host import verify_bitwise as proof
 from tests.ci_helpers import assert_paths_covered
 

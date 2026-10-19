@@ -13,9 +13,9 @@ from demos.integrations.mlx.portable_host import (
     gather_dispatch,
     runtime,
     scatter_evidence,
+    verify_scatter,
 )
 from demos.integrations.mlx.portable_host import scatter_workloads as workloads
-from demos.integrations.mlx.portable_host import verify_scatter
 from demos.integrations.mlx.portable_host.gather_workloads import words
 from demos.integrations.mlx.tests.host.test_portable_scatter import (
     buffers,

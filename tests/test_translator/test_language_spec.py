@@ -3,10 +3,9 @@
 import json
 
 from crosstl.translator import ast as ast_module
-from crosstl.translator import language_spec
+from crosstl.translator import language_spec, stage_utils
 from crosstl.translator import lexer as lexer_module
 from crosstl.translator import parser as parser_module
-from crosstl.translator import stage_utils
 from crosstl.translator import validation as validation_module
 
 

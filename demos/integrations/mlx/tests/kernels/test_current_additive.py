@@ -12,9 +12,9 @@ from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
 from demos.integrations.mlx.tests.kernels.test_current_extrema import (
     TYPES,
     _guard,
+    _payload,
 )
 from demos.integrations.mlx.tests.kernels.test_current_extrema import _pairs as _edges
-from demos.integrations.mlx.tests.kernels.test_current_extrema import _payload
 from tests.test_translator.test_metal_additive_profile import _oracle as _add
 from tests.test_translator.test_metal_division import _bfloat
 

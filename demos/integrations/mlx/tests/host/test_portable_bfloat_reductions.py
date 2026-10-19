@@ -7,9 +7,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from demos.integrations.mlx.portable_host import bfloat_storage, reduction_layout
+from demos.integrations.mlx.portable_host import (
+    bfloat_storage,
+    reduction_layout,
+    runtime,
+)
 from demos.integrations.mlx.portable_host import reduction_packages as packages
-from demos.integrations.mlx.portable_host import runtime
 from demos.integrations.mlx.portable_host import verify_bfloat_reductions as proof
 from demos.integrations.mlx.portable_host.runtime import physical_dtype
 from demos.integrations.mlx.portable_host.small_row_packages import SMALL_ROW_ENTRIES

@@ -13,10 +13,10 @@ from demos.integrations.mlx.portable_host import (
     gather_packages,
     runtime,
     scatter_evidence,
+    verify_scatter,
 )
 from demos.integrations.mlx.portable_host import scatter_layout as layout
 from demos.integrations.mlx.portable_host import scatter_workloads as workloads
-from demos.integrations.mlx.portable_host import verify_scatter
 from demos.integrations.mlx.portable_host.gather_workloads import words
 from tests.ci_helpers import assert_paths_covered
 

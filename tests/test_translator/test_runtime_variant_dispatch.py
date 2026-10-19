@@ -23,9 +23,9 @@ from crosstl.project import (
     compile_native_deferred_compilation_request,
     encode_runtime_variant_key,
     execute_native_deferred_compilation_request,
+    validate_native_deferred_compilation_request,
 )
 from crosstl.project import pipeline as project_pipeline
-from crosstl.project import validate_native_deferred_compilation_request
 from crosstl.project.native_runtime_drivers import OpenGLComputeRuntime
 from crosstl.project.runtime_verification import native_runtime_parity_adapter
 

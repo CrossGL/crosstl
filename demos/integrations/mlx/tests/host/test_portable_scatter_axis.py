@@ -14,10 +14,10 @@ from demos.integrations.mlx.portable_host import (
     gather_packages,
     runtime,
     scatter_axis_evidence,
+    verify_scatter_axis,
 )
 from demos.integrations.mlx.portable_host import scatter_axis_layout as layout
 from demos.integrations.mlx.portable_host import scatter_axis_workloads as workloads
-from demos.integrations.mlx.portable_host import verify_scatter_axis
 from demos.integrations.mlx.portable_host.gather_workloads import words
 from tests.ci_helpers import assert_paths_covered
 

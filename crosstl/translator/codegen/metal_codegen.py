@@ -172,11 +172,6 @@ from .image_access_contracts import (
     image_atomic_helper_resource_metadata,
     image_atomic_result_kind_error,
     image_atomic_result_kind_mismatch,
-)
-from .image_access_contracts import (
-    image_atomic_value_arguments as shared_image_atomic_value_arguments,
-)
-from .image_access_contracts import (
     image_atomic_value_kind_error,
     image_atomic_value_kind_mismatch,
     image_format_channel_count,
@@ -272,11 +267,6 @@ from .image_access_contracts import (
     storage_image_two_component_store_expression,
     storage_image_zero_values,
     supported_image_formats,
-)
-from .image_access_contracts import (
-    texture_argument_diagnostic_type as shared_texture_argument_diagnostic_type,
-)
-from .image_access_contracts import (
     texture_compare_argument_error,
     texture_compare_extra_argument_count_error,
     texture_compare_offset_capability_error,
@@ -323,6 +313,12 @@ from .image_access_contracts import (
     unsupported_texture_query_lod_expression,
     unsupported_texture_samples_query_call_expression,
     validate_texture_operation_arity,
+)
+from .image_access_contracts import (
+    image_atomic_value_arguments as shared_image_atomic_value_arguments,
+)
+from .image_access_contracts import (
+    texture_argument_diagnostic_type as shared_texture_argument_diagnostic_type,
 )
 from .match_utils import (
     generate_match_expression_assignment,

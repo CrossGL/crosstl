@@ -46,12 +46,11 @@ from crosstl.project import reflect_target_host_interface, translate_project
 from crosstl.translator.ast import ArrayAccessNode as CrossGLArrayAccessNode
 from crosstl.translator.ast import AssignmentNode as CrossGLAssignmentNode
 from crosstl.translator.ast import BinaryOpNode as CrossGLBinaryOpNode
-from crosstl.translator.ast import CooperativeMatrixType
+from crosstl.translator.ast import CooperativeMatrixType, ResourceMemoryQualifierNode
 from crosstl.translator.ast import FunctionCallNode as CrossGLFunctionCallNode
 from crosstl.translator.ast import IdentifierNode as CrossGLIdentifierNode
 from crosstl.translator.ast import LiteralNode as CrossGLLiteralNode
 from crosstl.translator.ast import MemberAccessNode as CrossGLMemberAccessNode
-from crosstl.translator.ast import ResourceMemoryQualifierNode
 from crosstl.translator.ast import TernaryOpNode as CrossGLTernaryOpNode
 from crosstl.translator.ast import UnaryOpNode as CrossGLUnaryOpNode
 from crosstl.translator.codegen.directx_codegen import (
