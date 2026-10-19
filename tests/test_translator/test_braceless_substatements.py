@@ -116,8 +116,10 @@ def test_braced_bodies_are_unchanged():
 
 def sentinel_counts(backend, output):
     if backend == "vulkan":
+        # Unformatted SPIR-V keeps numeric ids, so resolve the int type id first.
+        int_id = re.search(r"^(%\w+) = OpTypeInt 32 1$", output, re.M).group(1)
         return {
-            value: len(re.findall(rf"OpConstant %int {value}\b", output))
+            value: len(re.findall(rf"OpConstant {int_id} {value}\b", output))
             for value in SENTINELS
         }
     return {
@@ -145,7 +147,10 @@ def test_every_braceless_body_reaches_the_output(tmp_path, backend, program):
     text = PROGRAMS[program]
     source = tmp_path / "braceless.cgl"
     source.write_text(text)
-    output = crosstl.translate(str(source), backend=backend)
+    # Unformatted output does not depend on whether SPIRV-Tools is installed.
+    output = crosstl.translate(
+        str(source), backend=backend, format_output=backend != "vulkan"
+    )
     expected = {value: 1 if f" {value};" in text else 0 for value in SENTINELS}
     assert sentinel_counts(backend, output) == expected
     assert not re.search(r"\)\s*\{\s*\}", output)

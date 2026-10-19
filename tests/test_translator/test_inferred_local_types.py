@@ -7,6 +7,7 @@ Before:
   whenever it could not infer an initializer's type.
 """
 
+import re
 import textwrap
 
 import pytest
@@ -87,8 +88,14 @@ def test_an_inferred_var_takes_its_initializers_type(tmp_path, backend, declarat
 
 
 def test_an_inferred_var_reaches_spirv_as_a_uint_function_variable(tmp_path):
-    output = translate(tmp_path, VAR_PROGRAM, "vulkan")
-    assert "%i = OpVariable %_ptr_Function_uint Function" in output
+    source = tmp_path / "shader.cgl"
+    source.write_text(VAR_PROGRAM)
+    # Unformatted output keeps numeric ids whether or not SPIRV-Tools is installed to add friendly names.
+    raw = crosstl.translate(str(source), backend="vulkan", format_output=False)
+    var = re.search(r'^OpName %(\w+) "i"$', raw, re.M).group(1)
+    uint = re.search(r"^%(\w+) = OpTypeInt 32 0$", raw, re.M).group(1)
+    pointer = re.search(rf"^%(\w+) = OpTypePointer Function %{uint}$", raw, re.M)
+    assert re.search(rf"^%{var} = OpVariable %{pointer.group(1)} Function$", raw, re.M)
 
 
 def test_hlsl_types_lets_of_builtin_variables(tmp_path):
