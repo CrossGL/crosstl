@@ -482,9 +482,9 @@ def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
     translator = yaml.safe_load((WORKFLOW_DIR / "translator-tests.yml").read_text())[
         "jobs"
     ]["test"]
-    backend = yaml.safe_load((WORKFLOW_DIR / "backend-tests.yml").read_text())[
-        "jobs"
-    ]["test"]
+    backend = yaml.safe_load((WORKFLOW_DIR / "backend-tests.yml").read_text())["jobs"][
+        "test"
+    ]
     demo = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())[
         "jobs"
     ]["portable-host"]
@@ -3862,7 +3862,7 @@ def test_native_collective_batches_limit_software_driver_threads():
     assert step["run"].count("-n auto -vv --durations=25") == 2
     batches = step["run"].split("python -m pytest ")[1:]
     assert len(batches) == 2
-    for index, (batch, count) in enumerate(zip(batches, (18, 34))):
+    for index, (batch, count) in enumerate(zip(batches, (19, 34))):
         selectors = re.findall(r"tests/[^\s\\]+", batch)
         assert len(selectors) == len(set(selectors)) == count
         assert not re.search(r"(?:^|\s)(?:-m|--maxfail)(?:\s|=|$)", batch)
