@@ -46,7 +46,9 @@ class MetalDirectiveMixin:
         if file_path:
             self._entered_source_files.add(self._canonical_path(file_path))
         processed = super().preprocess(code, file_path=file_path)
-        reject_unknown_directives(processed)
+        # Entry-point discovery only lists kernel names; the translation of the same source refuses the directive.
+        if not getattr(self, "_discovering_entry_points", False):
+            reject_unknown_directives(processed)
         return processed
 
     def _parse_directive(self, line: str):

@@ -78,16 +78,16 @@ _TARGET_REASONS = {
         "(D3D12_STATIC_SAMPLER_DESC), which CrossTL does not emit yet"
     ),
 }
-_TARGET_ALIASES = {
-    "glsl": "opengl",
-    "webgl": "opengl",
-    "essl": "opengl",
-    "spirv": "vulkan",
-    "hlsl": "directx",
-    "dx11": "directx",
-    "dx12": "directx",
-    "d3d11": "directx",
-    "d3d12": "directx",
+# Every target spelling a reason applies to, so the lookup needs no alias step.
+_TARGET_FAMILIES = {
+    "opengl": ("opengl", "glsl", "webgl", "essl"),
+    "vulkan": ("vulkan", "spirv"),
+    "directx": ("directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"),
+}
+_TARGET_REASONS = {
+    spelling: _TARGET_REASONS[family]
+    for family, spellings in _TARGET_FAMILIES.items()
+    for spelling in spellings
 }
 
 
@@ -132,10 +132,9 @@ class FixedSamplerStateUnsupportedError(TranslationDiagnostic):
     """Fixed sampler state the target cannot declare in shader source."""
 
     def __init__(self, target, name):
-        family = _TARGET_ALIASES.get(target, target)
         self.missing_capabilities = (f"{target}.fixed-sampler-state",)
         reason = _TARGET_REASONS.get(
-            family, f"{target} has no shader-declared sampler state"
+            target, f"{target} has no shader-declared sampler state"
         )
         super().__init__(
             f"fixed sampler state {name} cannot be expressed for {target}: {reason}",

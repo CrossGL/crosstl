@@ -1071,7 +1071,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self._containing_span_cache.clear()
         self._lexical_scope_lookup_cache.clear()
         code = self._strip_leading_compiler_diagnostics(code)
-        return super().preprocess(code, file_path=file_path)
+        self._discovering_entry_points = True
+        try:
+            return super().preprocess(code, file_path=file_path)
+        finally:
+            self._discovering_entry_points = False
 
     def _source_analysis(self, code: str) -> _MetalSourceAnalysis:
         cache = self._source_analysis_cache

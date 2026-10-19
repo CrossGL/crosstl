@@ -33726,9 +33726,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "directx",
                 shader_type,
                 role,
-                "the entry declares none, and ray interface variables declared at "
-                "global scope (GLSL rayPayloadInEXT, hitAttributeEXT, "
-                "callableDataInEXT) are not lowered to entry parameters yet",
+                "the entry declares none and the program declares no ray interface "
+                "variable (GLSL rayPayloadInEXT, hitAttributeEXT, callableDataInEXT) "
+                "to pass as one; DXR requires it (DirectX Raytracing spec, shader "
+                "signatures)",
             )
 
         exact_role_order = {

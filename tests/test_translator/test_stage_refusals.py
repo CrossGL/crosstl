@@ -21,6 +21,17 @@ shader main {
 }
 """
 
+RAY_MISS_WITHOUT_PAYLOAD = """
+shader main {
+    vec3 color @location(0);
+    ray_miss {
+        void main() {
+            color = vec3(0.0);
+        }
+    }
+}
+"""
+
 HALF_COLOR = """
 shader main {
     struct VOut {
@@ -58,8 +69,10 @@ def test_webgl_refuses_stages_beyond_vertex_and_fragment(tmp_path):
 
 
 def test_directx_ray_entry_without_payload_parameter_is_a_typed_refusal(tmp_path):
+    # A global rayPayloadInEXT becomes the entry's payload parameter (semantics/hlsl_ray_interfaces.py); a miss
+    # shader with no payload at all has nothing DXR can pass.
     with pytest.raises(RayStageInterfaceUnsupportedError) as raised:
-        translate(tmp_path, RAY_MISS_WITH_GLOBAL_PAYLOAD, "directx")
+        translate(tmp_path, RAY_MISS_WITHOUT_PAYLOAD, "directx")
 
     assert (
         raised.value.project_diagnostic_code
