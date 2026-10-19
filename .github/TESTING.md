@@ -50,8 +50,8 @@ Branch protection and the merge queue require these checks:
 
 Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
 The translator and backend jobs size `pytest-xdist` to match. The Python
-setup steps cache pip downloads, keyed on `requirements.txt`, `pyproject.toml`
-and `setup.cfg`.
+setup steps cache pip downloads, keyed on `requirements.txt` and
+`pyproject.toml`.
 
 Backend, translator, complete-suite, example and open-source demo workflows replace a
 superseded pull-request run when a new revision arrives. The concurrency key
