@@ -131,6 +131,7 @@ from .array_utils import (
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .call_effects import builtin_argument_write_indices
+from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
 from .entry_selection import entry_type_references
 from .enum_utils import (
@@ -346,7 +347,6 @@ from .index_range_contracts import (
     parse_index_range_assertions,
     truncating_division_interval,
 )
-from .congruent_intervals import congruent_ring_interval
 from .integer_intervals import convert_integer_intervals
 from .loop_guard_bounds import guarded_additive_loop_entries
 from .loop_induction import (
