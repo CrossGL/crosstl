@@ -12,6 +12,7 @@ import pytest
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator import parse
+from tests.metal_refusal_helpers import refused_metal
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
 from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_native_runtime import _native_request
@@ -185,11 +186,12 @@ def test_metal_segmented_canonical_shuffle_preserves_modulo(tmp_path, kind):
 def test_metal_segmented_shuffle_rejects_noninteger_modulo(modulo):
     from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 
-    generated = MetalCodeGen().generate_stage(
+    refusal = refused_metal(
+        MetalCodeGen().generate_stage,
         parse(_canonical(f"uint result = WaveShuffleAndFillUp(1u, 2u, 1u, {modulo});")),
         "compute",
     )
-    assert "unsupported Metal wave intrinsic" in generated and "modulo" in generated
+    assert "wave intrinsic: WaveShuffleAndFillUp" in refusal and "modulo" in refusal
 
 
 def _source(kind, size):

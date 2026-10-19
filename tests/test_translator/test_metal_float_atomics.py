@@ -19,6 +19,7 @@ from crosstl.translator.ast import (
     MemberAccessNode,
 )
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from tests.metal_refusal_helpers import recorded_refusals, refused_metal
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
 REQUIRE_ENV = "CROSTL_REQUIRE_METAL_FLOAT_ATOMICS"
@@ -143,7 +144,7 @@ def test_atomic_storage_rejects_nonwritable_or_local_memory(access_kind, storage
     result = codegen.generate_metal_buffer_resource_atomic_call(
         "atomicAdd", [target, 1.5]
     )
-    assert "unsupported Metal buffer atomic" in result
+    assert "buffer atomic: atomicAdd requires" in recorded_refusals(codegen)
     assert "reinterpret_cast" not in result
 
 
@@ -166,9 +167,8 @@ def test_float_atomics_reject_operations_without_native_metal_support(operation)
         buffer float values[1];
         compute {{ void main() {{ {operation}(values[0], 1.5); }} }}
     }}"""
-    generated = MetalCodeGen().generate_stage(parse(source), "compute")
-    assert "unsupported Metal" in generated
-    assert "atomic_float" not in generated
+    refusal = refused_metal(MetalCodeGen().generate_stage, parse(source), "compute")
+    assert operation in refusal
 
 
 @pytest.fixture(scope="session")

@@ -331,6 +331,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .metal_refusals import metal_refusals, split_shared_fallback
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     crossgl_literal_positive_integer,
@@ -850,6 +851,7 @@ class MetalCodeGen:
 
     def __init__(self):
         """Initialize Metal type maps and per-generation resource state."""
+        self.refusals = metal_refusals()
         self.current_shader = None
         self.vertex_item = None
         self.fragment_item = None
@@ -1855,7 +1857,29 @@ class MetalCodeGen:
         return self.generate_program(ast, target_stage=shader_type)
 
     def generate_program(self, ast, target_stage=None):
-        """Render an AST to Metal, optionally filtering stage entry points."""
+        """Render an AST to Metal, optionally filtering stage entry points.
+
+        Raises :class:`MetalLoweringRefused` listing every construct that has no faithful Metal lowering.
+        """
+        return self.refusals.run(self.render_program, ast, target_stage)
+
+    def refuse_lowering(self, reason, fallback=""):
+        """Record a construct with no faithful Metal lowering and return ``fallback`` in its place.
+
+        The fallback only lets generation reach the other refusals in the program; no program is returned while a
+        refusal is pending.
+        """
+        self.refusals.record(reason)
+        return fallback
+
+    def refuse_shared_fallback(self, text):
+        """Refuse the reasons in a fallback from the shared image-access helpers; return its placeholder value."""
+        reasons, remainder = split_shared_fallback(text)
+        for reason in reasons:
+            self.refuse_lowering(reason)
+        return remainder
+
+    def render_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
@@ -2869,10 +2893,10 @@ class MetalCodeGen:
                 self.sampler_variables.append((node, binding, array_size))
                 sampler_register = max(sampler_register, binding + resource_count)
             elif self.is_input_attachment_type_name(vtype):
-                code += (
-                    "/* unsupported Metal input attachment declaration: "
-                    f"'{var_name}' uses {self.type_name_string(vtype)}; "
-                    "subpassInput resources require Vulkan subpass lowering */\n"
+                self.refuse_lowering(
+                    f"input attachment declaration: '{var_name}' uses "
+                    f"{self.type_name_string(vtype)}; subpassInput resources require "
+                    "Vulkan subpass lowering"
                 )
             else:
                 mapped_type = self.map_type(vtype)
@@ -2892,10 +2916,7 @@ class MetalCodeGen:
                     )
                     code += f"{declaration} = {init_expr};\n"
                 elif self.global_value_variable_requires_initializer(qualifier):
-                    diagnostic = self.metal_program_scope_global_initializer_diagnostic(
-                        var_name, node
-                    )
-                    code += f"{diagnostic}\n"
+                    self.refuse_program_scope_groupshared_global(var_name, node)
                     init_expr = self.metal_program_scope_global_default_initializer(
                         mapped_type, array_suffix
                     )
@@ -3165,9 +3186,9 @@ class MetalCodeGen:
             mapped_type = self.map_type(var_type)
             initial_value = getattr(node, "initial_value", None)
             if initial_value is not None:
-                code += (
-                    "/* unsupported Metal function constant default: "
-                    f"'{name}' initializers are not allowed by MSL */\n"
+                self.refuse_lowering(
+                    f"function constant default: '{name}' initializers are not "
+                    "allowed by MSL"
                 )
             code += (
                 f"{self.metal_unused_declaration_qualifier('constant')} "
@@ -4736,10 +4757,10 @@ class MetalCodeGen:
             return None
         fallback_type = self.current_expression_expected_type or "vec4"
         fallback = self.metal_default_value_expression(fallback_type)
-        return (
-            "/* unsupported Metal input attachment load: "
-            "subpassLoad requires Vulkan subpass input lowering */ "
-            f"{fallback}"
+        return self.refuse_lowering(
+            "input attachment load: subpassLoad requires Vulkan subpass input "
+            "lowering",
+            fallback,
         )
 
     def generate_function(
@@ -6032,9 +6053,9 @@ class MetalCodeGen:
             return None
         attribute, result_type = builtin
         fallback = self.diagnostic_zero_value_for_type(result_type)
-        return (
-            f"{fallback} /* unsupported Metal GLSL subgroup builtin: {name} "
-            f"requires compute-stage {attribute} value */"
+        return self.refuse_lowering(
+            f"GLSL subgroup builtin: {name} requires compute-stage {attribute} value",
+            fallback,
         )
 
     def metal_graphics_builtin_expression_name(self, name):
@@ -6362,14 +6383,14 @@ class MetalCodeGen:
         if not missing_requirements:
             return None
         requirement = " and ".join(missing_requirements)
-        diagnostic = (
-            "/* unsupported Metal wave helper call: function "
-            f"'{func_name}' requires compute-stage {requirement} value */"
+        self.refuse_lowering(
+            f"wave helper call: function '{func_name}' requires compute-stage "
+            f"{requirement} value"
         )
         return_type = self.function_return_types.get(func_name, "void")
         if self.map_type(return_type) == "void":
-            return diagnostic
-        return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
+            return "(void)0"
+        return self.diagnostic_zero_value_for_type(return_type)
 
     def metal_vertex_builtin_parameter_specs(self):
         return [
@@ -8348,10 +8369,10 @@ class MetalCodeGen:
                 return None
             target_name = self.assignment_target_display_name(target) or "<target>"
             value_name = self.assignment_target_display_name(value) or "<expr>"
-            return (
-                "/* unsupported Metal pointer offset assignment: value "
-                f"'{value_name}' is not an integer scalar for target "
-                f"'{target_name}' */"
+            return self.refuse_lowering(
+                f"pointer offset assignment: value '{value_name}' is not an integer "
+                f"scalar for target '{target_name}'",
+                "(void)0",
             )
 
         expected_address_space = self.argument_address_space(target)
@@ -8361,11 +8382,12 @@ class MetalCodeGen:
         target_name = self.assignment_target_display_name(target) or "<target>"
         conflict = self.argument_address_space_conflict(value)
         if conflict is not None:
-            return (
-                "/* unsupported Metal address-space assignment: value "
+            return self.refuse_lowering(
+                "address-space assignment: value "
                 f"{self.address_space_conflict_description(conflict)} use "
                 f"different address spaces; assignment to '{target_name}' "
-                f"requires {expected_address_space} */"
+                f"requires {expected_address_space}",
+                "(void)0",
             )
 
         actual_address_space = self.argument_address_space(value)
@@ -8376,10 +8398,11 @@ class MetalCodeGen:
             return None
 
         value_name = self.assignment_target_display_name(value) or "<expr>"
-        return (
-            "/* unsupported Metal address-space assignment: value "
-            f"'{value_name}' uses {actual_address_space} address space but "
-            f"target '{target_name}' uses {expected_address_space} */"
+        return self.refuse_lowering(
+            f"address-space assignment: value '{value_name}' uses "
+            f"{actual_address_space} address space but target '{target_name}' uses "
+            f"{expected_address_space}",
+            "(void)0",
         )
 
     def local_reference_assignment_target(self, target):
@@ -8594,18 +8617,18 @@ class MetalCodeGen:
             return "{}"
         return self.metal_default_value_expression(mapped_type)
 
-    def metal_program_scope_global_initializer_diagnostic(self, name, node=None):
+    def refuse_program_scope_groupshared_global(self, name, node=None):
+        """Refuse groupshared storage Metal cannot declare at program scope.
+
+        Other uninitialised value globals are zero-initialised in the constant address space: that is HLSL's
+        ``static`` semantics and a valid choice for GLSL, which leaves them undefined, and every store to them is
+        refused separately.
+        """
         if self.is_program_scope_groupshared_global(node):
-            return (
-                "/* unsupported Metal program-scope groupshared global: "
-                f"'{name}' cannot be emitted as Metal threadgroup storage at "
-                "program scope; using constant zero placeholder */"
+            self.refuse_lowering(
+                f"program-scope groupshared global: '{name}' cannot be emitted as "
+                "Metal threadgroup storage at program scope"
             )
-        return (
-            "/* unsupported Metal program-scope global initializer: "
-            f"'{name}' needs an initializer in the constant address space; "
-            "using zero initializer */"
-        )
 
     def local_variable_qualifier(self, node):
         qualifiers = {
@@ -8717,11 +8740,10 @@ class MetalCodeGen:
             return None
         initial_value = getattr(node, "initial_value", None)
         initializer_name = self.assignment_target_root_name(initial_value) or "<expr>"
-        return (
-            "/* unsupported Metal address-space local alias: initializer "
-            f"'{initializer_name}' uses {initializer_address_space} address space "
-            f"but local '{node.name}' was declared {explicit_address_space}; "
-            f"using read-only {initializer_address_space} alias */"
+        return self.refuse_lowering(
+            f"address-space local alias: initializer '{initializer_name}' uses "
+            f"{initializer_address_space} address space but local '{node.name}' was "
+            f"declared {explicit_address_space}"
         )
 
     def local_variable_address_space_conflict_diagnostic(self, node):
@@ -8733,13 +8755,10 @@ class MetalCodeGen:
         )
         if conflict is None:
             return None
-        target_address_space = self.local_variable_address_space(node)
-        fallback_kind = "value" if isinstance(raw_type, ReferenceType) else "alias"
-        return (
-            "/* unsupported Metal address-space local alias: initializer "
+        return self.refuse_lowering(
+            "address-space local alias: initializer "
             f"{self.address_space_conflict_description(conflict)} use different "
-            f"address spaces; using uninitialized {target_address_space} "
-            f"{fallback_kind} */"
+            "address spaces"
         )
 
     def local_variable_address_space_conflict_declaration(self, node, declaration):
@@ -8907,10 +8926,9 @@ class MetalCodeGen:
                 "memory_order_relaxed);\n"
             )
         if declared_size is not None and len(elements) > declared_size:
-            lines.append(
-                f"{indent_str}/* unsupported Metal atomic array initializer: "
-                f"'{name}' has {len(elements)} initializers for {declared_size} "
-                "elements; extra values were ignored */\n"
+            self.refuse_lowering(
+                f"atomic array initializer: '{name}' has {len(elements)} initializers "
+                f"for {declared_size} elements"
             )
         return "".join(lines)
 
@@ -10594,12 +10612,17 @@ class MetalCodeGen:
         indent,
         target_name,
     ):
+        """Assign the default value on the path no arm takes; refuse an arm that produces no value.
+
+        The unmatched path is reached only by a subject the arms do not cover, which a well-formed value-position
+        match excludes; Metal still needs the variable assigned on that path. An arm without a value is a
+        malformed match, not an unreachable path.
+        """
         indent_str = "    " * indent
         fallback = self.metal_default_value_expression(target_type)
-        return (
-            f"{indent_str}{target_variable} = {fallback} "
-            f"/* fallback for generated {target_name}: {reason} */;\n"
-        )
+        if reason != "no wildcard arm handles remaining cases":
+            self.refuse_lowering(f"match expression for '{target_variable}': {reason}")
+        return f"{indent_str}{target_variable} = {fallback};\n"
 
     def condition_has_single_outer_parentheses(self, condition):
         if not (condition.startswith("(") and condition.endswith(")")):
@@ -12886,18 +12909,26 @@ class MetalCodeGen:
         return "0u"
 
     def metal_wave_diagnostic_expression(self, operation, arguments, reason):
-        return (
-            f"/* unsupported Metal wave intrinsic: {operation} {reason} */ "
-            f"{self.metal_wave_default_value(operation, arguments)}"
+        return self.refuse_lowering(
+            f"wave intrinsic: {operation} {reason}",
+            self.metal_wave_default_value(operation, arguments),
         )
 
     def generate_metal_ray_query_call(self, operation, query_expr, arguments):
         self.require_metal_ray_query_runtime()
+        self.refuse_metal_ray_query(operation)
         self.required_metal_ray_query_helpers.add(str(operation))
         helper_name = self.metal_ray_query_helper_name(operation)
         args = [self.generate_expression(query_expr)]
         args.extend(self.generate_expression(arg) for arg in arguments or [])
         return f"{helper_name}({', '.join(args)})"
+
+    def refuse_metal_ray_query(self, operation=None):
+        """Refuse inline ray queries: the ``cgl_ray_query_*`` helpers trace nothing and return default values."""
+        construct = f"RayQuery.{operation}" if operation else "RayQuery"
+        self.refuse_lowering(
+            f"ray query: {construct} has no Metal intersection_query lowering"
+        )
 
     def metal_ray_query_default_value(self, return_type):
         if return_type == "bool":
@@ -14087,22 +14118,23 @@ class MetalCodeGen:
         return type_name
 
     def unsupported_metal_ray_tracing_intrinsic(self, operation, reason):
-        return f"/* unsupported Metal ray tracing intrinsic: {operation} - {reason} */"
+        return self.refuse_lowering(
+            f"ray tracing intrinsic: {operation} - {reason}", "(void)0"
+        )
 
     def unsupported_metal_acceleration_structure_array_diagnostic(self, name):
-        return (
-            "/* unsupported Metal ray tracing resource: arrays of "
-            "acceleration_structure are not valid Metal buffer parameters "
-            f"({name}) */\n"
+        return self.refuse_lowering(
+            "ray tracing resource: arrays of acceleration_structure are not valid "
+            f"Metal buffer parameters ({name})"
         )
 
     def unsupported_metal_acceleration_structure_array_alias_diagnostic(
         self, name, source_name
     ):
-        return (
-            "/* unsupported Metal ray tracing resource: local "
-            f"acceleration_structure alias '{name}' cannot be initialized from "
-            f"unsupported acceleration_structure array '{source_name}' */\n"
+        return self.refuse_lowering(
+            f"ray tracing resource: local acceleration_structure alias '{name}' "
+            "cannot be initialized from unsupported acceleration_structure array "
+            f"'{source_name}'"
         )
 
     def unsupported_metal_acceleration_structure_array_alias_source(self, expr):
@@ -14127,7 +14159,7 @@ class MetalCodeGen:
         reason = self.unsupported_metal_acceleration_structure_array_reason(expr)
         if reason is None:
             return None
-        return f"0 /* unsupported Metal ray tracing resource: {reason} */"
+        return self.refuse_lowering(f"ray tracing resource: {reason}", "0")
 
     def metal_acceleration_structure_array_parameter_kind(self, vtype, node=None):
         if not self.is_acceleration_structure_type(vtype):
@@ -14139,9 +14171,9 @@ class MetalCodeGen:
         return resource_type
 
     def unsupported_metal_ray_function_table_array_diagnostic(self, table_kind, name):
-        return (
-            f"/* unsupported Metal ray tracing resource: arrays of {table_kind} "
-            f"are not valid Metal buffer parameters ({name}) */\n"
+        return self.refuse_lowering(
+            f"ray tracing resource: arrays of {table_kind} are not valid Metal "
+            f"buffer parameters ({name})"
         )
 
     def unsupported_metal_ray_function_table_array_alias_diagnostic(
@@ -14150,10 +14182,9 @@ class MetalCodeGen:
         table_kind = self.unsupported_metal_ray_function_table_array_variables.get(
             source_name, "ray function table"
         )
-        return (
-            "/* unsupported Metal ray tracing resource: local "
-            f"{table_kind} alias '{name}' cannot be initialized from "
-            f"unsupported {table_kind} array '{source_name}' */\n"
+        return self.refuse_lowering(
+            f"ray tracing resource: local {table_kind} alias '{name}' cannot be "
+            f"initialized from unsupported {table_kind} array '{source_name}'"
         )
 
     def metal_ray_function_table_kind(self, vtype):
@@ -14193,7 +14224,7 @@ class MetalCodeGen:
         reason = self.unsupported_metal_ray_function_table_array_reason(expr)
         if reason is None:
             return None
-        return f"0 /* unsupported Metal ray tracing resource: {reason} */"
+        return self.refuse_lowering(f"ray tracing resource: {reason}", "0")
 
     def unsupported_metal_ray_function_table_array_member_call(self, func_expr):
         if not isinstance(func_expr, MemberAccessNode):
@@ -14319,9 +14350,7 @@ class MetalCodeGen:
             self.expression_result_type(target) or self.current_expression_expected_type
         )
         zero_value = self.diagnostic_zero_value_for_type(return_type or "int")
-        return (
-            f"/* unsupported Metal buffer atomic: {func_name} {reason} */ {zero_value}"
-        )
+        return self.refuse_lowering(f"buffer atomic: {func_name} {reason}", zero_value)
 
     def generate_metal_expected_compare_exchange(
         self, atomic_target, args, scalar_type, *, bitwise_float=False
@@ -14432,10 +14461,11 @@ class MetalCodeGen:
                 address_space = "thread"
         if address_space in {None, "thread"}:
             return None
-        return (
-            "false /* unsupported Metal atomic compare-exchange expected pointer: "
-            f"expected storage '{storage_name}' uses {address_space} address space; "
-            "Metal requires thread storage */"
+        return self.refuse_lowering(
+            "atomic compare-exchange expected pointer: expected storage "
+            f"'{storage_name}' uses {address_space} address space; Metal requires "
+            "thread storage",
+            "false",
         )
 
     def atomic_expected_storage_root_name(self, arg):
@@ -14705,9 +14735,8 @@ class MetalCodeGen:
     def unsupported_metal_mesh_output_assignment_diagnostic(self, target_info, reason):
         name = target_info.get("name", "<unknown>")
         role = target_info.get("role", "output")
-        return (
-            "/* unsupported Metal mesh output assignment: "
-            f"{role} output '{name}' - {reason} */"
+        return self.refuse_lowering(
+            f"mesh output assignment: {role} output '{name}' - {reason}", "(void)0"
         )
 
     def metal_mesh_vertex_output_value(self, expr, mesh_output):
@@ -14807,14 +14836,15 @@ class MetalCodeGen:
                 len(arguments) == 4
                 and self.current_metal_mesh_payload_parameter is None
             ):
-                return (
-                    "/* unsupported Metal mesh dispatch: DispatchMesh payload "
-                    "argument requires an object_data payload context */"
+                return self.refuse_lowering(
+                    "mesh dispatch: DispatchMesh payload argument requires an "
+                    "object_data payload context",
+                    "(void)0",
                 )
             if self.current_metal_mesh_grid_properties_parameter is None:
-                return (
-                    "/* unsupported Metal mesh dispatch: DispatchMesh requires "
-                    "mesh_grid_properties context */"
+                return self.refuse_lowering(
+                    "mesh dispatch: DispatchMesh requires mesh_grid_properties context",
+                    "(void)0",
                 )
         if (
             expr.operation == "DispatchMesh"
@@ -14892,14 +14922,14 @@ class MetalCodeGen:
         return None
 
     def unsupported_metal_mesh_dispatch(self, reason):
-        return f"/* unsupported Metal mesh dispatch: {reason} */"
+        return self.refuse_lowering(f"mesh dispatch: {reason}", "(void)0")
 
     def metal_dispatch_mesh_payload_assignment(self, payload_expr):
         if self.current_metal_mesh_payload_parameter is None:
-            return (
-                "/* unsupported Metal mesh payload dispatch: "
-                "DispatchMesh payload argument requires an object_data payload "
-                "parameter */"
+            return self.refuse_lowering(
+                "mesh payload dispatch: DispatchMesh payload argument requires an "
+                "object_data payload parameter",
+                "(void)0",
             )
 
         payload_type = self.expression_result_type(payload_expr)
@@ -14909,10 +14939,10 @@ class MetalCodeGen:
                 self.current_metal_mesh_payload_type is not None
                 and mapped_payload_type != self.current_metal_mesh_payload_type
             ):
-                return (
-                    "/* unsupported Metal mesh payload dispatch: "
-                    f"payload argument type {mapped_payload_type} does not match "
-                    f"{self.current_metal_mesh_payload_type} */"
+                return self.refuse_lowering(
+                    f"mesh payload dispatch: payload argument type {mapped_payload_type} "
+                    f"does not match {self.current_metal_mesh_payload_type}",
+                    "(void)0",
                 )
 
         payload_source_diagnostic = self.metal_dispatch_mesh_payload_source_diagnostic(
@@ -14927,9 +14957,9 @@ class MetalCodeGen:
     def metal_dispatch_mesh_payload_source_diagnostic(self, payload_expr):
         payload_name = self.assignment_target_root_name(payload_expr)
         if not payload_name:
-            return (
-                "/* unsupported Metal mesh payload dispatch: "
-                "payload argument must be a threadgroup lvalue */"
+            return self.refuse_lowering(
+                "mesh payload dispatch: payload argument must be a threadgroup lvalue",
+                "(void)0",
             )
 
         payload_type = self.expression_result_type(payload_expr)
@@ -14937,10 +14967,11 @@ class MetalCodeGen:
             display_name = (
                 self.assignment_target_display_name(payload_expr) or payload_name
             )
-            return (
-                "/* unsupported Metal mesh payload dispatch: payload argument "
-                f"'{display_name}' has pointer or array type; DispatchMesh "
-                "payload requires a threadgroup value lvalue */"
+            return self.refuse_lowering(
+                f"mesh payload dispatch: payload argument '{display_name}' has "
+                "pointer or array type; DispatchMesh payload requires a threadgroup "
+                "value lvalue",
+                "(void)0",
             )
 
         address_space = self.argument_address_space(payload_expr)
@@ -14951,10 +14982,11 @@ class MetalCodeGen:
         display_name = (
             self.assignment_target_access_display_name(payload_expr) or payload_name
         )
-        return (
-            "/* unsupported Metal mesh payload dispatch: payload argument "
-            f"'{display_name}' uses {source_address_space} address space; "
-            "DispatchMesh payload requires a threadgroup lvalue */"
+        return self.refuse_lowering(
+            f"mesh payload dispatch: payload argument '{display_name}' uses "
+            f"{source_address_space} address space; DispatchMesh payload requires a "
+            "threadgroup lvalue",
+            "(void)0",
         )
 
     def generate_buffer_call(self, func_name, args):
@@ -14972,9 +15004,8 @@ class MetalCodeGen:
             value = self.generate_expression(args[1])
             counter = self.structured_buffer_counter_reference(args[0])
             if counter is None:
-                return (
-                    "/* unsupported Metal buffer append: requires append/consume "
-                    "counter buffer */"
+                return self.refuse_lowering(
+                    "buffer append: requires append/consume counter buffer", "(void)0"
                 )
             index = f"atomic_fetch_add_explicit({counter}, 1u, memory_order_relaxed)"
             return f"{buffer}[{index}] = {value}"
@@ -14982,9 +15013,8 @@ class MetalCodeGen:
             buffer = self.generate_expression(args[0])
             counter = self.structured_buffer_counter_reference(args[0])
             if counter is None:
-                return (
-                    "0 /* unsupported Metal buffer consume: requires append/consume "
-                    "counter buffer */"
+                return self.refuse_lowering(
+                    "buffer consume: requires append/consume counter buffer", "0"
                 )
             index = (
                 f"(atomic_fetch_sub_explicit({counter}, 1u, "
@@ -16479,10 +16509,10 @@ class MetalCodeGen:
             if not self.is_mutable_raw_buffer_parameter(raw_param_type, parameter):
                 continue
             parameter_name = getattr(parameter, "name", f"arg{index}")
-            return (
-                "/* unsupported Metal raw buffer call: readonly buffer "
-                f"'{arg_name}' cannot be passed to mutable parameter "
-                f"'{parameter_name}' of '{func_name}' */"
+            return self.refuse_lowering(
+                f"raw buffer call: readonly buffer '{arg_name}' cannot be passed to "
+                f"mutable parameter '{parameter_name}' of '{func_name}'",
+                "(void)0",
             )
         return None
 
@@ -16525,10 +16555,10 @@ class MetalCodeGen:
             if not self.is_mutable_metal_parameter(raw_param_type, parameter):
                 continue
             parameter_name = getattr(parameter, "name", f"arg{index}")
-            return (
-                "/* unsupported Metal parameter call: readonly parameter "
-                f"'{arg_name}' cannot be passed to mutable parameter "
-                f"'{parameter_name}' of '{func_name}' */"
+            return self.refuse_lowering(
+                f"parameter call: readonly parameter '{arg_name}' cannot be passed to "
+                f"mutable parameter '{parameter_name}' of '{func_name}'",
+                "(void)0",
             )
         return None
 
@@ -16579,10 +16609,10 @@ class MetalCodeGen:
                 arg_name, "const object_data"
             )
             reason_text = self.readonly_metal_mesh_payload_reason_text(reason)
-            diagnostic = (
-                "/* unsupported Metal mesh payload call: mesh payload "
-                f"'{arg_name}' is {reason_text} and cannot be passed to "
-                f"mutable parameter '{parameter_name}' of '{func_name}' */"
+            self.refuse_lowering(
+                f"mesh payload call: mesh payload '{arg_name}' is {reason_text} and "
+                f"cannot be passed to mutable parameter '{parameter_name}' of "
+                f"'{func_name}'"
             )
             selected_function = self.metal_user_function_overload_for_call(
                 func_name,
@@ -16594,8 +16624,8 @@ class MetalCodeGen:
                 else self.function_return_types.get(func_name)
             )
             if self.map_type(return_type) == "void":
-                return diagnostic
-            return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
+                return "(void)0"
+            return self.diagnostic_zero_value_for_type(return_type)
         return None
 
     def pointer_arithmetic_operand(self, expr, operand_types=None):
@@ -17051,9 +17081,10 @@ class MetalCodeGen:
             return None
         target_name, reason = alias
         reason_text = self.readonly_metal_mesh_payload_reason_text(reason)
-        return (
-            "/* unsupported Metal mesh payload alias: mesh payload "
-            f"'{target_name}' cannot store {reason_text} */"
+        return self.refuse_lowering(
+            f"mesh payload alias: mesh payload '{target_name}' cannot store "
+            f"{reason_text}",
+            "(void)0",
         )
 
     def readonly_raw_buffer_assignment_diagnostic(self, target):
@@ -17066,9 +17097,9 @@ class MetalCodeGen:
             target, root_name, "constant address space"
         ):
             return None
-        return (
-            "/* unsupported Metal raw buffer store: readonly buffer "
-            f"'{root_name}' cannot be written */"
+        return self.refuse_lowering(
+            f"raw buffer store: readonly buffer '{root_name}' cannot be written",
+            "(void)0",
         )
 
     def mutable_const_pointee_pointer_assignment(self, target, root_name, reason):
@@ -17095,9 +17126,8 @@ class MetalCodeGen:
         )
         if self.mutable_const_pointee_pointer_assignment(target, root_name, reason):
             return None
-        return (
-            "/* unsupported Metal parameter store: parameter "
-            f"'{root_name}' is {reason} */"
+        return self.refuse_lowering(
+            f"parameter store: parameter '{root_name}' is {reason}", "(void)0"
         )
 
     def readonly_metal_program_scope_global_assignment_diagnostic(self, target):
@@ -17109,14 +17139,16 @@ class MetalCodeGen:
             return None
         target_name = self.assignment_target_display_name(target) or root_name
         if root_name in self.metal_program_scope_groupshared_globals:
-            return (
-                "/* unsupported Metal program-scope groupshared store: global "
-                f"'{target_name}' cannot be written because Metal threadgroup "
-                "storage must be declared inside a kernel */"
+            return self.refuse_lowering(
+                f"program-scope groupshared store: global '{target_name}' cannot be "
+                "written because Metal threadgroup storage must be declared inside a "
+                "kernel",
+                "(void)0",
             )
-        return (
-            "/* unsupported Metal program-scope global store: global "
-            f"'{target_name}' is emitted in the constant address space */"
+        return self.refuse_lowering(
+            f"program-scope global store: global '{target_name}' is emitted in the "
+            "constant address space",
+            "(void)0",
         )
 
     def readonly_metal_mesh_payload_assignment_diagnostic(self, target):
@@ -17127,9 +17159,9 @@ class MetalCodeGen:
             root_name, "const object_data"
         )
         reason_text = self.readonly_metal_mesh_payload_reason_text(reason)
-        return (
-            "/* unsupported Metal mesh payload store: mesh payload "
-            f"'{root_name}' is {reason_text} */"
+        return self.refuse_lowering(
+            f"mesh payload store: mesh payload '{root_name}' is {reason_text}",
+            "(void)0",
         )
 
     def readonly_metal_mesh_payload_reason_text(self, reason):
@@ -19698,17 +19730,19 @@ class MetalCodeGen:
         if not context:
             return None
         if context.get("payload") and not self.current_metal_mesh_payload_parameter:
-            return (
-                "/* unsupported Metal mesh dispatch helper call: function "
-                f"'{func_name}' requires an object_data payload context */"
+            return self.refuse_lowering(
+                f"mesh dispatch helper call: function '{func_name}' requires an "
+                "object_data payload context",
+                "(void)0",
             )
         if (
             context.get("grid")
             and not self.current_metal_mesh_grid_properties_parameter
         ):
-            return (
-                "/* unsupported Metal mesh dispatch helper call: function "
-                f"'{func_name}' requires mesh_grid_properties context */"
+            return self.refuse_lowering(
+                f"mesh dispatch helper call: function '{func_name}' requires "
+                "mesh_grid_properties context",
+                "(void)0",
             )
         return None
 
@@ -24326,27 +24360,27 @@ class MetalCodeGen:
 
     def unsupported_texture1d_sampling_option_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return (
-            "/* unsupported Metal texture sampling: "
-            f"{func_name} on {texture_type} supports only implicit sampling */ "
-            "float4(0.0)"
+        return self.refuse_lowering(
+            f"texture sampling: {func_name} on {texture_type} supports only implicit "
+            "sampling",
+            "float4(0.0)",
         )
 
     def unsupported_texture1d_texel_fetch_lod_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return (
-            "/* unsupported Metal texel fetch: "
-            f"{func_name} on {texture_type} requires a compile-time literal "
-            "mip level */ float4(0.0)"
+        return self.refuse_lowering(
+            f"texel fetch: {func_name} on {texture_type} requires a compile-time "
+            "literal mip level",
+            "float4(0.0)",
         )
 
     def unsupported_texture1d_size_lod_call(self, texture_type, return_type):
         texture_type = self.resource_base_type(texture_type)
         zero_value = "0" if return_type == "int" else f"{return_type}(0)"
-        return (
-            "/* unsupported Metal texture size query: textureSize on "
-            f"{texture_type} requires a compile-time literal mip level */ "
-            f"{zero_value}"
+        return self.refuse_lowering(
+            f"texture size query: textureSize on {texture_type} requires a "
+            "compile-time literal mip level",
+            zero_value,
         )
 
     def metal_texture1d_read_lod_argument(self, lod_arg):
@@ -24358,7 +24392,9 @@ class MetalCodeGen:
         return f"uint({value})"
 
     def unsupported_texture_sample_offset_call(self, func_name, reason):
-        return unsupported_texture_offset_call_expression("Metal", func_name, reason)
+        return self.refuse_shared_fallback(
+            unsupported_texture_offset_call_expression("Metal", func_name, reason)
+        )
 
     def texture_sample_offset_coord_args(self, texture_type, coord):
         if self.is_array_texture_resource(texture_type):
@@ -24424,7 +24460,9 @@ class MetalCodeGen:
         )
 
     def unsupported_texture_projected_call(self, func_name, reason):
-        return unsupported_projected_texture_call_expression("Metal", func_name, reason)
+        return self.refuse_shared_fallback(
+            unsupported_projected_texture_call_expression("Metal", func_name, reason)
+        )
 
     def projected_texture_coord(self, texture_arg, coord_arg, coord):
         texture_type = self.resource_base_type(self.texture_resource_type(texture_arg))
@@ -24696,37 +24734,49 @@ class MetalCodeGen:
         )
 
     def unsupported_texture_gather_call(self, func_name, reason):
-        return unsupported_texture_gather_call_expression("Metal", func_name, reason)
+        return self.refuse_shared_fallback(
+            unsupported_texture_gather_call_expression("Metal", func_name, reason)
+        )
 
     def unsupported_multisample_texture_call(self, func_name, texture_type):
-        return unsupported_multisample_texture_call_vector_expression(
-            "Metal", func_name, texture_type
+        return self.refuse_shared_fallback(
+            unsupported_multisample_texture_call_vector_expression(
+                "Metal", func_name, texture_type
+            )
         )
 
     def unsupported_multisample_texture_compare_call(self, func_name, texture_type):
-        return unsupported_multisample_texture_compare_scalar_expression(
-            "Metal", func_name, texture_type
+        return self.refuse_shared_fallback(
+            unsupported_multisample_texture_compare_scalar_expression(
+                "Metal", func_name, texture_type
+            )
         )
 
     def unsupported_multisample_texture_gather_compare_call(
         self, func_name, texture_type
     ):
-        return unsupported_multisample_texture_gather_compare_vector_expression(
-            "Metal", func_name, texture_type
+        return self.refuse_shared_fallback(
+            unsupported_multisample_texture_gather_compare_vector_expression(
+                "Metal", func_name, texture_type
+            )
         )
 
     def unsupported_multisample_texture_query_lod_call(self, texture_type):
-        return unsupported_multisample_texture_query_lod_expression(
-            "Metal", texture_type
+        return self.refuse_shared_fallback(
+            unsupported_multisample_texture_query_lod_expression("Metal", texture_type)
         )
 
     def unsupported_texture_query_levels_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return unsupported_texture_query_levels_expression("Metal", texture_type)
+        return self.refuse_shared_fallback(
+            unsupported_texture_query_levels_expression("Metal", texture_type)
+        )
 
     def unsupported_texture_query_lod_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return unsupported_texture_query_lod_expression("Metal", texture_type)
+        return self.refuse_shared_fallback(
+            unsupported_texture_query_lod_expression("Metal", texture_type)
+        )
 
     def storage_image_texture_operation_expression(self, func_name, texture_type):
         if not self.is_storage_image_resource(texture_type):
@@ -24734,13 +24784,17 @@ class MetalCodeGen:
 
         texture_type = self.resource_base_type(texture_type)
         if is_storage_image_texture_comparison_operation(func_name):
-            return unsupported_storage_image_texture_comparison_scalar_expression(
-                "Metal", func_name, texture_type
+            return self.refuse_shared_fallback(
+                unsupported_storage_image_texture_comparison_scalar_expression(
+                    "Metal", func_name, texture_type
+                )
             )
 
         if is_storage_image_texture_operation(func_name):
-            return unsupported_storage_image_texture_operation_vector_expression(
-                "Metal", func_name, texture_type
+            return self.refuse_shared_fallback(
+                unsupported_storage_image_texture_operation_vector_expression(
+                    "Metal", func_name, texture_type
+                )
             )
 
         return None
@@ -24754,7 +24808,9 @@ class MetalCodeGen:
         }
 
     def unsupported_cube_texel_fetch_call(self, func_name, texture_type):
-        return unsupported_cube_texel_fetch_expression("Metal", func_name, texture_type)
+        return self.refuse_shared_fallback(
+            unsupported_cube_texel_fetch_expression("Metal", func_name, texture_type)
+        )
 
     def generate_texture_gather_call(
         self, func_name, texture_name, sampler_arg, coord, extra_args, texture_type
@@ -24856,7 +24912,9 @@ class MetalCodeGen:
         return self.texture_sampling_capabilities(texture_type)["compare_offset"]
 
     def unsupported_texture_compare_call(self, func_name, reason):
-        return unsupported_texture_compare_scalar_expression("Metal", func_name, reason)
+        return self.refuse_shared_fallback(
+            unsupported_texture_compare_scalar_expression("Metal", func_name, reason)
+        )
 
     def is_depth_texture_resource(self, texture_type):
         return self.resource_base_type(texture_type).startswith("depth")
@@ -25244,8 +25302,10 @@ class MetalCodeGen:
         return self.texture_sampling_capabilities(texture_type)["gather_compare_offset"]
 
     def unsupported_texture_gather_compare_call(self, func_name, reason):
-        return unsupported_texture_gather_compare_call_expression(
-            "Metal", func_name, reason
+        return self.refuse_shared_fallback(
+            unsupported_texture_gather_compare_call_expression(
+                "Metal", func_name, reason
+            )
         )
 
     def generate_texture_gather_compare_call(
@@ -25486,7 +25546,9 @@ class MetalCodeGen:
         texture_name = self.generate_expression(texture_arg)
         descriptor = self.texture_query_resource_descriptor(texture_arg)
         if not descriptor["multisample"]:
-            return unsupported_texture_samples_query_call_expression("Metal")
+            return self.refuse_shared_fallback(
+                unsupported_texture_samples_query_call_expression("Metal")
+            )
         return texture_samples_query_expression("Metal", texture_name)
 
     def image_coordinate_expression(self, image_type, coord):
@@ -25851,26 +25913,32 @@ class MetalCodeGen:
         resource_type = self.resource_base_type(image_type)
         agnostic_type = self.storage_image_access_agnostic_type(image_type)
         component_type = metal_storage_image_component_type(agnostic_type)
-        return unsupported_multisample_image_atomic_expression(
-            "Metal",
-            func_name,
-            resource_type,
-            storage_image_atomic_zero_value(component_type),
+        return self.refuse_shared_fallback(
+            unsupported_multisample_image_atomic_expression(
+                "Metal",
+                func_name,
+                resource_type,
+                storage_image_atomic_zero_value(component_type),
+            )
         )
 
     def unsupported_multisample_image_store_call(self, image_type):
-        return unsupported_multisample_image_store_expression(
-            "Metal", self.resource_base_type(image_type)
+        return self.refuse_shared_fallback(
+            unsupported_multisample_image_store_expression(
+                "Metal", self.resource_base_type(image_type)
+            )
         )
 
     def unsupported_image_atomic_call(self, func_name, image_type):
         image_type = self.storage_image_access_agnostic_type(image_type)
         component_type = metal_storage_image_component_type(image_type)
-        return unsupported_image_atomic_expression(
-            "Metal",
-            func_name,
-            self.resource_base_type(image_type),
-            storage_image_atomic_zero_value(component_type),
+        return self.refuse_shared_fallback(
+            unsupported_image_atomic_expression(
+                "Metal",
+                func_name,
+                self.resource_base_type(image_type),
+                storage_image_atomic_zero_value(component_type),
+            )
         )
 
     def image_atomic_compare_descriptor(self, texture_type):
@@ -26297,7 +26365,9 @@ class MetalCodeGen:
             if self.is_cube_texture_resource(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource(texture_type):
-                return unsupported_multisample_texel_fetch_offset_expression("Metal")
+                return self.refuse_shared_fallback(
+                    unsupported_multisample_texel_fetch_offset_expression("Metal")
+                )
             if self.is_texture1d_sample_resource(texture_type):
                 lod = self.metal_texture1d_read_lod_argument(args[2])
                 if lod is None:
@@ -26623,6 +26693,7 @@ class MetalCodeGen:
 
         if self.is_metal_ray_query_type_name(vtype_str):
             self.require_metal_ray_query_runtime()
+            self.refuse_metal_ray_query()
             return "CglRayQuery"
 
         standard_array = self.split_metal_array_resource_type(vtype_str)

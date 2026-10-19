@@ -209,7 +209,10 @@ def test_other_buffer_arrays_become_buffer_blocks(tmp_path):
     assert re.search(r"\bByteAddressBuffer basesStorage : register\(t1\);", hlsl)
     assert "StructuredBuffer" not in hlsl
     glsl = translate(tmp_path, BLOCK, "glsl")
-    assert "layout(std430, binding = 0) buffer DirsBlock { vec3 dirs[]; }" in glsl
+    # clang-format, when installed, splits the block across lines; the layout is what is checked.
+    assert "layout(std430, binding = 0) buffer DirsBlock { vec3 dirs[]; }" in " ".join(
+        glsl.split()
+    )
     assert "vec3 d = dirsStorage.dirs[i];" in glsl
     assert "dirsStorage.dirs[i] = vec3(basesStorage.bases[i][1], 1.0);" in glsl
     assert "dirsStorage.dirs[(i + 1u)] = d.zyx;" in glsl

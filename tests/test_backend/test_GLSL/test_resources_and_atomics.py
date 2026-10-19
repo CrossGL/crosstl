@@ -17,6 +17,7 @@ from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 from crosstl.translator.semantics.unsized_arrays import UnsizedArrayUnsupportedError
+from tests.metal_refusal_helpers import metal_partial_output
 
 RESOURCE_GLSL = """
 #version 450 core
@@ -4741,7 +4742,7 @@ def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats(
     assert shader_ast is not None
 
     hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "Texture2DMS<float4> colorImages[4] : register(t0);" in hlsl
@@ -4787,8 +4788,8 @@ def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats(
         in metal
     )
     assert (
-        "unsupported Metal multisample image store: imageStore on "
-        "texture2d_ms_array<uint, access::read>" in metal
+        "multisample image store: imageStore on "
+        "texture2d_ms_array<uint, access::read>" in metal_refusal
     )
     assert "texture2d_ms_array<uint, access::read_write>" not in metal
     assert ".write(" not in metal
@@ -13337,7 +13338,7 @@ def test_codegen_multisample_image_switch_match_fallbacks_stay_in_case_blocks():
     assert shader_ast is not None
 
     hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "Texture2DMS<float4> colorImage : register(t0);" in hlsl
@@ -13356,8 +13357,10 @@ def test_codegen_multisample_image_switch_match_fallbacks_stay_in_case_blocks():
     assert "case 0:\n        case 1: {" in metal
     assert metal.count("case 0: {") == 1
     assert metal.count("float4 scoped") == 4
-    assert metal.count("unsupported Metal multisample image store") == 4
-    assert metal.count("unsupported Metal multisample image atomic") == 4
+    assert "multisample image store: imageStore on texture2d_ms<float" in metal_refusal
+    assert (
+        "multisample image atomic: imageAtomicAdd on texture2d_ms<uint" in metal_refusal
+    )
     assert "imageStore(" not in metal
     assert "imageAtomicAdd(counters" not in metal
     assert "atomic_fetch_add" not in metal
@@ -13404,7 +13407,7 @@ def test_codegen_multisample_image_atomic_variants_use_sample_argument(
     assert shader_ast is not None
 
     hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "Texture2DMS<uint> counters : register(t0);" in hlsl
@@ -13416,9 +13419,10 @@ def test_codegen_multisample_image_atomic_variants_use_sample_argument(
     assert f"{operation}(counters" not in hlsl
 
     assert (
-        "uint old = /* unsupported Metal multisample image atomic: "
-        f"{operation} on texture2d_ms<uint, access::read> */ 0u;" in metal
+        "multisample image atomic: "
+        f"{operation} on texture2d_ms<uint, access::read>" in metal_refusal
     )
+    assert "uint old = 0u;" in metal
     assert f"{operation}(counters" not in metal
 
     assert f"uint old = {operation}(counters, ivec2(0), 1, 2u);" in glsl
@@ -13444,7 +13448,7 @@ def test_codegen_float_image_atomic_exchange_uses_backend_diagnostics():
     assert shader_ast is not None
 
     hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWTexture2D<float> scalarImage : register(u0);" in hlsl
@@ -13463,13 +13467,12 @@ def test_codegen_float_image_atomic_exchange_uses_backend_diagnostics():
     assert "texture2d<float, access::read_write> scalarImage [[texture(0)]]" in metal
     assert "texture2d_ms<float, access::read> sampleImage [[texture(1)]]" in metal
     assert (
-        "float oldScalar = /* unsupported Metal image atomic resource call: "
-        "imageAtomicExchange on texture2d<float, access::read_write> */ 0.0;" in metal
+        "image atomic resource call: "
+        "imageAtomicExchange on texture2d<float, access::read_write>" in metal_refusal
     )
     assert (
-        "float oldSample = /* unsupported Metal multisample image atomic: "
-        "imageAtomicExchange on texture2d_ms<float, access::read> */ "
-        "0.0;" in metal
+        "multisample image atomic: "
+        "imageAtomicExchange on texture2d_ms<float, access::read>" in metal_refusal
     )
     assert "atomic_exchange" not in metal
 
@@ -14803,7 +14806,7 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
     assert shader_ast is not None
 
     hlsl = HLSLCodeGen().generate(shader_ast)
-    metal = MetalCodeGen().generate(shader_ast)
+    metal, metal_refusal = metal_partial_output(MetalCodeGen().generate, shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWByteAddressBuffer cubeBlock : register(u106);" in hlsl
@@ -14851,12 +14854,9 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
         "readDepth(cubeBlock));" in metal
     )
     assert (
-        metal.count(
-            "/* unsupported Metal texture gather compare: "
-            "textureGatherCompareOffset offsets require 2D or 2D-array depth "
-            "textures */ float4(0.0)"
-        )
-        == 4
+        "texture gather compare: "
+        "textureGatherCompareOffset offsets require 2D or 2D-array depth "
+        "textures" in metal_refusal
     )
     assert "unsupported Metal GLSL buffer block" not in metal
     assert "cubeBlock.direction" not in metal

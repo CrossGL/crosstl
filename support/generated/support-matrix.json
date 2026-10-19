@@ -636,7 +636,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 640,
+        "unsupported_marker_count": 592,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -780,7 +780,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2617
+        "test_count": 2618
       },
       "translator_codegen": {
         "exists": true,
@@ -1503,6 +1503,15 @@
     }
   ],
   "backlog": [
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "stages",
+      "feature": "Ray tracing stages",
+      "feature_id": "stage.ray_tracing",
+      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, are refused with project.translate.metal-lowering-unsupported. RayQuery declarations and methods are refused with the same code because Metal has no HLSL-style RayQuery object and no intersection_query lowering exists yet. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters are refused while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
+      "status": "partial"
+    },
     {
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
@@ -3192,7 +3201,7 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_ray_query_operations_lower_to_compile_safe_helpers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_query_placeholders_compile_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_query_refusal_placeholders_compile_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_intersection_table_trace_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_primitive_acceleration_trace_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_payload_trace_compiles_with_metal3",
@@ -3217,8 +3226,8 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ],
-          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. RayQuery declarations and methods lower to compile-safe CglRayQuery placeholder helpers because Metal has no HLSL-style RayQuery object. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters emit compile-safe diagnostics while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
-          "status": "supported"
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, are refused with project.translate.metal-lowering-unsupported. RayQuery declarations and methods are refused with the same code because Metal has no HLSL-style RayQuery object and no intersection_query lowering exists yet. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters are refused while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
+          "status": "partial"
         },
         "mojo": {
           "evidence": [
@@ -19820,7 +19829,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 45,
+    "backlog_count": 46,
     "feature_count": 89,
     "status_counts": {
       "cuda": {
@@ -19849,8 +19858,8 @@
       },
       "metal": {
         "diagnostic": 4,
-        "partial": 1,
-        "supported": 75,
+        "partial": 2,
+        "supported": 74,
         "unknown": 0,
         "unsupported": 3,
         "validated_rejection": 6

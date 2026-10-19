@@ -69,6 +69,7 @@ from crosstl.translator.codegen.pointer_reinterpret import (
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.metal_refusal_helpers import metal_partial_output
 
 
 def tokenize_code(code: str) -> List:
@@ -1772,11 +1773,13 @@ def test_metal_target_pointer_compound_offsets_reject_floating_value():
     """
 
     crossgl = convert_without_preprocessing(source)
-    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    metal, refusal = metal_partial_output(
+        MetalCodeGen().generate, parse_crossgl(crossgl)
+    )
 
     assert (
-        "unsupported Metal pointer offset assignment: value 'amount' is not an "
-        "integer scalar for target 'cursor'" in metal
+        "pointer offset assignment: value 'amount' is not an "
+        "integer scalar for target 'cursor'" in refusal
     )
     assert "cursor += amount;" not in metal
 
