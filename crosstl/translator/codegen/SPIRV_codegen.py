@@ -56,6 +56,7 @@ from .array_utils import (
     evaluate_literal_int_expression,
     parse_array_type,
 )
+from .call_graph import validate_recursion_free
 from .enum_utils import (
     collect_generic_enum_specializations,
     collect_generic_enum_struct_definitions,
@@ -30397,6 +30398,7 @@ class VulkanSPIRVCodeGen(
         if not isinstance(ast, ShaderNode):
             return "; Error: Not a shader node"
 
+        validate_recursion_free(ast, "vulkan")
         self.reset_generation_state()
 
         self.emit("; SPIR-V")

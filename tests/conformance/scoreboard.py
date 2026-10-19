@@ -32,6 +32,21 @@ IMPROVEMENTS = {
     "runtime-error": {"refused", "diverged", "preserved"},
     "refused": {"preserved"},
 }
+# A compile-only runtime has no execution evidence to lose: passing the native checker is its best outcome.
+COMPILE_ONLY_IMPROVEMENTS = {
+    "translator-error": {"compiled-only"},
+    "invalid": {"compiled-only"},
+}
+
+
+def improves(identity, expected, actual):
+    """Whether outcome ``actual`` is better than ``expected`` for the cell ``identity``."""
+    if actual in IMPROVEMENTS.get(expected, set()):
+        return True
+    runtime = identity.rsplit("|", 1)[-1]
+    return runtime.startswith("compile-only@") and actual in (
+        COMPILE_ONLY_IMPROVEMENTS.get(expected, set())
+    )
 
 
 def key(record):
@@ -82,9 +97,9 @@ def check(baseline, records, scope=None):
         for name in ("sourceSHA256", "inputSHA256"):
             if actual[name] != expected[name]:
                 failures.append(f"Changed {name}: {identity}")
-        if actual["outcome"] != expected["outcome"] and actual[
-            "outcome"
-        ] not in IMPROVEMENTS.get(expected["outcome"], set()):
+        if actual["outcome"] != expected["outcome"] and not improves(
+            identity, expected["outcome"], actual["outcome"]
+        ):
             failures.append(
                 f"Regression {identity}: {expected['outcome']} -> {actual['outcome']}"
             )
@@ -98,7 +113,7 @@ def improvements(baseline, records):
         for identity, expected in baseline["cells"].items()
         if identity in current
         and current[identity]["outcome"] != expected["outcome"]
-        and current[identity]["outcome"] in IMPROVEMENTS.get(expected["outcome"], set())
+        and improves(identity, expected["outcome"], current[identity]["outcome"])
     ]
 
 

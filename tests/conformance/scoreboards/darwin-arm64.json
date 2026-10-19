@@ -4122,42 +4122,42 @@
     },
     "u_recursion|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "e23ec79da330c42dfc2bcd9813c6f9cd8567acfa292204e670bca102660c4ff7",
-      "outcome": "runtime-error",
+      "outcome": "refused",
       "sourceSHA256": "4895f8deaa3c8f799cebb1d7149512f4eb25de3428e15a65f17a0b3db2bbd912"
     },
     "u_recursion|cuda|metal|strict|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "e23ec79da330c42dfc2bcd9813c6f9cd8567acfa292204e670bca102660c4ff7",
-      "outcome": "runtime-error",
+      "outcome": "refused",
       "sourceSHA256": "4895f8deaa3c8f799cebb1d7149512f4eb25de3428e15a65f17a0b3db2bbd912"
     },
     "u_recursion|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "e23ec79da330c42dfc2bcd9813c6f9cd8567acfa292204e670bca102660c4ff7",
-      "outcome": "invalid",
+      "outcome": "refused",
       "sourceSHA256": "4895f8deaa3c8f799cebb1d7149512f4eb25de3428e15a65f17a0b3db2bbd912"
     },
     "u_recursion|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "e23ec79da330c42dfc2bcd9813c6f9cd8567acfa292204e670bca102660c4ff7",
-      "outcome": "invalid",
+      "outcome": "refused",
       "sourceSHA256": "4895f8deaa3c8f799cebb1d7149512f4eb25de3428e15a65f17a0b3db2bbd912"
     },
     "u_recursion|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "e23ec79da330c42dfc2bcd9813c6f9cd8567acfa292204e670bca102660c4ff7",
-      "outcome": "invalid",
+      "outcome": "refused",
       "sourceSHA256": "4895f8deaa3c8f799cebb1d7149512f4eb25de3428e15a65f17a0b3db2bbd912"
     },
     "u_recursion|cuda|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "e23ec79da330c42dfc2bcd9813c6f9cd8567acfa292204e670bca102660c4ff7",
-      "outcome": "invalid",
+      "outcome": "refused",
       "sourceSHA256": "4895f8deaa3c8f799cebb1d7149512f4eb25de3428e15a65f17a0b3db2bbd912"
     },
     "u_recursion|cuda|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "e23ec79da330c42dfc2bcd9813c6f9cd8567acfa292204e670bca102660c4ff7",
-      "outcome": "invalid",
+      "outcome": "refused",
       "sourceSHA256": "4895f8deaa3c8f799cebb1d7149512f4eb25de3428e15a65f17a0b3db2bbd912"
     },
     "u_recursion|cuda|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "e23ec79da330c42dfc2bcd9813c6f9cd8567acfa292204e670bca102660c4ff7",
-      "outcome": "invalid",
+      "outcome": "refused",
       "sourceSHA256": "4895f8deaa3c8f799cebb1d7149512f4eb25de3428e15a65f17a0b3db2bbd912"
     },
     "u_sinf|cuda|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
@@ -4292,22 +4292,22 @@
     },
     "u_u64_mul|cuda|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
       "inputSHA256": "9d6df3e56235622717800b2b4bcc817da6ef0d1b9b269b72e8152fb35249a8e6",
-      "outcome": "invalid",
+      "outcome": "compiled-only",
       "sourceSHA256": "7f1bf31e841c153dcedd0f4a520a92fd4ebb91b263a0c1ac33ee081b1bfce689"
     },
     "u_u64_mul|cuda|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
       "inputSHA256": "9d6df3e56235622717800b2b4bcc817da6ef0d1b9b269b72e8152fb35249a8e6",
-      "outcome": "invalid",
+      "outcome": "compiled-only",
       "sourceSHA256": "7f1bf31e841c153dcedd0f4a520a92fd4ebb91b263a0c1ac33ee081b1bfce689"
     },
     "u_u64_mul|cuda|metal|relaxed|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "9d6df3e56235622717800b2b4bcc817da6ef0d1b9b269b72e8152fb35249a8e6",
-      "outcome": "invalid",
+      "outcome": "preserved",
       "sourceSHA256": "7f1bf31e841c153dcedd0f4a520a92fd4ebb91b263a0c1ac33ee081b1bfce689"
     },
     "u_u64_mul|cuda|metal|strict|translated|vulkan1.1|metal-apple": {
       "inputSHA256": "9d6df3e56235622717800b2b4bcc817da6ef0d1b9b269b72e8152fb35249a8e6",
-      "outcome": "invalid",
+      "outcome": "preserved",
       "sourceSHA256": "7f1bf31e841c153dcedd0f4a520a92fd4ebb91b263a0c1ac33ee081b1bfce689"
     },
     "u_u64_mul|cuda|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
@@ -4462,14 +4462,13 @@
     }
   },
   "counts": {
-    "compiled-only": 138,
+    "compiled-only": 140,
     "diverged": 148,
     "driver-rejected": 8,
-    "invalid": 38,
+    "invalid": 28,
     "observed": 40,
-    "preserved": 508,
-    "refused": 10,
-    "runtime-error": 2
+    "preserved": 510,
+    "refused": 18
   },
   "keys": [
     "case",

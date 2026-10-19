@@ -46,6 +46,7 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
+from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
     generic_type_parts,
@@ -648,6 +649,7 @@ class WGSLCodeGen:
     def generate_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
         self.validate_wgsl_stage_support(ast, target_stage)
+        validate_recursion_free(ast, "wgsl")
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
         self._global_binding_index = 0
         self._identifier_scopes = []

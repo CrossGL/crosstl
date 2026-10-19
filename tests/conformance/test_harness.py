@@ -451,6 +451,19 @@ def test_scoreboard_rejects_lost_execution(outcome):
     assert check(snapshot([record()]), [record(outcome)])
 
 
+def test_scoreboard_accepts_a_valid_artifact_only_where_nothing_executes():
+    compile_only = "compile-only@darwin"
+    baseline = snapshot([record("invalid", runtime=compile_only)])
+    fixed = [record("compiled-only", runtime=compile_only)]
+    assert not check(baseline, fixed)
+    assert improvements(baseline, fixed)
+    assert check(
+        snapshot([record("compiled-only", runtime=compile_only)]),
+        [record("invalid", runtime=compile_only)],
+    )
+    assert check(snapshot([record("invalid")]), [record("compiled-only")])
+
+
 def test_scoreboard_rejects_missing_duplicate_and_changed_cases():
     baseline = snapshot([record()])
     assert check(baseline, [])

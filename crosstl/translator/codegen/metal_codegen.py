@@ -92,6 +92,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .call_graph import validate_recursion_free
 from .constant_ordering import partition_constants_by_struct_dependency
 from .entry_selection import entry_type_references
 from .enum_utils import (
@@ -1022,6 +1023,8 @@ class MetalCodeGen:
             "u16": "uint",
             "i32": "int",
             "u32": "uint",
+            "i64": "int64_t",
+            "u64": "uint64_t",
             "str": "int",
             "char": "int",
             "signed char": "int",
@@ -1849,6 +1852,7 @@ class MetalCodeGen:
         """Render an AST to Metal, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
         validate_pointer_reinterpretation_target(ast, "metal")
+        validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
 
@@ -9798,6 +9802,8 @@ class MetalCodeGen:
                 "u8",
                 "u16",
                 "u32",
+                "i64",
+                "u64",
                 "uchar",
                 "unsigned char",
                 "uint8",
@@ -11338,6 +11344,8 @@ class MetalCodeGen:
                     "u8",
                     "u16",
                     "u32",
+                    "i64",
+                    "u64",
                     "uchar",
                     "unsigned char",
                     "uint8",
