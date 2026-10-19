@@ -26,6 +26,7 @@ from ...translator.remainder_math import binary32_remainder_support
 from ...translator.resource_identity import source_resource_attribute
 from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
+from .conditional_types import split_template_arguments
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -18980,8 +18981,10 @@ float {scalar}(float value) {{
         # ``conditional`` metafunction only yields a type through ``::type``.
         if name == "conditional" and not type_accessor:
             return None
-        args = self.split_generic_arguments(inner[:-1])
-        if len(args) != 3:
+        # Conditions such as ``flag && (N < 4)`` hold angle brackets that are
+        # operators, so split with the template-argument rules.
+        args = split_template_arguments(inner[:-1])
+        if args is None or len(args) != 3:
             return None
 
         bindings = {
