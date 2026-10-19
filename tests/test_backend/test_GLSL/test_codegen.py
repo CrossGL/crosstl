@@ -822,8 +822,31 @@ def test_codegen_two_argument_atan_from_khronos_docs_maps_to_crossgl_atan2():
 
 
 def test_codegen_two_argument_atan_without_bit_casts_keeps_builtin():
-    # floatBitsToUint needs GLSL 3.30, so an older source profile keeps the
-    # builtin; stage I/O layouts may still raise the emitted #version later.
+    # floatBitsToUint needs GLSL 3.30, so a GLSL 1.50 program that nothing
+    # raises keeps the builtin.
+    code = textwrap.dedent("""
+        #version 150
+
+        void main()
+        {
+            float angle = atan(float(gl_VertexID), 2.0);
+            gl_Position = vec4(angle, 0.0, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+    assert "float angle = atan2(float(gl_VertexID), 2.0);" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert glsl.startswith("#version 150\n")
+    assert "float angle = atan(float(gl_VertexID), 2.0);" in glsl
+    assert "crossgl_atan2_float" not in glsl
+    assert "floatBitsToUint" not in glsl
+
+
+def test_codegen_two_argument_atan_uses_helper_once_layouts_raise_version():
+    # The fragment output location raises #version 150 to 3.30, and the
+    # program is emitted for 3.30 throughout, so atan2 gets the bit-cast helper.
     code = textwrap.dedent("""
         #version 150
 
@@ -841,9 +864,9 @@ def test_codegen_two_argument_atan_without_bit_casts_keeps_builtin():
     assert "float angle = atan2(input.direction.y, input.direction.x);" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "float angle = atan(direction.y, direction.x);" in glsl
-    assert "crossgl_atan2_float" not in glsl
-    assert "floatBitsToUint" not in glsl
+    assert glsl.startswith("#version 330 core\n")
+    assert "crossgl_atan2_float(direction.y, direction.x)" in glsl
+    assert "floatBitsToUint" in glsl
 
 
 def test_codegen_user_defined_two_argument_atan_is_preserved():

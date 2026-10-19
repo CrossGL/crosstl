@@ -15894,7 +15894,9 @@ def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
     assert "precision highp float" not in metal
     assert "#include <metal_stdlib>" in metal
 
-    assert "#version 300 es" in glsl
+    # GLSL ES has compute shaders from 3.10 (GLSL ES 3.20, section 1.1.1), so the
+    # emitted version is raised from the source's 3.00.
+    assert glsl.startswith("#version 310 es\n")
     assert "#extension GL_ARB_separate_shader_objects : enable" in glsl
     assert "precision highp float;" in glsl
 

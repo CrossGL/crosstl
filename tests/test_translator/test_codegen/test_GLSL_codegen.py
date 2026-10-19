@@ -33104,24 +33104,6 @@ def test_opengl_variable_gather_offsets_lower_where_glsl_allows_them(version):
     )
 
 
-@pytest.mark.parametrize("version", ["#version 330", "#version 310 es"])
-def test_opengl_variable_gather_offsets_refused_before_glsl_allows_them(version):
-    message = refused_glsl(
-        GLSLCodeGen().generate_stage,
-        crosstl.translator.parse(VARIABLE_GATHER_OFFSET_SHADER.format(version=version)),
-        "fragment",
-    )
-
-    assert (
-        "texture gather: textureGatherOffset texel offsets must be compile-time "
-        "integer constants" in message
-    )
-    assert (
-        "texture gather: textureGatherOffsets texel offsets must be compile-time "
-        "integer constants" in message
-    )
-
-
 def test_opengl_variable_gather_offsets_validate_with_glslang(tmp_path):
     glslang = shutil.which("glslangValidator")
     if glslang is None:

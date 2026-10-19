@@ -188,6 +188,14 @@ from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_refusals import OpenGLLoweringRefused
 from .glsl_union_storage import UnionStorage
+from .glsl_version_requirements import (
+    VARIABLE_GATHER_OFFSET,
+    generated_program_requirements,
+    parse_version_line,
+    program_extensions,
+    resolve_version_line,
+    with_es_default_precisions,
+)
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -2604,6 +2612,9 @@ class GLSLCodeGen(LoweringRefusalMixin):
         self.current_glsl_extensions = set()
         self.current_glsl_version_line = None
         self.current_glsl_resource_binding_layouts_supported = True
+        self.glsl_emission_requirements = []
+        self.glsl_raised_version_line = None
+        self.glsl_required_version_line = None
         self.current_mesh_output_count_limits = {}
         self.task_payload_shared_variables = []
         self.current_target_stage = None
@@ -3596,13 +3607,11 @@ class GLSLCodeGen(LoweringRefusalMixin):
         if self.glsl_extension_enabled("GL_ARB_shading_language_420pack"):
             return True
 
-        if "es" in str(version_line or "").strip().split()[2:]:
-            return True
-
         version_number = self.glsl_version_number(version_line)
         if version_number is None:
             return True
-        return version_number >= 420
+        # layout(binding) arrived in GLSL 4.20 and GLSL ES 3.10 (section 4.4.5 and 4.4.6).
+        return version_number >= (310 if self.glsl_version_is_es(version_line) else 420)
 
     def glsl_version_line_with_minimum(self, version_line, minimum_version):
         version_number = self.glsl_version_number(version_line)
@@ -3623,73 +3632,53 @@ class GLSLCodeGen(LoweringRefusalMixin):
         )
         return f"#version {minimum_version} {profile}"
 
-    def generated_stage_io_layout_minimum_version(self, code):
-        minimum_version = None
-        for line in str(code or "").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("layout("):
-                end = stripped.find(")")
-                if end == -1:
-                    continue
-                layout_parts = {
-                    part.partition("=")[0].strip()
-                    for part in stripped[len("layout(") : end].split(",")
-                }
-                if "component" in layout_parts:
-                    minimum_version = max(minimum_version or 0, 440)
-                if layout_parts & {"location", "index"}:
-                    minimum_version = max(minimum_version or 0, 330)
-                remainder = stripped[end + 1 :].strip()
-                if remainder.startswith("uniform ") and "{" in remainder:
-                    minimum_version = max(minimum_version or 0, 330)
-                if any(
-                    remainder.startswith(f"{direction} ") for direction in ("in", "out")
-                ):
-                    minimum_version = max(minimum_version or 0, 330)
-                continue
-
-            interface_parts = stripped.rstrip(";").split()
-            if (
-                stripped.endswith(";")
-                and len(interface_parts) >= 3
-                and interface_parts[-3] in {"in", "out"}
-            ):
-                minimum_version = max(minimum_version or 0, 330)
-        return minimum_version
-
-    def glsl_layout_minimum_satisfied_by_extensions(self, minimum_version):
-        if minimum_version is None:
-            return True
-        if minimum_version <= 330 and self.glsl_extension_enabled(
-            "GL_ARB_explicit_attrib_location"
-        ):
-            return True
-        if minimum_version <= 440 and self.glsl_extension_enabled(
-            "GL_ARB_enhanced_layouts"
-        ):
-            return True
+    def glsl_version_line_is_fixed(self):
+        """Whether the target profile pins the ``#version`` line, so a construct above it is refused."""
         return False
 
     def ensure_glsl_version_supports_generated_layouts(self, code):
-        minimum_version = self.generated_stage_io_layout_minimum_version(code)
-        if self.glsl_layout_minimum_satisfied_by_extensions(minimum_version):
-            return code
+        """Raise the ``#version`` line to the lowest one the rendered program's constructs need.
 
+        Constructs that no version of the profile has, and any raise when the version is fixed, are refused. GLSL
+        ES output then declares ``highp`` defaults for every type that lacks one.
+        """
         lines = str(code).splitlines(keepends=True)
-        for index, line in enumerate(lines):
-            stripped = line.strip()
-            if not stripped.startswith("#version"):
-                continue
-            upgraded = self.glsl_version_line_with_minimum(stripped, minimum_version)
-            if upgraded == stripped:
-                return code
-            line_end = "\n" if line.endswith("\n") else ""
-            lines[index] = f"{upgraded}{line_end}"
+        version_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.strip().startswith("#version")
+            ),
+            None,
+        )
+        if version_index is None:
+            return code
+        version_line = lines[version_index].strip()
+        requirements = generated_program_requirements(
+            code,
+            sorted(getattr(self, "current_glsl_stage_names", ()) or ()),
+            self.GLSL_STAGE_GUARD_MACROS,
+        )
+        for requirement in getattr(self, "glsl_emission_requirements", ()):
+            if requirement not in requirements:
+                requirements.append(requirement)
+        extensions = set(self.current_glsl_extensions) | program_extensions(code)
+        upgraded, refusals = resolve_version_line(
+            version_line,
+            requirements,
+            extensions,
+            can_raise=not self.glsl_version_line_is_fixed(),
+        )
+        for reason in refusals:
+            self.refuse_lowering(f"GLSL version requirement: {reason}")
+        if upgraded != version_line:
+            line_end = "\n" if lines[version_index].endswith("\n") else ""
+            lines[version_index] = f"{upgraded}{line_end}"
             self.current_glsl_version_line = upgraded
-            self.current_glsl_resource_binding_layouts_supported = (
-                self.glsl_resource_binding_layouts_supported(upgraded)
-            )
-            return "".join(lines)
+            self.glsl_raised_version_line = upgraded
+            code = "".join(lines)
+        if self.glsl_version_is_es(upgraded):
+            code = with_es_default_precisions(code)
         return code
 
     def should_emit_resource_binding_layouts(self):
@@ -3810,6 +3799,7 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 lines[index] = f"{upgraded_version}{line_end}"
                 break
             self.current_glsl_version_line = upgraded_version
+            self.glsl_raised_version_line = upgraded_version
 
         has_extension = any(
             re.match(
@@ -8039,7 +8029,33 @@ class GLSLCodeGen(LoweringRefusalMixin):
 
         Raises the emitter's ``LOWERING_REFUSAL_TYPE`` listing every construct that has no faithful lowering.
         """
-        return self.refusals.run(self.render_program, ast, target_stage)
+        return self.refusals.run(
+            self.render_program_at_required_version, ast, target_stage
+        )
+
+    GLSL_VERSION_RESOLUTION_PASSES = 3
+
+    def render_program_at_required_version(self, ast, target_stage=None):
+        """Render the program at the lowest ``#version`` its constructs need.
+
+        Emission decides some forms from the version (``layout(binding)``, variable gather offsets), so a program
+        whose first rendering raised the version line is rendered again starting from the raised line, with only
+        the refusals of that final rendering.
+        """
+        recorded = list(self.refusals.reasons)
+        self.glsl_required_version_line = None
+        try:
+            code = self.render_program(ast, target_stage)
+            for _ in range(self.GLSL_VERSION_RESOLUTION_PASSES - 1):
+                raised = getattr(self, "glsl_raised_version_line", None)
+                if raised is None:
+                    break
+                self.refusals.reasons = list(recorded)
+                self.glsl_required_version_line = raised
+                code = self.render_program(ast, target_stage)
+            return code
+        finally:
+            self.glsl_required_version_line = None
 
     def render_program(self, ast, target_stage=None):
         region = codegen_dispatch_region(
@@ -8323,6 +8339,7 @@ class GLSLCodeGen(LoweringRefusalMixin):
             for stage_name in self.glsl_stage_names(ast, target_stage)
             if stage_name is not None
         }
+        self.current_glsl_stage_names = stage_names
         if target_stage is not None:
             self.current_global_stage_io_stage = target_stage
         elif len(stage_names) == 1:
@@ -8614,6 +8631,11 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 extra_lines.append(line)
         if version_line is None:
             version_line = self.default_glsl_version_line(ast, target_stage)
+        required_version_line = getattr(self, "glsl_required_version_line", None)
+        if required_version_line is not None:
+            version_line = required_version_line
+        self.glsl_raised_version_line = None
+        self.glsl_emission_requirements = []
         self.current_glsl_version_line = version_line
         self.current_glsl_disabled_extensions = {
             match.group(1)
@@ -46839,17 +46861,29 @@ complex64_t crossgl_complex64_mod_assign(
         GLSL ES 3.20, section 8.9.4); ``textureOffset`` and the other offset forms
         still require constant expressions.
         """
-        version_line = getattr(self, "current_glsl_version_line", None)
-        version_number = self.glsl_version_number(version_line)
-        if version_number is None:
+        number, profile = parse_version_line(
+            getattr(self, "current_glsl_version_line", None)
+        )
+        if number is None:
             return True
-        return version_number >= (320 if self.glsl_version_is_es(version_line) else 400)
+        return VARIABLE_GATHER_OFFSET.satisfied_by(
+            number, profile == "es", self.current_glsl_extensions
+        )
 
     def glsl_gather_offsets_are_expressible(self, offset_args):
-        """Return whether ``textureGatherOffset`` can take these offsets as written."""
-        return self.glsl_version_supports_variable_gather_offsets() or (
-            self.glsl_texel_offsets_are_compile_time_constants(offset_args)
-        )
+        """Return whether ``textureGatherOffset`` can take these offsets.
+
+        A non-constant offset below the version that allows one is a version requirement, so the program is
+        emitted at that version; a profile whose version is fixed refuses it.
+        """
+        if self.glsl_version_supports_variable_gather_offsets():
+            return True
+        if self.glsl_texel_offsets_are_compile_time_constants(offset_args):
+            return True
+        if self.glsl_version_line_is_fixed():
+            return False
+        self.glsl_emission_requirements.append(VARIABLE_GATHER_OFFSET)
+        return True
 
     def glsl_texel_offsets_are_compile_time_constants(self, offset_args):
         return all(

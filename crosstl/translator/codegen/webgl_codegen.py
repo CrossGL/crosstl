@@ -204,6 +204,10 @@ class WebGLCodeGen(GLSLCodeGen):
     def glsl_resource_binding_layouts_supported(self, version_line):
         return False
 
+    def glsl_version_line_is_fixed(self):
+        # WebGL 2 compiles GLSL ES 3.00 only.
+        return True
+
     def generate_expression(self, expr, is_main=False):
         replacement = getattr(self, "_webgl_expression_replacements", {}).get(id(expr))
         if replacement is not None:
