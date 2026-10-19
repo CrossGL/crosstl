@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 97,
-        "endOffset": 2622,
+        "endLine": 273,
+        "endOffset": 7132,
         "file": "crosstl-out/vulkan/AAPLMeshRenderer.spvasm",
-        "length": 2622,
+        "length": 7132,
         "line": 1,
         "offset": 0
       },

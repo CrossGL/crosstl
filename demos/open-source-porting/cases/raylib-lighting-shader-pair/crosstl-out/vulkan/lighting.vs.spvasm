@@ -118,7 +118,6 @@ OpStore %39 %37
 %57 = OpCompositeExtract %5 %55 1
 %58 = OpCompositeExtract %5 %55 2
 %59 = OpCompositeExtract %5 %55 3
-; WARNING: Constructor vec3 expected 3 components but got 4; truncating extra components
 %60 = OpCompositeConstruct %7 %56 %57 %58
 %61 = OpAccessChain %47 %41 %46
 OpStore %61 %60
@@ -143,7 +142,6 @@ OpStore %71 %69
 %82 = OpCompositeExtract %5 %80 1
 %83 = OpCompositeExtract %5 %80 2
 %84 = OpCompositeExtract %5 %80 3
-; WARNING: Constructor vec3 expected 3 components but got 4; truncating extra components
 %85 = OpCompositeConstruct %7 %81 %82 %83
 %86 = OpExtInst %7 %1 Normalize %85
 %87 = OpAccessChain %47 %41 %66

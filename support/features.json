@@ -1287,7 +1287,7 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_candidate_aabb_opaque_getter_emits_khr_instruction",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_candidate_aabb_opaque_getter_rejects_arguments",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_operations_are_refused"
           ]
         },
         "cuda": {
@@ -5347,7 +5347,7 @@
         },
         "vulkan": {
           "status": "supported",
-          "notes": "SPIR-V codegen emits deterministic diagnostics or validated fallback modules for invalid builtin operand shapes, compute/stage metadata, tessellation patch contexts, geometry stream calls, mesh output counts and member/index targets, ray-query argument shapes, interface locations/components, duplicate resource bindings, malformed buffer/image/texture/resource-query operands, and dynamic resource-array shape conflicts.",
+          "notes": "SPIR-V codegen refuses with a typed diagnostic (project.translate.vulkan-lowering-unsupported, listing every reason in the module) instead of emitting a module for invalid builtin operand shapes, compute/stage metadata, tessellation patch contexts, geometry stream calls, mesh output counts and member/index targets, ray-query argument shapes, interface locations/components, duplicate resource bindings, malformed buffer/image/texture/resource-query operands, and dynamic resource-array shape conflicts.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_invalid_atan2_operand_shapes_emit_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_malformed_std450_math_builtins_emit_diagnostics",

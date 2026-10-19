@@ -813,7 +813,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 117,
+        "unsupported_marker_count": 118,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -865,7 +865,7 @@
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "self.emit(f\"; WARNING: matrix operation '{op}' is not supported for operands\")"
+            "text": "self.refuse_lowering(f\"matrix operation '{op}' is not supported for operands\")"
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -909,7 +909,7 @@
           "tests/test_translator/test_native_upload_snapshots.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1243
+        "test_count": 1246
       },
       "translator_codegen": {
         "exists": true,
@@ -3285,7 +3285,7 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_candidate_aabb_opaque_getter_emits_khr_instruction",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_candidate_aabb_opaque_getter_rejects_arguments",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_operations_are_refused"
           ],
           "notes": "Ray generation, intersection, any-hit, closest-hit, miss, and callable stages lower to SPIR-V KHR ray tracing entry points with validator-backed RayTracingKHR capability and SPV_KHR_ray_tracing extension coverage. Acceleration-structure resources preserve descriptor metadata and participate in entry-point interfaces, ray payload, callable data, and hit attribute values are bridged through RayPayloadKHR, CallableDataKHR, and HitAttributeKHR storage variables, launch and hit builtins lower to SPIR-V builtins, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to native KHR instructions, and RayQuery methods lower to KHR ray-query instructions including triangle position fetch coverage.",
           "status": "supported"
@@ -7465,7 +7465,7 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_query_shapes_for_array_cube_and_multisample_samplers",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_queries_reject_malformed_operands"
           ],
-          "notes": "SPIR-V codegen emits deterministic diagnostics or validated fallback modules for invalid builtin operand shapes, compute/stage metadata, tessellation patch contexts, geometry stream calls, mesh output counts and member/index targets, ray-query argument shapes, interface locations/components, duplicate resource bindings, malformed buffer/image/texture/resource-query operands, and dynamic resource-array shape conflicts.",
+          "notes": "SPIR-V codegen refuses with a typed diagnostic (project.translate.vulkan-lowering-unsupported, listing every reason in the module) instead of emitting a module for invalid builtin operand shapes, compute/stage metadata, tessellation patch contexts, geometry stream calls, mesh output counts and member/index targets, ray-query argument shapes, interface locations/components, duplicate resource bindings, malformed buffer/image/texture/resource-query operands, and dynamic resource-array shape conflicts.",
           "status": "supported"
         },
         "webgl": {

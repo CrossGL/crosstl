@@ -1104,7 +1104,7 @@ OpDecorate %4166 BuiltIn NumWorkgroups
 %4127 = OpConstant %4 1022
 %4131 = OpConstant %4 1023
 %4139 = OpTypeFunction %29 %29 %29
-%4146 = OpTypePointer Private %26
+%4146 = OpTypePointer Workgroup %26
 %4148 = OpTypeFunction %2
 %4151 = OpTypeVector %29 3
 %4152 = OpTypePointer Input %4151
@@ -1114,12 +1114,12 @@ OpDecorate %4166 BuiltIn NumWorkgroups
 %4172 = OpConstant %29 2
 %4176 = OpTypePointer Uniform %9
 %4196 = OpTypePointer Uniform %4
-%4200 = OpTypePointer Private %4
+%4200 = OpTypePointer Workgroup %4
 %4202 = OpConstant %29 264
 %12 = OpVariable %11 Uniform
 %16 = OpVariable %15 Uniform
 %19 = OpVariable %18 Uniform
-%4147 = OpVariable %4146 Private
+%4147 = OpVariable %4146 Workgroup
 %4153 = OpVariable %4152 Input
 %4162 = OpVariable %4152 Input
 %4166 = OpVariable %4152 Input

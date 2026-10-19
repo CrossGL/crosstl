@@ -16,12 +16,12 @@ OpName %17 "x"
 %6 = OpTypeVector %5 2
 %7 = OpTypeVector %5 3
 %8 = OpTypeVector %5 4
-%9 = OpTypePointer Private %4
+%9 = OpTypePointer Workgroup %4
 %11 = OpTypeFunction %2
 %14 = OpConstant %4 123
 %15 = OpTypeVector %4 4
 %16 = OpTypePointer Function %15
-%10 = OpVariable %9 Private
+%10 = OpVariable %9 Workgroup
 %12 = OpFunction %2 None %11
 %13 = OpLabel
 %17 = OpVariable %16 Function
