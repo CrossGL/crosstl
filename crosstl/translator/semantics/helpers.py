@@ -15,7 +15,7 @@ from .rewrite import call, clone
 from .rule_table import HELPERS
 
 HELPER_MARK = "cgl_rule_helper"
-_VECTOR_PREFIX = {"uint": "uvec", "int": "ivec"}
+_VECTOR_PREFIX = {"uint": "uvec", "int": "ivec", "float": "vec"}
 _LANE_NAMES = "xyzw"
 
 
@@ -27,19 +27,27 @@ def helper_name(intrinsic: str, lanes: int) -> str:
 def helper_source(intrinsic: str, lanes: int) -> str:
     """The CrossGL definition of the helper for ``lanes`` lanes."""
     helper = HELPERS[intrinsic]
-    scalar = helper.scalar
+    parameters = helper.parameter_types
+    names = [f"x{index}" for index in range(len(parameters))]
     if lanes == 1:
+        signature = ", ".join(f"{t} {n}" for t, n in zip(parameters, names))
         return (
-            f"{scalar} {helper.name}({scalar} x0, {scalar} x1) "
+            f"{helper.result_type} {helper.name}({signature}) "
             f"{{ return {helper.body}; }}"
         )
-    vector = f"{_VECTOR_PREFIX[scalar]}{lanes}"
+
+    def vector(scalar):
+        return f"{_VECTOR_PREFIX[scalar]}{lanes}"
+
+    signature = ", ".join(f"{vector(t)} {n}" for t, n in zip(parameters, names))
     per_lane = ", ".join(
-        f"{helper.name}(x0.{lane}, x1.{lane})" for lane in _LANE_NAMES[:lanes]
+        f"{helper.name}({', '.join(f'{n}.{lane}' for n in names)})"
+        for lane in _LANE_NAMES[:lanes]
     )
+    result = vector(helper.result_type)
     return (
-        f"{vector} {helper_name(intrinsic, lanes)}({vector} x0, {vector} x1) "
-        f"{{ return {vector}({per_lane}); }}"
+        f"{result} {helper_name(intrinsic, lanes)}({signature}) "
+        f"{{ return {result}({per_lane}); }}"
     )
 
 

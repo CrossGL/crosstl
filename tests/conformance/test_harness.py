@@ -15,8 +15,9 @@ from .validators import dxil_is_signed, validate
 
 
 def test_hazard_inventory_and_oracles():
-    # The 66 evidence kernels plus the binary16 division, square-root, fma and conversion cases.
-    assert len(CASES) == len(BY_ID) == 70
+    # The 66 evidence kernels, the binary16 division, square-root, fma and conversion cases, and the OpenCL
+    # saturated conversions to uint (round to nearest even) and to char.
+    assert len(CASES) == len(BY_ID) == 72
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",

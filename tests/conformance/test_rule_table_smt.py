@@ -120,3 +120,88 @@ def test_a_backend_without_an_entry_fails_the_check():
 def test_cli_exits_zero_on_the_committed_table(capsys):
     assert rule_table_smt.main([]) == 0
     assert "0 failures" in capsys.readouterr().out
+
+
+def test_every_saturated_conversion_entry_is_checked_and_sound():
+    records, _ = rule_table_smt.check_table()
+    checked = {(r["intrinsic"], r["target"]): r["result"] for r in records}
+    for intrinsic in rule_table.CONVERT_SAT_INTRINSICS:
+        for target in ("metal", "directx", "vulkan", "opengl", "wgsl"):
+            assert checked[(intrinsic, target)] == "sound", (intrinsic, target)
+
+
+_MAGNITUDE = "(asuint(x0) & 0x7FFFFFFFu)"
+
+
+@pytest.mark.parametrize(
+    "intrinsic, body, result",
+    [
+        # The unguarded conversion is undefined for NaN and out-of-range operands.
+        ("__cgl_sat_ftoi", "int(x0)", "unsound"),
+        # Converting x0 itself in the in-range arm is undefined where both arms are evaluated.
+        (
+            "__cgl_sat_ftoi",
+            f"{_MAGNITUDE} < 0x4F000000u ? int(x0) : ({_MAGNITUDE} > 0x7F800000u ? 0 : "
+            "(asuint(x0) >= 0x80000000u ? asint(0x80000000u) : 2147483647))",
+            "unsound",
+        ),
+        # Without the NaN test, NaN saturates instead of giving 0.
+        (
+            "__cgl_sat_ftoi",
+            f"{_MAGNITUDE} < 0x4F000000u ? int(asfloat({_MAGNITUDE} < 0x4F000000u ? asuint(x0) : 0u)) : "
+            "(asuint(x0) >= 0x80000000u ? asint(0x80000000u) : 2147483647)",
+            "unsound",
+        ),
+        # 2^31 itself is not representable as int.
+        (
+            "__cgl_sat_ftoi",
+            f"{_MAGNITUDE} <= 0x4F000000u ? int(asfloat({_MAGNITUDE} <= 0x4F000000u ? asuint(x0) : 0u)) : "
+            f"({_MAGNITUDE} > 0x7F800000u ? 0 : (asuint(x0) >= 0x80000000u ? asint(0x80000000u) : 2147483647))",
+            "unsound",
+        ),
+        # Negative values saturate to 0, so testing the magnitude alone is wrong for uint.
+        (
+            "__cgl_sat_ftou",
+            f"{_MAGNITUDE} > 0x7F800000u ? 0u : ({_MAGNITUDE} < 0x4F800000u ? "
+            f"uint(asfloat({_MAGNITUDE} < 0x4F800000u ? {_MAGNITUDE} : 0u)) : 0xFFFFFFFFu)",
+            "unsound",
+        ),
+        ("__cgl_sat_itou", "uint(x0)", "unsound"),
+        ("__cgl_sat_itou", "x0 <= 0 ? 0u : uint(x0)", "sound"),
+        ("__cgl_sat_utoi", "x0 >= 0x7FFFFFFFu ? 2147483647 : int(x0)", "sound"),
+        ("__cgl_sat_utoi", "x0 > 0x80000000u ? 2147483647 : int(x0)", "unsound"),
+        # Float comparisons are not modelled; the helpers decide on bits.
+        ("__cgl_sat_ftoi", "x0 == x0 ? int(x0) : 0", "unmodelled"),
+    ],
+)
+def test_checker_rejects_defective_conversion_helpers(
+    monkeypatch, intrinsic, body, result
+):
+    original = rule_table.HELPERS[intrinsic]
+    monkeypatch.setitem(
+        rule_table.HELPERS,
+        intrinsic,
+        rule_table.Helper(
+            original.name, original.scalar, body, original.parameters, original.result
+        ),
+    )
+    helpers._parsed.cache_clear()
+    try:
+        records = [
+            rule_table_smt.check_entry(
+                intrinsic, target, TargetEntry("polyfill", "mutation")
+            )
+            for target in ("metal", "opengl")
+        ]
+    finally:
+        monkeypatch.undo()
+        helpers._parsed.cache_clear()
+    assert [record["result"] for record in records] == [result, result]
+
+
+def test_native_conversion_is_unsound_on_every_target():
+    for target in ("metal", "opengl", "wgsl", "vulkan", "directx"):
+        record = rule_table_smt.check_entry(
+            "__cgl_sat_ftoi", target, TargetEntry("native", "mutation")
+        )
+        assert record["result"] == "unsound", target

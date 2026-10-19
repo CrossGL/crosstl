@@ -12,10 +12,13 @@ import functools
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .conversions import UNRESOLVED, native_conversion
 from .helpers import HelperSet
 from .hub_types import call_name
 from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 from .rule_table import (
+    CONVERSION_SIGNATURES,
+    CONVERT_SAT_GENERIC,
     HELPERS,
     INTRINSIC_FAMILY,
     INTRINSICS,
@@ -78,6 +81,11 @@ class Lowerer:
 
     def lower_call(self, node):
         intrinsic = call_name(node)
+        if intrinsic in CONVERT_SAT_GENERIC:
+            reason = node.annotations.get(UNRESOLVED, "was not resolved by annotation")
+            raise RuleInexpressibleError(
+                f"the conversion {intrinsic} {reason}", target=self.target
+            )
         operator, arity = INTRINSICS[intrinsic]
         arguments = list(node.arguments or [])
         if len(arguments) != arity:
@@ -87,6 +95,10 @@ class Lowerer:
             )
         entry = self.entry(intrinsic)
         if entry.kind == "native":
+            if intrinsic in CONVERSION_SIGNATURES:
+                result_type = node.annotations.get("cgl_rule_type")
+                lanes = result_type.lanes if result_type is not None else 1
+                return native_conversion(intrinsic, arguments[0], lanes)
             return _native(node, operator, arguments)
         conversions = node.annotations.get("cgl_rule_convert") or (None,) * arity
         operands = [_convert(a, c) for a, c in zip(arguments, conversions)]

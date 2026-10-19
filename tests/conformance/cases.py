@@ -15,7 +15,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import half_cases
+from . import conversion_cases, half_cases
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 EXT_LANG = {
@@ -762,6 +762,24 @@ CASES = [
         _ftoi_inputs(),
         np.int32,
         o_ftoi_d3d,
+    ),
+    Case(
+        "c_convert_uint_sat_rte",
+        "H5",
+        "convert_uint_sat_rte(x)",
+        "OpenCL C §6.4.3.3",
+        conversion_cases.uint_rte_inputs(),
+        np.uint32,
+        conversion_cases.uint_rte_reference,
+    ),
+    Case(
+        "c_convert_char_sat",
+        "H5",
+        "convert_char_sat(x)",
+        "OpenCL C §6.4.3.3",
+        conversion_cases.char_inputs(),
+        np.int32,
+        conversion_cases.char_reference,
     ),
     Case(
         "h_min_nan",

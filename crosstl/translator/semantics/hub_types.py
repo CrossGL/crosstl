@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass
 
 from .. import ast as A
+from .rule_table import CONVERSION_SIGNATURES, CONVERT_SAT_GENERIC
 
 
 @dataclass(frozen=True)
@@ -167,8 +168,16 @@ _SAME_AS_ARGUMENTS = frozenset(
         "mad",
         "reversebits",
         "bitfieldReverse",
+        "roundEven",
     }
 )
+_CONVERSION_RESULTS = {
+    name: {"int": INT32, "uint": UINT32}[result]
+    for name, result in [
+        *((n, signature[1]) for n, signature in CONVERSION_SIGNATURES.items()),
+        *((n, generic[0]) for n, generic in CONVERT_SAT_GENERIC.items()),
+    ]
+}
 
 
 def type_from_name(name) -> HubType | None:
@@ -399,6 +408,11 @@ class TypeScope:
             return carried
         name = call_name(expr)
         arguments = expr.arguments or []
+        converted = _CONVERSION_RESULTS.get(name)
+        if converted is not None:
+            # A rule conversion's result has its own scalar type and the operand's lanes.
+            first = self.infer(arguments[0]) if arguments else None
+            return converted.with_lanes(first.lanes) if first is not None else None
         if name.startswith("__cgl_"):
             result = self.infer(arguments[0]) if arguments else None
             for argument in arguments[1:]:

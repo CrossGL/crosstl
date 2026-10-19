@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .. import ast as A
+from .conversions import resolve as resolve_conversion
 from .helpers import is_helper
 from .hub_types import (
     BOOL,
@@ -29,6 +30,8 @@ from .rewrite import child_slots, get_child, set_child
 from .rule_table import (
     BINARY_UDIV_ZERO_INTRINSIC,
     BINARY_WRAP_INTRINSIC,
+    CONVERT_SAT,
+    CONVERT_SAT_GENERIC,
     INTRINSIC_FAMILY,
     UDIV_ZERO,
     WRAP,
@@ -194,18 +197,27 @@ class Annotator:
             elif udiv_zero and node.operator in _DIVISION_COMPOUND:
                 self.annotate_division_compound(node)
         elif isinstance(node, A.FunctionCallNode):
-            self.type_intrinsic(node)
+            return self.type_intrinsic(node)
         return node
 
     def type_intrinsic(self, node):
-        """A rule intrinsic written in the source text gets its result type, which helper lowering needs."""
-        if (
-            call_name(node) in INTRINSIC_FAMILY
-            and "cgl_rule_type" not in node.annotations
-        ):
+        """A rule intrinsic written in the source text gets its result type, which helper lowering needs.
+
+        A generic saturated conversion is resolved by its operand's type instead (see :mod:`.conversions`).
+        """
+        name = call_name(node)
+        if name in CONVERT_SAT_GENERIC:
+            arguments = node.arguments or []
+            operand = self.scope.infer(arguments[0]) if len(arguments) == 1 else None
+            replacement = resolve_conversion(node, operand)
+            if replacement is not node:
+                self.report.count(CONVERT_SAT)
+            return replacement
+        if name in INTRINSIC_FAMILY and "cgl_rule_type" not in node.annotations:
             result = self.scope.infer(node)
             if result is not None:
                 node.annotations["cgl_rule_type"] = result
+        return node
 
     def rewrite_binary(self, node):
         left, right = self.scope.infer(node.left), self.scope.infer(node.right)

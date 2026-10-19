@@ -26,7 +26,15 @@ Target model:
     panic on Rust, and undefined behaviour everywhere else (MSL and CUDA/HIP C++17 [expr.mul]/4, SPIR-V OpUDiv and
     OpUMod, DXC's LLVM udiv and urem, Slang, Mojo by reading);
   - ``==`` and ``!=`` compare bits, and a conditional is evaluated eagerly: a target may compute both arms (SPIR-V
-    OpSelect, WGSL select), so an undefined operation in either arm makes the whole construct undefined.
+    OpSelect, WGSL select), so an undefined operation in either arm makes the whole construct undefined;
+  - ``&``, ``<``, ``<=``, ``>`` and ``>=`` act on 32-bit integers, signed only when both operands are signed;
+  - a binary32 value is its bit pattern: ``asfloat``, and ``asuint`` or ``asint`` of a float, reinterpret it exactly,
+    and ``int(f)`` and ``uint(f)`` truncate toward zero and are defined only where the truncated value is
+    representable (C++17 [conv.fpint]/1 for MSL, CUDA and HIP; DXC's fptosi and fptoui give poison otherwise; GLSL,
+    SPIR-V and WGSL are taken to leave it undefined too). Floating-point comparison and arithmetic are not modelled.
+
+For ``convert_sat`` the carried rule is OpenCL C 6.4.3.3, stated over IEEE binary32 values: NaN gives 0, and other
+values truncate toward zero and clamp to the result range.
 
 The check also fails when an entry is missing for a registered backend, when a template uses a parameter other than
 exactly once (helper functions may repeat parameters, since a call evaluates each operand once), when an intrinsic
@@ -101,20 +109,34 @@ class Semantics:
         if isinstance(node, A.FunctionCallNode):
             name = call_name(node)
             if (
-                name not in ("asint", "asuint", "int", "uint")
+                name not in ("asint", "asuint", "asfloat", "int", "uint")
                 or len(node.arguments) != 1
             ):
                 raise Unmodelled(f"call {name!r}")
             operand = self.eval(node.arguments[0])
+            if operand.kind == "b":
+                raise Unmodelled(f"boolean operand of {name}")
+            if name == "asfloat":
+                if operand.kind == "f":
+                    raise Unmodelled("asfloat of a float")
+                return Value(operand.term, "f")
+            if operand.kind == "f" and name in ("int", "uint"):
+                return self.float_to_integer(name, operand)
             return Value(operand.term, "i" if name in ("asint", "int") else "u")
         if isinstance(node, A.BinaryOpNode) and node.op in ("+", "-", "*"):
             return self.arithmetic(node.op, self.eval(node.left), self.eval(node.right))
         if isinstance(node, A.BinaryOpNode) and node.op in ("/", "%"):
             return self.division(node.op, self.eval(node.left), self.eval(node.right))
+        if isinstance(node, A.BinaryOpNode) and node.op == "&":
+            left, right = self.integers(node.op, node.left, node.right)
+            kind = "u" if "u" in (left.kind, right.kind) else "i"
+            return Value(left.term & right.term, kind)
+        if isinstance(node, A.BinaryOpNode) and node.op in _ORDERINGS:
+            left, right = self.integers(node.op, node.left, node.right)
+            signed = left.kind == right.kind == "i"
+            return Value(_ORDERINGS[node.op](left.term, right.term, signed), "b")
         if isinstance(node, A.BinaryOpNode) and node.op in ("==", "!="):
-            left, right = self.eval(node.left), self.eval(node.right)
-            if "b" in (left.kind, right.kind):
-                raise Unmodelled(f"boolean operand of {node.op}")
+            left, right = self.integers(node.op, node.left, node.right)
             equal = left.term == right.term
             return Value(equal if node.op == "==" else z3.Not(equal), "b")
         if isinstance(node, A.TernaryOpNode):
@@ -127,12 +149,39 @@ class Semantics:
             return Value(z3.If(condition.term, chosen.term, other.term), chosen.kind)
         if isinstance(node, A.UnaryOpNode) and node.op == "-":
             operand = self.eval(node.operand)
+            if operand.kind not in ("i", "u"):
+                raise Unmodelled(f"negation of a {operand.kind!r} value")
             if operand.kind == "i" and not self.signed_wraps:
                 self.defined.append(z3.BVSNegNoOverflow(operand.term))
             return Value(-operand.term, operand.kind)
         raise Unmodelled(f"{type(node).__name__} {getattr(node, 'op', '')}".strip())
 
+    def integers(self, op, left_node, right_node):
+        """Both operands of an integer-only operator; ``==`` on floats is not bit equality, so it is unmodelled."""
+        left, right = self.eval(left_node), self.eval(right_node)
+        if not {left.kind, right.kind} <= {"i", "u"}:
+            raise Unmodelled(f"{left.kind!r} and {right.kind!r} operands of {op}")
+        return left, right
+
+    def float_to_integer(self, name, operand) -> Value:
+        """``int(f)`` or ``uint(f)``: truncation toward zero, defined only when the truncated value is representable.
+
+        NaN and out-of-range operands are undefined behaviour in C++17 [conv.fpint]/1 (MSL, CUDA, HIP), poison for
+        DXC's LLVM fptosi and fptoui, and unspecified on GLSL, SPIR-V and WGSL; the model treats them all as undefined.
+        """
+        value = z3.fpBVToFP(operand.term, z3.Float32())
+        if name == "int":
+            low, high = _fp(-(2.0**31)), _fp(2.0**31)
+            self.defined.append(z3.And(z3.fpGEQ(value, low), z3.fpLT(value, high)))
+            return Value(z3.fpToSBV(z3.RTZ(), value, z3.BitVecSort(BITS)), "i")
+        self.defined.append(
+            z3.And(z3.fpGT(value, _fp(-1.0)), z3.fpLT(value, _fp(2.0**32)))
+        )
+        return Value(z3.fpToUBV(z3.RTZ(), value, z3.BitVecSort(BITS)), "u")
+
     def arithmetic(self, op, left, right) -> Value:
+        if not {left.kind, right.kind} <= {"i", "u"}:
+            raise Unmodelled(f"{left.kind!r} and {right.kind!r} operands of {op}")
         # Usual arithmetic conversions: a signed and an unsigned 32-bit operand compute as unsigned.
         kind = "u" if "u" in (left.kind, right.kind) else "i"
         a, b = left.term, right.term
@@ -142,7 +191,9 @@ class Semantics:
         return Value(result, kind)
 
     def division(self, op, left, right) -> Value:
-        if "u" not in (left.kind, right.kind) or "b" in (left.kind, right.kind):
+        if not {left.kind, right.kind} <= {"i", "u"}:
+            raise Unmodelled(f"{left.kind!r} and {right.kind!r} operands of {op}")
+        if "u" not in (left.kind, right.kind):
             raise Unmodelled(f"signed {op}")
         a, b = left.term, right.term
         exact = z3.UDiv(a, b) if op == "/" else z3.URem(a, b)
@@ -181,14 +232,80 @@ def carried_udiv_zero(op, operands):
     return z3.If(b == 0, z3.BitVecVal(ALL_ONES, BITS), exact)
 
 
-CARRIED = {rule_table.WRAP: carried_wrap, rule_table.UDIV_ZERO: carried_udiv_zero}
-# The operand and result kind of each family's operations.
+def carried_convert_sat(op, operands):
+    """OpenCL C 6.4.3.3 saturated conversion: NaN gives 0, other values truncate and clamp to the result range.
+
+    Stated over IEEE binary32 values rather than bit patterns, so it is independent of the helpers' bit tests.
+    """
+    (x,) = operands
+    int_min, int_max = 1 << (BITS - 1), (1 << (BITS - 1)) - 1
+    if op == "itou":
+        return z3.If(x < 0, z3.BitVecVal(0, BITS), x)
+    if op == "utoi":
+        return z3.If(z3.UGT(x, int_max), z3.BitVecVal(int_max, BITS), x)
+    value = z3.fpBVToFP(x, z3.Float32())
+    zero = z3.BitVecVal(0, BITS)
+    if op == "ftoi":
+        clamped = z3.If(
+            z3.fpGEQ(value, _fp(2.0**31)),
+            z3.BitVecVal(int_max, BITS),
+            z3.If(
+                z3.fpLEQ(value, _fp(-(2.0**31))),
+                z3.BitVecVal(int_min, BITS),
+                z3.fpToSBV(z3.RTZ(), value, z3.BitVecSort(BITS)),
+            ),
+        )
+    else:
+        clamped = z3.If(
+            z3.fpGEQ(value, _fp(2.0**32)),
+            z3.BitVecVal(ALL_ONES, BITS),
+            z3.If(
+                z3.fpLEQ(value, _fp(0.0)),
+                zero,
+                z3.fpToUBV(z3.RTZ(), value, z3.BitVecSort(BITS)),
+            ),
+        )
+    return z3.If(z3.fpIsNaN(value), zero, clamped)
+
+
+def _fp(value):
+    return z3.FPVal(value, z3.Float32())
+
+
+_ORDERINGS = {
+    "<": lambda a, b, signed: a < b if signed else z3.ULT(a, b),
+    "<=": lambda a, b, signed: a <= b if signed else z3.ULE(a, b),
+    ">": lambda a, b, signed: a > b if signed else z3.UGT(a, b),
+    ">=": lambda a, b, signed: a >= b if signed else z3.UGE(a, b),
+}
+
+CARRIED = {
+    rule_table.WRAP: carried_wrap,
+    rule_table.UDIV_ZERO: carried_udiv_zero,
+    rule_table.CONVERT_SAT: carried_convert_sat,
+}
+# The operand and result kind of each family's operations; conversions have their own signatures.
 FAMILY_KIND = {rule_table.WRAP: "i", rule_table.UDIV_ZERO: "u"}
+_SCALAR_KIND = {"float": "f", "int": "i", "uint": "u"}
+
+
+def signature(intrinsic):
+    """The operand kinds and the result kind of ``intrinsic``."""
+    arity = rule_table.INTRINSICS[intrinsic][1]
+    conversion = rule_table.CONVERSION_SIGNATURES.get(intrinsic)
+    if conversion is not None:
+        operand, result = (_SCALAR_KIND[name] for name in conversion)
+        return (operand,) * arity, result
+    kind = FAMILY_KIND[rule_table.INTRINSIC_FAMILY[intrinsic]]
+    return (kind,) * arity, kind
 
 
 def native_expression(intrinsic):
     operator, arity = rule_table.INTRINSICS[intrinsic]
     operands = [A.IdentifierNode(f"x{index}") for index in range(arity)]
+    conversion = rule_table.CONVERSION_SIGNATURES.get(intrinsic)
+    if conversion is not None:
+        return A.FunctionCallNode(A.IdentifierNode(conversion[1]), operands)
     if arity == 1:
         return A.UnaryOpNode(operator, operands[0])
     return A.BinaryOpNode(operands[0], operator, operands[1])
@@ -210,7 +327,7 @@ def check_entry(intrinsic, target, entry):
         return record
     operator, arity = rule_table.INTRINSICS[intrinsic]
     family = rule_table.INTRINSIC_FAMILY[intrinsic]
-    kind = FAMILY_KIND[family]
+    operand_kinds, kind = signature(intrinsic)
     if entry.kind == "polyfill" and intrinsic in rule_table.HELPERS:
         expression = helper_body(intrinsic)
     elif entry.kind == "polyfill":
@@ -233,7 +350,10 @@ def check_entry(intrinsic, target, entry):
     semantics = Semantics(
         target,
         entry.configuration,
-        {f"x{i}": Value(term, kind) for i, term in enumerate(operands)},
+        {
+            f"x{i}": Value(term, operand_kind)
+            for i, (term, operand_kind) in enumerate(zip(operands, operand_kinds))
+        },
     )
     try:
         result = semantics.eval(expression)
