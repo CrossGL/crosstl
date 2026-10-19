@@ -621,3 +621,29 @@ def test_hlsl_float_literals_adopt_the_half_type(tmp_path):
     )
     wgsl = translate(tmp_path, source, "wgsl", ".hlsl")
     assert "cgl_half_round((cgl_half_round((h * 0.0999755859375)) + 1.0))" in wgsl
+
+
+def test_initializers_outside_function_bodies_are_legalized(tmp_path):
+    """Program constants, globals and static struct member initializers round to binary16 like local ones."""
+    helpers = (
+        "constant half scale = 0.1h;\n"
+        "template <typename T> struct Bounds;\n"
+        "template <> struct Bounds<half> {\n"
+        "  static constexpr constant half lowest = -metal::numeric_limits<half>::max();\n"
+        "  static constexpr constant half third = 0.1h;\n"
+        "  static constexpr constant half infinity = metal::numeric_limits<half>::infinity();\n"
+        "};\n"
+    )
+    body = (
+        "    half h = max(half(a[i]) * scale, Bounds<half>::lowest);\n"
+        "    o[i] = float(h) + float(Bounds<half>::third) + float(Bounds<half>::infinity);"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body, helpers)
+    assert names == ["cgl_half_round"]
+    assert "scale: f32 = 0.0999755859375;" in wgsl
+    assert "-65504.0" in wgsl and "f32(0.0999755859375)" in wgsl
+    assert "cgl_half_round(f32(bitcast<f32>(2139095040u)))" in wgsl
+    glsl_helpers = "const float16_t bias = float16_t(0.1);\n"
+    body = "    float16_t h = float16_t(a[i]) + bias;\n    o[i] = float(h);"
+    wgsl, _ = helpers_in(tmp_path, glsl, body, glsl_helpers)
+    assert "0.0999755859375" in wgsl

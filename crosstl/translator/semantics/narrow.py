@@ -307,10 +307,11 @@ class NarrowLegalizer:
         program, scope = self.program, self.scope
         for constant in getattr(program, "constants", None) or []:
             scope.declare(constant.name, constant.const_type)
-            self._normalize_declaration(constant, "const_type", "value")
+            self._initializer(constant, "const_type", "value")
         self._declare_variables(getattr(program, "global_variables", None) or [])
         for cbuffer in getattr(program, "cbuffers", None) or []:
             scope.declare_cbuffer(cbuffer)
+        self._member_initializers()
         for function in getattr(program, "functions", None) or []:
             if isinstance(function, A.FunctionNode):
                 self.function(function)
@@ -351,7 +352,25 @@ class NarrowLegalizer:
         for variable in variables:
             self.scope.declare(variable.name, variable.var_type)
             self.scope.declare_block_members(variable)
-            self._normalize_declaration(variable, "var_type", "initial_value")
+            self._initializer(variable, "var_type", "initial_value")
+
+    def _initializer(self, node, type_field, value_field):
+        """A declaration outside a function body: legalize its initializer, then convert it to a narrow type."""
+        value = getattr(node, value_field, None)
+        if value is not None:
+            replacement = self.visit(value)
+            if replacement is not value:
+                set_child(node, value_field, None, replacement)
+        self._normalize_declaration(node, type_field, value_field)
+
+    def _member_initializers(self):
+        """Struct member initializers (static members included) sit outside every function body."""
+        for struct in iter_structs(self.program):
+            if not isinstance(struct, A.StructNode):
+                continue
+            for member in struct.members or []:
+                if isinstance(member, A.StructMemberNode):
+                    self._initializer(member, "member_type", "default_value")
 
     def refuse(self, what, reason_code, node=None):
         raise NarrowIntegerUnsupportedError(
