@@ -9,7 +9,9 @@ GPU (conformance case ``u_recursion``). These targets therefore refuse any cycle
 The graph has one node per function declaration: program functions, stage-local functions and stage entry points,
 in declaration order. A call by name has an edge to every declaration of that name whose arity accepts the call;
 among several, overload resolution keeps those whose parameter types equal the argument types the hub type scope
-infers, then those with the same lane counts. Overloads that cannot be told apart all receive an edge.
+infers, then those with the same lane counts. Among those, arguments without a value type (matrices, cooperative
+matrices, arrays, structures) keep the overloads whose parameters declare the argument's declared type, when any
+do. Overloads that cannot be told apart all receive an edge.
 Calls through member access, function values and built-ins have no user-declared callee and no edge.
 """
 
@@ -91,6 +93,34 @@ def _stage_functions(program):
 def _parameter_type(parameter):
     declared = getattr(parameter, "param_type", None)
     return declared if declared is not None else getattr(parameter, "var_type", None)
+
+
+def _declared_key(node):
+    """A structural key of a declared type, ignoring references and fragment annotations; ``None`` if unknown."""
+    if isinstance(node, A.ReferenceType):
+        return _declared_key(node.referenced_type)
+    value = type_from_node(node)
+    if value is not None:
+        return ("value", value.kind, value.bits, value.lanes)
+    if isinstance(node, A.CooperativeMatrixType):
+        element = _declared_key(node.element_type)
+        return ("cooperative", element, repr(node.rows), repr(node.cols), node.scope)
+    if isinstance(node, A.MatrixType):
+        element = _declared_key(node.element_type)
+        return ("matrix", element, repr(node.rows), repr(node.cols))
+    if isinstance(node, A.ArrayType):
+        return ("array", _declared_key(node.element_type), repr(node.size))
+    if isinstance(node, A.PointerType):
+        return ("pointer", _declared_key(node.pointee_type))
+    if isinstance(node, (A.NamedType, A.PrimitiveType)):
+        generic = tuple(
+            _declared_key(argument)
+            for argument in getattr(node, "generic_args", None) or []
+        )
+        if None in generic:
+            return None
+        return ("named", node.name, generic)
+    return None
 
 
 def _arity(function):
@@ -195,6 +225,7 @@ class CallGraph:
         if len(candidates) < 2:
             return candidates
         argument_types = [self.scope.infer(argument) for argument in arguments]
+        argument_nodes = [self.scope.node_type(argument) for argument in arguments]
         for exact in (True, False):
             matching = [
                 index
@@ -202,8 +233,36 @@ class CallGraph:
                 if self._accepts(self.functions[index], argument_types, exact)
             ]
             if matching:
-                return matching
+                declared = [
+                    index
+                    for index in matching
+                    if self._declared_accepts(
+                        self.functions[index], argument_types, argument_nodes
+                    )
+                ]
+                return declared or matching
         return candidates
+
+    @staticmethod
+    def _declared_accepts(function, argument_types, argument_nodes):
+        """Whether no named argument's declared type contradicts a parameter where value types cannot tell.
+
+        Matrices, cooperative matrices, arrays and structures have no value type, so ``_accepts`` lets them match
+        any parameter. Their declared types still separate overloads: a ``CooperativeMatrix<float, 8, 8>`` local
+        does not bind to a ``vec2`` reference. Positions where both sides have value types are left to ``_accepts``.
+        """
+        for parameter, argument_type, node in zip(
+            function.parameters or [], argument_types, argument_nodes
+        ):
+            declared = _parameter_type(parameter)
+            if node is None or declared is None:
+                continue
+            if argument_type is not None and type_from_node(declared) is not None:
+                continue
+            expected, actual = _declared_key(declared), _declared_key(node)
+            if expected is not None and actual is not None and expected != actual:
+                return False
+        return True
 
     @staticmethod
     def _accepts(function, argument_types, exact):
