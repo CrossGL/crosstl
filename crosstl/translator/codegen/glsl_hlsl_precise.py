@@ -378,7 +378,49 @@ class GLSLHlslPreciseMixin:
         as floating point when its operand is floating point or of unknown
         type. Increments and decrements of floating-point values belong to
         floating-point locals, which every write keeps precise.
+
+        The map is built before the body is generated, so the locals that the
+        body declares are given their declared types for the scan.
         """
+        source_types = self.local_variable_source_types
+        body_types = {
+            name: declared_type
+            for name, declared_type in self.glsl_body_declared_local_types(body).items()
+            if name not in source_types
+        }
+        source_types.update(body_types)
+        try:
+            return self.glsl_scan_precise_value_writes(body)
+        finally:
+            for name in body_types:
+                source_types.pop(name, None)
+
+    def glsl_body_declared_local_types(self, body):
+        """Map each local that ``body`` declares with one explicit type to it.
+
+        A name declared with different types in different scopes is left out,
+        so the operations that use it keep an unknown type.
+        """
+        declared = {}
+        conflicting = set()
+        for node in self.walk_ast(body):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            declared_type = self.type_name_string(
+                getattr(node, "var_type", None) or getattr(node, "vtype", None)
+            )
+            if not isinstance(name, str) or declared_type in {None, "", "auto"}:
+                continue
+            if declared.setdefault(name, declared_type) != declared_type:
+                conflicting.add(name)
+        return {
+            name: declared_type
+            for name, declared_type in declared.items()
+            if name not in conflicting
+        }
+
+    def glsl_scan_precise_value_writes(self, body):
         writes = {}
         for node in self.walk_ast(body):
             target = None
