@@ -52,8 +52,6 @@ from ..ast import (
 )
 from ..diagnostics import TranslationDiagnostic
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
-from .relational_builtins import lower_relational_builtins
-from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
@@ -93,6 +91,8 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .relational_builtins import lower_relational_builtins
+from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_float_semantics import SpirvFloatSemanticsMixin

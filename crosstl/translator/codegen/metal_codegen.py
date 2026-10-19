@@ -65,7 +65,6 @@ from ..structure_conversions import (
     StructureFieldValue,
     registered_structure_conversion_for_identity,
 )
-from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
     INTEGER_COORDINATE_INTRINSIC_NAMES,
@@ -85,7 +84,6 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
-from .relational_builtins import lower_relational_builtins, metal_logical_not_operand
 from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -339,6 +337,7 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .metal_refusals import metal_refusals
+from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .operator_spellings import map_c_family_operator
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -348,6 +347,7 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
     validate_pointer_reinterpretation_target,
 )
+from .relational_builtins import lower_relational_builtins, metal_logical_not_operand
 from .resource_arrays import collect_resource_array_size_hints
 from .stage_utils import (
     assign_stage_entry_names,

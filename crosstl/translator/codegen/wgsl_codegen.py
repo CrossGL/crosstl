@@ -46,7 +46,6 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
-from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
@@ -57,6 +56,7 @@ from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
 )
+from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 

@@ -4,6 +4,7 @@ import re
 
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 
+from .aggregate_equality import lower_aggregate_equality
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -31,8 +32,6 @@ from .OpenglAst import (
     VectorConstructorNode,
     WhileNode,
 )
-
-from .aggregate_equality import lower_aggregate_equality
 
 try:
     from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
