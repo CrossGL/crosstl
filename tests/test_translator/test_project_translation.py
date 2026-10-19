@@ -7969,7 +7969,7 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert "float3 VSIn_Pos [[attribute(0)]];" in vertex_metal
     assert "float4 VSIn_Color [[attribute(1)]];" in vertex_metal
     assert "vertex_main_Input _crossglInput [[stage_in]]" in vertex_metal
-    assert "float4 PSIn_Color [[user(Color0)]];" in vertex_metal
+    assert "float4 PSIn_Color [[user(COLOR0)]];" in vertex_metal
     assert "fragment_main_Input _crossglInput [[stage_in]]" in fragment_metal
     assert "float4 PSOut_Color [[color(0)]];" in fragment_metal
 

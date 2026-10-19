@@ -65,6 +65,7 @@ from ..structure_conversions import (
     StructureFieldValue,
     registered_structure_conversion_for_identity,
 )
+from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
     INTEGER_COORDINATE_INTRINSIC_NAMES,
@@ -1351,11 +1352,11 @@ class MetalCodeGen:
             "SV_InstanceId": "instance_id",
             "sv_instance_id": "instance_id",
             "sv_instanceid": "instance_id",
-            "gl_IsFrontFace": "is_front_facing",
-            "SV_IsFrontFace": "is_front_facing",
-            "SV_IsFrontFacing": "is_front_facing",
-            "sv_is_front_face": "is_front_facing",
-            "sv_isfrontface": "is_front_facing",
+            "gl_IsFrontFace": "front_facing",
+            "SV_IsFrontFace": "front_facing",
+            "SV_IsFrontFacing": "front_facing",
+            "sv_is_front_face": "front_facing",
+            "sv_isfrontface": "front_facing",
             "gl_PrimitiveID": "primitive_id",
             "SV_PrimitiveID": "primitive_id",
             "SV_PrimitiveId": "primitive_id",
@@ -1393,6 +1394,8 @@ class MetalCodeGen:
             "SV_Position": "position",
             "gl_PointSize": "point_size",
             "gl_ClipDistance": "clip_distance",
+            "gl_Layer": "render_target_array_index",
+            "gl_ViewportIndex": "viewport_array_index",
             # Fragment inputs
             "gl_FragColor": "[[color(0)]]",
             "gl_FragColor0": "[[color(0)]]",
@@ -1429,7 +1432,7 @@ class MetalCodeGen:
             "gl_FragCoord": "position",
             "gl_BaryCoordEXT": "barycentric_coord",
             "gl_BaryCoordNoPerspEXT": "barycentric_coord",
-            "gl_FrontFacing": "is_front_facing",
+            "gl_FrontFacing": "front_facing",
             "gl_PointCoord": "point_coord",
             "gl_SampleID": "sample_id",
             "SV_SampleIndex": "sample_id",
@@ -4386,6 +4389,34 @@ class MetalCodeGen:
             dependencies,
         )
 
+    def metal_is_varying_struct(self, struct_name):
+        """Whether ``struct_name`` carries values from a vertex entry to a fragment entry (:mod:`.metal_varyings`)."""
+        if struct_name in getattr(self, "metal_vertex_entry_input_struct_names", ()):
+            return False
+        return struct_name in getattr(
+            self, "metal_vertex_entry_output_struct_names", ()
+        ) or struct_name in getattr(self, "metal_fragment_entry_input_struct_names", ())
+
+    def metal_varying_member_attribute(
+        self, member, struct_name, default_member_semantics, offset=0
+    ):
+        if not self.metal_is_varying_struct(struct_name):
+            return None
+        semantic = self.metal_struct_member_effective_semantic(
+            member, default_member_semantics, struct_name
+        )
+        return metal_varying_attribute(self, member, semantic, offset=offset)
+
+    def metal_member_semantic_attribute(
+        self, member, semantic, struct_name, default_member_semantics
+    ):
+        varying = self.metal_varying_member_attribute(
+            member, struct_name, default_member_semantics
+        )
+        if varying is not None:
+            return varying
+        return self.map_semantic(semantic) if semantic else ""
+
     def metal_struct_member_declaration(
         self,
         member,
@@ -4409,7 +4440,11 @@ class MetalCodeGen:
                 semantic = (
                     field_semantics[index] if index < len(field_semantics) else None
                 )
-                semantic_attr = self.map_semantic(semantic) if semantic else ""
+                semantic_attr = self.metal_varying_member_attribute(
+                    member, struct_name, default_member_semantics, offset=index
+                )
+                if semantic_attr is None:
+                    semantic_attr = self.map_semantic(semantic) if semantic else ""
                 code += (
                     f"    {field_type} {field_name}{semantic_attr}"
                     f"{interpolation_attr};\n"
@@ -4426,7 +4461,9 @@ class MetalCodeGen:
             )
             if resource_array_declaration is not None:
                 abi_attr = self.format_metal_struct_member_abi_attributes(member)
-                semantic_attr = self.map_semantic(semantic) if semantic else ""
+                semantic_attr = self.metal_member_semantic_attribute(
+                    member, semantic, struct_name, default_member_semantics
+                )
                 interpolation_attr = self.metal_interpolation_attribute_suffix(member)
                 return (
                     f"    {resource_array_declaration}{abi_attr}{semantic_attr}"
@@ -4439,7 +4476,9 @@ class MetalCodeGen:
                 "element_type",
                 getattr(member, "vtype", "float"),
             )
-            semantic_attr = self.map_semantic(semantic) if semantic else ""
+            semantic_attr = self.metal_member_semantic_attribute(
+                member, semantic, struct_name, default_member_semantics
+            )
             interpolation_attr = self.metal_interpolation_attribute_suffix(member)
             mapped_type = self.map_type(element_type)
             if preserve_native_narrow_storage:
@@ -4465,7 +4504,9 @@ class MetalCodeGen:
             member, default_member_semantics, struct_name
         )
         abi_attr = self.format_metal_struct_member_abi_attributes(member)
-        semantic_attr = self.map_semantic(semantic) if semantic else ""
+        semantic_attr = self.metal_member_semantic_attribute(
+            member, semantic, struct_name, default_member_semantics
+        )
         interpolation_attr = self.metal_interpolation_attribute_suffix(member)
 
         if hasattr(member, "member_type"):
@@ -5138,9 +5179,7 @@ class MetalCodeGen:
                         "name": p.name,
                         "raw_type": raw_param_type,
                         "mapped_type": param_type,
-                        "attribute": self.metal_fragment_input_semantic_attribute(
-                            semantic
-                        ),
+                        "attribute": metal_varying_attribute(self, p, semantic),
                         "semantic": semantic,
                         "preserve_user_attribute": True,
                     }
@@ -6533,7 +6572,9 @@ class MetalCodeGen:
             "vertex_id": "uint",
             "instance_id": "uint",
             "primitive_id": "uint",
-            "is_front_facing": "bool",
+            "front_facing": "bool",
+            "render_target_array_index": "uint",
+            "viewport_array_index": "uint",
             "position": "float4",
             "point_coord": "float2",
             "sample_id": "uint",
@@ -6710,9 +6751,13 @@ class MetalCodeGen:
         if self.is_graphics_stage_output_parameter(parameter, shader_type):
             return False
         semantic = self.semantic_from_node(parameter)
-        if not self.is_metal_user_stage_io_semantic(semantic):
+        if semantic is not None and is_metal_varying_builtin(
+            self.canonical_metal_semantic(semantic)
+        ):
             return False
-        if self.is_resource_parameter_type(raw_param_type):
+        if self.is_metal_resource_or_buffer_parameter(
+            raw_param_type, parameter, shader_type
+        ):
             return False
         if isinstance(raw_param_type, (PointerType, ReferenceType)):
             return False
@@ -6728,19 +6773,6 @@ class MetalCodeGen:
         if base_type in self.structs_by_name:
             return False
         return self.is_metal_scalar_or_vector_type_name(base_type)
-
-    def metal_fragment_input_semantic_attribute(self, semantic):
-        if self.metal_attribute_index_from_semantic(semantic) is not None:
-            return self.map_semantic(semantic)
-        hlsl_attribute = self.metal_hlsl_attribute_semantic(semantic)
-        if hlsl_attribute is not None:
-            return f" [[{hlsl_attribute}]]"
-        hlsl_color = self.metal_hlsl_color_semantic(semantic)
-        if hlsl_color is not None:
-            return f" [[user({hlsl_color})]]"
-        if str(semantic).lower() == "color":
-            return " [[user(Color0)]]"
-        return None
 
     def is_metal_scalar_or_vector_type_name(self, type_name):
         type_name = str(type_name).strip()
@@ -6784,7 +6816,10 @@ class MetalCodeGen:
         for parameter in parameters:
             attribute = parameter.get("attribute")
             attribute_index = self.metal_attribute_index_from_attribute(attribute)
-            if attribute_index is None and (
+            if (
+                attribute_index is None
+                and not parameter.get("preserve_user_attribute")
+            ) and (
                 attribute is None
                 or not attribute.strip()
                 or (
@@ -6827,6 +6862,10 @@ class MetalCodeGen:
         semantic = self.semantic_from_node(parameter)
         if semantic is None and stage_name == "fragment":
             semantic = "gl_FragColor"
+        if stage_name == "vertex":
+            varying = metal_varying_attribute(self, parameter, semantic)
+            if varying is not None:
+                return varying
         return self.map_semantic(semantic)
 
     def generate_metal_stage_output_parameter_struct(self, struct_name, parameters):
@@ -6892,7 +6931,9 @@ class MetalCodeGen:
             "vertex_id": "uint",
             "instance_id": "uint",
             "primitive_id": "uint",
-            "is_front_facing": "bool",
+            "front_facing": "bool",
+            "render_target_array_index": "uint",
+            "viewport_array_index": "uint",
             "position": "float4",
             "point_coord": "float2",
             "point_size": "float",
@@ -17888,13 +17929,14 @@ class MetalCodeGen:
         return canonical not in {
             "barycentric_coord",
             "clip_distance",
+            "front_facing",
             "instance_id",
-            "is_front_facing",
             "payload",
             "point_coord",
             "point_size",
             "position",
             "primitive_id",
+            "render_target_array_index",
             "sample_id",
             "sample_mask",
             "stencil_ref",
@@ -17904,6 +17946,7 @@ class MetalCodeGen:
             "threadgroup_position_in_grid",
             "threads_per_threadgroup",
             "vertex_id",
+            "viewport_array_index",
         }
 
     def metal_stage_io_member_attribute_span(self, member):
@@ -20098,6 +20141,12 @@ class MetalCodeGen:
         if self.is_metal_ray_stage(shader_type):
             return False
         if self.is_graphics_stage_output_parameter(parameter, shader_type):
+            return False
+        # Built-in inputs such as [[vertex_id]] are parameters; a [[stage_in]] struct holds only attributes.
+        semantic = self.semantic_from_node(parameter)
+        if semantic is not None and is_metal_varying_builtin(
+            self.canonical_metal_semantic(semantic)
+        ):
             return False
         return True
 

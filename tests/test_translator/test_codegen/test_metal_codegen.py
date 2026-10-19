@@ -8929,11 +8929,15 @@ def test_metal_stage_io_interpolation_attributes_preserve_semantics():
         crosstl.translator.parse(shader), "fragment"
     )
 
-    assert "float4 color [[attribute(5)]] [[flat]];" in generated_code
-    assert "float2 uv [[attribute(6)]] [[centroid_no_perspective]];" in generated_code
-    assert "int materialId [[attribute(7)]] [[flat]];" in generated_code
+    # Fragment inputs link to vertex outputs by [[user(...)]] key; [[attribute(n)]] is ignored there.
+    assert "float4 color [[user(TEXCOORD0)]] [[flat]];" in generated_code
     assert (
-        "float4 sampleColor [[attribute(8)]] [[sample_perspective]];" in generated_code
+        "float2 uv [[user(TEXCOORD1)]] [[centroid_no_perspective]];" in generated_code
+    )
+    assert "int materialId [[user(TEXCOORD2)]] [[flat]];" in generated_code
+    assert (
+        "float4 sampleColor [[user(TEXCOORD3)]] [[sample_perspective]];"
+        in generated_code
     )
     assert "[[linear_noperspective_centroid]]" not in generated_code
     assert "[[nointerpolation]]" not in generated_code
@@ -14444,8 +14448,10 @@ def test_metal_stage_entry_name_avoids_global_helper_collision():
 
     assert "float4 fragment_main(float2 uv)" in generated_code
     assert (
-        "fragment float4 fragment_main_2(float2 uv [[attribute(5)]])" in generated_code
+        "fragment float4 fragment_main_2(fragment_main_2_Input _crossglInput "
+        "[[stage_in]])" in generated_code
     )
+    assert "float2 uv [[user(TEXCOORD0)]];" in generated_code
 
 
 def test_metal_stage_entry_name_avoids_local_helper_collision():
@@ -14469,8 +14475,10 @@ def test_metal_stage_entry_name_avoids_local_helper_collision():
 
     assert "float4 fragment_main(float2 uv)" in generated_code
     assert (
-        "fragment float4 fragment_main_2(float2 uv [[attribute(5)]])" in generated_code
+        "fragment float4 fragment_main_2(fragment_main_2_Input _crossglInput "
+        "[[stage_in]])" in generated_code
     )
+    assert "float2 uv [[user(TEXCOORD0)]];" in generated_code
     assert "return fragment_main(uv);" in generated_code
 
 
@@ -15999,7 +16007,7 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "uint primitiveID [[primitive_id]]" in fragment_code
-    assert "bool frontFacing [[is_front_facing]]" in fragment_code
+    assert "bool frontFacing [[front_facing]]" in fragment_code
     assert "float4 coord [[position]]" in fragment_code
     assert "float2 point [[point_coord]]" in fragment_code
     assert "uint sampleID [[sample_id]]" in fragment_code
@@ -16072,7 +16080,7 @@ def test_graphics_hlsl_system_value_semantic_alias_variants_lower_to_metal_built
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "uint primitiveID [[primitive_id]]" in fragment_code
-    assert "bool frontFacing [[is_front_facing]]" in fragment_code
+    assert "bool frontFacing [[front_facing]]" in fragment_code
     assert "SV_PrimitiveId" not in fragment_code
     assert "sv_isfrontface" not in fragment_code
 
@@ -16132,7 +16140,7 @@ def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
     [
         ("vertex", "float", "gl_InstanceID", "instance_id", "uint"),
         ("fragment", "int", "gl_PrimitiveID", "primitive_id", "uint"),
-        ("fragment", "int", "gl_FrontFacing", "is_front_facing", "bool"),
+        ("fragment", "int", "gl_FrontFacing", "front_facing", "bool"),
         ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
         ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
         ("fragment", "int", "gl_SampleID", "sample_id", "uint"),
@@ -16258,7 +16266,7 @@ def test_struct_builtin_member_semantics_are_validated():
     assert "float pointSize [[point_size]];" in generated
     assert "float4 coord [[position]];" in generated
     assert "float2 point [[point_coord]];" in generated
-    assert "bool frontFacing [[is_front_facing]];" in generated
+    assert "bool frontFacing [[front_facing]];" in generated
     assert "uint primitiveID [[primitive_id]];" in generated
     assert "uint sampleID [[sample_id]];" in generated
     assert "uint sampleMaskIn [[sample_mask]];" in generated
@@ -16304,7 +16312,7 @@ def test_metal_clip_distance_array_keeps_native_vertex_attribute_order():
         ("vec3 position @ gl_Position", "position", "float4"),
         ("vec3 color @ gl_FragColor", "color\\(0\\)", "float4"),
         ("vec2 depth @ gl_FragDepth", "depth\\(any\\)", "float"),
-        ("int frontFacing @ gl_FrontFacing", "is_front_facing", "bool"),
+        ("int frontFacing @ gl_FrontFacing", "front_facing", "bool"),
         ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
         ("int primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
         ("vec2 pointSize @ gl_PointSize", "point_size", "float"),
