@@ -39,6 +39,7 @@ from .identifier_rewrites import (
     replace_unqualified_identifiers,
     unqualified_identifiers,
 )
+from .local_decltypes import complete_declared_type, substitute_local_decltypes_in
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .template_constants import unresolved_constant_references
 from .template_overloads import declared_type_names, select_instantiated_overload
@@ -487,6 +488,8 @@ class _MetalIntegralConstantBinding:
     scope_start: int
     scope_end: int
     value: Optional[str]
+    # The complete type the local was declared with, when ``decltype`` of it can be spelled.
+    declared_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -5225,6 +5228,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     scope_start=scope_start,
                     scope_end=scope_end,
                     value=value,
+                    declared_type=(
+                        None
+                        if file_scope_only
+                        else complete_declared_type(
+                            member.type_text, member.array_suffix
+                        )
+                    ),
                 )
             )
         record_parameters_through(len(code))
@@ -5411,6 +5421,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if best is not None:
                 visible[name] = best
         return visible
+
+    @staticmethod
+    def _visible_local_declared_types(
+        visible: Dict[str, _MetalIntegralConstantBinding],
+    ) -> Dict[str, str]:
+        return {
+            name: binding.declared_type
+            for name, binding in visible.items()
+            if binding.declared_type is not None
+        }
 
     @classmethod
     def _local_integral_constants_at(
@@ -23745,18 +23765,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         resolved_calls: List[Tuple[str, List[str], Tuple[int, int]]] = []
         for function_name, template_arguments, span in calls:
+            visible_local_constants = self._local_integral_constant_bindings_at(
+                local_integral_constants,
+                span[0],
+            )
             resolved_arguments = [
                 self._resolve_type_aliases_at(
                     argument,
                     local_type_aliases,
                     span[0],
                 )
-                for argument in template_arguments
+                for argument in substitute_local_decltypes_in(
+                    template_arguments,
+                    self._visible_local_declared_types(visible_local_constants),
+                )
             ]
-            visible_local_constants = self._local_integral_constant_bindings_at(
-                local_integral_constants,
-                span[0],
-            )
             local_constants = {
                 name: binding.value
                 for name, binding in visible_local_constants.items()
@@ -24085,18 +24108,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 ):
                     i = j + 1
                     continue
+                visible_local_constants = self._local_integral_constant_bindings_at(
+                    local_integral_constants,
+                    i,
+                )
                 template_arguments = [
                     self._resolve_type_aliases_at(
                         argument,
                         local_type_aliases,
                         i,
                     )
-                    for argument in template_arguments
+                    for argument in substitute_local_decltypes_in(
+                        template_arguments,
+                        self._visible_local_declared_types(visible_local_constants),
+                    )
                 ]
-                visible_local_constants = self._local_integral_constant_bindings_at(
-                    local_integral_constants,
-                    i,
-                )
                 local_constants = {
                     name: binding.value
                     for name, binding in visible_local_constants.items()
