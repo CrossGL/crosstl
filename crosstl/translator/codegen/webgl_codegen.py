@@ -20,6 +20,7 @@ from .GLSL_codegen import (
 )
 from .glsl_refusals import WebGLLoweringRefused
 from .index_range_contracts import WEBGL_INDEX_PROFILE
+from .stage_refusals import StageUnsupportedError
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
@@ -738,9 +739,11 @@ class WebGLCodeGen(GLSLCodeGen):
             supported = stages & self.SUPPORTED_STAGE_NAMES
             if supported:
                 return
-            raise ValueError(
-                "WebGL target does not support shader stage(s): "
-                + ", ".join(unsupported)
+            raise StageUnsupportedError(
+                "webgl",
+                "WebGL",
+                unsupported,
+                "WebGL 2 (GLSL ES 3.00) has only vertex and fragment shaders",
             )
 
     def webgl_stage_names(self, ast):

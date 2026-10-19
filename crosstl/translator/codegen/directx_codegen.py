@@ -386,6 +386,7 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
+from .stage_refusals import RayStageInterfaceUnsupportedError
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -419,6 +420,32 @@ from .workgroup_access_contracts import parse_workgroup_access_assertions
 # ``nullptr`` cannot name a groupshared array and real backings always have a
 # positive extent, so the pair cannot collide with a concrete contract.
 HLSL_NULL_WORKGROUP_POINTER_CONTRACT = ("nullptr", 0)
+# DXR system-value intrinsics and their result types (DirectX Raytracing specification, "System value intrinsics").
+HLSL_RAY_SYSTEM_VALUE_TYPES = {
+    "DispatchRaysIndex": "uint3",
+    "DispatchRaysDimensions": "uint3",
+    "WorldRayOrigin": "float3",
+    "WorldRayDirection": "float3",
+    "ObjectRayOrigin": "float3",
+    "ObjectRayDirection": "float3",
+    "RayTMin": "float",
+    "RayTCurrent": "float",
+    "RayFlags": "uint",
+    "InstanceIndex": "uint",
+    "InstanceID": "uint",
+    "GeometryIndex": "uint",
+    "PrimitiveIndex": "uint",
+    "HitKind": "uint",
+    "ObjectToWorld3x4": "float3x4",
+    "ObjectToWorld4x3": "float4x3",
+    "WorldToObject3x4": "float3x4",
+    "WorldToObject4x3": "float4x3",
+}
+# An HLSL vector type and its component type: float3, uint2, float16_t4, min16int2.
+HLSL_VECTOR_TYPE_RE = re.compile(
+    r"(bool|int|uint|half|float|double|min16float|min10float|min16int|min12int|min16uint"
+    r"|int16_t|uint16_t|float16_t|int64_t|uint64_t)([234])"
+)
 
 # Private pointer parameters lower to ``array, int base``.  A Metal rebase such
 # as ``x_thread += 8 * i`` becomes ``x_thread_base += int(8 * i)``; the analysis
@@ -2643,6 +2670,13 @@ class HLSLCodeGen(LoweringRefusalMixin):
             "image2DArray": "RWTexture2DArray<float4>",
             "image2DMS": "RWTexture2DMS<float4>",
             "image2DMSArray": "RWTexture2DMSArray<float4>",
+            # CrossGL's spelling of a float storage image without a format (the SPIR-V importer's); HLSL's
+            # default element type for these templates is float4 as well.
+            "RWTexture1D": "RWTexture1D<float4>",
+            "RWTexture1DArray": "RWTexture1DArray<float4>",
+            "RWTexture2D": "RWTexture2D<float4>",
+            "RWTexture2DArray": "RWTexture2DArray<float4>",
+            "RWTexture3D": "RWTexture3D<float4>",
             "sampler": "SamplerState",
             "comparison_sampler": "SamplerComparisonState",
         }
@@ -4639,7 +4673,11 @@ class HLSLCodeGen(LoweringRefusalMixin):
             qualifier = self.resource_memory_qualifier(mapped_type, node)
             if not qualifier and not is_hlsl_resource_global:
                 qualifier = self.local_variable_qualifier(node)
-                if "thread" in (getattr(node, "qualifiers", []) or []):
+                # A module variable without ``static`` is an implicitly constant member of the $Globals
+                # constant buffer in HLSL; private per-invocation state needs ``static``.
+                if {"thread", "static"} & {
+                    str(value) for value in getattr(node, "qualifiers", []) or []
+                } and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
             code += f"{qualifier}{declaration}{register};\n"
@@ -17736,6 +17774,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     if byte_shape[0] is ArithmeticScalarKind.SIGNED_INTEGER
                     else "uint8"
                 )
+            # Indexing a vector selects one component.
+            vector = HLSL_VECTOR_TYPE_RE.fullmatch(self.map_type(array_type) or "")
+            if vector is not None:
+                return vector.group(1)
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
@@ -17798,6 +17840,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if (
+                not args
+                and isinstance(func_name, str)
+                and func_name in HLSL_RAY_SYSTEM_VALUE_TYPES
+                and func_name not in getattr(self, "function_return_types", {})
+            ):
+                return HLSL_RAY_SYSTEM_VALUE_TYPES[func_name]
             if isinstance(func_expr, MemberAccessNode) or (
                 hasattr(func_expr, "__class__")
                 and "MemberAccess" in str(func_expr.__class__)
@@ -33673,7 +33722,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for role in sorted(
             required_roles.get(shader_type, set()) - set(role_parameters)
         ):
-            raise ValueError(f"DirectX {shader_type} stage requires a {role} parameter")
+            raise RayStageInterfaceUnsupportedError(
+                "directx",
+                shader_type,
+                role,
+                "the entry declares none, and ray interface variables declared at "
+                "global scope (GLSL rayPayloadInEXT, hitAttributeEXT, "
+                "callableDataInEXT) are not lowered to entry parameters yet",
+            )
 
         exact_role_order = {
             "ray_generation": [],
@@ -34504,7 +34560,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if expected_type is None:
             return
 
-        if array_suffix or actual_base_type != expected_type:
+        if array_suffix or not self.hlsl_builtin_semantic_type_matches(
+            mapped_semantic, actual_base_type, expected_type
+        ):
             raise ValueError(
                 f"DirectX {shader_type} return semantic '{semantic}' maps to "
                 f"'{mapped_semantic}' and requires function '{function_name}' "
@@ -34537,12 +34595,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             return
 
-        if array_suffix or actual_base_type != expected_type:
+        if array_suffix or not self.hlsl_builtin_semantic_type_matches(
+            mapped_semantic, actual_base_type, expected_type
+        ):
             raise ValueError(
                 f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
                 f"'{mapped_semantic}' and requires member '{member_name}' to "
                 f"have type {expected_type}, got {actual_type}"
             )
+
+    # A render target written as a 16-bit four-component vector keeps its
+    # meaning: SV_Target accepts any numeric vector, and only the width differs.
+    HLSL_HALF_RENDER_TARGET_TYPES = frozenset({"float16_t4", "half4", "min16float4"})
+
+    def hlsl_builtin_semantic_type_matches(
+        self, mapped_semantic, actual_base_type, expected_type
+    ):
+        if actual_base_type == expected_type:
+            return True
+        return (
+            expected_type == "float4"
+            and self.hlsl_render_target_semantic(mapped_semantic)
+            and actual_base_type in self.HLSL_HALF_RENDER_TARGET_TYPES
+        )
 
     def validate_hlsl_tess_factor_member_semantic_type(
         self, struct_name, member_name, member_type, semantic, mapped_semantic=None
@@ -51613,6 +51688,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "iimage2DMSArray": "RWTexture2DMSArray",
             "uimage2DMSArray": "RWTexture2DMSArray",
             "imageCube": "RWTextureCube",
+            "RWTexture1D": "RWTexture1D",
+            "RWTexture1DArray": "RWTexture1DArray",
+            "RWTexture2D": "RWTexture2D",
+            "RWTexture2DArray": "RWTexture2DArray",
+            "RWTexture3D": "RWTexture3D",
         }
         texture_type = texture_types.get(base_type)
         if component_type and texture_type:

@@ -24,6 +24,10 @@ from ...translator.precise_power import binary32_power_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
 from ...translator.resource_identity import source_resource_attribute
+from ...translator.semantics.sampler_states import (
+    SAMPLER_STATE_CALL_ARGUMENTS,
+    canonical_sampler_argument,
+)
 from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .MetalAst import *
@@ -2595,8 +2599,34 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
 
     def generate_sampler_constructor_arg(self, arg, is_main=False):
         if isinstance(arg, VariableNode) and self.is_scoped_identifier(arg.name):
-            return arg.name
+            return canonical_sampler_argument(arg.name)
+        if isinstance(arg, FunctionCallNode) and isinstance(arg.name, str):
+            name = canonical_sampler_argument(arg.name)
+            if name in SAMPLER_STATE_CALL_ARGUMENTS:
+                arguments = ", ".join(
+                    self.generate_expression(item, is_main) for item in arg.args
+                )
+                return f"{name}({arguments})"
         return self.generate_expression(arg, is_main)
+
+    def program_scope_sampler_constant(self, variable, initializer):
+        """``const sampler NAME = sampler(...);`` for a program-scope constexpr sampler."""
+        name = self.sanitize_identifier(variable.name)
+        extents = [
+            self.generate_expression(size, False)
+            for size in getattr(variable, "array_sizes", None) or []
+        ]
+        array_type = self.metal_array_type_parts(
+            self.normalized_metal_type(getattr(variable, "vtype", None))
+        )
+        if array_type is not None:
+            extents.insert(0, array_type[1])
+        if initializer is None:
+            value = "sampler()"
+        else:
+            value = self.generate_expression(initializer, False)
+        suffix = "".join(f"[{extent}]" for extent in extents)
+        return f"    const sampler {name}{suffix} = {value};\n"
 
     def is_scoped_identifier(self, name):
         return (
@@ -3503,7 +3533,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 if isinstance(glob, AssignmentNode):
                     if isinstance(glob.left, VariableNode):
                         if self.is_sampler_variable(glob.left):
-                            self.global_sampler_names.add(glob.left.name)
+                            # A program-scope constexpr sampler is fixed sampler
+                            # state; it stays a CrossGL constant so every target
+                            # either carries that state or refuses it.
+                            code += self.program_scope_sampler_constant(
+                                glob.left, glob.right
+                            )
                             self.current_type_resolution_context = (
                                 previous_type_resolution_context
                             )
@@ -3544,7 +3579,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                     code += f"    {left} {glob.operator} {right};\n"
                 elif isinstance(glob, VariableNode):
                     if self.is_sampler_variable(glob):
-                        self.global_sampler_names.add(glob.name)
+                        code += self.program_scope_sampler_constant(glob, None)
                         self.current_type_resolution_context = (
                             previous_type_resolution_context
                         )
@@ -12418,12 +12453,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             ):
                 coords_expr = sampler_expr
                 sampler_expr = None
-            sampler_name = self.expression_base_name(sampler_expr)
-            sampler = (
-                ""
-                if sampler_name in self.global_sampler_names
-                else self.generate_expression(sampler_expr, is_main)
-            )
+            sampler = self.generate_expression(sampler_expr, is_main)
             sample_args = [texture]
             if sampler:
                 sample_args.append(sampler)

@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 516,
+        "unsupported_marker_count": 518,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -388,8 +388,12 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 40,
+        "unsupported_marker_count": 41,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "from .stage_refusals import StageUnsupportedError"
+          },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "project_diagnostic_code = \"project.translate.webgl-struct-construction-unsupported\""
@@ -465,10 +469,6 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "builtin: builtin for builtin in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "builtin_name = self.webgl_unsupported_builtin_attribute_name(node)"
           }
         ]
       },
@@ -636,7 +636,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 588,
+        "unsupported_marker_count": 590,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -780,7 +780,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2618
+        "test_count": 2624
       },
       "translator_codegen": {
         "exists": true,
@@ -813,7 +813,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 118,
+        "unsupported_marker_count": 127,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -909,7 +909,7 @@
           "tests/test_translator/test_native_upload_snapshots.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1247
+        "test_count": 1263
       },
       "translator_codegen": {
         "exists": true,

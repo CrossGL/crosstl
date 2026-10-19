@@ -421,6 +421,9 @@ from .subgroup_control_flow import (
 from .uniform_returns import UniformReturnAnalysis
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
+# Opens the branch a SPIR-V compilation of the emitted GLSL takes (GL_ARB_gl_spirv, GL_KHR_vulkan_glsl).
+GLSL_SPIRV_GUARD = "#if defined(GL_SPIRV) || defined(VULKAN)\n"
+
 
 class OpenGLTemplateTypeError(ValueError):
     """Raised when OpenGL generation would emit an unresolved template type."""
@@ -17441,25 +17444,34 @@ class GLSLCodeGen(LoweringRefusalMixin):
         )
         if builtin_declaration is not None:
             return builtin_declaration
-        metadata = ""
-        layout = ""
-        if constant_id is not None:
-            self.validate_glsl_specialization_constant_type(node, const_type)
-            layout = f"layout(constant_id = {constant_id}) "
-            if value is None:
-                value_code = self.zero_value_expression(const_type)
-                metadata = (
-                    "/* CrossGL specialization metadata: "
-                    f"name={name}; constant_id={constant_id}; "
-                    "required_override=true; "
-                    f"encoding_default={value_code} */\n"
-                )
-            else:
-                value_code = self.generate_constant_expression(value, const_type)
+        if constant_id is None:
+            value_code = self.generate_constant_expression(value, const_type)
+            return f"const {declaration} = {value_code};\n"
+
+        self.validate_glsl_specialization_constant_type(node, const_type)
+        layout = f"layout(constant_id = {constant_id}) "
+        if value is None:
+            value_code = self.zero_value_expression(const_type)
+            metadata = (
+                "/* CrossGL specialization metadata: "
+                f"name={name}; constant_id={constant_id}; "
+                "required_override=true; "
+                f"encoding_default={value_code} */\n"
+            )
+            fallback = (
+                f'#error "specialization constant {name} has no default: '
+                'compile this shader to SPIR-V and specialize it"\n'
+            )
         else:
             value_code = self.generate_constant_expression(value, const_type)
-
-        return f"{metadata}{layout}const {declaration} = {value_code};\n"
+            metadata = ""
+            fallback = f"const {declaration} = {value_code};\n"
+        # constant_id exists only when the shader is compiled to SPIR-V (GLSL 4.60 section 4.4.5,
+        # GL_ARB_gl_spirv, GL_KHR_vulkan_glsl); a driver compiling the source keeps the default value.
+        return (
+            f"{GLSL_SPIRV_GUARD}{metadata}{layout}const {declaration} = {value_code};\n"
+            f"#else\n{fallback}#endif\n"
+        )
 
     def glsl_builtin_specialization_constant_declaration(
         self,
@@ -17493,7 +17505,9 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 reason="builtin-default-mismatch",
                 source_location=self.glsl_specialization_constant_source_location(node),
             )
-        return f"layout(constant_id = {constant_id}) {name};\n"
+        return (
+            f"{GLSL_SPIRV_GUARD}layout(constant_id = {constant_id}) {name};\n#endif\n"
+        )
 
     def glsl_constant_layout_prefix(self, node):
         constant_id = self.glsl_specialization_constant_id(node)
@@ -22447,15 +22461,19 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 continue
 
             layout = self.stage_io_layout_for_node(member)
+            member_type = self.member_type_name(member)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "fragment",
                 "input",
                 layout,
-                self.member_type_name(member),
+                (
+                    self.stage_io_per_vertex_element_type(member_type)
+                    if self.is_pervertex_stage_io(member, "")
+                    else member_type
+                ),
                 input_name,
             )
-            member_type = self.member_type_name(member)
             prefix = self.stage_io_declaration_prefix(
                 member, "in", stage_name="fragment"
             )
@@ -30959,6 +30977,8 @@ class GLSLCodeGen(LoweringRefusalMixin):
             return
 
         stage_name = self.current_target_stage or "global"
+        if self.is_per_vertex_stage_io(node, qualifier, direction):
+            mapped_type = self.stage_io_per_vertex_element_type(mapped_type)
         self.reserve_stage_io_layout(
             self.stage_io_used_locations,
             stage_name,
@@ -30967,6 +30987,40 @@ class GLSLCodeGen(LoweringRefusalMixin):
             mapped_type,
             self.resource_node_name(node, "<unnamed>"),
         )
+
+    # Arrayed interfaces whose outer dimension indexes vertices, not locations (GLSL 4.60 section 4.4.1):
+    # geometry inputs, tessellation inputs and non-patch control outputs, mesh outputs, pervertex inputs.
+    PER_VERTEX_STAGE_IO = {
+        ("geometry", "input"),
+        ("tessellation_control", "input"),
+        ("tessellation_control", "output"),
+        ("tessellation_evaluation", "input"),
+        ("mesh", "output"),
+    }
+
+    @staticmethod
+    def is_pervertex_stage_io(node, qualifier):
+        names = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", None) or []
+        }
+        return "pervertex" in names or bool(
+            set(str(qualifier).split()) & {"pervertexEXT", "pervertexNV"}
+        )
+
+    def is_per_vertex_stage_io(self, node, qualifier, direction):
+        if "patch" in str(qualifier).split():
+            return False
+        if self.is_pervertex_stage_io(node, qualifier):
+            return True
+        stage = str(self.current_global_stage_io_stage or "").lower()
+        return (stage, direction) in self.PER_VERTEX_STAGE_IO
+
+    @staticmethod
+    def stage_io_per_vertex_element_type(mapped_type):
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        close = array_suffix.find("]")
+        return base_type + array_suffix[close + 1 :] if close >= 0 else mapped_type
 
     def stage_io_layout_has(self, layout, names):
         if not layout.startswith("layout("):
@@ -31164,6 +31218,8 @@ class GLSLCodeGen(LoweringRefusalMixin):
             normalized = normalized.replace("-", "_")
             if normalized in {"perprimitive", "perprimitiveext"}:
                 add("perprimitiveEXT")
+            elif normalized in {"pervertex", "pervertexext"}:
+                add("pervertexEXT")
             elif normalized in {
                 "task_payload_shared",
                 "taskpayloadshared",
@@ -31209,6 +31265,7 @@ class GLSLCodeGen(LoweringRefusalMixin):
             "precise": 1,
             "patch": 2,
             "perprimitiveEXT": 3,
+            "pervertexEXT": 3,
             "flat": 4,
             "smooth": 5,
             "noperspective": 6,

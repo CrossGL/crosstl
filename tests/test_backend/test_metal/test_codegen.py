@@ -6398,7 +6398,7 @@ def test_codegen_preserves_template_helper_generics_for_crossgl_specialization()
     assert [param.name for param in function.generic_params] == ["T", "U"]
 
 
-def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
+def test_codegen_keeps_global_constexpr_sampler_state_for_roundtrip():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -6413,16 +6413,21 @@ def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
     """
     crossgl = convert(code)
 
-    assert "texture(texture_, in_.texCoords)" in crossgl
-    assert "sampler2d" not in crossgl
-    assert "texture(texture_, sampler2d" not in crossgl
+    # The fixed state is part of the program: dropping it would sample with
+    # whatever default sampler the round trip invents.
+    assert (
+        "const sampler sampler2d_ = sampler(coord::normalized, filter::linear);"
+        in crossgl
+    )
+    assert "texture(texture_, sampler2d_, in_.texCoords)" in crossgl
 
     ast = parse_crossgl(crossgl)
     metal = MetalCodeGen().generate(ast)
-    assert "texture_.sample(sampler(" in metal
+    assert "sampler2d_ = sampler(coord::normalized, filter::linear);" in metal
+    assert "texture_.sample(sampler2d_, in_.texCoords)" in metal
 
 
-def test_codegen_omits_global_constexpr_sampler_array_argument_for_roundtrip():
+def test_codegen_keeps_global_constexpr_sampler_array_for_roundtrip():
     # Apple MSL supports arrays of samplers declared in program scope.
     code = """
     #include <metal_stdlib>
@@ -6439,13 +6444,10 @@ def test_codegen_omits_global_constexpr_sampler_array_argument_for_roundtrip():
     """
     crossgl = convert(code)
 
-    assert "texture(tex, uv)" in crossgl
-    assert "sampler[2]" not in crossgl
-    assert "samplers" not in crossgl
-
-    ast = parse_crossgl(crossgl)
-    metal = MetalCodeGen().generate(ast)
-    assert "tex.sample(sampler(" in metal
+    assert "const sampler samplers[2] = {" in crossgl
+    assert "sampler(address::clamp_to_zero)" in crossgl
+    assert "sampler(coord::pixel)" in crossgl
+    assert "texture(tex, samplers[0], uv)" in crossgl
 
 
 def test_roundtrip_local_constexpr_sampler_options_from_apple_texture_sample():

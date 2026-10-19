@@ -226,6 +226,13 @@ def test_fallback_markers_and_entry_points():
     assert checks.count_entries("kernel void add(device float* a) {}", "metal") == 1
     assert (
         checks.count_entries(
+            "[[object, max_total_threads_per_threadgroup(1)]] void object_main() {}",
+            "metal",
+        )
+        == 1
+    )
+    assert (
+        checks.count_entries(
             '[shader("vertex")]\nfloat4 VSMain() : SV_Position', "hlsl"
         )
         == 2

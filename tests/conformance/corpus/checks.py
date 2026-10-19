@@ -60,7 +60,7 @@ GLSL_GUARDS = {
 ENTRY_PATTERNS = {
     "metal": re.compile(
         r"\b(?:kernel|vertex|fragment)\s+(?:(?:const|static|inline)\s+)*[\w:]+(?:\s*<[^;{}]*?>)?[\s*&]+\w+\s*\("
-        r"|\[\[\s*(?:kernel|vertex|fragment|mesh|object|visible)\s*\]\]|\[\[host_name\("
+        r"|\[\[\s*(?:kernel|vertex|fragment|mesh|object|visible)\s*(?:\]\]|,)|\[\[host_name\("
     ),
     "glsl": re.compile(r"\bvoid\s+main\s*\("),
     "essl": re.compile(r"\bvoid\s+main\s*\("),

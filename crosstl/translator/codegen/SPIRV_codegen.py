@@ -93,6 +93,7 @@ from .pointer_reinterpret import (
 )
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
+from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
@@ -14265,6 +14266,7 @@ class VulkanSPIRVCodeGen(
             storage_class == "Input"
             and execution_model == "Fragment"
             and self.interface_type_requires_flat(interface_type)
+            and not self.is_per_vertex_interface(interface_node)
         ):
             self.decorations.append(f"OpDecorate %{variable.id} Flat")
         self.decorate_global_interface_variable(interface_node, variable)
@@ -20021,6 +20023,15 @@ class VulkanSPIRVCodeGen(
                 if attribute_name == "sample":
                     self.require_capability("SampleRateShading")
                 self.decorations.append(f"OpDecorate %{var_id.id} {decoration_name}")
+        if self.declaration_metadata_names(node) & {
+            "pervertex",
+            "pervertexext",
+            "pervertexnv",
+        }:
+            # SPV_KHR_fragment_shader_barycentric: each element is one vertex's value, not an interpolant.
+            self.require_capability("FragmentBarycentricKHR")
+            self.require_extension("SPV_KHR_fragment_shader_barycentric")
+            self.decorations.append(f"OpDecorate %{var_id.id} PerVertexKHR")
 
     def has_attribute(self, node, attribute_name: str) -> bool:
         return any(
@@ -20691,7 +20702,48 @@ class VulkanSPIRVCodeGen(
         type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         type_source = getattr(node, "member_type", type_source)
         type_name = self.type_name_from_value(type_source)
+        if type_name is not None and self.is_per_vertex_interface(node):
+            outer = self.split_outer_array_type(
+                self.normalize_hlsl_matrix_type(
+                    self.normalize_generic_vector_type(type_name)
+                )
+            )
+            if outer is not None:
+                type_name = outer[0]
         return self.interface_type_location_component_widths(type_name)
+
+    # Arrayed interfaces whose outer dimension indexes vertices and takes no locations (Vulkan 1.3 section
+    # 15.1.4): geometry inputs, tessellation inputs and non-patch control outputs, mesh outputs, pervertex inputs.
+    PER_VERTEX_INTERFACES = {
+        ("Geometry", "in"),
+        ("TessellationControl", "in"),
+        ("TessellationControl", "out"),
+        ("TessellationEvaluation", "in"),
+        ("MeshEXT", "out"),
+        ("MeshNV", "out"),
+    }
+
+    def is_per_vertex_interface(self, node) -> bool:
+        names = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", None) or []
+        }
+        names.update(str(q).lower() for q in getattr(node, "qualifiers", None) or [])
+        if "patch" in names:
+            return False
+        if names & {"pervertex", "pervertexext", "pervertexnv"}:
+            return True
+        direction = (
+            "in"
+            if names & {"in", "input"}
+            else "out" if names & {"out", "output"} else None
+        )
+        models = (
+            {self.current_execution_model}
+            if self.current_execution_model
+            else getattr(self, "program_execution_models", set())
+        )
+        return len(models) == 1 and (*models, direction) in self.PER_VERTEX_INTERFACES
 
     def interface_type_location_component_widths(self, type_name: str) -> List[int]:
         if type_name is None:
@@ -20742,6 +20794,16 @@ class VulkanSPIRVCodeGen(
 
         if self.is_task_payload_shared_node(node):
             return "TaskPayloadWorkgroupEXT"
+        ray_storage = ray_storage_class(attribute_names | qualifiers)
+        if ray_storage is not None:
+            if getattr(node, "initial_value", None) is not None:
+                raise UnsupportedSPIRVFeatureError(
+                    "ray tracing variable initializer",
+                    f"SPIR-V {ray_storage} variable '{node.name}' cannot take an initializer",
+                    missing_capabilities=("spirv.ray_tracing_storage.initializer",),
+                    source_location=getattr(node, "source_location", None),
+                )
+            return ray_storage
         # Module- and stage-scope GLSL `shared`, HLSL `groupshared` and MSL `threadgroup` variables are one copy
         # per workgroup; Private storage would give every invocation its own copy.
         workgroup_names = {"shared", "groupshared", "threadgroup", "workgroup"}
@@ -30298,10 +30360,14 @@ class VulkanSPIRVCodeGen(
                 body.append(line)
 
         if self.spirv_module_version() == "1.4":
-            entry_points = [
-                self.append_spirv_1_4_workgroup_interfaces(line)
-                for line in entry_points
-            ]
+            entry_points = complete_entry_point_interfaces(
+                [
+                    self.append_spirv_1_4_workgroup_interfaces(line)
+                    for line in entry_points
+                ],
+                global_variables,
+                body,
+            )
 
         annotations.extend(self.decorations)
 
@@ -30449,6 +30515,10 @@ class VulkanSPIRVCodeGen(
 
         validate_recursion_free(ast, "vulkan")
         self.reset_generation_state()
+        self.program_execution_models = {
+            self.spirv_execution_model(self.stage_key(stage_type))
+            for stage_type in getattr(ast, "stages", None) or {}
+        }
         try:
             module = self._generate_module(ast)
         except (TranslationDiagnostic, UnsupportedSPIRVFeatureError):

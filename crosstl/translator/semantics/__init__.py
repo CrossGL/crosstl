@@ -11,11 +11,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .annotate import Annotator
+from .array_length import fold_array_lengths
 from .half import HalfFloatUnsupportedError, legalize_half_floats
+from .hlsl_stage_interfaces import (
+    HlslStageInterfaceUnsupportedError,
+    legalize_hlsl_stage_interfaces,
+)
 from .lower import Lowerer, RuleInexpressibleError
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
+from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
+from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
@@ -26,9 +33,12 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 __all__ = [
     "CudaWarpIntrinsicUnsupportedError",
     "FAMILIES",
+    "FixedSamplerStateUnsupportedError",
     "HalfFloatUnsupportedError",
+    "HlslStageInterfaceUnsupportedError",
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
+    "PerVertexInputUnsupportedError",
     "RuleInexpressibleError",
     "RuleReport",
     "SOURCE_RULES",
@@ -69,7 +79,11 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
 
     SPIR-V storage block variables are first rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
-    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Structs holding samplers,
+    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`); ``a.length()`` of a sized
+    array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
+    (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
+    GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`).
+    Structs holding samplers,
     textures or images are flattened into separate resources for SPIR-V, or refused with
     :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`).
     CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
@@ -83,6 +97,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
+    refuse_per_vertex_inputs(program, report.target)
+    legalize_sampler_states(program, report.target)
+    fold_array_lengths(program, report.target)
+    legalize_hlsl_stage_interfaces(program, report.target)
     legalize_opaque_struct_members(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
     legalize_half_floats(program, report.source, report.target)

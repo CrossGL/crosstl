@@ -5,6 +5,14 @@ import shlex
 import struct
 
 from ..common_ast import InitializerListNode
+from .local_names import function_local_names
+from .ray_tracing_import import (
+    BUILTIN_VARIABLE_NAMES,
+    SpirvInstructionUnsupportedError,
+    ray_statement,
+    ray_variable_locations,
+    refuse_untranslated_statement,
+)
 from .VulkanAst import *
 from .VulkanLexer import *
 
@@ -76,6 +84,19 @@ class VulkanParser:
         "ASSIGN_SHIFT_RIGHT",
     )
     SPIRV_INTERFACE_STORAGE_CLASSES = {"Input": "IN", "Output": "OUT"}
+    # SPV_KHR_ray_tracing storage classes and the GL_EXT_ray_tracing qualifiers that declare them.
+    SPIRV_RAY_STORAGE_QUALIFIERS = {
+        "RayPayloadKHR": "rayPayloadEXT",
+        "IncomingRayPayloadKHR": "rayPayloadInEXT",
+        "CallableDataKHR": "callableDataEXT",
+        "IncomingCallableDataKHR": "callableDataInEXT",
+        "HitAttributeKHR": "hitAttributeEXT",
+        "RayPayloadNV": "rayPayloadEXT",
+        "IncomingRayPayloadNV": "rayPayloadInEXT",
+        "CallableDataNV": "callableDataEXT",
+        "IncomingCallableDataNV": "callableDataInEXT",
+        "HitAttributeNV": "hitAttributeEXT",
+    }
     SPIRV_INTERFACE_DECORATIONS = {
         "BuiltIn": "builtin",
         "Location": "location",
@@ -157,6 +178,7 @@ class VulkanParser:
         "ViewIndex": "gl_ViewIndex",
         "WorkgroupId": "gl_WorkGroupID",
         "WorkgroupSize": "gl_WorkGroupSize",
+        **BUILTIN_VARIABLE_NAMES,
     }
     SPIRV_STORAGE_BUILTIN_VARIABLE_NAMES = {
         ("SampleMask", "Input"): "gl_SampleMaskIn",
@@ -1356,6 +1378,8 @@ class VulkanParser:
                 continue
 
             function_id, _opcode, function_operands, _start_line = entry_instruction
+            module_names = names
+            names = function_local_names(raw_instructions, module_names)
             return_type_id = function_operands[0] if function_operands else None
             function_control = (
                 function_operands[1] if len(function_operands) >= 2 else None
@@ -1406,7 +1430,7 @@ class VulkanParser:
                 self.spirv_assembly_function_return_type_name(
                     return_type_id, types, constants
                 ),
-                names.get(
+                module_names.get(
                     function_id,
                     self.spirv_function_name_fallback(function_id, entry_points_by_id),
                 ),
@@ -1440,6 +1464,7 @@ class VulkanParser:
             )
             node.spirv_execution_modes = execution_modes.get(function_id, [])
             node.spirv_names = names
+            names = module_names
             node.spirv_constants = constants
             node.spirv_decorations = decorations
             node.spirv_extended_instruction_imports = extended_instruction_imports
@@ -2226,6 +2251,27 @@ class VulkanParser:
                         statements.append(expressions[result_id])
                     continue
 
+            if result_id and opcode == "OpReportIntersectionKHR":
+                if len(operands) < 3:
+                    raise SpirvInstructionUnsupportedError(
+                        opcode, f"needs 3 operands, got {len(operands)}"
+                    )
+                expressions[result_id] = FunctionCallNode(
+                    "ReportHit",
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operand, expressions, names, decorations, constants
+                        )
+                        for operand in operands[1:3]
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                if result_id not in used_result_ids:
+                    # A discarded result still reports the hit; structured blocks emit it from this flag.
+                    expressions[result_id].spirv_unused_side_effect = True
+                    statements.append(expressions[result_id])
+                continue
+
             if result_id and opcode in {
                 "OpAtomicCompareExchange",
                 "OpAtomicCompareExchangeWeak",
@@ -2753,6 +2799,20 @@ class VulkanParser:
 
             if opcode == "OpReturn":
                 statements.append(ReturnNode())
+                continue
+
+            ray_call = ray_statement(
+                opcode,
+                operands,
+                lambda operand: self.spirv_assembly_operand_expression(
+                    operand, expressions, names, decorations, constants
+                ),
+                ray_variable_locations(variables, decorations),
+            )
+            if ray_call is not None:
+                statements.append(ray_call)
+                continue
+            refuse_untranslated_statement(result_id, opcode)
 
         structured_statements = self.spirv_assembly_simple_loop_body(
             raw_instructions,
@@ -3906,6 +3966,26 @@ class VulkanParser:
 
             if opcode == "OpReturn":
                 statements.append(ReturnNode())
+                continue
+
+            if result_id and getattr(
+                expressions.get(result_id), "spirv_unused_side_effect", False
+            ):
+                statements.append(expressions[result_id])
+                continue
+
+            ray_call = ray_statement(
+                opcode,
+                operands,
+                lambda operand: self.spirv_assembly_operand_expression(
+                    operand, expressions, names, decorations, constants
+                ),
+                ray_variable_locations(variables_by_id.values(), decorations),
+            )
+            if ray_call is not None:
+                statements.append(ray_call)
+                continue
+            refuse_untranslated_statement(result_id, opcode)
 
         return statements
 
@@ -4074,6 +4154,49 @@ class VulkanParser:
                 return member_types[member_index]
         return None
 
+    def spirv_assembly_typed_access_chain(
+        self,
+        base_operand,
+        type_id,
+        index_operands,
+        expressions,
+        names,
+        decorations,
+        member_names,
+        types,
+        constants,
+    ):
+        """``base.member[i].field``: an access chain walked through its pointee type, struct indices as names."""
+        access = self.spirv_assembly_operand_expression(
+            base_operand, expressions, names, decorations, constants
+        )
+        for index_operand in index_operands:
+            type_info = types.get(type_id, {})
+            if type_info.get("kind") == "struct":
+                member_index = self.spirv_integer_constant_operand(
+                    index_operand, constants
+                )
+                member_types = type_info.get("member_types", [])
+                if member_index is None or not 0 <= member_index < len(member_types):
+                    return None
+                member_key = str(member_index)
+                access = MemberAccessNode(
+                    access,
+                    member_names.get(type_id, {}).get(
+                        member_key, f"member_{member_key}"
+                    ),
+                )
+                type_id = member_types[member_index]
+                continue
+            access = ArrayAccessNode(
+                access,
+                self.spirv_assembly_operand_expression(
+                    index_operand, expressions, names, decorations, constants
+                ),
+            )
+            type_id = self.spirv_composite_index_type_id(type_id, index_operand, types)
+        return access
+
     def spirv_assembly_struct_member_access_expression(
         self,
         base_operand,
@@ -4101,6 +4224,24 @@ class VulkanParser:
         storage_class = variable["storage_class"] or pointer_type.get("storage_class")
         struct_type_id = pointer_type.get("type_id")
         struct_type = types.get(struct_type_id, {})
+        if (
+            storage_class in self.SPIRV_INTERFACE_STORAGE_CLASSES
+            and struct_type.get("kind") in {"array", "runtime_array"}
+            and types.get(struct_type.get("element_type"), {}).get("kind") == "struct"
+            and len(index_operands) >= 2
+        ):
+            # Per-vertex interface arrays (gl_in, gl_MeshVerticesEXT, mesh outputs): element, then member names.
+            return self.spirv_assembly_typed_access_chain(
+                base_operand,
+                struct_type_id,
+                index_operands,
+                expressions,
+                names,
+                decorations,
+                member_names,
+                types,
+                constants,
+            )
         if struct_type.get("kind") != "struct":
             return None
 
@@ -4113,6 +4254,18 @@ class VulkanParser:
             return None
 
         member_key = str(member_index)
+        if storage_class in self.SPIRV_RAY_STORAGE_QUALIFIERS:
+            return self.spirv_assembly_typed_access_chain(
+                base_operand,
+                struct_type_id,
+                index_operands,
+                expressions,
+                names,
+                decorations,
+                member_names,
+                types,
+                constants,
+            )
         if storage_class == "Function":
             member_name = member_names.get(struct_type_id, {}).get(
                 member_key, f"member_{member_key}"
@@ -6007,6 +6160,23 @@ class VulkanParser:
                     layouts.append(resource_block_layout)
                 continue
 
+            ray_qualifier = self.SPIRV_RAY_STORAGE_QUALIFIERS.get(storage_class)
+            if ray_qualifier is not None:
+                ray_layout = self.spirv_assembly_ray_storage_layout(
+                    variable,
+                    pointer_type,
+                    storage_class,
+                    ray_qualifier,
+                    names,
+                    decorations,
+                    types,
+                    constants,
+                    ray_variable_locations(variables, decorations),
+                )
+                if ray_layout is not None:
+                    layouts.append(ray_layout)
+                continue
+
             layout_type = self.SPIRV_INTERFACE_STORAGE_CLASSES.get(storage_class)
             if layout_type is None:
                 continue
@@ -6065,6 +6235,46 @@ class VulkanParser:
             )
 
         return layouts
+
+    def spirv_assembly_ray_storage_layout(
+        self,
+        variable,
+        pointer_type,
+        storage_class,
+        ray_qualifier,
+        names,
+        decorations,
+        types,
+        constants,
+        ray_locations,
+    ):
+        """A ray payload, callable data or hit attribute variable, as its GL_EXT_ray_tracing declaration."""
+        data_type, array_suffix = self.spirv_type_name_and_suffix(
+            pointer_type.get("type_id"), types, constants, names=names
+        )
+        if data_type is None:
+            return None
+        variable_decorations = decorations.get(variable["id"], [])
+        qualifiers = [
+            (name, value)
+            for name, value in self.spirv_layout_qualifiers(variable_decorations)
+            if name == "location"
+        ]
+        location = ray_locations.get(variable["id"])
+        if not qualifiers and location is not None:
+            qualifiers = [("location", str(location))]
+        variable_name = self.spirv_assembly_value_name(
+            variable["id"], names, decorations={}
+        )
+        return LayoutNode(
+            qualifiers,
+            data_type=data_type,
+            variable_name=f"{variable_name}{array_suffix}",
+            declaration_qualifiers=[ray_qualifier],
+            spirv_id=variable["id"],
+            spirv_decorations=variable_decorations,
+            spirv_storage_class=storage_class,
+        )
 
     def spirv_assembly_private_global_variables(
         self, variables, names, decorations, types, constants

@@ -57,6 +57,7 @@ from ..math_namespaces import (
     METAL_PRECISE_MATH_FUNCTIONS,
 )
 from ..resource_identity import resource_identity_marker
+from ..semantics.sampler_states import is_sampler_constructor
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..structure_conversions import (
@@ -875,6 +876,7 @@ class MetalCodeGen:
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
         self.metal_lowered_program_scope_groupshared_global_ids = set()
         self.metal_program_scope_value_global_types = {}
+        self.program_scope_sampler_constants = set()
         self.metal_type_aliases = {}
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
@@ -1896,6 +1898,7 @@ class MetalCodeGen:
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
         self.metal_lowered_program_scope_groupshared_global_ids = set()
         self.metal_program_scope_value_global_types = {}
+        self.program_scope_sampler_constants = set()
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -3151,6 +3154,10 @@ class MetalCodeGen:
                 )
                 mapped_type = "float"
             declaration = format_c_style_array_declaration(mapped_type, name)
+            if mapped_type == "sampler":
+                # Program-scope fixed sampler state; texture calls take it as
+                # their explicit sampler argument.
+                self.program_scope_sampler_constants.add(name)
             code += (
                 f"{self.metal_unused_declaration_qualifier('constant')} "
                 f"{declaration} = {value_code};\n"
@@ -6870,7 +6877,10 @@ class MetalCodeGen:
                     f"'{metal_semantic}' and is not supported"
                 )
             actual_type = self.map_type(self.struct_member_raw_type(member))
-            if actual_type != expected_type:
+            # A half-precision color attachment value is the same four-component
+            # output; [[color(n)]] accepts half vectors (MSL 3.2 section 5.2.3.4).
+            half_color = metal_semantic.startswith("color(") and actual_type == "half4"
+            if actual_type != expected_type and not half_color:
                 struct_name = getattr(struct_node, "name", "<anonymous>")
                 member_name = getattr(member, "name", "<anonymous>")
                 raise ValueError(
@@ -13674,6 +13684,15 @@ class MetalCodeGen:
             return
 
         members = self.metal_intersection_result_members(raw_return_type)
+        if members is None and mapped_return_type == "void":
+            # GL_EXT_ray_tracing and SPIR-V intersection shaders report hits
+            # through calls; a Metal intersection function returns its result.
+            self.refuse_lowering(
+                f"{primitive_type} intersection stage: a void entry that reports "
+                "hits with ReportHit has no lowering to a Metal intersection "
+                "function result yet"
+            )
+            return
         if members is None:
             if primitive_type == "triangle":
                 raise ValueError(
@@ -23289,6 +23308,10 @@ class MetalCodeGen:
             args[1]
         )
         if sampler_name in self.sampler_variable_names():
+            return True
+        if sampler_name in self.program_scope_sampler_constants or (
+            is_sampler_constructor(args[1])
+        ):
             return True
         arg_type = self.expression_result_type(args[1])
         return arg_type is not None and self.is_sampler_type(arg_type)

@@ -26,6 +26,7 @@ from typing import (
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
+from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
 from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
@@ -903,7 +904,7 @@ class _PromotedFunctionDefinition:
     promoted_parameters: Tuple[_PromotedFunctionParameter, ...]
 
 
-class MetalPreprocessor(HLSLPreprocessor):
+class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     """Small Metal preprocessor used before lexing imported source files."""
 
     def __init__(
