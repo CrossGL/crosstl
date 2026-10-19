@@ -1025,13 +1025,37 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
     assert upload["with"]["path"] == "mlx-current-results"
     families = steps[len(setup) : -1]
     assert families
+    # A sharded family runs one step in each of its groups. The include list gives
+    # every such group its family and shard index, numbered 0 to n - 1.
+    shard_groups = {}
+    for entry in matrix["include"]:
+        assert set(entry) == {"group", "family", "shard"}, entry
+        assert entry["group"] in matrix["group"], entry
+        assert entry["group"] == f"{entry['family']}-{entry['shard']}", entry
+        shard_groups.setdefault(entry["family"], []).append(entry["shard"])
+    assert len(matrix["include"]) == len(
+        {entry["group"] for entry in matrix["include"]}
+    )
+    for family, shards in shard_groups.items():
+        assert shards == list(range(len(shards))), family
+        assert family not in matrix["group"], family
     by_group = {group: [] for group in matrix["group"]}
+    stepped_families = set()
     for step in families:
         assert step["name"].startswith("Prove current MLX ")
         assert step["name"] not in porting_steps
-        condition = re.fullmatch(r"matrix\.group == '([a-z][a-z0-9-]*)'", step["if"])
-        group = condition.group(1)
-        by_group[group].append(step)
+        condition = re.fullmatch(
+            r"matrix\.(group|family) == '([a-z][a-z0-9-]*)'", step["if"]
+        )
+        if condition.group(1) == "group":
+            by_group[condition.group(2)].append(step)
+        else:
+            family = condition.group(2)
+            assert family not in stepped_families, family
+            stepped_families.add(family)
+            for shard in shard_groups[family]:
+                by_group[f"{family}-{shard}"].append(step)
+            assert "${{ matrix.shard }}" in step["env"].values(), step["name"]
         assert "continue-on-error" not in step
         assert "python tools/run_bounded_command.py" in step["run"]
     timeout = job["timeout-minutes"] * 60
