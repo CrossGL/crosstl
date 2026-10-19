@@ -624,3 +624,50 @@ def test_readme_results_state_what_the_upstream_device_lost_steps_selected():
     section = " ".join(_readme_results_section().split())
     claim = "the three upstream DeviceLost steps selected no case"
     assert (claim in section) is (set(upstream.values()) == {0})
+
+
+def _gated_case_counts():
+    """Count the frozen capability-gated cases per (capability, runsWhenAvailable).
+
+    Gates without type arguments count every case of the method from the lock.
+    Gates with type arguments count the matching type rows on both devices; the
+    lock records only totals per method, so this is exact for the RGB32 gates,
+    whose methods run each texture type once per device.
+    """
+    contract = json.loads((ROOT / "coverage.json").read_text(encoding="utf-8"))
+    lock = json.loads((ROOT / "coverage.lock.json").read_text(encoding="utf-8"))
+    by_name = {}
+    for signature, entry in lock["methods"].items():
+        by_name.setdefault(signature.split("(")[0], []).append(entry)
+    counts = {}
+    for capability, entry in contract["capabilities"].items():
+        for gate in entry["gates"]:
+            methods = by_name[gate["method"]]
+            assert len(methods) == 1, gate["method"]
+            wanted = gate.get("typeArguments")
+            if wanted is None:
+                cases = methods[0]["cases"]
+            else:
+                cases = len(wanted) * len(methods[0]["devices"])
+            key = (capability, gate["runsWhenAvailable"])
+            counts[key] = counts.get(key, 0) + cases
+    return counts
+
+
+def test_readme_limitations_count_the_frozen_capability_gates():
+    """The Limitations section states the gated case counts of the contract."""
+    counts = _gated_case_counts()
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    start = text.index("## Limitations\n")
+    section = " ".join(text[start : text.index("\n## ", start + 1)].split())
+    fp64_runs, fp64_throws = counts[("fp64", True)], counts[("fp64", False)]
+    rgb32 = counts[("rw-texture-rgb32", True)]
+    assert f"The {fp64_runs} double-precision cases are capability-gated" in section
+    assert f'the {fp64_throws} cases that require the "unsupported"' in section
+    assert f"({rgb32} cases on each translated target)" in section
+    results = json.loads(PUBLISHED.read_text(encoding="utf-8"))["profiles"]
+    assert results["metal-apple-gpu"]["cases"]["capabilityGated"] == fp64_runs + rgb32
+    assert (
+        results["opengl-mesa-llvmpipe"]["cases"]["capabilityGated"]
+        == fp64_throws + rgb32
+    )

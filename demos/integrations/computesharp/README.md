@@ -574,12 +574,17 @@ loosening any upstream threshold:
 
 ## Limitations
 
-- Metal has no double-precision type: the 6 double-precision cases are
-  capability-gated on Metal and the 10 cases that require the "unsupported"
-  behavior pass there instead. WARP and OpenGL provide fp64, so on those
-  profiles it is the other way round.
+- Metal has no double-precision type: the scalar types of the Metal Shading
+  Language Specification (section 2.1) exclude `double`. The 6
+  double-precision cases are capability-gated on Metal and the 10 cases that
+  require the "unsupported" behavior pass there instead. WARP and OpenGL
+  provide fp64, so on those profiles it is the other way round.
 - Read-write textures of `Float3`, `Int3` and `UInt3` (12 cases on each
-  translated target) are unsupported on every profile, as on Direct3D 12.
+  translated target) are unsupported on every profile: `MTLPixelFormat`
+  defines no three-channel 32-bit formats, OpenGL image load/store accepts no
+  three-channel 32-bit formats (OpenGL 4.6 core specification, section 8.26),
+  and on Direct3D 12 WARP the upstream capability check reports the DXGI
+  R32G32B32 formats as unsupported for read-write textures.
 - Windows-specific tests (DXIL reflection, D3D12/DXGI interop, COM) run only in
   the original baseline.
 - The Metal backend requires a unified-memory device and compiles with
