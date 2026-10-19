@@ -32397,11 +32397,11 @@ def test_metal_1d_base_lod_sampling_depends_on_program_stages():
 
     # Fragment sampling derives its own LOD, which can select the minification
     # filter, so an explicit base level has no exact Metal 1D equivalent.
-    graphics_code = MetalCodeGen().generate(crosstl.translator.parse(graphics_shader))
-    assert (
-        "/* unsupported Metal texture sampling: textureLod on texture1d<float> "
-        "supports only implicit sampling */ float4(0.0)" in graphics_code
-    )
+    with pytest.raises(
+        MetalLoweringRefused,
+        match="textureLod on texture1d<float> supports only implicit sampling",
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(graphics_shader))
 
     compute_code = MetalCodeGen().generate(crosstl.translator.parse(compute_shader))
     assert "lineMap.sample(linearSampler, 0.5)" in compute_code

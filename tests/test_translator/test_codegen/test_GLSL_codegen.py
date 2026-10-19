@@ -16408,19 +16408,21 @@ def test_glsl_precise_function_multiple_returns_use_collision_safe_locals(tmp_pa
     )
 
 
+# A fragment stage with only a uniform and an output keeps every other construct within
+# GLSL 3.30, so the profile changes only for the precise qualifier.
 PRECISE_PROFILE_SHADER = """
 #version {version}
 shader PreciseProfile {{
+    out vec4 fragColor @location(0);
     @precise
     float stable(float a, float b, float c) {{
         // A comment that mentions precise does not need the qualifier.
         return a * b + c;
     }}
-    compute {{
-        layout(std430, binding = 0) buffer Data {{ float values[]; }} data;
-        @numthreads(1, 1, 1)
+    fragment {{
+        uniform vec3 operands;
         void main() {{
-            data.values[0] = stable(data.values[1], data.values[2], data.values[3]);
+            fragColor = vec4(stable(operands.x, operands.y, operands.z));
         }}
     }}
 }}
