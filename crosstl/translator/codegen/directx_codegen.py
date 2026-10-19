@@ -153,6 +153,11 @@ from .builtin_result_types import (
 from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
 from .constant_guards import constant_bool_locals
+from .counter_loops import (
+    any_start_counter_loop_terminates,
+    any_start_counter_loops,
+    counter_update,
+)
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -5771,7 +5776,10 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         bound, a literal offset and stride, and a body that leaves them alone,
         every invocation runs the same trips, so the counter stays uniform
         after the loop too. The checked termination proof uses the bound's
-        literal value or metadata range.
+        literal value or metadata range. ``any_start_counter_loops`` adds
+        loops, such as ``for (; k > 0; k--)`` in each branch of an ``if``,
+        that the counter may reach with any value; the flow analysis proves
+        that value uniform and termination must hold from every start.
         """
         record = getattr(self, "hlsl_software_subgroup_counter_loops", {}).get(id(node))
         if record is None:
@@ -5792,10 +5800,15 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             if key in uniform_names and key != name
         }
         # The initializer runs at the declaration, where a later local may
-        # not yet shadow a constant it names; only literals are proven.
-        start = checked_induction_value(declaration.initial_value, {})
+        # not yet shadow a constant it names; only literals are proven. A loop
+        # the counter may reach with another value proves every start.
+        start = (
+            checked_induction_value(declaration.initial_value, {})
+            if id(node) in getattr(self, "hlsl_software_subgroup_fresh_counter_loops", ())
+            else None
+        )
         condition = getattr(node, "condition", None)
-        if start is None or not isinstance(condition, BinaryOpNode):
+        if not isinstance(condition, BinaryOpNode):
             return False
         operator = self.map_operator(condition.operator)
         left = condition.left
@@ -5831,22 +5844,27 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 return False
             convert = _UnsignedLiteralInt if record["dtype"].startswith("u") else int
             stops = [convert(record["minimum"]), convert(record["maximum"])]
-        update = node.update
+        update = counter_update(node.update)
+        if update is None or update[0] != name:
+            return False
+        _counter, sign, stride = update
         stride_names = set()
-        if isinstance(update, AssignmentNode):
-            step = checked_induction_value(update.value, constants)
+        step = sign
+        if stride is not None:
+            magnitude = checked_induction_value(stride, constants)
+            step = None if magnitude is None else sign * magnitude
             stride_names = self.hlsl_software_subgroup_expression_identifier_names(
-                update.value
+                stride
             )
-        else:
-            step = 1
-        if step is None or not offset_counter_loop_terminates(
-            self.type_name_string(declaration.var_type),
-            start,
-            offset,
-            stops,
-            step,
-            operator,
+        type_name = self.type_name_string(declaration.var_type)
+        if step is None or not (
+            start is not None
+            and offset_counter_loop_terminates(
+                type_name, start, offset, stops, step, operator
+            )
+            or any_start_counter_loop_terminates(
+                type_name, offset, stops, step, operator
+            )
         ):
             return False
         if not self.hlsl_software_subgroup_loop_controls_preserved(
@@ -7019,11 +7037,20 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 list(node.arguments or [])
             )
 
-        self.hlsl_software_subgroup_counter_loops = (
+        fresh_counter_loops = (
             init_less_counter_loops(function, self.walk_ast, counter_writes)
             if entry
             else {}
         )
+        # Loops entered with an unknown counter need the flow analysis to
+        # prove the counter uniform where each loop starts.
+        self.hlsl_software_subgroup_counter_loops = (
+            any_start_counter_loops(function, self.walk_ast, counter_writes)
+            if entry
+            else {}
+        )
+        self.hlsl_software_subgroup_counter_loops.update(fresh_counter_loops)
+        self.hlsl_software_subgroup_fresh_counter_loops = set(fresh_counter_loops)
         counter_names = {
             record[0] for record in self.hlsl_software_subgroup_counter_loops.values()
         }
@@ -7384,6 +7411,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.hlsl_software_subgroup_guard_names = set()
         self.hlsl_software_subgroup_guard_constant_names = set()
         self.hlsl_software_subgroup_counter_loops = {}
+        self.hlsl_software_subgroup_fresh_counter_loops = set()
         self.hlsl_software_subgroup_proven_counter_loops = set()
         self.hlsl_software_subgroup_modular_stride_loops = set()
         if self.software_subgroup_width is None:
