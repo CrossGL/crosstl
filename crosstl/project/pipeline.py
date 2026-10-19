@@ -30,10 +30,6 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
-from crosstl.backend.Metal.template_overloads import (
-    declared_type_names,
-    select_instantiated_overload,
-)
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_declared_type_and_name,
@@ -41,6 +37,10 @@ from crosstl.backend.Metal.function_specialization import (
     _normalize_metal_type_text,
     _strip_metal_attribute_blocks,
     _template_parameter_values_from_arguments,
+)
+from crosstl.backend.Metal.template_overloads import (
+    declared_type_names,
+    select_instantiated_overload,
 )
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.directx_toolchain import (

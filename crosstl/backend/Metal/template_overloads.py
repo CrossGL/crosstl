@@ -13,7 +13,7 @@ that are certain and never guesses between overloads that both still fit.
 from __future__ import annotations
 
 import re
-from typing import Any, Optional, Sequence
+from typing import Any, Sequence
 
 _VALUE_LITERAL_RE = re.compile(
     r"[-+]?(?:0[xX][0-9A-Fa-f']+|0[bB][01']+|\d[\d']*(?:\.\d*)?(?:[eE][-+]?\d+)?"
@@ -38,7 +38,7 @@ def declared_type_names(code: str) -> frozenset[str]:
 
 def _argument_kind(
     preprocessor: Any, argument: str, type_names: frozenset[str]
-) -> Optional[str]:
+) -> str | None:
     """Return ``"type"`` or ``"value"`` when the argument kind is certain."""
     text = argument.strip()
     if not text:
@@ -90,7 +90,7 @@ def select_instantiated_overload(
     type_names: frozenset[str],
     candidates: Sequence[Any],
     arguments: Sequence[str],
-) -> Optional[Any]:
+) -> Any | None:
     """Return the overload an explicit instantiation names, or ``None``.
 
     ``type_names`` comes from :func:`declared_type_names` for the source that

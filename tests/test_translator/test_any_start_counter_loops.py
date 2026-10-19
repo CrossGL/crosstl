@@ -209,7 +209,9 @@ def test_discovery_skips_loops_inside_other_loops():
         "if (limits[1] > 0) {", "for (int r = 0; r < 2; r++) if (limits[1] > 0) {", 1
     )
     walk = HLSLCodeGen().walk_ast
-    assert any_start_counter_loops(_entry(parse(source)), walk, lambda node: set()) == {}
+    assert (
+        any_start_counter_loops(_entry(parse(source)), walk, lambda node: set()) == {}
+    )
 
 
 def test_counter_update_reads_both_directions():
@@ -316,9 +318,17 @@ def test_directx_accepts_descending_loops_from_a_uniform_counter(tmp_path):
                 "simdgroup_multiply_accumulate(C, A, B, C);\n      k -= int(lane % 2);\n    }",
             )
         ],
-        [("simdgroup_store(C, out, 8);", "k = int(lane);\n  simdgroup_store(C, out, 8);")],
+        [
+            (
+                "simdgroup_store(C, out, 8);",
+                "k = int(lane);\n  simdgroup_store(C, out, 8);",
+            )
+        ],
         [("int k = T;", "uint k = uint(T);"), ("k > 0;", "k >= 0u;")],
-        [("int k = T;", "int k = T;\n  for (int r = 0; r < 2; r++) {"), ("  simdgroup_store", "  }\n  simdgroup_store")],
+        [
+            ("int k = T;", "int k = T;\n  for (int r = 0; r < 2; r++) {"),
+            ("  simdgroup_store", "  }\n  simdgroup_store"),
+        ],
     ],
     ids=[
         "divergent-start",
