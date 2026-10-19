@@ -461,12 +461,11 @@ def _assert_grouped_native_python_policy(workflow_text, component_key):
         for runner in ("windows-latest", "macOS-latest")
     ]
     assert "all" not in matrix[component_key]
-    expected_runner = (
+    # Both workflows select Xcode 27.1 for Metal, which only the xcode-27
+    # image carries.
+    assert job["runs-on"] == (
         "${{ matrix.OS == 'macOS-latest' && 'xcode-27' || matrix.OS }}"
-        if component_key == "component"
-        else "${{ matrix.OS }}"
     )
-    assert job["runs-on"] == expected_runner
     # Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
     assert job["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == (
         "${{ matrix.OS == 'macOS-latest' && '3' || '4' }}"

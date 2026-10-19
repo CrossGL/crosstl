@@ -44,7 +44,9 @@ jobs:
 
   test:
     needs: python-versions
-    runs-on: ${{ matrix.OS }}
+    # The pinned Xcode 27.1 toolchain the Metal step selects is only on the
+    # xcode-27 image; macOS-latest images carry Xcode 26.
+    runs-on: ${{ matrix.OS == 'macOS-latest' && 'xcode-27' || matrix.OS }}
     timeout-minutes: 45
     env:
       # Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
