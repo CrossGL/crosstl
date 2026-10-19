@@ -2419,8 +2419,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                             length=max(first_span[1] - first_span[0], 0),
                             context=context,
                         )
-                specialized_name = self._template_specialization_identifier(
-                    struct_name, list(key[1])
+                specialized_name = self._unique_struct_specialization_identifier(
+                    struct_name, key
                 )
                 if partial_selection is None:
                     materialized = self._materialize_template_struct_with_name(
@@ -26844,6 +26844,23 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if identifier[0].isdigit():
             identifier = f"{function_name}_{identifier}"
         return identifier
+
+    def _unique_struct_specialization_identifier(
+        self, struct_name: str, key: Tuple[str, Tuple[str, ...]]
+    ) -> str:
+        """Name ``key``'s concrete struct without taking another key's name.
+
+        The readable identifier drops punctuation, so distinct arguments such
+        as ``!flag`` and ``flag`` give the same text. A later key takes the
+        first numbered suffix that no other specialization owns.
+        """
+        preferred = self._template_specialization_identifier(struct_name, list(key[1]))
+        owner = (key[0], tuple(key[1]))
+        candidate, suffix = preferred, 2
+        while self._materialized_struct_specializations.get(candidate, owner) != owner:
+            candidate = f"{preferred}_{suffix}"
+            suffix += 1
+        return candidate
 
     def _template_specialization_key(
         self, function_name: str, template_arguments: List[str]
