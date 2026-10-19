@@ -5074,10 +5074,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             qualifiers = {
                 str(item).lower() for item in getattr(member, "qualifiers", []) or []
             }
+            # On a pointer member, ``constant`` names the pointee's address
+            # space; the member itself is an assignable pointer value.
             if (
                 "constant" in qualifiers
-                or self.reference_element_type(member_type) is not None
-            ):
+                and self.pointer_element_type(member_type) is None
+            ) or self.reference_element_type(member_type) is not None:
                 raise MetalConstructorContractError(
                     owner,
                     (),
@@ -18966,7 +18968,10 @@ float {scalar}(float value) {{
         the legacy integer-safe else branch used by existing diagnostics and
         parsing contracts.
         """
-        candidate = str(base).strip()
+        # ``typename metal::conditional_t<...>`` names the same selection.
+        candidate = re.sub(
+            r"^(?:typename\s+)?(?:::\s*)?(?:metal\s*::\s*)?", "", str(base).strip()
+        )
         type_accessor = False
         if candidate.endswith("::type"):
             candidate = candidate[: -len("::type")].strip()
@@ -19011,6 +19016,12 @@ float {scalar}(float value) {{
         selected_branch = selected_branch.strip()
         if not selected_branch:
             return None
+        # A branch may itself be a selection, as in nested conditional_t.
+        nested = self.resolve_conditional_type(
+            selected_branch, require_concrete=require_concrete
+        )
+        if nested is not None:
+            return nested
         return self.map_type(selected_branch)
 
     def map_generic_type_argument(self, argument):
