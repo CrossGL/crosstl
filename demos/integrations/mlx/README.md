@@ -354,6 +354,36 @@ The 64 complex64 split-K entries and two complex64 accumulation kernels are
 not covered; they need the same `BlockMMA` partial specialization as the
 fused complex64 entries (#2261).
 
+#### Gathered GEMM
+
+`test_current_gemm_gather.py` executes all 60 float32, float16 and bfloat16
+`gather_mm` entries of `steel_gemm_gather.metal` (five tile shapes and four
+transpositions per type), each with three frozen function-constant
+configurations: unaligned without an output batch, unaligned with
+`has_batch`, and fully aligned. `gemm_gather_model.py` names every entry,
+`gather_mm_rhs` included, and the test checks that list against entry
+discovery. The dispatch binds the buffers `matmul.cpp` binds: `lhs_indices`
+and `rhs_indices` select operand batches from a two-dimensional `A` batch and
+a one-dimensional `B` batch, with repeated and reordered indices, a strided
+`lhs_indices` read and `rhs_indices` broadcast along the first index axis. The
+multi-product cases also pad every leading dimension and batch stride and add
+a spare threadgroup in each tile axis. Every output
+word, guards included, is compared with an exact reference, and on macOS with
+the original source too. The current-tree native parity job runs the 180
+entry-variant pairs in seven shards per operating system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_GATHER=1 \
+CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_COUNT=7 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_gather.py
+```
+
+The two `gather_mm_rhs` entries are not covered. They derive each row tile
+from `offsets` with subgroup scans, and DirectX and OpenGL can lower those
+scans only once the read-only storage they read is proved immutable (#2263).
+
 ### Resource-Index Controls
 
 Guarded resource-index controls execute on original/generated Metal and on
