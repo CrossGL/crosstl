@@ -63,6 +63,20 @@ class Dialect:
     def cast(self, kind: Type, value: str) -> str:
         return f"{self.type(kind)}({value})"
 
+    def literal(self, kind: Type) -> str:
+        """A constant of ``kind``, for an argument the language requires to be a constant expression."""
+        if kind.shape:
+            raise ProbeError("no constant probe argument of a vector or matrix type")
+        return {"bool": "false", "int": "0", "uint": "0u"}.get(kind.scalar, "0.0")
+
+    def buffer_element(self, kind: Type, atomic: bool) -> str:
+        """The element type of the output buffer; ``atomic`` when the probe passes it to an atomic operation."""
+        return self.type(kind)
+
+    def keep(self, atomic: bool) -> str:
+        """The baseline probe's store: it keeps the output buffer in use without computing anything."""
+        return self.store("outp[i]")
+
     def declare(self, kind: Type, name: str, value: str = "") -> str:
         initial = f" = {value}" if value else ""
         return f"{self.type(kind)} {name}{initial};"

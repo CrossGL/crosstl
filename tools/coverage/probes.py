@@ -99,8 +99,60 @@ class Metal(Dialect):
         return "\n".join(lines + ["}"]) + "\n"
 
 
+class WGSL(Dialect):
+    language = "wgsl"
+    suffix = ".wgsl"
+    _SCALARS = {"float": "f32", "int": "i32", "uint": "u32", "bool": "bool"}
+
+    def scalar(self, scalar: str) -> str:
+        if scalar not in self._SCALARS:
+            raise ProbeError(f"WGSL has no {scalar} type")
+        return self._SCALARS[scalar]
+
+    def vector(self, scalar: str, size: int) -> str:
+        return f"vec{size}<{self.scalar(scalar)}>"
+
+    def matrix(self, scalar: str, columns: int, rows: int) -> str:
+        if scalar != "float":
+            raise ProbeError(f"WGSL has no {scalar} matrices")
+        return f"mat{columns}x{rows}<f32>"
+
+    def declare(self, kind: Type, name: str, value: str = "") -> str:
+        initial = f" = {value}" if value else ""
+        return f"var {name}: {self.type(kind)}{initial};"
+
+    def out_argument(self, name: str) -> str:
+        raise ProbeError("WGSL has no output parameters")
+
+    def inout_argument(self) -> str:
+        return "&outp[i]"
+
+    def to_int(self, condition: str) -> str:
+        return f"select(0, 1, {condition})"
+
+    def buffer_element(self, kind: Type, atomic: bool) -> str:
+        return f"atomic<{self.type(kind)}>" if atomic else self.type(kind)
+
+    def keep(self, atomic: bool) -> str:
+        # An atomic buffer element can only be used through atomic built-in functions.
+        return "" if atomic else self.store("outp[i]")
+
+    def kernel(self, buffers: list[Buffer], body: list[str]) -> str:
+        lines = [
+            f"@group(0) @binding({binding}) var<storage, read_write> {name}: array<{kind}>;"
+            for binding, (kind, name) in enumerate(buffers)
+        ]
+        lines += [
+            "@compute @workgroup_size(1, 1, 1)",
+            "fn main(@builtin(global_invocation_id) id: vec3<u32>) {",
+            "    let i = id.x;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["}"]) + "\n"
+
+
 DIALECTS: dict[str, Dialect] = {
-    d.language: d for d in (CROSSGL, GLSL(), HLSL(), Metal())
+    d.language: d for d in (CROSSGL, GLSL(), HLSL(), Metal(), WGSL())
 }
 
 
@@ -162,6 +214,8 @@ class _Builder:
             elif param.direction == "out":
                 self.lines.append(dialect.declare(param.type, local))
                 arguments.append(dialect.out_argument(local))
+            elif param.direction == "const":
+                arguments.append(dialect.literal(param.type))
             else:
                 value = self.value(param.type)
                 self.lines.append(dialect.declare(param.type, local, value))
@@ -174,6 +228,7 @@ class _Builder:
         """Statements that call ``name`` once, and the element type of the output buffer."""
         dialect = self.dialect
         arguments, output = self._arguments(signature)
+        atomic = output is not None
         call = dialect.call(name, arguments)
         result = signature.result
         if output is not None or result.opaque:
@@ -199,7 +254,7 @@ class _Builder:
                 value = dialect.cast(output, value)
             stores = [dialect.declare(result, "r", call), dialect.store(value)]
         if baseline:
-            stores = [dialect.store("outp[i]")]
+            stores = [line for line in [dialect.keep(atomic)] if line]
         return self.lines + stores, output
 
 
@@ -210,7 +265,9 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         raise ProbeError(feature.note or "the feature list gives no signature")
     if feature.stage != "compute":
         raise ProbeError(f"no {feature.stage}-stage probe yet")
-    name = feature.crossgl if language == "crossgl" else feature.name
+    name = (
+        feature.crossgl if language == "crossgl" else feature.spelling or feature.name
+    )
     if not name:
         raise NoSpelling(
             "CrossGL has no spelling for this operation"
@@ -224,5 +281,6 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         for scalar in ("float", "int", "uint")
         if scalar in builder.offsets
     ]
-    buffers.append((dialect.type(output), "outp"))
+    atomic = any(p.direction == "inout" for p in feature.signature.params)
+    buffers.append((dialect.buffer_element(output, atomic), "outp"))
     return Probe(language, dialect.kernel(buffers, body), dialect.entry, dialect.suffix)

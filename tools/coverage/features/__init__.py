@@ -1,10 +1,10 @@
-"""Feature lists generated from pinned upstream sources."""
+"""Feature lists generated from pinned upstream sources, and for Metal from its toolchain headers."""
 
 from __future__ import annotations
 
 from ..model import Feature
 from ..upstream import fetch
-from . import glsl, hlsl, spirv
+from . import glsl, hlsl, metal, spirv, wgsl
 
 
 def _glsl_names(offline: bool) -> set[str]:
@@ -19,11 +19,25 @@ def _hlsl(offline: bool) -> list[Feature]:
     return hlsl.parse(fetch("hlsl", offline=offline), _glsl_names(offline))
 
 
+def _metal(offline: bool) -> list[Feature]:
+    return metal.parse(metal.LIST.read_text(), _glsl_names(offline))
+
+
 def _spirv(offline: bool) -> list[Feature]:
     return spirv.parse(fetch("spirv", offline=offline), fetch("glsl", offline=offline))
 
 
-PARSERS = {"glsl": _glsl, "hlsl": _hlsl, "spirv": _spirv}
+def _wgsl(offline: bool) -> list[Feature]:
+    return wgsl.parse(fetch("wgsl", offline=offline), _glsl_names(offline))
+
+
+PARSERS = {
+    "glsl": _glsl,
+    "hlsl": _hlsl,
+    "metal": _metal,
+    "spirv": _spirv,
+    "wgsl": _wgsl,
+}
 
 
 def load(language: str, *, offline: bool = False) -> list[Feature]:

@@ -10,6 +10,7 @@ measured. The row is computed from the report alone, so reports from several run
 from __future__ import annotations
 
 from .model import Score
+from .semantic import BORROWED
 
 LANGUAGE = "crossgl"
 DIRECTION = "ir"
@@ -17,13 +18,24 @@ _PRECEDENCE = ("supported", "wrong", "refused", "untested")
 
 
 def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
+    outputs = [b for b in backends if b["direction"] == "output" and b.get("offered")]
+    ids = {
+        (b["language"], f["name"]): f["semantic"]
+        for b in outputs
+        for f in b["features"]
+        if f.get("semantic")
+    }
     groups: dict[str, list[tuple[str, dict]]] = {}
-    for backend in backends:
-        if backend["direction"] != "output" or not backend.get("offered"):
-            continue
+    for backend in outputs:
         language = backend["language"]
+        lender = BORROWED.get(language, "")
         for feature in backend["features"]:
-            key = feature.get("semantic") or f"{language}/{feature['name']}"
+            spelled = feature.get("crossgl") or feature["name"]
+            key = (
+                feature.get("semantic")
+                or ids.get((lender, spelled))
+                or f"{language}/{feature['name']}"
+            )
             groups.setdefault(key, []).append((language, feature))
     return groups
 

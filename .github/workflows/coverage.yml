@@ -1,0 +1,228 @@
+name: Coverage
+
+# Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
+# feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The
+# Linux job measures GLSL, HLSL, SPIR-V and WGSL with glslang, DXC, spirv-val and naga; the macOS job measures Metal
+# with xcrun metal. The report job merges both reports and adds the CrossGL IR row.
+#
+# Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
+# only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the
+# macOS job only when they change the coverage engine or the Metal translator.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PYTHONUNBUFFERED: "1"
+  PYTHONHASHSEED: "0"
+  NAGA_VERSION: "30.0.1"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    name: Plan coverage legs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      metal: ${{ steps.plan.outputs.metal }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Decide whether the Metal leg runs
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ] && [ "$EVENT" != merge_group ]; then
+            echo "metal=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull request checks out its merge commit and a merge group its queued commit; the first parent is the
+          # base, so this lists exactly the files the change touches.
+          changed="$(git diff --name-only HEAD^1 HEAD)"
+          pattern='^(tools/coverage/|tests/coverage/|\.github/workflows/coverage\.yml$|crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$)'
+          if grep -Eq "$pattern" <<<"$changed"; then
+            echo "metal=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "metal=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  linux:
+    name: Coverage (GLSL, HLSL, SPIR-V, WGSL)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CROSSTL_COVERAGE_CACHE: ${{ github.workspace }}/../coverage-cache
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Install pinned Linux DXC
+        uses: ./.github/actions/install-linux-dxc
+        with:
+          pinned: "true"
+
+      - name: Install pinned glslang and SPIRV-Tools
+        uses: ./.github/actions/install-shader-validators
+
+      - name: Restore naga
+        id: naga
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/naga
+          key: naga-cli-${{ env.NAGA_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build naga
+        if: steps.naga.outputs.cache-hit != 'true'
+        run: cargo install naga-cli --version "$NAGA_VERSION" --locked --root "$RUNNER_TEMP/naga"
+
+      - name: Activate naga
+        run: |
+          echo "$RUNNER_TEMP/naga/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/naga/bin/naga" --version
+
+      - name: Restore upstream feature sources
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/../coverage-cache
+          key: coverage-upstream-${{ hashFiles('tools/coverage/upstream.py') }}
+
+      - name: Measure coverage
+        run: |
+          python -m tools.coverage run --strict --jobs 4 \
+            --backend glsl --backend hlsl --backend spirv --backend wgsl \
+            --output coverage-linux.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-linux
+          path: coverage-linux.json
+          retention-days: 14
+
+  metal:
+    name: Coverage (Metal)
+    needs: plan
+    if: needs.plan.outputs.metal == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Prepare the Metal toolchain
+        run: |
+          xcodebuild -version
+          python tools/ensure_metal_toolchain.py
+
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Measure coverage
+        run: python -m tools.coverage run --strict --jobs 3 --backend metal --output coverage-metal.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-metal
+          path: coverage-metal.json
+          retention-days: 14
+
+  report:
+    name: Coverage report
+    needs: [linux, metal]
+    if: always() && needs.linux.result == 'success' && needs.metal.result != 'failure' && needs.metal.result != 'cancelled'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+
+      - name: Merge the reports
+        run: |
+          set -euo pipefail
+          python -m tools.coverage merge coverage-*.json --output coverage.json | tee summary.txt
+          {
+            echo "### Coverage"
+            echo
+            echo '```'
+            cat summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.json
+          retention-days: 14
+
+  result:
+    name: Coverage result
+    needs: [plan, linux, metal, report]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check coverage jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "A coverage job ended with $result."; exit 1 ;;
+            esac
+          done

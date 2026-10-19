@@ -106,3 +106,57 @@ def test_fetch_rejects_a_changed_upstream_file(monkeypatch, tmp_path):
         ),
     )
     assert upstream.fetch("glsl", offline=True) == "pinned"
+
+
+def _row(language, direction, outcome, **extra):
+    return {
+        "language": language,
+        "direction": direction,
+        "offered": True,
+        "score": 100.0 if outcome == "supported" else 0.0,
+        "counts": {},
+        "features": [
+            {
+                "name": "fma",
+                "category": "function",
+                "group": "g",
+                "outcome": outcome,
+                **extra,
+            }
+        ],
+    }
+
+
+def _report(*rows, commit="abc", tool="glslangValidator"):
+    return {
+        "schema": 1,
+        "commit": commit,
+        "date": "2026-10-19T00:00:00Z",
+        "crosstl": "",
+        "sources": {},
+        "validators": {tool: "1.0"},
+        "backends": list(rows),
+    }
+
+
+def test_merge_combines_runners_and_rebuilds_the_ir_row():
+    linux = _report(_row("glsl", "output", "wrong", semantic="ext:Fma"))
+    mac = _report(_row("metal", "output", "supported"), tool="metal")
+    merged = report.merge([linux, mac])
+    assert [(b["language"], b["direction"]) for b in merged["backends"]] == [
+        ("glsl", "output"),
+        ("metal", "output"),
+        ("crossgl", "ir"),
+    ]
+    assert merged["validators"] == {"glslangValidator": "1.0", "metal": "1.0"}
+    # Metal borrows GLSL's semantic id, so the two rows are one IR feature, expressible through Metal.
+    (feature,) = merged["backends"][-1]["features"]
+    assert feature["outcome"] == "supported" and feature["via"] == ["metal"]
+
+
+def test_merge_refuses_mixed_commits_and_double_measurements():
+    row = _row("glsl", "output", "supported")
+    with pytest.raises(ValueError, match="different commits"):
+        report.merge([_report(row), _report(row, commit="def")])
+    with pytest.raises(ValueError, match="more than one report"):
+        report.merge([_report(row), _report(row)])

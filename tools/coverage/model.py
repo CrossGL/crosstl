@@ -48,6 +48,9 @@ VOID = Type.other("void")
 
 @dataclass(frozen=True)
 class Param:
+    """A parameter; ``direction`` is ``in``, ``out``, ``inout`` (an atomic or read-modify-write operand) or
+    ``const``, an argument the language requires to be a constant expression."""
+
     type: Type
     direction: str = "in"
 
@@ -72,7 +75,8 @@ class Feature:
 
     ``name`` is the upstream spelling and ``group`` the upstream section it comes from. ``signature`` is the overload
     the probe uses and ``crossgl`` the CrossGL spelling of the same operation, empty when CrossGL has none; ``note``
-    then says why. ``stage`` is the shader stage the probe must run in.
+    then says why. ``stage`` is the shader stage the probe must run in. ``spelling`` is how the native probe calls
+    the feature when that differs from ``name``, as for WGSL's ``bitcast<u32>``.
     """
 
     language: str
@@ -83,6 +87,7 @@ class Feature:
     crossgl: str = ""
     stage: str = "compute"
     note: str = ""
+    spelling: str = ""
 
     @property
     def key(self) -> str:

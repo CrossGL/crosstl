@@ -130,3 +130,63 @@ def test_hlsl_probes_are_valid_hlsl(probe_feature, baseline):
     probe = probes.build(probe_feature, "hlsl", baseline=baseline)
     verdict = validators.validate("hlsl", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+WGSL_SIGNATURES = [
+    feature("mix", VEC3, VEC3, VEC3, VEC3),
+    feature("select", VEC3, VEC3, VEC3, Type("bool")),
+    feature("determinant", Type("float"), Type("float", (3, 3))),
+    feature("atomicAdd", Type("int"), Param(Type("int"), "inout"), Type("int")),
+    feature("workgroupBarrier", Type.other("void")),
+    feature(
+        "insertBits",
+        Type("int", (3,)),
+        Type("int", (3,)),
+        Type("int", (3,)),
+        Type("uint"),
+        Type("uint"),
+    ),
+]
+
+
+@pytest.mark.skipif(not validators.available("wgsl"), reason="naga is not installed")
+@pytest.mark.parametrize("probe_feature", WGSL_SIGNATURES, ids=lambda f: f.name)
+@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
+def test_wgsl_probes_are_valid_wgsl(probe_feature, baseline):
+    probe = probes.build(probe_feature, "wgsl", baseline=baseline)
+    verdict = validators.validate("wgsl", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
+def test_wgsl_probe_binds_atomics_through_a_pointer():
+    source = probes.build(WGSL_SIGNATURES[3], "wgsl").source
+    assert "var<storage, read_write> outp: array<atomic<i32>>;" in source
+    assert "atomicAdd(&outp[i], a1)" in source
+    # The baseline cannot read an atomic element directly, so it leaves the buffer alone.
+    assert (
+        "outp[i]" not in probes.build(WGSL_SIGNATURES[3], "wgsl", baseline=True).source
+    )
+
+
+def test_wgsl_has_no_output_parameters():
+    frexp = feature("frexp", VEC3, VEC3, Param(Type("int", (3,)), "out"))
+    with pytest.raises(probes.ProbeError, match="output parameters"):
+        probes.build(frexp, "wgsl")
+
+
+METAL_SIGNATURES = [
+    feature("fma", VEC3, VEC3, VEC3, VEC3),
+    feature("select", VEC3, VEC3, VEC3, Type("bool", (3,))),
+    feature("frexp", VEC3, VEC3, Param(Type("int", (3,)), "out")),
+    feature("simd_sum", Type("float"), Type("float")),
+]
+
+
+@pytest.mark.skipif(
+    not validators.available("metal"), reason="the Metal toolchain is not installed"
+)
+@pytest.mark.parametrize("probe_feature", METAL_SIGNATURES, ids=lambda f: f.name)
+def test_metal_probes_are_valid_metal(probe_feature):
+    probe = probes.build(probe_feature, "metal")
+    verdict = validators.validate("metal", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log

@@ -16,8 +16,11 @@ from . import probes, validators
 from .model import Feature
 
 # Features with no SPIR-V lowering, keyed ``language/category/name``, and the semantic id they share with features
-# that have one. Metal features belong here once Metal has a feature list.
+# that have one.
 CURATED: dict[str, str] = {}
+# Languages no reference compiler here lowers to SPIR-V. Their functions take the id of the function of the named
+# language that CrossGL spells the same way: Metal ``fabs`` is CrossGL ``abs``, so it shares GLSL ``abs``'s id.
+BORROWED = {"metal": "glsl"}
 # Instructions that only move or address values. They never identify a call.
 _MEMORY = frozenset(
     "OpLoad OpStore OpAccessChain OpInBoundsAccessChain OpPtrAccessChain OpVariable OpCopyObject OpCopyMemory "
@@ -36,8 +39,11 @@ _ALIASES = {
     "OpSubgroupAnyKHR": "OpGroupNonUniformAny",
     "OpSubgroupAllEqualKHR": "OpGroupNonUniformAllEqual",
 }
-# Barriers whose scope and memory-semantics operands are the operation itself, so their values join the id.
-_BARRIERS = frozenset({"OpControlBarrier", "OpMemoryBarrier"})
+# Instructions whose constant operands are part of the operation, so their values join the id: the scope and memory
+# semantics of a barrier, the direction of a quad swap.
+_CONSTANT_OPERANDS = frozenset(
+    {"OpControlBarrier", "OpMemoryBarrier", "OpGroupNonUniformQuadSwap"}
+)
 # The GroupOperation operand tells a reduction from an inclusive or exclusive scan.
 _GROUP_OPERATIONS = frozenset(
     {"Reduce", "InclusiveScan", "ExclusiveScan", "ClusteredReduce"}
@@ -86,8 +92,8 @@ def _token(
         library = sets.get(words[1], words[1])
         return "" if library.startswith("NonSemantic.") else f"{library}:{words[2]}"
     opcode = _ALIASES.get(opcode, opcode)
-    if opcode in _BARRIERS:
-        return f"{opcode}({','.join(constants.get(w, w) for w in words)})"
+    if opcode in _CONSTANT_OPERANDS:
+        return f"{opcode}({','.join(constants[w] for w in words if w in constants)})"
     operation = next((w for w in words if w in _GROUP_OPERATIONS), "")
     return f"{opcode}.{operation}" if operation else opcode
 

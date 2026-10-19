@@ -35,6 +35,8 @@ SUFFIX = {
 GLSL_STAGES = {"compute": "comp", "fragment": "frag", "vertex": "vert"}
 HLSL_PROFILES = {"compute": "cs_6_6", "fragment": "ps_6_6", "vertex": "vs_6_6"}
 SPIRV_ENVIRONMENT = "vulkan1.1"
+# The language version of the Metal feature list (features/metal.txt); probes compile against the same version.
+METAL_STANDARD = "metal4.1"
 
 
 @dataclass(frozen=True)
@@ -145,7 +147,17 @@ def validate(
                 scratch,
             )
         if language == "metal":
-            return _run([*command("metal"), "-c", name, "-o", "probe.air"], scratch)
+            return _run(
+                [
+                    *command("metal"),
+                    f"-std={METAL_STANDARD}",
+                    "-c",
+                    name,
+                    "-o",
+                    "probe.air",
+                ],
+                scratch,
+            )
         if language == "wgsl":
             return _run([*command("naga"), name], scratch)
         environment = ["--target-env", SPIRV_ENVIRONMENT]
@@ -180,6 +192,7 @@ SPIRV_COMPILERS = {
             "probe.spv",
         ),
     ),
+    "wgsl": ("naga", ("{source}", "probe.spv")),
 }
 
 

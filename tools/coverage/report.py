@@ -8,7 +8,8 @@ import subprocess
 from pathlib import Path
 
 from . import ir, upstream, validators
-from .model import OUTCOMES, Result, Score
+from .features import metal
+from .model import DIRECTIONS, OUTCOMES, Result, Score
 
 SCHEMA = 1
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
@@ -32,6 +33,22 @@ def _crosstl_version() -> str:
         return version("crosstl")
     except PackageNotFoundError:
         return ""
+
+
+def _sources(languages: list[str]) -> dict[str, dict[str, str]]:
+    sources = {
+        language: {
+            "repository": s.repository,
+            "commit": s.commit,
+            "path": s.path,
+            "describes": s.describes,
+        }
+        for language, s in sorted(upstream.SOURCES.items())
+        if language in languages
+    }
+    if "metal" in languages:
+        sources["metal"] = metal.source(metal.LIST.read_text())
+    return dict(sorted(sources.items()))
 
 
 def build(results: list[Result], languages: list[str], directions: list[str]) -> dict:
@@ -78,6 +95,11 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
                             **({"detail": r.detail} if r.detail else {}),
                             **({"validator": r.validator} if r.validator else {}),
                             **({"semantic": r.semantic} if r.semantic else {}),
+                            **(
+                                {"crossgl": r.feature.crossgl}
+                                if r.feature.crossgl not in ("", r.feature.name)
+                                else {}
+                            ),
                         }
                         for r in group
                     ],
@@ -98,19 +120,57 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
             datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         ),
         "crosstl": _crosstl_version(),
-        "sources": {
-            language: {
-                "repository": s.repository,
-                "commit": s.commit,
-                "path": s.path,
-                "describes": s.describes,
-            }
-            for language, s in sorted(upstream.SOURCES.items())
-            if language in languages
-        },
+        "sources": _sources(languages),
         "validators": {tool: validators.version(tool) or None for tool in tools},
         "backends": backends,
     }
+
+
+def merge(reports: list[dict]) -> dict:
+    """One report from reports of separate runners, such as a Linux and a macOS job, with the IR row rebuilt.
+
+    The runners must have measured the same commit; a language and direction measured twice is an error, because the
+    merged score would depend on which runner came last.
+    """
+    if not reports:
+        raise ValueError("no reports to merge")
+    commits = {r["commit"] for r in reports}
+    if len(commits) > 1:
+        raise ValueError(
+            f"reports come from different commits: {', '.join(sorted(commits))}"
+        )
+    rows: dict[tuple[str, str], dict] = {}
+    for report in reports:
+        for backend in report["backends"]:
+            key = (backend["language"], backend["direction"])
+            if backend["language"] == ir.LANGUAGE:
+                continue
+            if key in rows and rows[key]["offered"] and backend["offered"]:
+                raise ValueError(
+                    f"{key[0]} {key[1]} is measured by more than one report"
+                )
+            if key not in rows or backend["offered"]:
+                rows[key] = backend
+    backends = [
+        rows[key] for key in sorted(rows, key=lambda k: (k[0], DIRECTIONS.index(k[1])))
+    ]
+    expressiveness = ir.build(backends)
+    if expressiveness:
+        backends.append(expressiveness)
+    merged = dict(reports[0])
+    merged["date"] = max(r["date"] for r in reports)
+    merged["sources"] = dict(
+        sorted({k: v for r in reports for k, v in r["sources"].items()}.items())
+    )
+    tools = sorted({tool for r in reports for tool in r["validators"]})
+    merged["validators"] = {
+        tool: next(
+            (r["validators"][tool] for r in reports if r["validators"].get(tool)), None
+        )
+        for tool in tools
+    }
+    merged["backends"] = backends
+    return merged
 
 
 def write(report: dict, path: Path) -> None:

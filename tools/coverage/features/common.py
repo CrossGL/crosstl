@@ -50,3 +50,21 @@ def signature(result: Type, params: list[tuple[Type, str]]) -> Signature:
 
 def slug(heading: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")
+
+
+def split(text: str) -> list[str]:
+    """Split on the commas that are not inside ``<...>`` or ``(...)``."""
+    parts, depth, current = [], 0, ""
+    for char in text:
+        if char in "<(":
+            depth += 1
+        elif char in ">)":
+            depth -= 1
+        if char == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += char
+    if current.strip():
+        parts.append(current.strip())
+    return parts
