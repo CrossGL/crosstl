@@ -1630,6 +1630,44 @@ matrix-matrix kernels of `quantized.metal` are not gated yet. This covers
 162/17,832 entries; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+`contracts/quantized_qmv_wide.current-tree.translation.json` pins a further
+432 entries of `quantized.metal` and their 1,296 artifacts: `affine_qmv_wide`
+with and without batching, for the same element types, group sizes and bit
+widths and its tiles of 2, 3, 4 and 5 input vectors, each output row reduced
+by eight lanes. Its `simd_shuffle_down` ladder lowers to 32-lane software
+subgroups on OpenGL and DirectX, DirectX keeping a lane's own value past the
+simdgroup's end as Metal does, and OpenGL is given the 7 batched index-range
+preconditions of `qmv_fast`, each reached by some case and shown by the model
+to name an element inside its buffer. `dequantize` deduces its output pointer
+type from the local `w_dq` array; DirectX now decays that array to a thread
+pointer as C++ and the OpenGL output do, so the 3, 5 and 6-bit steps
+`w_local += 8 * i` move the view's base. Required CI executes 1,080
+dispatches and 117,504 checked elements per target on Metal, Mesa EGL and
+Direct3D 12 WARP in the `quantized-qmv-wide-0` through `quantized-qmv-wide-8`
+legs, following `quantized.cpp`'s `qmv_wide`: `(32, 2, 1)` threadgroups over
+a `(ceil(M / vecs_per_tg), ceil(N / 8), B)` grid, where every case's `M` is
+one `qmv_wide` gives the entry's tile, below the vector limit of 13, and `K`
+avoids `qmv_quad`'s 64 and 128. Unbatched entries run one tile against nine
+groups per row, so lane 0 of each row reduces two, and a tiled matrix whose
+last row group, and for tiles of 4 and 5 last vector tile, is partial; the
+unchanged upstream kernel gets only the eight buffers MLX binds unbatched.
+Batched entries run stacked batches, a two-dimensional batch with transposed
+activations and broadcast weights, and strided activations sharing one
+weight matrix. The inputs of `qmv_fast` make every dequantized weight,
+product, partial sum and shuffle a multiple of 2^-5 below 2^19, exact in any
+order; only the final `static_cast<T>` rounds, which 26,506 float16 and
+bfloat16 results need, 7,567 of them halfway cases. A lane-level model of
+`dequantize`'s eight-value sub-chunks, the shuffle ladder and the
+partial-tile guards must reach direct dequantized dot products and write
+every output once, and mutated models that drop the bias, reverse a
+sub-chunk, drop the six-bit steps, give a lane one group, stream one vector,
+ignore the lane's row, sum all 32 lanes or ignore the weight batch offset are
+rejected. Every word is compared exactly, eight trailing guards must keep
+their values and inputs must be unchanged; Metal also runs the unchanged
+upstream kernels, which must produce the same words. This covers
+432/17,832 entries; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

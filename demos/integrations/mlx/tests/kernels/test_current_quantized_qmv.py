@@ -105,9 +105,11 @@ KERNELS = {
     "batch_0": "affine_qmv_fast",
 }
 # The 108 quantize and dequantize entries have their own gate,
-# test_current_quantized.py.
+# test_current_quantized.py, and the 432 affine_qmv_wide entries theirs,
+# test_current_quantized_qmv_wide.py.
 QUANTIZE_ENTRY_COUNT = 108
-# Kernels of quantized.metal neither gate covers yet.
+QMV_WIDE_ENTRY_COUNT = 432
+# Kernels of quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
     "affine_gather_qmv",
     "affine_gather_qvm",
@@ -118,7 +120,6 @@ EXCLUDED_KERNELS = (
     "affine_gather_qmm_t",
     "affine_qmm_t",
     "affine_qmv_quad",
-    "affine_qmv_wide",
     "affine_qvm_split_k",
     "affine_qmm_t_splitk",
     "affine_gather_qmm_rhs_nt",
@@ -998,11 +999,12 @@ def _expected_validation_contract():
 
 
 def _expected_scope():
-    covered = QUANTIZE_ENTRY_COUNT + len(ENTRIES)
+    covered = QUANTIZE_ENTRY_COUNT + len(ENTRIES) + QMV_WIDE_ENTRY_COUNT
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
         "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
+        "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
             "count": UNIT_ENTRY_COUNT - covered,
@@ -1077,7 +1079,10 @@ def test_quantized_qmv_entries_follow_mlx_instantiation():
     )
     assert ENTRIES[-1] == "affine_qmv_fast_bfloat16_t_gs_32_b_8_batch_0"
     assert not set(KERNELS.values()) & set(EXCLUDED_KERNELS)
-    assert QUANTIZE_ENTRY_COUNT + len(ENTRIES) + 1782 == UNIT_ENTRY_COUNT
+    assert (
+        QUANTIZE_ENTRY_COUNT + len(ENTRIES) + QMV_WIDE_ENTRY_COUNT + 1350
+        == UNIT_ENTRY_COUNT
+    )
 
 
 def test_quantized_qmv_shards_partition_the_entries(monkeypatch):
