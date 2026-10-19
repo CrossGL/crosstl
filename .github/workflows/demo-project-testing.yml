@@ -1546,6 +1546,7 @@ jobs:
           CROSTL_REQUIRE_METAL_NESTED_MEMBERS: "1"
           CROSTL_REQUIRE_REFERENCE_CAPTURE: "1"
           CROSTL_REQUIRE_TRAILING_RETURNS: "1"
+          CROSTL_REQUIRE_FORWARDED_LOOP_BOUNDS: "1"
           CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
           CROSTL_REQUIRE_PARAMETER_USAGE: "1"
           CROSTL_REQUIRE_RESOURCE_OVERLOADS: "1"
@@ -1604,6 +1605,7 @@ jobs:
               tests/test_translator/test_metal_nested_member_context.py \
               tests/test_translator/test_reference_capture.py \
               tests/test_translator/test_trailing_divergent_returns.py \
+              tests/test_translator/test_forwarded_resource_loop_bounds.py \
               tests/test_translator/test_reference_aliases.py \
               tests/test_translator/test_parameter_usage.py \
               tests/test_translator/test_resource_overloads.py \

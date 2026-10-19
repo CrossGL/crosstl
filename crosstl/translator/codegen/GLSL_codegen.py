@@ -6492,6 +6492,44 @@ class GLSLCodeGen(LoweringRefusalMixin):
             if isinstance(node, IdentifierNode) and getattr(node, "name", None)
         }
 
+    def glsl_software_subgroup_dependency_names(self, expression):
+        """Identifiers whose values or storage ``expression`` can observe.
+
+        A call whose effect-free arguments have a dependency summary observes
+        only the arguments that summary reads, and storage only through
+        immutable resources. Arguments it merely forwards, such as resource
+        identities passed to an accessor helper, cannot change its value.
+        Every other node observes every identifier beneath it.
+        """
+        analysis = self.glsl_software_subgroup_uniform_returns
+        resources = getattr(self, "glsl_software_subgroup_resource_names", set())
+        names = set()
+        visited = set()
+        pending = [expression]
+        while pending:
+            value = pending.pop()
+            if value is None or isinstance(value, (str, int, float, bool)):
+                continue
+            if isinstance(value, dict):
+                pending.extend(value.values())
+                continue
+            if isinstance(value, (list, tuple, set)):
+                pending.extend(value)
+                continue
+            if id(value) in visited:
+                continue
+            visited.add(id(value))
+            if isinstance(value, FunctionCallNode):
+                required = analysis.uniform_arguments(value, resources)
+                if required is not None:
+                    pending.extend(required)
+                    continue
+            if isinstance(value, IdentifierNode) and getattr(value, "name", None):
+                names.add(value.name)
+            if hasattr(value, "__dict__"):
+                pending.extend(vars(value).values())
+        return names
+
     def glsl_software_subgroup_analyze_uniform_if(self, node, uniform_names):
         conditions = [
             getattr(node, "condition", getattr(node, "if_condition", None)),
@@ -6908,9 +6946,9 @@ class GLSLCodeGen(LoweringRefusalMixin):
             ):
                 return False
 
-        bound_names = self.glsl_software_subgroup_expression_identifier_names(bound)
+        bound_names = self.glsl_software_subgroup_dependency_names(bound)
         stride_names = (
-            self.glsl_software_subgroup_expression_identifier_names(update.value)
+            self.glsl_software_subgroup_dependency_names(update.value)
             if additive_update or geometric_update or modular_update
             else set()
         )
