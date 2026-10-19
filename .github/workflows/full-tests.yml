@@ -37,7 +37,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install dependencies
@@ -94,7 +93,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install optional shader validators
@@ -271,7 +269,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install adapter toolchain
@@ -399,7 +396,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install DirectX Shader Compiler
@@ -457,7 +453,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install GLSL and SPIR-V tools
@@ -652,7 +647,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install GLSL validator
