@@ -103,7 +103,7 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
 
 
-def _loader_access_assertions(entry=REPRESENTATIVE):
+def _loader_access_assertions(entry=REPRESENTATIVE, source=SOURCE):
     """The threadgroup slots each ``BlockLoader::load_unsafe`` writes.
 
     ``loader.h`` distributes ``reads`` adjacent elements of a tile row to each
@@ -121,7 +121,7 @@ def _loader_access_assertions(entry=REPRESENTATIVE):
         assert max(slots) < loader.rows * loader.leading
         assertions.append(
             {
-                "source": SOURCE,
+                "source": source,
                 "entryPoint": entry.name,
                 "function": loader.function,
                 "parameter": "self.dst",
@@ -132,7 +132,7 @@ def _loader_access_assertions(entry=REPRESENTATIVE):
     return tuple(assertions)
 
 
-def _opengl_index_assertions(entry=REPRESENTATIVE):
+def _opengl_index_assertions(entry=REPRESENTATIVE, source=SOURCE):
     """GLSL indexes with 32-bit ints, so 64-bit pointer offsets need ranges.
 
     Device views index MLX buffers, which stay below 2^31 elements; a loader
@@ -162,10 +162,10 @@ def _opengl_index_assertions(entry=REPRESENTATIVE):
             "indexed": f"crosstl_workgroup_{tile}",
             "maximum": loader["maximum"],
         }
-        for tile, loader in zip(("As", "Bs"), _loader_access_assertions(entry))
+        for tile, loader in zip(("As", "Bs"), _loader_access_assertions(entry, source))
     ]
     return tuple(
-        {"source": SOURCE, **item, "minimum": 0} for item in device + workgroup
+        {"source": source, **item, "minimum": 0} for item in device + workgroup
     )
 
 
