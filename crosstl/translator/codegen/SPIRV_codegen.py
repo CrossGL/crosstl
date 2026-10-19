@@ -91,6 +91,7 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
@@ -243,6 +244,7 @@ class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
 
 
 class VulkanSPIRVCodeGen(
+    SpirvBfloat16MathMixin,
     SpirvDefaultUniformMixin,
     SpirvFloatSemanticsMixin,
     SpirvLocalReferenceMixin,
@@ -11502,6 +11504,10 @@ class VulkanSPIRVCodeGen(
         if integer_bit_call is not None:
             return integer_bit_call
 
+        bfloat16_math_call = self.call_bfloat16_math_function(function_name, args)
+        if bfloat16_math_call is not None:
+            return bfloat16_math_call
+
         float_semantics_call = self.call_float_semantics_function(function_name, args)
         if float_semantics_call is not None:
             return float_semantics_call
@@ -11566,6 +11572,26 @@ class VulkanSPIRVCodeGen(
                 function_name,
                 "abs requires floating-point or signed integer "
                 "scalar or vector operand",
+            )
+
+        # C/MSL fabs (C99 7.12.7.2, MSL 6.5) is the floating-point absolute value.
+        if function_name == "fabs" and len(args) == 1:
+            if self._float_shape(args[0]) is not None:
+                return self.call_abs_function(args[0])
+            raise self.builtin_lowering_error(
+                function_name,
+                "fabs requires a floating-point scalar or vector operand",
+            )
+
+        # MSL select(a, b, c) (MSL 6.4) yields c ? b : a per component, like mix(a, b, bvec).
+        if function_name == "select" and len(args) == 3:
+            selected = self.call_bool_mix_function(args)
+            if selected is not None:
+                return selected
+            raise self.builtin_lowering_error(
+                function_name,
+                "select requires matching value operands and a bool condition "
+                "that is scalar or matches their component count",
             )
 
         if function_name == "pow" and len(args) == 2:
@@ -14571,7 +14597,27 @@ class VulkanSPIRVCodeGen(
             return type_name
         if self.has_attribute(param, "glsl_buffer_block"):
             return self.type_name_from_value(param_type)
-        return None
+        return self.buffer_array_parameter_pointer_type_name(param, param_type)
+
+    def buffer_array_parameter_pointer_type_name(self, param, param_type):
+        """An array parameter in device or constant memory is a pointer to its element.
+
+        C++ adjusts a parameter of type "array of T" to "pointer to T" ([dcl.fct]/5), and MSL
+        keeps the address space on the pointer (MSL section 4.2), so ``constant int s[3]`` binds
+        the caller's buffer by reference.
+        """
+        if param_type.__class__.__name__ != "ArrayType":
+            return None
+        qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", None) or []}
+        if not qualifiers & {"constant", "device"}:
+            return None
+        element_type = getattr(param_type, "element_type", None)
+        if element_type is None or element_type.__class__.__name__ == "ArrayType":
+            return None
+        element_name = self.type_name_from_value(element_type)
+        if not element_name:
+            return None
+        return self.storage_buffer_resource_type_name(f"{element_name}*")
 
     def storage_buffer_expression_type_name(self, expr) -> Optional[str]:
         if isinstance(expr, TernaryOpNode):
@@ -16887,6 +16933,10 @@ class VulkanSPIRVCodeGen(
 
     def generic_struct_requires_materialization(self, struct_node) -> bool:
         """Return whether a generic struct has no legal placeholder layout."""
+        type_parameters = {
+            str(getattr(parameter, "name", parameter))
+            for parameter in getattr(struct_node, "generic_params", None) or []
+        }
         for member in getattr(struct_node, "members", []) or []:
             if isinstance(member, ArrayNode):
                 if (
@@ -16906,7 +16956,23 @@ class VulkanSPIRVCodeGen(
                 )
             if self.generic_struct_member_type_requires_materialization(member_type):
                 return True
+            # A stored member typed by the struct's own parameter has no layout until instantiation.
+            if not self.is_static_struct_member(
+                member
+            ) and self.type_mentions_type_parameter(member_type, type_parameters):
+                return True
         return False
+
+    def type_mentions_type_parameter(self, type_value, type_parameters) -> bool:
+        """Return whether a member type names one of a generic struct's type parameters."""
+        if type_value is None or not type_parameters:
+            return False
+        if not isinstance(type_value, str):
+            type_value = self.convert_type_node_to_string(type_value)
+        return any(
+            name in type_parameters
+            for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(type_value))
+        )
 
     def generic_struct_member_type_requires_materialization(self, type_value) -> bool:
         if type_value is None:
