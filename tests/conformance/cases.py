@@ -15,6 +15,8 @@ from typing import Callable
 
 import numpy as np
 
+from . import half_cases
+
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 EXT_LANG = {
     ".comp": "glsl",
@@ -1012,6 +1014,54 @@ CASES = [
         o_half_mul,
         compare="ulp:0",
         v1="m_half_mul",
+    ),
+    Case(
+        "m_half_div",
+        "H15",
+        "half(x) / half(y), quotients next to a binary16 midpoint",
+        "MSL half (binary16), correctly rounded division",
+        half_cases.div_inputs(),
+        np.float32,
+        None,
+        threads=512,
+        out_count=512,
+        check=half_cases.check(half_cases.div_reference),
+    ),
+    Case(
+        "m_half_sqrt",
+        "H15",
+        "sqrt(half(x)) over [1, 4) and random normal values",
+        "MSL half (binary16), correctly rounded square root",
+        half_cases.sqrt_inputs(),
+        np.float32,
+        None,
+        threads=2560,
+        out_count=2560,
+        check=half_cases.check(half_cases.sqrt_reference),
+    ),
+    Case(
+        "m_half_fma",
+        "H15",
+        "fma(half(x), half(y), half(z)), sums next to a binary16 midpoint",
+        "MSL half (binary16), IEEE 754 fusedMultiplyAdd",
+        half_cases.fma_inputs(),
+        np.float32,
+        None,
+        threads=512,
+        out_count=512,
+        check=half_cases.check(half_cases.fma_reference),
+    ),
+    Case(
+        "m_half_round",
+        "H15",
+        "half(x) for x on and next to binary16 midpoints",
+        "MSL half (binary16), conversion rounds to nearest even",
+        half_cases.round_inputs(),
+        np.float32,
+        None,
+        threads=512,
+        out_count=512,
+        check=half_cases.check(half_cases.round_reference),
     ),
     # ---- layout and memory -----------------------------------------------------------------------------
     Case(

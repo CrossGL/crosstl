@@ -821,7 +821,7 @@ def test_wgsl_codegen_lowers_writeonly_uimage2d_to_storage_texture_store():
         "var dstTexture: texture_storage_2d<rgba32uint, write>;"
     ) in generated
     assert (
-        "textureStore(dstTexture, vec2<i32>(1, 2), " "vec4<u32>(3, 4, 5, 6));"
+        "textureStore(dstTexture, vec2<i32>(1, 2), " "vec4<u32>(3u, 4u, 5u, 6u));"
     ) in generated
     assert "imageStore" not in generated
 
@@ -2668,7 +2668,7 @@ def test_wgsl_codegen_lowers_switch_default_case():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert "case 0:" in generated
+    assert "case 0u:" in generated
     assert "default: {" in generated
     assert "case : {" not in generated
 
@@ -2692,7 +2692,7 @@ def test_wgsl_codegen_adds_missing_switch_default_case():
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert "case 0:" in generated
+    assert "case 0u:" in generated
     assert "default: {\n            break;\n        }" in generated
 
 

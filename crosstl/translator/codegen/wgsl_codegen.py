@@ -174,6 +174,15 @@ class WGSLCodeGen:
         "rsqrt": "inverseSqrt",
         "saturate": "saturate",
     }
+    BIT_CAST_FUNCTIONS = {
+        "asuint": "u32",
+        "asint": "i32",
+        "asfloat": "f32",
+        "floatBitsToUint": "u32",
+        "floatBitsToInt": "i32",
+        "uintBitsToFloat": "f32",
+        "intBitsToFloat": "f32",
+    }
     DERIVATIVE_FUNCTION_NAME_MAP = {
         "dfdx": "dpdx",
         "ddx": "dpdx",
@@ -2948,6 +2957,10 @@ class WGSLCodeGen:
         literal_type = self.type_name_string(getattr(node, "literal_type", ""))
         if literal_type == "f32" and re.fullmatch(r"[-+]?\d+", text):
             return f"{text}.0"
+        # An unsigned literal keeps its type: an abstract integer would become i32 in
+        # `select(0, 1, c)` or `1 << n` and mismatch a u32 operand (WGSL section 6.1.2).
+        if literal_type == "u32" and re.fullmatch(r"\d+", text):
+            return f"{text}u"
         return text
 
     def generate_workgroup_size_literal(self):
@@ -3003,6 +3016,9 @@ class WGSLCodeGen:
             return self.generate_derivative_call(node, derivative_name, function_name)
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
+        bit_cast = self.BIT_CAST_FUNCTIONS.get(function_name)
+        if bit_cast is not None and not self.is_user_function_name(function_name):
+            return self.generate_bit_cast_call(node, function_name, bit_cast)
         if function_name == "mod":
             return self.generate_mod_call(node)
 
@@ -3045,6 +3061,21 @@ class WGSLCodeGen:
         elif isinstance(node.function, MemberAccessNode):
             mapped_name = self.generate_expression(node.function)
         return f"{mapped_name}({args})"
+
+    def is_user_function_name(self, name):
+        return bool(getattr(self, "_function_overloads_by_name", {}).get(name))
+
+    def generate_bit_cast_call(self, node, function_name, scalar):
+        """HLSL ``asuint``/``asint``/``asfloat`` and GLSL ``floatBitsToUint`` and the like as WGSL ``bitcast``."""
+        if len(node.arguments) != 1:
+            raise ValueError(
+                f"WGSL target supports {function_name}() with exactly 1 argument; got "
+                f"{len(node.arguments)}"
+            )
+        argument = node.arguments[0]
+        lanes = self.vector_component_count(self.expression_type(argument))
+        target = scalar if lanes is None else f"vec{lanes}<{scalar}>"
+        return f"bitcast<{target}>({self.generate_expression(argument)})"
 
     def generate_derivative_call(self, node, mapped_name, function_name):
         if len(node.arguments) != 1:

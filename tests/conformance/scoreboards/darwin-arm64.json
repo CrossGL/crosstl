@@ -2360,6 +2360,146 @@
       "outcome": "preserved",
       "sourceSHA256": "73214f6ef29aaf5501d845600c83fbfd4f94f859b3984c6fdc39664ecb525921"
     },
+    "m_half_div|metal|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "compiled-only",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "compiled-only",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|metal|relaxed|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|metal|strict|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_div|metal|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "483aacb8e609b10afa7034058355a17aa9d0e5d88d92e0689281ea0c3696728b",
+      "outcome": "preserved",
+      "sourceSHA256": "f040ee9fca6d3b6f014ed5328537a968783fcdf0e186fe2f1f54d0a12992067a"
+    },
+    "m_half_fma|metal|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "compiled-only",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "compiled-only",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|metal|relaxed|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|metal|strict|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
+    "m_half_fma|metal|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "cfaab97b042e53d4d3dc4e49defd60736902b98357509ac16a39827baff9621b",
+      "outcome": "preserved",
+      "sourceSHA256": "e477d99f3da9e55ec12fec8721e3b798e7558b44f522c1e120aac232962ab25f"
+    },
     "m_half_mul|metal|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "62ac4b4bf6d513ee02a3976a3183795bf7ab76c4053746ae3cf7a3290713faa3",
       "outcome": "preserved",
@@ -2372,12 +2512,12 @@
     },
     "m_half_mul|metal|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
       "inputSHA256": "62ac4b4bf6d513ee02a3976a3183795bf7ab76c4053746ae3cf7a3290713faa3",
-      "outcome": "invalid",
+      "outcome": "compiled-only",
       "sourceSHA256": "da3da089ffaeddeb3833c710f0cbb69614821dfc054996830e42c91c9377fc39"
     },
     "m_half_mul|metal|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
       "inputSHA256": "62ac4b4bf6d513ee02a3976a3183795bf7ab76c4053746ae3cf7a3290713faa3",
-      "outcome": "invalid",
+      "outcome": "compiled-only",
       "sourceSHA256": "da3da089ffaeddeb3833c710f0cbb69614821dfc054996830e42c91c9377fc39"
     },
     "m_half_mul|metal|metal|relaxed|reference|vulkan1.1|metal-apple": {
@@ -2402,33 +2542,173 @@
     },
     "m_half_mul|metal|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "62ac4b4bf6d513ee02a3976a3183795bf7ab76c4053746ae3cf7a3290713faa3",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "da3da089ffaeddeb3833c710f0cbb69614821dfc054996830e42c91c9377fc39"
     },
     "m_half_mul|metal|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "62ac4b4bf6d513ee02a3976a3183795bf7ab76c4053746ae3cf7a3290713faa3",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "da3da089ffaeddeb3833c710f0cbb69614821dfc054996830e42c91c9377fc39"
     },
     "m_half_mul|metal|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "62ac4b4bf6d513ee02a3976a3183795bf7ab76c4053746ae3cf7a3290713faa3",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "da3da089ffaeddeb3833c710f0cbb69614821dfc054996830e42c91c9377fc39"
     },
     "m_half_mul|metal|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
       "inputSHA256": "62ac4b4bf6d513ee02a3976a3183795bf7ab76c4053746ae3cf7a3290713faa3",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "da3da089ffaeddeb3833c710f0cbb69614821dfc054996830e42c91c9377fc39"
     },
     "m_half_mul|metal|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
       "inputSHA256": "62ac4b4bf6d513ee02a3976a3183795bf7ab76c4053746ae3cf7a3290713faa3",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "da3da089ffaeddeb3833c710f0cbb69614821dfc054996830e42c91c9377fc39"
     },
     "m_half_mul|metal|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
       "inputSHA256": "62ac4b4bf6d513ee02a3976a3183795bf7ab76c4053746ae3cf7a3290713faa3",
-      "outcome": "diverged",
+      "outcome": "preserved",
       "sourceSHA256": "da3da089ffaeddeb3833c710f0cbb69614821dfc054996830e42c91c9377fc39"
+    },
+    "m_half_round|metal|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "compiled-only",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "compiled-only",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|metal|relaxed|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|metal|strict|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_round|metal|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "301bdb1ca1418a7efe9a2851904b4c9dff1cf56483c07697157b121967270220",
+      "outcome": "preserved",
+      "sourceSHA256": "6649806b9a78d03912c15b148f67c835e0e10a89e2729bf99cceaa753a4c14ca"
+    },
+    "m_half_sqrt|metal|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "compiled-only",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "compiled-only",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|metal|relaxed|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|metal|strict|reference|vulkan1.1|metal-apple": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
+    },
+    "m_half_sqrt|metal|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "22af9ab300737568cc961dfde470b4a74f079e9ebe3bb8def756792e3b149801",
+      "outcome": "preserved",
+      "sourceSHA256": "6c0294be8296ef0a9869f6ded63aae38e6630e9354320b2a5313dff6b63650cc"
     },
     "m_isnan|metal|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "bdaf51381afa805f94f39b7be3f78080787724a4db674fa3bf427d15497159be",
@@ -4462,12 +4742,12 @@
     }
   },
   "counts": {
-    "compiled-only": 140,
-    "diverged": 130,
+    "compiled-only": 150,
+    "diverged": 124,
     "driver-rejected": 8,
-    "invalid": 28,
+    "invalid": 26,
     "observed": 40,
-    "preserved": 528,
+    "preserved": 582,
     "refused": 18
   },
   "keys": [

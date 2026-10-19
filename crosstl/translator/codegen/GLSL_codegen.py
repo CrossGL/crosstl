@@ -90,6 +90,7 @@ from ..metadata_preconditions import (
     with_metadata_precondition_header,
 )
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
+from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
 from ..structure_conversions import (
@@ -33274,6 +33275,17 @@ float {name}(int64_t value) {{
         return "\n".join(helpers) + "\n"
 
     def generate_glsl_ieee_math_helper(self, name, operation, value_type, width):
+        if operation == "half-fma":
+            if width == 1:
+                return glsl_half_helper_source("cgl_half_fma", name)
+            scalar = self.glsl_ieee_helper_name("half-fma", "float")
+            lanes = ", ".join(
+                f"{scalar}(left.{c}, right.{c}, addend.{c})" for c in "xyzw"[:width]
+            )
+            return (
+                f"{value_type} {name}({value_type} left, {value_type} right, "
+                f"{value_type} addend) {{\n    return {value_type}({lanes});\n}}\n"
+            )
         if operation == "fma":
             # A precise result makes fma() one operation (GLSL 4.60, 8.3):
             # Mesa otherwise splits it and folds (a * b + c) - c into a * b.
@@ -33399,7 +33411,7 @@ float {name}(int64_t value) {{
         for name, operation, value_type, condition_type, width in sorted(
             self.required_glsl_metal_math_helpers
         ):
-            if operation in {"fma", "difference", "atan2"} or operation.startswith(
+            if operation in {"fma", "half-fma", "difference", "atan2"} or operation.startswith(
                 ("precise-", "ieee-")
             ):
                 helpers.append(
@@ -40074,6 +40086,12 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             return None
         value_type = info["mapped"]
+        if operation == "fma" and all(
+            self.glsl_half_width(self.glsl_source_expression_type(arg)) is not None
+            for arg in args
+        ):
+            # A binary32 fma of binary16 values rounds twice; the helper rounds the exact sum once.
+            operation = "half-fma"
         rendered = [
             self.generate_expression_with_expected(arg, value_type) for arg in args
         ]
@@ -40081,6 +40099,13 @@ complex64_t crossgl_complex64_mod_assign(
         self.required_glsl_metal_math_helpers.add(
             (helper_name, operation, value_type, "", info["width"])
         )
+        if operation == "half-fma":
+            if info["width"] != 1:
+                scalar_name = self.glsl_ieee_helper_name("half-fma", "float")
+                self.required_glsl_metal_math_helpers.add(
+                    (scalar_name, "half-fma", "float", "", 1)
+                )
+            return f"{helper_name}({', '.join(rendered)})"
         if operation == "atan2":
             if info["width"] != 1:
                 # Vector lanes call the scalar helper.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .interface import hlsl_reflected_strides
@@ -15,6 +16,17 @@ BINARIES = {"metal": ".air", "hlsl": ".dxil", "glsl": ".spv", "spirv": ".spv"}
 HLSL_PROFILE = "cs_6_6"
 CONFIGS = ("strict", "relaxed")
 ENVIRONMENTS = ("vulkan1.1", "vulkan1.2", "vulkan1.3")
+# HLSL 2021 native 16-bit scalar, vector and matrix types exist only under `dxc -enable-16bit-types` (Shader Model 6.2).
+NATIVE_16_BIT = re.compile(r"\b(?:float16_t|int16_t|uint16_t)(?:[1-4](?:x[1-4])?)?\b")
+
+
+def hlsl_arguments(path):
+    """The DXC arguments an HLSL artifact needs beyond its profile and entry point."""
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return []
+    return ["-enable-16bit-types"] if NATIVE_16_BIT.search(text) else []
 
 
 def _missing(name):
@@ -38,6 +50,7 @@ def _hlsl(path, output, entry, config, profile):
         return [missing], {}
     dxc = tool("dxc").command
     command = [*dxc, path, "-T", profile, "-E", entry, "-HV", "2021", "-Fo", output]
+    command += hlsl_arguments(path)
     if config == "strict":
         command.append("-Gis")
     result = require_artifact(run(command), output)

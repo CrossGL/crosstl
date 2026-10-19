@@ -15,7 +15,8 @@ from .validators import dxil_is_signed, validate
 
 
 def test_hazard_inventory_and_oracles():
-    assert len(CASES) == len(BY_ID) == 66
+    # The 66 evidence kernels plus the binary16 division, square-root, fma and conversion cases.
+    assert len(CASES) == len(BY_ID) == 70
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",
@@ -515,3 +516,14 @@ def test_scoreboard_merge_replaces_only_the_runs_scope():
     }
     assert merged["counts"] == {"diverged": 1, "preserved": 1}
     assert scoreboard.SCHEMA == merged["schemaVersion"]
+
+
+def test_native_16_bit_hlsl_is_compiled_with_16_bit_types(tmp_path):
+    from .validators import hlsl_arguments
+
+    native = tmp_path / "native.hlsl"
+    native.write_text("float16_t2 f(uint16_t x) { return float16_t2(x, x); }\n")
+    plain = tmp_path / "plain.hlsl"
+    plain.write_text("min16float f(float x) { return x; } // float16_tx\n")
+    assert hlsl_arguments(native) == ["-enable-16bit-types"]
+    assert hlsl_arguments(plain) == []
