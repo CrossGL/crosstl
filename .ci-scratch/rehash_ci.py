@@ -1,0 +1,104 @@
+"""Recompute generated Metal hashes of the MLX reduce contracts, one shard at a time.
+
+usage: rehash_ci.py <pinned|current> <shard> <count> <out.json> [entry-regex]
+
+pinned:  the 846d round-trip contract (test_reduce_complete_metal_roundtrip), MLX root in CROSTL_MLX_ROOT.
+current: the 9c3d current-tree contract (test_current_reduce_family), MLX root in CROSTL_MLX_ROOT.
+Writes {"changed": {entry: {"sha256", "sizeBytes", "old"}}, "failed": {entry: codes}, "same": [entries]}.
+"""
+
+import json
+import os
+import re
+import shutil
+import sys
+import tempfile
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
+REPO = Path.cwd()
+sys.path.insert(0, str(REPO))
+MLX = Path(os.environ["CROSTL_MLX_ROOT"]).resolve()
+FAMILY = sys.argv[1]
+
+from crosstl.project import load_project_config, translate_project  # noqa: E402
+
+if FAMILY == "pinned":
+    import demos.integrations.mlx.tests.kernels.test_reduce_complete_metal_roundtrip as M  # noqa: E402
+
+    EXPECTED = {
+        w.entry_point: (w.sha256, w.size_bytes) for w in M.CURRENT_REDUCE_METAL_WORKLOADS
+    }
+    WORKLOADS = {w.entry_point: w for w in M.CURRENT_REDUCE_METAL_WORKLOADS}
+else:
+    import demos.integrations.mlx.tests.kernels.test_current_reduce_family as F  # noqa: E402
+
+    _records = F._contract()["artifacts"]["metal"]
+    EXPECTED = {e: (_records[e]["sha256"], _records[e]["sizeBytes"]) for e in F.ENTRIES}
+
+
+def _pinned(entry):
+    base = MLX / ".crosstl-corpus-evidence"
+    base.mkdir(exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix="rehash-", dir=base))
+    try:
+        config = work / "crosstl.toml"
+        config.write_text(M._project_config(WORKLOADS[entry]) + "\n", encoding="utf-8")
+        return translate_project(
+            load_project_config(MLX, config),
+            targets=("metal",),
+            output_dir=(work / "out").relative_to(MLX).as_posix(),
+            format_output=False,
+            validate=True,
+            run_toolchains=False,
+        ).to_json(), False
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _current(entry):
+    work = Path(tempfile.mkdtemp(prefix=".current-reduce-", dir=MLX))
+    try:
+        return translate_project(
+            F._config(work, "metal", entry),
+            format_output=False,
+            validate=True,
+            run_toolchains=False,
+        ).to_json(), True
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def one(entry):
+    report, strict = (_pinned if FAMILY == "pinned" else _current)(entry)
+    if report["summary"]["translatedCount"] != 1 or (strict and report["diagnostics"]):
+        codes = sorted({d.get("code") for d in report.get("diagnostics", [])})
+        return entry, None, codes
+    artifact = report["artifacts"][0]
+    return entry, (artifact["generatedHash"]["value"], artifact["generatedSizeBytes"]), None
+
+
+def main():
+    shard, count, out = int(sys.argv[2]), int(sys.argv[3]), Path(sys.argv[4])
+    pattern = re.compile(sys.argv[5]) if len(sys.argv) > 5 else None
+    entries = sorted(e for e in EXPECTED if pattern is None or pattern.search(e))[shard::count]
+    changed, failed, same = {}, {}, []
+    with ProcessPoolExecutor(max_workers=int(os.environ.get("WORKERS", "4"))) as pool:
+        for entry, result, codes in pool.map(one, entries, chunksize=2):
+            if result is None:
+                failed[entry] = codes
+            elif tuple(result) != tuple(EXPECTED[entry]):
+                changed[entry] = {
+                    "sha256": result[0],
+                    "sizeBytes": result[1],
+                    "old": list(EXPECTED[entry]),
+                }
+            else:
+                same.append(entry)
+            print(entry, "failed" if result is None else "ok", flush=True)
+    out.write_text(json.dumps({"changed": changed, "failed": failed, "same": same}, indent=1))
+    print(f"entries={len(entries)} same={len(same)} changed={len(changed)} failed={len(failed)}")
+
+
+if __name__ == "__main__":
+    main()

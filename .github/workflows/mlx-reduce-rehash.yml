@@ -1,0 +1,50 @@
+name: MLX reduce contract rehash (scratch)
+
+# Temporary: recomputes the Metal hashes of the MLX reduce contracts for the self-tail-call lowering.
+# Runs only on pushes to its scratch branch, which is deleted after the hashes are collected.
+on:
+  push:
+    branches: [mlx/reduce-rehash-scratch]
+
+permissions:
+  contents: read
+
+jobs:
+  rehash:
+    name: rehash ${{ matrix.family }} ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        family: [pinned, current]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install CrossTL
+        run: python -m pip install -e . pytest numpy "PyYAML>=6,<7"
+      - name: Checkout pinned upstream MLX
+        env:
+          MLX_COMMIT: ${{ matrix.family == 'pinned' && '846d176227a0ac13d2667e58d2bb68b322109ab0' || '9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8' }}
+        run: |
+          git init mlx-upstream
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+      - name: Rehash
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          WORKERS: "4"
+        run: |
+          python .ci-scratch/rehash_ci.py ${{ matrix.family }} ${{ matrix.shard }} 10 \
+            rehash-${{ matrix.family }}-${{ matrix.shard }}.json '_(large_)?[25]_(32_32_)?reduce_' | tail -n 5
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rehash-${{ matrix.family }}-${{ matrix.shard }}
+          path: rehash-${{ matrix.family }}-${{ matrix.shard }}.json
+          retention-days: 3
