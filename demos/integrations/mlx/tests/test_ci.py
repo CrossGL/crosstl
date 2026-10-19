@@ -982,6 +982,11 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "quantized-qmv-wide-6",
         "quantized-qmv-wide-7",
         "quantized-qmv-wide-8",
+        "gemm-family-0",
+        "gemm-family-1",
+        "gemm-family-2",
+        "gemm-family-3",
+        "gemm-family-4",
     ]
     assert job["runs-on"] == "${{ matrix.os }}"
     assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"

@@ -274,13 +274,50 @@ python -m pytest -q -n auto \
   demos/integrations/mlx/tests/kernels/test_current_gemm.py
 ```
 
-This proves one float32 NN entry and six function-constant configurations, not
-the complete GEMM family or the upstream MLX suite. Transposed operands, other
-element types and every mixed alignment combination are not covered. OpenGL's
+This proves one float32 NN entry and six function-constant configurations. The
+family gate below extends it to the other real-typed entries; neither covers
+the upstream MLX suite or every mixed alignment combination. OpenGL's
 device offsets are asserted, not checked against runtime metadata, which #2179
 tracks. This check does not establish full host-runtime
 redirection for any backend. A configured gate is not proof of success until
 its native job passes for the relevant revision.
+
+#### GEMM family
+
+`test_current_gemm_family.py` executes all 72 float32, float16 and bfloat16
+entries of `steel_gemm_fused.metal`: six tile shapes and the four NN, NT, TN
+and TT transpositions per type. `gemm_fused_model.py` follows `gemm.h`,
+`loader.h` and `mma.h` to name every entry's two `BlockLoader` instantiations,
+the slots they write, and the slots `BlockMMA` reads; a non-native test
+requires the reads to equal the writes for all 96 entries. Each entry's
+DirectX and OpenGL assertions come from that model, as the representative's
+do, and its workgroup is `(32, WN, WM)`.
+
+Each entry runs three frozen configurations: unaligned (shapes 4x5x7,
+33x35x17 with two padded batches and a spare threadgroup per axis, and
+70x69x41, which spans several tiles in every dimension), aligned (one tile,
+then 64x64x32), and broadcast batches with `alpha * AB + beta * C`. Transposed
+operands store the same logical matrices, so all four layouts share one
+reference. float32 and float16 use quarter-integer operands; bfloat16 uses
+halves so every product, sum and epilogue keeps within its 8 significant bits.
+The tests check that every reference value is exact in the output type, so
+accumulation order and the final conversion round nothing; they do not test
+rounding. Outputs are compared word for word, guards included, and on macOS
+with the original source as well. The current-tree native parity job runs the
+216 entry and configuration pairs in five shards per operating system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_FAMILY=1 \
+CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_COUNT=5 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_family.py
+```
+
+The 24 complex64 entries are not covered yet. Their `BlockMMA` partial
+specialization now matches through the `complex64_t` alias, but its local tile
+types and `reinterpret_cast` float views stop translation with a typed
+diagnostic; #2261 tracks the partial-specialization materialization.
 
 ### Resource-Index Controls
 
