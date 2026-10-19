@@ -8,9 +8,21 @@ import subprocess
 from fnmatch import fnmatchcase
 from pathlib import Path
 
+WORKFLOW = ".github/workflows/demo-project-testing.yml"
 FULL_PATHS = (
     "demos/integrations/mlx/**",
-    ".github/workflows/demo-project-testing.yml",
+    WORKFLOW,
+)
+# The tier selector, its tests and the demo's prose never run inside the full
+# tier, and the complete test suite runs the selector's tests on every pull
+# request and queue group, so a change limited to them needs only the smoke
+# tier. ``PLAN_JOB`` names a workflow change confined to the ci-plan job.
+PLAN_JOB = f"{WORKFLOW}#ci-plan"
+PLANNER_PATHS = (
+    "demos/integrations/mlx/ci_plan.py",
+    "demos/integrations/mlx/tests/test_ci_plan.py",
+    "demos/integrations/mlx/*.md",
+    PLAN_JOB,
 )
 SMOKE_PATHS = (
     "crosstl/**",
@@ -44,15 +56,20 @@ def validation_plan(event, paths, full_requested=False):
     if event not in {"pull_request", "push", "merge_group"}:
         raise ValueError(f"Unsupported workflow event: {event}")
     paths = tuple(paths)
-    corpus = any(fnmatchcase(path, pattern) for path in paths for pattern in FULL_PATHS)
+    mlx = [path for path in paths if _matches(path, (*FULL_PATHS, PLAN_JOB))]
+    corpus = any(not _matches(path, PLANNER_PATHS) for path in mlx)
     heavy = bool(full_requested) if event == "pull_request" else corpus
     smoke = (
         heavy
-        or corpus
+        or bool(mlx)
         or event == "merge_group"
         or any(fnmatchcase(path, pattern) for path in paths for pattern in SMOKE_PATHS)
     )
     return {"heavy": heavy, "smoke": smoke}
+
+
+def _matches(path, patterns):
+    return any(fnmatchcase(path, pattern) for pattern in patterns)
 
 
 def _require_hashes(*revisions):
@@ -92,6 +109,52 @@ def changed_paths(base, head):
     )
 
 
+def _without_plan_job(text):
+    """Return the workflow's lines outside its top-level ``ci-plan`` job."""
+    kept, in_plan = [], False
+    for line in text.splitlines():
+        if re.fullmatch(r"(  )?[A-Za-z0-9_-]+:\s*", line):
+            in_plan = line.rstrip() == "  ci-plan:"
+        if not in_plan:
+            kept.append(line)
+    return kept
+
+
+def _file_at(revision, path):
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{path}"],
+        capture_output=True,
+        timeout=60,
+    )
+    return result.stdout.decode("utf-8") if result.returncode == 0 else None
+
+
+def classify_workflow_change(base, head, paths):
+    """Name a workflow change that only edits the ci-plan job as ``PLAN_JOB``.
+
+    The plan job decides which jobs run but runs none of the full tier, so
+    editing it alone does not need that tier. Any change to another job, a
+    trigger or the workflow's environment keeps the workflow path.
+    """
+    paths = tuple(paths)
+    if WORKFLOW not in paths:
+        return paths
+    _require_hashes(base, head)
+    merge_base = subprocess.run(
+        ["git", "merge-base", base, head],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout.strip()
+    before, after = _file_at(merge_base, WORKFLOW), _file_at(head, WORKFLOW)
+    if before is None or after is None:
+        return paths
+    if _without_plan_job(before) != _without_plan_job(after):
+        return paths
+    return tuple(PLAN_JOB if path == WORKFLOW else path for path in paths)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event", required=True)
@@ -115,9 +178,10 @@ def main(argv=None):
         # queue group may not be fetched: without a diff, validate everything.
         plan = {"heavy": True, "smoke": True}
     else:
-        plan = validation_plan(
-            args.event, changed_paths(args.base, args.head), full_requested
+        paths = classify_workflow_change(
+            args.base, args.head, changed_paths(args.base, args.head)
         )
+        plan = validation_plan(args.event, paths, full_requested)
     if args.output is not None:
         with args.output.open("a", encoding="utf-8") as output:
             output.writelines(

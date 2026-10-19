@@ -7,7 +7,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from demos.integrations.mlx.ci_plan import changed_paths, main, validation_plan
+from demos.integrations.mlx.ci_plan import (
+    PLAN_JOB,
+    _without_plan_job,
+    changed_paths,
+    classify_workflow_change,
+    main,
+    validation_plan,
+)
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
@@ -328,6 +335,91 @@ def test_result_gate_fails_when_a_job_that_ran_fails(outcome):
     completed = _run_result_gate(results)
     assert completed.returncode == 1
     assert f"ended with '{outcome}'" in completed.stdout
+
+
+@pytest.mark.parametrize("event", ["push", "merge_group"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "demos/integrations/mlx/ci_plan.py",
+        "demos/integrations/mlx/tests/test_ci_plan.py",
+        "demos/integrations/mlx/README.md",
+        "demos/integrations/mlx/portable_host/README.md",
+        PLAN_JOB,
+    ],
+)
+def test_planner_changes_need_only_the_smoke_tier(event, path):
+    assert validation_plan(event, [path]) == {"heavy": False, "smoke": True}
+    kernel = "demos/integrations/mlx/tests/kernels/test_current_arange.py"
+    assert validation_plan(event, [path, kernel]) == {"heavy": True, "smoke": True}
+
+
+def test_plan_job_split_removes_exactly_the_plan_job():
+    text = WORKFLOW.read_text()
+    workflow = yaml.safe_load(text)
+    remaining = yaml.safe_load("\n".join(_without_plan_job(text)) + "\n")
+    del workflow["jobs"]["ci-plan"]
+    assert remaining == workflow
+
+
+_PLANNED_WORKFLOW = """name: Demo
+on:
+  push:
+    branches: [main]
+jobs:
+  ci-plan:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo {plan}
+  native:
+    runs-on: windows-2025
+    steps:
+      - run: echo {native}
+"""
+
+
+@pytest.mark.parametrize(
+    "plan,native,trigger,heavy",
+    [
+        ("planner-two", "native", "main", "false"),
+        ("planner", "native-two", "main", "true"),
+        ("planner", "native", "release", "true"),
+    ],
+)
+def test_workflow_change_confined_to_plan_job_skips_full_tier(
+    tmp_path, monkeypatch, plan, native, trigger, heavy
+):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_PLANNED_WORKFLOW.format(plan="planner", native="native"))
+    base = _commit("Start")
+    changed = _PLANNED_WORKFLOW.format(plan=plan, native=native)
+    workflow.write_text(changed.replace("[main]", f"[{trigger}]"))
+    head = _commit("Edit workflow")
+    paths = classify_workflow_change(base, head, changed_paths(base, head))
+    assert paths == (
+        (PLAN_JOB,) if heavy == "false" else (str(WORKFLOW.relative_to(ROOT)),)
+    )
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", "merge_group", "--base", base, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
+    assert output.read_text() == f"heavy={heavy}\nsmoke=true\n"
+
+
+def test_added_workflow_keeps_the_full_tier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    (tmp_path / "README.md").write_text("start\n")
+    base = _commit("Start")
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_PLANNED_WORKFLOW.format(plan="planner", native="native"))
+    head = _commit("Add workflow")
+    paths = changed_paths(base, head)
+    assert classify_workflow_change(base, head, paths) == paths
+    assert validation_plan("push", paths)["heavy"] is True
 
 
 def test_unsupported_event_fails():
