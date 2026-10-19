@@ -401,7 +401,7 @@ def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang(
 
     crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
 
-    assert "const S sc = S(0.125);" in crossgl
+    assert "const S sc = S(float16_t(0.125));" in crossgl
     assert "S{" not in crossgl
     assert "S v[2] @row_major @glsl_buffer_block(std430);" in crossgl
     assert "0.125hf" not in crossgl

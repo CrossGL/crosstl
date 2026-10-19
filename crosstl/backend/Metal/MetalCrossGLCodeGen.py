@@ -11642,7 +11642,8 @@ class MetalToCrossGLConverter:
         if "'" in value and re.match(r"^(?:0[xX][0-9a-fA-F]|0[bB][01]|\d|\.\d)", value):
             value = value.replace("'", "")
         if re.fullmatch(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[hH]", value):
-            return value[:-1]
+            # A half literal keeps its type: `h * 0.5h` is half arithmetic, `h * 0.5` float (MSL section 2.1).
+            return f"float16({value[:-1]})"
         if re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*", value):
             digits, type_name = integer_literal_parts(value, legacy_octal=True)
             suffix = {"int": "", "uint": "u", "int64_t": "l", "uint64_t": "ul"}[

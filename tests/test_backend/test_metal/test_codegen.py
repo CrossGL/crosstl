@@ -4359,13 +4359,15 @@ def test_codegen_roundtrips_global_constant_half_vector_initializer():
     crossgl = convert(code)
 
     assert (
-        "constant f16vec3 luminanceWeighting = " "f16vec3(0.2126, 0.7152, 0.0722);"
+        "constant f16vec3 luminanceWeighting = "
+        "f16vec3(float16(0.2126), float16(0.7152), float16(0.0722));"
     ) in crossgl
     assert "0.2126h" not in crossgl
 
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
     assert (
-        "constant half3 luminanceWeighting = " "half3(0.2126, 0.7152, 0.0722);"
+        "constant half3 luminanceWeighting = "
+        "half3(half(0.2126), half(0.7152), half(0.0722));"
     ) in metal
 
 

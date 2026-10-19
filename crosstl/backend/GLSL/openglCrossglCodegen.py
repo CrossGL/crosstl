@@ -3557,7 +3557,8 @@ class GLSLToCrossGLConverter:
             return double_float_match.group("body")
         half_float_match = HALF_FLOAT_LITERAL_SUFFIX_RE.match(text)
         if half_float_match:
-            return half_float_match.group("body")
+            # A float16_t literal keeps its type: `h * 0.5hf` is binary16 arithmetic, `h * 0.5` binary32.
+            return f"float16_t({half_float_match.group('body')})"
         long_integer_match = LONG_INTEGER_LITERAL_SUFFIX_RE.match(text)
         if long_integer_match:
             suffix = long_integer_match.group("suffix")

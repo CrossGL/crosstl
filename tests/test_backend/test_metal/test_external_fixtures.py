@@ -823,7 +823,7 @@ EXTERNAL_FIXTURES = [
         # becomes the CrossGL fill rather than an opaque mangled call.
         "contains": [
             "CooperativeMatrix<float16,8,8,subgroup,unspecified,unspecified> arg_2 = "
-            "cooperative_matrix_fill(float16(0.0));",
+            "cooperative_matrix_fill(float16(float16(0.0)));",
             "const CooperativeMatrix<float16,8,8,subgroup,unspecified,unspecified> "
             "v_1 = arg_2;",
         ],
