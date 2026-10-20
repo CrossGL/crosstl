@@ -26,6 +26,7 @@ TOOLS = {
     "hip": "hipcc",
     "hlsl": "dxc",
     "metal": "metal",
+    "slang": "slangc",
     "spirv": "spirv-val",
     "wgsl": "naga",
 }
@@ -35,6 +36,7 @@ SUFFIX = {
     "hip": ".hip",
     "hlsl": ".hlsl",
     "metal": ".metal",
+    "slang": ".slang",
     "spirv": ".spvasm",
     "wgsl": ".wgsl",
 }
@@ -46,6 +48,8 @@ METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
 # feature list names, and for C++17.
 CUDA_ARCH = "sm_80"
+# Slang probes compile to SPIR-V, the target whose validator (SPIRV-Tools, built into slangc) checks the result.
+SLANG_TARGET = "spirv"
 # HIP probes compile for RDNA3 (gfx1100), which has the image instructions texture and surface access need; the CDNA
 # targets have none. No GPU is needed: hipcc compiles for the named target.
 HIP_ARCH = "gfx1100"
@@ -87,9 +91,11 @@ def version(name: str) -> str:
     base = command(name)
     if not base:
         return ""
+    # slangc takes single-dash options only.
+    flag = "-version" if name == "slangc" else "--version"
     try:
         result = subprocess.run(
-            [*base, "--version"], capture_output=True, text=True, timeout=TIMEOUT
+            [*base, flag], capture_output=True, text=True, timeout=TIMEOUT
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -115,6 +121,8 @@ def _run(arguments: list[str], cwd: str) -> Verdict:
     except subprocess.TimeoutExpired:
         return Verdict(False, f"{arguments[0]} timed out after {TIMEOUT} s")
     log = _ANSI.sub("", result.stdout + result.stderr).replace(cwd + os.sep, "").strip()
+    if result.returncode != 0 and not log:
+        log = f"error: {Path(arguments[0]).name} exited with status {result.returncode} and no message"
     # Compilers report the first error first and end with notes and counts, so the head of the log is kept.
     return Verdict(result.returncode == 0, log[:2000])
 
@@ -210,6 +218,25 @@ def validate(
                 ],
                 scratch,
             )
+        if language == "slang":
+            # A ``[shader(...)]`` attribute names the entry point and its stage; without one, slangc is told both.
+            entry_point = (
+                []
+                if "[shader(" in source
+                else ["-entry", entry or "main", "-stage", stage]
+            )
+            return _run(
+                [
+                    *command("slangc"),
+                    name,
+                    *entry_point,
+                    "-target",
+                    SLANG_TARGET,
+                    "-o",
+                    "probe.spv",
+                ],
+                scratch,
+            )
         environment = ["--target-env", SPIRV_ENVIRONMENT]
         assembled = _run(
             [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch
@@ -240,6 +267,24 @@ SPIRV_COMPILERS = {
             "-fspv-target-env=" + SPIRV_ENVIRONMENT,
             "{source}",
             "-Fo",
+            "probe.spv",
+        ),
+    ),
+    "slang": (
+        "slangc",
+        (
+            "{source}",
+            "-target",
+            SLANG_TARGET,
+            "-entry",
+            "{entry}",
+            "-stage",
+            "compute",
+            "-O0",
+            # slangc removes unused locals even at -O0; with debug information it keeps them, so the baseline
+            # probe keeps the argument reads the call's probe has. Debug instructions never join an id.
+            "-g2",
+            "-o",
             "probe.spv",
         ),
     ),

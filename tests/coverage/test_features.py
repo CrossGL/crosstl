@@ -1,5 +1,5 @@
 from tools.coverage import validators
-from tools.coverage.features import cuda, glsl, hip, hlsl, metal, spirv, wgsl
+from tools.coverage.features import cuda, glsl, hip, hlsl, metal, slang, spirv, wgsl
 from tools.coverage.model import Param, Type
 
 GLSL_EXCERPT = """
@@ -415,3 +415,130 @@ def test_hip_reads_the_math_atomic_and_device_headers():
     assert features["erff"].crossgl == features["erf"].crossgl == "erf"
     assert features["__popc"].crossgl == "bitCount"
     assert features["__syncthreads"].crossgl == "barrier"
+
+
+SLANG_HLSL = """
+//@hidden:
+__generic<T : __BuiltinFloatingPointType>
+T __hiddenHelper(T x) { return x; }
+
+//@public:
+/// Sine.
+__generic<T : __BuiltinFloatingPointType>
+[__readNone]
+[require(cpp_cuda_glsl_hlsl_metal_spirv_wgsl_llvm, sm_4_0_version)]
+T sin(T x)
+{
+    __target_switch
+    {
+    case hlsl: __intrinsic_asm "sin";
+    case spirv: return spirv_asm { OpExtInst $$T result glsl450 Sin $x };
+    }
+}
+
+__generic<T : __BuiltinFloatingPointType, let N : int>
+[require(cpp_cuda_glsl_hlsl_metal_spirv_wgsl_llvm, sm_4_0_version)]
+vector<T, N> sin(vector<T, N> x)
+{
+    VECTOR_MAP_UNARY(T, N, sin, x);
+}
+
+${
+struct SlangAtomicOperationInfo
+{
+    const char* slangCallSuffix;
+    const char* internalCallSuffix;
+    const char* interface;
+};
+SlangAtomicOperationInfo slangAtomicOperationInfo[2] = {
+    { "Add", "add", "IArithmeticAtomicable" },
+    { "Exchange", "exchange", "IAtomicable" },
+};
+for (SlangAtomicOperationInfo atomicOp : slangAtomicOperationInfo)
+{
+$}
+[ForceInline]
+[require(cuda_glsl_hlsl_metal_spirv, atomic_glsl_hlsl_cuda_metal)]
+void Interlocked$(atomicOp.slangCallSuffix)<T:$(atomicOp.interface)>(__ref T dest, T value)
+{
+    __atomic_$(atomicOp.internalCallSuffix)(dest, value);
+}
+${
+}
+$}
+
+[require(cpp_cuda_glsl_hlsl_spirv, fragment)]
+void clip(float x);
+
+[require(hlsl, sm_5_0)]
+void ProcessTriTessFactorsAvg(in float3 RawEdgeFactors, in float InsideScale, out float3 Rounded);
+
+[require(glsl_spirv, GLSL_430_SPIRV_1_0_compute)]
+[require(glsl_spirv, meshshading)]
+uint3 WorkgroupCount()
+{
+    return uint3(0);
+}
+
+__generic<T : __BuiltinFloatingPointType>
+T lerp(T x, T y, T s);
+
+struct Hidden
+{
+    float member(float x) { return x; }
+};
+"""
+
+SLANG_CORE = """
+//@public:
+__generic<T, U>
+[__unsafeForceInlineEarly]
+T bit_cast(U value);
+"""
+
+
+def test_slang_reads_the_public_global_functions_of_the_core_module():
+    glsl_names = {"sin", "mix"}
+    features = by_name(slang.parse(SLANG_CORE, SLANG_HLSL, glsl_names))
+    assert sorted(features) == [
+        "InterlockedAdd",
+        "InterlockedExchange",
+        "ProcessTriTessFactorsAvg",
+        "WorkgroupCount",
+        "bit_cast",
+        "clip",
+        "lerp",
+        "sin",
+    ]
+    assert features["bit_cast"].group == "core"
+    assert features["sin"].group == "hlsl"
+    # Generic functions are probed with two-component vectors when they have a vector overload.
+    vec2 = Type("float", (2,))
+    assert features["sin"].signature.result == vec2
+    assert features["sin"].signature.params == (Param(vec2),)
+    add = features["InterlockedAdd"].signature
+    assert add.params == (Param(Type("int"), "inout"), Param(Type("int")))
+    assert features["lerp"].crossgl == "mix"
+    assert features["WorkgroupCount"].signature.result == Type("uint", (3,))
+
+
+def test_slang_stages_targets_and_explicit_generic_arguments():
+    features = by_name(slang.parse(SLANG_CORE, SLANG_HLSL))
+    assert features["clip"].stage == "fragment"
+    # One require alternative works in compute, so no other stage is needed.
+    assert features["WorkgroupCount"].stage == "compute"
+    tess = features["ProcessTriTessFactorsAvg"]
+    assert tess.signature is None
+    assert tess.note == "needs a target other than SPIR-V"
+    # No argument fixes bit_cast's result type, so the probe names it.
+    assert features["bit_cast"].spelling == "bit_cast<int>"
+    assert features["sin"].spelling == ""
+
+
+def test_slang_types():
+    generics = {"T": "float", "N": "size"}
+    assert slang.slang_type("vector<T, N>", generics) == Type("float", (2,))
+    assert slang.slang_type("matrix<T, 3, 4>", generics) == Type("float", (4, 3))
+    assert slang.slang_type("float3x4", {}) == Type("float", (4, 3))
+    assert slang.slang_type("uint32_t4", {}) == Type("uint", (4,))
+    assert slang.slang_type("half", {}) == Type.other("half")

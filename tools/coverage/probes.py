@@ -43,6 +43,7 @@ class HLSL(Dialect):
     language = "hlsl"
     suffix = ".hlsl"
     rows_first = True
+    entry_attributes: tuple[str, ...] = ("[numthreads(1, 1, 1)]",)
 
     def vector(self, scalar: str, size: int) -> str:
         return f"{scalar}{size}"
@@ -53,16 +54,19 @@ class HLSL(Dialect):
     def cast(self, kind: Type, value: str) -> str:
         return f"({self.type(kind)}){value}"
 
+    def buffer(self, kind: str, name: str, binding: int) -> str:
+        return f"RWStructuredBuffer<{kind}> {name} : register(u{binding});"
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = list(parts.get("prelude", ()))
         lines += [
-            f"RWStructuredBuffer<{kind}> {name} : register(u{binding});"
+            self.buffer(kind, name, binding)
             for binding, (kind, name) in enumerate(buffers)
         ]
         lines += parts.get("declarations", ())
         params = ", ".join(["uint3 id : SV_DispatchThreadID", *parts.get("params", ())])
         lines += [
-            "[numthreads(1, 1, 1)]",
+            *self.entry_attributes,
             f"void main({params}) {{",
             "    uint i = id.x;",
         ]
@@ -217,8 +221,21 @@ class HIP(CUDA):
         return super().kernel(buffers, body, prelude=prelude, **parts)
 
 
+class Slang(HLSL):
+    """Slang compiles HLSL kernels; the ``shader`` attribute marks the entry point, so slangc needs no ``-entry``."""
+
+    language = "slang"
+    suffix = ".slang"
+    entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
+
+    def buffer(self, kind: str, name: str, binding: int) -> str:
+        # slangc assigns bindings in declaration order; a D3D register would only draw a warning for SPIR-V.
+        return f"RWStructuredBuffer<{kind}> {name};"
+
+
 DIALECTS: dict[str, Dialect] = {
-    d.language: d for d in (CROSSGL, CUDA(), GLSL(), HIP(), HLSL(), Metal(), WGSL())
+    d.language: d
+    for d in (CROSSGL, CUDA(), GLSL(), HIP(), HLSL(), Metal(), Slang(), WGSL())
 }
 
 

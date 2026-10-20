@@ -243,3 +243,26 @@ def test_hip_probes_are_valid_hip(probe_feature, baseline):
     probe = probes.build(probe_feature, "hip", baseline=baseline)
     verdict = validators.validate("hip", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_slang_probe_is_an_hlsl_kernel_with_a_shader_attribute():
+    source = probes.build(HLSL_SIGNATURES[0], "slang").source
+    assert source.startswith("RWStructuredBuffer<float> fin;\n")
+    assert '[shader("compute")]\n[numthreads(1, 1, 1)]\nvoid main(' in source
+    assert "register(" not in source
+    assert probes.build(HLSL_SIGNATURES[0], "slang").suffix == ".slang"
+
+
+@pytest.mark.skipif(not validators.available("slang"), reason="slangc is not installed")
+@pytest.mark.parametrize("probe_feature", HLSL_SIGNATURES, ids=lambda f: f.name)
+@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
+def test_slang_probes_are_valid_slang(probe_feature, baseline):
+    probe = probes.build(probe_feature, "slang", baseline=baseline)
+    verdict = validators.validate("slang", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
+@pytest.mark.skipif(not validators.available("slang"), reason="slangc is not installed")
+def test_slang_validation_needs_an_entry_point():
+    source = "RWStructuredBuffer<float> outp;\nvoid helper() { outp[0] = 1.0; }\n"
+    assert not validators.validate("slang", source, entry="main").accepted

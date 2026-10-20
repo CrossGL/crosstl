@@ -5,7 +5,7 @@ from __future__ import annotations
 from .. import constructs
 from ..model import Feature
 from ..upstream import fetch
-from . import cuda, glsl, hip, hlsl, metal, spirv, wgsl
+from . import cuda, glsl, hip, hlsl, metal, slang, spirv, wgsl
 
 
 def _glsl_names(offline: bool) -> set[str]:
@@ -41,6 +41,14 @@ def _metal(offline: bool) -> list[Feature]:
     return metal.parse(metal.LIST.read_text(), _glsl_names(offline))
 
 
+def _slang(offline: bool) -> list[Feature]:
+    return slang.parse(
+        fetch("slang-core", offline=offline),
+        fetch("slang", offline=offline),
+        _glsl_names(offline),
+    )
+
+
 def _spirv(offline: bool) -> list[Feature]:
     return spirv.parse(fetch("spirv", offline=offline), fetch("glsl", offline=offline))
 
@@ -55,6 +63,7 @@ PARSERS = {
     "hip": _hip,
     "hlsl": _hlsl,
     "metal": _metal,
+    "slang": _slang,
     "spirv": _spirv,
     "wgsl": _wgsl,
 }

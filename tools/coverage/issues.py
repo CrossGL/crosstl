@@ -54,6 +54,7 @@ TOOLS = {
     "hip": "hipcc",
     "hlsl": "DXC",
     "metal": "the Metal compiler",
+    "slang": "slangc",
     "spirv": "spirv-val",
     "wgsl": "naga",
 }

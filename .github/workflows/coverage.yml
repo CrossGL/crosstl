@@ -2,12 +2,12 @@ name: Coverage
 
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The
-# Linux job measures GLSL, HLSL, SPIR-V and WGSL with glslang, DXC, spirv-val and naga, a second Linux job measures
-# CUDA and HIP with nvcc and hipcc, and the macOS job measures Metal with xcrun metal. The report job merges the reports and adds the
-# CrossGL IR row. On pushes to main and nightly,
-# the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart),
-# COVERAGE.md and a bounded history.csv; main itself never receives generated files. The issues job then
-# reconciles the tracking and bug issues (tools/coverage/issues.py); pull requests only print its plan.
+# Linux job measures GLSL, HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc, a second Linux
+# job measures CUDA and HIP with nvcc and hipcc, and the macOS job measures Metal with xcrun metal. The report job
+# merges the reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan
+# `coverage` branch with coverage.json, coverage.svg (the README chart), COVERAGE.md and a bounded history.csv; main
+# itself never receives generated files. The issues job then reconciles the tracking and bug issues
+# (tools/coverage/issues.py); pull requests only print its plan.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the
@@ -18,6 +18,7 @@ env:
   PYTHONUNBUFFERED: "1"
   PYTHONHASHSEED: "0"
   NAGA_VERSION: "30.0.1"
+  SLANG_VERSION: "2026.9.1"
 
 on:
   push:
@@ -70,7 +71,7 @@ jobs:
           fi
 
   linux:
-    name: Coverage (GLSL, HLSL, SPIR-V, WGSL)
+    name: Coverage (GLSL, HLSL, SPIR-V, WGSL, Slang)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -114,6 +115,19 @@ jobs:
           echo "$RUNNER_TEMP/naga/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/naga/bin/naga" --version
 
+      # The release tools/coverage/upstream.py reads Slang's standard library from; the archive digest is pinned.
+      - name: Install slangc ${{ env.SLANG_VERSION }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/slang.tar.gz"
+          curl -fsSLo "$archive" --retry 5 --retry-all-errors --connect-timeout 30 \
+            "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64-glibc-2.27.tar.gz"
+          echo "b57ea8869aa6d61a449145a8048591fdd9311c478496f012bbd2440e31ea0130  $archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/slang"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/slang"
+          echo "$RUNNER_TEMP/slang/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/slang/bin/slangc" -version
+
       - name: Restore upstream feature sources
         uses: actions/cache@v6
         with:
@@ -123,7 +137,7 @@ jobs:
       - name: Measure coverage
         run: |
           python -m tools.coverage run --strict --jobs 4 \
-            --backend glsl --backend hlsl --backend spirv --backend wgsl \
+            --backend glsl --backend hlsl --backend spirv --backend wgsl --backend slang \
             --output coverage-linux.json
 
       - uses: actions/upload-artifact@v7

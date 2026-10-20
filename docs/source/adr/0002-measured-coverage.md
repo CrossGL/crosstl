@@ -38,6 +38,7 @@ Mojo follow. A direction CrossTL does not offer, such as WGSL input, is reported
 | Metal | The standard-library headers of Apple's Metal toolchain, read once by a script in the repository into `metal.txt`, which records the toolchain and language version |
 | CUDA | llvm/llvm-project: clang's `__clang_cuda_math.h` and `__clang_cuda_device_functions.h` |
 | HIP | llvm/llvm-project: clang's `__clang_hip_math.h`; ROCm/clr: `amd_hip_atomic.h` and `amd_device_functions.h`, at the versions of the hipcc that validates the probes |
+| Slang | shader-slang/slang: the core module sources `hlsl.meta.slang` and `core.meta.slang` of the slangc release that validates the probes; the global functions of their public sections |
 
 Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
 only when the script is rerun for a newer toolchain. Language-level categories are added on top of built-ins: types,
@@ -48,9 +49,9 @@ their pinned commits, checks their digests and caches them. No feature list is w
 
 For every feature the engine generates a minimal probe, in CrossGL for output and in the source language for input.
 It translates the probe and validates the result with `glslangValidator` (GLSL), DXC (HLSL), `spirv-val`
-(SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA) or hipcc (HIP); the two GPU
-compute compilers need no GPU to compile. Input probes are validated by emitting
-the imported CrossGL back to the source language. Where Core's conformance runtimes can execute a probe, it is
+(SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA), hipcc (HIP) or slangc
+compiling to SPIR-V (Slang); the two GPU compute compilers need no GPU to compile. Input probes are validated by
+emitting the imported CrossGL back to the source language. Where Core's conformance runtimes can execute a probe, it is
 executed through a hook Core provides; the runtime harness is not duplicated.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
@@ -65,7 +66,7 @@ for a backend and direction is `supported / (supported + refused + wrong)`; `unt
 CrossGL has no compatibility guarantee: its goal is to express everything any backend can, so that every backend can
 reach 100 %. The "CrossGL IR" row measures that goal. Its universe is the union of every backend's features,
 normalized to semantic features: a feature's id is the set of SPIR-V instructions its native probe lowers to when the
-reference compiler builds it (DXC `-spirv`, glslang, naga), minus a baseline probe that reads the same arguments
+reference compiler builds it (DXC `-spirv`, glslang, naga, slangc), minus a baseline probe that reads the same arguments
 without the call. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. A feature SPIR-V cannot express is
 listed by hand in `tools/coverage/semantic.py` only when it is known to equal another; otherwise it stays a semantic
 feature of its own.

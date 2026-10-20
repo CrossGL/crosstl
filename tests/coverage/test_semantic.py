@@ -89,3 +89,25 @@ def test_instructions_keep_the_operands_that_change_the_operation():
     assert found["OpControlBarrier(2,2,264)"] == 1
     assert found["OpGroupNonUniformIAdd.ExclusiveScan"] == 1
     assert found["OpGroupNonUniformAll"] == 1
+
+
+def slang(name, result, *params):
+    signature = Signature(result, tuple(Param(p) for p in params))
+    return Feature("slang", "function", name, signature, crossgl=name)
+
+
+@pytest.mark.skipif(
+    not validators.can_lower("slang"), reason="slangc or spirv-dis is missing"
+)
+@pytest.mark.parametrize(
+    ("feature", "expected"),
+    [
+        # Three arguments: the baseline must keep the reads slangc would otherwise drop as unused.
+        (slang("lerp", VEC2, VEC2, VEC2, VEC2), "GLSL.std.450:FMix"),
+        (slang("asuint", Type("uint", (2,)), VEC2), "OpBitcast"),
+        (slang("dot", Type("float"), VEC2, VEC2), "OpDot"),
+    ],
+    ids=lambda value: value.name if isinstance(value, Feature) else value,
+)
+def test_slang_features_lower_to_their_instruction(feature, expected):
+    assert semantic.lower(feature) == (expected, "")

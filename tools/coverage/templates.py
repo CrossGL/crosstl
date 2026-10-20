@@ -12,7 +12,8 @@ yet.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -531,12 +532,32 @@ HIP = {
     ),
 }
 
+
+def _slang(template: Template, stage: str = "") -> Template:
+    """An HLSL template as Slang: slangc assigns bindings itself, and a stage program names its stage."""
+    declarations = re.sub(r"\s*:\s*register\(\w+\)", "", template.declarations)
+    program = f'[shader("{stage}")]\n{template.program}' if stage else template.program
+    return replace(template, declarations=declarations, program=program)
+
+
+# Slang compiles HLSL, adds 8-bit integers, and reads the workgroup count through WorkgroupCount().
+SLANG = {
+    **{name: _slang(template) for name, template in HLSL.items()},
+    "int8": _scalar("int8_t"),
+    "uint8": _scalar("uint8_t"),
+    "num-workgroups": Template("outp[i] = float(WorkgroupCount().x);"),
+    "vertex": _slang(HLSL["vertex"], "vertex"),
+    "fragment": _slang(HLSL["fragment"], "fragment"),
+    "discard": _slang(HLSL["discard"], "fragment"),
+}
+
 TEMPLATES = {
     "cuda": CUDA,
     "hip": HIP,
     "glsl": GLSL,
     "hlsl": HLSL,
     "metal": METAL,
+    "slang": SLANG,
     "wgsl": WGSL,
     "spirv": {},
 }

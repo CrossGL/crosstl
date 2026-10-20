@@ -129,8 +129,9 @@ RENAMES = {
         "simd_any": "anyInvocation",
     },
 }
-# HIP spells its device functions the way CUDA does.
+# HIP spells its device functions the way CUDA does, and Slang its built-in functions the way HLSL does.
 RENAMES["hip"] = RENAMES["cuda"]
+RENAMES["slang"] = RENAMES["hlsl"]
 
 
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:

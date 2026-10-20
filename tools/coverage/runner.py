@@ -17,6 +17,7 @@ OUTPUT_BACKENDS = {
     "hip": "hip",
     "hlsl": "directx",
     "metal": "metal",
+    "slang": "slang",
     "spirv": "vulkan",
     "wgsl": "wgsl",
 }
@@ -26,6 +27,7 @@ INPUT_BACKENDS = {
     "hip": "hip",
     "hlsl": "directx",
     "metal": "metal",
+    "slang": "slang",
 }
 
 

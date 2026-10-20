@@ -148,7 +148,9 @@ def _templated(language: str) -> list[Feature]:
     ]
 
 
-@pytest.mark.parametrize("language", ["cuda", "glsl", "hip", "hlsl", "metal", "wgsl"])
+@pytest.mark.parametrize(
+    "language", ["cuda", "glsl", "hip", "hlsl", "metal", "slang", "wgsl"]
+)
 def test_native_templates_are_valid(language):
     if not validators.available(language):
         pytest.skip(f"{validators.TOOLS[language]} is not installed")
