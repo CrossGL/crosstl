@@ -47197,6 +47197,33 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return f"float3({projected_coord}, {self.vector_component(coord, 'z')})"
 
+    def hlsl_sample_cmp_level(
+        self, texture_name, sampler_name, coord, compare, lod_arg, offset=None
+    ):
+        """An explicit-LOD compare: SampleCmpLevelZero (Shader Model 4) at a literal level 0, else SampleCmpLevel
+        (Shader Model 6.7)."""
+        arguments = [sampler_name, coord, compare]
+        if self.hlsl_is_zero_literal(lod_arg):
+            method = "SampleCmpLevelZero"
+        else:
+            method = "SampleCmpLevel"
+            arguments.append(self.generate_expression(lod_arg))
+        if offset is not None:
+            arguments.append(offset)
+        return f"{texture_name}.{method}({', '.join(arguments)})"
+
+    @staticmethod
+    def hlsl_is_zero_literal(node):
+        if not isinstance(node, LiteralNode) or isinstance(node.value, bool):
+            return False
+        value = node.value
+        if isinstance(value, str):
+            value = value.strip().rstrip("fFhHlLuU")
+        try:
+            return float(value) == 0.0
+        except (TypeError, ValueError):
+            return False
+
     def generate_texture_compare_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)
         if parts is None:
@@ -47266,10 +47293,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
-                lod = self.generate_expression(extra_args[1])
-                return (
-                    f"{texture_name}.SampleCmpLevel("
-                    f"{sampler_name}, {projected_coord}, {compare}, {lod})"
+                return self.hlsl_sample_cmp_level(
+                    texture_name, sampler_name, projected_coord, compare, extra_args[1]
                 )
 
             if is_texture_compare_lod_offset_operation(func_name):
@@ -47282,11 +47307,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return self.unsupported_texture_compare_call(
                         func_name, texture_compare_offset_capability_error("DirectX")
                     )
-                lod = self.generate_expression(extra_args[1])
                 offset = self.generate_expression(extra_args[2])
-                return (
-                    f"{texture_name}.SampleCmpLevel("
-                    f"{sampler_name}, {projected_coord}, {compare}, {lod}, {offset})"
+                return self.hlsl_sample_cmp_level(
+                    texture_name,
+                    sampler_name,
+                    projected_coord,
+                    compare,
+                    extra_args[1],
+                    offset,
                 )
 
             if is_texture_compare_grad_operation(func_name):
@@ -47357,10 +47385,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if count_error:
                 return self.unsupported_texture_compare_call(func_name, count_error)
-            lod = self.generate_expression(extra_args[1])
-            return (
-                f"{texture_name}.SampleCmpLevel("
-                f"{sampler_name}, {coord}, {compare}, {lod})"
+            return self.hlsl_sample_cmp_level(
+                texture_name, sampler_name, coord, compare, extra_args[1]
             )
 
         if is_texture_compare_lod_offset_operation(func_name):
@@ -47373,11 +47399,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_offset_capability_error("DirectX")
                 )
-            lod = self.generate_expression(extra_args[1])
             offset = self.generate_expression(extra_args[2])
-            return (
-                f"{texture_name}.SampleCmpLevel("
-                f"{sampler_name}, {coord}, {compare}, {lod}, {offset})"
+            return self.hlsl_sample_cmp_level(
+                texture_name, sampler_name, coord, compare, extra_args[1], offset
             )
 
         if is_texture_compare_grad_operation(func_name):

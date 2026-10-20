@@ -909,7 +909,7 @@
           "tests/test_translator/test_native_upload_snapshots.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1276
+        "test_count": 1282
       },
       "translator_codegen": {
         "exists": true,

@@ -17,6 +17,7 @@ from .hlsl_stage_interfaces import (
     HlslStageInterfaceUnsupportedError,
     legalize_hlsl_stage_interfaces,
 )
+from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
 from .lower import Lowerer, RuleInexpressibleError
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
@@ -41,6 +42,7 @@ __all__ = [
     "FixedSamplerStateUnsupportedError",
     "HalfFloatUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
+    "ImplicitLodStageUnsupportedError",
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
@@ -91,6 +93,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`).
+    Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
+    targets that sample implicitly only in fragment shaders, and bias, derivative and LOD-query operations there are
+    refused (:mod:`.implicit_lod`).
     Structs holding samplers,
     textures or images are flattened into separate resources for SPIR-V, or refused with
     :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`).
@@ -112,6 +117,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
     legalize_opaque_struct_members(program, report.target)
+    legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
     legalize_half_floats(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)

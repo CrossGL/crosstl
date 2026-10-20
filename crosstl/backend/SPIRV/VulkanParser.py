@@ -1646,6 +1646,14 @@ class VulkanParser:
                         names,
                         decorations,
                         constants,
+                        coordinate_components=self.spirv_sample_coordinate_components(
+                            opcode,
+                            operands[1],
+                            operands[2],
+                            expression_type_ids,
+                            constant_types,
+                            types,
+                        ),
                     ),
                 )
                 continue
@@ -1665,6 +1673,14 @@ class VulkanParser:
                         names,
                         decorations,
                         constants,
+                        coordinate_components=self.spirv_sample_coordinate_components(
+                            opcode,
+                            operands[1],
+                            operands[2],
+                            expression_type_ids,
+                            constant_types,
+                            types,
+                        ),
                     )
                 )
                 expression_type_ids[result_id] = operands[0]
@@ -4423,6 +4439,40 @@ class VulkanParser:
             constants,
         )
 
+    def spirv_sample_coordinate_components(
+        self,
+        opcode,
+        image_operand,
+        coordinate_operand,
+        expression_type_ids,
+        constant_types,
+        types,
+    ):
+        """The coordinate components a sample consumes, when its coordinate operand has more; else ``None``.
+
+        A SPIR-V sample coordinate holds ``(u[, v][, w][, array layer])`` as the image needs, then ``q`` for a
+        projective sample; further components are ignored, and glslang passes, for instance, the whole ``vec3`` of
+        ``texture(sampler2DShadow, P)`` with its reference. CrossGL coordinates hold exactly the consumed
+        components.
+        """
+        sampled_type = types.get(expression_type_ids.get(image_operand), {})
+        image_type = types.get(sampled_type.get("image_type"), {})
+        axes = {"1D": 1, "2D": 2, "Rect": 2, "3D": 3, "Cube": 3}.get(
+            image_type.get("dim")
+        )
+        if sampled_type.get("kind") != "sampled_image" or axes is None:
+            return None
+        needed = axes + (1 if str(image_type.get("arrayed")) == "1" else 0)
+        if "Proj" in opcode:
+            needed += 1
+        coordinate_type = expression_type_ids.get(coordinate_operand)
+        if coordinate_type is None:
+            coordinate_type = constant_types.get(coordinate_operand)
+        available = self.spirv_vector_component_count(coordinate_type, types)
+        if available is None or available <= needed:
+            return None
+        return needed
+
     def spirv_assembly_image_sample_expression(
         self,
         opcode,
@@ -4433,6 +4483,7 @@ class VulkanParser:
         names,
         decorations,
         constants,
+        coordinate_components=None,
     ):
         image = self.spirv_assembly_operand_expression(
             image_operand, expressions, names, decorations, constants
@@ -4440,6 +4491,8 @@ class VulkanParser:
         coordinate = self.spirv_assembly_operand_expression(
             coordinate_operand, expressions, names, decorations, constants
         )
+        if coordinate_components is not None:
+            coordinate = MemberAccessNode(coordinate, "xyzw"[:coordinate_components])
         dref = None
         if "Dref" in opcode and image_operands:
             dref = self.spirv_assembly_operand_expression(
@@ -4593,6 +4646,7 @@ class VulkanParser:
         names,
         decorations,
         constants,
+        coordinate_components=None,
     ):
         sample = self.spirv_assembly_image_sample_expression(
             opcode,
@@ -4603,6 +4657,7 @@ class VulkanParser:
             names,
             decorations,
             constants,
+            coordinate_components=coordinate_components,
         )
         function_name = self.spirv_sparse_image_sample_function_name(
             opcode, sample.name
@@ -6774,6 +6829,9 @@ class VulkanParser:
 
         text = str(literal)
         stripped = text.lstrip("+-")
+        if stripped.isdigit():
+            # spirv-dis prints integral floating-point values without a fraction; CrossGL reads those as integers.
+            return f"{text}.0"
         if not stripped.lower().startswith("0x") or "p" not in stripped.lower():
             return literal
 

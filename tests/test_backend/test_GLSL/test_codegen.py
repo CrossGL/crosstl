@@ -1196,7 +1196,7 @@ def test_codegen_native_shadow_texture_imports_compare_helpers():
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "shadowMap.SampleCmp(shadowMapSampler, input.uv, 0.5)" in hlsl
     assert (
-        "shadowMap.SampleCmpLevel(" "shadowMapSampler, uvz.xy, uvz.z, 0.0, int2(1, -1))"
+        "shadowMap.SampleCmpLevelZero(shadowMapSampler, uvz.xy, uvz.z, int2(1, -1))"
     ) in hlsl
     assert "shadowMap.Sample(" not in hlsl
 
@@ -1284,7 +1284,7 @@ def test_codegen_native_projected_shadow_texture_imports_compare_helpers():
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "shadowMap.SampleCmp(" in hlsl
-    assert "shadowMap.SampleCmpLevel(" in hlsl
+    assert "shadowMap.SampleCmpLevelZero(" in hlsl
     assert "shadowMap.SampleCmpGrad(" in hlsl
     assert "shadowMap.Sample(" not in hlsl
 

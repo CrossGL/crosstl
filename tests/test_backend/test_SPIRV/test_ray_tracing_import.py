@@ -218,7 +218,7 @@ def test_struct_payload_access_chains_use_member_names(tmp_path):
 
 def test_hit_control_statements_become_intrinsics(tmp_path):
     assert "IgnoreHit()" in import_spirv(tmp_path, ANY_HIT)
-    assert "ReportHit(1, 0);" in import_spirv(tmp_path, INTERSECTION)
+    assert "ReportHit(1.0, 0);" in import_spirv(tmp_path, INTERSECTION)
 
 
 def test_execute_callable_names_the_callable_data_location(tmp_path):

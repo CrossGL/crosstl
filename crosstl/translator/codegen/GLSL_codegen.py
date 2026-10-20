@@ -46650,6 +46650,13 @@ complex64_t crossgl_complex64_mod_assign(
             "u64vec2",
             "u64vec3",
             "u64vec4",
+            # CrossGL also spells integer vectors as HLSL does (the SPIR-V importer's spelling).
+            "int2",
+            "int3",
+            "int4",
+            "uint2",
+            "uint3",
+            "uint4",
         }
 
     def glsl_compile_time_int_constants(self):

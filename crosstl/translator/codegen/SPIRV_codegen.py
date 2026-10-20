@@ -387,6 +387,8 @@ class VulkanSPIRVCodeGen(
         self.std430_runtime_array_struct_types = set()
         self.resource_types = {}
         self.resource_image_types = {}
+        # OpTypeSampledImage id per image type id: combined samplers and texture+sampler pairs share one type.
+        self.sampled_image_type_ids = {}
         self.ray_query_types = {}
         self.ray_tracing_storage_variables = {}
         self.enum_type_names = set()
@@ -802,8 +804,7 @@ class VulkanSPIRVCodeGen(
             )
 
             if info["kind"] == "sampled_image":
-                id_value = self.get_id()
-                self.emit(f"%{id_value} = OpTypeSampledImage %{image_type.id}")
+                id_value = self.sampled_image_type_id(image_type)
                 spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
             else:
                 spirv_id = image_type
@@ -5230,16 +5231,25 @@ class VulkanSPIRVCodeGen(
         if cache_key in self.resource_types:
             return self.resource_types[cache_key]
 
-        id_value = self.get_id()
-        self.emit(f"%{id_value} = OpTypeSampledImage %{image_type.id}")
+        id_value = self.sampled_image_type_id(image_type)
         sampled_image_type = SpirvId(id_value, SpirvType(type_name), type_name)
         self.resource_types[cache_key] = sampled_image_type
-        self.resource_type_metadata[id_value] = (
+        self.resource_type_metadata.setdefault(
+            id_value,
             self.sampled_image_metadata_from_texture(
                 sampled_image_type, texture_metadata
-            )
+            ),
         )
         return sampled_image_type
+
+    def sampled_image_type_id(self, image_type: SpirvId) -> int:
+        """The OpTypeSampledImage of ``image_type``, declared once: SPIR-V forbids duplicate non-aggregate types."""
+        id_value = self.sampled_image_type_ids.get(image_type.id)
+        if id_value is None:
+            id_value = self.get_id()
+            self.emit(f"%{id_value} = OpTypeSampledImage %{image_type.id}")
+            self.sampled_image_type_ids[image_type.id] = id_value
+        return id_value
 
     def sampled_image_metadata_from_texture(self, sampled_image_type, texture_metadata):
         metadata = dict(texture_metadata)
