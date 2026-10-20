@@ -2116,7 +2116,7 @@ class Parser:
         is_colon_style_var = (
             self.current_token[0] == "VAR"
             and self.peek()[0] != "LESS_THAN"
-            and self.peek(2)[0] == "COLON"
+            and self.peek(2)[0] in {"COLON", "EQUALS"}
         )
 
         parsed_qualifiers = (
@@ -2129,12 +2129,15 @@ class Parser:
         if is_colon_style_var:
             self.eat("VAR")
             name = self.parse_binding_identifier()
-            self.eat("COLON")
-            var_type = self.parse_type()
-            var_type = self.parse_array_suffixes(var_type)
+            var_type = None
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                var_type = self.parse_type()
+                var_type = self.parse_array_suffixes(var_type)
 
             attributes.extend(self.parse_post_declaration_attributes())
-            var_type = self.parse_array_suffixes(var_type)
+            if var_type is not None:
+                var_type = self.parse_array_suffixes(var_type)
 
             initial_value = None
             if self.current_token[0] == "EQUALS":
@@ -2296,7 +2299,7 @@ class Parser:
             if (
                 self.current_token[0] == "VAR"
                 and self.peek()[0] != "LESS_THAN"
-                and self.peek(2)[0] == "COLON"
+                and self.peek(2)[0] in {"COLON", "EQUALS"}
             ):
                 return True
 
@@ -4333,15 +4336,18 @@ class Parser:
         if (
             self.current_token[0] == "VAR"
             and self.peek()[0] != "LESS_THAN"
-            and self.peek(2)[0] == "COLON"
+            and self.peek(2)[0] in {"COLON", "EQUALS"}
         ):
             self.eat("VAR")
             name = self.parse_binding_identifier()
-            self.eat("COLON")
-            var_type = self.parse_type()
-            var_type = self.parse_array_suffixes(var_type)
+            var_type = None
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                var_type = self.parse_type()
+                var_type = self.parse_array_suffixes(var_type)
             attributes = self.parse_post_declaration_attributes()
-            var_type = self.parse_array_suffixes(var_type)
+            if var_type is not None:
+                var_type = self.parse_array_suffixes(var_type)
 
             initial_value = None
             if self.current_token[0] == "EQUALS":
