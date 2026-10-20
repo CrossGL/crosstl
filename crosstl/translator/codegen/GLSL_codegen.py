@@ -204,6 +204,7 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
+from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_refusals import (
     OpenGLLoweringRefused,
     patch_parameter_refusal_reason,
@@ -398,6 +399,7 @@ from .index_range_contracts import (
     truncating_division_interval,
 )
 from .integer_intervals import convert_integer_intervals
+from .interface_conflicts import InterfaceLocationConflictError
 from .loop_guard_bounds import guarded_additive_loop_entries
 from .loop_induction import (
     checked_induction_value,
@@ -1857,73 +1859,77 @@ class GLSLCodeGen(
     # non-type keywords. Source languages such as HLSL accept them as ordinary
     # identifiers (``this``, ``resource``, ``filter``), so they are escaped.
     # Mesa also lexes ``packed``, reserved up to GLSL 1.30, as a keyword.
-    GLSL_RESERVED_IDENTIFIERS = GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES | {
-        "active",
-        "asm",
-        "attribute",
-        "barrier",
-        "buffer",
-        "cast",
-        "centroid",
-        "class",
-        "coherent",
-        "common",
-        "enum",
-        "extern",
-        "external",
-        "filter",
-        "fixed",
-        "flat",
-        "fvec2",
-        "fvec3",
-        "fvec4",
-        "goto",
-        "half",
-        "highp",
-        "hvec2",
-        "hvec3",
-        "hvec4",
-        "inline",
-        "input",
-        "interface",
-        "invariant",
-        "layout",
-        "long",
-        "lowp",
-        "mediump",
-        "namespace",
-        "noinline",
-        "noperspective",
-        "output",
-        "packed",
-        "partition",
-        "patch",
-        "precise",
-        "precision",
-        "public",
-        "readonly",
-        "resource",
-        "restrict",
-        "sample",
-        "sampler3DRect",
-        "shared",
-        "short",
-        "sizeof",
-        "smooth",
-        "static",
-        "subroutine",
-        "superp",
-        "template",
-        "this",
-        "typedef",
-        "uniform",
-        "union",
-        "unsigned",
-        "using",
-        "varying",
-        "volatile",
-        "writeonly",
-    }
+    GLSL_RESERVED_IDENTIFIERS = (
+        GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES
+        | {
+            "active",
+            "asm",
+            "attribute",
+            "barrier",
+            "buffer",
+            "cast",
+            "centroid",
+            "class",
+            "coherent",
+            "common",
+            "enum",
+            "extern",
+            "external",
+            "filter",
+            "fixed",
+            "flat",
+            "fvec2",
+            "fvec3",
+            "fvec4",
+            "goto",
+            "half",
+            "highp",
+            "hvec2",
+            "hvec3",
+            "hvec4",
+            "inline",
+            "input",
+            "interface",
+            "invariant",
+            "layout",
+            "long",
+            "lowp",
+            "mediump",
+            "namespace",
+            "noinline",
+            "noperspective",
+            "output",
+            "packed",
+            "partition",
+            "patch",
+            "precise",
+            "precision",
+            "public",
+            "readonly",
+            "resource",
+            "restrict",
+            "sample",
+            "sampler3DRect",
+            "shared",
+            "short",
+            "sizeof",
+            "smooth",
+            "static",
+            "subroutine",
+            "superp",
+            "template",
+            "this",
+            "typedef",
+            "uniform",
+            "union",
+            "unsigned",
+            "using",
+            "varying",
+            "volatile",
+            "writeonly",
+        }
+        | GLSL_TYPE_KEYWORDS
+    )
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_",)
     GLSL_BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     COMPOUND_ASSIGNMENT_BINARY_OPERATORS = {
@@ -22467,11 +22473,12 @@ class GLSLCodeGen(
             if start <= used_end and used_start <= end:
                 if used_start == start and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise InterfaceLocationConflictError(
+                    "opengl",
                     f"Conflicting OpenGL {stage_name} {direction} location "
                     f"for '{name}': {self.stage_io_location_label(start, end)} "
                     f"overlaps '{used_name}' "
-                    f"{self.stage_io_location_label(used_start, used_end)}"
+                    f"{self.stage_io_location_label(used_start, used_end)}",
                 )
         for (
             used_start,
@@ -22484,11 +22491,12 @@ class GLSLCodeGen(
             if used_index != 0:
                 continue
             if start <= used_end and used_start <= end:
-                raise ValueError(
+                raise InterfaceLocationConflictError(
+                    "opengl",
                     f"Conflicting OpenGL {stage_name} {direction} location "
                     f"for '{name}': {self.stage_io_location_label(start, end)} "
                     f"overlaps '{used_name}' "
-                    f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}"
+                    f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}",
                 )
         ranges.append((start, end, name))
 
@@ -22518,11 +22526,12 @@ class GLSLCodeGen(
                     continue
                 if used_start == start and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise InterfaceLocationConflictError(
+                    "opengl",
                     f"Conflicting OpenGL {stage_name} {direction} location "
                     f"for '{name}': {self.stage_io_component_location_label(start, end, component_start, component_end)} "
                     f"overlaps '{used_name}' "
-                    f"{self.stage_io_location_label(used_start, used_end)}"
+                    f"{self.stage_io_location_label(used_start, used_end)}",
                 )
 
         entries = self.stage_io_used_components.setdefault((stage_name, direction), [])
@@ -22547,11 +22556,12 @@ class GLSLCodeGen(
                     component_start <= used_component_end
                     and used_component_start <= component_end
                 ):
-                    raise ValueError(
+                    raise InterfaceLocationConflictError(
+                        "opengl",
                         f"Conflicting OpenGL {stage_name} {direction} location "
                         f"for '{name}': {self.stage_io_component_location_label(start, end, component_start, component_end)} "
                         f"overlaps '{used_name}' "
-                        f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}"
+                        f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}",
                     )
         entries.append((start, end, component_start, component_end, index, name))
 
@@ -22563,9 +22573,10 @@ class GLSLCodeGen(
             return True
         if existing == declaration:
             return False
-        raise ValueError(
+        raise InterfaceLocationConflictError(
+            "opengl",
             f"Conflicting OpenGL {stage_name} {direction} declaration for "
-            f"'{name}': {declaration} differs from {existing}"
+            f"'{name}': {declaration} differs from {existing}",
         )
 
     def stage_io_declared_names(self, stage_name, direction):
@@ -44629,6 +44640,11 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_source_expression_type(self, expression):
         if expression is None:
             return None
+        if isinstance(expression, RayTracingOpNode) and expression.operation in {
+            "ReportHit",
+            "ReportIntersection",
+        }:
+            return "bool"  # reportIntersectionEXT returns whether the hit was accepted
         emulated_matrix_type = self.glsl_emulated_matrix_expression_type(expression)
         if emulated_matrix_type is not None:
             return emulated_matrix_type

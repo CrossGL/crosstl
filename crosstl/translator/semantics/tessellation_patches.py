@@ -704,20 +704,18 @@ class _TessellationLowering:
                 "system-value",
             )
         member_kind = member_type(member)
-        if (
-            patch
-            and isinstance(member_kind, A.ArrayType)
+        # A sized array of values is one varying taking one location per element; a per-vertex one becomes an
+        # array of arrays whose outer dimension is the vertex (GLSL 4.60 section 4.3.4).
+        while (
+            isinstance(member_kind, A.ArrayType)
             and literal_int(member_kind.size) is not None
         ):
-            # A patch variable is not arrayed per vertex, so a sized array of values is one varying.
             member_kind = member_kind.element_type
         if isinstance(member_kind, A.ArrayType) or type_name(
             member_kind
         ) in self.structs(self.stage):
-            # A per-vertex array member needs an array of arrays, which the stage-array sizing and the SPIR-V
-            # emitter do not build yet.
             self.refuse(
-                f"member '{struct.name}.{member.name}' is an array or structure",
+                f"member '{struct.name}.{member.name}' is an unsized array or a structure",
                 "aggregate-member",
             )
 

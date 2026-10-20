@@ -28,6 +28,7 @@ from .DirectxAst import (
     MemberAccessNode,
     PragmaNode,
     ReturnNode,
+    ScopedBlockNode,
     ShaderNode,
     StructNode,
     SwitchNode,
@@ -2676,7 +2677,8 @@ class HLSLParser:
             return "discard"
 
         if self.current_token[0] == "LBRACE":
-            return self.parse_block()
+            # A nested compound statement opens a scope (HLSL follows C here), so it stays a node.
+            return ScopedBlockNode(self.parse_block())
 
         if self.current_token[0] == "PREPROCESSOR":
             self.parse_preprocessor_directive()

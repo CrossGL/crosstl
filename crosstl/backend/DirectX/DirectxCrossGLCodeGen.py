@@ -314,7 +314,7 @@ class HLSLToCrossGLConverter(
             "RasterizerOrderedByteAddressBuffer": "RWByteAddressBuffer",
             "AppendStructuredBuffer": "buffer",
             "ConsumeStructuredBuffer": "buffer",
-            "RaytracingAccelerationStructure": "accelerationStructure",
+            "RaytracingAccelerationStructure": "accelerationStructureEXT",
             "RayQuery": "rayQuery",
             "InputPatch": "inputPatch",
             "OutputPatch": "outputPatch",
@@ -2254,13 +2254,24 @@ class HLSLToCrossGLConverter(
             return None
         return f"{constructor_type}({rendered_object})"
 
+    def member_owner_type(self, object_type):
+        """The struct whose members ``value.member`` names, for a value of ``object_type``."""
+        object_base = str(object_type).strip()
+        if "[" in object_base:
+            object_base = object_base.split("[", 1)[0]
+        wrapper, _, element = object_base.partition("<")
+        if wrapper.strip() in {"ConstantBuffer", "TextureBuffer"} and element.endswith(
+            ">"
+        ):
+            # ConstantBuffer<T> and TextureBuffer<T> name T's members directly.
+            object_base = element[:-1].strip()
+        return object_base
+
     def member_access_raw_type(self, object_type, member):
         if not object_type:
             return None
 
-        object_base = str(object_type).strip()
-        if "[" in object_base:
-            object_base = object_base.split("[", 1)[0]
+        object_base = self.member_owner_type(object_type)
 
         struct_members = self.struct_member_types.get(object_base)
         if struct_members and member in struct_members:
@@ -2303,7 +2314,9 @@ class HLSLToCrossGLConverter(
             expr = expr.array
         if not isinstance(expr, MemberAccessNode):
             return None
-        owner_base = self.raw_type_base(self.expression_raw_type(expr.object))
+        owner_base = self.raw_type_base(
+            self.member_owner_type(self.expression_raw_type(expr.object))
+        )
         return self.struct_member_array_dims.get(owner_base, {}).get(expr.member)
 
     def raw_type_base(self, type_name):
@@ -4064,7 +4077,7 @@ class HLSLToCrossGLConverter(
         return base_type in {
             "sampler",
             "comparison_sampler",
-            "accelerationStructure",
+            "accelerationStructureEXT",
         } or base_type.startswith(
             (
                 "sampler",
@@ -4376,6 +4389,12 @@ class HLSLToCrossGLConverter(
                 code += "break;\n"
             elif isinstance(stmt, ContinueNode):
                 code += "continue;\n"
+            elif isinstance(stmt, ScopedBlockNode):
+                code += "{\n"
+                code += self.generate_function_body(
+                    stmt.statements, indent + 1, is_main
+                )
+                code += "    " * indent + "}\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
             else:
