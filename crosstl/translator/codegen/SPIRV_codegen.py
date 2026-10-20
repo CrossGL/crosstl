@@ -110,6 +110,11 @@ from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
+from .spirv_exponent_builtins import (
+    OUTPUT_OPERAND_FUNCTIONS,
+    spirv_ldexp_call,
+    spirv_output_operand_call,
+)
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
@@ -11637,6 +11642,8 @@ class VulkanSPIRVCodeGen(
             return spirv_pack_call(self, function_name, args)
         if function_name in BITFIELD_ARITIES:
             return spirv_bitfield_call(self, function_name, args)
+        if function_name == "ldexp":
+            return spirv_ldexp_call(self, args)
         synchronization_call = self.call_synchronization_function(function_name, args)
         if synchronization_call is not None:
             return synchronization_call
@@ -29070,6 +29077,12 @@ class VulkanSPIRVCodeGen(
 
             if isinstance(callee_name, str) and callee_name.lower() == "nonuniformext":
                 return self.process_non_uniform_function_call(callee_name, expr.args)
+
+            if (
+                callee_name in OUTPUT_OPERAND_FUNCTIONS
+                and not self.has_function_reference(callee_name)
+            ):
+                return spirv_output_operand_call(self, callee_name, list(expr.args))
 
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)

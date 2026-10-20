@@ -172,6 +172,7 @@ from .enum_utils import (
     sanitize_type_name,
     substitute_generic_type_name,
 )
+from .exponent_builtins import emit_glsl_exponent_helpers, glsl_exponent_call
 from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
@@ -2838,6 +2839,7 @@ class GLSLCodeGen(
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
+        self.glsl_exponent_helpers = {}
         self.glsl_half_helper_names = {}
         self.glsl_half_bitcast_helper_names = {}
         self.glsl_bfloat_helper_names = {}
@@ -8591,6 +8593,7 @@ class GLSLCodeGen(
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
+        self.glsl_exponent_helpers = {}
         self.glsl_half_helper_names = {}
         self.glsl_half_bitcast_helper_names = {}
         self.glsl_bfloat_helper_names = {}
@@ -9950,6 +9953,7 @@ class GLSLCodeGen(
             + self.generate_glsl_trailing_zero_helpers()
             + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_metal_math_helpers()
+            + emit_glsl_exponent_helpers(self)
             + self.generate_glsl_half_helpers()
             + self.generate_glsl_half_bitcast_helpers()
             + self.generate_glsl_bfloat_helpers()
@@ -39665,6 +39669,10 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if boolean_order_call is not None:
                 return boolean_order_call
+
+            exponent_call = glsl_exponent_call(self, original_func_name, expr.args)
+            if exponent_call is not None:
+                return exponent_call
 
             isfinite_call = self.generate_glsl_isfinite_call(
                 original_func_name,
