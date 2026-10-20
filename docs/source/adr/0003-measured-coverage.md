@@ -1,4 +1,4 @@
-# ADR 0002: Measure backend coverage in CI and retire the hand-maintained support matrix
+# ADR 0003: Measure backend coverage in CI and retire the hand-maintained support matrix
 
 - Status: accepted
 - Date: 2026-10-19
