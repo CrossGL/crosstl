@@ -18,10 +18,19 @@ from .model import Feature
 # Features with no SPIR-V lowering, keyed ``language/category/name``, and the semantic id they share with features
 # that have one.
 CURATED: dict[str, str] = {}
-# Languages no reference compiler here lowers to SPIR-V. Their functions take the id of the function of the named
+# Languages whose functions, or some of them, have no id of their own. They take the id of the function of the named
 # language that CrossGL spells the same way: Metal ``fabs`` and CUDA ``fabsf`` are CrossGL ``abs``, so they share
 # GLSL ``abs``'s id.
-BORROWED = {"cuda": "glsl", "hip": "glsl", "metal": "glsl", "mojo": "glsl"}
+BORROWED = {
+    "cuda": "glsl",
+    "hip": "glsl",
+    "metal": "glsl",
+    "mojo": "glsl",
+    "rust": "glsl",
+}
+# Feature groups whose SPIR-V does not identify them: glam writes Vec3's methods in plain Rust arithmetic, so
+# ``Vec3::dot`` lowers to multiplies and adds rather than to OpDot.
+UNIDENTIFIED = {("rust", "vec3"): "glam computes it with Rust arithmetic"}
 # Instructions that only move or address values. They never identify a call.
 _MEMORY = frozenset(
     "OpLoad OpStore OpAccessChain OpInBoundsAccessChain OpPtrAccessChain OpVariable OpCopyObject OpCopyMemory "
@@ -114,6 +123,8 @@ def lower(feature: Feature) -> tuple[str, str]:
         return CURATED[feature.key], ""
     if feature.language == "spirv":
         return f"GLSL.std.450:{feature.name}", ""
+    if (feature.language, feature.group) in UNIDENTIFIED:
+        return "", UNIDENTIFIED[feature.language, feature.group]
     if feature.language not in validators.SPIRV_COMPILERS:
         return "", f"no SPIR-V compiler for {feature.language}"
     if not validators.can_lower(feature.language):

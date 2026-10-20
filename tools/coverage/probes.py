@@ -310,6 +310,127 @@ class Mojo(Dialect):
         return "\n".join(lines) + "\n"
 
 
+class Rust(Dialect):
+    """A rust-gpu compute entry point: buffers are slice parameters and glam supplies the vector and matrix types.
+
+    A call spelled ``.name`` is a method of its first argument, and one spelled ``unsafe name`` sits in an ``unsafe``
+    block.
+    """
+
+    language = "rust"
+    suffix = ".rs"
+    entry = "probe"
+    _SCALARS = {
+        "float": "f32",
+        "double": "f64",
+        "int": "i32",
+        "uint": "u32",
+        "bool": "bool",
+    }
+    _GLAM = {"float": "", "double": "D", "int": "I", "uint": "U", "bool": "B"}
+
+    def scalar(self, scalar: str) -> str:
+        return self._SCALARS[scalar]
+
+    def vector(self, scalar: str, size: int) -> str:
+        return f"{self._GLAM[scalar]}Vec{size}"
+
+    def matrix(self, scalar: str, columns: int, rows: int) -> str:
+        if scalar not in ("float", "double") or columns != rows:
+            raise ProbeError("glam has square float matrices only")
+        return f"{self._GLAM[scalar]}Mat{columns}"
+
+    def read(self, buffer: str, offset: int) -> str:
+        return f"{buffer}[i + {offset}]"
+
+    def construct(self, kind: Type, parts: list[str]) -> str:
+        build = "from_cols" if len(kind.shape) == 2 else "new"
+        return f"{self.type(kind)}::{build}({', '.join(parts)})"
+
+    def cast(self, kind: Type, value: str) -> str:
+        if kind.shape:
+            return f"{value}.as_{self.type(kind).lower()}()"
+        return f"({value}) as {self.type(kind)}"
+
+    def literal(self, kind: Type) -> str:
+        if kind.shape:
+            raise ProbeError("no constant probe argument of a vector or matrix type")
+        return {"bool": "false", "int": "0", "uint": "0"}.get(kind.scalar, "0.0")
+
+    def declare(self, kind: Type, name: str, value: str = "") -> str:
+        if not value:
+            return f"let mut {name}: {self.type(kind)} = Default::default();"
+        return f"let {name}: {self.type(kind)} = {value};"
+
+    def call(self, name: str, arguments: list[str]) -> str:
+        unsafe = name.startswith("unsafe ")
+        name = name.removeprefix("unsafe ")
+        if name.startswith("."):
+            receiver, *rest = arguments
+            call = f"{receiver}{name}({', '.join(rest)})"
+        else:
+            call = f"{name}({', '.join(arguments)})"
+        return f"unsafe {{ {call} }}" if unsafe else call
+
+    def out_argument(self, name: str) -> str:
+        return f"&mut {name}"
+
+    def inout_argument(self) -> str:
+        return "&mut outp[i]"
+
+    def to_int(self, condition: str) -> str:
+        return f"if {condition} {{ 1 }} else {{ 0 }}"
+
+    def part(self, matrix: str) -> str:
+        return f"{matrix}.x_axis"
+
+    def buffer_element(self, kind: Type, atomic: bool) -> str:
+        # A storage buffer of 3-vectors needs a 16-byte stride, which glam's 12-byte vectors lack.
+        if kind.shape == (3,):
+            return self.type(Type(kind.scalar, (4,)))
+        return self.type(kind)
+
+    def stored(self, kind: Type, value: str) -> str:
+        if kind.shape == (3,):
+            return f"{value}.extend({self.literal(Type(kind.scalar))})"
+        return value
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        params = ["#[spirv(global_invocation_id)] id: UVec3"]
+        for binding, (kind, name) in enumerate(buffers):
+            access = "&mut " if name == "outp" else "&"
+            params.append(
+                f"#[spirv(storage_buffer, descriptor_set = 0, binding = {binding})] {name}: {access}[{kind}]"
+            )
+        params += parts.get("params", ())
+        prelude = list(parts.get("prelude", ()))
+        # Crate attributes (``#![feature(f16)]``) have to precede every item.
+        attributes = [line for line in prelude if line.startswith("#!")]
+        declarations = list(parts.get("declarations", ()))
+        if declarations:
+            declarations.append("")
+        lines = [
+            "#![no_std]",
+            *attributes,
+            "use spirv_std::arch::*;",
+            "use spirv_std::glam::*;",
+            "use spirv_std::memory::{Scope, Semantics};",
+            "use spirv_std::num_traits::Float;",
+            "use spirv_std::spirv;",
+            *(line for line in prelude if not line.startswith("#!")),
+            "",
+            *declarations,
+            "#[spirv(compute(threads(1)))]",
+            "pub fn probe(",
+            *(f"    {param}," for param in params),
+            ") {",
+            "    let i = id.x as usize;",
+        ]
+        lines += [f"    {line}" for line in body]
+        lines.append("}")
+        return "\n".join(lines) + "\n"
+
+
 DIALECTS: dict[str, Dialect] = {
     d.language: d
     for d in (
@@ -320,6 +441,7 @@ DIALECTS: dict[str, Dialect] = {
         HLSL(),
         Metal(),
         Mojo(),
+        Rust(),
         Slang(),
         WGSL(),
     )
@@ -405,7 +527,7 @@ class _Builder:
             stores = [dialect.statement(call)]
             if output is None:
                 output = Type("uint")
-                stores.append(dialect.store("0u"))
+                stores.append(dialect.store(dialect.literal(output)))
         elif result.scalar == "bool":
             flag = dialect.first("r") if result.shape else "r"
             stores = [
@@ -422,7 +544,10 @@ class _Builder:
             if result.scalar == "double":
                 output = output.with_scalar("float")
                 value = dialect.cast(output, value)
-            stores = [dialect.declare(result, "r", call), dialect.store(value)]
+            stores = [
+                dialect.declare(result, "r", call),
+                dialect.store(dialect.stored(output, value)),
+            ]
         if baseline:
             stores = [line for line in [dialect.keep(atomic)] if line]
         return self.lines + stores, output

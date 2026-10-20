@@ -18,6 +18,7 @@ OUTPUT_BACKENDS = {
     "hlsl": "directx",
     "metal": "metal",
     "mojo": "mojo",
+    "rust": "rust",
     "slang": "slang",
     "spirv": "vulkan",
     "wgsl": "wgsl",
@@ -29,6 +30,7 @@ INPUT_BACKENDS = {
     "hlsl": "directx",
     "metal": "metal",
     "mojo": "mojo",
+    "rust": "rust",
     "slang": "slang",
 }
 

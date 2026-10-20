@@ -73,6 +73,10 @@ class Dialect:
         """The element type of the output buffer; ``atomic`` when the probe passes it to an atomic operation."""
         return self.type(kind)
 
+    def stored(self, kind: Type, value: str) -> str:
+        """``value``, of type ``kind``, as the output buffer's element type holds it."""
+        return value
+
     def keep(self, atomic: bool) -> str:
         """The baseline probe's store: it keeps the output buffer in use without computing anything."""
         return self.store("outp[i]")

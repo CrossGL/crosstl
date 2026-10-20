@@ -6,7 +6,18 @@ from dataclasses import dataclass, field
 
 SCALARS = ("bool", "int", "uint", "float", "double")
 OUTCOMES = ("supported", "refused", "wrong", "untested")
-LANGUAGES = ("cuda", "glsl", "hip", "hlsl", "metal", "mojo", "slang", "spirv", "wgsl")
+LANGUAGES = (
+    "cuda",
+    "glsl",
+    "hip",
+    "hlsl",
+    "metal",
+    "mojo",
+    "rust",
+    "slang",
+    "spirv",
+    "wgsl",
+)
 DIRECTIONS = ("output", "input")
 
 

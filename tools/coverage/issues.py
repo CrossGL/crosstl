@@ -55,6 +55,7 @@ TOOLS = {
     "hlsl": "DXC",
     "metal": "the Metal compiler",
     "mojo": "the Mojo compiler",
+    "rust": "rust-gpu",
     "slang": "slangc",
     "spirv": "spirv-val",
     "wgsl": "naga",

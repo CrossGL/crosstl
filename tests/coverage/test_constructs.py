@@ -149,7 +149,8 @@ def _templated(language: str) -> list[Feature]:
 
 
 @pytest.mark.parametrize(
-    "language", ["cuda", "glsl", "hip", "hlsl", "metal", "mojo", "slang", "wgsl"]
+    "language",
+    ["cuda", "glsl", "hip", "hlsl", "metal", "mojo", "rust", "slang", "wgsl"],
 )
 def test_native_templates_are_valid(language):
     if not validators.available(language):

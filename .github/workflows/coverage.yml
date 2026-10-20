@@ -3,8 +3,8 @@ name: Coverage
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The
 # Linux job measures GLSL, HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc, a second Linux
-# job measures CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, and the macOS job measures Metal with xcrun
-# metal. The report job merges the reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job
+# job measures CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, a third measures Rust with rust-gpu, and the
+# macOS job measures Metal with xcrun metal. The report job merges the reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job
 # replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart), COVERAGE.md and a bounded
 # history.csv; main itself never receives generated files. The issues job then reconciles the tracking and bug issues
 # (tools/coverage/issues.py); pull requests only print its plan.
@@ -19,6 +19,9 @@ env:
   PYTHONHASHSEED: "0"
   NAGA_VERSION: "30.0.1"
   SLANG_VERSION: "2026.9.1"
+  # tools/coverage/upstream.py reads spirv_std from the same release.
+  RUST_GPU_VERSION: "0.11.0"
+  RUST_GPU_COMMIT: "62401280ab4b512c734ad1aceee7553385e17418"
 
 on:
   push:
@@ -220,6 +223,74 @@ jobs:
           path: coverage-compute.json
           retention-days: 14
 
+  rust:
+    name: Coverage (Rust)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CROSSTL_COVERAGE_CACHE: ${{ github.workspace }}/../coverage-cache
+      CROSSTL_COVERAGE_RUST_GPU: ${{ github.workspace }}/../rust-gpu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      # rust-gpu is a rustc backend built from source. The cache keeps the backend and the core and spirv-std
+      # libraries rust-gpu's compile tests build for the SPIR-V target; tools/coverage/rustgpu.py compiles each probe
+      # against them.
+      - name: Restore rust-gpu
+        id: rust-gpu
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/../rust-gpu
+          key: rust-gpu-${{ env.RUST_GPU_COMMIT }}-${{ runner.os }}
+
+      - name: Install rust-gpu ${{ env.RUST_GPU_VERSION }}
+        run: |
+          set -euo pipefail
+          root="$CROSSTL_COVERAGE_RUST_GPU"
+          if [ ! -d "$root/.git" ]; then
+            git clone --quiet --depth 1 --branch "v$RUST_GPU_VERSION" https://github.com/Rust-GPU/rust-gpu "$root"
+          fi
+          test "$(git -C "$root" rev-parse HEAD)" = "$RUST_GPU_COMMIT"
+          cd "$root"
+          toolchain="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$toolchain" --profile minimal --component rust-src,rustc-dev,llvm-tools
+          if [ ! -f target/release/librustc_codegen_spirv.so ]; then
+            cargo build --release -p rustc_codegen_spirv
+            cargo run --release -p compiletests -- --target-env vulkan1.1 lang/core/intrinsics/log10
+            # Keep only what a probe compiles against.
+            find target/release -mindepth 1 -maxdepth 1 ! -name librustc_codegen_spirv.so -exec rm -rf {} +
+            find target/compiletest-deps -type d -name incremental -prune -exec rm -rf {} +
+            rm -rf target/compiletest-results
+          fi
+          du -sh "$root"
+
+      - name: Restore upstream feature sources
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/../coverage-cache
+          key: coverage-upstream-${{ hashFiles('tools/coverage/upstream.py') }}
+
+      - name: Measure coverage
+        run: python -m tools.coverage run --strict --jobs 4 --backend rust --output coverage-rust.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-rust
+          path: coverage-rust.json
+          retention-days: 14
+
   metal:
     name: Coverage (Metal)
     needs: plan
@@ -259,8 +330,8 @@ jobs:
 
   report:
     name: Coverage report
-    needs: [linux, compute, metal]
-    if: always() && needs.linux.result == 'success' && needs.compute.result == 'success' && needs.metal.result != 'failure' && needs.metal.result != 'cancelled'
+    needs: [linux, compute, rust, metal]
+    if: always() && needs.linux.result == 'success' && needs.compute.result == 'success' && needs.rust.result == 'success' && needs.metal.result != 'failure' && needs.metal.result != 'cancelled'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -437,7 +508,7 @@ jobs:
 
   result:
     name: Coverage result
-    needs: [plan, linux, compute, metal, report, publish, issues]
+    needs: [plan, linux, compute, rust, metal, report, publish, issues]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

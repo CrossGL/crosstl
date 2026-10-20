@@ -1,7 +1,7 @@
 """Reference validators, one per target language.
 
 A validator is looked up on ``PATH``; ``CROSSTL_COVERAGE_<TOOL>`` (for example ``CROSSTL_COVERAGE_DXC``) points at a
-specific binary instead.
+specific binary instead. rust-gpu is a rustc backend rather than a binary; :mod:`.rustgpu` says how to provide it.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import rustgpu
+
 TIMEOUT = 60
 # Terminal colour codes some validators (naga) write even when their output is not a terminal.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -27,6 +29,7 @@ TOOLS = {
     "hlsl": "dxc",
     "metal": "metal",
     "mojo": "mojo",
+    "rust": "rust-gpu",
     "slang": "slangc",
     "spirv": "spirv-val",
     "wgsl": "naga",
@@ -38,6 +41,7 @@ SUFFIX = {
     "hlsl": ".hlsl",
     "metal": ".metal",
     "mojo": ".mojo",
+    "rust": ".rs",
     "slang": ".slang",
     "spirv": ".spvasm",
     "wgsl": ".wgsl",
@@ -83,6 +87,8 @@ def command(name: str) -> tuple[str, ...]:
         except (OSError, subprocess.TimeoutExpired):
             return ()
         return metal if probe.returncode == 0 else ()
+    if name == "rust-gpu":
+        return rustgpu.command()
     found = _executable(name)
     return (found,) if found else ()
 
@@ -90,6 +96,8 @@ def command(name: str) -> tuple[str, ...]:
 @functools.lru_cache(maxsize=None)
 def version(name: str) -> str:
     """The first line the tool prints for ``--version``, or an empty string when it is not installed."""
+    if name == "rust-gpu":
+        return rustgpu.version()
     base = command(name)
     if not base:
         return ""
@@ -240,6 +248,8 @@ def validate(
                 ],
                 scratch,
             )
+        if language == "rust":
+            return _run([*command("rust-gpu"), name, "--out-dir", "."], scratch)
         if language == "slang":
             # A ``[shader(...)]`` attribute names the entry point and its stage; without one, slangc is told both.
             entry_point = (
@@ -311,6 +321,8 @@ SPIRV_COMPILERS = {
         ),
     ),
     "wgsl": ("naga", ("{source}", "probe.spv")),
+    # rust-gpu names the module after the crate, which is named after the file.
+    "rust": ("rust-gpu", ("{source}", "--out-dir", ".")),
 }
 
 

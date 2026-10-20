@@ -5,7 +5,7 @@ from __future__ import annotations
 from .. import constructs
 from ..model import Feature
 from ..upstream import fetch
-from . import cuda, glsl, hip, hlsl, metal, mojo, slang, spirv, wgsl
+from . import cuda, glsl, hip, hlsl, metal, mojo, rust, slang, spirv, wgsl
 
 
 def _glsl_names(offline: bool) -> set[str]:
@@ -52,6 +52,29 @@ def _mojo(offline: bool) -> list[Feature]:
     )
 
 
+# The modules of spirv_std::arch, each a source of :data:`..upstream.SOURCES` named ``rust-<module>``.
+RUST_ARCH = (
+    "arch",
+    "atomics",
+    "barrier",
+    "demote_to_helper_invocation_ext",
+    "derivative",
+    "mesh_shading",
+    "primitive",
+    "ray_tracing",
+    "subgroup",
+)
+
+
+def _rust(offline: bool) -> list[Feature]:
+    return rust.parse(
+        {module: fetch(f"rust-{module}", offline=offline) for module in RUST_ARCH},
+        fetch("rust-float", offline=offline),
+        fetch("rust-vec3", offline=offline),
+        _glsl_names(offline),
+    )
+
+
 def _slang(offline: bool) -> list[Feature]:
     return slang.parse(
         fetch("slang-core", offline=offline),
@@ -75,6 +98,7 @@ PARSERS = {
     "hlsl": _hlsl,
     "metal": _metal,
     "mojo": _mojo,
+    "rust": _rust,
     "slang": _slang,
     "spirv": _spirv,
     "wgsl": _wgsl,
