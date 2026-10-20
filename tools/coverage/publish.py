@@ -1,7 +1,7 @@
-"""What the coverage workflow publishes to the ``coverage`` branch: the report, the chart, ``COVERAGE.md`` and a
-bounded ``history.csv``.
+"""What the coverage workflow publishes to the ``coverage`` branch: the report, the chart, ``COVERAGE.md``, a
+bounded ``history.csv`` and the trend chart drawn from it.
 
-``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes all four files. Only CI
+``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes all five files. Only CI
 runs it; contributors never regenerate anything.
 """
 
@@ -13,7 +13,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from . import chart, ir
+from . import chart, ir, trend
 from .model import OUTCOMES
 
 # One row per language and direction per run; 400 runs is more than a year of nightly runs plus pushes to main.
@@ -58,6 +58,48 @@ def _table(report: dict) -> list[str]:
         ),
     ]
     return lines
+
+
+def _categories(report: dict) -> list[str]:
+    """Supported over measured features per category, one line per offered language and direction.
+
+    Categories with no measured feature in any line are left out.
+    """
+    rows = [r for r in report["backends"] if r["offered"]]
+    categories = sorted(
+        {
+            f["category"]
+            for r in rows
+            for f in r["features"]
+            if f["outcome"] in ("supported", "refused", "wrong")
+        }
+    )
+    if not categories:
+        return []
+    lines = [
+        "## By category",
+        "",
+        "Each cell counts the supported features of a category over its supported, refused and wrong ones. Untested "
+        "features are left out, and a blank cell means none of the category's features could be measured.",
+        "",
+        "| Language | Direction | " + " | ".join(categories) + " |",
+        "|---|---|" + "---:|" * len(categories),
+    ]
+    for row in rows:
+        language, direction = label(row)
+        cells = []
+        for category in categories:
+            outcomes = Counter(
+                f["outcome"] for f in row["features"] if f["category"] == category
+            )
+            measured = sum(outcomes[o] for o in ("supported", "refused", "wrong"))
+            cells.append(f"{outcomes['supported']}/{measured}" if measured else "")
+        lines.append(
+            "|"
+            + "|".join(f" {c} " if c else " " for c in (language, direction, *cells))
+            + "|"
+        )
+    return [*lines, ""]
 
 
 def _sources(report: dict, repository: str) -> list[str]:
@@ -146,6 +188,11 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "",
         *_table(report),
         "",
+        "## Trend",
+        "",
+        "![CrossTL coverage over time per language and direction](trend.svg)",
+        "",
+        *_categories(report),
         "## Feature lists",
         "",
         *_sources(report, repository),
@@ -197,13 +244,15 @@ def write_site(
     previous_history: str = "",
     repository: str = "CrossGL/crosstl",
 ) -> list[Path]:
-    """Write the four published files into ``directory`` and return their paths."""
+    """Write the five published files into ``directory`` and return their paths."""
     directory.mkdir(parents=True, exist_ok=True)
+    runs = history(report, previous_history)
     files = {
         "coverage.json": json.dumps(report, indent=1, sort_keys=True) + "\n",
         "coverage.svg": chart.render(report),
         "COVERAGE.md": markdown(report, repository),
-        "history.csv": history(report, previous_history),
+        "history.csv": runs,
+        "trend.svg": trend.render(runs),
     }
     paths = []
     for filename, text in files.items():

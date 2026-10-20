@@ -6,8 +6,9 @@ name: Coverage
 # Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, one measures Rust with rust-gpu, and
 # the macOS job measures Metal with xcrun metal. The report job merges the reports and adds the CrossGL IR row. On
 # pushes to main and nightly, the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg
-# (the README chart), COVERAGE.md and a bounded history.csv; main itself never receives generated files. The issues
-# job then reconciles the tracking and bug issues (tools/coverage/issues.py); pull requests only print its plan.
+# (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the trend chart drawn from it; main itself
+# never receives generated files. The issues job then reconciles the tracking and bug issues
+# (tools/coverage/issues.py); pull requests only print its plan.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
@@ -511,7 +512,7 @@ jobs:
           git init --quiet --initial-branch=coverage
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add coverage.json coverage.svg COVERAGE.md history.csv
+          git add coverage.json coverage.svg COVERAGE.md history.csv trend.svg
           git commit --quiet -m "Coverage for ${GITHUB_SHA::12}"
           # The branch is one commit by design, so each publication replaces it.
           git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:coverage
