@@ -154,6 +154,29 @@ u64 [[]] ReadClock(in uint scope);
 
 namespace Texture2DMethods {
 float [[ro]] CalculateLevelOfDetail(in any_sampler s, in float<2> x) : tex2d_t_calc_lod;
+$match<0, -1> void<4> [[ro]] GatherCmp(in sampler_cmp s, in float<2> x, in float compareValue) : tex2d_t_gather_comp;
+$classT [[]] Load(in int<3> x, in int<2> o, out uint_only status) : tex2d_t_load_o_s;
+$classT [[ro]] Load(in int<3> x) : tex2d_t_load;
+} namespace
+
+namespace ByteAddressBufferMethods {
+$funcT [[ro]] Load(in uint byteOffset) : byteaddress_load;
+} namespace
+
+namespace DxHitObjectMethods {
+    DxHitObject [[static,class_prefix,min_sm=6.9]] MakeNop();
+} namespace
+
+namespace NodeOutputMethods {
+    bool [[]] IsValid();
+} namespace
+
+namespace DxIntrinsics {
+    void [[min_sm=6.9]] MaybeReorderThread(in uint CoherenceHint, in uint NumCoherenceHintBitsFromLSB);
+} namespace
+
+namespace VkSubpassInputMethods {
+$classT [[]] SubpassLoad() : subpassinput_load;
 } namespace
 """
 
@@ -161,11 +184,36 @@ float [[ro]] CalculateLevelOfDetail(in any_sampler s, in float<2> x) : tex2d_t_c
 def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     features = by_name(hlsl.parse(HLSL_TABLE, {"mix", "fma"}))
     assert "ReadClock" not in features
+    assert "VkSubpassInput.SubpassLoad" not in features
     assert features["Texture2D.CalculateLevelOfDetail"].category == "method"
-    assert features["Texture2D.CalculateLevelOfDetail"].signature is None
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
     assert features["GetGroupWaveIndex"].note == "needs shader model 6.10"
+    assert features["dx::MaybeReorderThread"].category == "function"
+    assert features["dx::MaybeReorderThread"].note == "needs shader model 6.9"
+
+
+def test_hlsl_methods_take_the_element_type_of_their_object():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    lod = features["Texture2D.CalculateLevelOfDetail"]
+    # Implicit derivatives need a fragment shader, or a compute group of at least four threads.
+    assert lod.stage == "fragment"
+    assert lod.signature.params[0].type == Type.other("sampler")
+    gather = features["Texture2D.GatherCmp"].signature
+    assert gather.result == Type("float", (4,))
+    assert gather.params[0].type == Type.other("sampler_cmp")
+    # The overload without an offset or the tiled-resource status comes first.
+    load = features["Texture2D.Load"]
+    assert load.signature == Signature(Type("float", (4,)), (Param(Type("int", (3,))),))
+    assert (load.group, load.spelling, load.crossgl) == ("Texture2D", "Load", "Load")
+    assert features["ByteAddressBuffer.Load"].signature.result == Type("uint")
+
+
+def test_hlsl_methods_of_types_no_probe_declares_are_untested():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    assert features["DxHitObject.MakeNop"].note == "needs shader model 6.9"
+    assert features["NodeOutput.IsValid"].signature is None
+    assert features["NodeOutput.IsValid"].note == "no probe for NodeOutput objects yet"
 
 
 def test_hlsl_resolves_generic_layouts_and_matched_types():

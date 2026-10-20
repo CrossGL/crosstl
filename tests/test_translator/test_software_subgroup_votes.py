@@ -199,11 +199,11 @@ def test_opengl_votes_allow_uniform_exit_and_final_lane_dependent_return(tmp_pat
 
 
 def test_software_votes_are_required_in_native_workflow():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate software subgroup votes"
     )
     assert "test_software_subgroup_votes.py" in step
@@ -214,11 +214,11 @@ def test_software_votes_are_required_in_native_workflow():
     assert "if:" not in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_software_subgroup_votes.py",
         )
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_opengl_subgroup_wrappers.py",
         )
 

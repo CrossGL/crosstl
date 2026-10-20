@@ -341,12 +341,12 @@ def test_boolean_verifier_rejects_corrupt_values_and_guards(index):
 
 
 def test_boolean_storage_is_required_in_native_workflows():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
     for job in ("mlx-metal-porting", "metal-host", "portable-host"):
-        step = ci_coverage.workflow_job_step_section(
+        step = workflow_text.workflow_job_step_section(
             workflow, job, "Validate pinned comparison arithmetic"
         )
         assert "test_boolean_buffer_runtime.py" in step
@@ -355,7 +355,7 @@ def test_boolean_storage_is_required_in_native_workflows():
         assert "--timeout-seconds" in step and "--junitxml" in step
         for event in ("pull_request", "push"):
             assert_paths_covered(
-                ci_coverage.workflow_event_path_filters(workflow, event),
+                workflow_text.workflow_event_path_filters(workflow, event),
                 "tests/test_translator/test_boolean_buffer_runtime.py",
             )
 

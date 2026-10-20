@@ -822,7 +822,7 @@
         "translated": 144
       },
       "translator": {
-        "commit": "72f61079a2aa2af3f985c0b72a3d147adead7d1d",
+        "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
         "package": "crosstl",
         "translatorTreeClean": true
       }
@@ -1578,15 +1578,15 @@
         "translated": 148
       },
       "translator": {
-        "commit": "72f61079a2aa2af3f985c0b72a3d147adead7d1d",
+        "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
         "package": "crosstl",
         "translatorTreeClean": true
       }
     }
   },
   "provenance": {
-    "sourceCommit": "31f1c36cbbcb6e453a114df3576e74635d93eaa1",
-    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39335751590/attempts/1"
+    "sourceCommit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39407200030/attempts/1"
   },
   "retained": {
     "ComputeSharp.Tests.DeviceLost": {
@@ -1855,7 +1855,7 @@
             "translated": 2
           },
           "translator": {
-            "commit": "72f61079a2aa2af3f985c0b72a3d147adead7d1d",
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -1986,7 +1986,7 @@
             "translated": 2
           },
           "translator": {
-            "commit": "72f61079a2aa2af3f985c0b72a3d147adead7d1d",
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -2159,7 +2159,7 @@
             "translated": 1
           },
           "translator": {
-            "commit": "72f61079a2aa2af3f985c0b72a3d147adead7d1d",
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -2288,7 +2288,7 @@
             "translated": 1
           },
           "translator": {
-            "commit": "72f61079a2aa2af3f985c0b72a3d147adead7d1d",
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -2458,7 +2458,7 @@
             "translation-failed": 1
           },
           "translator": {
-            "commit": "72f61079a2aa2af3f985c0b72a3d147adead7d1d",
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -2572,7 +2572,7 @@
             "translated": 7
           },
           "translator": {
-            "commit": "72f61079a2aa2af3f985c0b72a3d147adead7d1d",
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
             "package": "crosstl",
             "translatorTreeClean": true
           }

@@ -111,7 +111,7 @@ def test_constrained_specializations_execute_natively(tmp_path, case):
 
 
 def test_constrained_specialization_execution_is_required_on_each_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
@@ -122,7 +122,7 @@ def test_constrained_specialization_execution_is_required_on_each_target():
         "Validate indexed DirectX gather and resource aggregates",
         "Validate indexed OpenGL gather and resource aggregates",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_constrained_specialization_runtime.py" in step
         timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
@@ -130,6 +130,6 @@ def test_constrained_specialization_execution_is_required_on_each_target():
         assert "if:" not in step and "continue-on-error" not in workflow
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/**",
         )

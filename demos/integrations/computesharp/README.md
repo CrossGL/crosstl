@@ -13,10 +13,11 @@ on Windows (WARP) is the independent baseline.
 ## Results
 
 The qualification job of workflow run
-[39335751590](https://github.com/CrossGL/crosstl/actions/runs/39335751590)
-(commit `31f1c36cbbcb6e453a114df3576e74635d93eaa1`) recomputed every check from
-the fresh artifacts of the three profile jobs and passed, for the main test
-project, the three ported companion projects and the two retained projects.
+[39407200030](https://github.com/CrossGL/crosstl/actions/runs/39407200030)
+(commit `9f2bcbcccefc11f06071a7124aa840d8f820e3ea`), the merge-queue run of the
+commit that landed on `main`, recomputed every check from the fresh artifacts of
+the three profile jobs and passed, for the main test project, the three ported
+companion projects and the two retained projects.
 `results.json` is the machine-readable summary that job wrote;
 `results_summary.py` regenerates it byte for byte from the job's
 `qualification.json`.

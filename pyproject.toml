@@ -45,5 +45,5 @@ testpaths = ["tests", "demos/integrations"]
 norecursedirs = [".git", ".venv", "build", "dist", "worktrees"]
 
 [tool.flit.sdist]
-include = ["CHANGELOG.md", "CITATION.cff", ".zenodo.json", "examples/", "support/", "docs/"]
-exclude = ["docs/_build/", "docs/doxygen/build/", "examples/output/", "support/generated/", "**/__pycache__/", "**/*.py[cod]"]
+include = ["CHANGELOG.md", "CITATION.cff", ".zenodo.json", "examples/", "docs/"]
+exclude = ["docs/_build/", "docs/doxygen/build/", "examples/output/", "**/__pycache__/", "**/*.py[cod]"]

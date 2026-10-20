@@ -345,13 +345,13 @@ def test_constant_reference_helpers_execute(tmp_path, iterations):
 
 
 def test_uniform_return_execution_is_required_in_existing_ci_job():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
     assert 'CROSTL_REQUIRE_UNIFORM_RETURN_RUNTIME: "1"' in step

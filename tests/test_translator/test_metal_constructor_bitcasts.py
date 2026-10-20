@@ -310,9 +310,9 @@ def test_nested_conversions_preserve_direct_rounding_and_evaluation(tmp_path, dt
 
 
 def test_nested_constructor_native_gate_is_required():
-    from tools import ci_coverage
+    from tests import workflow_text
 
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         Path(".github/workflows/demo-project-testing.yml").read_text(),
         "Validate bfloat vector round trips",
     )

@@ -259,11 +259,11 @@ def test_overloaded_word_shuffles_execute(tmp_path, shape):
 
 
 def test_overloaded_shuffle_execution_is_required_in_existing_native_jobs():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate exact partial subgroup execution"
     )
     assert "test_directx_subgroup_overloads.py" in step

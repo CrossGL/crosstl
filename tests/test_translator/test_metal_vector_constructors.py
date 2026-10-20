@@ -289,13 +289,13 @@ def test_selected_vector_conversion_executes_natively(tmp_path, case):
 
 
 def test_generic_vector_constructor_gate_is_required():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate generic vector constructors"
     )
     assert "test_metal_vector_constructors.py" in step and f'{REQUIRE_ENV}: "1"' in step
@@ -306,6 +306,6 @@ def test_generic_vector_constructor_gate_is_required():
     assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_metal_vector_constructors.py",
         )
