@@ -618,6 +618,12 @@ class Parser:
         self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError(
+                    f"Unterminated shader declaration {name!r}: "
+                    "expected '}' before end of input"
+                )
+
             if self.current_token[0] == "PREPROCESSOR":
                 preprocessors.append(self.parse_preprocessor_directive())
             elif self.current_token[0] == "PRECISION":

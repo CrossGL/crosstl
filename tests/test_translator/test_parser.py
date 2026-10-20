@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 from typing import List
 
@@ -4100,6 +4102,43 @@ def test_unterminated_generic_value_expression_is_rejected():
 
     with pytest.raises(SyntaxError, match="Unterminated generic argument list"):
         parser.parse_type()
+
+
+def test_complete_shader_declaration_still_parses():
+    code = """
+    shader Complete {
+        float identity(float value) { return value; }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert [function.name for function in ast.functions] == ["identity"]
+
+
+def test_unterminated_shader_declaration_fails_in_bounded_subprocess():
+    # Keep a regression in a child process so a parser hang cannot stall pytest.
+    script = (
+        "from crosstl.translator.lexer import Lexer\n"
+        "from crosstl.translator.parser import Parser\n"
+        "source = 'shader Incomplete { float identity(float value) { return value; }'\n"
+        "try:\n"
+        "    Parser(Lexer(source).tokens).parse()\n"
+        "except SyntaxError as exc:\n"
+        "    print(exc)\n"
+        "else:\n"
+        "    raise SystemExit('expected SyntaxError for unterminated shader')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=4,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Unterminated shader declaration 'Incomplete'" in result.stdout
 
 
 def test_nested_generic_type_close_does_not_eat_shift_operator():
