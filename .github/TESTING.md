@@ -20,8 +20,10 @@ Windows machine, gets Linux, macOS and Windows coverage without asking:
   - Path-filtered demo workflows for the files they cover.
 - **Merge queue tier.** The `merge_group` event runs each gating workflow once
   more on the exact commit that will land on main. That run covers every
-  supported Python version (3.11 through 3.15) and the full MLX native, parity,
-  corpus and host tier. A pull request merges only when this run passes.
+  supported Python version (3.11 through 3.15) and the MLX smoke job. The full
+  MLX native, parity, corpus and host tier runs in the queue only when the
+  group changes `demos/integrations/mlx/**` or the MLX workflow, as for pushes
+  to main. A pull request merges only when this run passes.
 - **Main and nightly.** Pushes to main repeat the full Python sweep. The MLX
   tier runs nightly and on manual dispatch.
 
