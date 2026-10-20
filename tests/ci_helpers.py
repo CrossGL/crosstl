@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from tools import ci_coverage
+from tests import workflow_text
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -103,23 +103,23 @@ def assert_paths_covered(filters, *required, root=ROOT):
 def assert_workflow_triggers(workflow, *required):
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event), *required
+            workflow_text.workflow_event_path_filters(workflow, event), *required
         )
 
 
 def current_parity_step(workflow, name, *, group):
     """Return a current-tree parity step after checking its group and upload."""
-    job = ci_coverage.workflow_job_text(workflow, CURRENT_PARITY_JOB)
-    step = ci_coverage.workflow_step_section(job, name)
+    job = workflow_text.workflow_job_text(workflow, CURRENT_PARITY_JOB)
+    step = workflow_text.workflow_step_section(job, name)
     assert step, name
     assert_native_step_prerequisites(step, job=CURRENT_PARITY_JOB, group=group)
     matrix = yaml.safe_load(workflow)["jobs"][CURRENT_PARITY_JOB]["strategy"]
     assert group in matrix["matrix"]["group"]
     # A family that also ran in the porting job would spend its budget twice.
-    assert not ci_coverage.workflow_job_step_section(
+    assert not workflow_text.workflow_job_step_section(
         workflow, "mlx-metal-porting", name
     )
-    upload = ci_coverage.workflow_step_section(job, CURRENT_PARITY_UPLOAD)
+    upload = workflow_text.workflow_step_section(job, CURRENT_PARITY_UPLOAD)
     assert "if: always()" in upload
     assert "path: mlx-current-results" in upload
     assert job.index(name) < job.index(CURRENT_PARITY_UPLOAD)

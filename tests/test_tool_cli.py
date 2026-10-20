@@ -1,22 +1,16 @@
-import configparser
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = [
-    "tools/ci_coverage.py",
     "tools/compile_artifact_bundle.py",
     "tools/ensure_metal_toolchain.py",
     "tools/refresh_artifact_contract.py",
     "tools/pytest_failure_summary.py",
-    "tools/support_matrix.py",
-    "tools/support_signals.py",
-    "tools/support_ci_summary.py",
-    "tools/sync_pr_issue_links.py",
-    "tools/sync_support_issues.py",
 ]
 
 
@@ -320,7 +314,7 @@ def test_crosstl_module_cli_help_surface(args, expected_stdout):
         assert text in result.stdout
 
 
-def test_support_tools_expose_cli_help():
+def test_tools_expose_cli_help():
     for tool in TOOLS:
         result = subprocess.run(
             [sys.executable, tool, "--help"],
@@ -333,7 +327,7 @@ def test_support_tools_expose_cli_help():
         assert "usage:" in result.stdout
 
 
-def test_support_tools_keep_main_entrypoint():
+def test_tools_keep_main_entrypoint():
     for tool in TOOLS:
         text = (ROOT / tool).read_text(encoding="utf-8")
 
@@ -342,7 +336,7 @@ def test_support_tools_keep_main_entrypoint():
         assert "sys.exit(main())" in text
 
 
-def test_pre_commit_config_keeps_repo_wide_formatters_and_safe_support_checks():
+def test_pre_commit_config_keeps_repo_wide_formatters():
     text = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
 
     assert "end-of-file-fixer" in text
@@ -351,29 +345,19 @@ def test_pre_commit_config_keeps_repo_wide_formatters_and_safe_support_checks():
     assert "ruff critical Python checks" in text
     assert "https://github.com/asottile/pyupgrade" in text
     assert "https://github.com/PyCQA/isort" in text
-    assert "python tools/support_matrix.py check" in text
-    assert "python tools/support_signals.py extract" in text
-    assert "python tools/support_signals.py check" not in text
-    assert "python tools/support_signals.py update" not in text
-    assert "python tools/support_matrix.py update" not in text
     assert "stages: [manual]" in text
-
-
-def test_pull_request_template_mentions_support_traceability_marker():
-    text = (ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md").read_text(encoding="utf-8")
-
-    assert "Support issue traceability: no issue closed" in text
 
 
 def test_local_temporary_worktrees_are_ignored_by_developer_tooling():
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     pre_commit = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    config = configparser.ConfigParser()
-    config.read(ROOT / "setup.cfg", encoding="utf-8")
+    pytest_options = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["tool"]["pytest"]["ini_options"]
 
     assert "worktrees/" in gitignore
     assert "worktrees/" in pre_commit
-    assert "worktrees" in config["tool:pytest"]["norecursedirs"].split()
+    assert "worktrees" in pytest_options["norecursedirs"]
 
 
 def test_public_docs_reference_project_porting_workflow():
@@ -401,9 +385,6 @@ def test_public_docs_use_root_package_cli_entrypoint():
             (ROOT / "docs" / "source" / "project-porting.rst").read_text(
                 encoding="utf-8"
             )
-        ),
-        "support/README.md": (
-            (ROOT / "support" / "README.md").read_text(encoding="utf-8")
         ),
     }
 

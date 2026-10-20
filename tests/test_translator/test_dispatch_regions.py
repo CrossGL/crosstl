@@ -42,11 +42,11 @@ REQUIRE_ENV = "CROSTL_REQUIRE_DISPATCH_REGIONS"
 
 
 def test_region_execution_gate_is_required_on_every_native_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate exact dispatch regions"
     )
     assert "test_dispatch_regions.py" in step
@@ -61,7 +61,7 @@ def test_region_execution_gate_is_required_on_every_native_target():
     for event in ("pull_request", "push"):
         for name in ("test_dispatch_regions.py", "test_exact_thread_grid_runtime.py"):
             assert_paths_covered(
-                ci_coverage.workflow_event_path_filters(workflow, event),
+                workflow_text.workflow_event_path_filters(workflow, event),
                 f"tests/test_translator/{name}",
             )
 

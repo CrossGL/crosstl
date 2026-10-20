@@ -93,7 +93,7 @@ def assert_no_hlsl_entry_parameters(generated):
                 "vertex vertex_main_Return vertex_main(",
                 "vertex_main_Input _crossglInput [[stage_in]]",
                 "float3 VSIn_Pos [[attribute(0)]];",
-                "float4 PSIn_Color [[user(Color0)]];",
+                "float4 PSIn_Color [[user(COLOR0)]];",
             ),
         ),
         (

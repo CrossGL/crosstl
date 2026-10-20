@@ -344,7 +344,7 @@ def test_narrow_helper_layouts_execute(tmp_path, case):
 
 
 def test_narrow_layout_execution_runs_in_the_scalar_alias_gate():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = os.path.join(
         os.path.dirname(__file__),
@@ -356,7 +356,7 @@ def test_narrow_layout_execution_runs_in_the_scalar_alias_gate():
     )
     with open(workflow, encoding="utf-8") as stream:
         text = stream.read()
-    step = ci_coverage.workflow_step_section(text, "Validate scalar alias resolution")
+    step = workflow_text.workflow_step_section(text, "Validate scalar alias resolution")
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_narrow_pointer_layouts.py" in step
     assert "continue-on-error" not in step and "if:" not in step

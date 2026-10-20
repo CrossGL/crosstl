@@ -2947,6 +2947,59 @@ def test_hlsl_codegen_recursively_expands_partial_fixed_array_returns():
     assert ".value1 = (Pair)0;" in generated
 
 
+def test_hlsl_codegen_disambiguates_colliding_fixed_array_return_struct_names():
+    pair_members = [
+        StructMemberNode("x", PrimitiveType("float")),
+        StructMemberNode("y", PrimitiveType("float")),
+    ]
+
+    def build_ast():
+        return ShaderNode(
+            "CollidingFixedArrayReturn",
+            ExecutionModel.COMPUTE_KERNEL,
+            structs=[
+                StructNode("Pair", list(pair_members)),
+                # A user struct that already owns the default lowering name.
+                StructNode("CrossGLFixedArray_Pair_2", list(pair_members)),
+            ],
+            functions=[
+                FunctionNode(
+                    "make_pairs",
+                    ArrayType(NamedType("Pair"), 2),
+                    [],
+                    BlockNode(
+                        [
+                            ReturnNode(
+                                ArrayLiteralNode(
+                                    [
+                                        ArrayLiteralNode(
+                                            [LiteralNode(3.0, PrimitiveType("float"))]
+                                        )
+                                    ]
+                                )
+                            )
+                        ]
+                    ),
+                ),
+            ],
+        )
+
+    generated = generate_code(build_ast())
+
+    match = re.search(
+        r"\b(CrossGLFixedArray_Pair_2_[0-9a-f]{8}) make_pairs\(\)", generated
+    )
+    assert match is not None
+    lowered_name = match.group(1)
+    assert f"struct {lowered_name} {{" in generated
+    assert "struct CrossGLFixedArray_Pair_2 {" in generated
+    # The suffix is a content digest, so repeated generation is stable.
+    assert generate_code(build_ast()).count(lowered_name) == generated.count(
+        lowered_name
+    )
+    assert lowered_name in generate_code(build_ast())
+
+
 def test_hlsl_codegen_rejects_excess_fixed_array_initializer_elements():
     ast = ShaderNode(
         "ExcessFixedArrayInitializer",
@@ -20762,7 +20815,9 @@ def test_hlsl_bit_count_lowers_to_countbits_intrinsic():
 
     # Microsoft HLSL docs list countbits(value) for uint scalar/vector inputs.
     # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/countbits
-    assert "uint3 vectorCounts = countbits(mask);" in generated_code
+    # CrossGL bitCount follows GLSL 4.60 section 8.8: `genIType bitCount(genUType)`,
+    # so the inferred local is signed even though countbits returns uint.
+    assert "int3 vectorCounts = countbits(mask);" in generated_code
     assert "uint countbits_ = tid.x;" in generated_code
     assert "uint scalarCount = (countbits(tid.x) + countbits_);" in generated_code
     assert "bitCount(" not in generated_code
@@ -20816,8 +20871,10 @@ def test_hlsl_first_bit_builtins_lower_to_native_intrinsics():
 
     # Microsoft HLSL exposes firstbitlow/firstbithigh for scalar and vector
     # integer operands, rather than GLSL's findLSB/findMSB spelling.
-    assert "uint3 lowBits = firstbitlow(mask);" in generated_code
-    assert "uint highBit = firstbithigh(tid.x);" in generated_code
+    # CrossGL findLSB/findMSB follow GLSL 4.60 section 8.8 (`genIType findLSB(genUType)`),
+    # so a zero input still reads as -1 through the signed local.
+    assert "int3 lowBits = firstbitlow(mask);" in generated_code
+    assert "int highBit = firstbithigh(tid.x);" in generated_code
     assert "int3 signedHighBits = firstbithigh(signedMask);" in generated_code
     assert "uint firstbitlow_ = tid.x;" in generated_code
     assert "uint firstbithigh_ = tid.y;" in generated_code

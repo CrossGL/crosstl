@@ -37,7 +37,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install dependencies
@@ -49,17 +48,17 @@ jobs:
 
       - name: Run complete test suite
         run: |
-          mkdir -p support/generated
-          python -m pytest tests demos/integrations --durations=25 -n auto --junitxml support/generated/full-tests-pytest.xml
+          mkdir -p build/reports
+          python -m pytest tests demos/integrations --durations=25 -n auto --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
         if: always()
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/full-tests-pytest.xml \
-            --json-output support/generated/full-tests-failure-summary.json \
-            --markdown-output support/generated/full-tests-failure-summary.md
-          cat support/generated/full-tests-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/full-tests-pytest.xml \
+            --json-output build/reports/full-tests-failure-summary.json \
+            --markdown-output build/reports/full-tests-failure-summary.md
+          cat build/reports/full-tests-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload complete test failure summary
         if: always()
@@ -68,9 +67,9 @@ jobs:
         with:
           name: full-test-failure-summary
           path: |
-            support/generated/full-tests-pytest.xml
-            support/generated/full-tests-failure-summary.json
-            support/generated/full-tests-failure-summary.md
+            build/reports/full-tests-pytest.xml
+            build/reports/full-tests-failure-summary.json
+            build/reports/full-tests-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
 
@@ -94,7 +93,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install optional shader validators
@@ -206,10 +204,10 @@ jobs:
       - name: Run external shader validator tests
         shell: bash
         run: |
-          mkdir -p support/generated
+          mkdir -p build/reports
           python -m pytest \
             tests/test_translator/test_codegen/test_external_shader_validators.py \
-            --junitxml support/generated/shader-validators-pytest.xml \
+            --junitxml build/reports/shader-validators-pytest.xml \
             -rs
 
       - name: Write shader validator failure summary
@@ -217,10 +215,10 @@ jobs:
         shell: bash
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/shader-validators-pytest.xml \
-            --json-output support/generated/shader-validators-failure-summary.json \
-            --markdown-output support/generated/shader-validators-failure-summary.md
-          cat support/generated/shader-validators-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/shader-validators-pytest.xml \
+            --json-output build/reports/shader-validators-failure-summary.json \
+            --markdown-output build/reports/shader-validators-failure-summary.md
+          cat build/reports/shader-validators-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload shader validator failure summary
         if: always()
@@ -229,9 +227,9 @@ jobs:
         with:
           name: shader-validator-failure-summary-${{ matrix.os }}
           path: |
-            support/generated/shader-validators-pytest.xml
-            support/generated/shader-validators-failure-summary.json
-            support/generated/shader-validators-failure-summary.md
+            build/reports/shader-validators-pytest.xml
+            build/reports/shader-validators-failure-summary.json
+            build/reports/shader-validators-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
 
@@ -271,7 +269,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install adapter toolchain
@@ -349,7 +346,7 @@ jobs:
         env:
           RUNTIME_PARITY_ADAPTER: ${{ matrix.adapter }}
         run: |
-          mkdir -p support/generated
+          mkdir -p build/reports
           if [ "$RUNTIME_PARITY_ADAPTER" = "vulkan" ]; then
             export CROSTL_RUN_VULKAN_DEVICE_TEST=1
             vulkaninfo --summary || true
@@ -358,7 +355,7 @@ jobs:
             tests/test_translator/test_runtime_verification.py \
             tests/test_translator/test_native_runtime_drivers.py \
             -k "runtime_parity" \
-            --junitxml support/generated/runtime-parity-${{ matrix.adapter }}-${{ matrix.os }}.xml
+            --junitxml build/reports/runtime-parity-${{ matrix.adapter }}-${{ matrix.os }}.xml
 
       - name: Run OpenGL compute runtime test
         if: matrix.adapter == 'opengl' && steps.probe_runtime_parity.outputs.available == 'true'
@@ -371,6 +368,19 @@ jobs:
           python -m pytest -q \
             tests/test_translator/test_native_runtime_drivers.py \
             -k "opengl_compute_runtime_executes_vector_scale_on_device"
+
+      - name: Check HLSL evaluation semantics on the native driver
+        if: (matrix.adapter == 'opengl' || matrix.adapter == 'metal') && steps.probe_runtime_parity.outputs.available == 'true'
+        shell: bash
+        env:
+          CROSSTL_REQUIRE_HLSL_VALUE_ARRAY_EXECUTION: "1"
+          CROSSTL_REQUIRE_MESA_NIR_EXACTNESS: ${{ matrix.adapter == 'opengl' && '1' || '' }}
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          python -m pytest -q \
+            tests/test_backend/test_directx/test_hlsl_value_array_parameters.py \
+            tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py
 
       - name: Record unavailable runtime parity adapter
         if: steps.probe_runtime_parity.outputs.available != 'true'
@@ -399,7 +409,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install DirectX Shader Compiler
@@ -457,7 +466,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install GLSL and SPIR-V tools
@@ -607,21 +615,21 @@ jobs:
 
       - name: Run external shader validator tests
         run: |
-          mkdir -p support/generated
+          mkdir -p build/reports
           python -m pytest -q -n auto \
             tests/test_translator/test_codegen/test_external_shader_validators.py \
             tests/test_translator/test_preprocessor \
-            --junitxml support/generated/compiler-smoke-linux-pytest.xml \
+            --junitxml build/reports/compiler-smoke-linux-pytest.xml \
             -rs
 
       - name: Write compiler smoke failure summary
         if: always()
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/compiler-smoke-linux-pytest.xml \
-            --json-output support/generated/compiler-smoke-linux-failure-summary.json \
-            --markdown-output support/generated/compiler-smoke-linux-failure-summary.md
-          cat support/generated/compiler-smoke-linux-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/compiler-smoke-linux-pytest.xml \
+            --json-output build/reports/compiler-smoke-linux-failure-summary.json \
+            --markdown-output build/reports/compiler-smoke-linux-failure-summary.md
+          cat build/reports/compiler-smoke-linux-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload compiler smoke failure summary
         if: always()
@@ -630,9 +638,9 @@ jobs:
         with:
           name: compiler-smoke-linux-failure-summary
           path: |
-            support/generated/compiler-smoke-linux-pytest.xml
-            support/generated/compiler-smoke-linux-failure-summary.json
-            support/generated/compiler-smoke-linux-failure-summary.md
+            build/reports/compiler-smoke-linux-pytest.xml
+            build/reports/compiler-smoke-linux-failure-summary.json
+            build/reports/compiler-smoke-linux-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
 
@@ -652,7 +660,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
 
       - name: Install GLSL validator
@@ -674,24 +681,24 @@ jobs:
 
       - name: Run Metal compiler smoke tests
         run: |
-          mkdir -p support/generated
+          mkdir -p build/reports
           python -m pytest -q -n auto \
             tests/test_translator/test_codegen/test_external_shader_validators.py \
             tests/test_translator/test_codegen/test_shader_validation.py \
             tests/test_translator/test_codegen/test_metal_codegen.py \
             tests/test_translator/test_preprocessor/test_dialects.py \
             -k "metal" \
-            --junitxml support/generated/compiler-smoke-macos-pytest.xml \
+            --junitxml build/reports/compiler-smoke-macos-pytest.xml \
             -rs
 
       - name: Write Metal compiler smoke failure summary
         if: always()
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/compiler-smoke-macos-pytest.xml \
-            --json-output support/generated/compiler-smoke-macos-failure-summary.json \
-            --markdown-output support/generated/compiler-smoke-macos-failure-summary.md
-          cat support/generated/compiler-smoke-macos-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/compiler-smoke-macos-pytest.xml \
+            --json-output build/reports/compiler-smoke-macos-failure-summary.json \
+            --markdown-output build/reports/compiler-smoke-macos-failure-summary.md
+          cat build/reports/compiler-smoke-macos-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Metal compiler smoke failure summary
         if: always()
@@ -700,9 +707,9 @@ jobs:
         with:
           name: compiler-smoke-macos-failure-summary
           path: |
-            support/generated/compiler-smoke-macos-pytest.xml
-            support/generated/compiler-smoke-macos-failure-summary.json
-            support/generated/compiler-smoke-macos-failure-summary.md
+            build/reports/compiler-smoke-macos-pytest.xml
+            build/reports/compiler-smoke-macos-failure-summary.json
+            build/reports/compiler-smoke-macos-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
 

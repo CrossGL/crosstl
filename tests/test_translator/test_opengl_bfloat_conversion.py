@@ -902,7 +902,7 @@ kernel void copy(const device bfloat* values [[buffer(0)]], device bfloat* resul
 
 
 def test_bfloat_conversion_native_gate_is_required():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
     for name in (
@@ -910,7 +910,7 @@ def test_bfloat_conversion_native_gate_is_required():
         "Validate indexed DirectX gather and resource aggregates",
         "Validate Metal byte and vector storage",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "tests/test_translator/test_opengl_bfloat_conversion.py" in step
         assert (

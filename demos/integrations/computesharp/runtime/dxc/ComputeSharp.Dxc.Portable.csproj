@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Portable ComputeSharp.Dxc: the upstream ShaderInfo record is compiled unchanged and
+    ReflectionServices reports the generated HLSL source and its double-precision use.
+    DXIL statistics require DXC on Windows and are reported as zero; the tests that
+    assert them are classified as Windows-specific.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>ComputeSharp.Dxc</AssemblyName>
+    <RootNamespace>ComputeSharp</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyVersion>4.0.0.0</AssemblyVersion>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>$(ComputeSharpRoot)/build/computesharp.snk</AssemblyOriginatorKeyFile>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../ComputeSharp.Portable.csproj" />
+    <Compile Include="$(ComputeSharpRoot)/src/ComputeSharp.Dxc/Interop/ShaderInfo.cs" Link="Upstream/Interop/ShaderInfo.cs" />
+    <Compile Include="ReflectionServices.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,2585 @@
+{
+  "contractSHA256": "d42e62eb332982539b6c9c76046beab0f6443adb129daa79dbb49955bd5d3bda",
+  "imageChecksSHA256": "1f8d7d8a2e9d0f4cfafe8cedc5314041542ccef0c5ca4839817d6af0b0e288af",
+  "kind": "computesharp-port-results",
+  "negativeControlsSHA256": "da6b76d0f0d8146aa988e1f03a68c48a911c96c0bc2f22020986ef0d606312ef",
+  "profiles": {
+    "directx-warp": {
+      "cases": {
+        "capabilityGated": 11,
+        "categories": {
+          "cpu-only": {
+            "discovered": 109,
+            "executed": 109,
+            "notRun": 0,
+            "outcomes": {
+              "Passed": 109
+            }
+          },
+          "required-gpu": {
+            "discovered": 3622,
+            "executed": 3622,
+            "notRun": 0,
+            "outcomes": {
+              "NotExecuted": 1813,
+              "Passed": 1809
+            }
+          },
+          "windows-specific": {
+            "discovered": 61,
+            "executed": 61,
+            "notRun": 0,
+            "outcomes": {
+              "NotExecuted": 15,
+              "Passed": 46
+            }
+          }
+        },
+        "expected": {
+          "excluded": 0,
+          "inconclusive": 11,
+          "optional": 1817,
+          "pass": 1964
+        },
+        "optionalHardwareSkipped": 1817,
+        "requiredCasesPassed": 1964,
+        "requiredGpuCasesPassed": 1809
+      },
+      "checks": {
+        "accounting": "passed",
+        "categories": "passed",
+        "coverage": "passed",
+        "outputs": "passed"
+      },
+      "device": {
+        "architecture": "X64",
+        "hardware": false,
+        "name": "Microsoft Basic Render Driver",
+        "os": "Microsoft Windows 10.0.26100",
+        "runtime": "4.0.0.0"
+      },
+      "execution": "software",
+      "outputs": {
+        "outputs": 18,
+        "references": 15,
+        "status": "passed"
+      },
+      "status": "passed"
+    },
+    "metal-apple-gpu": {
+      "arithmeticExactness": {
+        "contractible": 0,
+        "exactArtifacts": 144,
+        "floatOperations": 11336,
+        "notCompiled": 4,
+        "status": "passed",
+        "tool": {
+          "compiler": "Apple metal version 32023.620 (metalfe-32023.620)",
+          "flags": [
+            "-fmetal-math-mode=safe",
+            "-fmetal-math-fp32-functions=fast",
+            "-O2"
+          ]
+        }
+      },
+      "cases": {
+        "capabilityGated": 18,
+        "categories": {
+          "cpu-only": {
+            "discovered": 109,
+            "executed": 109,
+            "notRun": 0,
+            "outcomes": {
+              "Passed": 109
+            }
+          },
+          "required-gpu": {
+            "discovered": 3622,
+            "executed": 3622,
+            "notRun": 0,
+            "outcomes": {
+              "NotExecuted": 18,
+              "Passed": 3604
+            }
+          },
+          "windows-specific": {
+            "discovered": 61,
+            "executed": 0,
+            "notRun": 61,
+            "outcomes": {}
+          }
+        },
+        "expected": {
+          "excluded": 61,
+          "inconclusive": 18,
+          "optional": 0,
+          "pass": 3713
+        },
+        "optionalHardwareSkipped": 0,
+        "requiredCasesPassed": 3713,
+        "requiredGpuCasesPassed": 3604
+      },
+      "checks": {
+        "accounting": "passed",
+        "arithmeticExactness": "passed",
+        "categories": "passed",
+        "coverage": "passed",
+        "discoveryParity": "passed",
+        "evidence": "passed",
+        "intrinsicPrecision": "passed",
+        "negativeControls": "passed",
+        "processingImages": "passed",
+        "run": "passed",
+        "shaderImages": "passed"
+      },
+      "device": {
+        "api": "Metal",
+        "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+        "fp64": false,
+        "hardware": true,
+        "maxThreadsPerGroup": 1024,
+        "name": "Apple Paravirtual device"
+      },
+      "evidence": {
+        "casesWithDispatch": 434,
+        "casesWithEvidence": 3468,
+        "dispatchedShaders": 113,
+        "gatedCaseNamesWithCapabilityQuery": 28,
+        "hostOnlyCaseNames": 138,
+        "pipelines": 134,
+        "policySha256": "c1e3f7bf5c0dfc1caea8bdde8a130de6888b905611c48d50eeca397617da802c",
+        "records": {
+          "capability": 214,
+          "device": 1,
+          "dispatch": 169678,
+          "pipeline": 134,
+          "readback": 58430,
+          "release": 62144,
+          "resource": 62144
+        },
+        "releasedResources": 62144,
+        "requiredCaseNamesExecuted": 3606,
+        "requiredCaseNamesWithEvidence": 3468,
+        "resources": {
+          "device": 61780,
+          "host": 364
+        },
+        "status": "passed",
+        "translatedShaders": 144
+      },
+      "execution": "hardware",
+      "host": {
+        "machine": "arm64",
+        "system": "Darwin"
+      },
+      "intrinsicPrecision": {
+        "device": {
+          "architecture": "Arm64",
+          "hardware": true,
+          "name": "Apple Paravirtual device",
+          "os": "macOS 15.7.9",
+          "runtime": "4.0.0.0"
+        },
+        "functions": {
+          "atan": {
+            "expression": "atan(x)",
+            "identical": 50143,
+            "ulpDistance": {
+              "max": 2247,
+              "p50": 1,
+              "p99": 1990,
+              "p99.9": 2210
+            }
+          },
+          "atan2": {
+            "expression": "atan2(x, y)",
+            "identical": 6490,
+            "ulpDistance": {
+              "max": 3294247,
+              "p50": 49,
+              "p99": 1886,
+              "p99.9": 2200
+            }
+          },
+          "cos": {
+            "expression": "cos(x)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "div": {
+            "expression": "1.0 / x",
+            "identical": 155660,
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "dot2": {
+            "expression": "dot(float2(x, y), float2(27.619, 57.583))",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "dot3": {
+            "expression": "dot(float3(x, y, z), float3(0.2126, 0.7152, 0.0722))",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "exp": {
+            "expression": "exp(x)",
+            "identical": 124880,
+            "ulpDistance": {
+              "max": 2,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 2
+            }
+          },
+          "exp2": {
+            "expression": "exp2(x)",
+            "identical": 124948,
+            "ulpDistance": {
+              "max": 8388608,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 2
+            }
+          },
+          "frac": {
+            "expression": "frac(x)",
+            "identical": 155658,
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "length2": {
+            "expression": "length(float2(x, y))",
+            "identical": 108282,
+            "ulpDistance": {
+              "max": 2,
+              "p50": 0,
+              "p99": 1,
+              "p99.9": 2
+            }
+          },
+          "lerp": {
+            "expression": "lerp(x, y, frac(z))",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "log": {
+            "expression": "log(x)",
+            "identical": 117786,
+            "ulpDistance": {
+              "max": 3240472,
+              "p50": 0,
+              "p99": 6,
+              "p99.9": 14345
+            }
+          },
+          "log2": {
+            "expression": "log2(x)",
+            "identical": 108217,
+            "ulpDistance": {
+              "max": 4675013,
+              "p50": 0,
+              "p99": 5,
+              "p99.9": 14480
+            }
+          },
+          "mad": {
+            "expression": "mad(x, 27.619, y)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "multiply-add": {
+            "expression": "x * 27.619 + y",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "normalize3": {
+            "expression": "normalize(float3(x, y, z)).x",
+            "identical": 116030,
+            "ulpDistance": {
+              "max": 3,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 2
+            }
+          },
+          "pow": {
+            "expression": "pow(abs(x), frac(y) * 4.0)",
+            "identical": 99526,
+            "ulpDistance": {
+              "max": 89,
+              "p50": 0,
+              "p99": 31,
+              "p99.9": 46
+            }
+          },
+          "pow-0.4545": {
+            "expression": "pow(abs(x), 0.4545)",
+            "identical": 61842,
+            "ulpDistance": {
+              "max": 25,
+              "p50": 1,
+              "p99": 6,
+              "p99.9": 8
+            }
+          },
+          "pow-2.2": {
+            "expression": "pow(abs(x), 2.2)",
+            "identical": 57885,
+            "ulpDistance": {
+              "max": 88,
+              "p50": 1,
+              "p99": 42,
+              "p99.9": 44
+            }
+          },
+          "rcp": {
+            "expression": "rcp(x)",
+            "identical": 155660,
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "rsqrt": {
+            "expression": "rsqrt(x)",
+            "identical": 128984,
+            "ulpDistance": {
+              "max": 2,
+              "p50": 0,
+              "p99": 1,
+              "p99.9": 1
+            }
+          },
+          "sin": {
+            "expression": "sin(x)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "smoothstep": {
+            "expression": "smoothstep(0.0, 1.0, frac(x))",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "sqrt": {
+            "expression": "sqrt(x)",
+            "identical": 131672,
+            "ulpDistance": {
+              "max": 2,
+              "p50": 0,
+              "p99": 1,
+              "p99.9": 2
+            }
+          },
+          "tan": {
+            "expression": "tan(x)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          }
+        },
+        "inputs": 155660,
+        "referenceDevice": {
+          "architecture": "X64",
+          "hardware": false,
+          "name": "Microsoft Basic Render Driver",
+          "os": "Microsoft Windows 10.0.26100",
+          "runtime": "4.0.0.0"
+        },
+        "status": "passed"
+      },
+      "negativeControls": {
+        "faults": {
+          "corrupt-guard": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer"
+            ],
+            "status": "passed"
+          },
+          "corrupt-readback": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+            ],
+            "status": "passed"
+          },
+          "omit-dispatch": {
+            "cases": 10,
+            "failed": 10,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D",
+              "ComputeSharp.Tests.ShadersTests.ContouredLayers"
+            ],
+            "status": "passed"
+          },
+          "perturb-constants": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.ShaderMembersTests.BoolInstanceFields"
+            ],
+            "status": "passed"
+          },
+          "perturb-unorm-scales": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchAsPixelShader",
+              "ComputeSharp.Tests.ComputeContextTests.Transition_ReadWriteTexture2D_Normalized",
+              "ComputeSharp.Tests.Texture2DTests.SampleFromSourceTexture_ComputeShader"
+            ],
+            "status": "passed"
+          },
+          "swap-bindings": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadOnlyBuffer",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+            ],
+            "status": "passed"
+          }
+        },
+        "status": "passed"
+      },
+      "processingImages": {
+        "methods": {
+          "ComputeSharp.Tests.ImageProcessingTests.BokehBlur": {
+            "directxUpstreamDelta": 1.3212766897482922e-06,
+            "largePixelFractionBound": 0.010810956790123456,
+            "largePixelFractionVsDirectX": 0.0,
+            "meanAbsoluteErrorBound": 0.7309063143004115,
+            "meanAbsoluteErrorVsDirectX": 0.00044174382716049383,
+            "upstreamDelta": 1.310277257369778e-06,
+            "upstreamThreshold": 9e-06
+          },
+          "ComputeSharp.Tests.ImageProcessingTests.GaussianBlur": {
+            "directxUpstreamDelta": 4.005292723024263e-06,
+            "largePixelFractionBound": 0.03285763888888889,
+            "largePixelFractionVsDirectX": 0.0,
+            "meanAbsoluteErrorBound": 1.1999649562757202,
+            "meanAbsoluteErrorVsDirectX": 5.803112139917695e-05,
+            "upstreamDelta": 4.005699291774162e-06,
+            "upstreamThreshold": 4.6e-06
+          }
+        },
+        "status": "passed"
+      },
+      "shaderImages": {
+        "casesCompared": 52,
+        "casesExecuted": 52,
+        "shaders": {
+          "ColorfulInfinity": {
+            "directxMeanAbsoluteErrorVsReference": 6.872106481481481e-06,
+            "directxUpstreamDelta": 7.86462174580165e-11,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.500013744212963,
+                "meanAbsoluteErrorVsDirectX": 5.063657407407407e-06,
+                "sha256": "cf4a10c72c64e560c87b79929c9844ccb1bf4e397d62a3f2157d22a51477422c",
+                "upstreamDelta": 8.69247666641235e-11
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "ContouredLayers": {
+            "directxMeanAbsoluteErrorVsReference": 7.436741898148148,
+            "directxUpstreamDelta": 8.510805559794172e-05,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.7734066840277778,
+                "largePixelFractionVsDirectX": 0.00025065104166666665,
+                "maxAbsoluteErrorVsDirectX": 80,
+                "meanAbsoluteErrorBound": 15.373483796296297,
+                "meanAbsoluteErrorVsDirectX": 0.04768988715277778,
+                "sha256": "cd74ac489988e15ba79a19845393bd7a5be330fffd6e8af997268b3d899e8aaa",
+                "upstreamDelta": 8.529018781975068e-05
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.000703
+          },
+          "ExtrudedTruchetPattern": {
+            "directxMeanAbsoluteErrorVsReference": 0.002298538773148148,
+            "directxUpstreamDelta": 2.630509010240499e-08,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0010303819444444444,
+                "largePixelFractionVsDirectX": 0.00025824652777777776,
+                "maxAbsoluteErrorVsDirectX": 202,
+                "meanAbsoluteErrorBound": 0.5045970775462963,
+                "meanAbsoluteErrorVsDirectX": 0.12162000868055556,
+                "sha256": "fcf18946603f2fdfa9214eb10825388cbae63738de27963edaf01d7b1206967e",
+                "upstreamDelta": 1.3910694587497775e-06
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00011
+          },
+          "FourColorGradient": {
+            "directxMeanAbsoluteErrorVsReference": 9.003360821759259,
+            "directxUpstreamDelta": 0.00010303685994231241,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.6984240451388889,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 18.506721643518517,
+                "meanAbsoluteErrorVsDirectX": 1.8807870370370372e-05,
+                "sha256": "f97007069c60ffb51992ed7f143893721854ad842082184caf924cb329156a88",
+                "upstreamDelta": 0.00010303698412055052
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00021
+          },
+          "FractalTiling": {
+            "directxMeanAbsoluteErrorVsReference": 0.00035951967592592595,
+            "directxUpstreamDelta": 4.114438955435179e-09,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5007190393518518,
+                "meanAbsoluteErrorVsDirectX": 5.4253472222222224e-06,
+                "sha256": "b794452a68f395e8ddfd342bbeb7ba179bbf7a664f5b2248ed1d21d1458408c6",
+                "upstreamDelta": 4.135135328450447e-09
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 5e-07
+          },
+          "HelloWorld": {
+            "directxMeanAbsoluteErrorVsReference": 0.0,
+            "directxUpstreamDelta": 0.0,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 0,
+                "meanAbsoluteErrorBound": 0.5,
+                "meanAbsoluteErrorVsDirectX": 0.0,
+                "sha256": "789587d073ddd84150adc1b7f0ab5302252e1812001a12fb365d0a20a76b2ce8",
+                "upstreamDelta": 0.0
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "MengerJourney": {
+            "directxMeanAbsoluteErrorVsReference": 0.010125506365740741,
+            "directxUpstreamDelta": 1.1587899251248273e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0013211805555555555,
+                "largePixelFractionVsDirectX": 5.4253472222222224e-06,
+                "maxAbsoluteErrorVsDirectX": 36,
+                "meanAbsoluteErrorBound": 0.5202510127314814,
+                "meanAbsoluteErrorVsDirectX": 0.004243706597222222,
+                "sha256": "1541bd2a39ca402601a030c24dbe89dbdb1b7b9c672dd6270713f8063b510794",
+                "upstreamDelta": 1.6435403738884225e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 1.1e-05
+          },
+          "Octagrams": {
+            "directxMeanAbsoluteErrorVsReference": 4.701967592592593e-06,
+            "directxUpstreamDelta": 5.38105698396955e-11,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 2.4956597222222224e-05,
+                "maxAbsoluteErrorVsDirectX": 23,
+                "meanAbsoluteErrorBound": 0.5000094039351852,
+                "meanAbsoluteErrorVsDirectX": 0.008766999421296296,
+                "sha256": "b3a4f6f2524ba845f62fffdffa19f31714a0337764258559d338e251215e330f",
+                "upstreamDelta": 1.0036085202563516e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 6e-07
+          },
+          "ProteanClouds": {
+            "directxMeanAbsoluteErrorVsReference": 1.2297453703703704e-05,
+            "directxUpstreamDelta": 1.40735336503819e-10,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5000245949074074,
+                "meanAbsoluteErrorVsDirectX": 2.3148148148148147e-05,
+                "sha256": "33c73a52bc9116ee03287aee79687d98e41468449c7493bf7ad3051ef7e4405b",
+                "upstreamDelta": 2.81470673007638e-10
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "PyramidPattern": {
+            "directxMeanAbsoluteErrorVsReference": 0.046072410300925924,
+            "directxUpstreamDelta": 5.272649382115578e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.00449609375,
+                "largePixelFractionVsDirectX": 0.0016644965277777778,
+                "maxAbsoluteErrorVsDirectX": 60,
+                "meanAbsoluteErrorBound": 0.5921448206018518,
+                "meanAbsoluteErrorVsDirectX": 0.12938368055555555,
+                "sha256": "c807a50cbb1d41738b97935ae083ada3d96293494930221dc450a69c2d349def",
+                "upstreamDelta": 1.9872119263561452e-06
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00021
+          },
+          "TerracedHills": {
+            "directxMeanAbsoluteErrorVsReference": 0.019874855324074073,
+            "directxUpstreamDelta": 2.2745313943778982e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0010130208333333334,
+                "largePixelFractionVsDirectX": 2.8211805555555554e-05,
+                "maxAbsoluteErrorVsDirectX": 121,
+                "meanAbsoluteErrorBound": 0.5397497106481481,
+                "meanAbsoluteErrorVsDirectX": 0.013893229166666667,
+                "sha256": "c81b07bcca60f177fdf02a300de9b2d3ccdd86c5bd2068ee8fb065f8b45e0f0b",
+                "upstreamDelta": 2.77679097471241e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 2.6e-05
+          },
+          "TriangleGridContouring": {
+            "directxMeanAbsoluteErrorVsReference": 0.0006799768518518519,
+            "directxUpstreamDelta": 7.78183625374058e-09,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5013599537037037,
+                "meanAbsoluteErrorVsDirectX": 7.414641203703704e-05,
+                "sha256": "430d9541e88ad6995407aa4c8d0651809087c5d81aef624483c3aab92b3b67af",
+                "upstreamDelta": 7.934989414053558e-09
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.0006
+          },
+          "TwoTiledTruchet": {
+            "directxMeanAbsoluteErrorVsReference": 6.076388888888889e-05,
+            "directxUpstreamDelta": 6.95398133312988e-10,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 5,
+                "meanAbsoluteErrorBound": 0.5001215277777777,
+                "meanAbsoluteErrorVsDirectX": 0.0008275462962962963,
+                "sha256": "c5dc8e508dd03a1322b40a775c03114c470405fe78fd9cb3e1a9244efd7b837e",
+                "upstreamDelta": 1.0141222777481074e-08
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00032
+          }
+        },
+        "status": "passed"
+      },
+      "status": "passed",
+      "translation": {
+        "compile-failed": 4,
+        "translated": 144
+      },
+      "translator": {
+        "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+        "package": "crosstl",
+        "translatorTreeClean": true
+      }
+    },
+    "opengl-mesa-llvmpipe": {
+      "arithmeticExactness": {
+        "contractible": 0,
+        "exactArtifacts": 148,
+        "floatOperations": 32235,
+        "notCompiled": 0,
+        "status": "passed",
+        "tool": {
+          "driver": "llvmpipe (LLVM 20.1.2, 256 bits) 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+          "dump": "MESA_GLSL=dump"
+        }
+      },
+      "cases": {
+        "capabilityGated": 22,
+        "categories": {
+          "cpu-only": {
+            "discovered": 109,
+            "executed": 109,
+            "notRun": 0,
+            "outcomes": {
+              "Passed": 109
+            }
+          },
+          "required-gpu": {
+            "discovered": 3622,
+            "executed": 3622,
+            "notRun": 0,
+            "outcomes": {
+              "NotExecuted": 22,
+              "Passed": 3600
+            }
+          },
+          "windows-specific": {
+            "discovered": 61,
+            "executed": 0,
+            "notRun": 61,
+            "outcomes": {}
+          }
+        },
+        "expected": {
+          "excluded": 61,
+          "inconclusive": 22,
+          "optional": 0,
+          "pass": 3709
+        },
+        "optionalHardwareSkipped": 0,
+        "requiredCasesPassed": 3709,
+        "requiredGpuCasesPassed": 3600
+      },
+      "checks": {
+        "accounting": "passed",
+        "arithmeticExactness": "passed",
+        "categories": "passed",
+        "coverage": "passed",
+        "discoveryParity": "passed",
+        "evidence": "passed",
+        "intrinsicPrecision": "passed",
+        "negativeControls": "passed",
+        "processingImages": "passed",
+        "run": "passed",
+        "shaderImages": "passed"
+      },
+      "device": {
+        "api": "OpenGL 4.5 core",
+        "driver": "4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+        "fp64": true,
+        "hardware": false,
+        "maxThreadsPerGroup": 1024,
+        "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+      },
+      "evidence": {
+        "casesWithDispatch": 440,
+        "casesWithEvidence": 3468,
+        "dispatchedShaders": 116,
+        "gatedCaseNamesWithCapabilityQuery": 28,
+        "hostOnlyCaseNames": 138,
+        "pipelines": 137,
+        "policySha256": "c1e3f7bf5c0dfc1caea8bdde8a130de6888b905611c48d50eeca397617da802c",
+        "records": {
+          "capability": 210,
+          "device": 1,
+          "dispatch": 169684,
+          "pipeline": 137,
+          "readback": 58440,
+          "release": 62154,
+          "resource": 62154
+        },
+        "releasedResources": 62154,
+        "requiredCaseNamesExecuted": 3606,
+        "requiredCaseNamesWithEvidence": 3468,
+        "resources": {
+          "device": 61790,
+          "host": 364
+        },
+        "status": "passed",
+        "translatedShaders": 148
+      },
+      "execution": "software",
+      "host": {
+        "machine": "x86_64",
+        "system": "Linux"
+      },
+      "intrinsicPrecision": {
+        "device": {
+          "architecture": "X64",
+          "hardware": false,
+          "name": "llvmpipe (LLVM 20.1.2, 256 bits)",
+          "os": "Ubuntu 24.04.5 LTS",
+          "runtime": "4.0.0.0"
+        },
+        "functions": {
+          "atan": {
+            "expression": "atan(x)",
+            "identical": 50455,
+            "ulpDistance": {
+              "max": 8388434,
+              "p50": 1,
+              "p99": 1687,
+              "p99.9": 1871
+            }
+          },
+          "atan2": {
+            "expression": "atan2(x, y)",
+            "identical": 6038,
+            "ulpDistance": {
+              "max": 872414885,
+              "p50": 62,
+              "p99": 1597,
+              "p99.9": 1862
+            }
+          },
+          "cos": {
+            "expression": "cos(x)",
+            "identical": 155660,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "div": {
+            "expression": "1.0 / x",
+            "identical": 155658,
+            "ulpDistance": {
+              "max": 2097152,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "dot2": {
+            "expression": "dot(float2(x, y), float2(27.619, 57.583))",
+            "identical": 155657,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 58,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "dot3": {
+            "expression": "dot(float3(x, y, z), float3(0.2126, 0.7152, 0.0722))",
+            "identical": 155658,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 605657,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "exp": {
+            "expression": "exp(x)",
+            "identical": 118771,
+            "ulpDistance": {
+              "max": 3,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 3
+            }
+          },
+          "exp2": {
+            "expression": "exp2(x)",
+            "identical": 120142,
+            "ulpDistance": {
+              "max": 3,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 3
+            }
+          },
+          "frac": {
+            "expression": "frac(x)",
+            "identical": 155658,
+            "ulpDistance": {
+              "max": 1065353216,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "length2": {
+            "expression": "length(float2(x, y))",
+            "identical": 155660,
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "lerp": {
+            "expression": "lerp(x, y, frac(z))",
+            "identical": 155657,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 1,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "log": {
+            "expression": "log(x)",
+            "identical": 144061,
+            "ulpDistance": {
+              "max": 1020260556,
+              "p50": 0,
+              "p99": 2,
+              "p99.9": 6
+            }
+          },
+          "log2": {
+            "expression": "log2(x)",
+            "identical": 141383,
+            "ulpDistance": {
+              "max": 1015152640,
+              "p50": 0,
+              "p99": 1,
+              "p99.9": 6
+            }
+          },
+          "mad": {
+            "expression": "mad(x, 27.619, y)",
+            "identical": 155657,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 28,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "multiply-add": {
+            "expression": "x * 27.619 + y",
+            "identical": 155657,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 28,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "normalize3": {
+            "expression": "normalize(float3(x, y, z)).x",
+            "identical": 155659,
+            "ulpDistance": {
+              "max": 0,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "pow": {
+            "expression": "pow(abs(x), frac(y) * 4.0)",
+            "identical": 94974,
+            "ulpDistance": {
+              "max": 1065353215,
+              "p50": 0,
+              "p99": 16,
+              "p99.9": 39
+            }
+          },
+          "pow-0.4545": {
+            "expression": "pow(abs(x), 0.4545)",
+            "identical": 51406,
+            "ulpDistance": {
+              "max": 580600162,
+              "p50": 1,
+              "p99": 5,
+              "p99.9": 8
+            }
+          },
+          "pow-2.2": {
+            "expression": "pow(abs(x), 2.2)",
+            "identical": 47787,
+            "ulpDistance": {
+              "max": 84,
+              "p50": 1,
+              "p99": 28,
+              "p99.9": 42
+            }
+          },
+          "rcp": {
+            "expression": "rcp(x)",
+            "identical": 155658,
+            "ulpDistance": {
+              "max": 2097152,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "rsqrt": {
+            "expression": "rsqrt(x)",
+            "identical": 155658,
+            "ulpDistance": {
+              "max": 449510157,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "sin": {
+            "expression": "sin(x)",
+            "identical": 155659,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpDistance": {
+              "max": 8388606,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "smoothstep": {
+            "expression": "smoothstep(0.0, 1.0, frac(x))",
+            "identical": 155659,
+            "mismatches": 0,
+            "required": "bit-identical to WARP; subnormal flushing may differ",
+            "ulpDistance": {
+              "max": 1065353216,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "sqrt": {
+            "expression": "sqrt(x)",
+            "identical": 155658,
+            "ulpDistance": {
+              "max": 439682291,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          },
+          "tan": {
+            "expression": "tan(x)",
+            "identical": 155659,
+            "mismatches": 0,
+            "required": "bit-identical to WARP",
+            "ulpDistance": {
+              "max": 8388606,
+              "p50": 0,
+              "p99": 0,
+              "p99.9": 0
+            }
+          }
+        },
+        "inputs": 155660,
+        "referenceDevice": {
+          "architecture": "X64",
+          "hardware": false,
+          "name": "Microsoft Basic Render Driver",
+          "os": "Microsoft Windows 10.0.26100",
+          "runtime": "4.0.0.0"
+        },
+        "status": "passed"
+      },
+      "negativeControls": {
+        "faults": {
+          "corrupt-guard": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer"
+            ],
+            "status": "passed"
+          },
+          "corrupt-readback": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+            ],
+            "status": "passed"
+          },
+          "omit-dispatch": {
+            "cases": 10,
+            "failed": 10,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_GroupSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D",
+              "ComputeSharp.Tests.ShadersTests.ContouredLayers"
+            ],
+            "status": "passed"
+          },
+          "perturb-constants": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchSize",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.ShaderMembersTests.BoolInstanceFields"
+            ],
+            "status": "passed"
+          },
+          "perturb-unorm-scales": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.DispatchTests.Verify_DispatchAsPixelShader",
+              "ComputeSharp.Tests.ComputeContextTests.Transition_ReadWriteTexture2D_Normalized",
+              "ComputeSharp.Tests.Texture2DTests.SampleFromSourceTexture_ComputeShader"
+            ],
+            "status": "passed"
+          },
+          "swap-bindings": {
+            "cases": 6,
+            "failed": 6,
+            "methods": [
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadOnlyBuffer",
+              "ComputeSharp.Tests.BufferTests.Dispatch_ReadWriteBuffer",
+              "ComputeSharp.Tests.Texture2DTests.Dispatch_ReadWriteTexture2D"
+            ],
+            "status": "passed"
+          }
+        },
+        "status": "passed"
+      },
+      "processingImages": {
+        "methods": {
+          "ComputeSharp.Tests.ImageProcessingTests.BokehBlur": {
+            "directxUpstreamDelta": 1.3212766897482922e-06,
+            "largePixelFractionBound": 0.010810956790123456,
+            "largePixelFractionVsDirectX": 0.0,
+            "meanAbsoluteErrorBound": 0.7309063143004115,
+            "meanAbsoluteErrorVsDirectX": 4.21167695473251e-05,
+            "upstreamDelta": 1.3210375316601157e-06,
+            "upstreamThreshold": 9e-06
+          },
+          "ComputeSharp.Tests.ImageProcessingTests.GaussianBlur": {
+            "directxUpstreamDelta": 4.005292723024263e-06,
+            "largePixelFractionBound": 0.03285763888888889,
+            "largePixelFractionVsDirectX": 0.0,
+            "meanAbsoluteErrorBound": 1.1999649562757202,
+            "meanAbsoluteErrorVsDirectX": 3.825874485596708e-05,
+            "upstreamDelta": 4.005163945592168e-06,
+            "upstreamThreshold": 4.6e-06
+          }
+        },
+        "status": "passed"
+      },
+      "shaderImages": {
+        "casesCompared": 52,
+        "casesExecuted": 52,
+        "shaders": {
+          "ColorfulInfinity": {
+            "directxMeanAbsoluteErrorVsReference": 6.872106481481481e-06,
+            "directxUpstreamDelta": 7.86462174580165e-11,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.500013744212963,
+                "meanAbsoluteErrorVsDirectX": 1.4467592592592593e-05,
+                "sha256": "8ce350d2133021ca1942ec986e566171fe8af7e205758e7a2c128874588c6e02",
+                "upstreamDelta": 1.614317095190865e-10
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "ContouredLayers": {
+            "directxMeanAbsoluteErrorVsReference": 7.436741898148148,
+            "directxUpstreamDelta": 8.510805559794172e-05,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.7734066840277778,
+                "largePixelFractionVsDirectX": 0.00025065104166666665,
+                "maxAbsoluteErrorVsDirectX": 80,
+                "meanAbsoluteErrorBound": 15.373483796296297,
+                "meanAbsoluteErrorVsDirectX": 0.041774088541666664,
+                "sha256": "81cebfbefb50c79ebf05755fe468aa03c58ac84a51287b843cd7c01312b8a865",
+                "upstreamDelta": 8.52889708730174e-05
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.000703
+          },
+          "ExtrudedTruchetPattern": {
+            "directxMeanAbsoluteErrorVsReference": 0.002298538773148148,
+            "directxUpstreamDelta": 2.630509010240499e-08,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0010303819444444444,
+                "largePixelFractionVsDirectX": 0.00026258680555555557,
+                "maxAbsoluteErrorVsDirectX": 210,
+                "meanAbsoluteErrorBound": 0.5045970775462963,
+                "meanAbsoluteErrorVsDirectX": 0.12212854456018518,
+                "sha256": "43231f803eebf8b4a11c55a1ce0458e9ca958973a2c072a4d94d3478b1e63841",
+                "upstreamDelta": 1.397071406924205e-06
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00011
+          },
+          "FourColorGradient": {
+            "directxMeanAbsoluteErrorVsReference": 9.003360821759259,
+            "directxUpstreamDelta": 0.00010303685994231241,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.6984240451388889,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 18.506721643518517,
+                "meanAbsoluteErrorVsDirectX": 1.8807870370370372e-05,
+                "sha256": "f97007069c60ffb51992ed7f143893721854ad842082184caf924cb329156a88",
+                "upstreamDelta": 0.00010303698412055052
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00021
+          },
+          "FractalTiling": {
+            "directxMeanAbsoluteErrorVsReference": 0.00035951967592592595,
+            "directxUpstreamDelta": 4.114438955435179e-09,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5007190393518518,
+                "meanAbsoluteErrorVsDirectX": 6.510416666666667e-06,
+                "sha256": "34efd99454af3b0802aab8e9832e6e5f0005498f73da8cc4f9c3e3777e2de0d5",
+                "upstreamDelta": 4.1061604062290715e-09
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 5e-07
+          },
+          "HelloWorld": {
+            "directxMeanAbsoluteErrorVsReference": 0.0,
+            "directxUpstreamDelta": 0.0,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 0,
+                "meanAbsoluteErrorBound": 0.5,
+                "meanAbsoluteErrorVsDirectX": 0.0,
+                "sha256": "789587d073ddd84150adc1b7f0ab5302252e1812001a12fb365d0a20a76b2ce8",
+                "upstreamDelta": 0.0
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "MengerJourney": {
+            "directxMeanAbsoluteErrorVsReference": 0.010125506365740741,
+            "directxUpstreamDelta": 1.1587899251248273e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0013211805555555555,
+                "largePixelFractionVsDirectX": 5.4253472222222224e-06,
+                "maxAbsoluteErrorVsDirectX": 51,
+                "meanAbsoluteErrorBound": 0.5202510127314814,
+                "meanAbsoluteErrorVsDirectX": 0.00416847511574074,
+                "sha256": "62d47b19db01564b2e2ca8d6c2b393e54b40de8d00923acd215b6e91938fd661",
+                "upstreamDelta": 1.6350134682061324e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 1.1e-05
+          },
+          "Octagrams": {
+            "directxMeanAbsoluteErrorVsReference": 4.701967592592593e-06,
+            "directxUpstreamDelta": 5.38105698396955e-11,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 6.510416666666667e-06,
+                "maxAbsoluteErrorVsDirectX": 23,
+                "meanAbsoluteErrorBound": 0.5000094039351852,
+                "meanAbsoluteErrorVsDirectX": 0.002607783564814815,
+                "sha256": "4c17017496b039baa549aaf0e7555e7ac7186a5693737d40e41ca52a444b3f3d",
+                "upstreamDelta": 2.9889701908649326e-08
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 6e-07
+          },
+          "ProteanClouds": {
+            "directxMeanAbsoluteErrorVsReference": 1.2297453703703704e-05,
+            "directxUpstreamDelta": 1.40735336503819e-10,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5000245949074074,
+                "meanAbsoluteErrorVsDirectX": 2.0616319444444445e-05,
+                "sha256": "7d2357a53b3c5b32f63c010311e55fec25b586ac723317e920b1c4bb46ee8020",
+                "upstreamDelta": 2.359386523740495e-10
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 4e-07
+          },
+          "PyramidPattern": {
+            "directxMeanAbsoluteErrorVsReference": 0.046072410300925924,
+            "directxUpstreamDelta": 5.272649382115578e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.00449609375,
+                "largePixelFractionVsDirectX": 0.0016644965277777778,
+                "maxAbsoluteErrorVsDirectX": 60,
+                "meanAbsoluteErrorBound": 0.5921448206018518,
+                "meanAbsoluteErrorVsDirectX": 0.12938404224537037,
+                "sha256": "a6c964f140759244728afef2153b35603a8901ddd6454c46286158cb6ff893b6",
+                "upstreamDelta": 1.9872243441799547e-06
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00021
+          },
+          "TerracedHills": {
+            "directxMeanAbsoluteErrorVsReference": 0.019874855324074073,
+            "directxUpstreamDelta": 2.2745313943778982e-07,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.0010130208333333334,
+                "largePixelFractionVsDirectX": 2.712673611111111e-05,
+                "maxAbsoluteErrorVsDirectX": 121,
+                "meanAbsoluteErrorBound": 0.5397497106481481,
+                "meanAbsoluteErrorVsDirectX": 0.013883101851851851,
+                "sha256": "b0888923ea74c4cb7796cb59fbe8c0f5c4a9808db2c111b36306f81d0b06eb0c",
+                "upstreamDelta": 2.774555766426761e-07
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 2.6e-05
+          },
+          "TriangleGridContouring": {
+            "directxMeanAbsoluteErrorVsReference": 0.0006799768518518519,
+            "directxUpstreamDelta": 7.78183625374058e-09,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 1,
+                "meanAbsoluteErrorBound": 0.5013599537037037,
+                "meanAbsoluteErrorVsDirectX": 6.872106481481482e-05,
+                "sha256": "8767dee834ff0c27f46f5747af39ed0d19f26ebf3f8efb6f4da76df2363cd59f",
+                "upstreamDelta": 7.914293041038291e-09
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.0006
+          },
+          "TwoTiledTruchet": {
+            "directxMeanAbsoluteErrorVsReference": 6.076388888888889e-05,
+            "directxUpstreamDelta": 6.95398133312988e-10,
+            "outputs": [
+              {
+                "largePixelFractionBound": 0.001,
+                "largePixelFractionVsDirectX": 0.0,
+                "maxAbsoluteErrorVsDirectX": 5,
+                "meanAbsoluteErrorBound": 0.5001215277777777,
+                "meanAbsoluteErrorVsDirectX": 0.0008998842592592592,
+                "sha256": "d8ce26e57bf5ba8c90eebcd80099269b7ddfd0ee9d6a845576a100a9168af45c",
+                "upstreamDelta": 1.0969077698091776e-08
+              }
+            ],
+            "size": [
+              1280,
+              720
+            ],
+            "upstreamThreshold": 0.00032
+          }
+        },
+        "status": "passed"
+      },
+      "status": "passed",
+      "translation": {
+        "translated": 148
+      },
+      "translator": {
+        "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+        "package": "crosstl",
+        "translatorTreeClean": true
+      }
+    }
+  },
+  "provenance": {
+    "sourceCommit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39407200030/attempts/1"
+  },
+  "retained": {
+    "ComputeSharp.Tests.DeviceLost": {
+      "contractSHA256": "dbbd2e039f6fbcafc969ffe0a0d6a833e11ecdc06317a5c62b0d5e1b5f0f0d69",
+      "countedAsTranslatedExecution": false,
+      "kind": "mstest",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "windows-specific": {
+                "discovered": 43,
+                "executed": 43,
+                "notRun": 0,
+                "outcomes": {
+                  "NotExecuted": 20,
+                  "Passed": 23
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 20,
+              "pass": 23
+            },
+            "optionalHardwareSkipped": 20,
+            "requiredCasesPassed": 23,
+            "requiredGpuCasesPassed": 0
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "runs": "passed"
+          },
+          "execution": "software",
+          "selectedCases": {
+            "DeviceDisposalTests": 13,
+            "DeviceLostTests": 28,
+            "GetDefaultDeviceTests": 2,
+            "upstream-DeviceDisposal": 0,
+            "upstream-DeviceLost": 0,
+            "upstream-GetDefaultDevice": 0
+          },
+          "status": "passed"
+        }
+      },
+      "scope": "windows-specific",
+      "status": "passed"
+    },
+    "ComputeSharp.Tests.SourceGenerators": {
+      "contractSHA256": "35e9f33519997178c7daf7056b8c9e2cd135d5185e060f2db8f8b300481561e6",
+      "countedAsTranslatedExecution": false,
+      "kind": "mstest",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "cpu-only": {
+                "discovered": 110,
+                "executed": 110,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 110
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 110
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 110,
+            "requiredGpuCasesPassed": 0
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "runs": "passed"
+          },
+          "execution": "software",
+          "selectedCases": {
+            "SourceGenerators": 110
+          },
+          "status": "passed"
+        }
+      },
+      "scope": "cpu-only",
+      "status": "passed"
+    }
+  },
+  "schemaVersion": 1,
+  "status": "passed",
+  "suites": {
+    "ComputeSharp.Tests.DisableDynamicCompilation": {
+      "contractSHA256": "9ced23face115d0ec2a0bc09de218730585486988f474cbc0b3e2d7a01c20f73",
+      "evidencePolicySHA256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+      "kind": "mstest",
+      "negativeControlsSHA256": "56b942084c518af7a03fcc7c3f43290b18c46b85785f2d2845650b1eafd4fdd2",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 4,
+                "executed": 4,
+                "notRun": 0,
+                "outcomes": {
+                  "NotExecuted": 2,
+                  "Passed": 2
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 2,
+              "pass": 2
+            },
+            "optionalHardwareSkipped": 2,
+            "requiredCasesPassed": 2,
+            "requiredGpuCasesPassed": 2
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed"
+          },
+          "execution": "software",
+          "status": "passed"
+        },
+        "metal-apple-gpu": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 2,
+            "floatOperations": 13,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "compiler": "Apple metal version 32023.620 (metalfe-32023.620)",
+              "flags": [
+                "-fmetal-math-mode=safe",
+                "-fmetal-math-fp32-functions=fast",
+                "-O2"
+              ]
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 4,
+                "executed": 4,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 4
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 4
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 4,
+            "requiredGpuCasesPassed": 4
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "Metal",
+            "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+            "fp64": false,
+            "hardware": true,
+            "maxThreadsPerGroup": 1024,
+            "name": "Apple Paravirtual device"
+          },
+          "evidence": {
+            "casesWithDispatch": 4,
+            "casesWithEvidence": 4,
+            "dispatchedShaders": 2,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 2,
+            "policySha256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+            "records": {
+              "device": 1,
+              "dispatch": 4,
+              "pipeline": 2,
+              "readback": 4,
+              "release": 4,
+              "resource": 4
+            },
+            "releasedResources": 4,
+            "requiredCaseNamesExecuted": 4,
+            "requiredCaseNamesWithEvidence": 4,
+            "resources": {
+              "device": 4
+            },
+            "status": "passed",
+            "translatedShaders": 2
+          },
+          "execution": "hardware",
+          "host": {
+            "machine": "arm64",
+            "system": "Darwin"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-readback": {
+                "cases": 4,
+                "failed": 4,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "omit-dispatch": {
+                "cases": 4,
+                "failed": 4,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "perturb-constants": {
+                "cases": 2,
+                "failed": 2,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "perturb-unorm-scales": {
+                "cases": 2,
+                "failed": 2,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 2
+          },
+          "translator": {
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        },
+        "opengl-mesa-llvmpipe": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 2,
+            "floatOperations": 5,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "driver": "llvmpipe (LLVM 20.1.2, 256 bits) 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+              "dump": "MESA_GLSL=dump"
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 4,
+                "executed": 4,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 4
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 4
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 4,
+            "requiredGpuCasesPassed": 4
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "OpenGL 4.5 core",
+            "driver": "4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+            "fp64": true,
+            "hardware": false,
+            "maxThreadsPerGroup": 1024,
+            "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+          },
+          "evidence": {
+            "casesWithDispatch": 4,
+            "casesWithEvidence": 4,
+            "dispatchedShaders": 2,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 2,
+            "policySha256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+            "records": {
+              "device": 1,
+              "dispatch": 4,
+              "pipeline": 2,
+              "readback": 4,
+              "release": 4,
+              "resource": 4
+            },
+            "releasedResources": 4,
+            "requiredCaseNamesExecuted": 4,
+            "requiredCaseNamesWithEvidence": 4,
+            "resources": {
+              "device": 4
+            },
+            "status": "passed",
+            "translatedShaders": 2
+          },
+          "execution": "software",
+          "host": {
+            "machine": "x86_64",
+            "system": "Linux"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-readback": {
+                "cases": 4,
+                "failed": 4,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "omit-dispatch": {
+                "cases": 4,
+                "failed": 4,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok",
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "perturb-constants": {
+                "cases": 2,
+                "failed": 2,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.ComputeShader_Test_Ok"
+                ],
+                "status": "passed"
+              },
+              "perturb-unorm-scales": {
+                "cases": 2,
+                "failed": 2,
+                "methods": [
+                  "ComputeSharp.Tests.DisableDynamicCompilation.DispatchTests.PixelShader_Test_Ok"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 2
+          },
+          "translator": {
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        }
+      },
+      "status": "passed"
+    },
+    "ComputeSharp.Tests.GlobalStatements": {
+      "contractSHA256": "576a385e621a8f29d7b8b0f4ff52756457784ff5609a0fe4e4ba28fb04975c30",
+      "evidencePolicySHA256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+      "kind": "program",
+      "negativeControlsSHA256": "392341037168ae30763058317889831af4c85e7d6ef1fdabbc6cd21264058621",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 1,
+                "executed": 1,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 1
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 1
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 1,
+            "requiredGpuCasesPassed": 1
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed"
+          },
+          "execution": "software",
+          "status": "passed"
+        },
+        "metal-apple-gpu": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 1,
+            "floatOperations": 2,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "compiler": "Apple metal version 32023.620 (metalfe-32023.620)",
+              "flags": [
+                "-fmetal-math-mode=safe",
+                "-fmetal-math-fp32-functions=fast",
+                "-O2"
+              ]
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 1,
+                "executed": 1,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 1
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 1
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 1,
+            "requiredGpuCasesPassed": 1
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "Metal",
+            "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+            "fp64": false,
+            "hardware": true,
+            "maxThreadsPerGroup": 1024,
+            "name": "Apple Paravirtual device"
+          },
+          "evidence": {
+            "casesWithDispatch": 1,
+            "casesWithEvidence": 1,
+            "dispatchedShaders": 1,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 1,
+            "policySha256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+            "records": {
+              "device": 1,
+              "dispatch": 1,
+              "pipeline": 1,
+              "readback": 1,
+              "release": 1,
+              "resource": 1
+            },
+            "releasedResources": 1,
+            "requiredCaseNamesExecuted": 1,
+            "requiredCaseNamesWithEvidence": 1,
+            "resources": {
+              "device": 1
+            },
+            "status": "passed",
+            "translatedShaders": 1
+          },
+          "execution": "hardware",
+          "host": {
+            "machine": "arm64",
+            "system": "Darwin"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-guard": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "corrupt-readback": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "omit-dispatch": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "perturb-constants": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 1
+          },
+          "translator": {
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        },
+        "opengl-mesa-llvmpipe": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 1,
+            "floatOperations": 1,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "driver": "llvmpipe (LLVM 20.1.2, 256 bits) 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+              "dump": "MESA_GLSL=dump"
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "required-gpu": {
+                "discovered": 1,
+                "executed": 1,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 1
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 1
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 1,
+            "requiredGpuCasesPassed": 1
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "OpenGL 4.5 core",
+            "driver": "4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+            "fp64": true,
+            "hardware": false,
+            "maxThreadsPerGroup": 1024,
+            "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+          },
+          "evidence": {
+            "casesWithDispatch": 1,
+            "casesWithEvidence": 1,
+            "dispatchedShaders": 1,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 1,
+            "policySha256": "d7b5430589959a1fb7347e072bd4284f9bf6e5b4d8f2dbc296f370b375514a36",
+            "records": {
+              "device": 1,
+              "dispatch": 1,
+              "pipeline": 1,
+              "readback": 1,
+              "release": 1,
+              "resource": 1
+            },
+            "releasedResources": 1,
+            "requiredCaseNamesExecuted": 1,
+            "requiredCaseNamesWithEvidence": 1,
+            "resources": {
+              "device": 1
+            },
+            "status": "passed",
+            "translatedShaders": 1
+          },
+          "execution": "software",
+          "host": {
+            "machine": "x86_64",
+            "system": "Linux"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-guard": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "corrupt-readback": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "omit-dispatch": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              },
+              "perturb-constants": {
+                "cases": 1,
+                "failed": 1,
+                "methods": [
+                  "Program.<Main>$"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 1
+          },
+          "translator": {
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        }
+      },
+      "status": "passed"
+    },
+    "ComputeSharp.Tests.Internals": {
+      "contractSHA256": "7876e1aaa1b6dde7ba0737852659124746585ed6cab008244115a252f099a865",
+      "evidencePolicySHA256": "39f3b933030ccd4e0b32505b505c6bd8bde7d86929bf41c6b23c2048d8ef5f1e",
+      "kind": "mstest",
+      "negativeControlsSHA256": "47fb2227c714f7028ff2cb24c5feefe5f2b7a8ba31bb155a8ac6701b9d5cec12",
+      "noFloatArithmeticReason": "The Internals shaders exist to exercise generated dispatch-data loaders; their bodies only compare the thread ids with the dispatch size, so no artifact does float arithmetic.",
+      "profiles": {
+        "directx-warp": {
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "cpu-only": {
+                "discovered": 28,
+                "executed": 28,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 28
+                }
+              },
+              "required-gpu": {
+                "discovered": 109,
+                "executed": 109,
+                "notRun": 0,
+                "outcomes": {
+                  "NotExecuted": 51,
+                  "Passed": 58
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 51,
+              "pass": 86
+            },
+            "optionalHardwareSkipped": 51,
+            "requiredCasesPassed": 86,
+            "requiredGpuCasesPassed": 58
+          },
+          "checks": {
+            "accounting": "passed",
+            "categories": "passed",
+            "coverage": "passed"
+          },
+          "execution": "software",
+          "status": "passed"
+        },
+        "metal-apple-gpu": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 3,
+            "floatOperations": 0,
+            "notCompiled": 4,
+            "status": "passed",
+            "tool": {
+              "compiler": "Apple metal version 32023.620 (metalfe-32023.620)",
+              "flags": [
+                "-fmetal-math-mode=safe",
+                "-fmetal-math-fp32-functions=fast",
+                "-O2"
+              ]
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "cpu-only": {
+                "discovered": 28,
+                "executed": 28,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 28
+                }
+              },
+              "required-gpu": {
+                "discovered": 109,
+                "executed": 109,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 109
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 137
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 137,
+            "requiredGpuCasesPassed": 109
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "Metal",
+            "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+            "fp64": false,
+            "hardware": true,
+            "maxThreadsPerGroup": 1024,
+            "name": "Apple Paravirtual device"
+          },
+          "evidence": {
+            "casesWithDispatch": 0,
+            "casesWithEvidence": 109,
+            "dispatchedShaders": 0,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 0,
+            "policySha256": "39f3b933030ccd4e0b32505b505c6bd8bde7d86929bf41c6b23c2048d8ef5f1e",
+            "records": {
+              "device": 1,
+              "readback": 66,
+              "release": 115,
+              "resource": 115
+            },
+            "releasedResources": 115,
+            "requiredCaseNamesExecuted": 109,
+            "requiredCaseNamesWithEvidence": 109,
+            "resources": {
+              "device": 79,
+              "host": 36
+            },
+            "status": "passed",
+            "translatedShaders": 3
+          },
+          "execution": "hardware",
+          "host": {
+            "machine": "arm64",
+            "system": "Darwin"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-readback": {
+                "cases": 42,
+                "failed": 42,
+                "methods": [
+                  "ComputeSharp.Tests.Internals.DebugViewTests.BufferDebugView_NotNull",
+                  "ComputeSharp.Tests.Internals.DebugViewTests.Texture2DDebugView_NotNull",
+                  "ComputeSharp.Tests.Internals.DebugViewTests.Texture3DDebugView_WithTPixel_NotNull"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "compile-failed": 3,
+            "translated": 3,
+            "translation-failed": 1
+          },
+          "translator": {
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        },
+        "opengl-mesa-llvmpipe": {
+          "arithmeticExactness": {
+            "contractible": 0,
+            "exactArtifacts": 7,
+            "floatOperations": 0,
+            "notCompiled": 0,
+            "status": "passed",
+            "tool": {
+              "driver": "llvmpipe (LLVM 20.1.2, 256 bits) 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+              "dump": "MESA_GLSL=dump"
+            }
+          },
+          "cases": {
+            "capabilityGated": 0,
+            "categories": {
+              "cpu-only": {
+                "discovered": 28,
+                "executed": 28,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 28
+                }
+              },
+              "required-gpu": {
+                "discovered": 109,
+                "executed": 109,
+                "notRun": 0,
+                "outcomes": {
+                  "Passed": 109
+                }
+              }
+            },
+            "expected": {
+              "excluded": 0,
+              "inconclusive": 0,
+              "optional": 0,
+              "pass": 137
+            },
+            "optionalHardwareSkipped": 0,
+            "requiredCasesPassed": 137,
+            "requiredGpuCasesPassed": 109
+          },
+          "checks": {
+            "accounting": "passed",
+            "arithmeticExactness": "passed",
+            "categories": "passed",
+            "coverage": "passed",
+            "discoveryParity": "passed",
+            "evidence": "passed",
+            "negativeControls": "passed",
+            "run": "passed"
+          },
+          "device": {
+            "api": "OpenGL 4.5 core",
+            "driver": "4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4; GLSL 4.50; vendor Mesa; EGL 1.5 Mesa Project (EGL_MESA_platform_surfaceless); software execution, threads all processors; formatted image loads supported; subgroup size not exposed (reported as 1)",
+            "fp64": true,
+            "hardware": false,
+            "maxThreadsPerGroup": 1024,
+            "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+          },
+          "evidence": {
+            "casesWithDispatch": 0,
+            "casesWithEvidence": 109,
+            "dispatchedShaders": 0,
+            "gatedCaseNamesWithCapabilityQuery": 0,
+            "hostOnlyCaseNames": 0,
+            "pipelines": 0,
+            "policySha256": "39f3b933030ccd4e0b32505b505c6bd8bde7d86929bf41c6b23c2048d8ef5f1e",
+            "records": {
+              "device": 1,
+              "readback": 66,
+              "release": 115,
+              "resource": 115
+            },
+            "releasedResources": 115,
+            "requiredCaseNamesExecuted": 109,
+            "requiredCaseNamesWithEvidence": 109,
+            "resources": {
+              "device": 79,
+              "host": 36
+            },
+            "status": "passed",
+            "translatedShaders": 7
+          },
+          "execution": "software",
+          "host": {
+            "machine": "x86_64",
+            "system": "Linux"
+          },
+          "negativeControls": {
+            "faults": {
+              "corrupt-readback": {
+                "cases": 42,
+                "failed": 42,
+                "methods": [
+                  "ComputeSharp.Tests.Internals.DebugViewTests.BufferDebugView_NotNull",
+                  "ComputeSharp.Tests.Internals.DebugViewTests.Texture2DDebugView_NotNull",
+                  "ComputeSharp.Tests.Internals.DebugViewTests.Texture3DDebugView_WithTPixel_NotNull"
+                ],
+                "status": "passed"
+              }
+            },
+            "status": "passed"
+          },
+          "status": "passed",
+          "translation": {
+            "translated": 7
+          },
+          "translator": {
+            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "package": "crosstl",
+            "translatorTreeClean": true
+          }
+        }
+      },
+      "status": "passed"
+    }
+  },
+  "upstreamCommit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a"
+}

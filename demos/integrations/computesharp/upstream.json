@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/Sergio0694/ComputeSharp.git",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "testProject": "tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj",
+  "sdkVersion": "10.0.400",
+  "targets": ["metal", "opengl"],
+  "coverageFrozen": true,
+  "nativeExecutionQualified": true
+}

@@ -871,7 +871,21 @@ class SlangToCrossGLConverter:
             return qualifier
         if getattr(func, "numthreads", None):
             return "compute"
-        return qualifier
+        return self.stage_from_result_semantic(func) or qualifier
+
+    @staticmethod
+    def stage_from_result_semantic(func):
+        """Return the stage that a result semantic implies for an entry point without ``[shader(...)]``.
+
+        Without the attribute the compiler's ``-stage`` option chooses the stage. A result bound to ``SV_Target``
+        is a fragment output and one bound to ``SV_Position`` a vertex output, as the HLSL import infers them.
+        """
+        semantic = str(getattr(func, "semantic", None) or "").strip().upper()
+        if semantic.startswith("SV_TARGET"):
+            return "fragment"
+        if semantic == "SV_POSITION":
+            return "vertex"
+        return None
 
     def format_import_path(self, path):
         path = str(path)

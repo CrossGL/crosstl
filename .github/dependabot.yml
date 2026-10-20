@@ -4,7 +4,23 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    labels: [dependencies]
     groups:
       github-actions:
         patterns:
           - "*"
+  # Python dependencies get security updates only; this entry sets their labels.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels: [dependencies]
+  # Likewise for the NuGet packages of the ComputeSharp demo.
+  - package-ecosystem: nuget
+    directories:
+      - /demos/integrations/computesharp/**
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels: [dependencies]

@@ -1,0 +1,15 @@
+<Project>
+  <!-- Exact legacy baseline only; see README.md before using these exceptions. -->
+  <!-- The companion test projects only see ImageSharp through the portable runtime. -->
+  <ItemGroup Condition="('$(MSBuildProjectName)' == 'ComputeSharp.Tests' or '$(MSBuildProjectName)' == 'ComputeSharp.Tests.DisableDynamicCompilation' or '$(MSBuildProjectName)' == 'ComputeSharp.Tests.GlobalStatements' or '$(MSBuildProjectName)' == 'ComputeSharp.Tests.Internals' or '$(MSBuildProjectName)' == 'ComputeSharp.Portable' or '$(MSBuildProjectName)' == 'IntrinsicProbe') and '$(CrossTLTrustedCorpusBaseline)' == 'true'">
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-gwg2-r3hj-4w44" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j3p4-wp97-rph4" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j9gm-c75j-xc9q" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-jjfr-hcj7-qf5w" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-wmxv-xphr-5c9g" />
+  </ItemGroup>
+  <!-- The source generator tests reach System.Security.Cryptography.Pkcs through the Roslyn test packages. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'ComputeSharp.Tests.SourceGenerators' and '$(CrossTLTrustedCorpusBaseline)' == 'true'">
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2fmv-rv2c-59x7" />
+  </ItemGroup>
+</Project>

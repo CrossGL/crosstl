@@ -87,53 +87,50 @@ Built-in targets
 Built-in sources
 ----------------
 
+Every source below except CrossGL has a reverse generator that emits CrossGL,
+so its programs can be translated through CrossGL to the targets above.
+
 .. list-table::
    :header-rows: 1
 
    * - Source
      - Registry name
      - Extensions
-     - Reverse CrossGL generation
    * - CrossGL
      - ``cgl``
      - ``.cgl``
-     - Native source format
    * - DirectX / HLSL
      - ``directx``
-     - ``.hlsl``
-     - Yes
+     - ``.hlsl``, ``.hlsli``, ``.fx``, ``.fxh``
    * - OpenGL / GLSL
      - ``opengl``
-     - ``.glsl``
-     - Yes
+     - ``.glsl`` and stage extensions such as ``.vert``, ``.frag``,
+       ``.comp``, ``.geom``, ``.tesc``, ``.tese``, ``.mesh``, ``.task`` and
+       ``.rgen``
    * - Metal
      - ``metal``
-     - ``.metal``
-     - Yes
+     - ``.metal``, ``.msl``
    * - Vulkan SPIR-V
      - ``vulkan``
      - ``.spvasm``
-     - Yes
    * - CUDA
      - ``cuda``
      - ``.cu``, ``.cuh``, ``.cuda``
-     - Yes
    * - HIP
      - ``hip``
      - ``.hip``
-     - Yes
+   * - OpenCL C
+     - ``opencl``
+     - ``.cl``, ``.opencl``
    * - Mojo
      - ``mojo``
      - ``.mojo``
-     - Yes
    * - Rust
      - ``rust``
      - ``.rs``, ``.rust``
-     - Yes
    * - Slang
      - ``slang``
-     - ``.slang``
-     - Yes
+     - ``.slang``, ``.slangh``
 
 Target-only sources
 -------------------

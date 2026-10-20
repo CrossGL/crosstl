@@ -925,13 +925,13 @@ def test_resource_read_proof_excludes_observable_local_storage(qualifier):
 
 
 def test_resource_aggregate_gate_requires_native_execution():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate indexed DirectX gather and resource aggregates"
     )
     assert f'{REQUIRE_ENV}: "1"' in step
@@ -950,13 +950,13 @@ def test_resource_aggregate_gate_requires_native_execution():
     assert directx_job.index(
         "Initialize DirectX execution evidence"
     ) < directx_job.index("Install CrossTL and runtime dependencies")
-    install = ci_coverage.workflow_step_section(
+    install = workflow_text.workflow_step_section(
         workflow, "Install CrossTL and runtime dependencies"
     )
     assert "set -euo pipefail" in install
     assert "tee .mlx-gather-directx/dependencies.log" in install
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/**",
         )

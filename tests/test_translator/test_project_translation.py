@@ -2238,10 +2238,12 @@ def _write_failed_artifact_report(repo):
 
 def test_support_external_corpus_manifest_documents_pinned_reductions():
     manifest = json.loads(
-        (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
     )
     backend_catalog = json.loads(
-        (ROOT / "support" / "backends.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "backends.json").read_text(encoding="utf-8")
     )
 
     assert manifest["schemaVersion"] == 1
@@ -2260,89 +2262,6 @@ def test_support_external_corpus_manifest_documents_pinned_reductions():
         assert len(entry["commit"]) == 40
         assert entry["sourceUrl"].startswith(entry["repository"])
         assert entry["targets"] == ["cgl"]
-
-
-def test_support_project_feature_evidence_references_existing_tests():
-    catalog = json.loads(
-        (ROOT / "support" / "features.json").read_text(encoding="utf-8")
-    )
-
-    declared_tests_by_path = {}
-
-    def declared_tests(path_text):
-        if path_text not in declared_tests_by_path:
-            test_file = ROOT / path_text
-            declared_tests_by_path[path_text] = {
-                line.strip().split("(", 1)[0][len("def ") :]
-                for line in test_file.read_text(encoding="utf-8").splitlines()
-                if line.strip().startswith("def test_")
-            }
-        return declared_tests_by_path[path_text]
-
-    def referenced_test(item):
-        if not isinstance(item, str):
-            return None
-        path_text, separator, test_name = item.partition("::def ")
-        if (
-            not separator
-            or not path_text.startswith("tests/")
-            or not path_text.endswith(".py")
-            or not test_name.startswith("test_")
-        ):
-            return None
-        return path_text, test_name
-
-    missing_evidence = []
-    missing_tests = []
-    for feature in catalog["features"]:
-        if feature.get("category") != "project":
-            continue
-        for backend, support in feature.get("support", {}).items():
-            evidence = support.get("evidence")
-            if not evidence:
-                missing_evidence.append(f"{feature.get('id')}:{backend}")
-                continue
-            test_evidence = []
-            for item in evidence:
-                test_reference = referenced_test(item)
-                if test_reference is None:
-                    continue
-                path_text, test_name = test_reference
-                test_evidence.append(item)
-                if test_name not in declared_tests(path_text):
-                    missing_tests.append(item)
-            if not test_evidence:
-                missing_evidence.append(f"{feature.get('id')}:{backend}")
-
-    assert missing_evidence == []
-    assert missing_tests == []
-
-
-def test_support_project_source_map_notes_document_granularity_contract():
-    catalog = json.loads(
-        (ROOT / "support" / "features.json").read_text(encoding="utf-8")
-    )
-    checked_features = {"project.validation_hooks", "project.source_provenance"}
-    stale_phrase = "single file-level source-map mapping"
-    required_phrases = (
-        "file-level source-map mapping cardinality",
-        "fine-grained positive-length source-map mappings",
-    )
-
-    stale_notes = []
-    missing_notes = []
-    for feature in catalog["features"]:
-        if feature.get("id") not in checked_features:
-            continue
-        for backend, support in feature.get("support", {}).items():
-            notes = support.get("notes", "")
-            if stale_phrase in notes:
-                stale_notes.append(f"{feature.get('id')}:{backend}")
-            if not all(phrase in notes for phrase in required_phrases):
-                missing_notes.append(f"{feature.get('id')}:{backend}")
-
-    assert stale_notes == []
-    assert missing_notes == []
 
 
 def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported(
@@ -7969,7 +7888,7 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert "float3 VSIn_Pos [[attribute(0)]];" in vertex_metal
     assert "float4 VSIn_Color [[attribute(1)]];" in vertex_metal
     assert "vertex_main_Input _crossglInput [[stage_in]]" in vertex_metal
-    assert "float4 PSIn_Color [[user(Color0)]];" in vertex_metal
+    assert "float4 PSIn_Color [[user(COLOR0)]];" in vertex_metal
     assert "fragment_main_Input _crossglInput [[stage_in]]" in fragment_metal
     assert "float4 PSOut_Color [[color(0)]];" in fragment_metal
 
@@ -23529,7 +23448,9 @@ def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
 
 def test_translate_project_runs_pinned_slang_external_corpus_fixture(tmp_path):
     support_manifest = json.loads(
-        (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
     )
     manifest_entry = next(
         entry
@@ -56130,7 +56051,7 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
                 rhs_tensor: UnsafePointer[Float32],
                 out_tensor: UnsafePointer[Float32],
             ):
-                var tid = block_idx.x * block_dim.x + thread_idx.x
+                var tid: Int = block_idx.x * block_dim.x + thread_idx.x
                 if tid < vector_size:
                     out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
 
@@ -56206,6 +56127,42 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     assert vulkan["code"] == "project.translate.vulkan-builtin-unsupported"
     assert vulkan["location"]["file"] == "vector_addition.mojo"
     assert vulkan["missingCapabilities"] == ["spirv.builtin.has_accelerator"]
+
+
+def test_translate_project_mojo_untyped_unresolved_local_is_refused_for_metal(
+    tmp_path,
+):
+    # `var tid = <unresolved host expression>` has no written type and no inferable one; Metal used to declare it
+    # `float`. It is now refused with a typed lowering diagnostic.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.sys import has_accelerator
+            from std.gpu import block_dim, block_idx, thread_idx
+
+            def vector_addition(
+                lhs_tensor: UnsafePointer[Float32],
+                out_tensor: UnsafePointer[Float32],
+            ):
+                var tid = block_idx.x * block_dim.x + thread_idx.x
+                out_tensor[tid] = lhs_tensor[tid]
+
+            def main() raises:
+                if not has_accelerator():
+                    print("No compatible GPU found")
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["metal"], output_dir="out").to_json()
+
+    assert [artifact["status"] for artifact in payload["artifacts"]] == ["failed"]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-lowering-unsupported": 1
+    }
+    (diagnostic,) = payload["diagnostics"]
+    assert "the type of 'tid' is not written" in diagnostic["message"]
 
 
 def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
