@@ -1,0 +1,253 @@
+"""Uniformity facts for locals that are reassigned outside loops.
+
+Software subgroup lowering proves that loop bounds and helper arguments are
+uniform across a subgroup. A lexical proof can only use locals that are never
+written. Some kernels instead clamp a bound once, as in
+``int limit = n; if (c) { int q = (group + 1) * 4; limit = min(n, q); }``.
+Every write to such a local is a plain ``name = value;`` reached outside any
+loop, so its fact at each point follows the writes before it: the value is
+uniform after a write of a uniform value, and after a uniform branch when it
+is uniform at the end of every branch.
+
+``followed_locals`` selects these locals. ``ReassignmentFlow`` updates a set of
+uniform names after each statement, given the backend's uniform-expression
+test.
+"""
+
+from ..ast import (
+    AssignmentNode,
+    BlockNode,
+    DoWhileNode,
+    ExpressionStatementNode,
+    ForInNode,
+    ForNode,
+    FunctionCallNode,
+    IdentifierNode,
+    IfNode,
+    LoopNode,
+    PointerType,
+    ReferenceType,
+    UnaryOpNode,
+    VariableNode,
+    WhileNode,
+)
+
+_LOOPS = (ForNode, WhileNode, DoWhileNode, LoopNode, ForInNode)
+_STEPS = {"++", "--", "PRE_INCREMENT", "POST_INCREMENT", "PRE_DECREMENT"}
+_STEPS |= {"POST_DECREMENT"}
+_UNARY_WRITES = _STEPS | {"&", "ADDRESS_OF"}
+
+
+def statement_list(body):
+    if hasattr(body, "statements"):
+        return list(body.statements or [])
+    if isinstance(body, list):
+        return list(body)
+    if body is None:
+        return []
+    return [body]
+
+
+def _expression(statement):
+    if isinstance(statement, ExpressionStatementNode):
+        return getattr(statement, "expression", None)
+    return statement
+
+
+def _plain_write(node, map_operator):
+    target = getattr(node, "target", getattr(node, "left", None))
+    operator = getattr(node, "operator", getattr(node, "op", "="))
+    if isinstance(target, IdentifierNode) and map_operator(operator) == "=":
+        return target.name
+    return None
+
+
+def followed_locals(
+    function,
+    mutable_names,
+    call_mutations,
+    *,
+    walk,
+    map_operator,
+    identifier_names,
+    write_roots,
+    value_type,
+    volatile,
+):
+    """Return the written locals whose writes a flow analysis can follow.
+
+    Each is a value declared once with an initializer, and every write to it
+    is a plain ``name = value;`` statement outside loops. Increments, compound
+    and member writes, address-taking, pointer or reference views and calls
+    that may write it disqualify a name. ``walk`` yields every node below a
+    root, ``identifier_names`` the names an expression reads, ``write_roots``
+    the names an assignment target writes, ``value_type``
+    whether a declared type holds a plain value and ``volatile`` whether a
+    declaration or type is volatile.
+    """
+    body = getattr(function, "body", None)
+    parameters = {
+        parameter.name
+        for parameter in getattr(function, "parameters", []) or []
+        if getattr(parameter, "name", None)
+    }
+    counts = {}
+    declarations = {}
+    for node in walk(body):
+        if isinstance(node, VariableNode) and getattr(node, "name", None):
+            counts[node.name] = counts.get(node.name, 0) + 1
+            declarations[node.name] = node
+    candidates = {
+        name
+        for name, declaration in declarations.items()
+        if counts[name] == 1
+        and name not in parameters
+        and name in mutable_names
+        and getattr(declaration, "initial_value", None) is not None
+        and value_type(declaration.var_type)
+        and not volatile(declaration)
+        and not volatile(declaration.var_type)
+    }
+    if not candidates:
+        return set()
+    followed = set()
+
+    def visit(statements, in_loop):
+        for statement in statement_list(statements):
+            node = _expression(statement)
+            if isinstance(node, AssignmentNode):
+                if not in_loop and _plain_write(node, map_operator):
+                    followed.add(id(node))
+            elif isinstance(node, IfNode):
+                visit(getattr(node, "then_branch", None), in_loop)
+                for branch in getattr(node, "else_if_bodies", []) or []:
+                    visit(branch, in_loop)
+                visit(getattr(node, "else_branch", None), in_loop)
+            elif isinstance(node, _LOOPS):
+                visit(getattr(node, "body", None), True)
+            elif isinstance(node, BlockNode):
+                visit(node, in_loop)
+
+    visit(body, False)
+    for node in walk(body):
+        if isinstance(node, AssignmentNode):
+            if id(node) not in followed:
+                target = getattr(node, "target", getattr(node, "left", None))
+                candidates.difference_update(write_roots(target))
+        elif isinstance(node, UnaryOpNode):
+            operator = getattr(node, "operator", getattr(node, "op", None))
+            if operator in _UNARY_WRITES or map_operator(operator) in _UNARY_WRITES:
+                candidates.difference_update(identifier_names(node.operand))
+        elif isinstance(node, FunctionCallNode):
+            candidates.difference_update(call_mutations.get(id(node), set()))
+        elif isinstance(node, VariableNode) and isinstance(
+            getattr(node, "var_type", None), (PointerType, ReferenceType)
+        ):
+            candidates.difference_update(identifier_names(node.initial_value))
+    return candidates
+
+
+class ReassignmentFlow:
+    """Update uniform-name facts across the writes of ``followed`` locals.
+
+    ``uniform_expression(expression, names, components)`` is the backend's
+    test, ``declares_uniform(declaration, names, components)`` decides a
+    local declared inside a followed branch and ``constant_condition``
+    optionally folds a guard to ``True`` or ``False``.
+    """
+
+    def __init__(
+        self,
+        followed,
+        *,
+        walk,
+        map_operator,
+        uniform_expression,
+        declares_uniform,
+        constant_condition=None,
+    ):
+        self.followed = set(followed)
+        self.walk = walk
+        self.map_operator = map_operator
+        self.uniform_expression = uniform_expression
+        self.declares_uniform = declares_uniform
+        self.constant_condition = constant_condition
+
+    def written(self, root):
+        names = set()
+        for node in self.walk(root):
+            if isinstance(node, AssignmentNode):
+                target = getattr(node, "target", getattr(node, "left", None))
+                if isinstance(target, IdentifierNode):
+                    names.add(target.name)
+            elif isinstance(node, UnaryOpNode) and isinstance(
+                getattr(node, "operand", None), IdentifierNode
+            ):
+                operator = getattr(node, "operator", getattr(node, "op", None))
+                if operator in _STEPS or self.map_operator(operator) in _STEPS:
+                    names.add(node.operand.name)
+        return names
+
+    def follow(self, statement, names, components):
+        """Update ``names`` for the followed writes ``statement`` performs."""
+        written = self.followed & self.written(statement)
+        if not written:
+            return
+        node = _expression(statement)
+        if isinstance(node, AssignmentNode):
+            name = _plain_write(node, self.map_operator)
+            value = getattr(node, "value", getattr(node, "right", None))
+            if name and self.uniform_expression(value, names, components):
+                names.add(name)
+            else:
+                names.difference_update(written)
+            return
+        if isinstance(node, (BlockNode, list)):
+            self.follow_branch(node, names, components)
+            return
+        if isinstance(node, IfNode) and not getattr(node, "else_if_conditions", None):
+            fixed = (
+                self.constant_condition(node.condition)
+                if self.constant_condition is not None
+                else None
+            )
+            if fixed is not None:
+                # A constant guard selects one branch for every invocation.
+                taken = node.then_branch if fixed else node.else_branch
+                self.follow_branch(taken, names, components)
+                return
+            if self.uniform_expression(node.condition, names, components):
+                # Every invocation takes the same branch, so a fact holds
+                # afterwards when it holds at the end of both branches.
+                results = []
+                for branch in (node.then_branch, node.else_branch):
+                    branch_names = set(names)
+                    self.follow_branch(branch, branch_names, components)
+                    results.append(branch_names)
+                names.intersection_update(*results)
+                return
+        names.difference_update(written)
+
+    def follow_branch(self, statements, names, components):
+        """Follow a branch every invocation takes, scoping its declarations.
+
+        A local the branch declares from uniform values makes the writes
+        computed from it uniform. Its fact ends with the branch, so an outer
+        name it shadows keeps its own fact.
+        """
+        components = dict(components)
+        outer = {}
+        for child in statement_list(statements):
+            if isinstance(child, VariableNode) and getattr(child, "name", None):
+                outer.setdefault(child.name, child.name in names)
+                names.discard(child.name)
+                components.pop(child.name, None)
+                if self.declares_uniform(child, names, components):
+                    names.add(child.name)
+                continue
+            self.follow(child, names, components)
+        for name, was_uniform in outer.items():
+            if was_uniform:
+                names.add(name)
+            else:
+                names.discard(name)

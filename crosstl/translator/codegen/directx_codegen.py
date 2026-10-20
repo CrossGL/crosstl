@@ -7089,6 +7089,51 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         reassigned_names = set(reassigned_names) | counter_names
         masked_if_plans = getattr(self, "hlsl_software_subgroup_masked_if_plans", {})
 
+        def declares_uniform(statement, names, components):
+            # Facts are lexical and apply only to locals never written or
+            # passed to a possibly mutating call in this function, or written
+            # only where their writes can be followed.
+            return (
+                (
+                    statement.name not in mutable_names
+                    or statement.name in reassigned_names
+                )
+                and (
+                    self.hlsl_software_subgroup_uniform_returns.value_type(
+                        statement.var_type
+                    )
+                    or statement.name in self.hlsl_software_subgroup_resource_names
+                )
+                and self.hlsl_software_subgroup_uniform_expression(
+                    statement.initial_value, names, components
+                )
+            )
+
+        def follow_branch(statements, names, components):
+            """Follow a branch every invocation takes, scoping its declarations.
+
+            A local the branch declares from uniform values, as MLX's causal
+            attention bound ``int q_max = (tid.x + 1) * BQ + params->qL_off;``,
+            makes the writes computed from it uniform. Its fact ends with the
+            branch, so an outer name it shadows keeps its own fact.
+            """
+            components = dict(components)
+            outer = {}
+            for child in self.hlsl_software_subgroup_statement_list(statements):
+                if isinstance(child, VariableNode) and getattr(child, "name", None):
+                    outer.setdefault(child.name, child.name in names)
+                    names.discard(child.name)
+                    components.pop(child.name, None)
+                    if declares_uniform(child, names, components):
+                        names.add(child.name)
+                    continue
+                apply_reassignments(child, names, components)
+            for name, was_uniform in outer.items():
+                if was_uniform:
+                    names.add(name)
+                else:
+                    names.discard(name)
+
         def apply_reassignments(statement, names, components):
             """Follow the writes of ``reassigned_names`` in ``statement``."""
             written = reassigned_names & self.hlsl_software_subgroup_written_names(
@@ -7121,9 +7166,17 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                     names.discard(name)
                 return
             if isinstance(node, (BlockNode, list)):
-                for child in self.hlsl_software_subgroup_statement_list(node):
-                    apply_reassignments(child, names, components)
+                follow_branch(node, names, components)
                 return
+            if isinstance(node, IfNode) and not getattr(
+                node, "else_if_conditions", None
+            ):
+                fixed = self.hlsl_bool_constant_value(node.condition, fixed_bools)
+                if fixed is not None:
+                    # A constant guard selects one branch for every invocation.
+                    taken = node.then_branch if fixed else node.else_branch
+                    follow_branch(taken, names, components)
+                    return
             if (
                 isinstance(node, IfNode)
                 and not getattr(node, "else_if_conditions", None)
@@ -7136,8 +7189,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 results = []
                 for branch in (node.then_branch, node.else_branch):
                     branch_names = set(names)
-                    for child in self.hlsl_software_subgroup_statement_list(branch):
-                        apply_reassignments(child, branch_names, components)
+                    follow_branch(branch, branch_names, components)
                     results.append(branch_names)
                 merged = set.intersection(*results)
                 names.clear()
@@ -7164,27 +7216,9 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                     apply_reassignments(previous, names, components)
                 previous = statement
                 if isinstance(statement, VariableNode):
-                    # Facts are lexical and apply only to locals never written
-                    # or passed to a possibly mutating call in this function,
-                    # or written only where their writes can be followed.
                     names.discard(statement.name)
                     components.pop(statement.name, None)
-                    if (
-                        (
-                            statement.name not in mutable_names
-                            or statement.name in reassigned_names
-                        )
-                        and (
-                            self.hlsl_software_subgroup_uniform_returns.value_type(
-                                statement.var_type
-                            )
-                            or statement.name
-                            in self.hlsl_software_subgroup_resource_names
-                        )
-                        and self.hlsl_software_subgroup_uniform_expression(
-                            statement.initial_value, names, components
-                        )
-                    ):
+                    if declares_uniform(statement, names, components):
                         names.add(statement.name)
                 has_return = any(
                     isinstance(node, ReturnNode) for node in self.walk_ast(statement)

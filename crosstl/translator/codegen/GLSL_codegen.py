@@ -499,6 +499,7 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
+from .subgroup_reassignments import ReassignmentFlow, followed_locals
 from .texture_lod_clamp import (
     GLSL_LOD_CLAMP_EXTENSION,
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
@@ -6399,25 +6400,54 @@ class GLSLCodeGen(
             )
         )
         arguments = {}
+        analysis = self.glsl_software_subgroup_uniform_returns
+        # Locals clamped outside loops, as a causal attention block bound, stay
+        # uniform where every write before the use is uniform.
+        followed = followed_locals(
+            function,
+            facts["mutable_names"],
+            self.glsl_software_subgroup_call_mutations,
+            walk=self.walk_ast,
+            map_operator=self.map_operator,
+            identifier_names=self.glsl_software_subgroup_expression_identifier_names,
+            write_roots=self.glsl_mutation_target_names,
+            value_type=analysis.value_type,
+            volatile=lambda node: analysis._qualified(node, {"volatile"}),
+        )
+
+        def declares_uniform(statement, names, components):
+            return (
+                (
+                    statement.name not in facts["mutable_names"]
+                    or statement.name in followed
+                )
+                and (
+                    analysis.value_type(statement.var_type)
+                    or statement.name in self.glsl_software_subgroup_resource_names
+                )
+                and self.glsl_software_subgroup_exit_uniform_expression(
+                    statement.initial_value, names, components
+                )
+            )
+
+        flow = ReassignmentFlow(
+            followed,
+            walk=self.walk_ast,
+            map_operator=self.map_operator,
+            uniform_expression=self.glsl_software_subgroup_exit_uniform_expression,
+            declares_uniform=declares_uniform,
+        )
 
         def visit(body, names, components):
+            previous = None
             for statement in self.glsl_software_subgroup_statement_list(body):
+                if previous is not None:
+                    flow.follow(previous, names, components)
+                previous = statement
                 if isinstance(statement, VariableNode):
                     names.discard(statement.name)
                     components.pop(statement.name, None)
-                    if (
-                        statement.name not in facts["mutable_names"]
-                        and (
-                            self.glsl_software_subgroup_uniform_returns.value_type(
-                                statement.var_type
-                            )
-                            or statement.name
-                            in self.glsl_software_subgroup_resource_names
-                        )
-                        and self.glsl_software_subgroup_exit_uniform_expression(
-                            statement.initial_value, names, components
-                        )
-                    ):
+                    if declares_uniform(statement, names, components):
                         names.add(statement.name)
                 if isinstance(statement, BlockNode) or hasattr(statement, "statements"):
                     visit(statement, set(names), dict(components))
