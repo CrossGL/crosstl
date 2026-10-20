@@ -93,7 +93,11 @@ class SpirvBfloat16MathMixin:
         if any(component in FLOATING_COMPONENT_TYPES for component in components):
             return None
         promoted = [
-            self._widen_bfloat16_operand(arg) if component == self.BFLOAT16_TYPE_NAME else arg
+            (
+                self._widen_bfloat16_operand(arg)
+                if component == self.BFLOAT16_TYPE_NAME
+                else arg
+            )
             for arg, component in zip(args, components)
         ]
         result = self.call_builtin_function(function_name, promoted)

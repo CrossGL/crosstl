@@ -16,7 +16,9 @@ import crosstl
 
 def _translate(tmp_path, source):
     path = tmp_path / "kernel.metal"
-    path.write_text("#include <metal_stdlib>\nusing namespace metal;\n" + source, encoding="utf-8")
+    path.write_text(
+        "#include <metal_stdlib>\nusing namespace metal;\n" + source, encoding="utf-8"
+    )
     return crosstl.translate(str(path), backend="vulkan", format_output=False)
 
 
@@ -27,7 +29,10 @@ def _validate(spv_code, tmp_path):
     asm, binary = tmp_path / "k.spvasm", tmp_path / "k.spv"
     asm.write_text(spv_code, encoding="utf-8")
     env = ["--target-env", "vulkan1.1"]
-    for command in ([spirv_as, *env, str(asm), "-o", str(binary)], [spirv_val, *env, str(binary)]):
+    for command in (
+        [spirv_as, *env, str(asm), "-o", str(binary)],
+        [spirv_val, *env, str(binary)],
+    ):
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         assert result.returncode == 0, result.stderr
 

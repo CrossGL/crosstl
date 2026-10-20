@@ -424,7 +424,9 @@ class HalfLegalizer:
 
     def _member_initializers(self):
         """Struct member initializers (static members included) sit outside every function body."""
-        structs = [node for node in self.program.walk() if isinstance(node, A.StructNode)]
+        structs = [
+            node for node in self.program.walk() if isinstance(node, A.StructNode)
+        ]
         for struct in structs:
             for member in struct.members or []:
                 if isinstance(member, A.StructMemberNode):
@@ -579,7 +581,9 @@ class HalfLegalizer:
         """
         for kind in kinds:
             if kind is None:
-                self.refuse(f"{what} with an operand of unknown type", "unknown-operand", node)
+                self.refuse(
+                    f"{what} with an operand of unknown type", "unknown-operand", node
+                )
             if kind.name == "bool":
                 self.refuse(f"{what} with a bool operand", "bool-operand", node)
         return not any(
@@ -630,7 +634,11 @@ class HalfLegalizer:
             self.refuse(f"the bit cast '{name}' to a half vector", "bitcast", node)
         if _FROM_BITS.fullmatch(name):
             kind = self.kind(arguments[0]) if len(arguments) == 1 else None
-            if kind is None or kind.name not in ("int", "int_literal") or kind.lanes != 1:
+            if (
+                kind is None
+                or kind.name not in ("int", "int_literal")
+                or kind.lanes != 1
+            ):
                 self.refuse(
                     f"the bit cast '{name}' to half from a non-scalar 16-bit integer",
                     "bitcast",
@@ -717,9 +725,7 @@ class HalfLegalizer:
                 parts.append(folded)
                 continue
             if kind is not None and kind.name == "double":
-                self.refuse(
-                    "a double converted to half", "double-rounding", argument
-                )
+                self.refuse("a double converted to half", "double-rounding", argument)
             exact = False
             parts.append(argument)
         vector = call(f"vec{half.lanes}", parts)
@@ -844,13 +850,17 @@ class HalfLegalizer:
             return lvalue
         if isinstance(expr, (A.SwizzleNode, A.MemberAccessNode)):
             base = self.half_value(
-                expr.vector_expr if isinstance(expr, A.SwizzleNode) else expr.object_expr
+                expr.vector_expr
+                if isinstance(expr, A.SwizzleNode)
+                else expr.object_expr
             )
             components = str(
                 expr.components if isinstance(expr, A.SwizzleNode) else expr.member
             )
-            if base is not None and base.lanes > 1 and re.fullmatch(
-                r"[xyzw]{1,4}|[rgba]{1,4}", components
+            if (
+                base is not None
+                and base.lanes > 1
+                and re.fullmatch(r"[xyzw]{1,4}|[rgba]{1,4}", components)
             ):
                 return base.with_lanes(len(components))
             return None
@@ -907,7 +917,10 @@ class HalfLegalizer:
                     isinstance(node, A.FunctionCallNode)
                     and half_from_name(call_name(node))
                 )
-                or (isinstance(node, A.CastNode) and half_of(node.target_type) is not None)
+                or (
+                    isinstance(node, A.CastNode)
+                    and half_of(node.target_type) is not None
+                )
             ):
                 self.refuse(
                     f"a half type in {type(node).__name__} the pass cannot legalize",

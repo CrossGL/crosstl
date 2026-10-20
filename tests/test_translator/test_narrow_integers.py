@@ -291,7 +291,9 @@ def test_initializers_outside_function_bodies_are_legalized(tmp_path, target):
         "  static constexpr constant uchar wrapped = uchar(260);\n"
         "};\n"
     )
-    body = "    uchar v = uchar(a[i]) + bias + Bounds<uchar>::wrapped;\n    o[i] = int(v);"
+    body = (
+        "    uchar v = uchar(a[i]) + bias + Bounds<uchar>::wrapped;\n    o[i] = int(v);"
+    )
     output = translate(
         tmp_path, METAL_KERNEL.format(helpers=helpers, body=body), target, ".metal"
     )

@@ -75,15 +75,15 @@ class HelperInterpreter:
     def __init__(self, skew=0):
         self.skew = skew
         self.calls = 0
-        self.functions = {
-            base: H.helper_function(base, 1) for base in H.SCALAR_HELPERS
-        }
+        self.functions = {base: H.helper_function(base, 1) for base in H.SCALAR_HELPERS}
 
     def perturb(self, value):
         if not np.isfinite(value) or value == 0:
             return value
         self.calls += 1
-        steps = (self.calls * 7919) % (2 * self.skew + 1) - self.skew if self.skew else 0
+        steps = (
+            (self.calls * 7919) % (2 * self.skew + 1) - self.skew if self.skew else 0
+        )
         direction = np.float32(np.inf if steps > 0 else -np.inf)
         for _ in range(abs(steps)):
             value = np.nextafter(value, direction, dtype=np.float32)
@@ -147,7 +147,9 @@ class HelperInterpreter:
         if isinstance(node, A.IdentifierNode):
             return frame[node.name]
         if isinstance(node, A.TernaryOpNode):
-            chosen = node.true_expr if self.expr(node.condition, frame) else node.false_expr
+            chosen = (
+                node.true_expr if self.expr(node.condition, frame) else node.false_expr
+            )
             return self.expr(chosen, frame)
         if isinstance(node, A.UnaryOpNode):
             value = self.expr(node.operand, frame)
@@ -164,9 +166,13 @@ class HelperInterpreter:
     def binary(self, node, frame):
         op = node.op
         if op == "&&":
-            return bool(self.expr(node.left, frame)) and bool(self.expr(node.right, frame))
+            return bool(self.expr(node.left, frame)) and bool(
+                self.expr(node.right, frame)
+            )
         if op == "||":
-            return bool(self.expr(node.left, frame)) or bool(self.expr(node.right, frame))
+            return bool(self.expr(node.left, frame)) or bool(
+                self.expr(node.right, frame)
+            )
         left, right = self.expr(node.left, frame), self.expr(node.right, frame)
         comparisons = {
             "<": lambda: left < right,
@@ -222,7 +228,9 @@ def round_half(value: Fraction) -> float:
     magnitude = abs(value)
     if magnitude >= HALF_MAX_EDGE:
         return sign * float("inf")
-    exponent = max(magnitude.numerator.bit_length() - magnitude.denominator.bit_length(), -14)
+    exponent = max(
+        magnitude.numerator.bit_length() - magnitude.denominator.bit_length(), -14
+    )
     while Fraction(2) ** exponent > magnitude and exponent > -14:
         exponent -= 1
     while Fraction(2) ** (exponent + 1) <= magnitude:
@@ -243,19 +251,31 @@ def finite_halves():
 def assert_same(actual, expected, what):
     actual_bits = _bits(np.float32(actual))
     expected_bits = _bits(np.float32(expected))
-    assert actual_bits == expected_bits, f"{what}: got {actual!r}, expected {expected!r}"
+    assert (
+        actual_bits == expected_bits
+    ), f"{what}: got {actual!r}, expected {expected!r}"
 
 
 # Unit tests ----------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "name, lanes",
-    [("half", 1), ("float16", 1), ("float16_t", 1), ("f16", 1), ("f16vec3", 3), ("half4", 4), ("vec2<f16>", 2)],
+    [
+        ("half", 1),
+        ("float16", 1),
+        ("float16_t", 1),
+        ("f16", 1),
+        ("f16vec3", 3),
+        ("half4", 4),
+        ("vec2<f16>", 2),
+    ],
 )
 def test_half_spellings(name, lanes):
     assert half_from_name(name).lanes == lanes
 
 
-@pytest.mark.parametrize("name", ["float", "min16float", "double", "half4x4", "bfloat16_t"])
+@pytest.mark.parametrize(
+    "name", ["float", "min16float", "double", "half4x4", "bfloat16_t"]
+)
 def test_other_types_are_not_half(name):
     assert half_from_name(name) is None
 
@@ -277,7 +297,15 @@ def test_round_helper_matches_numpy_conversion():
             np.array(
                 [
                     (base + offset) & MASK
-                    for base in (0x33000000, 0x33800000, 0x38800000, 0x387FF000, 0x3F801000, 0x477FF000, 0x477FE000)
+                    for base in (
+                        0x33000000,
+                        0x33800000,
+                        0x38800000,
+                        0x387FF000,
+                        0x3F801000,
+                        0x477FF000,
+                        0x477FE000,
+                    )
                     for offset in (-1, 0, 1, 0x1000, 0x2000)
                 ]
                 + [0x7F800000, 0xFF800000, 0x7FC00000, 0x80000000, 0, 1],
@@ -297,7 +325,12 @@ def test_round_helper_matches_numpy_conversion():
 def _midpoint_pairs(rng, count):
     """Pairs whose exact quotient lies next to a binary16 midpoint (or on one), plus random pairs."""
     values = halves(rng.uniform(-4, 4, count) * 2.0 ** rng.integers(-12, 12, count))
-    pairs = list(zip(values, halves(rng.uniform(-4, 4, count) * 2.0 ** rng.integers(-12, 12, count))))
+    pairs = list(
+        zip(
+            values,
+            halves(rng.uniform(-4, 4, count) * 2.0 ** rng.integers(-12, 12, count)),
+        )
+    )
     for numerator in (1, 3, 5, 7, 1025, 2047, 683, 1.5, 0.75):
         for denominator in (3, 7, 11, 1023, 2045, 0.6669921875, 3.0517578125e-05):
             pairs.append((float(np.float16(numerator)), float(np.float16(denominator))))
@@ -308,7 +341,11 @@ def _midpoint_pairs(rng, count):
 def test_division_helper_is_correctly_rounded(skew):
     interpreter = HelperInterpreter(skew)
     rng = np.random.default_rng(1 + skew)
-    for a, b in _midpoint_pairs(rng, 1500) + [(65504.0, 2.0**-24), (2.0**-24, 65504.0), (-0.0, 3.0)]:
+    for a, b in _midpoint_pairs(rng, 1500) + [
+        (65504.0, 2.0**-24),
+        (2.0**-24, 65504.0),
+        (-0.0, 3.0),
+    ]:
         expected = round_half(Fraction(a) / Fraction(b))
         if a == 0:
             expected = float(np.float16(a) / np.float16(b))
@@ -324,9 +361,13 @@ def test_square_root_helper_is_correctly_rounded(skew):
         # A binary16 square root is never within 2^-23 (relative) of a binary16 midpoint, so rounding the binary64
         # root exactly gives the correctly rounded result.
         expected = round_half(Fraction(math.sqrt(float(value))))
-        assert_same(interpreter.call("cgl_half_sqrt", value), expected, f"sqrt({value!r})")
+        assert_same(
+            interpreter.call("cgl_half_sqrt", value), expected, f"sqrt({value!r})"
+        )
     assert np.isnan(interpreter.call("cgl_half_sqrt", np.float32(-1.0)))
-    assert_same(interpreter.call("cgl_half_sqrt", np.float32(np.inf)), np.inf, "sqrt(inf)")
+    assert_same(
+        interpreter.call("cgl_half_sqrt", np.float32(np.inf)), np.inf, "sqrt(inf)"
+    )
 
 
 def _fma_triples(rng, count):
@@ -358,7 +399,9 @@ def _fma_triples(rng, count):
     for _ in range(1500):
         exponent = int(rng.integers(-13, 15))
         midpoint = (2 * int(rng.integers(1024, 2048)) + 1) * 2.0 ** (exponent - 11)
-        c = float(np.float16(rng.uniform(-1, 1) * 2.0 ** int(rng.integers(-24, exponent))))
+        c = float(
+            np.float16(rng.uniform(-1, 1) * 2.0 ** int(rng.integers(-24, exponent)))
+        )
         a = float(np.float16(rng.uniform(1, 2) * 2.0 ** int(rng.integers(-6, 6))))
         b = float(np.float16((midpoint - c) / a))
         triples.append((a, b, c))
@@ -377,7 +420,11 @@ def test_fma_helper_is_correctly_rounded():
         expected = round_half(exact)
         if exact == 0:
             expected = float(np.float32(np.float32(a) * np.float32(b) + np.float32(c)))
-        assert_same(interpreter.call("cgl_half_fma", a, b, c), expected, f"fma({a!r}, {b!r}, {c!r})")
+        assert_same(
+            interpreter.call("cgl_half_fma", a, b, c),
+            expected,
+            f"fma({a!r}, {b!r}, {c!r})",
+        )
 
 
 @pytest.mark.parametrize(
@@ -392,7 +439,9 @@ def test_fma_helper_is_correctly_rounded():
 def test_helpers_pass_the_conformance_inputs(helper, inputs, reference, arity):
     """The GPU conformance inputs, interpreted: the oracle there must hold for the helper itself."""
     values = inputs()
-    interpreter = HelperInterpreter(skew=2 if helper in ("cgl_half_div", "cgl_half_sqrt") else 0)
+    interpreter = HelperInterpreter(
+        skew=2 if helper in ("cgl_half_div", "cgl_half_sqrt") else 0
+    )
     for operands, expected in zip(values.reshape(-1, arity), reference(values)):
         actual = interpreter.call(helper, *operands)
         assert_same(actual, expected, f"{helper}{tuple(float(v) for v in operands)}")
@@ -562,7 +611,10 @@ def test_half_bit_casts_use_the_binary16_encoding(tmp_path):
     [
         ("    half4x4 m = half4x4(1.0h);\n    o[i] = float(m[0][0]);", "matrix"),
         ("    half h = half(a[i]);\n    o[i] = float(h++);", "step-value"),
-        ("    half h = half(a[i]);\n    o[i] = float(fmod(h, half(2.0h)));", "remainder"),
+        (
+            "    half h = half(a[i]);\n    o[i] = float(fmod(h, half(2.0h)));",
+            "remainder",
+        ),
         ("    half2 h = half2(a[i]);\n    o[i] = float(as_type<uint>(h));", "bitcast"),
     ],
 )
@@ -577,7 +629,12 @@ def test_unsupported_half_constructs_are_refused(tmp_path, target, body, reason)
 def test_reserved_helper_names_are_refused(tmp_path):
     helpers = "float cgl_half_round(float x) { return x; }\n"
     with pytest.raises(HalfFloatUnsupportedError) as raised:
-        glsl(tmp_path, "    float16_t h = float16_t(a[i]);\n    o[i] = float(h);", "vulkan", helpers)
+        glsl(
+            tmp_path,
+            "    float16_t h = float16_t(a[i]);\n    o[i] = float(h);",
+            "vulkan",
+            helpers,
+        )
     assert raised.value.reason_code == "reserved-name"
 
 
@@ -587,7 +644,11 @@ def test_helpers_are_emitted_once_in_dependency_order(tmp_path):
         "    o[i] = float(x / float16_t(3.0) + sqrt(x) + x / float16_t(7.0));"
     )
     output = glsl(tmp_path, body, "wgsl")
-    names = [line.split("(")[0][3:] for line in output.splitlines() if line.startswith("fn cgl_half")]
+    names = [
+        line.split("(")[0][3:]
+        for line in output.splitlines()
+        if line.startswith("fn cgl_half")
+    ]
     assert names == [
         "cgl_half_round",
         "cgl_half_index",
