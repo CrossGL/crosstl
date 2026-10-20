@@ -1,6 +1,16 @@
 from tools.coverage import validators
-from tools.coverage.features import cuda, glsl, hip, hlsl, metal, slang, spirv, wgsl
-from tools.coverage.model import Param, Type
+from tools.coverage.features import (
+    cuda,
+    glsl,
+    hip,
+    hlsl,
+    metal,
+    mojo,
+    slang,
+    spirv,
+    wgsl,
+)
+from tools.coverage.model import Param, Signature, Type
 
 GLSL_EXCERPT = """
 == Common Functions
@@ -542,3 +552,144 @@ def test_slang_types():
     assert slang.slang_type("float3x4", {}) == Type("float", (4, 3))
     assert slang.slang_type("uint32_t4", {}) == Type("uint", (4,))
     assert slang.slang_type("half", {}) == Type.other("half")
+
+
+MOJO_MATH_INIT = """
+from std.utils.numerics import isnan, nan
+from .math import (
+    Floorable,
+    floor,
+    frexp,
+    gcd,
+    rsqrt,
+    sqrt,
+)
+"""
+
+MOJO_MATH = """
+from std.utils.numerics import isnan
+
+
+@always_inline
+def floor[T: Floorable, //](value: T) -> T:
+    \"\"\"Floor.\"\"\"
+    return value.__floor__()
+
+
+def _sqrt_nvvm(x: SIMD, out res: type_of(x)):
+    pass
+
+
+def sqrt[
+    dtype: DType, width: SIMDLength, //
+](x: SIMD[dtype, width]) -> SIMD[dtype, width]:
+    comptime assert (
+        dtype.is_numeric() or dtype == .bool
+    ), "type must be arithmetic or boolean"
+
+    comptime if dtype.is_integral():
+        return x
+    return x
+
+
+def sqrt(x: Int) -> Int:
+    return x
+
+
+def rsqrt[
+    dtype: DType, width: SIMDLength, //
+](x: SIMD[dtype, width]) -> type_of(x) where dtype.is_floating_point():
+    return x
+
+
+def frexp[
+    dtype: DType, width: SIMDLength, //
+](x: SIMD[dtype, width]) -> StaticTuple[
+    SIMD[dtype, width], 2
+] where dtype.is_floating_point():
+    return x
+
+
+def gcd(m: Int, n: Int, /) -> Int:
+    return m
+"""
+
+MOJO_NUMERICS = """
+def nan[dtype: DType]() -> Scalar[dtype]:
+    comptime assert dtype.is_floating_point(), "fp only"
+    return 0
+
+
+def isnan[
+    dtype: DType, width: SIMDLength, //
+](val: SIMD[dtype, width]) -> SIMD[.bool, width]:
+    return False
+"""
+
+MOJO_BIT_INIT = """
+from .bit import (
+    pop_count,
+    rotate_bits_left,
+)
+"""
+
+MOJO_BIT = """
+def pop_count[dtype: DType, width: SIMDLength, //](val: SIMD[dtype, width]) -> SIMD[dtype, width]:
+    comptime assert dtype.is_integral(), "must be integral"
+    return val
+
+
+def rotate_bits_left[
+    dtype: DType,
+    width: SIMDLength,
+    //,
+    shift: Int,
+](x: SIMD[dtype, width]) -> SIMD[dtype, width] where dtype.is_integral():
+    return x
+"""
+
+
+def test_mojo_reads_the_functions_the_packages_export():
+    glsl_names = {"floor", "inversesqrt", "bitCount", "isnan"}
+    found = mojo.parse(
+        MOJO_MATH_INIT, MOJO_MATH, MOJO_NUMERICS, MOJO_BIT_INIT, MOJO_BIT, glsl_names
+    )
+    features = by_name(found)
+    # Traits and private helpers are not functions of the public API.
+    assert sorted(features) == [
+        "floor",
+        "frexp",
+        "gcd",
+        "isnan",
+        "nan",
+        "pop_count",
+        "rotate_bits_left",
+        "rsqrt",
+        "sqrt",
+    ]
+    assert {f.group for f in found} == {"math", "bit"}
+    assert features["floor"].signature == Signature(
+        Type("float"), (Param(Type("float")),)
+    )
+    # The first definition is probed, and a comptime if on the type does not constrain it.
+    assert features["sqrt"].signature.params == (Param(Type("float")),)
+    assert features["rsqrt"].signature.result == Type("float")
+    assert features["rsqrt"].crossgl == "inversesqrt"
+    assert features["isnan"].signature.result == Type("bool")
+    assert features["pop_count"].signature.result == Type("int")
+    assert features["pop_count"].crossgl == "bitCount"
+    assert features["gcd"].signature.params[0].type == Type.other("Int")
+    assert (
+        features["frexp"].signature.unsupported == "StaticTuple[SIMD[dtype, width], 2]"
+    )
+
+
+def test_mojo_names_the_parameters_no_argument_fixes():
+    features = by_name(
+        mojo.parse(MOJO_MATH_INIT, MOJO_MATH, MOJO_NUMERICS, MOJO_BIT_INIT, MOJO_BIT)
+    )
+    assert features["nan"].spelling == "nan[dtype=DType.float32]"
+    assert features["nan"].signature == Signature(Type("float"), ())
+    assert features["rotate_bits_left"].spelling == "rotate_bits_left[shift=1]"
+    assert features["rotate_bits_left"].signature.params == (Param(Type("int")),)
+    assert features["sqrt"].spelling == ""

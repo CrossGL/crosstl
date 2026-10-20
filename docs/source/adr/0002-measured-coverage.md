@@ -39,6 +39,7 @@ Mojo follow. A direction CrossTL does not offer, such as WGSL input, is reported
 | CUDA | llvm/llvm-project: clang's `__clang_cuda_math.h` and `__clang_cuda_device_functions.h` |
 | HIP | llvm/llvm-project: clang's `__clang_hip_math.h`; ROCm/clr: `amd_hip_atomic.h` and `amd_device_functions.h`, at the versions of the hipcc that validates the probes |
 | Slang | shader-slang/slang: the core module sources `hlsl.meta.slang` and `core.meta.slang` of the slangc release that validates the probes; the global functions of their public sections |
+| Mojo | modular/modular: the `std.math` and `std.bit` modules of the Mojo release that validates the probes, limited to the functions their `__init__.mojo` files export |
 
 Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
 only when the script is rerun for a newer toolchain. Language-level categories are added on top of built-ins: types,
@@ -49,8 +50,8 @@ their pinned commits, checks their digests and caches them. No feature list is w
 
 For every feature the engine generates a minimal probe, in CrossGL for output and in the source language for input.
 It translates the probe and validates the result with `glslangValidator` (GLSL), DXC (HLSL), `spirv-val`
-(SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA), hipcc (HIP) or slangc
-compiling to SPIR-V (Slang); the two GPU compute compilers need no GPU to compile. Input probes are validated by
+(SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA), hipcc (HIP), slangc
+compiling to SPIR-V (Slang) or the Mojo compiler with MAX's GPU package (Mojo); none of them needs a GPU to compile. Input probes are validated by
 emitting the imported CrossGL back to the source language. Where Core's conformance runtimes can execute a probe, it is
 executed through a hook Core provides; the runtime harness is not duplicated.
 

@@ -233,9 +233,96 @@ class Slang(HLSL):
         return f"RWStructuredBuffer<{kind}> {name};"
 
 
+class Mojo(Dialect):
+    """A Mojo GPU kernel: buffers are pointer arguments and MAX's ``global_idx`` gives the invocation's index."""
+
+    language = "mojo"
+    suffix = ".mojo"
+    entry = "probe"
+    _SCALARS = {
+        "float": "Float32",
+        "double": "Float64",
+        "int": "Int32",
+        "uint": "UInt32",
+        "bool": "Bool",
+    }
+    _DTYPES = {
+        "float": "float32",
+        "double": "float64",
+        "int": "int32",
+        "uint": "uint32",
+        "bool": "bool",
+    }
+
+    def scalar(self, scalar: str) -> str:
+        return self._SCALARS[scalar]
+
+    def vector(self, scalar: str, size: int) -> str:
+        return f"SIMD[DType.{self._DTYPES[scalar]}, {size}]"
+
+    def matrix(self, scalar: str, columns: int, rows: int) -> str:
+        raise ProbeError("Mojo has no matrix types")
+
+    def read(self, buffer: str, offset: int) -> str:
+        return f"{buffer}[i + {offset}]"
+
+    def literal(self, kind: Type) -> str:
+        if kind.shape:
+            raise ProbeError("no constant probe argument of a vector or matrix type")
+        return {"bool": "False", "int": "0", "uint": "0"}.get(kind.scalar, "0.0")
+
+    def declare(self, kind: Type, name: str, value: str = "") -> str:
+        initial = f" = {value}" if value else ""
+        return f"var {name}: {self.type(kind)}{initial}"
+
+    def out_argument(self, name: str) -> str:
+        raise ProbeError("Mojo has no output arguments")
+
+    def to_int(self, condition: str) -> str:
+        return f"Int32(1) if {condition} else Int32(0)"
+
+    def first(self, vector: str) -> str:
+        return f"{vector}[0]"
+
+    def store(self, value: str) -> str:
+        return f"outp[i] = {value}"
+
+    def statement(self, expression: str) -> str:
+        return expression
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        params = [
+            f"{name}: UnsafePointer[{kind}, MutAnyOrigin]" for kind, name in buffers
+        ]
+        params += parts.get("params", ())
+        lines = [
+            "from std.bit import *",
+            "from std.math import *",
+            "from max.gpu import global_idx",
+            *parts.get("prelude", ()),
+            "",
+            *parts.get("declarations", ()),
+            "",
+            f"def probe({', '.join(params)}):",
+            "    var i: Int = global_idx.x",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines) + "\n"
+
+
 DIALECTS: dict[str, Dialect] = {
     d.language: d
-    for d in (CROSSGL, CUDA(), GLSL(), HIP(), HLSL(), Metal(), Slang(), WGSL())
+    for d in (
+        CROSSGL,
+        CUDA(),
+        GLSL(),
+        HIP(),
+        HLSL(),
+        Metal(),
+        Mojo(),
+        Slang(),
+        WGSL(),
+    )
 }
 
 

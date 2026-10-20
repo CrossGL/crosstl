@@ -5,7 +5,7 @@ from __future__ import annotations
 from .. import constructs
 from ..model import Feature
 from ..upstream import fetch
-from . import cuda, glsl, hip, hlsl, metal, slang, spirv, wgsl
+from . import cuda, glsl, hip, hlsl, metal, mojo, slang, spirv, wgsl
 
 
 def _glsl_names(offline: bool) -> set[str]:
@@ -41,6 +41,17 @@ def _metal(offline: bool) -> list[Feature]:
     return metal.parse(metal.LIST.read_text(), _glsl_names(offline))
 
 
+def _mojo(offline: bool) -> list[Feature]:
+    return mojo.parse(
+        fetch("mojo-math-exports", offline=offline),
+        fetch("mojo-math", offline=offline),
+        fetch("mojo-numerics", offline=offline),
+        fetch("mojo-bit-exports", offline=offline),
+        fetch("mojo-bit", offline=offline),
+        _glsl_names(offline),
+    )
+
+
 def _slang(offline: bool) -> list[Feature]:
     return slang.parse(
         fetch("slang-core", offline=offline),
@@ -63,6 +74,7 @@ PARSERS = {
     "hip": _hip,
     "hlsl": _hlsl,
     "metal": _metal,
+    "mojo": _mojo,
     "slang": _slang,
     "spirv": _spirv,
     "wgsl": _wgsl,

@@ -26,6 +26,7 @@ TOOLS = {
     "hip": "hipcc",
     "hlsl": "dxc",
     "metal": "metal",
+    "mojo": "mojo",
     "slang": "slangc",
     "spirv": "spirv-val",
     "wgsl": "naga",
@@ -36,6 +37,7 @@ SUFFIX = {
     "hip": ".hip",
     "hlsl": ".hlsl",
     "metal": ".metal",
+    "mojo": ".mojo",
     "slang": ".slang",
     "spirv": ".spvasm",
     "wgsl": ".wgsl",
@@ -120,7 +122,12 @@ def _run(arguments: list[str], cwd: str) -> Verdict:
         )
     except subprocess.TimeoutExpired:
         return Verdict(False, f"{arguments[0]} timed out after {TIMEOUT} s")
-    log = _ANSI.sub("", result.stdout + result.stderr).replace(cwd + os.sep, "").strip()
+    log = _ANSI.sub("", result.stdout + result.stderr)
+    # Some compilers (mojo) print the scratch directory's real path, which on macOS is under /private; the longer
+    # spelling goes first, since it contains the other.
+    for directory in sorted({os.path.realpath(cwd), cwd}, key=len, reverse=True):
+        log = log.replace(directory + os.sep, "")
+    log = log.strip()
     if result.returncode != 0 and not log:
         log = f"error: {Path(arguments[0]).name} exited with status {result.returncode} and no message"
     # Compilers report the first error first and end with notes and counts, so the head of the log is kept.
@@ -215,6 +222,21 @@ def validate(
                     name,
                     "-o",
                     "probe.o",
+                ],
+                scratch,
+            )
+        if language == "mojo":
+            # The Mojo compiler type-checks every function it parses, called or not; emitting LLVM IR needs no main.
+            return _run(
+                [
+                    *command("mojo"),
+                    "build",
+                    "--emit",
+                    "llvm",
+                    "--disable-warnings",
+                    name,
+                    "-o",
+                    "probe.ll",
                 ],
                 scratch,
             )

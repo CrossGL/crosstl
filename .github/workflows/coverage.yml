@@ -3,10 +3,10 @@ name: Coverage
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The
 # Linux job measures GLSL, HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc, a second Linux
-# job measures CUDA and HIP with nvcc and hipcc, and the macOS job measures Metal with xcrun metal. The report job
-# merges the reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan
-# `coverage` branch with coverage.json, coverage.svg (the README chart), COVERAGE.md and a bounded history.csv; main
-# itself never receives generated files. The issues job then reconciles the tracking and bug issues
+# job measures CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, and the macOS job measures Metal with xcrun
+# metal. The report job merges the reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job
+# replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart), COVERAGE.md and a bounded
+# history.csv; main itself never receives generated files. The issues job then reconciles the tracking and bug issues
 # (tools/coverage/issues.py); pull requests only print its plan.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
@@ -147,7 +147,7 @@ jobs:
           retention-days: 14
 
   compute:
-    name: Coverage (CUDA, HIP)
+    name: Coverage (CUDA, HIP, Mojo)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -190,6 +190,21 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends hipcc=5.7.1-3 libamdhip64-dev=5.7.1-3
           hipcc --version
 
+      # The Mojo compiler and MAX's GPU package, at the release tools/coverage/upstream.py reads Mojo's standard library
+      # from. They live in their own environment, and the wheels are pinned by digest.
+      - name: Install mojo 1.1.0
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/mojo"
+          cat > "$RUNNER_TEMP/mojo-requirements.txt" <<'EOF'
+          mojo-compiler==1.1.0 --hash=sha256:b47442278eb39705075f23d058b38a364bd68bdaa542ad514c187cee633beab7
+          mojo-compiler-mojo-libs==1.1.0 --hash=sha256:dd8c5382e27fe5c1ffe0834d267f549abbffee35bf1a8d605cf24252ff95a2e6
+          max-mojo-libs==26.6.0 --hash=sha256:7880630afbfb544bd66cf7ab725f5e7b91fcaac02c7e4c9a74a877eba1546e2b
+          EOF
+          "$RUNNER_TEMP/mojo/bin/pip" install --quiet --no-deps --require-hashes -r "$RUNNER_TEMP/mojo-requirements.txt"
+          echo "CROSSTL_COVERAGE_MOJO=$RUNNER_TEMP/mojo/bin/mojo" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/mojo/bin/mojo" --version
+
       - name: Restore upstream feature sources
         uses: actions/cache@v6
         with:
@@ -197,7 +212,7 @@ jobs:
           key: coverage-upstream-${{ hashFiles('tools/coverage/upstream.py') }}
 
       - name: Measure coverage
-        run: python -m tools.coverage run --strict --jobs 4 --backend cuda --backend hip --output coverage-compute.json
+        run: python -m tools.coverage run --strict --jobs 4 --backend cuda --backend hip --backend mojo --output coverage-compute.json
 
       - uses: actions/upload-artifact@v7
         with:

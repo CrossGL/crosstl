@@ -82,6 +82,42 @@ SOURCES = {
         "24bc62cd69825c062f6527b783d2089c669c643b2df9336a6b5c7895a0ad7eec",
         "DXC v1.9.2602.24 intrinsic table",
     ),
+    # Mojo's standard library at the release CI installs (mojo 1.1.0, tagged mojo/v1.1.0 and max/v26.6.0).
+    "mojo-bit": Source(
+        "modular/modular",
+        "c6fa49f712fe15c99d0461ad2baaf2a15cbc58ce",
+        "Mojo/stdlib/std/bit/bit.mojo",
+        "a449dab898731d371e00a3373034de7bb3210de1cb4d7c01289a10538c2685ed",
+        "Mojo 1.1.0 std.bit functions",
+    ),
+    "mojo-bit-exports": Source(
+        "modular/modular",
+        "c6fa49f712fe15c99d0461ad2baaf2a15cbc58ce",
+        "Mojo/stdlib/std/bit/__init__.mojo",
+        "0cabf5f5474056e435ac69082c42556ed049e8130c94f6a33e91e81cc7b8d5e8",
+        "Mojo 1.1.0 std.bit public API",
+    ),
+    "mojo-math": Source(
+        "modular/modular",
+        "c6fa49f712fe15c99d0461ad2baaf2a15cbc58ce",
+        "Mojo/stdlib/std/math/math.mojo",
+        "765c598e516790d1814df7a40b19a1ecb01f748719755becc669620d7722a314",
+        "Mojo 1.1.0 std.math functions",
+    ),
+    "mojo-math-exports": Source(
+        "modular/modular",
+        "c6fa49f712fe15c99d0461ad2baaf2a15cbc58ce",
+        "Mojo/stdlib/std/math/__init__.mojo",
+        "54ad6d83767414e9e2f9a049297cdb9ed37507d0c972f4e056984edef18f0b1d",
+        "Mojo 1.1.0 std.math public API",
+    ),
+    "mojo-numerics": Source(
+        "modular/modular",
+        "c6fa49f712fe15c99d0461ad2baaf2a15cbc58ce",
+        "Mojo/stdlib/std/utils/numerics.mojo",
+        "d2978a288ad44a3ffc87fa6d4cb4f28564da1ec1fed2f4f31ecd11450d148e20",
+        "Mojo 1.1.0 floating-point predicates std.math re-exports",
+    ),
     # Slang's standard library is the core module slangc is built from, pinned to the release CI installs.
     "slang": Source(
         "shader-slang/slang",

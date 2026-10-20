@@ -266,3 +266,52 @@ def test_slang_probes_are_valid_slang(probe_feature, baseline):
 def test_slang_validation_needs_an_entry_point():
     source = "RWStructuredBuffer<float> outp;\nvoid helper() { outp[0] = 1.0; }\n"
     assert not validators.validate("slang", source, entry="main").accepted
+
+
+MOJO_SIGNATURES = [
+    feature("fma", Type("float"), Type("float"), Type("float"), Type("float")),
+    feature("isnan", Type("bool"), Type("float")),
+    feature("pop_count", Type("int"), Type("int")),
+    feature("ldexp", Type("double"), Type("double"), Type("int")),
+]
+
+
+def test_mojo_probe_is_a_gpu_kernel_over_pointers():
+    source = probes.build(MOJO_SIGNATURES[1], "mojo").source
+    assert "from max.gpu import global_idx\n" in source
+    assert (
+        "def probe(fin: UnsafePointer[Float32, MutAnyOrigin], "
+        "outp: UnsafePointer[Int32, MutAnyOrigin]):" in source
+    )
+    assert "    var a0: Float32 = fin[i + 0]\n    var r: Bool = isnan(a0)\n" in source
+    assert "outp[i] = Int32(1) if r else Int32(0)" in source
+    vector = probes.build(feature("normalize", VEC3, VEC3), "mojo").source
+    assert (
+        "var a0: SIMD[DType.float32, 3] = SIMD[DType.float32, 3](fin[i + 0]," in vector
+    )
+    assert probes.build(MOJO_SIGNATURES[0], "mojo").suffix == ".mojo"
+    with pytest.raises(probes.ProbeError, match="matrix"):
+        probes.build(
+            feature("transpose", Type("float", (2, 2)), Type("float", (2, 2))), "mojo"
+        )
+
+
+@pytest.mark.skipif(
+    not validators.available("mojo"), reason="the Mojo compiler is not installed"
+)
+@pytest.mark.parametrize("probe_feature", MOJO_SIGNATURES, ids=lambda f: f.name)
+@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
+def test_mojo_probes_are_valid_mojo(probe_feature, baseline):
+    probe = probes.build(probe_feature, "mojo", baseline=baseline)
+    verdict = validators.validate("mojo", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
+@pytest.mark.skipif(
+    not validators.available("mojo"), reason="the Mojo compiler is not installed"
+)
+def test_mojo_validation_type_checks_functions_nothing_calls():
+    source = "def unused() -> Float32:\n    return nosuch(1.0)\n"
+    verdict = validators.validate("mojo", source)
+    assert not verdict.accepted
+    assert verdict.log.startswith("probe.mojo:2:12: error: use of unknown declaration")

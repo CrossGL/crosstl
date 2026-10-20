@@ -128,6 +128,12 @@ RENAMES = {
         "simd_all": "allInvocations",
         "simd_any": "anyInvocation",
     },
+    "mojo": {
+        "atan2": "atan",
+        "rsqrt": "inversesqrt",
+        "pop_count": "bitCount",
+        "bit_reverse": "bitfieldReverse",
+    },
 }
 # HIP spells its device functions the way CUDA does, and Slang its built-in functions the way HLSL does.
 RENAMES["hip"] = RENAMES["cuda"]
