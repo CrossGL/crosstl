@@ -110,6 +110,21 @@ def test_no_workflow_runs_pull_request_code_with_a_privileged_token():
         assert "workflow_run" not in workflow[True], filename
 
 
+def test_the_coverage_comment_job_runs_no_pull_request_code():
+    workflow = _workflows()["coverage.yml"]
+    job = workflow["jobs"]["comment"]
+    # It writes pull-request comments only, and only where the token belongs to this repository.
+    assert job["permissions"] == {"pull-requests": "write"}
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in (
+        job["if"]
+    )
+    # It reads the report job's comparison as text and never checks out or runs the pull request's code.
+    uses = [step["uses"] for step in job["steps"] if "uses" in step]
+    assert uses == ["actions/download-artifact@v8"]
+    script = job["steps"][-1]["run"]
+    assert not re.search(r"\b(?:python|pip)\b", script)
+
+
 @pytest.mark.parametrize(
     "filename",
     [
