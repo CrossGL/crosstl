@@ -155,6 +155,38 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
     )
 
 
+def test_current_attention_runs_in_the_native_jobs_and_retains_evidence():
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    job = yaml.safe_load(workflow)["jobs"]["mlx-metal-porting"]
+    names = [step.get("name") for step in job["steps"]]
+    step = job["steps"][names.index("Prove current MLX attention native execution")]
+    path = "demos/integrations/mlx/tests/kernels/test_current_attention.py"
+    assert workflow.count(path) == 1
+    assert path in step["run"]
+    assert "if" not in step and "continue-on-error" not in step
+    assert step["env"]["CROSTL_MLX_CURRENT_TARGET"] == (
+        "${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl'"
+        " || 'metal' }}"
+    )
+    assert step["env"]["CROSTL_REQUIRE_MLX_CURRENT_ATTENTION"] == "1"
+    assert step["env"]["CROSTL_MLX_CURRENT_ROOT"].endswith("/mlx-current-tree-upstream")
+    assert step["env"]["EGL_PLATFORM"] == "surfaceless"
+    assert step["env"]["LIBGL_ALWAYS_SOFTWARE"] == "1"
+    assert step["env"]["PYOPENGL_PLATFORM"] == "egl"
+    assert "--timeout-seconds 900" in step["run"]
+    assert "--junitxml=mlx-attention-results/results.xml" in step["run"]
+    upload = job["steps"][names.index("Upload current MLX attention native evidence")]
+    assert names.index("Upload current MLX attention native evidence") == (
+        names.index("Prove current MLX attention native execution") + 1
+    )
+    assert upload["if"] == "always()"
+    assert upload["with"]["name"] == "mlx-attention-${{ runner.os }}"
+    assert upload["with"]["path"] == "mlx-attention-results"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["include-hidden-files"] is True
+    _assert_workflow_triggers(workflow, path)
+
+
 def test_full_gemm_uses_existing_native_jobs_and_retains_evidence():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     job = yaml.safe_load(workflow)["jobs"]["mlx-metal-porting"]

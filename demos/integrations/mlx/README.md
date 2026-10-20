@@ -433,6 +433,31 @@ CROSTL_REQUIRE_MLX_CURRENT_STEEL_CONV_GENERAL=1 \
 python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_steel_conv_general.py
 ```
 
+### Full-Entry Attention Execution
+
+`tests/kernels/test_current_attention.py` translates the unchanged
+`steel_attention_float32_bq32_bk32_bd64_bv64_wm4_wn1_maskfloat32` entry at
+commit `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` and dispatches it through the
+native Metal, DirectX or OpenGL loader. The six function constants are frozen to
+the aligned float-mask configuration. `AttnParams` and `AttnMaskParams` are
+filled as `scaled_dot_product_attention.cpp` fills them, and the grid is the
+upstream `(NQ, H, B)` grid of `(32, 4, 1)` threadgroups.
+
+There are two cases. The first has two heads with 64-row queries and keys and
+a per-head mask. The second has two batches, four query heads over two
+key/value heads, a 96-row key sequence (`qL_off = 64`), the sequence-major Q/O
+layout and a mask broadcast over heads. Each case must match a float64
+evaluation of `softmax(scale * Q K^T + mask) V` at `rtol=atol=1e-5`, and must
+leave four output guards and the unused `lse` buffer unchanged. On Metal, the
+original MLX kernel, compiled with the same constants, must meet the same
+reference.
+
+The threadgroup Q, K and V views need no access assertions: OpenGL proves
+their offsets from the loaders and from `BaseMMAFrag::get_coord`. OpenGL
+asserts that device offsets stay below 2^31 elements, as the GEMM gate does.
+This covers one entry, not the attention family, its causal, sink or `lse`
+variants, or the upstream suite.
+
 ### Resource-Index Controls
 
 Guarded resource-index controls execute on original/generated Metal and on

@@ -4766,6 +4766,35 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Prove current MLX attention native execution
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_ATTENTION: "1"
+          CROSTL_MLX_CURRENT_TARGET: ${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl' || 'metal' }}
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p mlx-attention-results
+          python tools/run_bounded_command.py \
+            --label "current MLX attention native execution" --timeout-seconds 900 -- \
+            python -m pytest -q \
+              --basetemp=mlx-attention-results/pytest \
+              --junitxml=mlx-attention-results/results.xml \
+              demos/integrations/mlx/tests/kernels/test_current_attention.py
+
+      - name: Upload current MLX attention native evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mlx-attention-${{ runner.os }}
+          path: mlx-attention-results
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Prove current MLX complex-power native dispatch
         shell: bash
         env:
