@@ -48,11 +48,15 @@ repos:
       - id: destroyed-symlinks
       - id: detect-private-key
       - id: end-of-file-fixer
+        exclude: \.patch$
       - id: fix-byte-order-marker
       - id: forbid-new-submodules
       - id: mixed-line-ending
         args: [--fix=lf]
+        exclude: \.patch$
       - id: trailing-whitespace
+        # Upstream patch context must stay byte-exact.
+        exclude: \.patch$
         args:
           - --markdown-linebreak-ext=md
           - --markdown-linebreak-ext=rst
