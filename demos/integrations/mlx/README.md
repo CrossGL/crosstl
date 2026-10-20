@@ -435,24 +435,34 @@ python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_st
 
 ### Full-Entry Attention Execution
 
-`tests/kernels/test_current_attention.py` translates twelve configurations of
-unchanged `wm4_wn1` entries of `steel_attention.metal` at commit
+`tests/kernels/test_current_attention.py` translates seventeen configurations
+of unchanged entries of `steel_attention.metal` at commit
 `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. The float32 float-mask entries cover
-head dimensions 64, 80 and 128
-(`steel_attention_float32_bq32_bk32_bd64_bv64_wm4_wn1_maskfloat32`, its `bd80`
-counterpart and `steel_attention_float32_bq32_bk16_bd128_bv128_wm4_wn1_maskfloat32`).
+head dimensions 64, 72, 80, 96, 128 and 256 and the asymmetric query and value
+head dimensions (96, 64)
+(`steel_attention_float32_bq32_bk32_bd64_bv64_wm4_wn1_maskfloat32`, its `bd72`,
+`bd80`, `bd96_bv64` counterparts,
+`steel_attention_float32_bq32_bk16_bd128_bv128_wm4_wn1_maskfloat32` and
+`steel_attention_float32_bq32_bk16_bd256_bv256_wm4_wn2_maskfloat32`).
 The float16 and bfloat16 float-mask entries cover head dimension 64. The
-boolean-mask (`maskbool_`) entries cover float32 at 64, float16 at 128 and
-bfloat16 at 80. Each is dispatched through the native Metal, DirectX or OpenGL
-loader. These eight freeze the six function constants to the aligned, masked
+boolean-mask (`maskbool_`) entries cover float32 at 64 and 256, float16 at 96
+and 128 and bfloat16 at 80. Head dimension 256 uses the `wm4_wn2` entries:
+two simdgroups per query row each multiply half of the head dimension and add
+their partial scores through the K/V tile reinterpreted as float32. Each entry
+is dispatched through the native Metal, DirectX or OpenGL loader. These
+thirteen freeze the six function constants to the aligned, masked
 configuration. Four more freeze other sets the host selects: unaligned
 sequences with attention sinks (float32 float mask at 64, float16 boolean mask
 at 128), an unaligned causal mask with the logsumexp (float32 at 80) and an
 aligned causal mask with sinks and the logsumexp (bfloat16 at 64). The host
-returns the logsumexp only without an array mask. `AttnParams` and
+returns the logsumexp only without an array mask. Not yet covered: head
+dimension 192, whose 16-bit tiles the OpenGL and bfloat16 DirectX outputs
+widen past the 32 KiB workgroup limit (#2307), and the float16 and bfloat16
+`wn2` entries, which multiply a float32 score tile by a 16-bit value tile
+(#2306). `AttnParams` and
 `AttnMaskParams` are filled as
 `scaled_dot_product_attention.cpp` fills them, and the grid is the upstream
-`(NQ, H, B)` grid of `(32, 4, 1)` threadgroups.
+`(NQ, H, B)` grid of `(32, 4, WN)` threadgroups.
 
 Every entry runs two cases. The first has two heads with 64-row queries and keys and
 a per-head mask. The second has two batches, four query heads over two
@@ -468,7 +478,8 @@ the second layout, so both the partial query block and the partial key block
 are exercised. A causal row keeps the keys up to its own position plus
 `qL_off`, and a sink adds one logit per query head without a value.
 
-With `WN == 1` the kernel accumulates in float32, so each case must match a
+With `WN == 1` the kernel widens its tiles to float32, and the float32 `wn2`
+entries need no widening. Both accumulate in float32, so each case must match a
 float64 evaluation of `softmax(scale * Q K^T + mask) V` to within
 `1e-5 * (1 + |reference|)`. A float16 or bfloat16 output must also be a value
 that its final store can round that interval to. A saved logsumexp is float32
@@ -484,8 +495,11 @@ identity selects the tile each accessor reads. OpenGL asserts that device
 offsets, including the boolean mask's, stay below 2^31 elements, as the GEMM
 gate does. DirectX and OpenGL accept the causal bound because their software
 subgroup proofs follow the block limit's writes outside loops, including the
-locals declared in the causal branch. This does not cover the other head
-dimensions, the `wm4_wn2` entries or the upstream suite.
+locals declared in the causal branch. DirectX and OpenGL lower the `wn2`
+score exchange's `reinterpret_cast<threadgroup float*>` of the float32 K/V
+tile as the tile itself, because the cast keeps the element type. This does
+not cover head dimension 192, the float16 and bfloat16 `wn2` entries or the
+upstream suite.
 
 ### Resource-Index Controls
 
