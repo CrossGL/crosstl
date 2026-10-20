@@ -23,6 +23,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 TOOLS = {
     "cuda": "nvcc",
     "glsl": "glslangValidator",
+    "hip": "hipcc",
     "hlsl": "dxc",
     "metal": "metal",
     "spirv": "spirv-val",
@@ -31,6 +32,7 @@ TOOLS = {
 SUFFIX = {
     "cuda": ".cu",
     "glsl": ".comp",
+    "hip": ".hip",
     "hlsl": ".hlsl",
     "metal": ".metal",
     "spirv": ".spvasm",
@@ -44,6 +46,9 @@ METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
 # feature list names, and for C++17.
 CUDA_ARCH = "sm_80"
+# HIP probes compile for RDNA3 (gfx1100), which has the image instructions texture and surface access need; the CDNA
+# targets have none. No GPU is needed: hipcc compiles for the named target.
+HIP_ARCH = "gfx1100"
 
 
 @dataclass(frozen=True)
@@ -184,6 +189,19 @@ def validate(
                 [
                     *command("nvcc"),
                     f"-arch={CUDA_ARCH}",
+                    "-std=c++17",
+                    "-c",
+                    name,
+                    "-o",
+                    "probe.o",
+                ],
+                scratch,
+            )
+        if language == "hip":
+            return _run(
+                [
+                    *command("hipcc"),
+                    f"--offload-arch={HIP_ARCH}",
                     "-std=c++17",
                     "-c",
                     name,

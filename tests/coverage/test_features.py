@@ -1,5 +1,5 @@
 from tools.coverage import validators
-from tools.coverage.features import cuda, glsl, hlsl, metal, spirv, wgsl
+from tools.coverage.features import cuda, glsl, hip, hlsl, metal, spirv, wgsl
 from tools.coverage.model import Param, Type
 
 GLSL_EXCERPT = """
@@ -344,3 +344,74 @@ def test_cuda_spells_single_precision_functions_as_their_crossgl_overload():
     assert features["__threadfence"].crossgl == "memoryBarrier"
     # A rename applies only when GLSL has the target, so a CrossGL spelling is never invented.
     assert by_name(cuda.parse(CUDA_MATH, CUDA_DEVICE))["__popc"].crossgl == "__popc"
+
+
+HIP_MATH = """
+#define __DEVICE__ static __device__ inline __attribute__((always_inline))
+#define __RETURN_TYPE bool
+__DEVICE__
+void __suppress_unused_warning(bool b){};
+__DEVICE__
+uint64_t __make_mantissa(const char *__tagp __attribute__((nonnull))) { return 0; }
+__DEVICE__
+double erf(double __x) { return __ocml_erf_f64(__x); }
+__DEVICE__
+float erff(float __x) { return __ocml_erf_f32(__x); }
+__DEVICE__
+float frexpf(float __x, int *__nptr) { return __builtin_frexpf(__x, __nptr); }
+__DEVICE__
+__RETURN_TYPE __isnanf(float __x) { return __builtin_isnan(__x); }
+template <class T> __DEVICE__ T min(T __arg1, T __arg2) { return __arg1 < __arg2 ? __arg1 : __arg2; }
+__DEVICE__ int min(int __arg1, int __arg2) { return __arg1 < __arg2 ? __arg1 : __arg2; }
+"""
+
+HIP_ATOMIC = """
+template<typename T, typename F> struct Cond_t<true, T, F> { using type = T; };
+__device__
+inline
+int atomicAdd(int* address, int val) {
+    return __hip_atomic_fetch_add(address, val, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+}
+__device__
+inline
+float atomicAdd(float* address, float val) { return unsafeAtomicAdd(address, val); }
+"""
+
+HIP_DEVICE = """
+static inline __device__ void printf(const char* format, All... all) {}
+__device__ static inline unsigned int __popc(unsigned int input) {
+    return __builtin_popcount(input);
+}
+__device__ static int32_t __fns32(uint64_t mask, uint32_t base, int32_t offset) { return 0; }
+__device__
+inline
+static void __syncthreads() { __barrier(__CLK_LOCAL_MEM_FENCE); }
+"""
+
+
+def test_hip_reads_the_math_atomic_and_device_headers():
+    glsl_names = {"erf", "frexp", "isnan", "bitCount", "barrier", "min"}
+    features = by_name(hip.parse(HIP_MATH, HIP_ATOMIC, HIP_DEVICE, glsl_names))
+    assert sorted(features) == [
+        "__fns32",
+        "__isnanf",
+        "__popc",
+        "__syncthreads",
+        "atomicAdd",
+        "erf",
+        "erff",
+        "frexpf",
+        "min",
+    ]
+    assert {f.group for f in features.values()} == {"math", "atomic", "device"}
+    # The first definition is the one probed: the int overloads of atomicAdd and min.
+    add = features["atomicAdd"].signature
+    assert add.params == (Param(Type("int"), "inout"), Param(Type("int")))
+    assert features["min"].signature.result == Type("int")
+    assert features["frexpf"].signature.params[1] == Param(Type("int"), "out")
+    assert features["__isnanf"].signature.result == Type("bool")
+    assert features["__fns32"].signature.params[0].type == Type.other("uint64_t")
+    assert features["__fns32"].signature.params[1].type == Type("uint")
+    assert features["erff"].crossgl == features["erf"].crossgl == "erf"
+    assert features["__popc"].crossgl == "bitCount"
+    assert features["__syncthreads"].crossgl == "barrier"

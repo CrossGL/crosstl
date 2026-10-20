@@ -519,8 +519,21 @@ CUDA = {
     ),
 }
 
+# HIP keeps CUDA's kernel language and renames the runtime types.
+HIP = {
+    **CUDA,
+    "half": _scalar("__half", "fin", "#include <hip/hip_fp16.h>"),
+    "sampled-texture": Template(
+        CUDA["sampled-texture"].body, params="hipTextureObject_t tex"
+    ),
+    "storage-image": Template(
+        CUDA["storage-image"].body, params="hipSurfaceObject_t img"
+    ),
+}
+
 TEMPLATES = {
     "cuda": CUDA,
+    "hip": HIP,
     "glsl": GLSL,
     "hlsl": HLSL,
     "metal": METAL,

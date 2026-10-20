@@ -206,8 +206,19 @@ class CUDA(Dialect):
         return "\n".join(lines + ["}"]) + "\n"
 
 
+class HIP(CUDA):
+    """HIP kernels are CUDA kernels that include the HIP runtime header, which hipcc does not add by itself."""
+
+    language = "hip"
+    suffix = ".hip"
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        prelude = ["#include <hip/hip_runtime.h>", *parts.pop("prelude", ())]
+        return super().kernel(buffers, body, prelude=prelude, **parts)
+
+
 DIALECTS: dict[str, Dialect] = {
-    d.language: d for d in (CROSSGL, CUDA(), GLSL(), HLSL(), Metal(), WGSL())
+    d.language: d for d in (CROSSGL, CUDA(), GLSL(), HIP(), HLSL(), Metal(), WGSL())
 }
 
 

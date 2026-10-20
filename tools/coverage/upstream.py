@@ -52,6 +52,29 @@ SOURCES = {
         "95c602702118f5aabba3a5e8569abfca9865d4c86e02a210021eed16b5dd6bc5",
         "GLSL 4.60 specification, chapter 8 (built-in functions)",
     ),
+    # HIP is pinned to the versions Ubuntu 24.04 packages (hipcc 5.7.1 on clang 17.0.6), the compiler the probes are
+    # validated with, so the list names exactly what that compiler's headers define.
+    "hip": Source(
+        "llvm/llvm-project",
+        "6009708b4367171ccdbf4b5905cb6a803753fe18",
+        "clang/lib/Headers/__clang_hip_math.h",
+        "218b1f09b2327d7bbd11534a4a6bba93ea990d1cc218177dbb36e2ff74b362ac",
+        "LLVM 17.0.6 device-side HIP math functions and intrinsics",
+    ),
+    "hip-atomic": Source(
+        "ROCm/clr",
+        "1949b1621a802ffb1492616adbae6154bfbe64ef",
+        "hipamd/include/hip/amd_detail/amd_hip_atomic.h",
+        "44e62e2adac1ccd40bfdf007b91131f125cf572b908b7f9a770a1d502008262d",
+        "ROCm 5.7.1 HIP atomic functions",
+    ),
+    "hip-device": Source(
+        "ROCm/clr",
+        "1949b1621a802ffb1492616adbae6154bfbe64ef",
+        "hipamd/include/hip/amd_detail/amd_device_functions.h",
+        "1cc905b32475f129990c64892514a822fb18fafa3e5b6f2a1ddb5eb093e3453c",
+        "ROCm 5.7.1 HIP device functions (integer intrinsics, conversions, barriers)",
+    ),
     "hlsl": Source(
         "microsoft/DirectXShaderCompiler",
         "d355aa8364d34df3f0822ba0de8d1dfc75ae6f48",

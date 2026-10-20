@@ -227,3 +227,19 @@ def test_cuda_probes_are_valid_cuda(probe_feature, baseline):
     probe = probes.build(probe_feature, "cuda", baseline=baseline)
     verdict = validators.validate("cuda", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_hip_probe_is_a_cuda_kernel_that_includes_the_hip_runtime():
+    source = probes.build(CUDA_SIGNATURES[2], "hip").source
+    assert source.startswith("#include <hip/hip_runtime.h>\n")
+    assert 'extern "C" __global__ void probe(int* iin, int* outp) {' in source
+    assert probes.build(CUDA_SIGNATURES[0], "hip").suffix == ".hip"
+
+
+@pytest.mark.skipif(not validators.available("hip"), reason="hipcc is not installed")
+@pytest.mark.parametrize("probe_feature", CUDA_SIGNATURES, ids=lambda f: f.name)
+@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
+def test_hip_probes_are_valid_hip(probe_feature, baseline):
+    probe = probes.build(probe_feature, "hip", baseline=baseline)
+    verdict = validators.validate("hip", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log

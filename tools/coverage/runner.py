@@ -14,6 +14,7 @@ from .semantic import lower
 OUTPUT_BACKENDS = {
     "cuda": "cuda",
     "glsl": "opengl",
+    "hip": "hip",
     "hlsl": "directx",
     "metal": "metal",
     "spirv": "vulkan",
@@ -22,6 +23,7 @@ OUTPUT_BACKENDS = {
 INPUT_BACKENDS = {
     "cuda": "cuda",
     "glsl": "opengl",
+    "hip": "hip",
     "hlsl": "directx",
     "metal": "metal",
 }

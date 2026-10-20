@@ -46,7 +46,7 @@ def cuda_type(spelling: str) -> Type:
     return Type.other(text)
 
 
-def _param(text: str, atomic: bool, first: bool) -> Param:
+def parameter(text: str, atomic: bool, first: bool) -> Param:
     text = re.sub(r"\b__\w+$", "", text.strip()).strip()
     if not text.endswith("*"):
         return Param(cuda_type(text))
@@ -71,7 +71,7 @@ def definitions(text: str, group: str) -> list[tuple[str, str, Signature, str]]:
         parts = [p for p in params.split(",") if p.strip() and p.strip() != "void"]
         signature = Signature(
             cuda_type(result),
-            tuple(_param(p, bool(atomic), i == 0) for i, p in enumerate(parts)),
+            tuple(parameter(p, bool(atomic), i == 0) for i, p in enumerate(parts)),
         )
         entry = (
             public,
@@ -91,7 +91,7 @@ def _rank(helper: str) -> int:
     )
 
 
-def _crossgl_name(name: str, signature: Signature, double_names: set[str]) -> str:
+def crossgl_name(name: str, signature: Signature, double_names: set[str]) -> str:
     """CrossGL overloads by type, so a single-precision C function is spelled as its double-precision twin."""
     base = name[:-1] if name.endswith("f") and name[:-1] in double_names else name
     if signature.result == Type("float") and base != name:
@@ -116,7 +116,7 @@ def parse(
                 signature,
                 group=group,
                 crossgl=crossgl.spelling(
-                    "cuda", _crossgl_name(name, signature, double_names), glsl_names
+                    "cuda", crossgl_name(name, signature, double_names), glsl_names
                 ),
             )
         )

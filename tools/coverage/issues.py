@@ -51,6 +51,7 @@ _LOCATION = re.compile(
 TOOLS = {
     "cuda": "nvcc",
     "glsl": "glslang",
+    "hip": "hipcc",
     "hlsl": "DXC",
     "metal": "the Metal compiler",
     "spirv": "spirv-val",
