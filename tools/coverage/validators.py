@@ -90,7 +90,35 @@ def command(name: str) -> tuple[str, ...]:
     if name == "rust-gpu":
         return rustgpu.command()
     found = _executable(name)
+    if (
+        found
+        and name == "mojo"
+        and not _MOJO_RELEASE.match(_first_line([found, "--version"]))
+    ):
+        # Calendar-versioned Mojo (24.x, 25.x) predates the language the probes are written in; treat it as absent
+        # so a stale install reads as untested rather than wrong.
+        return ()
     return (found,) if found else ()
+
+
+# The Mojo line the probes target: the compute job pins mojo-compiler 1.1.0.
+_MOJO_RELEASE = re.compile(r"mojo\s+1\.", re.IGNORECASE)
+
+
+def _first_line(arguments: list[str]) -> str:
+    """The first non-empty line ``arguments`` prints, or an empty string when it cannot run."""
+    try:
+        result = subprocess.run(
+            arguments, capture_output=True, text=True, timeout=TIMEOUT
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    lines = [
+        line.strip()
+        for line in (result.stdout + result.stderr).splitlines()
+        if line.strip()
+    ]
+    return lines[0] if lines else ""
 
 
 @functools.lru_cache(maxsize=None)
@@ -103,18 +131,7 @@ def version(name: str) -> str:
         return ""
     # slangc takes single-dash options only.
     flag = "-version" if name == "slangc" else "--version"
-    try:
-        result = subprocess.run(
-            [*base, flag], capture_output=True, text=True, timeout=TIMEOUT
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    lines = [
-        line.strip()
-        for line in (result.stdout + result.stderr).splitlines()
-        if line.strip()
-    ]
-    return lines[0] if lines else ""
+    return _first_line([*base, flag])
 
 
 def available(language: str) -> bool:

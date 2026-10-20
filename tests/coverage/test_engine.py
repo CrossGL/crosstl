@@ -209,3 +209,21 @@ def test_tools_lists_every_language_and_how_to_provide_a_missing_tool(
     assert "CROSSTL_COVERAGE_RUST_GPU" in rows["rust"]
     assert "MetalToolchain" in rows["metal"]
     assert "glsl yes, hlsl no" in lines[-2]
+
+
+@pytest.mark.parametrize(
+    ("banner", "found"),
+    [("Mojo 1.1.0 (8189361e)", True), ("mojo 24.4.0 (59977802)", False)],
+)
+def test_mojo_counts_as_installed_only_for_the_pinned_release_line(
+    tmp_path, monkeypatch, banner, found
+):
+    fake = tmp_path / "mojo"
+    fake.write_text(f"#!/bin/sh\necho '{banner}'\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("CROSSTL_COVERAGE_MOJO", str(fake))
+    validators.command.cache_clear()
+    try:
+        assert validators.command("mojo") == ((str(fake),) if found else ())
+    finally:
+        validators.command.cache_clear()
