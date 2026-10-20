@@ -6,6 +6,11 @@ the pointer's allocation and indexes each array with the same 64-bit
 expression. A function-scoped assertion gives every branch the same range, so
 it either overstates the smaller array's bound or understates the larger one.
 An ``indexed`` scope states the range per array.
+
+The small array is filled and read up to a runtime ``count`` that the host keeps
+at 16 or less. Only an assertion can state that bound, so the small array's
+subscripts are proven by its scoped range or not at all. The view identity
+already decides which array each subscript reaches.
 """
 
 import shutil
@@ -35,19 +40,20 @@ struct Cursor {
 kernel void shared_reader(
     const device float* inputs [[buffer(0)]],
     device float* outputs [[buffer(1)]],
+    constant uint& count [[buffer(2)]],
     uint tid [[thread_position_in_threadgroup]]) {
     threadgroup float large[64];
     threadgroup float small[16];
     Cursor wide{large};
     Cursor narrow{small};
     wide.write(long(tid), inputs[tid]);
-    if (tid < 16u) {
+    if (tid < count) {
         narrow.write(long(tid), inputs[64u + tid]);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     float value = wide.read(long(63u - tid));
-    if (tid < 16u) {
-        value += narrow.read(long(15u - tid));
+    if (tid < count) {
+        value += narrow.read(long(count - 1u - tid));
     }
     outputs[tid] = value;
 }
@@ -159,7 +165,8 @@ def test_storage_scoped_ranges_narrow_each_array(tmp_path):
 
 def test_function_and_storage_scopes_combine(tmp_path):
     # Load helpers are proved by the scoped pair; store helpers keep only the
-    # large array's range, so the small array's stores stay unproven.
+    # large array's range. The small array's stores are bounded only by
+    # ``tid < count``, a range far past its 16 elements, so they are refused.
     payload, _ = _translate(
         tmp_path,
         [
@@ -168,7 +175,7 @@ def test_function_and_storage_scopes_combine(tmp_path):
         ],
     )
     assert payload["summary"]["translatedCount"] == 0
-    assert _index_errors(payload) == [(SMALL, "index-range-unproven")]
+    assert _index_errors(payload) == [(SMALL, "index-range-out-of-bounds")]
 
 
 def test_storage_scoped_range_still_checks_the_storage_bound(tmp_path):

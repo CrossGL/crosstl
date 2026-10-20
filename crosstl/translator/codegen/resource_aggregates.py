@@ -217,7 +217,9 @@ def _call(name, args):
 
 
 def _integer(value):
-    return LiteralNode(value, "int")
+    # A typed literal lets target range proofs compare it with the typed identity
+    # member, so a view's proven identity decides the accessor branch it takes.
+    return LiteralNode(value, PrimitiveType("int"))
 
 
 def _member(value, name):
