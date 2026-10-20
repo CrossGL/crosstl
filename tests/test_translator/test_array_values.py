@@ -282,9 +282,14 @@ def test_metal_stage_output_arrays_split_array_values(tmp_path):
 def test_spirv_stage_structure_members_after_an_array_take_later_locations(tmp_path):
     code = _translate(tmp_path, STAGE_ARRAY_CGL, ".cgl", "vulkan")
 
-    locations = dict(
-        re.findall(r"OpDecorate %CrossGL_vertex_output_main_(\w+) Location (\d+)", code)
-    )
+    # Without SPIRV-Tools the module keeps numeric ids; name them through OpName.
+    names = dict(re.findall(r'OpName %(\w+) "(\w+)"', code))
+    prefix = "CrossGL_vertex_output_main_"
+    locations = {
+        names.get(target, target)[len(prefix) :]: value
+        for target, value in re.findall(r"OpDecorate %(\w+) Location (\d+)", code)
+        if names.get(target, target).startswith(prefix)
+    }
     assert locations == {"N": "1", "id": "3"}
     _validate_spirv(tmp_path, code)
 

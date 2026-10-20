@@ -179,7 +179,8 @@ def _spelling(type_node):
         rows, cols = type_node.rows, type_node.cols
         if prefix is None or not str(rows).isdigit() or not str(cols).isdigit():
             return None
-        return f"{prefix}{rows}" if rows == cols else f"{prefix}{rows}x{cols}"
+        # CrossGL spells matrices as GLSL does: matCxR has C columns of R rows.
+        return f"{prefix}{rows}" if rows == cols else f"{prefix}{cols}x{rows}"
     return None
 
 

@@ -75,7 +75,10 @@ def _validate(tmp_path, code):
 
 
 def _decorations(code, kind):
-    return dict(re.findall(rf"OpDecorate %(\w+) {kind} (\w+)", code))
+    # Without SPIRV-Tools the module keeps numeric ids; name them through OpName.
+    names = dict(re.findall(r'OpName %(\w+) "(\w+)"', code))
+    found = re.findall(rf"OpDecorate %(\w+) {kind} (\w+)", code)
+    return {names.get(target, target): value for target, value in found}
 
 
 def test_per_vertex_outputs_are_built_ins_not_locations(tmp_path):
