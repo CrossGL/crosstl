@@ -117,7 +117,11 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
-from . import hlsl_byte_records, hlsl_private_pointer_call_intervals
+from . import (
+    hlsl_byte_records,
+    hlsl_private_pointer_call_intervals,
+    hlsl_private_pointer_variants,
+)
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -42717,6 +42721,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         for parameter in parameters
                     )
                 )
+        variants = self.hlsl_private_pointer_emitted_variants(
+            functions_by_name,
+            pointer_parameters,
+            scalar_parameters,
+            required_spans,
+            view_calls,
+            variants,
+        )
 
         self.function_private_pointer_backing_variants = {
             function_name: tuple(
@@ -42743,6 +42755,135 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             }
             for function_name, parameters in pointer_parameters.items()
         }
+
+    def hlsl_private_pointer_callee_variant(
+        self, caller_variant, call, pointer_parameters, scalar_parameters
+    ):
+        """The backing variant ``call`` binds from one variant of its caller."""
+
+        caller_positions = {
+            parameter.name: index
+            for index, parameter in enumerate(
+                pointer_parameters.get(call.get("caller"), ())
+            )
+        }
+        values = []
+        for parameter in pointer_parameters[call["callee"]]:
+            binding = call["bindings"][parameter.name]
+            root_kind = binding.get("root_kind")
+            position = caller_positions.get(binding.get("root"))
+            if root_kind == "local":
+                values.append(binding["extent"])
+            elif root_kind == "local_word_view":
+                values.append(binding["word_view"])
+            elif root_kind == "scalar" and parameter.name in scalar_parameters.get(
+                call["callee"], set()
+            ):
+                values.append(1)
+            elif (
+                root_kind == "parameter"
+                and position is not None
+                and position < len(caller_variant)
+            ):
+                values.append(caller_variant[position])
+            else:
+                return None
+        return tuple(values)
+
+    def hlsl_private_pointer_unrecorded_callees(self, functions_by_name, view_calls):
+        """Helpers with a call the private pointer analysis did not record."""
+
+        recorded = {id(call["node"]) for calls in view_calls.values() for call in calls}
+        callees = set()
+        for function in functions_by_name.values():
+            for node in self.walk_ast(getattr(function, "body", [])):
+                if not isinstance(node, FunctionCallNode) or id(node) in recorded:
+                    continue
+                callee_name = self.hlsl_private_pointer_call_callee(node)
+                if callee_name in self.function_private_pointer_parameters:
+                    callees.add(callee_name)
+        return sorted(callees)
+
+    def hlsl_private_pointer_emitted_variants(
+        self,
+        functions_by_name,
+        pointer_parameters,
+        scalar_parameters,
+        required_spans,
+        view_calls,
+        variants,
+    ):
+        """The backing variants to emit, refusing indistinguishable overloads."""
+
+        reached = hlsl_private_pointer_variants.reached_variants(
+            variants,
+            view_calls,
+            pointer_parameters,
+            lambda caller_variant, call: self.hlsl_private_pointer_callee_variant(
+                caller_variant, call, pointer_parameters, scalar_parameters
+            ),
+        )
+        for function_name in self.hlsl_private_pointer_unrecorded_callees(
+            functions_by_name, view_calls
+        ):
+            default = tuple(
+                required_spans[function_name][parameter.name]
+                for parameter in pointer_parameters[function_name]
+            )
+            variants[function_name].add(default)
+            reached[function_name].add(default)
+
+        previous_variant = self.current_hlsl_private_pointer_variant
+        emitted = {}
+        try:
+            for function_name in sorted(variants):
+                parameters = pointer_parameters[function_name]
+
+                def signature(variant):
+                    self.current_hlsl_private_pointer_variant = {
+                        parameter.name: variant[index]
+                        for index, parameter in enumerate(parameters)
+                    }
+                    return tuple(
+                        self.hlsl_private_pointer_parameter_array_type(
+                            parameter, function_name
+                        )
+                        for parameter in parameters
+                    )
+
+                if len(variants[function_name]) < 2:
+                    emitted[function_name] = set(variants[function_name])
+                    continue
+                emitted[function_name], collisions = (
+                    hlsl_private_pointer_variants.emitted_variants(
+                        variants[function_name], reached[function_name], signature
+                    )
+                )
+                for first, second in collisions:
+                    index = next(
+                        index
+                        for index in range(len(parameters))
+                        if first[index] != second[index]
+                    )
+                    parameter = parameters[index]
+                    raise DirectXPrivatePointerParameterError(
+                        "DirectX private pointer parameter "
+                        f"'{function_name}.{parameter.name}' is bound to backings "
+                        f"{first[index]!r} and {second[index]!r}, which both "
+                        f"become '{signature(first)[index]}' and cannot be "
+                        "distinct HLSL overloads",
+                        function_name=function_name,
+                        parameter_name=parameter.name,
+                        reason="indistinguishable-backing-variants",
+                        source_location=getattr(
+                            functions_by_name.get(function_name),
+                            "source_location",
+                            None,
+                        ),
+                    )
+        finally:
+            self.current_hlsl_private_pointer_variant = previous_variant
+        return emitted
 
     def hlsl_private_pointer_local_array_extents(self, function):
         constants = self.visible_literal_int_constants(function)
