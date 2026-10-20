@@ -376,13 +376,13 @@ def test_row_trace_checks_physical_boolean_storage(row_evidence, target, fault):
 def test_row_ci_preserves_all_three_targets_and_full_width_sets():
     import yaml
 
-    from tests import workflow_text
+    from tools import ci_coverage
 
     workflow = (
         Path(__file__).resolve().parents[5]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    dependencies = workflow_text.workflow_job_step_section(
+    dependencies = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Install CrossTL and MLX build dependencies"
     )
     assert '"PyYAML>=6,<7"' in dependencies
@@ -392,7 +392,7 @@ def test_row_ci_preserves_all_three_targets_and_full_width_sets():
     assert "PyYAML>=6,<7" in requirements.splitlines()
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(workflow, event),
+            ci_coverage.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/host/test_portable_rows.py",
         )
     job = yaml.safe_load(workflow)["jobs"]["reductions"]

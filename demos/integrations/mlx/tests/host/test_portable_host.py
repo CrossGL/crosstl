@@ -2508,7 +2508,7 @@ def test_boolean_unary_dispatch_preserves_stored_contiguous_layouts(monkeypatch)
 
 
 def test_ci_requires_native_math_before_building_mlx():
-    from tests import workflow_text
+    from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
@@ -2519,7 +2519,7 @@ def test_ci_requires_native_math_before_building_mlx():
         "Build adapted upstream MLX",
     )
     for earlier, later in zip(order, order[1:]):
-        assert workflow_text.workflow_job_step_after(
+        assert ci_coverage.workflow_job_step_after(
             workflow, "portable-host", later, earlier
         )
     for name, seconds, evidence_directory, modules, flags in (
@@ -2551,7 +2551,7 @@ def test_ci_requires_native_math_before_building_mlx():
             ),
         ),
     ):
-        step = workflow_text.workflow_job_step_section(workflow, "portable-host", name)
+        step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
         condition = " ".join(yaml.safe_load(step)[0]["if"].split())
         if name == "Validate native scalar math":
             assert condition == (
@@ -2578,18 +2578,18 @@ def test_ci_requires_native_math_before_building_mlx():
             assert path in step
             for event in ("push", "pull_request"):
                 assert_paths_covered(
-                    workflow_text.workflow_event_path_filters(workflow, event), path
+                    ci_coverage.workflow_event_path_filters(workflow, event), path
                 )
         for flag in flags:
             assert f'{flag}: "1"' in step
-    scalar = workflow_text.workflow_job_step_section(
+    scalar = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate native scalar math"
     )
     assert (
         "CROSTL_REQUIRE_DIRECTX_ATAN2: ${{ runner.os == 'Windows' && '1' || '0' }}"
         in scalar
     )
-    half = workflow_text.workflow_job_step_section(
+    half = ci_coverage.workflow_job_step_section(
         workflow, "opengl", "Validate OpenGL half conversions"
     )
     assert "if:" not in half
@@ -2604,10 +2604,10 @@ def test_ci_requires_native_math_before_building_mlx():
     assert "tee .mlx-gather-opengl/half-conversions.log" in half
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(workflow, event),
+            ci_coverage.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_opengl_half_conversion.py",
         )
-    directx_half = workflow_text.workflow_job_step_section(
+    directx_half = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate DirectX half conversions"
     )
     for job, name, directory, flag, module, seconds in (
@@ -2628,7 +2628,7 @@ def test_ci_requires_native_math_before_building_mlx():
             600,
         ),
     ):
-        step = workflow_text.workflow_job_step_section(workflow, job, name)
+        step = ci_coverage.workflow_job_step_section(workflow, job, name)
         if job == "opengl":
             assert "if:" not in step
             assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in step
@@ -2651,9 +2651,9 @@ def test_ci_requires_native_math_before_building_mlx():
         assert module in step
         for event in ("pull_request", "push"):
             assert_paths_covered(
-                workflow_text.workflow_event_path_filters(workflow, event), module
+                ci_coverage.workflow_event_path_filters(workflow, event), module
             )
-    derivatives = workflow_text.workflow_job_step_section(
+    derivatives = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Execute pinned OpenGL attention derivatives"
     )
     assert (
@@ -2674,10 +2674,10 @@ def test_ci_requires_native_math_before_building_mlx():
     assert "tests/test_translator/test_directx_half_conversion.py" in directx_half
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(workflow, event),
+            ci_coverage.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_half_conversion.py",
         )
-    binary = workflow_text.workflow_job_step_section(
+    binary = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned native binary math"
     )
     assert "CROSTL_MLX_CURRENT_TARGET: ${{ matrix.target }}" in binary
@@ -2690,18 +2690,18 @@ def test_ci_requires_native_math_before_building_mlx():
         "${{ runner.os == 'Linux' && '1' || '0' }}" in binary
     )
     assert "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream" in binary
-    timeout = workflow_text.workflow_job_timeout_minutes(workflow, "portable-host")
+    timeout = ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host")
     assert timeout * 60 > 120 + 900 + 1800 + 900 + 1800
 
 
 def test_ci_requires_resident_attention_reductions():
     import re
 
-    from tests import workflow_text
+    from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = workflow_text.workflow_job_step_section(
+    step = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Execute pinned resident attention reductions"
     )
     assert (
@@ -2724,7 +2724,7 @@ def test_ci_requires_resident_attention_reductions():
     assert (
         "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py" in step
     )
-    assert workflow_text.workflow_job_step_after(
+    assert ci_coverage.workflow_job_step_after(
         workflow,
         "portable-host",
         "Execute pinned resident attention reductions",
@@ -2732,22 +2732,22 @@ def test_ci_requires_resident_attention_reductions():
     )
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(workflow, event),
+            ci_coverage.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/kernels/test_attention_reduce_runtime.py",
         )
-    assert workflow_text.workflow_job_timeout_minutes(
+    assert ci_coverage.workflow_job_timeout_minutes(
         workflow, "portable-host"
     ) * 60 > sum(
         int(value)
         for value in re.findall(
             r"--timeout-seconds (\d+)",
-            workflow_text.workflow_job_text(workflow, "portable-host"),
+            ci_coverage.workflow_job_text(workflow, "portable-host"),
         )
     )
 
 
 def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
-    from tests import workflow_text
+    from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
@@ -2788,7 +2788,7 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
             "demos/integrations/mlx/tests/kernels/test_attention_ds_runtime.py",
         ),
     ):
-        step = workflow_text.workflow_job_step_section(workflow, "portable-host", name)
+        step = ci_coverage.workflow_job_step_section(workflow, "portable-host", name)
         prerequisite = (
             "host-warp-identity"
             if name.startswith("Validate DirectX")
@@ -2807,11 +2807,11 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
         assert f"--junitxml=.mlx-portable-host/{directory}/results.xml" in step
         assert f"tee .mlx-portable-host/{directory}.log" in step
         assert module in step
-        assert workflow_text.workflow_job_step_after(
+        assert ci_coverage.workflow_job_step_after(
             workflow, "portable-host", "Build adapted upstream MLX", name
         )
         for event in ("push", "pull_request"):
-            paths = workflow_text.workflow_event_path_filters(workflow, event)
+            paths = ci_coverage.workflow_event_path_filters(workflow, event)
             assert_paths_covered(paths, module)
             assert_paths_covered(
                 paths, "tests/test_translator/test_metal_float_atomics.py"
@@ -2827,7 +2827,7 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
                 paths, "demos/integrations/mlx/tests/fixtures/gated_delta_reference.py"
             )
     metal = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    attention = workflow_text.workflow_job_step_section(
+    attention = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Execute pinned portable attention row dots"
     )
     assert (
@@ -2852,12 +2852,10 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
     assert "tee .mlx-portable-host/attention-odo.log" in attention
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(workflow, event),
+            ci_coverage.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/kernels/test_attention_odo_runtime.py",
         )
-    assert workflow_text.workflow_job_timeout_minutes(
-        workflow, "portable-host"
-    ) * 60 > (
+    assert ci_coverage.workflow_job_timeout_minutes(workflow, "portable-host") * 60 > (
         120
         + 120
         + 180
@@ -2874,7 +2872,7 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
         + 600
         + 600
     )
-    reductions = workflow_text.workflow_job_step_section(
+    reductions = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate DirectX software reductions"
     )
     assert "tests/test_translator/test_directx_subgroup_identity.py" in reductions
@@ -2882,18 +2880,18 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
     assert "tests/test_translator/test_directx_subgroup_components.py" in reductions
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(workflow, event),
+            ci_coverage.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_subgroup_identity.py",
         )
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(workflow, event),
+            ci_coverage.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_subgroup_uniformity.py",
         )
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(workflow, event),
+            ci_coverage.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_subgroup_components.py",
         )
-    control = workflow_text.workflow_job_step_section(
+    control = ci_coverage.workflow_job_step_section(
         metal, "metal-host", "Validate native float atomics"
     )
     assert (
@@ -2903,6 +2901,6 @@ def test_ci_requires_directx_atomic_execution_and_pinned_compilation():
     assert 'CROSTL_REQUIRE_METAL_FLOAT_ATOMICS: "1"' in control
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(metal, event),
+            ci_coverage.workflow_event_path_filters(metal, event),
             "tests/test_translator/test_directx_float_atomics.py",
         )

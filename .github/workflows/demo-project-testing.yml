@@ -3889,14 +3889,13 @@ jobs:
           $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Prove native artifact contract refresh
-        shell: bash
         env:
           CROSTL_REQUIRE_ARTIFACT_REFRESH_COMPILER: "1"
-        run: |
-          mkdir -p build/reports
-          python -m pytest -q -n auto tests/test_artifact_contract_refresh.py \
-            --basetemp build/reports/artifact-refresh-native \
-            --junitxml build/reports/artifact-refresh-native.xml
+        run: >-
+          python -m pytest -q -n auto
+          tests/test_artifact_contract_refresh.py
+          --basetemp support/generated/artifact-refresh-native
+          --junitxml support/generated/artifact-refresh-native.xml
 
       - name: Upload native artifact refresh evidence
         if: always()
@@ -3904,8 +3903,8 @@ jobs:
         with:
           name: artifact-refresh-native-${{ runner.os }}
           path: |
-            build/reports/artifact-refresh-native
-            build/reports/artifact-refresh-native.xml
+            support/generated/artifact-refresh-native
+            support/generated/artifact-refresh-native.xml
           if-no-files-found: warn
           retention-days: 14
 

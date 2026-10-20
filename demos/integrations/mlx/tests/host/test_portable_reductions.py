@@ -584,19 +584,19 @@ def test_reduction_workloads_cover_every_declared_width_and_operation():
 def test_reduction_host_ci_requires_every_variant_and_retains_failures():
     from pathlib import Path
 
-    from tests import workflow_text
+    from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            workflow_text.workflow_event_path_filters(workflow, event),
+            ci_coverage.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/host/test_portable_reductions.py",
         )
-    translation = workflow_text.workflow_job_step_section(
+    translation = ci_coverage.workflow_job_step_section(
         workflow, "reductions", "Translate reduction launch variants"
     )
-    execution = workflow_text.workflow_job_step_section(
+    execution = ci_coverage.workflow_job_step_section(
         workflow, "reductions", "Execute MLX reductions"
     )
     for step in (translation, execution):
@@ -606,13 +606,13 @@ def test_reduction_host_ci_requires_every_variant_and_retains_failures():
     assert "--width" not in translation and "--entry" not in translation
     assert "--jobs 2" in translation and "--target ${{ matrix.target }}" in translation
     assert "--reductions .mlx-portable-reductions/packages" in execution
-    assert workflow_text.workflow_job_step_after(
+    assert ci_coverage.workflow_job_step_after(
         workflow,
         "reductions",
         "Execute MLX reductions",
         "Translate reduction launch variants",
     )
-    job = workflow_text.workflow_job_text(workflow, "reductions")
+    job = ci_coverage.workflow_job_text(workflow, "reductions")
     assert "needs: [ci-plan, portable-host, row-packages]" in job
     assert "artifact-ids: ${{ steps.host-artifact.outputs.id }}" in job
     assert "run_id: context.runId" in job and "merge-multiple: true" in job

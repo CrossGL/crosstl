@@ -28,7 +28,6 @@ from demos.integrations.mlx.tests.kernels.test_unary_complete_directx import (
     UNARY_DIRECTX_WORKLOADS,
     _project_config,
 )
-from tests import workflow_text
 from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_bfloat_buffer_runtime import _storage
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
@@ -38,6 +37,7 @@ from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_precise_exp import _narrow, _oracle
 from tests.test_translator.test_metal_precise_trig import _float, _round_decimal
 from tests.test_translator.test_software_subgroup_product import _package
+from tools import ci_coverage
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_DIVISION"
 ENTRY = "v_Sigmoidbfloat16bfloat16"
@@ -214,7 +214,7 @@ def test_ci_requires_pinned_division_once_per_platform():
         Path(__file__).resolve().parents[5]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = workflow_text.workflow_job_step_section(
+    step = ci_coverage.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned unary arithmetic"
     )
     assert_native_step_prerequisites(step, job="portable-host", pinned=True)

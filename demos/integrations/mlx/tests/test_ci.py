@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests import workflow_text
 from tests.test_ci_workflows import (
     RUNNER_OSES,
+    _load_ci_coverage_module,
     _matrix_values,
     _workflow_event_paths,
     _workflow_job_section,
@@ -867,14 +867,15 @@ def test_project_demo_has_no_parent_cancellation_or_serialization():
 
 def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
-    jobs = workflow_text.workflow_job_names(workflow)
+    coverage = _load_ci_coverage_module()
+    jobs = coverage.workflow_job_names(workflow)
     assert len(jobs) == 42
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
-        section = workflow_text.nested_yaml_section(job, "concurrency", 4)
+        section = coverage.nested_yaml_section(job, "concurrency", 4)
         expected = "${{ github.workflow }}-${{ github.ref }}-" + name
-        if workflow_text.nested_yaml_section(job, "matrix", 6):
+        if coverage.nested_yaml_section(job, "matrix", 6):
             expected += "-${{ strategy.job-index }}"
         assert section == [
             "      group: " + expected,
@@ -1007,7 +1008,8 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
 def test_affine_metal_numerics_reuse_the_complete_source_bundle():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     job = _workflow_job_section(workflow, "mlx-quantized-complete-metal-roundtrip")
-    step = workflow_text.workflow_step_section(
+    coverage = _load_ci_coverage_module()
+    step = coverage.workflow_step_section(
         job, "Verify affine Metal numerical roundtrip"
     )
     assert "runs-on: macOS-latest" in job
@@ -1031,7 +1033,7 @@ def test_affine_metal_numerics_reuse_the_complete_source_bundle():
     assert job.index("Compile every pinned quantized Metal artifact") < job.index(
         "Verify affine Metal numerical roundtrip"
     )
-    upload = workflow_text.workflow_step_section(
+    upload = coverage.workflow_step_section(
         job, "Retain quantized Metal native compilation evidence"
     )
     assert "if: always()" in upload and "path: .quantized-metal-native" in upload
@@ -1042,7 +1044,7 @@ def test_affine_metal_numerics_reuse_the_complete_source_bundle():
 
 def test_metal_execution_budget_preserves_all_storage_cases():
     job = _workflow_job_section(_workflow_texts()["demo-project-testing.yml"], "metal")
-    step = workflow_text.workflow_step_section(
+    step = _load_ci_coverage_module().workflow_step_section(
         job, "Validate Metal byte and vector storage"
     )
     assert '--timeout-seconds 1800 --label "Native Metal storage"' in step
@@ -1073,7 +1075,8 @@ def test_corpus_retains_failure_evidence_without_additional_jobs(
 ):
     workflow = _workflow_texts()["demo-project-testing.yml"]
     job = _workflow_job_section(workflow, f"mlx-{family}-complete-{target}-translation")
-    proof = workflow_text.workflow_step_section(
+    coverage = _load_ci_coverage_module()
+    proof = coverage.workflow_step_section(
         job, f"Prove current MLX complete {family} family {platform} translation"
     )
     runner = "ubuntu-24.04" if target == "directx" else "ubuntu-latest"
@@ -1082,7 +1085,7 @@ def test_corpus_retains_failure_evidence_without_additional_jobs(
     assert "python -m pytest -q -n auto" in proof
     assert f"--junitxml={family}-{target}-junit.xml" in proof
     assert "continue-on-error" not in job
-    upload = workflow_text.workflow_step_section(
+    upload = coverage.workflow_step_section(
         job, f"Upload {family} {platform} corpus evidence"
     )
     assert "if: always()" in upload
@@ -1121,8 +1124,9 @@ def test_native_loader_evidence_is_retained_in_existing_project_job(
     job = _workflow_job_section(
         _workflow_texts()["demo-project-testing.yml"], "mlx-metal-porting"
     )
+    coverage = _load_ci_coverage_module()
     revision = "current" if family in {"gemv", "mxfp4"} else "pinned"
-    step = workflow_text.workflow_step_section(
+    step = coverage.workflow_step_section(
         job, f"Prove {revision} MLX {title} {platform} native-loader execution"
     )
     assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in step
@@ -1133,9 +1137,7 @@ def test_native_loader_evidence_is_retained_in_existing_project_job(
     assert f"--junitxml={results}/{target}.xml" in step
     assert "python -m pytest -q -n auto" in step
     assert "continue-on-error" not in step
-    upload = workflow_text.workflow_step_section(
-        job, "Upload MLX project-porting reports"
-    )
+    upload = coverage.workflow_step_section(job, "Upload MLX project-porting reports")
     assert "if: always()" in upload
     assert "mlx-current-upstream/.crosstl-corpus-evidence" in upload
     assert results in upload
@@ -1160,9 +1162,10 @@ def test_directx_corpus_report_matches_compiler_runner(family):
 
 def test_mlx_gather_checkout_preserves_pinned_source_bytes():
     workflow = (WORKFLOW_DIR / "demo-project-testing.yml").read_text(encoding="utf-8")
+    ci_coverage = _load_ci_coverage_module()
     for target in ("metal", "metal-float", "directx", "opengl"):
         job = _workflow_job_section(workflow, target)
-        step = workflow_text.workflow_step_section(job, "Checkout pinned upstream MLX")
+        step = ci_coverage.workflow_step_section(job, "Checkout pinned upstream MLX")
         initialization = step.index("git init mlx-upstream")
         configuration = step.index("git -C mlx-upstream config core.autocrlf false")
         checkout = step.index("git -C mlx-upstream checkout --detach FETCH_HEAD")
@@ -1212,7 +1215,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert f'MLX_CURRENT_TREE_COMMIT: "{mlx_current_tree_commit}"' in mlx_porting
     assert 'git -C mlx-upstream checkout "$MLX_COMMIT"' in mlx_porting
     assert 'git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"' in mlx_porting
-    current_runtime_checkout = workflow_text.workflow_step_section(
+    current_runtime_checkout = _load_ci_coverage_module().workflow_step_section(
         mlx_porting,
         "Checkout current MLX runtime proof corpus",
     )
@@ -1226,7 +1229,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         'test "$(git -C mlx-current-upstream rev-parse HEAD)" = '
         '"$MLX_CORPUS_COMMIT"' in current_runtime_checkout
     )
-    current_tree_checkout = workflow_text.workflow_step_section(
+    current_tree_checkout = _load_ci_coverage_module().workflow_step_section(
         mlx_porting,
         "Checkout current MLX kernel tree",
     )
@@ -1239,7 +1242,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         'test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = '
         '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
     )
-    current_census = workflow_text.workflow_step_section(
+    current_census = _load_ci_coverage_module().workflow_step_section(
         mlx_porting,
         "Audit current MLX kernel census",
     )
@@ -1247,7 +1250,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '--expected-commit "$MLX_CURRENT_TREE_COMMIT"' in current_census
     assert "--expected-unit-count 49" in current_census
     assert "--expected-entry-count 17832" in current_census
-    math_checks = workflow_text.workflow_step_section(
+    math_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Direct3D Metal math semantics"
     )
     _assert_workflow_triggers(
@@ -1258,13 +1261,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--timeout-seconds 120 --" in math_checks
     assert "test_directx_metal_math.py::test_directx_metal_math_executes" in math_checks
     assert "mkdir -p directx-math-results" in math_checks
-    math_upload = workflow_text.workflow_step_section(
+    math_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload Direct3D Metal math evidence"
     )
     assert "if: always() && runner.os == 'Windows'" in math_upload
     assert "path: directx-math-results" in math_upload
     assert "if-no-files-found: error" in math_upload
-    atan2_checks = workflow_text.workflow_step_section(
+    atan2_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate atan2 signed-zero semantics"
     )
     _assert_workflow_triggers(
@@ -1285,7 +1288,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--timeout-seconds 120 --" in atan2_checks
     assert "pytest -q -n auto" in atan2_checks
     assert "tests/test_translator/test_directx_atan2.py" in atan2_checks
-    atan2_upload = workflow_text.workflow_step_section(
+    atan2_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload atan2 signed-zero evidence"
     )
     assert (
@@ -1294,7 +1297,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     )
     assert "path: atan2-results" in atan2_upload
     assert "if-no-files-found: error" in atan2_upload
-    opengl_math_checks = workflow_text.workflow_step_section(
+    opengl_math_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate OpenGL Metal math semantics"
     )
     _assert_workflow_triggers(
@@ -1305,13 +1308,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--timeout-seconds 120 --" in opengl_math_checks
     assert "pytest -q -n auto" in opengl_math_checks
     assert "tests/test_translator/test_opengl_metal_math.py" in opengl_math_checks
-    opengl_math_upload = workflow_text.workflow_step_section(
+    opengl_math_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload OpenGL Metal math evidence"
     )
     assert "if: always() && runner.os == 'Linux'" in opengl_math_upload
     assert "path: opengl-math-results" in opengl_math_upload
     assert "if-no-files-found: error" in opengl_math_upload
-    metal_package = workflow_text.workflow_step_section(
+    metal_package = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate native Metal package execution"
     )
     assert 'CROSTL_REQUIRE_METAL_PACKAGE_RUNTIME: "1"' in metal_package
@@ -1331,13 +1334,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     _assert_workflow_triggers(
         mlx_porting, "tests/test_translator/test_metal_native_runtime.py"
     )
-    metal_package_upload = workflow_text.workflow_step_section(
+    metal_package_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload native Metal package evidence"
     )
     assert "if: always() && runner.os == 'macOS'" in metal_package_upload
     assert "path: metal-package-results" in metal_package_upload
     assert "if-no-files-found: error" in metal_package_upload
-    ownership = workflow_text.workflow_step_section(
+    ownership = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Metal builtin ownership"
     )
     _assert_workflow_triggers(
@@ -1347,13 +1350,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--timeout-seconds 120 --" in ownership
     assert "pytest -q -n auto" in ownership
     assert "if: runner.os" not in ownership
-    ownership_upload = workflow_text.workflow_step_section(
+    ownership_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload Metal builtin ownership evidence"
     )
     assert "if: always()" in ownership_upload
     assert "name: metal-builtin-ownership-${{ runner.os }}" in ownership_upload
     assert "if-no-files-found: error" in ownership_upload
-    struct_checks = workflow_text.workflow_step_section(
+    struct_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Prove current MLX complex-power native dispatch"
     )
     assert 'CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_POWER: "1"' in struct_checks
@@ -1368,13 +1371,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     ):
         _assert_workflow_triggers(mlx_porting, filename)
         assert filename in struct_checks
-    struct_upload = workflow_text.workflow_step_section(
+    struct_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload current MLX complex-power evidence"
     )
     assert "if: always()" in struct_upload
     assert "name: mlx-complex-power-${{ runner.os }}" in struct_upload
     assert "if-no-files-found: error" in struct_upload
-    binary_shapes = workflow_text.workflow_step_section(
+    binary_shapes = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Prove current MLX binary shape parity"
     )
     assert 'CROSTL_REQUIRE_MLX_CURRENT_BINARY_SHAPES: "1"' in binary_shapes
@@ -1389,7 +1392,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         mlx_porting,
         "demos/integrations/mlx/tests/kernels/test_current_binary_shapes.py",
     )
-    binary_upload = workflow_text.workflow_step_section(
+    binary_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload current MLX binary shape evidence"
     )
     assert "if: always()" in binary_upload
@@ -1397,7 +1400,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "mlx-current-tree-upstream/.current-binary-shapes-*" in binary_upload
     assert "include-hidden-files: true" in binary_upload
     assert "if-no-files-found: error" in binary_upload
-    primitive_checks = workflow_text.workflow_step_section(
+    primitive_checks = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Validate Direct3D reduction primitives"
     )
     assert "if: runner.os == 'Windows'" in primitive_checks
@@ -1410,7 +1413,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "test_directx_reduction_primitives_execute[$case]" in primitive_checks
     assert "|| failed=1" in primitive_checks
     assert 'exit "$failed"' in primitive_checks
-    primitive_upload = workflow_text.workflow_step_section(
+    primitive_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload Direct3D reduction primitive diagnostics"
     )
     assert "if: always() && runner.os == 'Windows'" in primitive_upload
@@ -1422,7 +1425,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert mlx_porting.index(
         "Validate Direct3D reduction primitives"
     ) < mlx_porting.index("Prove current MLX arg-reduce native validation")
-    current_arg_reduce = workflow_text.workflow_step_section(
+    current_arg_reduce = _load_ci_coverage_module().workflow_step_section(
         mlx_porting,
         "Prove current MLX arg-reduce native validation",
     )
@@ -1488,7 +1491,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         "mkdir -p mlx-current-results"
     ) < current_arg_reduce.index('--basetemp="mlx-current-results/$entry"')
     assert '--junitxml="mlx-current-results/$entry.xml"' in current_arg_reduce
-    runtime_upload = workflow_text.workflow_step_section(
+    runtime_upload = _load_ci_coverage_module().workflow_step_section(
         mlx_porting, "Upload current MLX runtime diagnostics"
     )
     assert "if: always()\n" in runtime_upload
@@ -1971,6 +1974,7 @@ def test_mlx_project_porting_workflow_runs_quantized_opengl_proof_on_linux():
 
 def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
 
     for name, environment, test_name in (
         (
@@ -1989,14 +1993,14 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
             "directx_compute_runtime_executes_inverse_hyperbolic_numerics_on_device",
         ),
     ):
-        step = workflow_text.workflow_step_section(mlx_porting, name)
+        step = ci_coverage.workflow_step_section(mlx_porting, name)
         assert "if: runner.os == 'Windows'" in step
         assert f'{environment}: "1"' in step
         assert test_name in step
         assert "-n auto" in step
         assert "mlx-upstream" not in step
 
-    directx_private_pointer_step = workflow_text.workflow_step_section(
+    directx_private_pointer_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove Direct3D local-struct byte-view native readback",
     )
@@ -2012,7 +2016,7 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
     assert "-k" not in directx_private_pointer_step
     assert "-n auto" in directx_private_pointer_step
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Validate OpenGL copysign runtime contract",
     )
@@ -2027,7 +2031,7 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
     assert "-n auto" in opengl_step
     assert "mlx-upstream" not in opengl_step
 
-    opengl_private_pointer_step = workflow_text.workflow_step_section(
+    opengl_private_pointer_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove OpenGL local-struct byte-view native readback",
     )
@@ -2045,7 +2049,7 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
     assert "PYOPENGL_PLATFORM: egl" in opengl_private_pointer_step
     assert "-n auto" in opengl_private_pointer_step
 
-    vulkan_step = workflow_text.workflow_step_section(
+    vulkan_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Validate generated OpenGL subgroup contract through Vulkan",
     )
@@ -2062,7 +2066,8 @@ def test_mlx_project_porting_workflow_runs_backend_runtime_contracts():
 
 def test_mlx_project_porting_workflow_requires_native_artifact_refresh():
     workflow = _workflow_texts().get("demo-project-testing.yml", "")
-    step = workflow_text.workflow_step_section(
+    coverage = _load_ci_coverage_module()
+    step = coverage.workflow_step_section(
         workflow, "Prove native artifact contract refresh"
     )
     assert 'CROSTL_REQUIRE_ARTIFACT_REFRESH_COMPILER: "1"' in step
@@ -2071,8 +2076,8 @@ def test_mlx_project_porting_workflow_requires_native_artifact_refresh():
     assert "-n auto" in step
     assert "if:" not in step
     assert "continue-on-error" not in step
-    assert "--basetemp build/reports/artifact-refresh-native" in step
-    assert "--junitxml build/reports/artifact-refresh-native.xml" in step
+    assert "--basetemp support/generated/artifact-refresh-native" in step
+    assert "--junitxml support/generated/artifact-refresh-native.xml" in step
     assert workflow.index("Install Linux SPIR-V tools") < workflow.index(
         "Prove native artifact contract refresh"
     )
@@ -2087,20 +2092,21 @@ def test_mlx_project_porting_workflow_requires_native_artifact_refresh():
         "tests/test_artifact_contract_refresh.py",
     ):
         _assert_workflow_triggers(workflow, path)
-    upload = workflow_text.workflow_step_section(
+    upload = coverage.workflow_step_section(
         workflow, "Upload native artifact refresh evidence"
     )
     assert "if: always()" in upload
     assert "artifact-refresh-native-${{ runner.os }}" in upload
-    assert "build/reports/artifact-refresh-native" in upload
+    assert "support/generated/artifact-refresh-native" in upload
 
 
 def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     integration_test = (
         "tests/test_translator/test_native_loader_dispatch_integration.py"
     )
-    limits_step = workflow_text.workflow_step_section(
+    limits_step = ci_coverage.workflow_step_section(
         mlx_porting, "Validate native dispatch limits"
     )
     assert "tests/test_translator/test_native_dispatch_limits.py" in limits_step
@@ -2112,7 +2118,7 @@ def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
         mlx_porting, "tests/test_translator/test_native_dispatch_limits.py"
     )
 
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove native loader Direct3D dispatch bridge",
     )
@@ -2127,7 +2133,7 @@ def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
     assert "mlx-upstream" not in directx_step
     assert f"{integration_test}::test_native_directx_workgroup_limits" in directx_step
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove native loader OpenGL dispatch bridge",
     )
@@ -2152,11 +2158,12 @@ def test_mlx_project_porting_workflow_runs_native_loader_dispatch_bridge():
 
 def test_mlx_project_porting_workflow_proves_initialized_read_write_execution():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "tests/test_translator/test_initialized_read_write_runtime.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
 
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove initialized read-write Direct3D native execution",
     )
@@ -2170,7 +2177,7 @@ def test_mlx_project_porting_workflow_proves_initialized_read_write_execution():
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove initialized read-write OpenGL native execution",
     )
@@ -2189,20 +2196,21 @@ def test_mlx_project_porting_workflow_proves_initialized_read_write_execution():
 
 def test_mlx_project_porting_workflow_proves_shared_native_allocation_execution():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "tests/test_translator/test_shared_native_allocations_runtime.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
 
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove shared allocation Direct3D native execution",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove shared allocation Direct3D native execution",
         "Install Windows DirectX Shader Compiler",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove shared allocation Direct3D native execution",
         "Install Windows Direct3D runtime dependencies",
@@ -2219,16 +2227,16 @@ def test_mlx_project_porting_workflow_proves_shared_native_allocation_execution(
     assert "-k" not in directx_step
     assert "mlx-upstream" not in directx_step
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove shared allocation OpenGL native execution",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove shared allocation OpenGL native execution",
         "Install Linux SPIR-V tools",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove shared allocation OpenGL native execution",
         "Install Linux runtime dependencies",
@@ -2249,10 +2257,11 @@ def test_mlx_project_porting_workflow_proves_shared_native_allocation_execution(
 
 def test_mlx_project_porting_workflow_runs_pinned_arange_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_arange_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    step = workflow_text.workflow_step_section(
+    step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX arange OpenGL native-loader execution",
     )
@@ -2269,7 +2278,7 @@ def test_mlx_project_porting_workflow_runs_pinned_arange_native_loader_proof():
     assert "-n auto" in step
     assert "-k" not in step
 
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX arange Direct3D native-loader execution",
     )
@@ -2288,10 +2297,11 @@ def test_mlx_project_porting_workflow_runs_pinned_arange_native_loader_proof():
 
 def test_mlx_project_porting_workflow_runs_pinned_binary_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_binary_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX binary add OpenGL native-loader execution",
     )
@@ -2311,7 +2321,7 @@ def test_mlx_project_porting_workflow_runs_pinned_binary_native_loader_proof():
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
 
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX binary add Direct3D native-loader execution",
     )
@@ -2331,10 +2341,11 @@ def test_mlx_project_porting_workflow_runs_pinned_binary_native_loader_proof():
 
 def test_mlx_project_porting_workflow_runs_pinned_copy_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_copy_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX copy OpenGL native-loader execution",
     )
@@ -2353,7 +2364,7 @@ def test_mlx_project_porting_workflow_runs_pinned_copy_native_loader_proof():
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
 
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX copy Direct3D native-loader execution",
     )
@@ -2372,10 +2383,11 @@ def test_mlx_project_porting_workflow_runs_pinned_copy_native_loader_proof():
 
 def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_logsumexp_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    step = workflow_text.workflow_step_section(
+    step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX LogSumExp Direct3D native-loader execution",
     )
@@ -2388,7 +2400,7 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
     )
     assert "-n auto" in step
     assert "-k" not in step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LogSumExp Direct3D native-loader execution",
         "Checkout current MLX runtime proof corpus",
@@ -2397,7 +2409,7 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
         "- name: Prove pinned MLX LogSumExp Direct3D native-loader execution"
     ) < mlx_porting.index("- name: Run MLX project-porting checks")
 
-    runtime_step = workflow_text.workflow_step_section(
+    runtime_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX LogSumExp OpenGL native-loader execution",
     )
@@ -2416,18 +2428,18 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
     )
     assert "-n auto" in runtime_step
     assert "-k" not in runtime_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LogSumExp OpenGL native-loader execution",
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LogSumExp OpenGL native-loader execution",
         "Checkout current MLX runtime proof corpus",
     )
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",
     )
@@ -2443,7 +2455,7 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
     )
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Validate pinned MLX LogSumExp OpenGL dispatch artifacts",
         "Checkout current MLX runtime proof corpus",
@@ -2452,10 +2464,11 @@ def test_mlx_project_porting_workflow_runs_pinned_logsumexp_native_loader_proof(
 
 def test_mlx_project_porting_workflow_runs_pinned_rms_norm_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_rms_norm_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX RMSNorm Direct3D native-loader execution",
     )
@@ -2471,13 +2484,13 @@ def test_mlx_project_porting_workflow_runs_pinned_rms_norm_native_loader_proof()
     )
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX RMSNorm Direct3D native-loader execution",
         "Checkout current MLX runtime proof corpus",
     )
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX RMSNorm OpenGL native-loader execution",
     )
@@ -2495,12 +2508,12 @@ def test_mlx_project_porting_workflow_runs_pinned_rms_norm_native_loader_proof()
     )
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX RMSNorm OpenGL native-loader execution",
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX RMSNorm OpenGL native-loader execution",
         "Checkout current MLX runtime proof corpus",
@@ -2509,12 +2522,13 @@ def test_mlx_project_porting_workflow_runs_pinned_rms_norm_native_loader_proof()
 
 def test_mlx_project_porting_workflow_runs_pinned_rms_norm_vjp_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = (
         "demos/integrations/mlx/tests/kernels/test_rms_norm_vjp_native_loader.py"
     )
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX RMSNorm VJP Direct3D native-loader execution",
     )
@@ -2530,13 +2544,13 @@ def test_mlx_project_porting_workflow_runs_pinned_rms_norm_vjp_native_loader_pro
     )
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX RMSNorm VJP Direct3D native-loader execution",
         "Checkout current MLX runtime proof corpus",
     )
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX RMSNorm VJP OpenGL native-loader execution",
     )
@@ -2555,12 +2569,12 @@ def test_mlx_project_porting_workflow_runs_pinned_rms_norm_vjp_native_loader_pro
     )
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX RMSNorm VJP OpenGL native-loader execution",
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX RMSNorm VJP OpenGL native-loader execution",
         "Checkout current MLX runtime proof corpus",
@@ -2569,10 +2583,11 @@ def test_mlx_project_porting_workflow_runs_pinned_rms_norm_vjp_native_loader_pro
 
 def test_mlx_project_porting_workflow_runs_pinned_layer_norm_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_layer_norm_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX LayerNorm Direct3D native-loader execution",
     )
@@ -2588,13 +2603,13 @@ def test_mlx_project_porting_workflow_runs_pinned_layer_norm_native_loader_proof
     )
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LayerNorm Direct3D native-loader execution",
         "Checkout current MLX runtime proof corpus",
     )
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX LayerNorm OpenGL native-loader execution",
     )
@@ -2613,12 +2628,12 @@ def test_mlx_project_porting_workflow_runs_pinned_layer_norm_native_loader_proof
     )
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LayerNorm OpenGL native-loader execution",
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LayerNorm OpenGL native-loader execution",
         "Checkout current MLX runtime proof corpus",
@@ -2627,12 +2642,13 @@ def test_mlx_project_porting_workflow_runs_pinned_layer_norm_native_loader_proof
 
 def test_mlx_project_porting_workflow_runs_pinned_layer_norm_vjp_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = (
         "demos/integrations/mlx/tests/kernels/test_layer_norm_vjp_native_loader.py"
     )
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX LayerNorm VJP Direct3D native-loader execution",
     )
@@ -2650,13 +2666,13 @@ def test_mlx_project_porting_workflow_runs_pinned_layer_norm_vjp_native_loader_p
     )
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LayerNorm VJP Direct3D native-loader execution",
         "Checkout current MLX runtime proof corpus",
     )
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX LayerNorm VJP OpenGL native-loader execution",
     )
@@ -2675,12 +2691,12 @@ def test_mlx_project_porting_workflow_runs_pinned_layer_norm_vjp_native_loader_p
     )
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LayerNorm VJP OpenGL native-loader execution",
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX LayerNorm VJP OpenGL native-loader execution",
         "Checkout current MLX runtime proof corpus",
@@ -2689,11 +2705,12 @@ def test_mlx_project_porting_workflow_runs_pinned_layer_norm_vjp_native_loader_p
 
 def test_mlx_project_porting_workflow_runs_pinned_arg_reduce_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_arg_reduce_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
     directx_step_name = "Prove pinned MLX arg-reduce Direct3D native-loader execution"
-    directx_step = workflow_text.workflow_step_section(mlx_porting, directx_step_name)
+    directx_step = ci_coverage.workflow_step_section(mlx_porting, directx_step_name)
     assert "if: runner.os == 'Windows'" in directx_step
     assert (
         "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
@@ -2706,14 +2723,14 @@ def test_mlx_project_porting_workflow_runs_pinned_arg_reduce_native_loader_proof
     )
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         directx_step_name,
         "Checkout current MLX runtime proof corpus",
     )
 
     opengl_step_name = "Prove pinned MLX arg-reduce OpenGL native-loader execution"
-    opengl_step = workflow_text.workflow_step_section(mlx_porting, opengl_step_name)
+    opengl_step = ci_coverage.workflow_step_section(mlx_porting, opengl_step_name)
     assert "if: runner.os == 'Linux'" in opengl_step
     assert (
         "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
@@ -2731,12 +2748,12 @@ def test_mlx_project_porting_workflow_runs_pinned_arg_reduce_native_loader_proof
     )
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Checkout current MLX runtime proof corpus",
@@ -2745,13 +2762,14 @@ def test_mlx_project_porting_workflow_runs_pinned_arg_reduce_native_loader_proof
 
 def test_mlx_project_porting_workflow_runs_pinned_attention_native_loader_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_scaled_dot_product_attention_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
     directx_step_name = (
         "Prove pinned MLX scaled-attention Direct3D native-loader execution"
     )
-    directx_step = workflow_text.workflow_step_section(mlx_porting, directx_step_name)
+    directx_step = ci_coverage.workflow_step_section(mlx_porting, directx_step_name)
     assert "if: runner.os == 'Windows'" in directx_step
     assert (
         "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in directx_step
@@ -2764,7 +2782,7 @@ def test_mlx_project_porting_workflow_runs_pinned_attention_native_loader_proof(
     )
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         directx_step_name,
         "Checkout current MLX runtime proof corpus",
@@ -2773,7 +2791,7 @@ def test_mlx_project_porting_workflow_runs_pinned_attention_native_loader_proof(
     opengl_step_name = (
         "Prove pinned MLX scaled-attention OpenGL native-loader execution"
     )
-    opengl_step = workflow_text.workflow_step_section(mlx_porting, opengl_step_name)
+    opengl_step = ci_coverage.workflow_step_section(mlx_porting, opengl_step_name)
     assert "if: runner.os == 'Linux'" in opengl_step
     assert (
         "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in opengl_step
@@ -2789,12 +2807,12 @@ def test_mlx_project_porting_workflow_runs_pinned_attention_native_loader_proof(
     )
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Checkout current MLX runtime proof corpus",
@@ -2803,10 +2821,11 @@ def test_mlx_project_porting_workflow_runs_pinned_attention_native_loader_proof(
 
 def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_dot_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX dot Direct3D native-loader execution",
     )
@@ -2824,12 +2843,12 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     )
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX dot Direct3D native-loader execution",
         "Checkout current MLX runtime proof corpus",
     )
-    upload = workflow_text.workflow_step_section(
+    upload = ci_coverage.workflow_step_section(
         mlx_porting, "Upload dot Direct3D evidence"
     )
     assert "if: always() && runner.os == 'Windows'" in upload
@@ -2838,13 +2857,13 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     assert "demo-results/dot/directx.xml" in upload
     assert "include-hidden-files: true" in upload
     assert "if-no-files-found: error" in upload
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Upload dot Direct3D evidence",
         "Prove pinned MLX dot Direct3D native-loader execution",
     )
 
-    metal_step = workflow_text.workflow_step_section(
+    metal_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX dot Metal round-trip compilation",
     )
@@ -2853,13 +2872,13 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     assert f"{test_path}::test_pinned_mlx_dot_roundtrips_through_metal" in metal_step
     assert "-n auto" in metal_step
     assert "-k" not in metal_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX dot Metal round-trip compilation",
         "Checkout current MLX runtime proof corpus",
     )
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Validate pinned MLX dot OpenGL artifact",
     )
@@ -2874,14 +2893,14 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     )
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Validate pinned MLX dot OpenGL artifact",
         "Checkout current MLX runtime proof corpus",
     )
 
     software_step_name = "Prove pinned MLX dot OpenGL software-subgroup execution"
-    software_step = workflow_text.workflow_step_section(
+    software_step = ci_coverage.workflow_step_section(
         mlx_porting,
         software_step_name,
     )
@@ -2902,12 +2921,12 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     )
     assert "-n auto" in software_step
     assert "-k" not in software_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         software_step_name,
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         software_step_name,
         "Checkout current MLX runtime proof corpus",
@@ -2916,11 +2935,12 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
 
 def test_mlx_project_porting_workflow_runs_affine_quantize_opengl_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_quantized_native_loader.py"
     step_name = "Prove pinned MLX affine quantize OpenGL native-loader execution"
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    step = workflow_text.workflow_step_section(mlx_porting, step_name)
+    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
     assert "if: runner.os == 'Linux'" in step
     assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in step
     assert 'CROSTL_REQUIRE_MLX_QUANTIZED_OPENGL_NATIVE_LOADER: "1"' in step
@@ -2933,7 +2953,7 @@ def test_mlx_project_porting_workflow_runs_affine_quantize_opengl_proof():
     )
     assert "-n auto" in step
     assert "-k" not in step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         step_name,
         "Checkout current MLX runtime proof corpus",
@@ -2942,10 +2962,11 @@ def test_mlx_project_porting_workflow_runs_affine_quantize_opengl_proof():
 
 def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_unary_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
-    translation_step = workflow_text.workflow_step_section(
+    translation_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Translate pinned MLX unary Square entry",
     )
@@ -2960,13 +2981,13 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     )
     assert "-n auto" in translation_step
     assert "-k" not in translation_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Translate pinned MLX unary Square entry",
         "Checkout current MLX runtime proof corpus",
     )
 
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX unary Square Direct3D native-loader execution",
     )
@@ -2983,7 +3004,7 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     assert "-n auto" in directx_step
     assert "-k" not in directx_step
 
-    metal_step = workflow_text.workflow_step_section(
+    metal_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX unary Square Metal round-trip",
     )
@@ -2996,13 +3017,13 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     )
     assert "-n auto" in metal_step
     assert "-k" not in metal_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX unary Square Metal round-trip",
         "Checkout current MLX runtime proof corpus",
     )
 
-    arccos_metal_step = workflow_text.workflow_step_section(
+    arccos_metal_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX unary ArcCos Metal round-trip",
     )
@@ -3018,7 +3039,7 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     )
     assert "-n auto" in arccos_metal_step
     assert "-k" not in arccos_metal_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         "Prove pinned MLX unary ArcCos Metal round-trip",
         "Checkout current MLX runtime proof corpus",
@@ -3048,7 +3069,7 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     matrix_job = _workflow_job_section(mlx_porting, "mlx-metal-porting")
     assert "Prove current MLX complete unary family Metal round-trips" not in matrix_job
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX unary Square OpenGL native-loader execution",
     )
@@ -3068,7 +3089,7 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     assert "-n auto" in opengl_step
     assert "-k" not in opengl_step
 
-    arccos_translation_step = workflow_text.workflow_step_section(
+    arccos_translation_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Translate pinned MLX unary ArcCos entry",
     )
@@ -3084,7 +3105,7 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     assert "-n auto" in arccos_translation_step
     assert "-k" not in arccos_translation_step
 
-    arccos_directx_step = workflow_text.workflow_step_section(
+    arccos_directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX unary ArcCos Direct3D native-loader execution",
     )
@@ -3104,7 +3125,7 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
     assert "-n auto" in arccos_directx_step
     assert "-k" not in arccos_directx_step
 
-    arccos_opengl_step = workflow_text.workflow_step_section(
+    arccos_opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         "Prove pinned MLX unary ArcCos OpenGL native-loader execution",
     )
@@ -3128,6 +3149,7 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
 
 def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_unary_complete_opengl.py"
 
     opengl_job = _workflow_job_section(
@@ -3157,7 +3179,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
     assert "Checkout current MLX unary corpus" in opengl_job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in opengl_job
 
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         opengl_job,
         "Prove current MLX complete unary family OpenGL translation",
     )
@@ -3184,6 +3206,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
 
 def test_mlx_project_porting_workflow_runs_unary_complete_directx_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_unary_complete_directx.py"
 
     directx_job = _workflow_job_section(
@@ -3213,7 +3236,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_directx_proof():
     assert "Checkout current MLX unary corpus" in directx_job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in directx_job
 
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         directx_job,
         "Prove current MLX complete unary family DirectX translation",
     )
@@ -3242,6 +3265,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_directx_proof():
 
 def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = (
         "demos/integrations/mlx/tests/kernels/test_binary_complete_metal_roundtrip.py"
     )
@@ -3261,7 +3285,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     assert "xcrun" not in sources
     assert 'MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"' in sources
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in sources
-    source_step = workflow_text.workflow_step_section(
+    source_step = ci_coverage.workflow_step_section(
         sources, "Verify and export complete binary Metal sources"
     )
     assert (
@@ -3293,7 +3317,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
             "binary-metal-evidence-${{ matrix.shard_index }}",
         ),
     ):
-        step = workflow_text.workflow_step_section(sources, name)
+        step = ci_coverage.workflow_step_section(sources, name)
         assert "if: always()" in step
         assert "uses: actions/upload-artifact@" in step
         assert f"name: {artifact}" in step
@@ -3312,14 +3336,14 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     assert 'python-version: "3.12"' in native
     assert "xcrun --sdk macosx metal --version" in native
     assert "pytest" not in native
-    download = workflow_text.workflow_step_section(
+    download = ci_coverage.workflow_step_section(
         native, "Download all binary Metal source shards"
     )
     assert "uses: actions/download-artifact@" in download
     assert "pattern: binary-metal-sources-*" in download
     assert "merge-multiple: false" in download
     assert "run-id:" not in download
-    compile_step = workflow_text.workflow_step_section(
+    compile_step = ci_coverage.workflow_step_section(
         native, "Compile every pinned binary Metal artifact"
     )
     assert "python tools/compile_artifact_bundle.py" in compile_step
@@ -3334,7 +3358,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
         """--compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]' """.strip()
         in compile_step
     )
-    evidence = workflow_text.workflow_step_section(
+    evidence = ci_coverage.workflow_step_section(
         native, "Retain binary Metal native compilation evidence"
     )
     assert "if: always()" in evidence
@@ -3381,6 +3405,7 @@ def test_metal_report_describes_split_ci(family, artifact_count):
 
 def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_binary_complete_opengl.py"
 
     binary_opengl_job = _workflow_job_section(
@@ -3406,7 +3431,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
     assert "Checkout current MLX binary corpus" in binary_opengl_job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in binary_opengl_job
 
-    binary_opengl_step = workflow_text.workflow_step_section(
+    binary_opengl_step = ci_coverage.workflow_step_section(
         binary_opengl_job,
         "Prove current MLX complete binary family OpenGL translation",
     )
@@ -3436,6 +3461,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
 
 def test_mlx_project_porting_workflow_runs_binary_complete_directx_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_binary_complete_directx.py"
 
     directx_job = _workflow_job_section(
@@ -3466,7 +3492,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_directx_proof():
     assert "sparse-checkout set mlx/backend/metal/kernels" in directx_job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in directx_job
 
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         directx_job,
         "Prove current MLX complete binary family DirectX translation",
     )
@@ -3495,8 +3521,9 @@ def test_mlx_project_porting_workflow_runs_binary_complete_directx_proof():
 
 def test_mlx_project_porting_workflow_runs_current_fft_runtime_proofs():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     step_name = "Prove current MLX FFT Direct3D native-loader execution"
-    step = workflow_text.workflow_step_section(mlx_porting, step_name)
+    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
 
     assert "if: runner.os == 'Windows'" in step
     assert (
@@ -3509,14 +3536,14 @@ def test_mlx_project_porting_workflow_runs_current_fft_runtime_proofs():
         "test_current_mlx_fft_executes_through_directx_native_loader" in step
     )
     assert "-k" not in step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         step_name,
         "Checkout current MLX runtime proof corpus",
     )
 
     opengl_step_name = "Prove current MLX FFT OpenGL native-loader execution"
-    opengl_step = workflow_text.workflow_step_section(mlx_porting, opengl_step_name)
+    opengl_step = ci_coverage.workflow_step_section(mlx_porting, opengl_step_name)
     assert "if: runner.os == 'Linux'" in opengl_step
     assert (
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-upstream"
@@ -3533,12 +3560,12 @@ def test_mlx_project_porting_workflow_runs_current_fft_runtime_proofs():
         "test_current_mlx_fft_executes_through_opengl_native_loader" in opengl_step
     )
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Checkout current MLX runtime proof corpus",
@@ -3557,13 +3584,14 @@ def test_fft_native_evidence_upload_follows_required_execution(
     revision, target, platform, runner, root
 ):
     workflow = _workflow_texts()["demo-project-testing.yml"]
+    coverage = _load_ci_coverage_module()
     name = f"Prove {revision} MLX FFT {platform} native-loader execution"
-    proof = workflow_text.workflow_step_section(workflow, name)
+    proof = coverage.workflow_step_section(workflow, name)
     assert 'CROSTL_KEEP_CORPUS_EVIDENCE: "1"' in proof
     assert f"--junitxml=demo-results/fft/{revision}-{target}.xml" in proof
     assert "continue-on-error" not in proof
     upload_name = f"Upload FFT {platform} evidence"
-    upload = workflow_text.workflow_step_section(workflow, upload_name)
+    upload = coverage.workflow_step_section(workflow, upload_name)
     condition = " ".join(upload.split())
     assert f"always() && runner.os == '{runner}'" in condition
     if target == "directx":
@@ -3584,16 +3612,17 @@ def test_fft_native_evidence_upload_follows_required_execution(
     assert "include-hidden-files: true" in upload
     assert "if-no-files-found: error" in upload
     assert "retention-days: 14" in upload
-    assert workflow_text.workflow_step_after(workflow, upload_name, name)
+    assert coverage.workflow_step_after(workflow, upload_name, name)
 
 
 def test_mlx_project_porting_workflow_runs_current_gemv_runtime_proofs():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_gemv_native_loader.py"
 
     _assert_workflow_triggers(mlx_porting, test_path)
     directx_step_name = "Prove current MLX GEMV Direct3D native-loader execution"
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         directx_step_name,
     )
@@ -3608,14 +3637,14 @@ def test_mlx_project_porting_workflow_runs_current_gemv_runtime_proofs():
         "test_current_mlx_gemv_executes_through_directx_native_loader" in directx_step
     )
     assert "-k" not in directx_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         directx_step_name,
         "Checkout current MLX runtime proof corpus",
     )
 
     software_step_name = "Validate Direct3D software subgroup shuffle execution"
-    software_step = workflow_text.workflow_step_section(
+    software_step = ci_coverage.workflow_step_section(
         mlx_porting,
         software_step_name,
     )
@@ -3628,19 +3657,19 @@ def test_mlx_project_porting_workflow_runs_current_gemv_runtime_proofs():
         in software_step
     )
     assert "-k" not in software_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         software_step_name,
         "Checkout current MLX runtime proof corpus",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         directx_step_name,
         software_step_name,
     )
 
     opengl_step_name = "Prove current MLX GEMV OpenGL native-loader execution"
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         opengl_step_name,
     )
@@ -3659,12 +3688,12 @@ def test_mlx_project_porting_workflow_runs_current_gemv_runtime_proofs():
         "test_current_mlx_gemv_executes_with_opengl_software_subgroups" in opengl_step
     )
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Checkout current MLX runtime proof corpus",
@@ -3673,13 +3702,14 @@ def test_mlx_project_porting_workflow_runs_current_gemv_runtime_proofs():
 
 def test_mlx_project_porting_workflow_runs_current_mxfp4_runtime_proofs():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = (
         "demos/integrations/mlx/tests/kernels/test_fp_quantized_native_loader.py"
     )
 
     _assert_workflow_triggers(mlx_porting, test_path)
     directx_step_name = "Prove current MLX MXFP4 Direct3D native-loader execution"
-    directx_step = workflow_text.workflow_step_section(
+    directx_step = ci_coverage.workflow_step_section(
         mlx_porting,
         directx_step_name,
     )
@@ -3694,14 +3724,14 @@ def test_mlx_project_porting_workflow_runs_current_mxfp4_runtime_proofs():
         "test_current_mlx_mxfp4_executes_through_directx_native_loader" in directx_step
     )
     assert "-k" not in directx_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         directx_step_name,
         "Checkout current MLX runtime proof corpus",
     )
 
     opengl_step_name = "Prove current MLX MXFP4 OpenGL native-loader execution"
-    opengl_step = workflow_text.workflow_step_section(
+    opengl_step = ci_coverage.workflow_step_section(
         mlx_porting,
         opengl_step_name,
     )
@@ -3720,12 +3750,12 @@ def test_mlx_project_porting_workflow_runs_current_mxfp4_runtime_proofs():
         "test_current_mlx_mxfp4_executes_with_opengl_software_subgroups" in opengl_step
     )
     assert "-k" not in opengl_step
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Install Linux runtime dependencies",
     )
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         opengl_step_name,
         "Checkout current MLX runtime proof corpus",
@@ -3734,10 +3764,11 @@ def test_mlx_project_porting_workflow_runs_current_mxfp4_runtime_proofs():
 
 def test_mlx_project_porting_workflow_installs_pinned_warp_runtime():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     step_name = "Install pinned Windows WARP runtime"
-    step = workflow_text.workflow_step_section(mlx_porting, step_name)
+    step = ci_coverage.workflow_step_section(mlx_porting, step_name)
 
-    assert workflow_text.workflow_step_after(
+    assert ci_coverage.workflow_step_after(
         mlx_porting,
         step_name,
         "Install Windows Direct3D runtime dependencies",
@@ -3754,6 +3785,7 @@ def test_mlx_project_porting_workflow_installs_pinned_warp_runtime():
 
 def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_copy_complete_opengl.py"
 
     copy_opengl_job = _workflow_job_section(
@@ -3779,7 +3811,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
     assert "Checkout current MLX copy corpus" in copy_opengl_job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_opengl_job
 
-    copy_opengl_step = workflow_text.workflow_step_section(
+    copy_opengl_step = ci_coverage.workflow_step_section(
         copy_opengl_job,
         "Prove current MLX complete copy family OpenGL translation",
     )
@@ -3809,6 +3841,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
 
 def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_copy_complete_directx.py"
 
     copy_directx_job = _workflow_job_section(
@@ -3834,7 +3867,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
     assert "Checkout current MLX copy corpus" in copy_directx_job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_directx_job
 
-    copy_directx_step = workflow_text.workflow_step_section(
+    copy_directx_step = ci_coverage.workflow_step_section(
         copy_directx_job,
         "Prove current MLX complete copy family DirectX translation",
     )
@@ -3974,6 +4007,7 @@ def test_mlx_project_porting_workflow_requires_quantized_wide_opengl_compilation
 
 def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_reduce_complete_opengl.py"
 
     reduce_opengl_job = _workflow_job_section(
@@ -3999,7 +4033,7 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
     assert "Checkout current MLX reduce corpus" in reduce_opengl_job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_opengl_job
 
-    reduce_opengl_step = workflow_text.workflow_step_section(
+    reduce_opengl_step = ci_coverage.workflow_step_section(
         reduce_opengl_job,
         "Prove current MLX complete reduce family OpenGL translation",
     )
@@ -4029,6 +4063,7 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
 
 def test_mlx_project_porting_workflow_runs_reduce_complete_directx_proof():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
+    ci_coverage = _load_ci_coverage_module()
     test_path = "demos/integrations/mlx/tests/kernels/test_reduce_complete_directx.py"
 
     reduce_directx_job = _workflow_job_section(
@@ -4054,7 +4089,7 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_directx_proof():
     assert "Checkout current MLX reduce corpus" in reduce_directx_job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_directx_job
 
-    reduce_directx_step = workflow_text.workflow_step_section(
+    reduce_directx_step = ci_coverage.workflow_step_section(
         reduce_directx_job,
         "Prove current MLX complete reduce family DirectX translation",
     )
@@ -4086,7 +4121,7 @@ def test_atomic_stores_and_pinned_scatter_are_required_on_each_native_target():
     from demos.integrations.mlx.tests.kernels.test_scatter_axis_runtime import (
         REQUIRE_ENV as SCATTER_ENV,
     )
-    from tests import workflow_text
+    from tools import ci_coverage
 
     workflow = (
         Path(__file__).resolve().parents[4]
@@ -4097,7 +4132,7 @@ def test_atomic_stores_and_pinned_scatter_are_required_on_each_native_target():
         "Validate indexed DirectX gather and resource aggregates",
         "Validate indexed OpenGL gather and resource aggregates",
     ):
-        step = workflow_text.workflow_step_section(workflow, name)
+        step = ci_coverage.workflow_step_section(workflow, name)
         assert f'{STORE_ENV}: "1"' in step
         assert f'{SCATTER_ENV}: "1"' in step
         assert "test_atomic_store_runtime.py" in step

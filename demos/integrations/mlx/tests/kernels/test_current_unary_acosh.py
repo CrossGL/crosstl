@@ -46,14 +46,14 @@ def test_current_mlx_precise_acosh_native_loader(tmp_path):
 
 @pytest.mark.parametrize("job_id", ["mlx-metal-porting", "portable-host", "metal-host"])
 def test_ci_requires_precise_acosh(job_id):
-    from tests import workflow_text
+    from tools import ci_coverage
 
     text = (
         Path(__file__).resolve().parents[5]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = (
-        workflow_text.workflow_job_text(text, job_id)
+        ci_coverage.workflow_job_text(text, job_id)
         .split("      - name: Validate pinned inverse hyperbolic cosine\n", 1)[1]
         .split("      - name:", 1)[0]
     )
@@ -71,5 +71,5 @@ def test_ci_requires_precise_acosh(job_id):
             "tests/test_translator/test_metal_precise_acosh.py",
         ):
             assert_paths_covered(
-                workflow_text.workflow_event_path_filters(text, event), module
+                ci_coverage.workflow_event_path_filters(text, event), module
             )

@@ -349,13 +349,13 @@ def test_current_half_fp8_native_loader(tmp_path):
 
 
 def test_ci_requires_current_half_fp8():
-    from tests import workflow_text
+    from tools import ci_coverage
 
     workflow = (
         Path(__file__).resolve().parents[5]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = workflow_text.workflow_job_step_section(
+    step = ci_coverage.workflow_job_step_section(
         workflow, "mlx-metal-porting", "Validate pinned unary arithmetic"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

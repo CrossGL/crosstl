@@ -1,0 +1,3 @@
+# The MLX workflow writes artifact-refresh evidence here until it moves to build/reports.
+*
+!.gitignore
