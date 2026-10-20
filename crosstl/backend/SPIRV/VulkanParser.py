@@ -6,6 +6,7 @@ import struct
 
 from ..common_ast import InitializerListNode
 from .access_chains import chain_base_pointee, walk_indices
+from .barrier_import import spirv_barrier_statements
 from .local_names import function_local_names
 from .ray_tracing_import import (
     BUILTIN_VARIABLE_NAMES,
@@ -724,6 +725,7 @@ class VulkanParser:
         self.pos = 0
         self.current_token = self.tokens[self.pos]
         self.loop_depth = 0
+        self.spirv_module_execution_models = []
         self.breakable_depth = 0
         self.skip_comments()
 
@@ -1367,6 +1369,9 @@ class VulkanParser:
         entry_points_by_id = {}
         for entry in entry_points:
             entry_points_by_id.setdefault(entry["id"], []).append(entry)
+        self.spirv_module_execution_models = sorted(
+            {entry["execution_model"] for entry in entry_points}
+        )
         entry_instruction = None
         raw_instructions = []
         for result_id, opcode, operands, line_number in instructions:
@@ -2712,37 +2717,21 @@ class VulkanParser:
                 continue
 
             if opcode == "OpControlBarrier" and len(operands) >= 3:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvControlBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:3]
-                        ],
+                statements.extend(
+                    spirv_barrier_statements(
+                        opcode,
+                        [constants.get(operand) for operand in operands[:3]],
+                        self.spirv_module_execution_models,
                     )
                 )
                 continue
 
             if opcode == "OpMemoryBarrier" and len(operands) >= 2:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvMemoryBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:2]
-                        ],
+                statements.extend(
+                    spirv_barrier_statements(
+                        opcode,
+                        [constants.get(operand) for operand in operands[:2]],
+                        self.spirv_module_execution_models,
                     )
                 )
                 continue
@@ -3882,37 +3871,21 @@ class VulkanParser:
                 continue
 
             if opcode == "OpControlBarrier" and len(operands) >= 3:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvControlBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:3]
-                        ],
+                statements.extend(
+                    spirv_barrier_statements(
+                        opcode,
+                        [constants.get(operand) for operand in operands[:3]],
+                        self.spirv_module_execution_models,
                     )
                 )
                 continue
 
             if opcode == "OpMemoryBarrier" and len(operands) >= 2:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvMemoryBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:2]
-                        ],
+                statements.extend(
+                    spirv_barrier_statements(
+                        opcode,
+                        [constants.get(operand) for operand in operands[:2]],
+                        self.spirv_module_execution_models,
                     )
                 )
                 continue

@@ -40523,6 +40523,10 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         if func_name in {"workgroupBarrier", "workgroupExecutionBarrier"}:
             return "barrier()"
+        if func_name in {"deviceMemoryBarrier", "allMemoryBarrier"}:
+            # GLSL has no device-scope fence limited to buffers and images; memoryBarrier() orders those and
+            # shared memory (GLSL 4.60 section 8.16), which covers both.
+            return "memoryBarrier()"
         return None
 
     def collect_metal_simd_group_placeholder_functions(self, functions):

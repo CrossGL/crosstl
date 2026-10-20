@@ -118,6 +118,11 @@ from .spirv_per_vertex_builtins import (
     per_vertex_builtin_info,
     sized_per_vertex_interface_type,
 )
+from .spirv_push_constants import (
+    declare_push_constant_block,
+    declare_push_constant_variable,
+    is_push_constant_block,
+)
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -560,6 +565,7 @@ class VulkanSPIRVCodeGen(
         self.current_struct_members = {}
         self.cbuffer_variables = {}
         self.cbuffer_members = {}
+        self.push_constant_block_name = None
 
         self.inputs = []
         self.outputs = []
@@ -10469,6 +10475,7 @@ class VulkanSPIRVCodeGen(
         synchronization_functions = {
             "allMemoryBarrier",
             "barrier",
+            "deviceMemoryBarrier",
             "groupMemoryBarrier",
             "workgroupBarrier",
             "workgroupExecutionBarrier",
@@ -10540,10 +10547,22 @@ class VulkanSPIRVCodeGen(
             )
             return self.register_constant(0, self.register_primitive_type("int"))
 
-        if function_name in {"groupMemoryBarrier", "memoryBarrierShared"}:
+        if function_name == "memoryBarrierShared":
             scope = self.spirv_scope_constant("Workgroup")
             semantics = self.spirv_memory_semantics_constant(
                 "AcquireRelease", "WorkgroupMemory"
+            )
+        elif function_name == "groupMemoryBarrier":
+            # GLSL 4.60 section 8.16: groupMemoryBarrier orders all memory accesses within the workgroup;
+            # glslang emits a Workgroup-scope barrier over uniform, workgroup and image memory.
+            scope = self.spirv_scope_constant("Workgroup")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "UniformMemory", "WorkgroupMemory", "ImageMemory"
+            )
+        elif function_name == "deviceMemoryBarrier":
+            scope = self.spirv_scope_constant("Device")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "UniformMemory", "ImageMemory"
             )
         elif function_name == "memoryBarrierBuffer":
             scope = self.spirv_scope_constant("Device")
@@ -17278,18 +17297,27 @@ class VulkanSPIRVCodeGen(
             )
             if member_type_source is None:
                 continue
-            member_type = self.map_crossgl_type(member_type_source)
-            members.append((member_type, member.name))
+            members.append((self.map_crossgl_type(member_type_source), member.name))
 
-        cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
-        self.decorate_cbuffer_type(cbuffer_type, members)
+        if is_push_constant_block(self, cbuffer_node):
+            var_id, members = declare_push_constant_block(self, cbuffer_node, members)
+        else:
+            # Block members use std140 layout clones so that ArrayStride/Offset
+            # decorations never reach the logical types used by Function,
+            # Private or Workgroup variables (VUID-StandaloneSpirv-None-10684).
+            members = [
+                (self.storage_layout_type(member_type, "std140"), member_name)
+                for member_type, member_name in members
+            ]
+            cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
+            self.decorate_cbuffer_type(cbuffer_type, members)
 
-        var_id = self.create_variable(cbuffer_type, "Uniform", cbuffer_node.name)
-        descriptor_set, binding = self.resource_descriptor_slot(cbuffer_node)
-        self.decorations.append(
-            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
-        )
-        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+            var_id = self.create_variable(cbuffer_type, "Uniform", cbuffer_node.name)
+            descriptor_set, binding = self.resource_descriptor_slot(cbuffer_node)
+            self.decorations.append(
+                f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+            )
+            self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
 
         # HLSL and CrossGL constant-buffer names are not in expression scope: in ``cbuffer ubo { UBO ubo; }`` the
         # identifier ``ubo`` names the member, so the block keeps its name only for reflection.
@@ -19889,6 +19917,13 @@ class VulkanSPIRVCodeGen(
         )
         if storage_class == "Uniform" and self.uniform_array_requires_block(var_type):
             return self.process_uniform_array_block_declaration(node, var_type)
+        if storage_class in {"Uniform", "Private"} and is_push_constant_block(
+            self, node
+        ):
+            # 'uniform T name' and HLSL's plain '[[vk::push_constant]] T name' global both name the push constants.
+            push_constant = declare_push_constant_variable(self, node, var_type)
+            if push_constant is not None:
+                return push_constant
         if (
             storage_class == "Uniform"
             and self.current_struct_members.get(var_type.type.base_type) is not None
@@ -24247,7 +24282,9 @@ class VulkanSPIRVCodeGen(
         cbuffer_var, member_type, member_index = member_info
         int_type = self.primitive_types["int"]
         index = self.register_constant(member_index, int_type)
-        ptr_type = self.register_pointer_type(member_type, "Uniform")
+        ptr_type = self.register_pointer_type(
+            member_type, cbuffer_var.type.storage_class or "Uniform"
+        )
         access = self.access_chain(cbuffer_var, [index], ptr_type)
         self.variable_value_types[access.id] = member_type
         return access

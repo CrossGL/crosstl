@@ -7805,12 +7805,18 @@ class TestVulkanSPIRVCodeGen:
             f"OpMemoryBarrier {workgroup_scope.group(1)} {shared_semantics.group(1)}"
             in spv_code
         )
+        # memoryBarrierShared orders workgroup memory; groupMemoryBarrier orders buffer, image and workgroup
+        # memory within the workgroup (GLSL 4.60 section 8.16), as glslang emits it.
         assert (
             spv_code.count(
                 f"OpMemoryBarrier {workgroup_scope.group(1)} "
                 f"{shared_semantics.group(1)}"
             )
-            == 2
+            == 1
+        )
+        assert (
+            f"OpMemoryBarrier {workgroup_scope.group(1)} {all_semantics.group(1)}"
+            in spv_code
         )
         assert (
             f"OpMemoryBarrier {device_scope.group(1)} {buffer_semantics.group(1)}"

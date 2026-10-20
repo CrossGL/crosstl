@@ -2374,14 +2374,14 @@ def test_glslang_web_comp_barrier_instructions_parse():
     body = ast.functions[0].body
 
     assert ast.spirv_assembly is True
+    # glslang's barrier(), memoryBarrier() and groupMemoryBarrier() (scopes 2/1/2, semantics 264/3400/3400)
+    # import as the CrossGL barriers that cover them.
     assert [stmt.name for stmt in body[:3]] == [
-        "spirvControlBarrier",
-        "spirvMemoryBarrier",
-        "spirvMemoryBarrier",
+        "workgroupBarrier",
+        "memoryBarrier",
+        "groupMemoryBarrier",
     ]
-    assert body[0].args == ["2", "2", "264"]
-    assert body[1].args == ["1", "3400"]
-    assert body[2].args == ["2", "3400"]
+    assert all(stmt.args == [] for stmt in body[:3])
     assert isinstance(body[3], ReturnNode)
 
 

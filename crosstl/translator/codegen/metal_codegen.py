@@ -12759,12 +12759,22 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "workgroupExecutionBarrier": "threadgroup_barrier(mem_flags::mem_none)",
             "subgroupExecutionBarrier": "simdgroup_barrier(mem_flags::mem_none)",
-            "groupMemoryBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            # groupMemoryBarrier and memoryBarrier order buffer, image and shared memory (GLSL 4.60 section
+            # 8.16); deviceMemoryBarrier orders buffers and textures (HLSL DeviceMemoryBarrier).
+            "groupMemoryBarrier": (
+                "threadgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
             "memoryBarrierShared": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "memoryBarrierBuffer": "threadgroup_barrier(mem_flags::mem_device)",
-            "deviceMemoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
+            "deviceMemoryBarrier": (
+                "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_texture)"
+            ),
             "memoryBarrierImage": "threadgroup_barrier(mem_flags::mem_texture)",
-            "memoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
+            "memoryBarrier": (
+                "threadgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
             "allMemoryBarrier": (
                 "threadgroup_barrier(mem_flags::mem_device | "
                 "mem_flags::mem_threadgroup | mem_flags::mem_texture)"

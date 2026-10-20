@@ -7080,9 +7080,11 @@ def test_glslang_web_comp_barrier_instructions_codegen_reparse():
         "layout(local_size_x = 2, local_size_y = 5, local_size_z = 7) in;"
         in generated_code
     )
-    assert "spirvControlBarrier(2, 2, 264);" in generated_code
-    assert "spirvMemoryBarrier(1, 3400);" in generated_code
-    assert "spirvMemoryBarrier(2, 3400);" in generated_code
+    assert "workgroupBarrier();" in generated_code
+    assert "memoryBarrier();" in generated_code
+    assert "groupMemoryBarrier();" in generated_code
+    assert "spirvControlBarrier" not in generated_code
+    assert "spirvMemoryBarrier" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

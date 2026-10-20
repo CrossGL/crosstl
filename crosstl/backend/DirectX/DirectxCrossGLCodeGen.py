@@ -359,7 +359,9 @@ class HLSLToCrossGLConverter(
             "EvaluateAttributeSnapped": "interpolateAtOffset",
             "EvaluateAttributeCentroid": "interpolateAtCentroid",
             "GroupMemoryBarrierWithGroupSync": "workgroupBarrier",
-            "GroupMemoryBarrier": "groupMemoryBarrier",
+            # GroupMemoryBarrier orders groupshared memory only: GLSL's memoryBarrierShared, not groupMemoryBarrier,
+            # which orders buffer and image accesses as well.
+            "GroupMemoryBarrier": "memoryBarrierShared",
             "DeviceMemoryBarrier": "deviceMemoryBarrier",
             "AllMemoryBarrier": "allMemoryBarrier",
         }
@@ -1767,6 +1769,9 @@ class HLSLToCrossGLConverter(
 
     def crossgl_attribute_name(self, attr_name):
         """Return a CrossGL-lexer-safe identifier for HLSL/DXC attributes."""
+        if str(attr_name) == "vk::push_constant":
+            # CrossGL spells a push-constant block '@push_constant' whatever its source language.
+            return "push_constant"
         safe_name = re.sub(r"\W+", "_", str(attr_name)).strip("_")
         if not safe_name:
             return "attribute"
@@ -4001,6 +4006,12 @@ class HLSLToCrossGLConverter(
         precise_prefix = self.format_precise_qualifier_prefix(node)
         array_suffix = self.format_array_suffixes(node)
         variable_type = self.map_variable_type(node)
+        if self.is_vk_push_constant_global(node) and str(
+            getattr(node, "vtype", "")
+        ) in getattr(self, "struct_type_names", set()):
+            # DXC reads '[[vk::push_constant]] T name;' as one push-constant buffer holding a T, which CrossGL
+            # spells 'ConstantBuffer<T> name @push_constant'.
+            variable_type = f"ConstantBuffer<{variable_type}>"
         variable_name = self.render_identifier(node.name)
         if storage_prefix == "const " and array_suffix:
             variable_type = f"{variable_type}{array_suffix}"
@@ -4022,6 +4033,7 @@ class HLSLToCrossGLConverter(
             and not declaration_prefix
             and str(getattr(node, "vtype", ""))
             in getattr(self, "struct_type_names", set())
+            and not variable_type.startswith("ConstantBuffer<")
         ):
             declaration_prefix = "var "
         return (
@@ -4029,8 +4041,17 @@ class HLSLToCrossGLConverter(
             f"{variable_name}{array_suffix}{initializer};\n"
         )
 
+    def is_vk_push_constant_global(self, node):
+        """Whether a global carries DXC's ``[[vk::push_constant]]``, which binds it outside ``$Globals``."""
+        return any(
+            str(getattr(attr, "name", "")) == "vk::push_constant"
+            for attr in getattr(node, "attributes", None) or []
+        )
+
     def is_hlsl_program_constant_global(self, node):
         if getattr(node, "value", None) is not None:
+            return False
+        if self.is_vk_push_constant_global(node):
             return False
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if getattr(node, "is_const", False) or qualifiers & {
