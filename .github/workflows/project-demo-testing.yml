@@ -70,7 +70,7 @@ jobs:
             pyproject.toml
             setup.cfg
           python-version: "3.12"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.400"
       - name: Install test dependencies
@@ -118,7 +118,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.400"
       - name: Record the immutable upstream inputs
@@ -215,7 +215,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.400"
       - name: Apply the documented non-Windows upstream patches
@@ -276,7 +276,7 @@ jobs:
             pyproject.toml
             setup.cfg
           python-version: "3.12"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.400"
       - name: Install CrossTL
@@ -368,7 +368,7 @@ jobs:
             pyproject.toml
             setup.cfg
           python-version: "3.12"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.400"
       - name: Install Mesa EGL and OpenGL
