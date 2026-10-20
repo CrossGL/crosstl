@@ -7,7 +7,7 @@ The source AST is retained.
 """
 
 from copy import copy, deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..arithmetic_conversions import (
     ArithmeticScalarKind,
@@ -248,7 +248,8 @@ def _pointer_type(value, owner=None):
 
     if (
         isinstance(value, NamedType)
-        and value.name in {
+        and value.name
+        in {
             "StructuredBuffer",
             "RWStructuredBuffer",
         }
@@ -337,7 +338,8 @@ def _remove_pointee_qualifiers(node):
 def _contains_storage_pointer(node):
     return any(
         isinstance(child, PointerType)
-        and child.address_space in {
+        and child.address_space
+        in {
             "constant",
             "device",
             "global",
@@ -365,7 +367,8 @@ def _literal_constant(node):
         return node.operator in {"+", "-", "!", "~"} and _literal_constant(node.operand)
     if isinstance(node, BinaryOpNode):
         return (
-            node.operator in {
+            node.operator
+            in {
                 "+",
                 "-",
                 "*",
@@ -975,6 +978,8 @@ class _Lowering:
             return node.literal_type
         if isinstance(node, CastNode):
             return self.source_type(node.target_type)
+        if isinstance(node, PointerReinterpretNode):
+            return self.identity_view(node, env)
         if isinstance(node, IdentifierNode):
             return env.get(node.name)
         if isinstance(node, MemberAccessNode):
@@ -1047,6 +1052,32 @@ class _Lowering:
                 return left
             return self.arithmetic_result(left, right, "?:")
         return None
+
+    def identity_view(self, node, env):
+        """The source pointer when a reinterpretation keeps its element and space.
+
+        Such a view changes no byte, so it may only narrow the access the
+        source pointer grants. Any other reinterpretation stays unknown.
+        """
+        source = self.infer(node.expression, env)
+        if not isinstance(source, _Pointer):
+            return None
+        try:
+            target = _pointer_type(node.target_type)
+        except ResourceAggregateError:
+            return None
+        if not (
+            isinstance(target, _Pointer)
+            and (target.element, target.space) == (source.element, source.space)
+            and (source.writable or not target.writable)
+            and (source.readable or not target.readable)
+        ):
+            return None
+        return replace(
+            source,
+            writable=source.writable and target.writable,
+            readable=source.readable and target.readable,
+        )
 
     def arithmetic_result(self, left, right, operator):
         left, right = _numeric(left), _numeric(right)
@@ -1248,7 +1279,8 @@ class _Lowering:
             element = self.fields.get(_name(element), {}).get(member)
         if _name(element) not in {"int", "uint"} and not (
             _name(element) == "float"
-            and operation in {
+            and operation
+            in {
                 "atomicLoad",
                 "atomicStore",
                 "atomicAdd",
@@ -1950,6 +1982,8 @@ class _Lowering:
                 self.expression(node.false_expr, env, expected),
                 source_location=location,
             )
+        if isinstance(node, PointerReinterpretNode) and isinstance(actual, _Pointer):
+            return self.expression(node.expression, env)
         if isinstance(node, (CastNode, PointerReinterpretNode)) and (
             self.contains_reference(self.infer(node.expression, env))
             or self.contains_reference(self.source_type(node.target_type))
