@@ -14,6 +14,7 @@ from .annotate import Annotator
 from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
+from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_stage_interfaces import (
     HlslStageInterfaceUnsupportedError,
@@ -55,6 +56,7 @@ __all__ = [
     "CudaWarpIntrinsicUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
+    "GeometryStreamUnsupportedError",
     "HalfFloatUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
@@ -108,6 +110,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
     structures (:mod:`.stage_interface_structs`). A structure an
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
+    For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
+    inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
     being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). For targets that build arrays
@@ -140,6 +144,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_texture_swizzles(program)
     gather_stage_interface_variables(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
+    lower_geometry_streams(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     hoist_array_constructors(program, report.target)

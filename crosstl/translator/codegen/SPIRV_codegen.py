@@ -123,6 +123,7 @@ from .spirv_stage_distances import (
     load_entry_point_distance,
     store_entry_point_distance,
 )
+from .stage_io_semantic_locations import spirv_semantic_location
 from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
     is_texture_lod_clamp_operation,
@@ -9131,31 +9132,7 @@ class VulkanSPIRVCodeGen(
         return location
 
     def mesh_output_semantic_location(self, semantic: Optional[str]) -> Optional[int]:
-        if semantic is None:
-            return None
-
-        semantic_text = str(semantic)
-        fixed_locations = {
-            "POSITION": 0,
-            "NORMAL": 1,
-            "TANGENT": 2,
-            "BINORMAL": 3,
-            "TEXCOORD": 4,
-            "COLOR": 13,
-            "COLOR0": 13,
-        }
-        if semantic_text in fixed_locations:
-            return fixed_locations[semantic_text]
-
-        match = re.fullmatch(r"TEXCOORD(\d+)", semantic_text)
-        if match:
-            return 5 + int(match.group(1))
-
-        match = re.fullmatch(r"COLOR(\d+)", semantic_text)
-        if match:
-            return 13 + int(match.group(1))
-
-        return None
+        return spirv_semantic_location(semantic)
 
     def ensure_mesh_primitive_index_output(
         self, literal_index: Optional[int] = None
@@ -14484,7 +14461,7 @@ class VulkanSPIRVCodeGen(
             interface_type, storage_class, name, interface_node
         )
         preferred_location = self.entry_point_interface_location(
-            semantic, storage_class, node, member_index
+            semantic, storage_class, node, member_index, execution_model
         )
         location = self.global_interface_location(
             interface_node, storage_class, preferred_location=preferred_location
@@ -14561,11 +14538,17 @@ class VulkanSPIRVCodeGen(
         return None
 
     def entry_point_interface_location(
-        self, semantic, storage_class: str, node, member_index: Optional[int]
+        self,
+        semantic,
+        storage_class: str,
+        node,
+        member_index: Optional[int],
+        execution_model: Optional[str] = None,
     ) -> Optional[int]:
         if semantic is None:
             return None
-        if storage_class == "Output":
+        # COLORn names a colour attachment only for a fragment output; elsewhere it is a user varying.
+        if storage_class == "Output" and execution_model in (None, "Fragment"):
             color_location = self.spirv_color_semantic_location(semantic, node)
             if color_location is not None:
                 return color_location
