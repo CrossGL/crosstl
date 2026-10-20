@@ -578,16 +578,20 @@ class _Lowering:
         return [(key, key[1]) for key in ordered]
 
     def combined_type(self, resource, shadow):
-        base = _SEPARATE_TO_COMBINED.get(resource.base_type, resource.base_type)
-        if shadow:
-            if base.startswith(("i", "u")) or base == "sampler3D":
-                self.refuse(
-                    f"texture {self.resource_label(resource)} of type {resource.base_type} cannot take a depth "
-                    "comparison in GLSL"
-                )
-                return None
-            return _SHADOW_OF.get(base, base)
-        return _PLAIN_OF.get(base, base)
+        """The combined GLSL type of a texture read through a plain or (``shadow``) a comparison sampler."""
+        base = resource.base_type
+        if base in _SEPARATE_TO_COMBINED:
+            base = _SEPARATE_TO_COMBINED[base]
+        plain = _PLAIN_OF[base] if base in _PLAIN_OF else base
+        if not shadow:
+            return plain
+        if plain in _SHADOW_OF:
+            return _SHADOW_OF[plain]
+        self.refuse(
+            f"texture {self.resource_label(resource)} of type {resource.base_type} cannot take a depth "
+            "comparison in GLSL"
+        )
+        return None
 
     def retype(self, node, resource, shadow):
         if resource.base_type not in _SEPARATE_TO_COMBINED and not any(
@@ -727,7 +731,8 @@ def canonicalize_separate_textures(ast):
                 and resource.base_type != "texture3D"
             )
             base = _SEPARATE_TO_COMBINED[resource.base_type]
-            base = _SHADOW_OF.get(base, base) if shadow else base
+            if shadow and base in _SHADOW_OF:
+                base = _SHADOW_OF[base]
             _set_type(resource.node, _with_base_type(_type_of(resource.node), base))
     return lowering.ast
 
