@@ -1798,7 +1798,8 @@ def test_hlsl_pixel_shader_user_semantic_input_lowers_to_metal_stage_in(tmp_path
     metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
 
     assert "struct fragment_main_Input" in metal
-    assert "float4 a [[attribute(0)]];" in metal
+    # HLSL links stages by semantic; Metal fragment inputs take it as a [[user]] key.
+    assert "float4 a [[user(A0)]];" in metal
     assert (
         "fragment float4 fragment_main("
         "fragment_main_Input _crossglInput [[stage_in]])"
@@ -2099,7 +2100,7 @@ def test_hlsl_struct_inout_vertex_entry_generates_valid_glsl_and_metal(tmp_path)
     assert "float3 VSIn_Pos [[attribute(0)]];" in metal
     assert "float4 VSIn_Color [[attribute(1)]];" in metal
     assert "float4 PSIn_Pos [[position]];" in metal
-    assert "float4 PSIn_Color [[user(Color0)]];" in metal
+    assert "float4 PSIn_Color [[user(COLOR0)]];" in metal
     assert "[[ATTRIB" not in metal
     assert "[[COLOR" not in metal
     assert " PSIn." not in metal
@@ -2145,7 +2146,7 @@ def test_hlsl_struct_inout_pixel_entry_generates_valid_glsl_and_metal(tmp_path):
 
     assert "fragment fragment_main_Return fragment_main" in metal
     assert "float4 PSIn_Pos [[position]]" in metal
-    assert "float4 PSIn_Color [[user(Color0)]]" in metal
+    assert "float4 PSIn_Color [[user(COLOR0)]]" in metal
     assert "float4 PSOut_Color [[color(0)]];" in metal
     assert "[[COLOR" not in metal
     assert " PSIn." not in metal

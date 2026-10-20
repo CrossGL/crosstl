@@ -4,6 +4,7 @@ import re
 
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 
+from .aggregate_equality import lower_aggregate_equality
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -38,6 +39,7 @@ except ImportError:
     CROSSGL_KEYWORDS = {}
 
 CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
+ARRAY_VARIABLE_KEY_PREFIX = "[]"
 SHORT_INTEGER_LITERAL_SUFFIX_RE = re.compile(
     r"^(?P<body>(?:0[xX][0-9a-fA-F]+|\d+))(?P<suffix>[uU][sS]|[sS])$"
 )
@@ -658,6 +660,7 @@ class GLSLToCrossGLConverter:
         self.variable_type_scopes = []
         self.function_name_renames = {}
         self.user_function_arities = set()
+        self.glsl_function_return_types = {}
         self.struct_type_renames = {}
 
     def indent(self):
@@ -852,6 +855,12 @@ class GLSLToCrossGLConverter:
         vtype = getattr(var, "vtype", None)
         if name and vtype:
             self.variable_type_scopes[-1][name] = vtype
+            # An array's element type is its vtype; the "[]" key records the array itself for expression typing.
+            array_key = ARRAY_VARIABLE_KEY_PREFIX + name
+            if getattr(var, "is_array", False) or getattr(var, "array_sizes", None):
+                self.variable_type_scopes[-1][array_key] = True
+            else:
+                self.variable_type_scopes[-1].pop(array_key, None)
 
     def register_parameter_type(self, param):
         if isinstance(param, VariableNode):
@@ -867,6 +876,12 @@ class GLSLToCrossGLConverter:
             if name in scope:
                 return scope[name]
         return None
+
+    def lookup_variable_is_array(self, name):
+        for scope in reversed(self.variable_type_scopes):
+            if name in scope:
+                return bool(scope.get(ARRAY_VARIABLE_KEY_PREFIX + name))
+        return False
 
     def expression_resource_type(self, expr):
         if isinstance(expr, VariableNode):
@@ -2430,6 +2445,12 @@ class GLSLToCrossGLConverter:
             for function in getattr(node, "functions", []) or []
             if getattr(function, "name", None)
         }
+        self.glsl_function_return_types = {}
+        for function in getattr(node, "functions", []) or []:
+            if getattr(function, "name", None):
+                self.glsl_function_return_types.setdefault(function.name, set()).add(
+                    str(getattr(function, "return_type", "") or "").strip()
+                )
         self.prepare_structured_buffers(node)
         node.io_variables = self.deduplicate_builtin_stage_io_variables(
             getattr(node, "io_variables", []) or []
@@ -3518,6 +3539,9 @@ class GLSLToCrossGLConverter:
             operator = self.operator_map.get(node.op, node.op)
             if operator == ",":
                 return f"({left}, {right})"
+            equality = lower_aggregate_equality(self, node, left, right)
+            if equality is not None:
+                return equality
             return f"({left} {operator} {right})"
         elif isinstance(node, UnaryOpNode):
             operand = self.generate_expression(node.operand)

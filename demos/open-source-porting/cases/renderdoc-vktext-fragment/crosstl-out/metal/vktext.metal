@@ -3,8 +3,8 @@
 using namespace metal;
 
 struct FragmentInput {
-    float4 tex [[attribute(0)]];
-    float2 glyphuv [[attribute(1)]];
+    float4 tex [[user(locn0)]];
+    float2 glyphuv [[user(locn1)]];
 };
 // Fragment Shader
 fragment float4 fragment_main(FragmentInput input [[stage_in]], texture2d<float> tex0 [[texture(3)]]) {

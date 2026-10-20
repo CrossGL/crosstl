@@ -113,6 +113,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .relational_builtins import lower_relational_builtins
 from .stage_utils import (
     compute_local_size,
     is_fragment_output_parameter,
@@ -351,6 +352,7 @@ class SlangCodeGen:
         outermost = not self._generating
         if outermost:
             self._generating = True
+            lower_relational_builtins(ast)
             self.variable_types = {}
             self.local_variable_types = self.variable_types
             self.image_resource_types = {}

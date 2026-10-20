@@ -14,7 +14,7 @@ struct VertexInput {
     float3 inColor [[attribute(1)]];
 };
 struct VertexOutput {
-    float3 outColor [[attribute(0)]];
+    float3 outColor [[user(locn0)]];
     float4 gl_Position [[position]];
 };
 // Constant Buffers

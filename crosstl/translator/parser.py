@@ -4090,6 +4090,8 @@ class Parser:
             return ContinueNode()
         elif self.current_token[0] == "LBRACE":
             return self.parse_block()
+        elif self.current_token_starts_inferred_var_declaration():
+            return self.parse_inferred_var_declaration()
         elif self.is_variable_declaration():
             return self.parse_variable_declaration()
         else:
@@ -4155,6 +4157,35 @@ class Parser:
 
         return self.finish_variable_contract(var_node)
 
+    def current_token_starts_inferred_var_declaration(self):
+        """Return whether ``var name = expr;`` starts here."""
+        if self.current_token[0] != "VAR":
+            return False
+        name_value = self.peek()[1]
+        return (
+            isinstance(name_value, str)
+            and name_value.isidentifier()
+            and self.peek(2)[0] == "EQUALS"
+        )
+
+    def parse_inferred_var_declaration(self):
+        """Parse ``var name = expr;``: a mutable local typed by its initializer.
+
+        It declares the same variable as ``let mut name = expr;`` (WGSL 7.3 ``var`` declarations and Mojo ``var``
+        locals both take the initializer's type when none is written).
+        """
+        self.eat("VAR")
+        name = self.parse_binding_identifier()
+        self.eat("EQUALS")
+        initial_value = self.parse_expression()
+        self.eat("SEMICOLON")
+
+        var_node = VariableNode(name=name, var_type=None, initial_value=initial_value)
+        var_node.generic_params = []
+        var_node.qualifiers = getattr(var_node, "qualifiers", []) + ["mut"]
+        var_node.is_let_declaration = True
+        return self.finish_variable_contract(var_node)
+
     def parse_binding_identifier(self):
         """Parse an identifier in binding position, including keyword-like names."""
         token_type, token_value = self.current_token
@@ -4184,13 +4215,31 @@ class Parser:
             "SEMICOLON",
         }
 
+    def parse_substatement(self):
+        """Parse the body of a selection or iteration statement as a block.
+
+        A substatement that is not a compound statement behaves as if it were one that contains it (C++
+        [stmt.select.general]/2 and [stmt.iter.general]/2; GLSL 4.60 sections 6.3-6.4 scope it the same way), so a
+        braceless body is kept as a one-statement block and every consumer sees a single shape.
+        """
+        statement = self.parse_statement()
+        if isinstance(statement, BlockNode):
+            return statement
+        statements = list(statement) if isinstance(statement, list) else [statement]
+        return BlockNode(
+            statements,
+            source_location=(
+                getattr(statements[0], "source_location", None) if statements else None
+            ),
+        )
+
     def parse_if_statement(self):
         """Parse an if/else statement chain."""
         self.eat("IF")
         self.eat("LPAREN")
         condition = self.parse_expression()
         self.eat("RPAREN")
-        then_branch = self.parse_statement()
+        then_branch = self.parse_substatement()
 
         else_branch = None
         if self.current_token[0] == "ELSE":
@@ -4198,7 +4247,7 @@ class Parser:
             if self.current_token[0] == "IF":
                 else_branch = self.parse_if_statement()
             else:
-                else_branch = self.parse_statement()
+                else_branch = self.parse_substatement()
 
         return IfNode(
             condition=condition, then_branch=then_branch, else_branch=else_branch
@@ -4234,7 +4283,7 @@ class Parser:
                 update = self.parse_expression_sequence()
 
             self.eat("RPAREN")
-            body = self.parse_statement()
+            body = self.parse_substatement()
 
             return ForNode(init=init, condition=condition, update=update, body=body)
         finally:
@@ -4267,7 +4316,7 @@ class Parser:
 
         self.enter_value_type_scope({pattern: binding_type})
         try:
-            body = self.parse_statement()
+            body = self.parse_substatement()
         finally:
             self.restore_value_type_scope()
 
@@ -4331,14 +4380,14 @@ class Parser:
         """Parse a while loop statement."""
         self.eat("WHILE")
         condition = self.parse_expression()
-        body = self.parse_statement()
+        body = self.parse_substatement()
 
         return WhileNode(condition=condition, body=body)
 
     def parse_do_while_statement(self):
         """Parse a do-while loop statement."""
         self.eat("DO")
-        body = self.parse_statement()
+        body = self.parse_substatement()
         self.eat("WHILE")
         condition = self.parse_expression()
         self.eat("SEMICOLON")
@@ -4348,7 +4397,7 @@ class Parser:
     def parse_loop_statement(self):
         """Parse an unconditional loop statement."""
         self.eat("LOOP")
-        body = self.parse_statement()
+        body = self.parse_substatement()
 
         return LoopNode(body=body)
 

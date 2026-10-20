@@ -7969,7 +7969,7 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert "float3 VSIn_Pos [[attribute(0)]];" in vertex_metal
     assert "float4 VSIn_Color [[attribute(1)]];" in vertex_metal
     assert "vertex_main_Input _crossglInput [[stage_in]]" in vertex_metal
-    assert "float4 PSIn_Color [[user(Color0)]];" in vertex_metal
+    assert "float4 PSIn_Color [[user(COLOR0)]];" in vertex_metal
     assert "fragment_main_Input _crossglInput [[stage_in]]" in fragment_metal
     assert "float4 PSOut_Color [[color(0)]];" in fragment_metal
 
@@ -56130,7 +56130,7 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
                 rhs_tensor: UnsafePointer[Float32],
                 out_tensor: UnsafePointer[Float32],
             ):
-                var tid = block_idx.x * block_dim.x + thread_idx.x
+                var tid: Int = block_idx.x * block_dim.x + thread_idx.x
                 if tid < vector_size:
                     out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
 
@@ -56206,6 +56206,42 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     assert vulkan["code"] == "project.translate.vulkan-builtin-unsupported"
     assert vulkan["location"]["file"] == "vector_addition.mojo"
     assert vulkan["missingCapabilities"] == ["spirv.builtin.has_accelerator"]
+
+
+def test_translate_project_mojo_untyped_unresolved_local_is_refused_for_metal(
+    tmp_path,
+):
+    # `var tid = <unresolved host expression>` has no written type and no inferable one; Metal used to declare it
+    # `float`. It is now refused with a typed lowering diagnostic.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.sys import has_accelerator
+            from std.gpu import block_dim, block_idx, thread_idx
+
+            def vector_addition(
+                lhs_tensor: UnsafePointer[Float32],
+                out_tensor: UnsafePointer[Float32],
+            ):
+                var tid = block_idx.x * block_dim.x + thread_idx.x
+                out_tensor[tid] = lhs_tensor[tid]
+
+            def main() raises:
+                if not has_accelerator():
+                    print("No compatible GPU found")
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["metal"], output_dir="out").to_json()
+
+    assert [artifact["status"] for artifact in payload["artifacts"]] == ["failed"]
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-lowering-unsupported": 1
+    }
+    (diagnostic,) = payload["diagnostics"]
+    assert "the type of 'tid' is not written" in diagnostic["message"]
 
 
 def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(

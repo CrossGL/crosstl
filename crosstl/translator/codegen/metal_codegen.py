@@ -98,6 +98,11 @@ from .buffer_block_diagnostics import (
     record_unsupported_layout_failures,
 )
 from .buffer_length import BufferLengthUnsupportedError
+from .builtin_result_types import (
+    C_FAMILY,
+    component_access_type,
+    inferred_value_type,
+)
 from .call_graph import validate_recursion_free
 from .constant_ordering import partition_constants_by_struct_dependency
 from .entry_selection import entry_type_references
@@ -340,6 +345,8 @@ from .metal_hlsl_matrix import (
 from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
 from .metal_refusals import metal_refusals
+from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
+from .operator_spellings import map_c_family_operator
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     crossgl_literal_positive_integer,
@@ -348,6 +355,7 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
     validate_pointer_reinterpretation_target,
 )
+from .relational_builtins import lower_relational_builtins, metal_logical_not_operand
 from .resource_arrays import collect_resource_array_size_hints
 from .stage_utils import (
     assign_stage_entry_names,
@@ -1366,11 +1374,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "SV_InstanceId": "instance_id",
             "sv_instance_id": "instance_id",
             "sv_instanceid": "instance_id",
-            "gl_IsFrontFace": "is_front_facing",
-            "SV_IsFrontFace": "is_front_facing",
-            "SV_IsFrontFacing": "is_front_facing",
-            "sv_is_front_face": "is_front_facing",
-            "sv_isfrontface": "is_front_facing",
+            "gl_IsFrontFace": "front_facing",
+            "SV_IsFrontFace": "front_facing",
+            "SV_IsFrontFacing": "front_facing",
+            "sv_is_front_face": "front_facing",
+            "sv_isfrontface": "front_facing",
             "gl_PrimitiveID": "primitive_id",
             "SV_PrimitiveID": "primitive_id",
             "SV_PrimitiveId": "primitive_id",
@@ -1408,6 +1416,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "SV_Position": "position",
             "gl_PointSize": "point_size",
             "gl_ClipDistance": "clip_distance",
+            "gl_Layer": "render_target_array_index",
+            "gl_ViewportIndex": "viewport_array_index",
             # Fragment inputs
             "gl_FragColor": "[[color(0)]]",
             "gl_FragColor0": "[[color(0)]]",
@@ -1444,7 +1454,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "gl_FragCoord": "position",
             "gl_BaryCoordEXT": "barycentric_coord",
             "gl_BaryCoordNoPerspEXT": "barycentric_coord",
-            "gl_FrontFacing": "is_front_facing",
+            "gl_FrontFacing": "front_facing",
             "gl_PointCoord": "point_coord",
             "gl_SampleID": "sample_id",
             "SV_SampleIndex": "sample_id",
@@ -1883,6 +1893,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
         Raises :class:`MetalLoweringRefused` listing every construct that has no faithful Metal lowering.
         """
+        lower_relational_builtins(ast)
         return self.refusals.run(self.render_program, ast, target_stage)
 
     def refuse_lowering(self, reason, fallback=""):
@@ -4488,6 +4499,34 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             dependencies,
         )
 
+    def metal_is_varying_struct(self, struct_name):
+        """Whether ``struct_name`` carries values from a vertex entry to a fragment entry (:mod:`.metal_varyings`)."""
+        if struct_name in getattr(self, "metal_vertex_entry_input_struct_names", ()):
+            return False
+        return struct_name in getattr(
+            self, "metal_vertex_entry_output_struct_names", ()
+        ) or struct_name in getattr(self, "metal_fragment_entry_input_struct_names", ())
+
+    def metal_varying_member_attribute(
+        self, member, struct_name, default_member_semantics, offset=0
+    ):
+        if not self.metal_is_varying_struct(struct_name):
+            return None
+        semantic = self.metal_struct_member_effective_semantic(
+            member, default_member_semantics, struct_name
+        )
+        return metal_varying_attribute(self, member, semantic, offset=offset)
+
+    def metal_member_semantic_attribute(
+        self, member, semantic, struct_name, default_member_semantics
+    ):
+        varying = self.metal_varying_member_attribute(
+            member, struct_name, default_member_semantics
+        )
+        if varying is not None:
+            return varying
+        return self.map_semantic(semantic) if semantic else ""
+
     def metal_struct_member_declaration(
         self,
         member,
@@ -4511,7 +4550,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 semantic = (
                     field_semantics[index] if index < len(field_semantics) else None
                 )
-                semantic_attr = self.map_semantic(semantic) if semantic else ""
+                semantic_attr = self.metal_varying_member_attribute(
+                    member, struct_name, default_member_semantics, offset=index
+                )
+                if semantic_attr is None:
+                    semantic_attr = self.map_semantic(semantic) if semantic else ""
                 code += (
                     f"    {field_type} {field_name}{semantic_attr}"
                     f"{interpolation_attr};\n"
@@ -4528,7 +4571,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             )
             if resource_array_declaration is not None:
                 abi_attr = self.format_metal_struct_member_abi_attributes(member)
-                semantic_attr = self.map_semantic(semantic) if semantic else ""
+                semantic_attr = self.metal_member_semantic_attribute(
+                    member, semantic, struct_name, default_member_semantics
+                )
                 interpolation_attr = self.metal_interpolation_attribute_suffix(member)
                 return (
                     f"    {resource_array_declaration}{abi_attr}{semantic_attr}"
@@ -4541,7 +4586,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 "element_type",
                 getattr(member, "vtype", "float"),
             )
-            semantic_attr = self.map_semantic(semantic) if semantic else ""
+            semantic_attr = self.metal_member_semantic_attribute(
+                member, semantic, struct_name, default_member_semantics
+            )
             interpolation_attr = self.metal_interpolation_attribute_suffix(member)
             mapped_type = self.map_type(element_type)
             if preserve_native_narrow_storage:
@@ -4567,7 +4614,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             member, default_member_semantics, struct_name
         )
         abi_attr = self.format_metal_struct_member_abi_attributes(member)
-        semantic_attr = self.map_semantic(semantic) if semantic else ""
+        semantic_attr = self.metal_member_semantic_attribute(
+            member, semantic, struct_name, default_member_semantics
+        )
         interpolation_attr = self.metal_interpolation_attribute_suffix(member)
 
         if hasattr(member, "member_type"):
@@ -5262,9 +5311,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                         "name": p.name,
                         "raw_type": raw_param_type,
                         "mapped_type": param_type,
-                        "attribute": self.metal_fragment_input_semantic_attribute(
-                            semantic
-                        ),
+                        "attribute": metal_varying_attribute(self, p, semantic),
                         "semantic": semantic,
                         "preserve_user_attribute": True,
                     }
@@ -6678,7 +6725,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "vertex_id": "uint",
             "instance_id": "uint",
             "primitive_id": "uint",
-            "is_front_facing": "bool",
+            "front_facing": "bool",
+            "render_target_array_index": "uint",
+            "viewport_array_index": "uint",
             "position": "float4",
             "point_coord": "float2",
             "sample_id": "uint",
@@ -6855,9 +6904,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if self.is_graphics_stage_output_parameter(parameter, shader_type):
             return False
         semantic = self.semantic_from_node(parameter)
-        if not self.is_metal_user_stage_io_semantic(semantic):
+        if semantic is not None and is_metal_varying_builtin(
+            self.canonical_metal_semantic(semantic)
+        ):
             return False
-        if self.is_resource_parameter_type(raw_param_type):
+        if self.is_metal_resource_or_buffer_parameter(
+            raw_param_type, parameter, shader_type
+        ):
             return False
         if isinstance(raw_param_type, (PointerType, ReferenceType)):
             return False
@@ -6873,19 +6926,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if base_type in self.structs_by_name:
             return False
         return self.is_metal_scalar_or_vector_type_name(base_type)
-
-    def metal_fragment_input_semantic_attribute(self, semantic):
-        if self.metal_attribute_index_from_semantic(semantic) is not None:
-            return self.map_semantic(semantic)
-        hlsl_attribute = self.metal_hlsl_attribute_semantic(semantic)
-        if hlsl_attribute is not None:
-            return f" [[{hlsl_attribute}]]"
-        hlsl_color = self.metal_hlsl_color_semantic(semantic)
-        if hlsl_color is not None:
-            return f" [[user({hlsl_color})]]"
-        if str(semantic).lower() == "color":
-            return " [[user(Color0)]]"
-        return None
 
     def is_metal_scalar_or_vector_type_name(self, type_name):
         type_name = str(type_name).strip()
@@ -6929,7 +6969,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         for parameter in parameters:
             attribute = parameter.get("attribute")
             attribute_index = self.metal_attribute_index_from_attribute(attribute)
-            if attribute_index is None and (
+            if (
+                attribute_index is None
+                and not parameter.get("preserve_user_attribute")
+            ) and (
                 attribute is None
                 or not attribute.strip()
                 or (
@@ -6972,6 +7015,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         semantic = self.semantic_from_node(parameter)
         if semantic is None and stage_name == "fragment":
             semantic = "gl_FragColor"
+        if stage_name == "vertex":
+            varying = metal_varying_attribute(self, parameter, semantic)
+            if varying is not None:
+                return varying
         return self.map_semantic(semantic)
 
     def generate_metal_stage_output_parameter_struct(self, struct_name, parameters):
@@ -7037,7 +7084,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "vertex_id": "uint",
             "instance_id": "uint",
             "primitive_id": "uint",
-            "is_front_facing": "bool",
+            "front_facing": "bool",
+            "render_target_array_index": "uint",
+            "viewport_array_index": "uint",
             "position": "float4",
             "point_coord": "float2",
             "point_size": "float",
@@ -7782,6 +7831,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             )
             if acceleration_structure_alias_type is not None:
                 var_type = acceleration_structure_alias_type
+            if var_type is None:
+                # Resource aliases above are typed from their source; anything still untyped is refused.
+                var_type = self.local_variable_declared_type(stmt, refuse_untyped=True)
             initial_value = getattr(stmt, "initial_value", None)
             acceleration_structure_array_alias = (
                 self.unsupported_metal_acceleration_structure_array_alias_source(
@@ -8031,13 +8083,27 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             result += f"{indent_str}{line}{terminator}\n"
         return result
 
-    def local_variable_declared_type(self, stmt):
+    def local_variable_declared_type(self, stmt, refuse_untyped=False):
+        """The type a local declaration is emitted with.
+
+        A local with no written type takes its initializer's; when that cannot be inferred either, analyses get
+        ``None`` and the declaration itself (``refuse_untyped``) is refused rather than given a guessed type.
+        """
         var_type = getattr(stmt, "var_type", None)
         if var_type is None:
             var_type = getattr(stmt, "vtype", None)
         if var_type is None:
-            var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
-        return self.type_name_string(var_type) or "float"
+            var_type = inferred_value_type(
+                self, getattr(stmt, "initial_value", None), C_FAMILY
+            )
+        declared_type = self.type_name_string(var_type)
+        if declared_type or not refuse_untyped:
+            return declared_type or None
+        return self.refuse_lowering(
+            f"local declaration: the type of '{getattr(stmt, 'name', '?')}' is not "
+            "written and cannot be inferred from its initializer",
+            "float",
+        )
 
     def local_variable_texture_alias_resource_type(self, node, declared_type):
         initial_value = getattr(node, "initial_value", None)
@@ -9817,6 +9883,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 if native is not None and native[-1:] in {"2", "3", "4"}:
                     return native[:-1]
                 return self.vector_component_type(array_type)
+            component_type = component_access_type(
+                self.type_name_string(array_type), C_FAMILY
+            )
+            if component_type is not None:
+                return component_type
             mapped_array_type = (
                 self.map_type(array_type) if array_type is not None else None
             )
@@ -11215,6 +11286,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     return byte_update
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{operator}"
+            if operator == "!":
+                operand = metal_logical_not_operand(
+                    operand, self.expression_result_type(expr.operand)
+                )
             if operator in {"+", "-"} and operand.startswith(("+", "-")):
                 # Keep adjacent signs from becoming an increment or decrement.
                 operand = f"({operand})"
@@ -18225,13 +18300,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return canonical not in {
             "barycentric_coord",
             "clip_distance",
+            "front_facing",
             "instance_id",
-            "is_front_facing",
             "payload",
             "point_coord",
             "point_size",
             "position",
             "primitive_id",
+            "render_target_array_index",
             "sample_id",
             "sample_mask",
             "stencil_ref",
@@ -18241,6 +18317,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "threadgroup_position_in_grid",
             "threads_per_threadgroup",
             "vertex_id",
+            "viewport_array_index",
         }
 
     def metal_stage_io_member_attribute_span(self, member):
@@ -20435,6 +20512,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if self.is_metal_ray_stage(shader_type):
             return False
         if self.is_graphics_stage_output_parameter(parameter, shader_type):
+            return False
+        # Built-in inputs such as [[vertex_id]] are parameters; a [[stage_in]] struct holds only attributes.
+        semantic = self.semantic_from_node(parameter)
+        if semantic is not None and is_metal_varying_builtin(
+            self.canonical_metal_semantic(semantic)
+        ):
             return False
         return True
 
@@ -27648,38 +27731,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return f"{target_type}{{{value}}}"
 
     def map_operator(self, op):
-        op_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "BITWISE_XOR": "^",
-            "BITWISE_OR": "|",
-            "BITWISE_AND": "&",
-            "LESS_THAN": "<",
-            "GREATER_THAN": ">",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "AND": "&&",
-            "OR": "||",
-            "EQUALS": "=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "ASSIGN_AND": "&=",
-            "LOGICAL_AND": "&&",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-        }
-        return op_map.get(op, op)
+        """Spell a CrossGL operator; an operator CrossGL does not define is refused."""
+        return map_c_family_operator(op, "Metal")
 
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to Metal attribute syntax."""

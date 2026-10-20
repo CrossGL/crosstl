@@ -38,6 +38,7 @@ from .DirectxAst import (
     VectorConstructorNode,
     WhileNode,
 )
+from .entry_stage_hints import demote_name_hinted_helpers, entry_name_stage_hint
 
 TYPE_TOKENS = {
     "FLOAT",
@@ -506,6 +507,7 @@ class HLSLParser:
                 )
                 global_variables.extend(declarations)
 
+        demote_name_hinted_helpers(self, functions, structs)
         self.apply_struct_parameter_stage_qualifiers(functions, structs)
         self.apply_effect_stage_entries(functions)
 
@@ -2179,7 +2181,9 @@ class HLSLParser:
             self.eat("CONST")
         return qualifiers
 
-    def infer_function_qualifier(self, name, attributes, params, semantic, body=None):
+    def infer_function_qualifier(
+        self, name, attributes, params, semantic, body=None, *, use_name_hint=True
+    ):
         attribute_names = {str(attr.name).lower() for attr in attributes}
         for attr in attributes:
             if attr.name.lower() == "shader" and attr.args:
@@ -2209,23 +2213,11 @@ class HLSLParser:
                 }
                 if stage_name in stage_map:
                     return stage_map[stage_name]
-        name_lower = name.lower()
-        if name_lower.startswith("vs"):
-            return "vertex"
-        if name_lower.startswith("ps"):
-            return "fragment"
-        if name_lower.startswith("cs"):
-            return "compute"
-        if name_lower.startswith("gs"):
-            return "geometry"
-        if name_lower.startswith("hs"):
-            return "tessellation_control"
-        if name_lower.startswith("ds"):
-            return "tessellation_evaluation"
-        if name_lower.startswith("ms"):
-            return "mesh"
-        if name_lower.startswith("as"):
-            return "task"
+        name_stage = (
+            entry_name_stage_hint(name, attribute_names) if use_name_hint else None
+        )
+        if name_stage is not None:
+            return name_stage
         has_mesh_output_parameter = any(
             any(
                 str(attr.name).lower() in {"vertices", "indices", "primitives"}

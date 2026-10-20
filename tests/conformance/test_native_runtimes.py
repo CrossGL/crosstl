@@ -13,9 +13,12 @@ import pytest
 from . import runner
 from .runtimes import RUNTIMES, provision
 
+# The HLSL check binds a 12-byte structured-buffer stride. It is not h_precise: DXC emits that kernel's
+# a * b - c as an unfused fmul and fsub without fast-math flags, and WARP 1.0.19 and 1.0.21 still fuse them,
+# so it measures the WARP JIT rather than the adapter. Its scoreboard cells keep recording the divergence.
 REFERENCE = {
     "metal": "m_ptr_arith",
-    "hlsl": "h_precise",
+    "hlsl": "h_float3_stride",
     "glsl": "g_std430_vec3_float",
     "spirv": "s_nocontraction",
 }

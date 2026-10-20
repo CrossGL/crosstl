@@ -303,6 +303,10 @@ def _translate_with_codegen(
             defines = materialized_source.defines
             source_options = materialized_source.source_options
 
+    if source_spec.name == "cgl":
+        # A CrossGL body the parser cannot read is refused; skipping it would emit a
+        # function that returns an undefined value.
+        source_options = {**(source_options or {}), "strict_function_bodies": True}
     ast = source_spec.parse(
         shader_code,
         file_path=file_path,
@@ -345,7 +349,10 @@ def _translate_with_codegen(
                 cgl_spec = SOURCE_REGISTRY.get("cgl")
                 if not cgl_spec:
                     raise ValueError("CrossGL parser not available for validation")
-                cgl_ast = cgl_spec.parse(generated_code)
+                cgl_ast = cgl_spec.parse(
+                    generated_code,
+                    source_options={"strict_function_bodies": True},
+                )
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
         else:
             reverse_codegen = source_spec.create_reverse_codegen(source_options)
@@ -360,7 +367,7 @@ def _translate_with_codegen(
             if not cgl_spec:
                 raise ValueError("CrossGL parser not available for intermediate step")
             cgl_source_options = {
-                "strict_function_bodies": source_spec.name != "mojo",
+                "strict_function_bodies": True,
             }
             cgl_ast = cgl_spec.parse(
                 intermediate_code,
