@@ -6009,6 +6009,7 @@ jobs:
               MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
               MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
               MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+              MLX_VULKAN_FRONTIER_SOURCES,
           )
 
           fence_source = "mlx/backend/metal/kernels/fence.metal"
@@ -6029,6 +6030,8 @@ jobs:
               directx_blocked_entry_point_counts.values()
           )
           vulkan_frontier_sources = set(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
+          # Refused sources are checked by run_porting against their tracked diagnostics.
+          vulkan_translated_sources = set(MLX_VULKAN_FRONTIER_SOURCES)
           gemv_workgroup_size_rule = list(GEMV_WORKGROUP_SIZE_RULE)
           gemv_report_workgroup_size_rule = list(GEMV_REPORT_WORKGROUP_SIZE_RULE)
           gemv_resolved_workgroup_sizes = list(
@@ -6086,7 +6089,7 @@ jobs:
               or set(scope["directxWorkgroupBlockedFrontierSources"])
               != directx_blocked_sources
               or set(scope["vulkanTranslatedFrontierSources"])
-              != vulkan_frontier_sources
+              != vulkan_translated_sources
               or set(scope["openglTranslatedFrontierSources"])
               != set(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES)
               or set(scope["openglWorkgroupBlockedFrontierSources"])
@@ -6393,18 +6396,18 @@ jobs:
           vulkan = checks["vulkan-frontier"]
           if (
               vulkan["status"] != "passed"
-              or set(vulkan["sources"]) != vulkan_frontier_sources
-              or vulkan["unitCount"] != len(vulkan_frontier_sources)
-              or vulkan["artifactCount"] != len(vulkan_frontier_sources)
+              or set(vulkan["sources"]) != vulkan_translated_sources
+              or vulkan["unitCount"] != len(vulkan_translated_sources)
+              or vulkan["artifactCount"] != len(vulkan_translated_sources)
               or vulkan["translatedArtifactCount"]
-              != len(vulkan_frontier_sources)
+              != len(vulkan_translated_sources)
               or vulkan["target"] != "vulkan"
           ):
               raise SystemExit("Vulkan frontier accounting is incomplete")
           if os.environ["RUNNER_OS"] == "Linux" and (
               vulkan["vulkanToolchainRequired"] is not True
               or vulkan["vulkanValidationStatus"] != "validated"
-              or vulkan["toolchainRuns"] < len(vulkan_frontier_sources)
+              or vulkan["toolchainRuns"] < len(vulkan_translated_sources)
           ):
               raise SystemExit("Vulkan frontier toolchain validation is incomplete")
           expected_directx_gemv = os.environ["RUNNER_OS"] == "Windows"

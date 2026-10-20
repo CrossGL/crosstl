@@ -1905,6 +1905,33 @@ def test_mlx_frontier_accounting_workflow_imports_available_harness_symbols():
     assert missing == []
 
 
+def test_mlx_frontier_accounting_counts_refused_vulkan_sources_separately():
+    """Refused Vulkan frontier sources are verified by run_porting, not counted as translated."""
+    from demos.integrations.mlx import run_porting
+
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    step_start = workflow.index("- name: Verify MLX frontier accounting")
+    command_marker = "          python - <<'PY'\n"
+    script_start = workflow.index(command_marker, step_start) + len(command_marker)
+    script = textwrap.dedent(
+        workflow[script_start : workflow.index("\n          PY", script_start)]
+    )
+    assert run_porting.MLX_VULKAN_FRONTIER_REFUSALS
+    assert set(run_porting.MLX_VULKAN_FRONTIER_SOURCES) == set(
+        run_porting.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    ) - set(run_porting.MLX_VULKAN_FRONTIER_REFUSALS)
+    assert "vulkan_translated_sources = set(MLX_VULKAN_FRONTIER_SOURCES)" in script
+    for translated in (
+        'set(scope["vulkanTranslatedFrontierSources"])',
+        'set(vulkan["sources"])',
+        'vulkan["unitCount"]',
+        'vulkan["artifactCount"]',
+        'vulkan["toolchainRuns"]',
+    ):
+        comparison = script[script.index(translated) :].split("\n", 2)
+        assert "vulkan_translated_sources" in "".join(comparison[:2]), translated
+
+
 def test_mlx_platform_runtime_wires_directx_graph_device_proof():
     workflow = _workflow_texts().get("demo-project-testing.yml", "")
     directx = _workflow_job_section(workflow, "directx-dispatch-sequence")
