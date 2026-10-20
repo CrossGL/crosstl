@@ -48,5 +48,11 @@ Per target:
   were updated. There is no compatibility switch (the IR has no compatibility guarantee).
 - The GLSL importer passes `matCxR` through unchanged, and no longer renames the ray-query transforms
   (`mat4x3`, GLSL_EXT_ray_query) to `mat3x4`.
-- Still open: the HLSL importer must map `floatRxC` to `matCxR` and lower HLSL rows, row-filling constructors,
-  `_mRC` swizzles and componentwise `*`; Slang keeps its previous spelling until it gets the HLSL lowering.
+- The HLSL importer (`crosstl/backend/DirectX/hlsl_matrix_import.py`) maps `floatRxC` to `matCxR`. A row read
+  `m[i]` becomes `transpose(m)[i]`, `m[i][j]` becomes `m[j][i]`, a row write calls a setter helper, constructors,
+  brace initializers and vector casts become `transpose(matRxC(...))`, `m._mRC` and `m._RC` become `m[C][R]`,
+  `*` of two matrices becomes `matrixCompMult`, a matrix cast keeps the upper-left elements and a scalar cast fills
+  every element. Row writes and multi-component swizzle writes whose operands have side effects are refused.
+- MSL takes only whole columns or one scalar per element in a matrix constructor, so the Metal emitter spreads the
+  components of a mixed argument list, such as `mat2(vec4)`, through a helper.
+- Still open: Slang keeps its previous spelling until it gets the HLSL lowering.

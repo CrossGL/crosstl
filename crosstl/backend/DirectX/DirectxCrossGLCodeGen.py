@@ -21,6 +21,11 @@ from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
+from .hlsl_matrix_import import (
+    HLSLMatrixImportMixin,
+    crossgl_matrix_type_name,
+    hlsl_matrix_type_map,
+)
 
 
 class HLSLSelectOverloadError(ValueError):
@@ -48,7 +53,7 @@ class HLSLIntegerConversionError(ValueError):
         super().__init__(f"Cannot preserve HLSL integer arithmetic: {reason}")
 
 
-class HLSLToCrossGLConverter(ImportRefusalMixin):
+class HLSLToCrossGLConverter(HLSLMatrixImportMixin, ImportRefusalMixin):
     """Serialize DirectX backend AST nodes back into CrossGL source."""
 
     IMPORT_REFUSAL_TYPE = DirectXImportRefused
@@ -151,45 +156,8 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
             "bool2": "bvec2",
             "bool3": "bvec3",
             "bool4": "bvec4",
-            # Matrix Types - float
-            "float2x2": "mat2",
-            "float2x3": "mat2x3",
-            "float2x4": "mat2x4",
-            "float3x2": "mat3x2",
-            "float3x3": "mat3",
-            "float3x4": "mat3x4",
-            "float4x2": "mat4x2",
-            "float4x3": "mat4x3",
-            "float4x4": "mat4",
-            # Matrix Types - half
-            "half2x2": "f16mat2",
-            "half2x3": "f16mat2x3",
-            "half2x4": "f16mat2x4",
-            "half3x2": "f16mat3x2",
-            "half3x3": "f16mat3",
-            "half3x4": "f16mat3x4",
-            "half4x2": "f16mat4x2",
-            "half4x3": "f16mat4x3",
-            "half4x4": "f16mat4",
-            "fixed2x2": "mat2",
-            "fixed2x3": "mat2x3",
-            "fixed2x4": "mat2x4",
-            "fixed3x2": "mat3x2",
-            "fixed3x3": "mat3",
-            "fixed3x4": "mat3x4",
-            "fixed4x2": "mat4x2",
-            "fixed4x3": "mat4x3",
-            "fixed4x4": "mat4",
-            # Matrix Types - double
-            "double2x2": "dmat2",
-            "double2x3": "dmat2x3",
-            "double2x4": "dmat2x4",
-            "double3x2": "dmat3x2",
-            "double3x3": "dmat3",
-            "double3x4": "dmat3x4",
-            "double4x2": "dmat4x2",
-            "double4x3": "dmat4x3",
-            "double4x4": "dmat4",
+            # Matrix Types: HLSL floatRxC is CrossGL matCxR (ADR 0003)
+            **hlsl_matrix_type_map(),
             # Texture Types
             "Texture1D": "sampler1D",
             "Texture1DArray": "sampler1DArray",
@@ -521,10 +489,11 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
                 type_map[f"{hlsl_prefix}{width}"] = f"{crossgl_prefix}{width}"
 
         for hlsl_prefix in ("min16float", "min10float", "float16_t"):
-            for columns in range(2, 5):
-                for rows in range(2, 5):
-                    suffix = str(columns) if columns == rows else f"{columns}x{rows}"
-                    type_map[f"{hlsl_prefix}{columns}x{rows}"] = f"f16mat{suffix}"
+            for rows in range(2, 5):
+                for cols in range(2, 5):
+                    type_map[f"{hlsl_prefix}{rows}x{cols}"] = crossgl_matrix_type_name(
+                        hlsl_prefix, rows, cols
+                    )
 
         return type_map
 
@@ -2257,9 +2226,11 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
         return None
 
     def indexed_value_raw_type(self, type_name):
-        return self.resource_element_raw_type(
-            type_name
-        ) or self.vector_element_raw_type(type_name)
+        return (
+            self.resource_element_raw_type(type_name)
+            or self.vector_element_raw_type(type_name)
+            or self.matrix_row_raw_type(type_name)
+        )
 
     def byte_address_load_raw_type(self, member):
         templated_type = self.first_template_argument(member)
@@ -3344,6 +3315,7 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
         }
         self.integer_compound_helpers = {}
         self.integer_helper_reserved_names = set()
+        self.reset_matrix_import_state()
         pending = [ast]
         while pending:
             node = pending.pop()
@@ -3483,6 +3455,7 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
                 code += self.generate_function(func)
 
         code += self.generate_integer_compound_helpers()
+        code += self.generate_matrix_row_setters()
         code += "}\n"
         return code
 
@@ -3889,6 +3862,11 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
                 code += self.format_binding_attributes(node, 1)
                 code += f"    cbuffer {cbuffer_name} {{\n"
                 for member in node.members:
+                    self.record_variable_type(
+                        member,
+                        self.global_variable_types,
+                        self.global_resource_array_dims,
+                    )
                     code += self.format_matrix_layout_attributes(member, 2)
                     code += self.format_attributes(getattr(member, "attributes", []), 2)
                     code += self.format_binding_attributes(member, 2)
@@ -4736,6 +4714,9 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
         converted = self.wide_integer_compound_expression(node, is_main)
         if converted is not None:
             return converted
+        matrix_assignment = self.matrix_assignment_expression(node, is_main)
+        if matrix_assignment is not None:
+            return matrix_assignment
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
         op = node.operator
@@ -4758,12 +4739,18 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
             right = self.generate_expression(expr.right, is_main)
             left = self.maybe_parenthesize(expr.left, left)
             right = self.maybe_parenthesize(expr.right, right)
+            matrix_product = self.matrix_product_expression(expr, left, right)
+            if matrix_product is not None:
+                return matrix_product
             return f"{left} {expr.op} {right}"
 
         elif isinstance(expr, AssignmentNode):
             converted = self.wide_integer_compound_expression(expr, is_main)
             if converted is not None:
                 return converted
+            matrix_assignment = self.matrix_assignment_expression(expr, is_main)
+            if matrix_assignment is not None:
+                return matrix_assignment
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             op = expr.operator
@@ -4883,6 +4870,11 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
                 condition, true_value, false_value = rendered_args
                 return f"select({false_value}, {true_value}, {condition})"
             args = ", ".join(rendered_args)
+            matrix_constructor = self.matrix_constructor_expression(
+                func_name, expr.args, is_main
+            )
+            if matrix_constructor is not None:
+                return matrix_constructor
             if func_name == "mul" and len(expr.args) == 2:
                 left = self.maybe_parenthesize(expr.args[0], rendered_args[0])
                 right = self.maybe_parenthesize(expr.args[1], rendered_args[1])
@@ -4924,6 +4916,9 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
             )
             if scalar_splat is not None:
                 return scalar_splat
+            matrix_member = self.matrix_member_expression(expr, is_main)
+            if matrix_member is not None:
+                return matrix_member
             if isinstance(expr.object, (int, float)):
                 obj = f"({obj})"
             return f"{obj}.{expr.member}"
@@ -4941,10 +4936,18 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
                 and self.is_storage_image_texel_access(expr)
             ):
                 return self.generate_storage_image_load(expr, is_main)
+            matrix_index = self.matrix_index_expression(expr, is_main)
+            if matrix_index is not None:
+                return matrix_index
             array = self.generate_expression(expr.array, is_main)
             index = self.generate_expression(expr.index, is_main)
             return f"{array}[{index}]"
         elif isinstance(expr, CastNode):
+            matrix_shape = self.hlsl_matrix_shape(expr.target_type)
+            if matrix_shape is not None:
+                return self.matrix_conversion_expression(
+                    matrix_shape, expr.expression, is_main
+                )
             target_type = self.map_type(expr.target_type)
             expression = self.generate_expression(expr.expression, is_main)
             return f"{target_type}({expression})"
@@ -4970,11 +4973,21 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
             return f"{condition} ? {left} : {right}"
 
         elif isinstance(expr, VectorConstructorNode):
+            matrix_constructor = self.matrix_constructor_expression(
+                expr.type_name, expr.args, is_main
+            )
+            if matrix_constructor is not None:
+                return matrix_constructor
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{self.map_type(expr.type_name)}({args})"
         elif isinstance(expr, InitializerListNode):
+            matrix_initializer = self.matrix_initializer_expression(
+                expected_type, expr, is_main
+            )
+            if matrix_initializer is not None:
+                return matrix_initializer
             elements = ", ".join(
                 self.generate_expression(element, is_main) for element in expr.elements
             )
@@ -5350,11 +5363,9 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
             "float16_t": "f16mat",
             "double": "dmat",
         }
-        prefix = prefixes.get(str(scalar_type).strip())
-        if prefix is None:
+        if prefixes.get(str(scalar_type).strip()) is None:
             return None
-        suffix = str(rows) if rows == cols else f"{rows}x{cols}"
-        return f"{prefix}{suffix}"
+        return crossgl_matrix_type_name(str(scalar_type).strip(), rows, cols)
 
     def map_rasterizer_ordered_buffer_type(self, base_type, element_type):
         buffer_type = {

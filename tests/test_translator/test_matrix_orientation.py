@@ -134,3 +134,47 @@ def test_oriented_hlsl_compiles_with_dxc(tmp_path):
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
+
+
+METAL_CONSTRUCTORS = """
+shader Constructors {
+    cbuffer Frame {
+        mat4 world;
+    }
+    compute {
+        layout(std430, binding = 0) buffer Out { float data[]; } outBuf;
+        void main() {
+            vec4 flat = vec4(1.0, 2.0, 3.0, outBuf.data[0]);
+            mat2 fromVector = mat2(flat);
+            mat2x3 mixed = mat2x3(flat.xy, 3.0, flat.w, flat.zw);
+            mat2 columns = mat2(flat.xy, flat.zw);
+            mat3x4 resized = mat3x4(world);
+            outBuf.data[1] = fromVector[1][0] + mixed[1][2] + columns[0][1] + resized[2][3];
+        }
+    }
+}
+"""
+
+
+def test_metal_spreads_mixed_constructor_components_over_the_columns():
+    metal = MetalCodeGen().generate(parse(METAL_CONSTRUCTORS))
+
+    assert (
+        "inline float2x2 __crossgl_float2x2_from_float4(float4 p0) {\n"
+        "    return float2x2(float2(p0.x, p0.y), float2(p0.z, p0.w));\n}\n"
+    ) in metal
+    assert (
+        "inline float2x3 __crossgl_float2x3_from_float2_float_float_float2("
+        "float2 p0, float p1, float p2, float2 p3) {\n"
+        "    return float2x3(float3(p0.x, p0.y, p1), float3(p2, p3.x, p3.y));\n}\n"
+    ) in metal
+    assert lines(metal, "fromVector = __crossgl_float2x2_from_float4(flat);")
+    assert lines(metal, "columns = float2x2(flat.xy, flat.zw);")
+
+
+def test_metal_resizes_constant_buffer_matrices_column_by_column():
+    metal = MetalCodeGen().generate(parse(METAL_CONSTRUCTORS))
+
+    assert [
+        line for line in lines(metal, "resized =") if "[0], " in line and "[2])" in line
+    ]

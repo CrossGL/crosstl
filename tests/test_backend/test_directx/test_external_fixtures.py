@@ -870,9 +870,11 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "mat2 baseMatrix = mat2(input);",
-            "mat2 rowMajorMatrix = mat2(input);",
-            "mat2 columnMajorMatrix = mat2(input);",
+            # A float4 cast to float2x2 lists the rows; CrossGL constructors fill columns.
+            "mat2 baseMatrix = transpose(mat2(input));",
+            "mat2 rowMajorMatrix = transpose(mat2(input));",
+            "mat2 columnMajorMatrix = transpose(mat2(input));",
+            "vec4(baseMatrix[0][0], rowMajorMatrix[1][0], columnMajorMatrix[0][1], baseMatrix[1][1])",
         ),
     ),
     ExternalFixture(
@@ -1023,7 +1025,7 @@ EXTERNAL_FIXTURES = [
             "i16vec4 d;",
             "u16vec4 e;",
             "f16vec4 f;",
-            "f16mat2x3 floatMat;",
+            "f16mat3x2 floatMat;",
             "result4 = asuint16(d);",
         ),
     ),

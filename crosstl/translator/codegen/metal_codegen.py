@@ -7648,6 +7648,7 @@ class MetalCodeGen:
 
     def collect_cbuffer_member_references(self, cbuffers):
         references = {}
+        self.metal_cbuffer_member_types = {}
         ambiguous_members = collect_duplicate_cbuffer_member_names(cbuffers)
         for cbuffer in cbuffers:
             parameter_name = self.cbuffer_parameter_name(cbuffer)
@@ -7656,6 +7657,15 @@ class MetalCodeGen:
                 if not member_name or member_name in ambiguous_members:
                     continue
                 references[member_name] = f"{parameter_name}.{member_name}"
+                member_type = (
+                    getattr(member, "member_type", None)
+                    or getattr(member, "vtype", None)
+                    or getattr(member, "var_type", None)
+                )
+                if member_type is not None:
+                    self.metal_cbuffer_member_types[member_name] = (
+                        self.type_name_string(member_type)
+                    )
         self.ambiguous_cbuffer_members = ambiguous_members
         return references
 
@@ -9604,9 +9614,11 @@ class MetalCodeGen:
             builtin_type = self.metal_compute_builtin_result_type(expr.name)
             if builtin_type is not None:
                 return builtin_type
-            return self.local_variable_types.get(
-                expr.name
-            ) or self.metal_program_scope_value_global_types.get(expr.name)
+            return (
+                self.local_variable_types.get(expr.name)
+                or self.metal_program_scope_value_global_types.get(expr.name)
+                or getattr(self, "metal_cbuffer_member_types", {}).get(expr.name)
+            )
         if isinstance(expr, (VariableNode, BackendVariableNode)):
             name = getattr(expr, "name", None)
             builtin_type = self.metal_graphics_builtin_result_type(name)
@@ -9615,9 +9627,11 @@ class MetalCodeGen:
             builtin_type = self.metal_compute_builtin_result_type(name)
             if builtin_type is not None:
                 return builtin_type
-            return self.local_variable_types.get(
-                name
-            ) or self.metal_program_scope_value_global_types.get(name)
+            return (
+                self.local_variable_types.get(name)
+                or self.metal_program_scope_value_global_types.get(name)
+                or getattr(self, "metal_cbuffer_member_types", {}).get(name)
+            )
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
         if isinstance(expr, BinaryOpNode):
@@ -11126,6 +11140,8 @@ class MetalCodeGen:
                 metal_type = self.map_type(constructor_type)
                 matrix_resize = self.generate_metal_matrix_resize_constructor(
                     metal_type, getattr(expr, "arguments", [])
+                ) or self.metal_matrix_builtins.component_constructor(
+                    metal_type, getattr(expr, "arguments", [])
                 )
                 if matrix_resize is not None:
                     return matrix_resize
@@ -11729,6 +11745,8 @@ class MetalCodeGen:
             ):
                 metal_type = self.map_type(func_name)
                 matrix_resize = self.generate_metal_matrix_resize_constructor(
+                    metal_type, expr.args
+                ) or self.metal_matrix_builtins.component_constructor(
                     metal_type, expr.args
                 )
                 if matrix_resize is not None:

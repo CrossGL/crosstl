@@ -2017,7 +2017,8 @@ def test_codegen_min_precision_vector_and_matrix_types():
 
     assert "f16vec3 hdr @ Color0;" in output
     assert "f16vec2 uv @ TexCoord0;" in output
-    assert "f16mat2x3 colorMatrix;" in output
+    # HLSL min16float2x3 has two rows of three: CrossGL f16mat3x2 (ADR 0003).
+    assert "f16mat3x2 colorMatrix;" in output
     assert "f16vec3 Shade(" in output
     assert "f16vec3 color @ Color0" in output
     assert "i16vec2 offset @ TexCoord1" in output
@@ -2052,7 +2053,7 @@ def test_codegen_template_style_vector_matrix_types_and_constructors():
     assert "vec3 normal @ Normal;" in output
     assert "mat3 basis;" in output
     assert "dvec4 MakeTemplateVector(vec3 input @ TexCoord0) @ gl_FragData[0]" in output
-    assert "mat2x3 localBasis;" in output
+    assert "mat3x2 localBasis;" in output
     assert "vec4 defaultWidth = vec4(1.0, 2.0, 3.0, 4.0);" in output
     assert "return dvec4(input.x, input.y, input.z, 1.0);" in output
     assert "vector<" not in output
@@ -3354,13 +3355,14 @@ def test_codegen_matrix_layout_qualifiers_from_hlsl_variable_syntax():
 
     output = generate_crossgl(hlsl)
 
-    assert "@ row_major\n    mat2x3 g_row;" in output
-    assert "@ column_major\n    mat3x2 g_col;" in output
+    assert "@ row_major\n    mat3x2 g_row;" in output
+    assert "@ column_major\n    mat2x3 g_col;" in output
     assert "@ row_major\n        mat4 transform;" in output
     assert (
-        "vec3 UseLayout(@ row_major mat2x3 input, " "@ column_major mat2x3 fallback)"
+        "vec3 UseLayout(@ row_major mat3x2 input, " "@ column_major mat3x2 fallback)"
     ) in output
-    assert "@ row_major\n        mat2x3 local = input;" in output
+    assert "@ row_major\n        mat3x2 local = input;" in output
+    assert "return transpose(local)[0] + transpose(fallback)[0];" in output
 
     shader_ast = parse_crossgl(output)
     assert [attr.name for attr in shader_ast.global_variables[0].attributes] == [

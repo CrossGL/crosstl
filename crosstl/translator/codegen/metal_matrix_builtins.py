@@ -11,6 +11,8 @@ the helpers take their operands by value, so each argument is evaluated once.
 
 from __future__ import annotations
 
+import re
+
 __all__ = ["MetalMatrixBuiltins"]
 
 MATRIX_BUILTINS = frozenset({"matrixCompMult", "outerProduct"})
@@ -82,8 +84,71 @@ class MetalMatrixBuiltins:
             )
         return name
 
+    def component_constructor(self, metal_type, args):
+        """A matrix built from scalars and vectors whose components do not line up with its columns.
+
+        GLSL (section 5.4.2) fills the columns with the components of the arguments in order; MSL only takes one
+        column per argument or one scalar per element. Each argument is passed to a helper once, by value.
+        """
+        generator = self.generator
+        shape = generator.metal_matrix_dimensions(metal_type)
+        if shape is None or not args:
+            return None
+        scalar, columns, rows = shape
+        parameter_types = []
+        widths = []
+        for arg in args:
+            arg_type = generator.map_type(generator.expression_result_type(arg) or "")
+            width = _component_width(arg_type)
+            if width is None:
+                return None
+            parameter_types.append(arg_type)
+            widths.append(width)
+        if len(args) == 1 and widths[0] == 1:
+            return None
+        if all(width == 1 for width in widths) or all(
+            width == rows for width in widths
+        ):
+            return None
+        if sum(widths) != columns * rows:
+            return None
+        matrix = f"{scalar}{columns}x{rows}"
+        name = f"__crossgl_{matrix}_from_" + "_".join(parameter_types)
+        if name not in self.helpers:
+            components = []
+            for index, width in enumerate(widths):
+                components += (
+                    [f"p{index}"]
+                    if width == 1
+                    else [f"p{index}.{'xyzw'[lane]}" for lane in range(width)]
+                )
+            columns_text = ", ".join(
+                f"{scalar}{rows}({', '.join(components[column * rows : (column + 1) * rows])})"
+                for column in range(columns)
+            )
+            parameters = ", ".join(
+                f"{parameter_type} p{index}"
+                for index, parameter_type in enumerate(parameter_types)
+            )
+            self.helpers[name] = (
+                f"inline {matrix} {name}({parameters}) {{\n"
+                f"    return {matrix}({columns_text});\n"
+                "}\n"
+            )
+        rendered = ", ".join(
+            generator.generate_expression_with_expected(arg, None) for arg in args
+        )
+        return f"{name}({rendered})"
+
     def code(self):
         return "".join(self.helpers[name] for name in sorted(self.helpers))
+
+
+def _component_width(type_name):
+    match = re.fullmatch(r"(float|half|int|uint|short|ushort|bool)([234])?", type_name)
+    if match is None:
+        return None
+    return int(match.group(2) or 1)
 
 
 def _vector_shape(type_name):

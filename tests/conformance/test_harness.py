@@ -19,7 +19,7 @@ def test_hazard_inventory_and_oracles():
     # saturated conversions to uint (round to nearest even) and to char, the HLSL and GLSL workgroup-memory
     # exchanges, the CUDA warp shuffles called from CrossGL, GLSL and SPIR-V runtime-array lengths, and GLSL matrix
     # orientation in values and in storage blocks.
-    assert len(CASES) == len(BY_ID) == 81
+    assert len(CASES) == len(BY_ID) == 82
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",
