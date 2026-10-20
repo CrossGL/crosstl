@@ -414,6 +414,34 @@ CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_COUNT=13 \
 python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_masked.py
 ```
 
+#### Segmented GEMM
+
+`test_current_gemm_segmented.py` executes all 60 `segmented_mm` entries of
+`steel_gemm_segmented.metal`: three element types, five tile shapes and four
+transpositions. Output batch `z` multiplies A and B over the inner range that
+`segments` gives for it, as pairs (`segments_contiguous`) or as consecutive
+boundaries. Each entry is translated with four frozen function-constant
+configurations, which take both segment layouts and every `align_M` and
+`align_N` pair, and runs two dispatches with the buffers `segmented_mm`
+binds: one segment over all of K, and five segments that are empty, shorter
+than a K tile, exactly one tile, several tiles with a tail, unaligned or
+overlapping, with padded strides and extra threadgroups.
+`gemm_segmented_model.py` names every entry and gives the segment product.
+The segments are declared immutable (`immutable_storage`), so the DirectX and
+OpenGL software-subgroup proofs read the K range, and with it the K loop's
+trip count, as uniform. Every output word, guards included, is compared with
+an exact reference, and on macOS with the original source too. The
+current-tree native parity job runs the pairs in seven shards per operating
+system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_SEGMENTED=1 \
+CROSTL_MLX_CURRENT_GEMM_SEGMENTED_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_SEGMENTED_SHARD_COUNT=7 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_segmented.py
+```
+
 #### Implicit-GEMM convolution
 
 `test_current_steel_conv.py` executes all 108 `implicit_gemm_conv_2d` entries
