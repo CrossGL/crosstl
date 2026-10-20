@@ -6,8 +6,9 @@ headers and rewrites ``metal.txt`` next to this module. The file records the too
 from; regenerate it only to move to a newer version, and say so in the pull request, as when moving an upstream pin.
 
 Each line of ``metal.txt`` is ``header name result(param, ...)``: one overload per function, chosen as the GLSL list
-chooses its generic types, with template parameters made concrete. A function with no overload a probe can call is
-listed with ``-`` in place of the signature.
+chooses its generic types, with template parameters made concrete. ``inout`` marks the atomic object an atomic
+function updates, and ``memory_order`` and ``mem_flags`` an enumeration the probe passes as a constant. A function
+with no overload a probe can call is listed with ``-`` in place of the signature.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from pathlib import Path
 
 from .. import crossgl
 from ..model import VOID, Feature, Param, Signature, Type
-from .common import split
+from .common import prototype, split
 
 LIST = Path(__file__).with_name("metal.txt")
 HEADERS = (
@@ -38,16 +39,27 @@ HEADERS = (
     "metal_quadgroup",
 )
 STAGES = {"metal_graphics": "fragment"}
-_SCALARS = {"float": "float", "int": "int", "uint": "uint", "bool": "bool"}
+_SCALARS = {
+    "float": "float",
+    "int": "int",
+    "uint": "uint",
+    "bool": "bool",
+    "long": "int64",
+    "ulong": "uint64",
+}
 # Narrow integer parameters (lane ids, deltas) take a 32-bit argument, which converts implicitly.
 _WIDENED = {"ushort": "uint", "short": "int"}
 _QUALIFIERS = re.compile(
     r"\b(?:const|constexpr|static|inline|thread|device|threadgroup|constant|volatile|explicit|METAL_\w+)\b"
+    r"|\bcoherent\s*\(\s*\w+\s*\)"
 )
 _MACRO = re.compile(r"\bMETAL_\w+\b")
 _DECLARATION = re.compile(
-    r"METAL_FUNC\s+(?P<result>.*?)\b(?P<name>[A-Za-z]\w*)\s*\((?P<params>.*)\)", re.S
+    r"METAL_FUNC\s+(?P<result>.*?)\b(?P<name>[A-Za-z]\w*)\s*\(", re.S
 )
+# Enumerations a probe passes as a constant; :class:`~tools.coverage.languages.Metal` names the enumerator.
+ENUMS = ("memory_order", "mem_flags")
+_ATOMIC = re.compile(r"_atomic\s*<\s*T\b[^>]*>")
 
 
 def _template_type(template: str) -> str:
@@ -59,11 +71,23 @@ def _template_type(template: str) -> str:
     return "float"
 
 
-def _concrete(spelling: str, template: str) -> str:
+def _atomic_type(result: str) -> str:
+    """The type an atomic function's ``T`` and ``U`` take: int, except for the 64-bit atomic max and min, which Metal
+    declares only for ulong."""
+    return "ulong" if re.search(r"_valid_m(?:ax|in)_type", result) else "int"
+
+
+def _concrete(spelling: str, template: str, bound: str = "") -> str:
+    """The probe type for one spelling; ``bound`` is the type of ``T`` and ``U`` when the header fixes it."""
     spelling = _QUALIFIERS.sub("", spelling).strip()
-    enabled = re.fullmatch(r"enable_if_t\s*<.*,\s*(\w+)\s*>", spelling, re.S)
+    enabled = re.fullmatch(r"enable_if_t\s*<(.*)>", spelling, re.S)
     if enabled:
-        spelling = enabled.group(1)
+        # enable_if_t<condition, type> is the type, and enable_if_t<condition> is void.
+        arguments = split(enabled.group(1))
+        if len(arguments) <= 2:
+            spelling = arguments[-1] if len(arguments) == 2 else "void"
+    if spelling in ("T", "U") and bound:
+        return bound
     if spelling == "T" and template:
         return _template_type(template)
     matrix = re.fullmatch(r"matrix\s*<\s*T\s*,\s*(\w+)\s*,\s*(\w+)\s*>", spelling)
@@ -74,10 +98,42 @@ def _concrete(spelling: str, template: str) -> str:
 
 
 def _value(spelling: str) -> bool:
-    spelling = spelling.removeprefix("out ")
-    return bool(
-        re.fullmatch(r"(float|int|uint|bool)([2-4])?|float[2-4]x[2-4]|void", spelling)
+    """Whether a probe can pass or receive ``spelling``: a value, an atomic operand in the output buffer, or an
+    enumeration it passes as a constant."""
+    spelling = re.sub(r"^(?:out|inout) ", "", spelling)
+    return spelling in ENUMS or bool(
+        re.fullmatch(
+            r"(float|int|uint|bool|long|ulong)([2-4])?|float[2-4]x[2-4]|void", spelling
+        )
     )
+
+
+def _arguments(declaration: str, start: int) -> str:
+    """The text between the parenthesis at ``start`` and the one that closes it."""
+    depth = 0
+    for index in range(start, len(declaration)):
+        depth += {"(": 1, ")": -1}.get(declaration[index], 0)
+        if depth == 0:
+            return declaration[start + 1 : index]
+    return declaration[start + 1 :]
+
+
+def _declared(part: str, template: str, bound: str) -> str | None:
+    """The listed type of one declared parameter, or ``None`` for one with a default, which the probe leaves out."""
+    if "=" in part:
+        return None
+    # Attribute macros such as METAL_MAYBE_UNDEF follow the parameter name.
+    part = _MACRO.sub("", part).strip()
+    if "*" in part:
+        # A pointer to an atomic object is the probe's output buffer element; no other pointer is probed.
+        pointee = _QUALIFIERS.sub("", part.rsplit("*", 1)[0]).strip()
+        if bound and _ATOMIC.fullmatch(pointee):
+            return f"inout {bound}"
+        return f"{_concrete(pointee, template, bound)}*"
+    reference = "&" in part
+    words = part.replace("&", " ").rsplit(None, 1)
+    kind = _concrete(words[0] if len(words) == 2 else part, template, bound)
+    return f"out {kind}" if reference else kind
 
 
 def declarations(header: str, text: str):
@@ -107,16 +163,22 @@ def declarations(header: str, text: str):
         if not match or match.group("name").startswith(("_", "operator")):
             template = ""
             continue
+        # Metal's atomic functions fix the types their template parameters may take; see _atomic_type.
+        bound = _atomic_type(match.group("result")) if header == "metal_atomic" else ""
         params = []
-        for part in split(match.group("params")):
-            # Attribute macros such as METAL_MAYBE_UNDEF follow the parameter name.
-            part = _MACRO.sub("", re.sub(r"=.*$", "", part)).strip()
-            reference = "&" in part
-            words = part.replace("&", " ").rsplit(None, 1)
-            kind = _concrete(words[0] if len(words) == 2 else part, template)
-            params.append(f"out {kind}" if reference else kind)
-        yield match.group("name"), _concrete(match.group("result"), template), params
+        for part in split(_arguments(declaration, match.end() - 1)):
+            kind = _declared(part, template, bound)
+            if kind is not None:
+                params.append(kind)
+        yield (
+            match.group("name"),
+            _concrete(match.group("result"), template, bound),
+            params,
+        )
         template = ""
+
+
+_PREFERRED = ("float", "int", "uint", "bool", "long", "ulong")
 
 
 def _preference(overload: tuple[str, list[str]]) -> tuple:
@@ -127,8 +189,10 @@ def _preference(overload: tuple[str, list[str]]) -> tuple:
     width = re.search(r"(\d)$", first)
     return (
         not all(_value(k) for k in kinds),
-        ("float", "int", "uint", "bool").index(scalar) if scalar in _SCALARS else 4,
+        _PREFERRED.index(scalar) if scalar in _PREFERRED else len(_PREFERRED),
         {None: 1, "3": 0}.get(width and width.group(1), 2),
+        # Of two otherwise equal overloads, such as an atomic function with and without memory flags, the shorter.
+        len(params),
     )
 
 
@@ -175,7 +239,9 @@ def source(text: str) -> dict[str, str]:
 def metal_type(spelling: str) -> Type:
     if spelling == "void":
         return VOID
-    match = re.fullmatch(r"(float|int|uint|bool)(?:([2-4])(?:x([2-4]))?)?", spelling)
+    match = re.fullmatch(
+        r"(float|int|uint|bool|long|ulong)(?:([2-4])(?:x([2-4]))?)?", spelling
+    )
     if not match:
         return Type.other(spelling)
     scalar, first, second = match.groups()
@@ -186,9 +252,10 @@ def metal_type(spelling: str) -> Type:
 
 def _param(text: str) -> Param:
     text = text.strip()
-    if text.startswith("out "):
-        return Param(metal_type(text.removeprefix("out ")), "out")
-    return Param(metal_type(text))
+    direction, _, kind = text.rpartition(" ")
+    if text in ENUMS:
+        return Param(Type.other(text), "const")
+    return Param(metal_type(kind), direction or "in")
 
 
 def parse(
@@ -206,6 +273,13 @@ def parse(
                 metal_type(result),
                 tuple(_param(p) for p in params.split(",") if p.strip()),
             )
+        spelling, counterpart = crossgl.spelling("metal", name, glsl_names), None
+        note = "" if signature else "no overload takes only value types"
+        if name in crossgl.COUNTERPARTS["metal"]:
+            spelling, counterpart = prototype(crossgl.COUNTERPARTS["metal"][name])
+        elif signature and any(p.type.opaque in ENUMS for p in signature.params):
+            spelling = ""
+            note = "CrossGL has no operation that takes a memory order or memory flags"
         features.append(
             Feature(
                 "metal",
@@ -213,9 +287,10 @@ def parse(
                 name,
                 signature,
                 group=header.removeprefix("metal_"),
-                crossgl=crossgl.spelling("metal", name, glsl_names),
+                crossgl=spelling,
                 stage=STAGES.get(header, "compute"),
-                note="" if signature else "no overload takes only value types",
+                note=note,
+                counterpart=counterpart,
             )
         )
     return features

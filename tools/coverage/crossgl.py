@@ -214,7 +214,27 @@ COUNTERPARTS = {
         "textureSampleLevel": "vec4 textureLod(sampler2D, vec2, float)",
         "textureStore": "void imageStore(image2D, ivec2, vec4)",
     },
+    # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
+    "metal": {"threadgroup_barrier": "void barrier()"},
 }
+# Metal's atomic functions, in forms with and without a memory order. CrossGL's, like GLSL's, are relaxed and take
+# none, so the probe passes memory_order_relaxed to the Metal function.
+_METAL_ATOMICS = {
+    "exchange": "atomicExchange",
+    "fetch_add": "atomicAdd",
+    "fetch_and": "atomicAnd",
+    "fetch_max": "atomicMax",
+    "fetch_min": "atomicMin",
+    "fetch_or": "atomicOr",
+    "fetch_xor": "atomicXor",
+}
+RENAMES["metal"].update({f"atomic_{op}": name for op, name in _METAL_ATOMICS.items()})
+COUNTERPARTS["metal"].update(
+    {
+        f"atomic_{op}_explicit": f"int {name}(inout int, int)"
+        for op, name in _METAL_ATOMICS.items()
+    }
+)
 
 
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:

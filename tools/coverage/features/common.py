@@ -53,7 +53,8 @@ def pick(
 
 def prototype(text: str) -> tuple[str, Signature]:
     """Parse a prototype such as ``vec4 textureLod(sampler2D, vec2, const float)``: GLSL type spellings without
-    parameter names, where ``const`` marks a parameter that must be a constant expression.
+    parameter names, where ``const`` marks a parameter that must be a constant expression and ``inout`` an atomic
+    operand.
     """
     match = re.fullmatch(r"(\w+)\s+(\w+)\s*\((.*)\)", text.strip())
     if not match:
@@ -62,7 +63,8 @@ def prototype(text: str) -> tuple[str, Signature]:
     parts = []
     for param in filter(None, (p.strip() for p in params.split(","))):
         words = param.split()
-        parts.append((glsl_type(words[-1]), "const" if words[0] == "const" else "in"))
+        direction = words[0] if words[0] in ("const", "inout") else "in"
+        parts.append((glsl_type(words[-1]), direction))
     return name, signature(glsl_type(result), parts)
 
 

@@ -118,11 +118,39 @@ class Metal(Dialect):
     language = "metal"
     suffix = ".metal"
     entry = "probe"
+    wide_integers = True
+    _SCALARS = {"int64": "long", "uint64": "ulong"}
+    # The constant a probe passes for each enumeration a Metal function takes (features.metal.ENUMS). Metal allows
+    # only relaxed ordering on device atomics, and mem_none makes a barrier an execution barrier only.
+    _ENUMERATORS = {
+        "memory_order": "memory_order_relaxed",
+        "mem_flags": "mem_flags::mem_none",
+    }
+
+    def type(self, kind: Type) -> str:
+        if kind.opaque in self._ENUMERATORS:
+            return kind.opaque
+        return super().type(kind)
 
     def scalar(self, scalar: str) -> str:
         if scalar == "double":
             raise ProbeError("Metal has no double type")
-        return scalar
+        return self._SCALARS.get(scalar, scalar)
+
+    def literal(self, kind: Type) -> str:
+        if kind.opaque in self._ENUMERATORS:
+            return self._ENUMERATORS[kind.opaque]
+        return super().literal(kind)
+
+    def buffer_element(self, kind: Type, atomic: bool) -> str:
+        return f"atomic_{self.type(kind)}" if atomic else self.type(kind)
+
+    def inout_argument(self) -> str:
+        return "&outp[i]"
+
+    def keep(self, atomic: bool) -> str:
+        # An atomic buffer element can only be used through atomic functions.
+        return "" if atomic else self.store("outp[i]")
 
     def vector(self, scalar: str, size: int) -> str:
         return f"{self.scalar(scalar)}{size}"

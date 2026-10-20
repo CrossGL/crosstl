@@ -66,7 +66,7 @@ metal_integer absdiff uint3(int3, int3)
 metal_integer addsat int3(int3, int3)
 metal_integer clz int3(int3)
 metal_integer ctz int3(int3)
-metal_integer deinterleave -
+metal_integer deinterleave uint2(ulong)
 metal_integer extract_bits int3(int3, uint, uint)
 metal_integer hadd int3(int3, int3)
 metal_integer insert_bits int3(int3, int3, uint, uint)
@@ -143,35 +143,35 @@ metal_graphics discard_fragment void()
 metal_graphics fwidth float3(float3)
 metal_graphics get_num_samples uint()
 metal_graphics get_sample_position float2(uint)
-metal_compute simdgroup_barrier -
-metal_compute threadgroup_barrier -
+metal_compute simdgroup_barrier void(mem_flags)
+metal_compute threadgroup_barrier void(mem_flags)
 metal_atomic atomic_compare_exchange_weak -
 metal_atomic atomic_compare_exchange_weak_explicit -
-metal_atomic atomic_exchange -
-metal_atomic atomic_exchange_explicit -
-metal_atomic atomic_fetch_add -
-metal_atomic atomic_fetch_add_explicit -
-metal_atomic atomic_fetch_and -
-metal_atomic atomic_fetch_and_explicit -
-metal_atomic atomic_fetch_max -
-metal_atomic atomic_fetch_max_explicit -
-metal_atomic atomic_fetch_min -
-metal_atomic atomic_fetch_min_explicit -
-metal_atomic atomic_fetch_or -
-metal_atomic atomic_fetch_or_explicit -
-metal_atomic atomic_fetch_sub -
-metal_atomic atomic_fetch_sub_explicit -
-metal_atomic atomic_fetch_xor -
-metal_atomic atomic_fetch_xor_explicit -
-metal_atomic atomic_load -
-metal_atomic atomic_load_explicit -
-metal_atomic atomic_max -
-metal_atomic atomic_max_explicit -
-metal_atomic atomic_min -
-metal_atomic atomic_min_explicit -
-metal_atomic atomic_store -
-metal_atomic atomic_store_explicit -
-metal_atomic atomic_thread_fence -
+metal_atomic atomic_exchange int(inout int, int)
+metal_atomic atomic_exchange_explicit int(inout int, int, memory_order)
+metal_atomic atomic_fetch_add int(inout int, int)
+metal_atomic atomic_fetch_add_explicit int(inout int, int, memory_order)
+metal_atomic atomic_fetch_and int(inout int, int)
+metal_atomic atomic_fetch_and_explicit int(inout int, int, memory_order)
+metal_atomic atomic_fetch_max int(inout int, int)
+metal_atomic atomic_fetch_max_explicit int(inout int, int, memory_order)
+metal_atomic atomic_fetch_min int(inout int, int)
+metal_atomic atomic_fetch_min_explicit int(inout int, int, memory_order)
+metal_atomic atomic_fetch_or int(inout int, int)
+metal_atomic atomic_fetch_or_explicit int(inout int, int, memory_order)
+metal_atomic atomic_fetch_sub int(inout int, int)
+metal_atomic atomic_fetch_sub_explicit int(inout int, int, memory_order)
+metal_atomic atomic_fetch_xor int(inout int, int)
+metal_atomic atomic_fetch_xor_explicit int(inout int, int, memory_order)
+metal_atomic atomic_load int(inout int)
+metal_atomic atomic_load_explicit int(inout int, memory_order)
+metal_atomic atomic_max void(inout ulong, ulong)
+metal_atomic atomic_max_explicit void(inout ulong, ulong, memory_order)
+metal_atomic atomic_min void(inout ulong, ulong)
+metal_atomic atomic_min_explicit void(inout ulong, ulong, memory_order)
+metal_atomic atomic_store void(inout int, int)
+metal_atomic atomic_store_explicit void(inout int, int, memory_order)
+metal_atomic atomic_thread_fence void(mem_flags, memory_order)
 metal_simdgroup simd_active_threads_mask -
 metal_simdgroup simd_all bool(bool)
 metal_simdgroup simd_and int(int)
@@ -190,8 +190,8 @@ metal_simdgroup simd_prefix_inclusive_product float(float)
 metal_simdgroup simd_prefix_inclusive_sum float(float)
 metal_simdgroup simd_product float(float)
 metal_simdgroup simd_shuffle float(float, uint)
-metal_simdgroup simd_shuffle_and_fill_down float(float, float, uint, uint)
-metal_simdgroup simd_shuffle_and_fill_up float(float, float, uint, uint)
+metal_simdgroup simd_shuffle_and_fill_down float(float, float, uint)
+metal_simdgroup simd_shuffle_and_fill_up float(float, float, uint)
 metal_simdgroup simd_shuffle_down float(float, uint)
 metal_simdgroup simd_shuffle_rotate_down float(float, uint)
 metal_simdgroup simd_shuffle_rotate_up float(float, uint)
@@ -217,8 +217,8 @@ metal_quadgroup quad_prefix_inclusive_product float(float)
 metal_quadgroup quad_prefix_inclusive_sum float(float)
 metal_quadgroup quad_product float(float)
 metal_quadgroup quad_shuffle float(float, uint)
-metal_quadgroup quad_shuffle_and_fill_down float(float, float, uint, uint)
-metal_quadgroup quad_shuffle_and_fill_up float(float, float, uint, uint)
+metal_quadgroup quad_shuffle_and_fill_down float(float, float, uint)
+metal_quadgroup quad_shuffle_and_fill_up float(float, float, uint)
 metal_quadgroup quad_shuffle_down float(float, uint)
 metal_quadgroup quad_shuffle_rotate_down float(float, uint)
 metal_quadgroup quad_shuffle_rotate_up float(float, uint)

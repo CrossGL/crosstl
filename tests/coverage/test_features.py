@@ -454,6 +454,83 @@ def test_metal_header_parse_drops_attribute_macros():
     ]
 
 
+METAL_ATOMIC_HEADER = """
+template <typename T, typename U, thread_scope S>
+METAL_FUNC enable_if_t<_valid_fetch_add_sub_type<device T *>::value &&
+                       is_convertible<T, U>::value, T>
+atomic_fetch_add_explicit(volatile device _atomic<T, S> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return T(__metal_atomic_fetch_add_explicit(&object->__s, operand, int(order), int(S)));
+}
+template <typename T, typename U, thread_scope S>
+METAL_FUNC enable_if_t<_valid_non_fetch_type<device T *>::value &&
+                       is_convertible<T, U>::value>
+atomic_store_explicit(volatile device _atomic<T, S> *object, U desired, memory_order order, mem_flags flags)
+{
+}
+template <typename T, typename U>
+METAL_FUNC enable_if_t<_valid_max_type<device T *>::value &&
+                       is_convertible<T, U>::value>
+atomic_max_explicit(volatile coherent(device) device _atomic<T> *object, U operand, memory_order order)
+{
+}
+template <typename T, typename U, thread_scope S>
+METAL_FUNC enable_if_t<_valid_non_fetch_type<device T *>::value, bool>
+atomic_compare_exchange_weak_explicit(volatile device _atomic<T, S> *object, thread T *expected, U desired)
+{
+}
+METAL_FUNC void atomic_thread_fence(mem_flags flags, memory_order order, thread_scope scope = thread_scope_device) METAL_CONST_ARG(flags)
+"""
+
+
+def test_metal_header_parse_reads_atomic_functions():
+    # The atomic object is the probe's output buffer element; trailing attribute macros and defaulted parameters are
+    # not parameters, and enable_if_t without a type is void.
+    assert list(metal.declarations("metal_atomic", METAL_ATOMIC_HEADER)) == [
+        ("atomic_fetch_add_explicit", "int", ["inout int", "int", "memory_order"]),
+        (
+            "atomic_store_explicit",
+            "void",
+            ["inout int", "int", "memory_order", "mem_flags"],
+        ),
+        # Metal declares the atomic max and min without a fetch for 64-bit unsigned integers only.
+        ("atomic_max_explicit", "void", ["inout ulong", "ulong", "memory_order"]),
+        # A pointer to anything but an atomic object is not probed.
+        ("atomic_compare_exchange_weak_explicit", "bool", ["inout int", "int*", "int"]),
+        ("atomic_thread_fence", "void", ["mem_flags", "memory_order"]),
+    ]
+
+
+METAL_ATOMIC_LIST = """metal_atomic atomic_fetch_add_explicit int(inout int, int, memory_order)
+metal_atomic atomic_fetch_add int(inout int, int)
+metal_atomic atomic_load_explicit int(inout int, memory_order)
+metal_atomic atomic_max void(inout ulong, ulong)
+metal_compute threadgroup_barrier void(mem_flags)
+"""
+
+
+def test_metal_atomic_functions_call_glsl_atomics_from_crossgl():
+    features = by_name(metal.parse(METAL_ATOMIC_LIST, {"atomicAdd", "barrier"}))
+    add = features["atomic_fetch_add_explicit"]
+    assert add.signature.params == (
+        Param(Type("int"), "inout"),
+        Param(Type("int")),
+        Param(Type.other("memory_order"), "const"),
+    )
+    # CrossGL's atomics take no memory order.
+    assert add.crossgl == "atomicAdd"
+    assert add.counterpart.params == (Param(Type("int"), "inout"), Param(Type("int")))
+    assert features["atomic_fetch_add"].crossgl == "atomicAdd"
+    assert features["atomic_fetch_add"].counterpart is None
+    assert features["atomic_max"].signature.params[0] == Param(Type("uint64"), "inout")
+    assert features["threadgroup_barrier"].crossgl == "barrier"
+    assert features["threadgroup_barrier"].counterpart.params == ()
+    # An operation CrossGL has only without a memory order is a gap, not an untested probe.
+    load = features["atomic_load_explicit"]
+    assert load.crossgl == ""
+    assert "memory order" in load.note
+
+
 def test_metal_list_records_its_toolchain():
     assert metal.source(METAL_LIST)["describes"] == (
         "Metal Shading Language 9.9 standard library, from Apple metal version 1.0 (test)"

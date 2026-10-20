@@ -386,6 +386,21 @@ METAL_SIGNATURES = [
     feature("select", VEC3, VEC3, VEC3, Type("bool", (3,))),
     feature("frexp", VEC3, VEC3, Param(Type("int", (3,)), "out")),
     feature("simd_sum", Type("float"), Type("float")),
+    feature(
+        "atomic_fetch_add_explicit",
+        Type("int"),
+        Param(Type("int"), "inout"),
+        Type("int"),
+        Param(Type.other("memory_order"), "const"),
+    ),
+    feature(
+        "atomic_max", Type.other("void"), Param(Type("uint64"), "inout"), Type("uint64")
+    ),
+    feature(
+        "threadgroup_barrier",
+        Type.other("void"),
+        Param(Type.other("mem_flags"), "const"),
+    ),
 ]
 
 
@@ -397,6 +412,19 @@ def test_metal_probes_are_valid_metal(probe_feature):
     probe = probes.build(probe_feature, "metal")
     verdict = validators.validate("metal", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_metal_atomic_probe_passes_the_output_element_and_a_relaxed_order():
+    add = feature(
+        "atomic_fetch_add_explicit",
+        Type("int"),
+        Param(Type("int"), "inout"),
+        Type("int"),
+        Param(Type.other("memory_order"), "const"),
+    )
+    source = probes.build(add, "metal").source
+    assert "device atomic_int* outp [[buffer(1)]]" in source
+    assert "atomic_fetch_add_explicit(&outp[i], a1, memory_order_relaxed);" in source
 
 
 CUDA_SIGNATURES = [
