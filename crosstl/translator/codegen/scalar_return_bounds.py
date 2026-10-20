@@ -497,7 +497,7 @@ class _ReturnAnalysis:
             return _Value(source_type, result) if result is not None else None
         if isinstance(expression, BinaryOpNode):
             operator = generator.map_operator(expression.op)
-            if operator not in {"+", "-", "*", "/", "%"}:
+            if operator not in {"+", "-", "*", "/", "%", "&", "|", "^"}:
                 return None
             left = self.expression(expression.left, bindings, active)
             right = self.expression(expression.right, bindings, active)
