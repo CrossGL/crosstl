@@ -306,7 +306,7 @@ def _method(owner: str, name: str, declared: list) -> Feature:
         None if note else chosen,
         group=owner,
         crossgl=name,
-        stage="fragment" if name in _DERIVATIVES else "compute",
+        stage="fragment" if name in _DERIVATIVES else kind.stage if kind else "compute",
         note=note,
         spelling=name,
     )

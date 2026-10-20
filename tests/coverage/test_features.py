@@ -238,6 +238,7 @@ void [[]] InterlockedExchange64(in uint byteOffset, in any_int64 value, out any_
 
 namespace DxHitObjectMethods {
     DxHitObject [[static,class_prefix,min_sm=6.9]] MakeNop();
+    bool [[rn,class_prefix,min_sm=6.9]] IsMiss();
 } namespace
 
 namespace NodeOutputMethods {
@@ -293,11 +294,15 @@ def test_hlsl_methods_take_the_element_type_of_their_object():
 
 def test_hlsl_methods_of_types_no_probe_declares_are_untested():
     features = by_name(hlsl.parse(HLSL_TABLE))
-    assert (
-        features["DxHitObject.MakeNop"].note == "no probe for DxHitObject objects yet"
-    )
     assert features["NodeOutput.IsValid"].signature is None
     assert features["NodeOutput.IsValid"].note == "no probe for NodeOutput objects yet"
+
+
+def test_hlsl_hit_object_methods_are_probed_in_a_ray_generation_shader():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    is_miss = features["DxHitObject.IsMiss"]
+    assert (is_miss.stage, is_miss.signature.result) == ("ray-generation", Type("bool"))
+    assert features["DxHitObject.MakeNop"].stage == "ray-generation"
 
 
 def test_hlsl_resolves_generic_layouts_and_matched_types():

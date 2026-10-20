@@ -18,11 +18,13 @@ from .model import Type
 @dataclass(frozen=True)
 class Object:
     """``spelling`` names the type, with ``{element}`` for its element type; ``register`` is the register class it
-    binds to, empty for an object that is a local variable."""
+    binds to, empty for an object that is a local variable; ``stage`` is the stage its methods are probed in.
+    """
 
     spelling: str
     element: Type | None = None
     register: str = ""
+    stage: str = "compute"
 
 
 _FLOAT4 = Type("float", (4,))
@@ -74,6 +76,9 @@ OBJECTS: dict[str, Object] = {
     "ByteAddressBuffer": Object("ByteAddressBuffer", None, "t"),
     "RWByteAddressBuffer": Object("RWByteAddressBuffer", None, "u"),
     "RayQuery": Object("RayQuery<RAY_FLAG_NONE>"),
+    # A default-constructed hit object is a NOP hit object (HLSL shader execution reordering), which a ray-generation
+    # shader can query.
+    "DxHitObject": Object("dx::HitObject", stage="ray-generation"),
 }
 # Sampler parameters, by the opaque type a feature list gives them: the sampler type, its name and its register.
 SAMPLERS = {

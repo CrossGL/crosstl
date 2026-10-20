@@ -463,6 +463,32 @@ def test_hlsl_method_probes_are_valid_hlsl(probe_feature):
     assert verdict.accepted, verdict.log
 
 
+HIT_OBJECT = Feature(
+    "hlsl",
+    "method",
+    "DxHitObject.GetRayTMin",
+    Signature(Type("float"), ()),
+    group="DxHitObject",
+    crossgl="GetRayTMin",
+    spelling="GetRayTMin",
+    stage="ray-generation",
+)
+
+
+def test_hit_object_methods_query_a_default_hit_object():
+    source = probes.build(HIT_OBJECT, "hlsl").source
+    assert '[shader("raygeneration")]' in source
+    assert "    dx::HitObject obj;" in source
+    assert "float r = obj.GetRayTMin();" in source
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+def test_hit_object_probe_is_valid_hlsl():
+    probe = probes.build(HIT_OBJECT, "hlsl")
+    verdict = validators.validate("hlsl", probe.source, HIT_OBJECT.stage, probe.entry)
+    assert verdict.accepted, verdict.log
+
+
 # A baseline only has to lower to SPIR-V, which is all the semantic layer does with it. The DXIL validator rejects a
 # ray query baseline because it declares the query without using it.
 @pytest.mark.skipif(
