@@ -93,6 +93,7 @@ from crosstl.translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from crosstl.translator.codegen.array_utils import prepend_array_dimension
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
 from crosstl.translator.codegen.entry_selection import prepare_entry_scoped_target
 from crosstl.translator.codegen.GLSL_codegen import OpenGLSoftwareSubgroupError
@@ -35487,7 +35488,7 @@ def _runtime_host_interface_type_name(type_node: Any) -> str | None:
             getattr(type_node, "element_type", None)
         )
         size = _runtime_host_interface_json_value(getattr(type_node, "size", None))
-        return f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
+        return prepend_array_dimension(element_type, size)
     if hasattr(type_node, "name"):
         name = str(getattr(type_node, "name"))
         generic_args = [

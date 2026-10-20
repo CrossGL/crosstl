@@ -112,6 +112,7 @@ from .array_utils import (
     format_c_style_array_declaration,
     get_array_size_from_node,
     parse_array_type,
+    prepend_array_dimension,
     split_array_type_suffix,
 )
 from .bfloat_constants import bfloat16_constant_bits, scalar_constant_value
@@ -4294,6 +4295,8 @@ class HLSLCodeGen(LoweringRefusalMixin):
                         base_type = self.convert_type_node_to_string(
                             node.var_type.element_type
                         )
+                        # An array of arrays: the outer dimension is the first suffix.
+                        base_type, element_suffix = split_array_type_suffix(base_type)
                         array_size = (
                             self.generate_expression(node.var_type.size)
                             if node.var_type.size
@@ -4308,9 +4311,10 @@ class HLSLCodeGen(LoweringRefusalMixin):
                             raise UnsizedArrayUnsupportedError(
                                 "directx", node.name, "is declared at module scope"
                             )
+                        array_suffix += element_suffix
                         resource_count = self.resource_array_count(
                             node.var_type.size if node.var_type.size else array_size
-                        )
+                        ) * self.inner_resource_array_count(node.var_type.element_type)
                     else:
                         vtype = self.convert_type_node_to_string(node.var_type)
                         array_suffix = ""
@@ -43632,6 +43636,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         arg_type = self.expression_result_type(args[1])
         return arg_type is not None and self.is_sampler_type(arg_type)
 
+    def inner_resource_array_count(self, element_type):
+        """Registers one element of a resource array of arrays takes: the product of its own fixed extents."""
+        count = 1
+        while isinstance(element_type, ArrayType):
+            count *= self.resource_array_count(element_type.size)
+            element_type = element_type.element_type
+        return count
+
     def resource_array_count(self, size):
         if size is None:
             return 1
@@ -43653,7 +43665,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     hasattr(node.var_type, "element_type")
                     and str(type(node.var_type)).find("ArrayType") != -1
                 ):
-                    vtype = self.convert_type_node_to_string(node.var_type.element_type)
+                    vtype = split_array_type_suffix(
+                        self.convert_type_node_to_string(node.var_type.element_type)
+                    )[0]
                     array_size = (
                         self.generate_expression(node.var_type.size)
                         if node.var_type.size
@@ -43661,7 +43675,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     )
                     resource_count = self.resource_array_count(
                         node.var_type.size if node.var_type.size else array_size
-                    )
+                    ) * self.inner_resource_array_count(node.var_type.element_type)
                 else:
                     vtype = self.convert_type_node_to_string(node.var_type)
             else:
@@ -53707,12 +53721,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     if isinstance(type_node.size, int):
-                        return f"{element_type}[{type_node.size}]"
+                        return prepend_array_dimension(element_type, type_node.size)
                     else:
                         size_str = self.expression_to_string(type_node.size)
-                        return f"{element_type}[{size_str}]"
+                        return prepend_array_dimension(element_type, size_str)
                 else:
-                    return f"{element_type}[]"
+                    return prepend_array_dimension(element_type)
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size

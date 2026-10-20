@@ -52,7 +52,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
-from .array_utils import get_array_size_from_node
+from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .stage_utils import (
     is_fragment_output_parameter,
@@ -2162,11 +2162,7 @@ class RustCodeGen:
                 node,
             )
             size = self.format_array_size(getattr(node, "size", None))
-            return (
-                f"{element_type_name}[{size}]"
-                if size is not None
-                else f"{element_type_name}[]"
-            )
+            return prepend_array_dimension(element_type_name, size)
         return self.get_variable_type(node) or "float"
 
     def rust_function_stage_name(self, func):
@@ -2867,9 +2863,7 @@ class RustCodeGen:
             )
             element_type = self.convert_type_node_to_string(element_type)
             size = self.format_array_size(getattr(member, "size", None))
-            return (
-                f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
-            )
+            return prepend_array_dimension(element_type, size)
 
         if not hasattr(member, "member_type") and not hasattr(member, "vtype"):
             return None
@@ -3439,9 +3433,7 @@ class RustCodeGen:
         if type_class == "ArrayType":
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = self.format_array_size(type_node.size)
-            return (
-                f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
-            )
+            return prepend_array_dimension(element_type, size)
         if getattr(type_node, "name", None) is not None:
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
@@ -13636,11 +13628,7 @@ class RustCodeGen:
                     getattr(node, "element_type", "float")
                 )
                 size = self.format_array_size(getattr(node, "size", None))
-                type_name = (
-                    f"{element_type}[{size}]"
-                    if size is not None
-                    else f"{element_type}[]"
-                )
+                type_name = prepend_array_dimension(element_type, size)
             else:
                 type_name = self.get_variable_type(node) or "float"
             type_name = self.resource_type_with_attributes(type_name, node)

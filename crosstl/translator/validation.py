@@ -1,5 +1,6 @@
 """Shared AST validation helpers for the CrossGL translator."""
 
+from .codegen.array_utils import prepend_array_dimension
 from .matrix_shape import matrix_type_spelling
 from .stage_utils import (
     SHADER_STAGE_NAMES,
@@ -1747,7 +1748,9 @@ def _stage_interface_type_name(type_node):
         size = (
             expression_debug_name(type_node.size) if type_node.size is not None else ""
         )
-        return f"{_stage_interface_type_name(type_node.element_type)}[{size}]"
+        return prepend_array_dimension(
+            _stage_interface_type_name(type_node.element_type), size
+        )
     if hasattr(type_node, "pointee_type"):
         return f"{_stage_interface_type_name(type_node.pointee_type)}*"
     if hasattr(type_node, "referenced_type"):

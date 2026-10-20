@@ -103,6 +103,18 @@ def split_array_type_suffix(type_name: str) -> Tuple[str, str]:
     return type_name[:open_bracket], type_name[open_bracket:]
 
 
+def prepend_array_dimension(element_type: str, size=None) -> str:
+    """The C-style spelling of an array of ``size`` elements of the type spelled ``element_type``.
+
+    The new dimension is the outermost, so its suffix comes first: an array of 2 ``float[3]`` is ``float[2][3]``
+    (C, GLSL 4.60 section 4.1.9, HLSL and MSL all read ``T a[2][3]`` as 2 arrays of 3). ``size`` is the spelled
+    extent; ``None`` or ``""`` leaves the dimension unsized.
+    """
+    base_type, array_suffix = split_array_type_suffix(str(element_type))
+    extent = "" if size is None else size
+    return f"{base_type}[{extent}]{array_suffix}"
+
+
 def collect_struct_member_types(structs, type_name_string) -> Dict[str, Dict[str, str]]:
     """Collect raw struct member types for expression type inference."""
     member_types = {}

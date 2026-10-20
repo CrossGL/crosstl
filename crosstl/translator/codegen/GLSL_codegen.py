@@ -133,6 +133,7 @@ from .array_utils import (
     format_c_style_array_declaration,
     get_array_size_from_node,
     parse_array_type,
+    prepend_array_dimension,
     split_array_type_suffix,
 )
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
@@ -55355,7 +55356,9 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if not array_size and self.is_inferable_resource_array_type(vtype):
                 array_size = "1"
-            array_suffix = f"[{array_size}]" if array_size else "[]"
+            # An array of arrays: the outer dimension is the first suffix, the element's own ones follow it.
+            vtype, element_suffix = split_array_type_suffix(vtype)
+            array_suffix = (f"[{array_size}]" if array_size else "[]") + element_suffix
             resource_count = self.resource_array_count(
                 node_type.size if node_type.size else array_size
             )
@@ -57366,12 +57369,12 @@ complex64_t crossgl_complex64_mod_assign(
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     if isinstance(type_node.size, int):
-                        return f"{element_type}[{type_node.size}]"
+                        return prepend_array_dimension(element_type, type_node.size)
                     else:
                         size_str = self.expression_to_string(type_node.size)
-                        return f"{element_type}[{size_str}]"
+                        return prepend_array_dimension(element_type, size_str)
                 else:
-                    return f"{element_type}[]"
+                    return prepend_array_dimension(element_type)
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
