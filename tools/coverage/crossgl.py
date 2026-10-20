@@ -214,10 +214,27 @@ COUNTERPARTS = {
         "textureSampleGrad": "vec4 textureGrad(sampler2D, vec2, vec2, vec2)",
         "textureSampleLevel": "vec4 textureLod(sampler2D, vec2, float)",
         "textureStore": "void imageStore(image2D, ivec2, vec4)",
+        # WGSL returns a result struct where CrossGL, like GLSL, returns one part and writes the other to an output
+        # parameter. Its only compare-exchange is the weak one, and CrossGL's is atomicCompSwap.
+        "frexp": "vec3 frexp(vec3, out ivec3)",
+        "modf": "vec3 modf(vec3, out vec3)",
+        "atomicCompareExchangeWeak": "int atomicCompSwap(inout int, int, int)",
     },
     # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
     "metal": {"threadgroup_barrier": "void barrier()"},
 }
+# Metal functions whose overloads take a pointer or return an opaque type (atomic compare-exchange takes the expected
+# value through a pointer, a ballot returns a simd_vote) are measured in the output direction only, through the
+# CrossGL operation that translates to them.
+COUNTERPARTS["metal"].update(
+    {
+        "atomic_compare_exchange_weak": "int atomicCompSwap(inout int, int, int)",
+        "atomic_compare_exchange_weak_explicit": (
+            "int atomicCompSwap(inout int, int, int)"
+        ),
+        "simd_ballot": "uvec4 subgroupBallot(bool)",
+    }
+)
 # Metal's atomic functions, in forms with and without a memory order. CrossGL's, like GLSL's, are relaxed and take
 # none, so the probe passes memory_order_relaxed to the Metal function.
 _METAL_ATOMICS = {

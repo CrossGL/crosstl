@@ -1,6 +1,7 @@
 import pytest
 
 from tools.coverage import probes, validators
+from tools.coverage.features.common import prototype
 from tools.coverage.model import VOID, Feature, Param, Signature, Type
 
 VEC3 = Type("float", (3,))
@@ -778,3 +779,15 @@ def test_wgsl_texture_probe_is_valid_wgsl():
     probe = probes.build(WGSL_SAMPLE_LEVEL, "wgsl")
     verdict = validators.validate("wgsl", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_a_counterpart_stands_in_for_a_signature_only_in_the_crossgl_probe():
+    name, counterpart = prototype("vec3 frexp(vec3, out ivec3)")
+    feature = Feature(
+        "wgsl", "function", "frexp", None, crossgl=name, counterpart=counterpart
+    )
+    source = probes.build(feature, "crossgl").source
+    assert "ivec3 a1;" in source
+    assert "vec3 r = frexp(a0, a1);" in source
+    with pytest.raises(probes.ProbeError, match="no signature"):
+        probes.build(feature, "wgsl")

@@ -194,7 +194,10 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         dialect = DIALECTS[language]
         source, entry, suffix = constructs.build(feature, language, dialect)
         return Probe(language, source, entry, suffix)
-    if feature.signature is None:
+    # A counterpart stands in for a signature the probes cannot spell, but only in the CrossGL probe.
+    if feature.signature is None and not (
+        language == "crossgl" and feature.counterpart
+    ):
         raise ProbeError(feature.note or "the feature list gives no signature")
     if feature.stage not in ("compute", "fragment", *RAYTRACING_STAGES):
         raise ProbeError(f"no {feature.stage}-stage probe yet")
