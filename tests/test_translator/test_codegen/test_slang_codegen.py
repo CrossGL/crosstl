@@ -1,6 +1,7 @@
+import copy
 import shutil
 import subprocess
-from typing import List
+from typing import List, NamedTuple
 
 import pytest
 
@@ -18,6 +19,7 @@ from crosstl.translator.ast import (
     PrimitiveType,
 )
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+from crosstl.translator.codegen.slang_refusals import SlangLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from crosstl.translator.semantics import UnsizedArrayUnsupportedError
@@ -49,6 +51,40 @@ def generate_code(ast_node):
     """
     codegen = SlangCodeGen()
     return codegen.generate(ast_node)
+
+
+class RefusedSlang(NamedTuple):
+    """A program the Slang emitter refuses, with what it rendered around the refused sites."""
+
+    code: str
+    # The distinct reasons SlangLoweringRefused reports.
+    reasons: tuple
+    # Every refusal recorded, one entry per refused site, in emission order.
+    sites: list
+
+
+def generate_refused_code(ast_node) -> RefusedSlang:
+    """Generate a program the Slang emitter must refuse.
+
+    The public generator raises SlangLoweringRefused and returns no program. The text around each refused site is
+    read from the internal renderer, so that the lowering of the rest of the program is still checked.
+    """
+    with pytest.raises(SlangLoweringRefused) as refused:
+        SlangCodeGen().generate(copy.deepcopy(ast_node))
+    assert refused.value.code == "project.translate.slang-lowering-unsupported"
+    codegen = SlangCodeGen()
+    sites = []
+    record = codegen.refusals.record
+
+    def record_site(reason):
+        sites.append(" ".join(str(reason).split()))
+        record(reason)
+
+    codegen.refusals.record = record_site
+    code = codegen.generate_program(ast_node)
+    assert tuple(codegen.refusals.reasons) == refused.value.reasons
+    assert "/* unsupported" not in code
+    return RefusedSlang(code, refused.value.reasons, sites)
 
 
 def generate_crossgl_from_slang(code: str) -> str:
@@ -3645,27 +3681,33 @@ def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
+    assert "uint lane = 0;" in generated_code
     assert (
-        "uint lane = /* unsupported Slang wave intrinsic: WaveGetLaneIndex "
-        "expects 0 arguments, got 1 */ 0;" in generated_code
+        "Slang wave intrinsic: WaveGetLaneIndex expects 0 arguments, got 1"
+        in refused.reasons
     )
+    assert "bool first = false;" in generated_code
     assert (
-        "bool first = /* unsupported Slang wave intrinsic: WaveIsFirstLane "
-        "expects 0 arguments, got 1 */ false;" in generated_code
+        "Slang wave intrinsic: WaveIsFirstLane expects 0 arguments, got 1"
+        in refused.reasons
     )
+    assert "uint4 ballot = uint4(0);" in generated_code
     assert (
-        "uint4 ballot = /* unsupported Slang wave intrinsic: WaveActiveBallot "
-        "expects 1 arguments, got 0 */ uint4(0);" in generated_code
+        "Slang wave intrinsic: WaveActiveBallot expects 1 arguments, got 0"
+        in refused.reasons
     )
+    assert "uint multi = 0;" in generated_code
     assert (
-        "uint multi = /* unsupported Slang wave intrinsic: WaveMultiPrefixSum "
-        "expects 2 arguments, got 1 */ 0;" in generated_code
+        "Slang wave intrinsic: WaveMultiPrefixSum expects 2 arguments, got 1"
+        in refused.reasons
     )
+    assert "uint quad = 0;" in generated_code
     assert (
-        "uint quad = /* unsupported Slang wave intrinsic: QuadReadLaneAt "
-        "expects 2 arguments, got 1 */ 0;" in generated_code
+        "Slang wave intrinsic: QuadReadLaneAt expects 2 arguments, got 1"
+        in refused.reasons
     )
     assert "WaveOpNode" not in generated_code
 
@@ -3688,27 +3730,28 @@ def test_wave_vote_intrinsics_validate_predicate_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
+    assert "bool badAnyValue = false;" in generated_code
     assert (
-        "bool badAnyValue = /* unsupported Slang wave intrinsic: "
-        "WaveActiveAnyTrue predicate must be scalar bool, got uint */ false;"
-        in generated_code
+        "Slang wave intrinsic: WaveActiveAnyTrue predicate must be scalar bool, got uint"
+        in refused.reasons
     )
+    assert "bool badAllVector = false;" in generated_code
     assert (
-        "bool badAllVector = /* unsupported Slang wave intrinsic: "
-        "WaveActiveAllTrue predicate must be scalar bool, got bool2 */ false;"
-        in generated_code
+        "Slang wave intrinsic: WaveActiveAllTrue predicate must be scalar bool, got bool2"
+        in refused.reasons
     )
+    assert "uint4 badBallotVectorComparison = uint4(0);" in generated_code
     assert (
-        "uint4 badBallotVectorComparison = /* unsupported Slang wave intrinsic: "
-        "WaveActiveBallot predicate must be scalar bool, got bool2 */ uint4(0);"
-        in generated_code
+        "Slang wave intrinsic: WaveActiveBallot predicate must be scalar bool, got bool2"
+        in refused.reasons
     )
+    assert "uint4 badBallotNumeric = uint4(0);" in generated_code
     assert (
-        "uint4 badBallotNumeric = /* unsupported Slang wave intrinsic: "
-        "WaveActiveBallot predicate must be scalar bool, got uint */ uint4(0);"
-        in generated_code
+        "Slang wave intrinsic: WaveActiveBallot predicate must be scalar bool, got uint"
+        in refused.reasons
     )
     assert "WaveActiveAnyTrue(value)" not in generated_code
     assert "WaveActiveAllTrue(vectorMask)" not in generated_code
@@ -3734,30 +3777,33 @@ def test_wave_intrinsic_invalid_argument_types_emit_slang_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
+    assert "uint badLane = 0;" in generated_code
     assert (
-        "uint badLane = /* unsupported Slang wave intrinsic: WaveReadLaneAt "
-        "lane index must be scalar int or uint, got float2 */ 0;" in generated_code
+        "Slang wave intrinsic: WaveReadLaneAt lane index must be scalar int or uint, got float2"
+        in refused.reasons
     )
+    assert "uint badQuadLane = 0;" in generated_code
     assert (
-        "uint badQuadLane = /* unsupported Slang wave intrinsic: QuadReadLaneAt "
-        "lane index must be scalar int or uint, got bool */ 0;" in generated_code
+        "Slang wave intrinsic: QuadReadLaneAt lane index must be scalar int or uint, got bool"
+        in refused.reasons
     )
+    assert "uint badPartition = 0;" in generated_code
     assert (
-        "uint badPartition = /* unsupported Slang wave intrinsic: "
-        "WaveMultiPrefixSum partition mask must be uint4, got float3 */ 0;"
-        in generated_code
+        "Slang wave intrinsic: WaveMultiPrefixSum partition mask must be uint4, got float3"
+        in refused.reasons
     )
+    assert "uint badPartitionCall = 0;" in generated_code
     assert (
-        "uint badPartitionCall = /* unsupported Slang wave intrinsic: "
-        "WaveMultiPrefixSum partition mask must be uint4, got uint */ 0;"
-        in generated_code
+        "Slang wave intrinsic: WaveMultiPrefixSum partition mask must be uint4, got uint"
+        in refused.reasons
     )
+    assert "uint badBitValue = 0;" in generated_code
     assert (
-        "uint badBitValue = /* unsupported Slang wave intrinsic: "
-        "WaveMultiPrefixBitAnd value must be scalar or vector int or uint, "
-        "got bool */ 0;" in generated_code
+        "Slang wave intrinsic: WaveMultiPrefixBitAnd value must be scalar or vector int or uint, got bool"
+        in refused.reasons
     )
     assert "WaveReadLaneAt(value, float2(0.0, 1.0))" not in generated_code
     assert "QuadReadLaneAt(value, false)" not in generated_code
@@ -3779,25 +3825,28 @@ def test_wave_intrinsic_diagnostics_use_vector_target_fallbacks():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
+    assert "float2 badBitVector = float2(0.0);" in generated_code
     assert (
-        "float2 badBitVector = /* unsupported Slang wave intrinsic: "
-        "WaveActiveBitAnd value must be scalar or vector int or uint, "
-        "got float2 */ float2(0.0);" in generated_code
+        "Slang wave intrinsic: WaveActiveBitAnd value must be scalar or vector int or uint, got float2"
+        in refused.reasons
     )
+    assert "bool2 badVoteVector = bool2(false);" in generated_code
     assert (
-        "bool2 badVoteVector = /* unsupported Slang wave intrinsic: "
-        "WaveActiveAllTrue predicate must be scalar bool, got bool2 */ "
-        "bool2(false);" in generated_code
+        "Slang wave intrinsic: WaveActiveAllTrue predicate must be scalar bool, got bool2"
+        in refused.reasons
     )
+    assert "uint2 badMissingVector = uint2(0u);" in generated_code
     assert (
-        "uint2 badMissingVector = /* unsupported Slang wave intrinsic: "
-        "WaveActiveSum expects 1 arguments, got 0 */ uint2(0u);" in generated_code
+        "Slang wave intrinsic: WaveActiveSum expects 1 arguments, got 0"
+        in refused.reasons
     )
+    assert "float4 badBallotShape = float4(0.0);" in generated_code
     assert (
-        "float4 badBallotShape = /* unsupported Slang wave intrinsic: "
-        "WaveActiveBallot expects 1 arguments, got 0 */ float4(0.0);" in generated_code
+        "Slang wave intrinsic: WaveActiveBallot expects 1 arguments, got 0"
+        in refused.reasons
     )
     assert "*/ 0;" not in generated_code
     assert "*/ false;" not in generated_code
@@ -3835,37 +3884,40 @@ def test_wave_intrinsics_validate_target_result_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "float2 validVector = WaveActiveSum(values);" in generated_code
     assert "uint validLane = WaveGetLaneIndex();" in generated_code
+    assert "float2 scalarToVector = float2(0.0);" in generated_code
     assert (
-        "float2 scalarToVector = /* unsupported Slang wave intrinsic: "
-        "WaveActiveSum returns float but target expects float2 */ float2(0.0);"
-        in generated_code
+        "Slang wave intrinsic: WaveActiveSum returns float but target expects float2"
+        in refused.reasons
     )
+    assert "float scalarFromBallot = 0;" in generated_code
     assert (
-        "float scalarFromBallot = /* unsupported Slang wave intrinsic: "
-        "WaveActiveBallot returns uint4 but target expects float */ 0;"
-        in generated_code
+        "Slang wave intrinsic: WaveActiveBallot returns uint4 but target expects float"
+        in refused.reasons
     )
+    assert "bool boolFromLane = false;" in generated_code
     assert (
-        "bool boolFromLane = /* unsupported Slang wave intrinsic: "
-        "WaveGetLaneIndex returns uint but target expects bool */ false;"
-        in generated_code
+        "Slang wave intrinsic: WaveGetLaneIndex returns uint but target expects bool"
+        in refused.reasons
     )
+    assert "uint2 widthMismatch = uint2(0u);" in generated_code
     assert (
-        "uint2 widthMismatch = /* unsupported Slang wave intrinsic: "
-        "WaveActiveSum returns uint3 but target expects uint2 */ uint2(0u);"
-        in generated_code
+        "Slang wave intrinsic: WaveActiveSum returns uint3 but target expects uint2"
+        in refused.reasons
     )
+    assert "acceptVector(float2(0.0));" in generated_code
     assert (
-        "acceptVector(/* unsupported Slang wave intrinsic: WaveReadLaneAt "
-        "returns float but target expects float2 */ float2(0.0));" in generated_code
+        "Slang wave intrinsic: WaveReadLaneAt returns float but target expects float2"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang wave intrinsic: WaveActiveBallot "
-        "returns uint4 but target expects float */ 0);" in generated_code
+        "Slang wave intrinsic: WaveActiveBallot returns uint4 but target expects float"
+        in refused.reasons
     )
     assert "float2 scalarToVector = WaveActiveSum(1.0);" not in generated_code
     assert "float scalarFromBallot = WaveActiveBallot(predicate);" not in generated_code
@@ -4193,35 +4245,44 @@ def test_mesh_intrinsics_validate_value_contexts():
     }
     """
 
-    dispatch_generated = generate_code(parse_code(tokenize_code(dispatch_code)))
+    dispatch_refused = generate_refused_code(parse_code(tokenize_code(dispatch_code)))
+    dispatch_generated = dispatch_refused.code
 
     assert (
-        "float3 dispatchReturn()\n{\n"
-        "    return /* unsupported Slang mesh intrinsic: DispatchMesh returns void "
-        "but target expects float3 */ float3(0.0);\n}" in dispatch_generated
+        "float3 dispatchReturn()\n{\n    return float3(0.0);\n}" in dispatch_generated
     )
     assert (
-        "float3 dispatchVector = /* unsupported Slang mesh intrinsic: DispatchMesh "
-        "returns void but target expects float3 */ float3(0.0);" in dispatch_generated
+        "Slang mesh intrinsic: DispatchMesh returns void but target expects float3"
+        in dispatch_refused.reasons
+    )
+    assert "float3 dispatchVector = float3(0.0);" in dispatch_generated
+    assert (
+        "Slang mesh intrinsic: DispatchMesh returns void but target expects float3"
+        in dispatch_refused.reasons
     )
     assert "DispatchMesh(2, 3, 4);" in dispatch_generated
+    assert "dispatchAssign = float3(0.0);" in dispatch_generated
     assert (
-        "dispatchAssign = /* unsupported Slang mesh intrinsic: DispatchMesh returns "
-        "void but target expects float3 */ float3(0.0);" in dispatch_generated
+        "Slang mesh intrinsic: DispatchMesh returns void but target expects float3"
+        in dispatch_refused.reasons
+    )
+    assert "float3 binaryDispatch = float3(0.0) + float3(1.0);" in dispatch_generated
+    assert (
+        "Slang mesh intrinsic: DispatchMesh returns void but target expects float3"
+        in dispatch_refused.reasons
     )
     assert (
-        "float3 binaryDispatch = /* unsupported Slang mesh intrinsic: DispatchMesh "
-        "returns void but target expects float3 */ float3(0.0) + float3(1.0);"
+        "float3 ternaryDispatch = (choose ? float3(0.0) : float3(0.0));"
         in dispatch_generated
     )
     assert (
-        "float3 ternaryDispatch = (choose ? /* unsupported Slang mesh intrinsic: "
-        "DispatchMesh returns void but target expects float3 */ float3(0.0) : "
-        "float3(0.0));" in dispatch_generated
+        "Slang mesh intrinsic: DispatchMesh returns void but target expects float3"
+        in dispatch_refused.reasons
     )
+    assert "acceptVector(float3(0.0));" in dispatch_generated
     assert (
-        "acceptVector(/* unsupported Slang mesh intrinsic: DispatchMesh returns void "
-        "but target expects float3 */ float3(0.0));" in dispatch_generated
+        "Slang mesh intrinsic: DispatchMesh returns void but target expects float3"
+        in dispatch_refused.reasons
     )
     assert "return DispatchMesh(1, 2, 3);" not in dispatch_generated
     assert "float3 dispatchVector = DispatchMesh(1, 2, 3);" not in dispatch_generated
@@ -4240,12 +4301,13 @@ def test_mesh_intrinsics_validate_value_contexts():
     }
     """
 
-    counts_generated = generate_code(parse_code(tokenize_code(counts_code)))
+    counts_refused = generate_refused_code(parse_code(tokenize_code(counts_code)))
+    counts_generated = counts_refused.code
 
+    assert "bool2 countsVector = bool2(false);" in counts_generated
     assert (
-        "bool2 countsVector = /* unsupported Slang mesh intrinsic: "
-        "SetMeshOutputCounts returns void but target expects bool2 */ bool2(false);"
-        in counts_generated
+        "Slang mesh intrinsic: SetMeshOutputCounts returns void but target expects bool2"
+        in counts_refused.reasons
     )
     assert "bool2 countsVector = SetMeshOutputCounts(3, 1);" not in counts_generated
     assert "MeshOpNode" not in dispatch_generated
@@ -5284,15 +5346,16 @@ def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
-        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts "
-        "expects 2 arguments, got 1 */ 0;" in generated_code
+        "Slang mesh intrinsic: SetMeshOutputCounts expects 2 arguments, got 1"
+        in refused.reasons
     )
     assert (
-        "/* unsupported Slang mesh intrinsic: DispatchMesh "
-        "expects 3 or 4 arguments, got 2 */ 0;" in generated_code
+        "Slang mesh intrinsic: DispatchMesh expects 3 or 4 arguments, got 2"
+        in refused.reasons
     )
     assert "MeshOpNode" not in generated_code
 
@@ -5314,20 +5377,21 @@ def test_set_mesh_output_counts_validates_count_argument_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "SetMeshOutputCounts(vertexCount, 1u);" in generated_code
     assert (
-        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts vertex count "
-        "must be scalar int or uint, got bool */ 0;" in generated_code
+        "Slang mesh intrinsic: SetMeshOutputCounts vertex count must be scalar int or uint, got bool"
+        in refused.reasons
     )
     assert (
-        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts primitive count "
-        "must be scalar int or uint, got float2 */ 0;" in generated_code
+        "Slang mesh intrinsic: SetMeshOutputCounts primitive count must be scalar int or uint, got float2"
+        in refused.reasons
     )
     assert (
-        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts vertex count "
-        "must be scalar int or uint, got float */ 0;" in generated_code
+        "Slang mesh intrinsic: SetMeshOutputCounts vertex count must be scalar int or uint, got float"
+        in refused.reasons
     )
     assert "SetMeshOutputCounts(useMeshlet, 1u)" not in generated_code
     assert "SetMeshOutputCounts(3u, primitiveCounts)" not in generated_code
@@ -5353,20 +5417,21 @@ def test_dispatch_mesh_validates_thread_count_argument_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "DispatchMesh(dispatchX, 1u, 1u);" in generated_code
     assert (
-        "/* unsupported Slang mesh intrinsic: DispatchMesh x count "
-        "must be scalar int or uint, got bool */ 0;" in generated_code
+        "Slang mesh intrinsic: DispatchMesh x count must be scalar int or uint, got bool"
+        in refused.reasons
     )
     assert (
-        "/* unsupported Slang mesh intrinsic: DispatchMesh y count "
-        "must be scalar int or uint, got float */ 0;" in generated_code
+        "Slang mesh intrinsic: DispatchMesh y count must be scalar int or uint, got float"
+        in refused.reasons
     )
     assert (
-        "/* unsupported Slang mesh intrinsic: DispatchMesh z count "
-        "must be scalar int or uint, got float2 */ 0;" in generated_code
+        "Slang mesh intrinsic: DispatchMesh z count must be scalar int or uint, got float2"
+        in refused.reasons
     )
     assert "DispatchMesh(enabled, 1u, 1u)" not in generated_code
     assert "DispatchMesh(1u, yCount, 1u)" not in generated_code
@@ -6829,52 +6894,61 @@ def test_slang_ray_tracing_intrinsics_validate_target_result_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "bool validReport = ReportHit(1.0, 0, attributes);" in generated_code
     assert "acceptBool(ReportHit(2.0, 1, attributes));" in generated_code
+    assert "float traced = 0;" in generated_code
     assert (
-        "float traced = /* unsupported Slang ray tracing intrinsic: TraceRay "
-        "returns void but target expects float */ 0;" in generated_code
+        "Slang ray tracing intrinsic: TraceRay returns void but target expects float"
+        in refused.reasons
     )
+    assert "float callableValue = 0;" in generated_code
     assert (
-        "float callableValue = /* unsupported Slang ray tracing intrinsic: "
-        "CallShader returns void but target expects float */ 0;" in generated_code
+        "Slang ray tracing intrinsic: CallShader returns void but target expects float"
+        in refused.reasons
     )
+    assert "float reportScalar = 0;" in generated_code
     assert (
-        "float reportScalar = /* unsupported Slang ray tracing intrinsic: "
-        "ReportHit returns bool but target expects float */ 0;" in generated_code
+        "Slang ray tracing intrinsic: ReportHit returns bool but target expects float"
+        in refused.reasons
     )
+    assert "bool2 reportVector = bool2(false);" in generated_code
     assert (
-        "bool2 reportVector = /* unsupported Slang ray tracing intrinsic: "
-        "ReportHit returns bool but target expects bool2 */ bool2(false);"
-        in generated_code
+        "Slang ray tracing intrinsic: ReportHit returns bool but target expects bool2"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang ray tracing intrinsic: ReportHit "
-        "returns bool but target expects float */ 0);" in generated_code
+        "Slang ray tracing intrinsic: ReportHit returns bool but target expects float"
+        in refused.reasons
     )
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang ray tracing intrinsic: ReportHit returns bool "
-        "but target expects float */ 0;" in generated_code
+        "Slang ray tracing intrinsic: ReportHit returns bool but target expects float"
+        in refused.reasons
     )
     assert "float reportReturn = reportAsFloat(attributes);" in generated_code
+    assert "float reportTernary = (take ? 0 : 1.0);" in generated_code
     assert (
-        "float reportTernary = (take ? /* unsupported Slang ray tracing intrinsic: "
-        "ReportHit returns bool but target expects float */ 0 : 1.0);" in generated_code
+        "Slang ray tracing intrinsic: ReportHit returns bool but target expects float"
+        in refused.reasons
     )
+    assert "float reportArray[2] = {0, 1.0};" in generated_code
     assert (
-        "float reportArray[2] = {/* unsupported Slang ray tracing intrinsic: "
-        "ReportHit returns bool but target expects float */ 0, 1.0};" in generated_code
+        "Slang ray tracing intrinsic: ReportHit returns bool but target expects float"
+        in refused.reasons
     )
+    assert "bool ignoredValue = false;" in generated_code
     assert (
-        "bool ignoredValue = /* unsupported Slang ray tracing intrinsic: "
-        "IgnoreHit returns void but target expects bool */ false;" in generated_code
+        "Slang ray tracing intrinsic: IgnoreHit returns void but target expects bool"
+        in refused.reasons
     )
+    assert "float2 acceptedVector = float2(0.0);" in generated_code
     assert (
-        "float2 acceptedVector = /* unsupported Slang ray tracing intrinsic: "
-        "AcceptHitAndEndSearch returns void but target expects float2 */ "
-        "float2(0.0);" in generated_code
+        "Slang ray tracing intrinsic: AcceptHitAndEndSearch returns void but target expects float2"
+        in refused.reasons
     )
     assert "float traced = TraceRay(" not in generated_code
     assert "float callableValue = CallShader(" not in generated_code
@@ -7741,35 +7815,41 @@ def test_slang_ray_query_methods_validate_target_result_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "bool validProceed = rq.Proceed();" in generated_code
     assert "uint validStatus = rq.CommittedStatus();" in generated_code
     assert "float3 validOrigin = rq.CandidateObjectRayOrigin();" in generated_code
+    assert "float proceedFloat = 0;" in generated_code
     assert (
-        "float proceedFloat = /* unsupported Slang RayQuery: Proceed returns bool "
-        "but target expects float */ 0;" in generated_code
+        "Slang RayQuery: Proceed returns bool but target expects float"
+        in refused.reasons
     )
+    assert "bool statusBool = false;" in generated_code
     assert (
-        "bool statusBool = /* unsupported Slang RayQuery: CommittedStatus returns "
-        "uint but target expects bool */ false;" in generated_code
+        "Slang RayQuery: CommittedStatus returns uint but target expects bool"
+        in refused.reasons
     )
+    assert "float3 rayTVector = float3(0.0);" in generated_code
     assert (
-        "float3 rayTVector = /* unsupported Slang RayQuery: CandidateRayT returns "
-        "float but target expects float3 */ float3(0.0);" in generated_code
+        "Slang RayQuery: CandidateRayT returns float but target expects float3"
+        in refused.reasons
     )
+    assert "float originScalar = 0;" in generated_code
     assert (
-        "float originScalar = /* unsupported Slang RayQuery: "
-        "CandidateObjectRayOrigin returns float3 but target expects float */ 0;"
-        in generated_code
+        "Slang RayQuery: CandidateObjectRayOrigin returns float3 but target expects float"
+        in refused.reasons
     )
+    assert "acceptVector(float3(0.0));" in generated_code
     assert (
-        "acceptVector(/* unsupported Slang RayQuery: CandidateRayT returns float "
-        "but target expects float3 */ float3(0.0));" in generated_code
+        "Slang RayQuery: CandidateRayT returns float but target expects float3"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang RayQuery: CommittedObjectRayDirection "
-        "returns float3 but target expects float */ 0);" in generated_code
+        "Slang RayQuery: CommittedObjectRayDirection returns float3 but target expects float"
+        in refused.reasons
     )
     assert "float proceedFloat = rq.Proceed();" not in generated_code
     assert "bool statusBool = rq.CommittedStatus();" not in generated_code
@@ -7807,32 +7887,33 @@ def test_slang_ray_query_matrix_methods_validate_target_result_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
         "float3x4 validObjectToWorld = rq.CommittedObjectToWorld3x4();"
         in generated_code
     )
     assert "acceptMatrix3x4(rq.CommittedWorldToObject3x4());" in generated_code
+    assert "float matrixScalar = 0;" in generated_code
     assert (
-        "float matrixScalar = /* unsupported Slang RayQuery: "
-        "CommittedObjectToWorld3x4 returns float3x4 but target expects float */ "
-        "0;" in generated_code
+        "Slang RayQuery: CommittedObjectToWorld3x4 returns float3x4 but target expects float"
+        in refused.reasons
     )
+    assert "float3 matrixVector = float3(0.0);" in generated_code
     assert (
-        "float3 matrixVector = /* unsupported Slang RayQuery: "
-        "CandidateWorldToObject3x4 returns float3x4 but target expects float3 */ "
-        "float3(0.0);" in generated_code
+        "Slang RayQuery: CandidateWorldToObject3x4 returns float3x4 but target expects float3"
+        in refused.reasons
     )
+    assert "float4x4 matrixWrongShape = float4x4(0.0);" in generated_code
     assert (
-        "float4x4 matrixWrongShape = /* unsupported Slang RayQuery: "
-        "CandidateObjectToWorld3x4 returns float3x4 but target expects float4x4 */ "
-        "float4x4(0.0);" in generated_code
+        "Slang RayQuery: CandidateObjectToWorld3x4 returns float3x4 but target expects float4x4"
+        in refused.reasons
     )
+    assert "acceptMatrix(float4x4(0.0));" in generated_code
     assert (
-        "acceptMatrix(/* unsupported Slang RayQuery: CommittedWorldToObject3x4 "
-        "returns float3x4 but target expects float4x4 */ float4x4(0.0));"
-        in generated_code
+        "Slang RayQuery: CommittedWorldToObject3x4 returns float3x4 but target expects float4x4"
+        in refused.reasons
     )
     assert "float matrixScalar = rq.CommittedObjectToWorld3x4();" not in generated_code
     assert "float3 matrixVector = rq.CandidateWorldToObject3x4();" not in generated_code
@@ -7870,33 +7951,35 @@ def test_slang_ray_query_void_methods_validate_value_contexts():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated_code
     assert "rq.CommitProceduralPrimitiveHit(1.0);" in generated_code
     assert "rq.CommitNonOpaqueTriangleHit();" in generated_code
     assert "rq.Abort();" in generated_code
+    assert "float traceValue = 0;" in generated_code
     assert (
-        "float traceValue = /* unsupported Slang RayQuery: TraceRayInline returns "
-        "void but target expects float */ 0;" in generated_code
+        "Slang RayQuery: TraceRayInline returns void but target expects float"
+        in refused.reasons
     )
+    assert "float commitProceduralValue = 0;" in generated_code
     assert (
-        "float commitProceduralValue = /* unsupported Slang RayQuery: "
-        "CommitProceduralPrimitiveHit returns void but target expects float */ 0;"
-        in generated_code
+        "Slang RayQuery: CommitProceduralPrimitiveHit returns void but target expects float"
+        in refused.reasons
     )
+    assert "bool commitTriangleValue = false;" in generated_code
     assert (
-        "bool commitTriangleValue = /* unsupported Slang RayQuery: "
-        "CommitNonOpaqueTriangleHit returns void but target expects bool */ false;"
-        in generated_code
+        "Slang RayQuery: CommitNonOpaqueTriangleHit returns void but target expects bool"
+        in refused.reasons
     )
+    assert "uint abortValue = 0u;" in generated_code
     assert (
-        "uint abortValue = /* unsupported Slang RayQuery: Abort returns void "
-        "but target expects uint */ 0u;" in generated_code
+        "Slang RayQuery: Abort returns void but target expects uint" in refused.reasons
     )
+    assert "acceptBool(false);" in generated_code
     assert (
-        "acceptBool(/* unsupported Slang RayQuery: Abort returns void but target "
-        "expects bool */ false);" in generated_code
+        "Slang RayQuery: Abort returns void but target expects bool" in refused.reasons
     )
     assert (
         "float traceValue = rq.TraceRayInline(scene, 0, 255, ray);"
@@ -11227,11 +11310,12 @@ def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
-        "/* unsupported Slang structured buffer: buffer_store requires "
-        "RWStructuredBuffer resource */;" in generated_code
+        "Slang structured buffer: buffer_store requires RWStructuredBuffer resource"
+        in refused.reasons
     )
     assert "buffer_store(values" not in generated_code
 
@@ -11258,7 +11342,8 @@ def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
         "[[vk::binding(4, 0)]] StructuredBuffer<float> readOnlyValues "
@@ -11280,19 +11365,19 @@ def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
         "[[vk::binding(8, 0)]] RWStructuredBuffer<float> attrWriteOnly "
         ": register(u8);" in generated_code
     )
+    assert "float blockedLoad = 0;" in generated_code
     assert (
-        "float blockedLoad = /* unsupported Slang structured buffer: "
-        "buffer_load requires readable structured buffer resource */ 0;"
-        in generated_code
+        "Slang structured buffer: buffer_load requires readable structured buffer resource"
+        in refused.reasons
+    )
+    assert "float blockedAttrLoad = 0;" in generated_code
+    assert (
+        "Slang structured buffer: buffer_load requires readable structured buffer resource"
+        in refused.reasons
     )
     assert (
-        "float blockedAttrLoad = /* unsupported Slang structured buffer: "
-        "buffer_load requires readable structured buffer resource */ 0;"
-        in generated_code
-    )
-    assert (
-        "/* unsupported Slang structured buffer: buffer_store requires "
-        "writable structured buffer resource */;" in generated_code
+        "Slang structured buffer: buffer_store requires writable structured buffer resource"
+        in refused.reasons
     )
     assert "readWriteValues.Store(0u, 2.0);" in generated_code
     assert "attrWriteOnly.Store(0u, 4.0);" in generated_code
@@ -11344,7 +11429,8 @@ def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
         "[[vk::binding(24, 0)]] RWStructuredBuffer<uint> counters "
@@ -11421,19 +11507,20 @@ def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked():
     )
     assert "if (cgl_atomicAnd_original != 0u)" in generated_code
     assert "oldValue = fetchOld(tid);" in generated_code
+    assert "uint readOnlyBlocked = 0u;" in generated_code
     assert (
-        "uint readOnlyBlocked = /* unsupported Slang structured buffer: "
-        "atomicAdd requires RWStructuredBuffer resource */ 0u;" in generated_code
+        "Slang structured buffer: atomicAdd requires RWStructuredBuffer resource"
+        in refused.reasons
     )
+    assert "uint attrReadOnlyBlocked = 0u;" in generated_code
     assert (
-        "uint attrReadOnlyBlocked = /* unsupported Slang structured buffer: "
-        "atomicAdd requires writable structured buffer resource */ 0u;"
-        in generated_code
+        "Slang structured buffer: atomicAdd requires writable structured buffer resource"
+        in refused.reasons
     )
+    assert "uint floatBlocked = 0u;" in generated_code
     assert (
-        "uint floatBlocked = /* unsupported Slang structured buffer: atomicAdd "
-        "requires scalar int or uint RWStructuredBuffer element */ 0u;"
-        in generated_code
+        "Slang structured buffer: atomicAdd requires scalar int or uint RWStructuredBuffer element"
+        in refused.reasons
     )
     assert "atomicAdd(counters" not in generated_code
     assert "atomicCompareExchange(counters" not in generated_code
@@ -11476,27 +11563,31 @@ def test_structured_buffer_atomics_validate_target_result_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "uint validUnsigned = cgl_atomicAdd_original;" in generated_code
     assert "int validSigned = cgl_atomicMin_original;" in generated_code
     assert "uint stillValid = loadOld(tid);" in generated_code
+    assert "float scalarUnsigned = 0;" in generated_code
     assert (
-        "float scalarUnsigned = /* unsupported Slang structured buffer: atomicAdd "
-        "returns uint but target expects float */ 0;" in generated_code
+        "Slang structured buffer: atomicAdd returns uint but target expects float"
+        in refused.reasons
     )
+    assert "int2 vectorSigned = int2(0);" in generated_code
     assert (
-        "int2 vectorSigned = /* unsupported Slang structured buffer: atomicMin "
-        "returns int but target expects int2 */ int2(0);" in generated_code
+        "Slang structured buffer: atomicMin returns int but target expects int2"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang structured buffer: atomicExchange "
-        "returns uint but target expects float */ 0);" in generated_code
+        "Slang structured buffer: atomicExchange returns uint but target expects float"
+        in refused.reasons
     )
+    assert "float scalarArray[2] = {0, 1.0};" in generated_code
     assert (
-        "float scalarArray[2] = {/* unsupported Slang structured buffer: "
-        "atomicCompareExchange returns uint but target expects float */ 0, 1.0};"
-        in generated_code
+        "Slang structured buffer: atomicCompareExchange returns uint but target expects float"
+        in refused.reasons
     )
     assert "float scalarUnsigned = cgl_atomicAdd_original" not in generated_code
     assert "int2 vectorSigned = cgl_atomicMin_original" not in generated_code
@@ -11545,38 +11636,39 @@ def test_structured_buffer_explicit_result_atomics_reject_value_contexts():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "InterlockedAdd(counters[tid.x], 1u, oldValue);" in generated_code
+    assert "uint initBlocked = 0u;" in generated_code
     assert (
-        "uint initBlocked = /* unsupported Slang structured buffer: atomicAdd "
-        "explicit original output atomic cannot be used as a value expression */ "
-        "0u;" in generated_code
+        "Slang structured buffer: atomicAdd explicit original output atomic cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "oldValue = 0u;" in generated_code
     assert (
-        "oldValue = /* unsupported Slang structured buffer: atomicExchange "
-        "explicit original output atomic cannot be used as a value expression */ "
-        "0u;" in generated_code
+        "Slang structured buffer: atomicExchange explicit original output atomic cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "passUint(0u);" in generated_code
     assert (
-        "passUint(/* unsupported Slang structured buffer: atomicOr explicit "
-        "original output atomic cannot be used as a value expression */ 0u);"
-        in generated_code
+        "Slang structured buffer: atomicOr explicit original output atomic cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "uint binaryBlocked = 0u + 1u;" in generated_code
     assert (
-        "uint binaryBlocked = /* unsupported Slang structured buffer: atomicXor "
-        "explicit original output atomic cannot be used as a value expression */ "
-        "0u + 1u;" in generated_code
+        "Slang structured buffer: atomicXor explicit original output atomic cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "if (0u != 0u)" in generated_code
     assert (
-        "if (/* unsupported Slang structured buffer: atomicAnd explicit original "
-        "output atomic cannot be used as a value expression */ 0u != 0u)"
-        in generated_code
+        "Slang structured buffer: atomicAnd explicit original output atomic cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "return 0u;" in generated_code
     assert (
-        "return /* unsupported Slang structured buffer: atomicAdd explicit "
-        "original output atomic cannot be used as a value expression */ 0u;"
-        in generated_code
+        "Slang structured buffer: atomicAdd explicit original output atomic cannot be used as a value expression"
+        in refused.reasons
     )
     assert (
         "for (InterlockedAdd(counters[tid.x], 6u, oldValue); oldValue < 8u; "
@@ -11625,32 +11717,28 @@ def test_structured_buffer_expression_atomics_in_loop_contexts_emit_diagnostics(
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
-        "atomicAdd expression-valued atomic cannot be used in "
-        "for-loop initializer context; use explicit original output argument"
-        in generated_code
+        "Slang structured buffer: atomicAdd expression-valued atomic cannot be used in for-loop initializer context; use explicit original output argument"
+        in refused.reasons
     )
     assert (
-        "atomicAdd expression-valued atomic cannot be used in "
-        "for-loop condition context; use explicit original output argument"
-        in generated_code
+        "Slang structured buffer: atomicAdd expression-valued atomic cannot be used in for-loop condition context; use explicit original output argument"
+        in refused.reasons
     )
     assert (
-        "atomicExchange expression-valued atomic cannot be used in "
-        "for-loop update context; use explicit original output argument"
-        in generated_code
+        "Slang structured buffer: atomicExchange expression-valued atomic cannot be used in for-loop update context; use explicit original output argument"
+        in refused.reasons
     )
     assert (
-        "atomicOr expression-valued atomic cannot be used in "
-        "while-loop condition context; use explicit original output argument"
-        in generated_code
+        "Slang structured buffer: atomicOr expression-valued atomic cannot be used in while-loop condition context; use explicit original output argument"
+        in refused.reasons
     )
     assert (
-        "atomicAnd expression-valued atomic cannot be used in "
-        "do-while-loop condition context; use explicit original output argument"
-        in generated_code
+        "Slang structured buffer: atomicAnd expression-valued atomic cannot be used in do-while-loop condition context; use explicit original output argument"
+        in refused.reasons
     )
     assert "InterlockedAdd(counters[tid.x], 1u, oldValue);" in generated_code
     assert "atomicAdd(counters" not in generated_code
@@ -11726,15 +11814,17 @@ def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
-        "/* unsupported Slang structured buffer: buffer_append requires "
-        "AppendStructuredBuffer resource */;" in generated_code
+        "Slang structured buffer: buffer_append requires AppendStructuredBuffer resource"
+        in refused.reasons
     )
+    assert "int value = 0;" in generated_code
     assert (
-        "int value = /* unsupported Slang structured buffer: buffer_consume "
-        "requires ConsumeStructuredBuffer resource */ 0;" in generated_code
+        "Slang structured buffer: buffer_consume requires ConsumeStructuredBuffer resource"
+        in refused.reasons
     )
     assert "buffer_append(" not in generated_code
     assert "buffer_consume(" not in generated_code
@@ -11771,7 +11861,8 @@ def test_append_consume_member_calls_respect_access_qualifiers_and_kinds():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
         "[[vk::binding(16, 0)]] AppendStructuredBuffer<Particle> "
@@ -11784,24 +11875,27 @@ def test_append_consume_member_calls_respect_access_qualifiers_and_kinds():
     assert "Particle particle = consumed.Consume();" in generated_code
     assert "appended.Append(particle);" in generated_code
     assert (
-        "/* unsupported Slang structured buffer: Append requires writable "
-        "structured buffer receiver */;" in generated_code
+        "Slang structured buffer: Append requires writable structured buffer receiver"
+        in refused.reasons
+    )
+    assert "Particle blocked = Particle();" in generated_code
+    assert (
+        "Slang structured buffer: Consume requires readable structured buffer receiver"
+        in refused.reasons
+    )
+    assert "float attrBlocked = 0;" in generated_code
+    assert (
+        "Slang structured buffer: Consume requires readable structured buffer receiver"
+        in refused.reasons
     )
     assert (
-        "Particle blocked = /* unsupported Slang structured buffer: Consume "
-        "requires readable structured buffer receiver */ Particle();" in generated_code
+        "Slang structured buffer: Append requires AppendStructuredBuffer receiver"
+        in refused.reasons
     )
+    assert "Particle wrong = Particle();" in generated_code
     assert (
-        "float attrBlocked = /* unsupported Slang structured buffer: Consume "
-        "requires readable structured buffer receiver */ 0;" in generated_code
-    )
-    assert (
-        "/* unsupported Slang structured buffer: Append requires "
-        "AppendStructuredBuffer receiver */;" in generated_code
-    )
-    assert (
-        "Particle wrong = /* unsupported Slang structured buffer: Consume "
-        "requires ConsumeStructuredBuffer receiver */ Particle();" in generated_code
+        "Slang structured buffer: Consume requires ConsumeStructuredBuffer receiver"
+        in refused.reasons
     )
     assert "readOnlyAppend.Append" not in generated_code
     assert "writeOnlyConsume.Consume" not in generated_code
@@ -11913,7 +12007,8 @@ def test_byte_address_vector_methods_and_readonly_stores_emit_slang():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "ByteAddressBuffer rawBytes : register(t0);" in generated_code
     assert "RWByteAddressBuffer rawVectors : register(u0);" in generated_code
@@ -11925,8 +12020,8 @@ def test_byte_address_vector_methods_and_readonly_stores_emit_slang():
     assert "rawVectors.Store3(offset + uint(16), asuint(normal));" in generated_code
     assert "rawVectors.Store4(offset + uint(32), asuint(color));" in generated_code
     assert (
-        "/* unsupported Slang byte-address buffer: Store requires "
-        "RWByteAddressBuffer receiver */;" in generated_code
+        "Slang byte-address buffer: Store requires RWByteAddressBuffer receiver"
+        in refused.reasons
     )
     assert "None(" not in generated_code
 
@@ -11942,11 +12037,12 @@ def test_byte_address_buffer_store_to_readonly_helper_emits_slang_diagnostic():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
-        "/* unsupported Slang byte-address buffer: buffer_store requires "
-        "RWByteAddressBuffer resource */;" in generated_code
+        "Slang byte-address buffer: buffer_store requires RWByteAddressBuffer resource"
+        in refused.reasons
     )
     assert "buffer_store(" not in generated_code
 
@@ -11971,7 +12067,8 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
         "[[vk::binding(9, 0)]] ByteAddressBuffer readOnlyRaw "
@@ -11993,22 +12090,23 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
         "[[vk::binding(13, 0)]] RWByteAddressBuffer attrWriteOnlyRaw "
         ": register(u13);" in generated_code
     )
+    assert "uint blockedLoad = 0u;" in generated_code
     assert (
-        "uint blockedLoad = /* unsupported Slang byte-address buffer: "
-        "buffer_load requires readable byte-address buffer resource */ 0u;"
-        in generated_code
+        "Slang byte-address buffer: buffer_load requires readable byte-address buffer resource"
+        in refused.reasons
+    )
+    assert "uint blockedAttrLoad = 0u;" in generated_code
+    assert (
+        "Slang byte-address buffer: Load requires readable byte-address buffer receiver"
+        in refused.reasons
     )
     assert (
-        "uint blockedAttrLoad = /* unsupported Slang byte-address buffer: "
-        "Load requires readable byte-address buffer receiver */ 0u;" in generated_code
+        "Slang byte-address buffer: buffer_store requires writable byte-address buffer resource"
+        in refused.reasons
     )
     assert (
-        "/* unsupported Slang byte-address buffer: buffer_store requires "
-        "writable byte-address buffer resource */;" in generated_code
-    )
-    assert (
-        "/* unsupported Slang byte-address buffer: Store requires "
-        "writable byte-address buffer receiver */;" in generated_code
+        "Slang byte-address buffer: Store requires writable byte-address buffer receiver"
+        in refused.reasons
     )
     assert "readWriteRaw.Store(offset, uint(3));" in generated_code
     assert "attrWriteOnlyRaw.Store(offset, uint(4));" in generated_code
@@ -12066,7 +12164,8 @@ def test_byte_address_load_calls_validate_target_result_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "uint scalar = rawInput.Load(offset);" in generated_code
     assert "uint helperScalar = rawInput.Load(offset + 4u);" in generated_code
@@ -12076,49 +12175,55 @@ def test_byte_address_load_calls_validate_target_result_types():
     assert "float castScalar = asfloat(rawInput.Load(offset + 48u));" in generated_code
     assert "float2 castPair = asfloat(rawInput.Load2(offset + 52u));" in generated_code
     assert "int3 signedTriple = asint(rawRW.Load3(offset + 60u));" in generated_code
+    assert "float invalidFloat = 0;" in generated_code
     assert (
-        "float invalidFloat = /* unsupported Slang byte-address buffer: Load "
-        "returns uint but target expects float */ 0;" in generated_code
+        "Slang byte-address buffer: Load returns uint but target expects float"
+        in refused.reasons
     )
+    assert "uint2 invalidVectorFromHelper = uint2(0u);" in generated_code
     assert (
-        "uint2 invalidVectorFromHelper = /* unsupported Slang byte-address "
-        "buffer: buffer_load returns uint but target expects uint2 */ uint2(0u);"
-        in generated_code
+        "Slang byte-address buffer: buffer_load returns uint but target expects uint2"
+        in refused.reasons
     )
+    assert "uint invalidScalarFromVector = 0u;" in generated_code
     assert (
-        "uint invalidScalarFromVector = /* unsupported Slang byte-address "
-        "buffer: Load2 returns uint2 but target expects uint */ 0u;" in generated_code
+        "Slang byte-address buffer: Load2 returns uint2 but target expects uint"
+        in refused.reasons
     )
+    assert "float2 invalidFloatVector = float2(0.0);" in generated_code
     assert (
-        "float2 invalidFloatVector = /* unsupported Slang byte-address buffer: "
-        "Load2 returns uint2 but target expects float2 */ float2(0.0);"
-        in generated_code
+        "Slang byte-address buffer: Load2 returns uint2 but target expects float2"
+        in refused.reasons
     )
+    assert "float2 invalidBinary = float2(0.0) + float2(1.0);" in generated_code
     assert (
-        "float2 invalidBinary = /* unsupported Slang byte-address buffer: "
-        "Load2 returns uint2 but target expects float2 */ float2(0.0) + "
-        "float2(1.0);" in generated_code
+        "Slang byte-address buffer: Load2 returns uint2 but target expects float2"
+        in refused.reasons
     )
+    assert "float2x2 invalidMatrix = float2x2(0.0);" in generated_code
     assert (
-        "float2x2 invalidMatrix = /* unsupported Slang byte-address buffer: "
-        "Load2 returns uint2 but target expects float2x2 */ float2x2(0.0);"
-        in generated_code
+        "Slang byte-address buffer: Load2 returns uint2 but target expects float2x2"
+        in refused.reasons
     )
+    assert "passUint(0u);" in generated_code
     assert (
-        "passUint(/* unsupported Slang byte-address buffer: Load3 returns "
-        "uint3 but target expects uint */ 0u);" in generated_code
+        "Slang byte-address buffer: Load3 returns uint3 but target expects uint"
+        in refused.reasons
     )
+    assert "passUint2(uint2(0u));" in generated_code
     assert (
-        "passUint2(/* unsupported Slang byte-address buffer: buffer_load "
-        "returns uint but target expects uint2 */ uint2(0u));" in generated_code
+        "Slang byte-address buffer: buffer_load returns uint but target expects uint2"
+        in refused.reasons
     )
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang byte-address buffer: Load returns uint "
-        "but target expects float */ 0;" in generated_code
+        "Slang byte-address buffer: Load returns uint but target expects float"
+        in refused.reasons
     )
+    assert "return uint4(0u);" in generated_code
     assert (
-        "return /* unsupported Slang byte-address buffer: Load2 returns uint2 "
-        "but target expects uint4 */ uint4(0u);" in generated_code
+        "Slang byte-address buffer: Load2 returns uint2 but target expects uint4"
+        in refused.reasons
     )
     assert "float invalidFloat = rawInput.Load" not in generated_code
     assert "uint invalidScalarFromVector = rawInput.Load2" not in generated_code
@@ -12175,33 +12280,40 @@ def test_byte_address_store_calls_reject_value_contexts():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "rawOutput.Store(offset, value);" in generated_code
     assert "rawOutput.Store2(offset + 4u, uint2(value, value));" in generated_code
+    assert "uint initBlocked = 0u;" in generated_code
     assert (
-        "uint initBlocked = /* unsupported Slang byte-address buffer: "
-        "buffer_store cannot be used as a value expression */ 0u;" in generated_code
+        "Slang byte-address buffer: buffer_store cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "oldValue = 0u;" in generated_code
     assert (
-        "oldValue = /* unsupported Slang byte-address buffer: Store cannot be "
-        "used as a value expression */ 0u;" in generated_code
+        "Slang byte-address buffer: Store cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "passUint(0u);" in generated_code
     assert (
-        "passUint(/* unsupported Slang byte-address buffer: Store3 cannot be "
-        "used as a value expression */ 0u);" in generated_code
+        "Slang byte-address buffer: Store3 cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "uint binaryBlocked = 0u + 1u;" in generated_code
     assert (
-        "uint binaryBlocked = /* unsupported Slang byte-address buffer: Store4 "
-        "cannot be used as a value expression */ 0u + 1u;" in generated_code
+        "Slang byte-address buffer: Store4 cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "if (0u != 0u)" in generated_code
     assert (
-        "if (/* unsupported Slang byte-address buffer: buffer_store cannot be "
-        "used as a value expression */ 0u != 0u)" in generated_code
+        "Slang byte-address buffer: buffer_store cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "return 0u;" in generated_code
     assert (
-        "return /* unsupported Slang byte-address buffer: buffer_store cannot "
-        "be used as a value expression */ 0u;" in generated_code
+        "Slang byte-address buffer: buffer_store cannot be used as a value expression"
+        in refused.reasons
     )
     assert (
         "for (rawOutput.Store(offset + 28u, value); oldValue < 8u; "
@@ -12245,7 +12357,8 @@ def test_byte_address_interlocked_member_calls_respect_access_qualifiers():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
         "[[vk::binding(20, 0)]] RWByteAddressBuffer rawOutput "
@@ -12273,12 +12386,12 @@ def test_byte_address_interlocked_member_calls_respect_access_qualifiers():
         in generated_code
     )
     assert (
-        "/* unsupported Slang byte-address buffer: InterlockedOr requires "
-        "RWByteAddressBuffer receiver */;" in generated_code
+        "Slang byte-address buffer: InterlockedOr requires RWByteAddressBuffer receiver"
+        in refused.reasons
     )
     assert (
-        "/* unsupported Slang byte-address buffer: InterlockedXor requires "
-        "writable byte-address buffer receiver */;" in generated_code
+        "Slang byte-address buffer: InterlockedXor requires writable byte-address buffer receiver"
+        in refused.reasons
     )
     assert "helper.InterlockedAdd(value);" in generated_code
     assert "readOnlyRaw.InterlockedOr" not in generated_code
@@ -12326,34 +12439,39 @@ def test_byte_address_interlocked_member_calls_reject_value_contexts():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "rawOutput.InterlockedAdd(offset, value, oldValue);" in generated_code
+    assert "uint initBlocked = 0u;" in generated_code
     assert (
-        "uint initBlocked = /* unsupported Slang byte-address buffer: "
-        "InterlockedAdd cannot be used as a value expression */ 0u;" in generated_code
+        "Slang byte-address buffer: InterlockedAdd cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "oldValue = 0u;" in generated_code
     assert (
-        "oldValue = /* unsupported Slang byte-address buffer: "
-        "InterlockedExchange cannot be used as a value expression */ 0u;"
-        in generated_code
+        "Slang byte-address buffer: InterlockedExchange cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "passUint(0u);" in generated_code
     assert (
-        "passUint(/* unsupported Slang byte-address buffer: InterlockedOr "
-        "cannot be used as a value expression */ 0u);" in generated_code
+        "Slang byte-address buffer: InterlockedOr cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "uint binaryBlocked = 0u + 1u;" in generated_code
     assert (
-        "uint binaryBlocked = /* unsupported Slang byte-address buffer: "
-        "InterlockedXor cannot be used as a value expression */ 0u + 1u;"
-        in generated_code
+        "Slang byte-address buffer: InterlockedXor cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "if (0u != 0u)" in generated_code
     assert (
-        "if (/* unsupported Slang byte-address buffer: InterlockedAnd cannot "
-        "be used as a value expression */ 0u != 0u)" in generated_code
+        "Slang byte-address buffer: InterlockedAnd cannot be used as a value expression"
+        in refused.reasons
     )
+    assert "return 0u;" in generated_code
     assert (
-        "return /* unsupported Slang byte-address buffer: InterlockedAdd "
-        "cannot be used as a value expression */ 0u;" in generated_code
+        "Slang byte-address buffer: InterlockedAdd cannot be used as a value expression"
+        in refused.reasons
     )
     assert (
         "for (rawOutput.InterlockedAdd(offset + 24u, value, oldValue); "
@@ -12793,7 +12911,8 @@ def test_slang_texture_multisample_backlog_fetch_queries_and_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "Sampler2DMS<float4> msTex : register(t0);" in generated_code
     assert "Sampler2DMSArray<float4> msLayers : register(t1);" in generated_code
@@ -12809,17 +12928,20 @@ def test_slang_texture_multisample_backlog_fetch_queries_and_diagnostics():
         in generated_code
     )
     assert (
-        "texture requires a non-shadow non-multisampled sampled texture resource"
-        in generated_code
+        "Slang sampled texture: texture requires a non-shadow non-multisampled "
+        "sampled texture resource" in refused.reasons
     )
     assert (
-        "textureOffset requires a non-shadow non-multisampled sampled texture "
-        "resource" in generated_code
+        "Slang texture offset: textureOffset requires a non-shadow non-multisampled "
+        "sampled texture resource" in refused.reasons
     )
-    assert "textureCompare requires a shadow sampler resource" in generated_code
     assert (
-        "textureGather requires a non-shadow non-multisampled sampled texture "
-        "resource" in generated_code
+        "Slang shadow compare: textureCompare requires a shadow sampler resource"
+        in refused.reasons
+    )
+    assert (
+        "Slang texture gather: textureGather requires a non-shadow non-multisampled "
+        "sampled texture resource" in refused.reasons
     )
     assert "texelFetch(" not in generated_code
     assert "textureSize(" not in generated_code
@@ -12974,168 +13096,173 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "float4 missingTexture = float4(0.0);" in generated_code
     assert (
-        "float4 missingTexture = /* unsupported Slang sampled texture: "
-        "texture requires texture and coordinate arguments */ float4(0.0);"
-        in generated_code
+        "Slang sampled texture: texture requires texture and coordinate arguments"
+        in refused.reasons
     )
+    assert "float4 missingCoord = float4(0.0);" in generated_code
     assert (
-        "float4 missingCoord = /* unsupported Slang sampled texture: "
-        "texture requires texture and coordinate arguments */ float4(0.0);"
-        in generated_code
+        "Slang sampled texture: texture requires texture and coordinate arguments"
+        in refused.reasons
     )
+    assert "float4 explicitMissingCoord = float4(0.0);" in generated_code
     assert (
-        "float4 explicitMissingCoord = /* unsupported Slang sampled texture: "
-        "texture requires texture and coordinate arguments */ float4(0.0);"
-        in generated_code
+        "Slang sampled texture: texture requires texture and coordinate arguments"
+        in refused.reasons
     )
+    assert "float4 extraBias = float4(0.0);" in generated_code
     assert (
-        "float4 extraBias = /* unsupported Slang sampled texture: "
-        "texture accepts coordinate and optional bias arguments */ float4(0.0);"
-        in generated_code
+        "Slang sampled texture: texture accepts coordinate and optional bias arguments"
+        in refused.reasons
     )
+    assert "float4 samplerOnly = float4(0.0);" in generated_code
     assert (
-        "float4 samplerOnly = /* unsupported Slang sampled texture: "
-        "texture requires a non-shadow non-multisampled sampled texture resource */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texture requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 imageSample = float4(0.0);" in generated_code
     assert (
-        "float4 imageSample = /* unsupported Slang sampled texture: "
-        "texture requires a non-shadow non-multisampled sampled texture resource */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texture requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 shadowSample = float4(0.0);" in generated_code
     assert (
-        "float4 shadowSample = /* unsupported Slang sampled texture: "
-        "texture requires a non-shadow non-multisampled sampled texture resource */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texture requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 msSample = float4(0.0);" in generated_code
     assert (
-        "float4 msSample = /* unsupported Slang sampled texture: "
-        "texture requires a non-shadow non-multisampled sampled texture resource */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texture requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 missingLod = float4(0.0);" in generated_code
     assert (
-        "float4 missingLod = /* unsupported Slang sampled texture: "
-        "textureLod requires one lod argument */ float4(0.0);" in generated_code
+        "Slang sampled texture: textureLod requires one lod argument" in refused.reasons
     )
+    assert "float4 extraLod = float4(0.0);" in generated_code
     assert (
-        "float4 extraLod = /* unsupported Slang sampled texture: "
-        "textureLod requires one lod argument */ float4(0.0);" in generated_code
+        "Slang sampled texture: textureLod requires one lod argument" in refused.reasons
     )
+    assert "float4 missingGrad = float4(0.0);" in generated_code
     assert (
-        "float4 missingGrad = /* unsupported Slang sampled texture: "
-        "textureGrad requires gradient x and gradient y arguments */ float4(0.0);"
-        in generated_code
+        "Slang sampled texture: textureGrad requires gradient x and gradient y arguments"
+        in refused.reasons
     )
+    assert "float4 extraGrad = float4(0.0);" in generated_code
     assert (
-        "float4 extraGrad = /* unsupported Slang sampled texture: "
-        "textureGrad requires gradient x and gradient y arguments */ float4(0.0);"
-        in generated_code
+        "Slang sampled texture: textureGrad requires gradient x and gradient y arguments"
+        in refused.reasons
     )
+    assert "float4 badCoordRank = float4(0.0);" in generated_code
     assert (
-        "float4 badCoordRank = /* unsupported Slang sampled texture: "
-        "texture requires a 2-component coordinate for sampler2D */ float4(0.0);"
-        in generated_code
+        "Slang sampled texture: texture requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float4 badExplicitCoordRank = float4(0.0);" in generated_code
     assert (
-        "float4 badExplicitCoordRank = /* unsupported Slang sampled texture: "
-        "textureLod requires a 2-component coordinate for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: textureLod requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float4 badBiasRank = float4(0.0);" in generated_code
     assert (
-        "float4 badBiasRank = /* unsupported Slang sampled texture: "
-        "texture requires a scalar bias argument */ float4(0.0);" in generated_code
+        "Slang sampled texture: texture requires a scalar bias argument"
+        in refused.reasons
     )
+    assert "float4 boolBiasType = float4(0.0);" in generated_code
     assert (
-        "float4 boolBiasType = /* unsupported Slang sampled texture: "
-        "texture bias argument must be scalar int, uint, float, or double, "
-        "got bool */ float4(0.0);" in generated_code
+        "Slang sampled texture: texture bias argument must be scalar int, uint, float, or double, got bool"
+        in refused.reasons
     )
+    assert "float4 badLodCoordRank = float4(0.0);" in generated_code
     assert (
-        "float4 badLodCoordRank = /* unsupported Slang sampled texture: "
-        "textureLod requires a 2-component coordinate for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: textureLod requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float4 badLodRank = float4(0.0);" in generated_code
     assert (
-        "float4 badLodRank = /* unsupported Slang sampled texture: "
-        "textureLod requires a scalar lod argument */ float4(0.0);" in generated_code
+        "Slang sampled texture: textureLod requires a scalar lod argument"
+        in refused.reasons
     )
+    assert "float4 boolLodType = float4(0.0);" in generated_code
     assert (
-        "float4 boolLodType = /* unsupported Slang sampled texture: "
-        "textureLod lod argument must be scalar int, uint, float, or double, "
-        "got bool */ float4(0.0);" in generated_code
+        "Slang sampled texture: textureLod lod argument must be scalar int, uint, float, or double, got bool"
+        in refused.reasons
     )
+    assert "float4 badGradCoordRank = float4(0.0);" in generated_code
     assert (
-        "float4 badGradCoordRank = /* unsupported Slang sampled texture: "
-        "textureGrad requires a 2-component coordinate for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: textureGrad requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float4 badGradRank = float4(0.0);" in generated_code
     assert (
-        "float4 badGradRank = /* unsupported Slang sampled texture: "
-        "textureGrad requires a 2-component gradient for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: textureGrad requires a 2-component gradient for sampler2D"
+        in refused.reasons
     )
+    assert "float4 intGradType = float4(0.0);" in generated_code
     assert (
-        "float4 intGradType = /* unsupported Slang sampled texture: "
-        "textureGrad gradient must be scalar or vector float or double, got int2 */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: textureGrad gradient must be scalar or vector float or double, got int2"
+        in refused.reasons
     )
+    assert "float4 boolGradType = float4(0.0);" in generated_code
     assert (
-        "float4 boolGradType = /* unsupported Slang sampled texture: "
-        "textureGrad gradient must be scalar or vector float or double, got bool2 */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: textureGrad gradient must be scalar or vector float or double, got bool2"
+        in refused.reasons
     )
+    assert "float4 missingFetchLevel = float4(0.0);" in generated_code
     assert (
-        "float4 missingFetchLevel = /* unsupported Slang sampled texture: "
-        "texelFetch requires one lod/sample argument */ float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch requires one lod/sample argument"
+        in refused.reasons
     )
+    assert "float4 extraFetchLevel = float4(0.0);" in generated_code
     assert (
-        "float4 extraFetchLevel = /* unsupported Slang sampled texture: "
-        "texelFetch requires one lod/sample argument */ float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch requires one lod/sample argument"
+        in refused.reasons
     )
+    assert "float4 fetchSamplerOnly = float4(0.0);" in generated_code
     assert (
-        "float4 fetchSamplerOnly = /* unsupported Slang sampled texture: "
-        "texelFetch requires a non-shadow texel-fetchable sampled texture resource */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch requires a non-shadow texel-fetchable sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 fetchImage = float4(0.0);" in generated_code
     assert (
-        "float4 fetchImage = /* unsupported Slang sampled texture: "
-        "texelFetch requires a non-shadow texel-fetchable sampled texture resource */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch requires a non-shadow texel-fetchable sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 fetchShadow = float4(0.0);" in generated_code
     assert (
-        "float4 fetchShadow = /* unsupported Slang sampled texture: "
-        "texelFetch requires a non-shadow texel-fetchable sampled texture resource */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch requires a non-shadow texel-fetchable sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 fetchCube = float4(0.0);" in generated_code
     assert (
-        "float4 fetchCube = /* unsupported Slang sampled texture: "
-        "texelFetch requires a non-shadow texel-fetchable sampled texture resource */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch requires a non-shadow texel-fetchable sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 badFetchCoordRank = float4(0.0);" in generated_code
     assert (
-        "float4 badFetchCoordRank = /* unsupported Slang sampled texture: "
-        "texelFetch requires a 2-component coordinate for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float4 badFetchIndexRank = float4(0.0);" in generated_code
     assert (
-        "float4 badFetchIndexRank = /* unsupported Slang sampled texture: "
-        "texelFetch fetch index argument must be scalar int or uint, got int2 */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch fetch index argument must be scalar int or uint, got int2"
+        in refused.reasons
     )
+    assert "float4 floatFetchLevel = float4(0.0);" in generated_code
     assert (
-        "float4 floatFetchLevel = /* unsupported Slang sampled texture: "
-        "texelFetch fetch index argument must be scalar int or uint, got float */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch fetch index argument must be scalar int or uint, got float"
+        in refused.reasons
     )
+    assert "float4 boolFetchSample = float4(0.0);" in generated_code
     assert (
-        "float4 boolFetchSample = /* unsupported Slang sampled texture: "
-        "texelFetch fetch index argument must be scalar int or uint, got bool */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetch fetch index argument must be scalar int or uint, got bool"
+        in refused.reasons
     )
-    assert generated_code.count("unsupported Slang sampled texture") == 33
+    assert sum(site.startswith("Slang sampled texture") for site in refused.sites) == 33
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
@@ -13179,46 +13306,54 @@ def test_sampled_texture_builtins_validate_target_result_types():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "float4 validTexture = colorMap.Sample(uv);" in generated_code
+    assert "float scalarTexture = 0;" in generated_code
     assert (
-        "float scalarTexture = /* unsupported Slang sampled texture: "
-        "texture returns float4 but target expects float */ 0;" in generated_code
+        "Slang sampled texture: texture returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "int2 vectorLod = int2(0);" in generated_code
     assert (
-        "int2 vectorLod = /* unsupported Slang sampled texture: "
-        "textureLod returns float4 but target expects int2 */ int2(0);"
-        in generated_code
+        "Slang sampled texture: textureLod returns float4 but target expects int2"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang sampled texture: textureGrad "
-        "returns float4 but target expects float */ 0);" in generated_code
+        "Slang sampled texture: textureGrad returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float fetchedScalar = 0;" in generated_code
     assert (
-        "float fetchedScalar = /* unsupported Slang sampled texture: "
-        "texelFetch returns float4 but target expects float */ 0;" in generated_code
+        "Slang sampled texture: texelFetch returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang sampled texture: texture returns float4 "
-        "but target expects float */ 0;" in generated_code
+        "Slang sampled texture: texture returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float scalarTernary = (take ? 0 : 1.0);" in generated_code
     assert (
-        "float scalarTernary = (take ? /* unsupported Slang sampled texture: "
-        "texture returns float4 but target expects float */ 0 : 1.0);" in generated_code
+        "Slang sampled texture: texture returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float scalarArray[2] = {0, 1.0};" in generated_code
     assert (
-        "float scalarArray[2] = {/* unsupported Slang sampled texture: "
-        "textureLod returns float4 but target expects float */ 0, 1.0};"
-        in generated_code
+        "Slang sampled texture: textureLod returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float missingTexture = 0;" in generated_code
     assert (
-        "float missingTexture = /* unsupported Slang sampled texture: "
-        "texture requires texture and coordinate arguments */ 0;" in generated_code
+        "Slang sampled texture: texture requires texture and coordinate arguments"
+        in refused.reasons
     )
+    assert "float missingFetch = 0;" in generated_code
     assert (
-        "float missingFetch = /* unsupported Slang sampled texture: "
-        "texelFetch requires one lod/sample argument */ 0;" in generated_code
+        "Slang sampled texture: texelFetch requires one lod/sample argument"
+        in refused.reasons
     )
     assert "float scalarTexture = colorMap.Sample(uv);" not in generated_code
     assert "int2 vectorLod = colorMap.SampleLevel" not in generated_code
@@ -13526,92 +13661,93 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "float4 missingOffset = float4(0.0);" in generated_code
     assert (
-        "float4 missingOffset = /* unsupported Slang texture offset: "
-        "textureOffset requires offset and optional bias arguments */ float4(0.0);"
-        in generated_code
+        "Slang texture offset: textureOffset requires offset and optional bias arguments"
+        in refused.reasons
     )
+    assert "float4 extraOffsetBias = float4(0.0);" in generated_code
     assert (
-        "float4 extraOffsetBias = /* unsupported Slang texture offset: "
-        "textureOffset requires offset and optional bias arguments */ float4(0.0);"
-        in generated_code
+        "Slang texture offset: textureOffset requires offset and optional bias arguments"
+        in refused.reasons
     )
+    assert "float4 missingLodOffset = float4(0.0);" in generated_code
     assert (
-        "float4 missingLodOffset = /* unsupported Slang texture offset: "
-        "textureLodOffset requires lod and offset arguments */ float4(0.0);"
-        in generated_code
+        "Slang texture offset: textureLodOffset requires lod and offset arguments"
+        in refused.reasons
     )
+    assert "float4 missingGradOffset = float4(0.0);" in generated_code
     assert (
-        "float4 missingGradOffset = /* unsupported Slang texture offset: "
-        "textureGradOffset requires gradient x, gradient y, and offset arguments */ "
-        "float4(0.0);" in generated_code
+        "Slang texture offset: textureGradOffset requires gradient x, gradient y, and offset arguments"
+        in refused.reasons
     )
+    assert "float4 samplerOffset = float4(0.0);" in generated_code
     assert (
-        "float4 samplerOffset = /* unsupported Slang texture offset: "
-        "textureOffset requires a non-shadow non-multisampled sampled texture "
-        "resource */ float4(0.0);" in generated_code
+        "Slang texture offset: textureOffset requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 imageOffset = float4(0.0);" in generated_code
     assert (
-        "float4 imageOffset = /* unsupported Slang texture offset: "
-        "textureLodOffset requires a non-shadow non-multisampled sampled texture "
-        "resource */ float4(0.0);" in generated_code
+        "Slang texture offset: textureLodOffset requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 shadowOffset = float4(0.0);" in generated_code
     assert (
-        "float4 shadowOffset = /* unsupported Slang texture offset: "
-        "textureGradOffset requires a non-shadow non-multisampled sampled texture "
-        "resource */ float4(0.0);" in generated_code
+        "Slang texture offset: textureGradOffset requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 multisampleOffset = float4(0.0);" in generated_code
     assert (
-        "float4 multisampleOffset = /* unsupported Slang texture offset: "
-        "textureOffset requires a non-shadow non-multisampled sampled texture "
-        "resource */ float4(0.0);" in generated_code
+        "Slang texture offset: textureOffset requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 badCoordRank = float4(0.0);" in generated_code
     assert (
-        "float4 badCoordRank = /* unsupported Slang texture offset: "
-        "textureOffset requires a 2-component coordinate for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang texture offset: textureOffset requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float4 badOffsetRank = float4(0.0);" in generated_code
     assert (
-        "float4 badOffsetRank = /* unsupported Slang texture offset: "
-        "textureLodOffset requires a 2-component offset for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang texture offset: textureLodOffset requires a 2-component offset for sampler2D"
+        in refused.reasons
     )
+    assert "float4 boolLodOffsetType = float4(0.0);" in generated_code
     assert (
-        "float4 boolLodOffsetType = /* unsupported Slang texture offset: "
-        "textureLodOffset lod argument must be scalar int, uint, float, or double, "
-        "got bool */ float4(0.0);" in generated_code
+        "Slang texture offset: textureLodOffset lod argument must be scalar int, uint, float, or double, got bool"
+        in refused.reasons
     )
+    assert "float4 floatOffsetType = float4(0.0);" in generated_code
     assert (
-        "float4 floatOffsetType = /* unsupported Slang texture offset: "
-        "textureOffset offset must be scalar or vector int, got float2 */ "
-        "float4(0.0);" in generated_code
+        "Slang texture offset: textureOffset offset must be scalar or vector int, got float2"
+        in refused.reasons
     )
+    assert "float4 boolBiasOffsetType = float4(0.0);" in generated_code
     assert (
-        "float4 boolBiasOffsetType = /* unsupported Slang texture offset: "
-        "textureOffset bias argument must be scalar int, uint, float, or double, "
-        "got bool */ float4(0.0);" in generated_code
+        "Slang texture offset: textureOffset bias argument must be scalar int, uint, float, or double, got bool"
+        in refused.reasons
     )
+    assert "float4 badBiasOffsetRank = float4(0.0);" in generated_code
     assert (
-        "float4 badBiasOffsetRank = /* unsupported Slang texture offset: "
-        "textureOffset requires a scalar bias argument */ float4(0.0);"
-        in generated_code
+        "Slang texture offset: textureOffset requires a scalar bias argument"
+        in refused.reasons
     )
+    assert "float4 boolOffsetType = float4(0.0);" in generated_code
     assert (
-        "float4 boolOffsetType = /* unsupported Slang texture offset: "
-        "textureLodOffset offset must be scalar or vector int, got bool2 */ "
-        "float4(0.0);" in generated_code
+        "Slang texture offset: textureLodOffset offset must be scalar or vector int, got bool2"
+        in refused.reasons
     )
+    assert "float4 floatGradOffsetType = float4(0.0);" in generated_code
     assert (
-        "float4 floatGradOffsetType = /* unsupported Slang texture offset: "
-        "textureGradOffset offset must be scalar or vector int, got float2 */ "
-        "float4(0.0);" in generated_code
+        "Slang texture offset: textureGradOffset offset must be scalar or vector int, got float2"
+        in refused.reasons
     )
+    assert "float4 badGradRank = float4(0.0);" in generated_code
     assert (
-        "float4 badGradRank = /* unsupported Slang texture offset: "
-        "textureGradOffset requires a 2-component gradient for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang texture offset: textureGradOffset requires a 2-component gradient for sampler2D"
+        in refused.reasons
     )
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
@@ -13664,40 +13800,44 @@ def test_texture_offset_builtins_validate_target_result_types():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "float4 validOffset = colorMap.Sample(uv, offset);" in generated_code
+    assert "float scalarOffset = 0;" in generated_code
     assert (
-        "float scalarOffset = /* unsupported Slang texture offset: "
-        "textureOffset returns float4 but target expects float */ 0;" in generated_code
+        "Slang texture offset: textureOffset returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "int2 vectorLodOffset = int2(0);" in generated_code
     assert (
-        "int2 vectorLodOffset = /* unsupported Slang texture offset: "
-        "textureLodOffset returns float4 but target expects int2 */ int2(0);"
-        in generated_code
+        "Slang texture offset: textureLodOffset returns float4 but target expects int2"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang texture offset: textureGradOffset "
-        "returns float4 but target expects float */ 0);" in generated_code
+        "Slang texture offset: textureGradOffset returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang texture offset: textureOffset returns "
-        "float4 but target expects float */ 0;" in generated_code
+        "Slang texture offset: textureOffset returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float scalarTernary = (take ? 0 : 1.0);" in generated_code
     assert (
-        "float scalarTernary = (take ? /* unsupported Slang texture offset: "
-        "textureOffset returns float4 but target expects float */ 0 : 1.0);"
-        in generated_code
+        "Slang texture offset: textureOffset returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float scalarArray[2] = {0, 1.0};" in generated_code
     assert (
-        "float scalarArray[2] = {/* unsupported Slang texture offset: "
-        "textureLodOffset returns float4 but target expects float */ 0, 1.0};"
-        in generated_code
+        "Slang texture offset: textureLodOffset returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float missingOffset = 0;" in generated_code
     assert (
-        "float missingOffset = /* unsupported Slang texture offset: "
-        "textureOffset requires offset and optional bias arguments */ 0;"
-        in generated_code
+        "Slang texture offset: textureOffset requires offset and optional bias arguments"
+        in refused.reasons
     )
     assert "float scalarOffset = colorMap.Sample(uv, offset);" not in generated_code
     assert "int2 vectorLodOffset = colorMap.SampleLevel" not in generated_code
@@ -13887,90 +14027,93 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "float4 badCoord = float4(0.0);" in generated_code
     assert (
-        "float4 badCoord = /* unsupported Slang projected texture: "
-        "textureProj requires sampler1D/2D/3D projection coordinates */ "
-        "float4(0.0);" in generated_code
+        "Slang projected texture: textureProj requires sampler1D/2D/3D projection coordinates"
+        in refused.reasons
     )
+    assert "float4 samplerProjected = float4(0.0);" in generated_code
     assert (
-        "float4 samplerProjected = /* unsupported Slang projected texture: "
-        "textureProj requires sampler1D/2D/3D texture resource */ float4(0.0);"
-        in generated_code
+        "Slang projected texture: textureProj requires sampler1D/2D/3D texture resource"
+        in refused.reasons
     )
+    assert "float4 imageProjected = float4(0.0);" in generated_code
     assert (
-        "float4 imageProjected = /* unsupported Slang projected texture: "
-        "textureProj requires sampler1D/2D/3D texture resource */ float4(0.0);"
-        in generated_code
+        "Slang projected texture: textureProj requires sampler1D/2D/3D texture resource"
+        in refused.reasons
     )
+    assert "float4 shadowProjected = float4(0.0);" in generated_code
     assert (
-        "float4 shadowProjected = /* unsupported Slang projected texture: "
-        "textureProj requires sampler1D/2D/3D texture resource */ float4(0.0);"
-        in generated_code
+        "Slang projected texture: textureProj requires sampler1D/2D/3D texture resource"
+        in refused.reasons
     )
+    assert "float4 multisampleProjected = float4(0.0);" in generated_code
     assert (
-        "float4 multisampleProjected = /* unsupported Slang projected texture: "
-        "textureProj requires sampler1D/2D/3D texture resource */ float4(0.0);"
-        in generated_code
+        "Slang projected texture: textureProj requires sampler1D/2D/3D texture resource"
+        in refused.reasons
     )
+    assert "float4 badProjectedBiasRank = float4(0.0);" in generated_code
     assert (
-        "float4 badProjectedBiasRank = /* unsupported Slang projected texture: "
-        "textureProj requires a scalar bias argument */ float4(0.0);" in generated_code
+        "Slang projected texture: textureProj requires a scalar bias argument"
+        in refused.reasons
     )
+    assert "float4 boolProjectedBias = float4(0.0);" in generated_code
     assert (
-        "float4 boolProjectedBias = /* unsupported Slang projected texture: "
-        "textureProj bias argument must be scalar int, uint, float, or double, "
-        "got bool */ float4(0.0);" in generated_code
+        "Slang projected texture: textureProj bias argument must be scalar int, uint, float, or double, got bool"
+        in refused.reasons
     )
+    assert "float4 missingLod = float4(0.0);" in generated_code
     assert (
-        "float4 missingLod = /* unsupported Slang projected texture: "
-        "textureProjLod requires one lod argument */ float4(0.0);" in generated_code
+        "Slang projected texture: textureProjLod requires one lod argument"
+        in refused.reasons
     )
+    assert "float4 boolProjectedLod = float4(0.0);" in generated_code
     assert (
-        "float4 boolProjectedLod = /* unsupported Slang projected texture: "
-        "textureProjLod lod argument must be scalar int, uint, float, or double, "
-        "got bool */ float4(0.0);" in generated_code
+        "Slang projected texture: textureProjLod lod argument must be scalar int, uint, float, or double, got bool"
+        in refused.reasons
     )
+    assert "float4 missingGrad = float4(0.0);" in generated_code
     assert (
-        "float4 missingGrad = /* unsupported Slang projected texture: "
-        "textureProjGrad requires gradient x and gradient y arguments */ "
-        "float4(0.0);" in generated_code
+        "Slang projected texture: textureProjGrad requires gradient x and gradient y arguments"
+        in refused.reasons
     )
+    assert "float4 missingOffset = float4(0.0);" in generated_code
     assert (
-        "float4 missingOffset = /* unsupported Slang projected texture: "
-        "textureProjGradOffset requires gradient x, gradient y, and offset arguments */ "
-        "float4(0.0);" in generated_code
+        "Slang projected texture: textureProjGradOffset requires gradient x, gradient y, and offset arguments"
+        in refused.reasons
     )
+    assert "float4 badProjectedOffset = float4(0.0);" in generated_code
     assert (
-        "float4 badProjectedOffset = /* unsupported Slang projected texture: "
-        "textureProjOffset requires a 2-component offset for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang projected texture: textureProjOffset requires a 2-component offset for sampler2D"
+        in refused.reasons
     )
+    assert "float4 floatProjectedOffset = float4(0.0);" in generated_code
     assert (
-        "float4 floatProjectedOffset = /* unsupported Slang projected texture: "
-        "textureProjOffset offset must be scalar or vector int, got float2 */ "
-        "float4(0.0);" in generated_code
+        "Slang projected texture: textureProjOffset offset must be scalar or vector int, got float2"
+        in refused.reasons
     )
+    assert "float4 boolProjectedOffsetBias = float4(0.0);" in generated_code
     assert (
-        "float4 boolProjectedOffsetBias = /* unsupported Slang projected texture: "
-        "textureProjOffset bias argument must be scalar int, uint, float, or double, "
-        "got bool */ float4(0.0);" in generated_code
+        "Slang projected texture: textureProjOffset bias argument must be scalar int, uint, float, or double, got bool"
+        in refused.reasons
     )
+    assert "float4 boolProjectedLodOffset = float4(0.0);" in generated_code
     assert (
-        "float4 boolProjectedLodOffset = /* unsupported Slang projected texture: "
-        "textureProjLodOffset offset must be scalar or vector int, got bool2 */ "
-        "float4(0.0);" in generated_code
+        "Slang projected texture: textureProjLodOffset offset must be scalar or vector int, got bool2"
+        in refused.reasons
     )
+    assert "float4 vectorProjectedLodOffset = float4(0.0);" in generated_code
     assert (
-        "float4 vectorProjectedLodOffset = /* unsupported Slang projected texture: "
-        "textureProjLodOffset requires a scalar lod argument */ float4(0.0);"
-        in generated_code
+        "Slang projected texture: textureProjLodOffset requires a scalar lod argument"
+        in refused.reasons
     )
+    assert "float4 badProjectedGrad = float4(0.0);" in generated_code
     assert (
-        "float4 badProjectedGrad = /* unsupported Slang projected texture: "
-        "textureProjGrad requires a 2-component gradient for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang projected texture: textureProjGrad requires a 2-component gradient for sampler2D"
+        in refused.reasons
     )
     assert "textureProj(" not in generated_code
     assert "textureProjOffset(" not in generated_code
@@ -14027,55 +14170,59 @@ def test_projected_texture_builtins_validate_target_result_types():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "float4 validProjected = colorMap.Sample(uvq.xy / uvq.z);" in generated_code
+    assert "float scalarProjected = 0;" in generated_code
     assert (
-        "float scalarProjected = /* unsupported Slang projected texture: "
-        "textureProj returns float4 but target expects float */ 0;" in generated_code
+        "Slang projected texture: textureProj returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "int2 vectorProjectedLod = int2(0);" in generated_code
     assert (
-        "int2 vectorProjectedLod = /* unsupported Slang projected texture: "
-        "textureProjLod returns float4 but target expects int2 */ int2(0);"
-        in generated_code
+        "Slang projected texture: textureProjLod returns float4 but target expects int2"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang projected texture: textureProjGrad "
-        "returns float4 but target expects float */ 0);" in generated_code
+        "Slang projected texture: textureProjGrad returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float offsetScalar = 0;" in generated_code
     assert (
-        "float offsetScalar = /* unsupported Slang projected texture: "
-        "textureProjOffset returns float4 but target expects float */ 0;"
-        in generated_code
+        "Slang projected texture: textureProjOffset returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float lodOffsetScalar = 0;" in generated_code
     assert (
-        "float lodOffsetScalar = /* unsupported Slang projected texture: "
-        "textureProjLodOffset returns float4 but target expects float */ 0;"
-        in generated_code
+        "Slang projected texture: textureProjLodOffset returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float gradOffsetScalar = 0;" in generated_code
     assert (
-        "float gradOffsetScalar = /* unsupported Slang projected texture: "
-        "textureProjGradOffset returns float4 but target expects float */ 0;"
-        in generated_code
+        "Slang projected texture: textureProjGradOffset returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang projected texture: textureProj returns float4 "
-        "but target expects float */ 0;" in generated_code
+        "Slang projected texture: textureProj returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float scalarTernary = (take ? 0 : 1.0);" in generated_code
     assert (
-        "float scalarTernary = (take ? /* unsupported Slang projected texture: "
-        "textureProj returns float4 but target expects float */ 0 : 1.0);"
-        in generated_code
+        "Slang projected texture: textureProj returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float scalarArray[2] = {0, 1.0};" in generated_code
     assert (
-        "float scalarArray[2] = {/* unsupported Slang projected texture: "
-        "textureProjLod returns float4 but target expects float */ 0, 1.0};"
-        in generated_code
+        "Slang projected texture: textureProjLod returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float missingProjected = 0;" in generated_code
     assert (
-        "float missingProjected = /* unsupported Slang projected texture: "
-        "textureProj requires texture and projected coordinate arguments */ 0;"
-        in generated_code
+        "Slang projected texture: textureProj requires texture and projected coordinate arguments"
+        in refused.reasons
     )
     assert (
         "float scalarProjected = colorMap.Sample(uvq.xy / uvq.z);" not in generated_code
@@ -14323,17 +14470,18 @@ def test_texel_fetch_offset_invalid_slang_calls_emit_diagnostic_stubs():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "float4 missingOffset = float4(0.0);" in generated_code
     assert (
-        "float4 missingOffset = /* unsupported Slang sampled texture: "
-        "texelFetchOffset requires lod/sample and offset arguments */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetchOffset requires lod/sample and offset arguments"
+        in refused.reasons
     )
+    assert "float4 extraOffset = float4(0.0);" in generated_code
     assert (
-        "float4 extraOffset = /* unsupported Slang sampled texture: "
-        "texelFetchOffset requires lod/sample and offset arguments */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetchOffset requires lod/sample and offset arguments"
+        in refused.reasons
     )
     for variable in [
         "samplerOffset",
@@ -14343,31 +14491,30 @@ def test_texel_fetch_offset_invalid_slang_calls_emit_diagnostic_stubs():
         "cubeOffset",
         "cubeArrayOffset",
     ]:
-        assert (
-            f"float4 {variable} = /* unsupported Slang sampled texture: "
-            "texelFetchOffset requires an offset-capable non-shadow "
-            "non-multisampled sampled texture resource */ float4(0.0);"
-            in generated_code
-        )
+        assert f"float4 {variable} = float4(0.0);" in generated_code
     assert (
-        "float4 badCoordRank = /* unsupported Slang sampled texture: "
-        "texelFetchOffset requires a 2-component coordinate for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetchOffset requires an offset-capable "
+        "non-shadow non-multisampled sampled texture resource" in refused.reasons
     )
+    assert "float4 badCoordRank = float4(0.0);" in generated_code
     assert (
-        "float4 badOffsetRank = /* unsupported Slang sampled texture: "
-        "texelFetchOffset requires a 2-component offset for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetchOffset requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float4 badOffsetRank = float4(0.0);" in generated_code
     assert (
-        "float4 badOffsetType = /* unsupported Slang sampled texture: "
-        "texelFetchOffset offset must be scalar or vector int, got uint2 */ "
-        "float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetchOffset requires a 2-component offset for sampler2D"
+        in refused.reasons
     )
+    assert "float4 badOffsetType = float4(0.0);" in generated_code
     assert (
-        "float4 badFetchIndex = /* unsupported Slang sampled texture: "
-        "texelFetchOffset fetch index argument must be scalar int or uint, "
-        "got float */ float4(0.0);" in generated_code
+        "Slang sampled texture: texelFetchOffset offset must be scalar or vector int, got uint2"
+        in refused.reasons
+    )
+    assert "float4 badFetchIndex = float4(0.0);" in generated_code
+    assert (
+        "Slang sampled texture: texelFetchOffset fetch index argument must be scalar int or uint, got float"
+        in refused.reasons
     )
     assert "texelFetchOffset(" not in generated_code
     assert ".Load(" not in generated_code
@@ -14563,44 +14710,49 @@ def test_texture_gather_builtins_validate_target_result_types():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "float4 validGather = colorMap.Gather(uv);" in generated_code
+    assert "float scalarGather = 0;" in generated_code
     assert (
-        "float scalarGather = /* unsupported Slang texture gather: "
-        "textureGather returns float4 but target expects float */ 0;" in generated_code
+        "Slang texture gather: textureGather returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "int2 vectorOffsetGather = int2(0);" in generated_code
     assert (
-        "int2 vectorOffsetGather = /* unsupported Slang texture gather: "
-        "textureGatherOffset returns float4 but target expects int2 */ int2(0);"
-        in generated_code
+        "Slang texture gather: textureGatherOffset returns float4 but target expects int2"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang texture gather: textureGatherOffsets "
-        "returns float4 but target expects float */ 0);" in generated_code
+        "Slang texture gather: textureGatherOffsets returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang texture gather: textureGather returns "
-        "float4 but target expects float */ 0;" in generated_code
+        "Slang texture gather: textureGather returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float scalarTernary = (take ? 0 : 1.0);" in generated_code
     assert (
-        "float scalarTernary = (take ? /* unsupported Slang texture gather: "
-        "textureGather returns float4 but target expects float */ 0 : 1.0);"
-        in generated_code
+        "Slang texture gather: textureGather returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float scalarArray[2] = {0, 1.0};" in generated_code
     assert (
-        "float scalarArray[2] = {/* unsupported Slang texture gather: "
-        "textureGatherOffset returns float4 but target expects float */ 0, 1.0};"
-        in generated_code
+        "Slang texture gather: textureGatherOffset returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "float missingOffset = 0;" in generated_code
     assert (
-        "float missingOffset = /* unsupported Slang texture gather: "
-        "textureGatherOffset requires offset and optional component arguments */ 0;"
-        in generated_code
+        "Slang texture gather: textureGatherOffset requires offset and optional component arguments"
+        in refused.reasons
     )
+    assert "float badComponent = 0;" in generated_code
     assert (
-        "float badComponent = /* unsupported Slang texture gather: "
-        "textureGather component literal must be 0, 1, 2, or 3 */ 0;" in generated_code
+        "Slang texture gather: textureGather component literal must be 0, 1, 2, or 3"
+        in refused.reasons
     )
     assert "float scalarGather = colorMap.Gather(uv);" not in generated_code
     assert "int2 vectorOffsetGather = colorMap.GatherGreen" not in generated_code
@@ -14706,107 +14858,108 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "float4 badComponent = float4(0.0);" in generated_code
     assert (
-        "float4 badComponent = /* unsupported Slang texture gather: "
-        "textureGather component literal must be 0, 1, 2, or 3 */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGather component literal must be 0, 1, 2, or 3"
+        in refused.reasons
     )
+    assert "float4 floatComponentGather = float4(0.0);" in generated_code
     assert (
-        "float4 floatComponentGather = /* unsupported Slang texture gather: "
-        "textureGather component argument must be scalar int or uint, got float */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGather component argument must be scalar int or uint, got float"
+        in refused.reasons
     )
+    assert "float4 boolComponentGather = float4(0.0);" in generated_code
     assert (
-        "float4 boolComponentGather = /* unsupported Slang texture gather: "
-        "textureGatherOffset component argument must be scalar int or uint, "
-        "got bool */ float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffset component argument must be scalar int or uint, got bool"
+        in refused.reasons
     )
+    assert "float4 vectorComponentGather = float4(0.0);" in generated_code
     assert (
-        "float4 vectorComponentGather = /* unsupported Slang texture gather: "
-        "textureGatherOffsets component argument must be scalar int or uint, "
-        "got int2 */ float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffsets component argument must be scalar int or uint, got int2"
+        in refused.reasons
     )
+    assert "float4 missingOffset = float4(0.0);" in generated_code
     assert (
-        "float4 missingOffset = /* unsupported Slang texture gather: "
-        "textureGatherOffset requires offset and optional component arguments */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffset requires offset and optional component arguments"
+        in refused.reasons
     )
+    assert "float4 badOffsets = float4(0.0);" in generated_code
     assert (
-        "float4 badOffsets = /* unsupported Slang texture gather: "
-        "textureGatherOffsets requires a typed offsets array or four offset arguments */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffsets requires a typed offsets array or four offset arguments"
+        in refused.reasons
     )
+    assert "float4 samplerGather = float4(0.0);" in generated_code
     assert (
-        "float4 samplerGather = /* unsupported Slang texture gather: "
-        "textureGather requires a non-shadow non-multisampled sampled texture "
-        "resource */ float4(0.0);" in generated_code
+        "Slang texture gather: textureGather requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 imageGather = float4(0.0);" in generated_code
     assert (
-        "float4 imageGather = /* unsupported Slang texture gather: "
-        "textureGather requires a non-shadow non-multisampled sampled texture "
-        "resource */ float4(0.0);" in generated_code
+        "Slang texture gather: textureGather requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 shadowGather = float4(0.0);" in generated_code
     assert (
-        "float4 shadowGather = /* unsupported Slang texture gather: "
-        "textureGather requires a non-shadow non-multisampled sampled texture "
-        "resource */ float4(0.0);" in generated_code
+        "Slang texture gather: textureGather requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 multisampleGather = float4(0.0);" in generated_code
     assert (
-        "float4 multisampleGather = /* unsupported Slang texture gather: "
-        "textureGather requires a non-shadow non-multisampled sampled texture "
-        "resource */ float4(0.0);" in generated_code
+        "Slang texture gather: textureGather requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float4 badCoordRank = float4(0.0);" in generated_code
     assert (
-        "float4 badCoordRank = /* unsupported Slang texture gather: "
-        "textureGather requires a 2-component coordinate for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGather requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float4 badOffsetRank = float4(0.0);" in generated_code
     assert (
-        "float4 badOffsetRank = /* unsupported Slang texture gather: "
-        "textureGatherOffset requires a 2-component offset for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffset requires a 2-component offset for sampler2D"
+        in refused.reasons
     )
+    assert "float4 floatOffsetGather = float4(0.0);" in generated_code
     assert (
-        "float4 floatOffsetGather = /* unsupported Slang texture gather: "
-        "textureGatherOffset offset must be scalar or vector int, got float2 */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffset offset must be scalar or vector int, got float2"
+        in refused.reasons
     )
+    assert "float4 boolOffsetsGather = float4(0.0);" in generated_code
     assert (
-        "float4 boolOffsetsGather = /* unsupported Slang texture gather: "
-        "textureGatherOffsets offset must be scalar or vector int, got bool2 */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffsets offset must be scalar or vector int, got bool2"
+        in refused.reasons
     )
+    assert "float4 floatOffsetArrayGather = float4(0.0);" in generated_code
     assert (
-        "float4 floatOffsetArrayGather = /* unsupported Slang texture gather: "
-        "textureGatherOffsets offset must be scalar or vector int, got float2 */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffsets offset must be scalar or vector int, got float2"
+        in refused.reasons
     )
+    assert "float4 boolOffsetArrayGather = float4(0.0);" in generated_code
     assert (
-        "float4 boolOffsetArrayGather = /* unsupported Slang texture gather: "
-        "textureGatherOffsets offset must be scalar or vector int, got bool2 */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffsets offset must be scalar or vector int, got bool2"
+        in refused.reasons
     )
+    assert "float4 uintOffsetArrayGather = float4(0.0);" in generated_code
     assert (
-        "float4 uintOffsetArrayGather = /* unsupported Slang texture gather: "
-        "textureGatherOffsets offset must be scalar or vector int, got uint2 */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffsets offset must be scalar or vector int, got uint2"
+        in refused.reasons
     )
+    assert "float4 indexedOffsetElementGather = float4(0.0);" in generated_code
     assert (
-        "float4 indexedOffsetElementGather = /* unsupported Slang texture gather: "
-        "textureGatherOffsets requires a typed offsets array or four offset "
-        "arguments */ float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffsets requires a typed offsets array or four offset arguments"
+        in refused.reasons
     )
+    assert "float4 dynamicIndexedOffsetElementGather = float4(0.0);" in generated_code
     assert (
-        "float4 dynamicIndexedOffsetElementGather = /* unsupported Slang texture "
-        "gather: textureGatherOffsets requires a typed offsets array or four "
-        "offset arguments */ float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffsets requires a typed offsets array or four offset arguments"
+        in refused.reasons
     )
+    assert "float4 badOffsetsRank = float4(0.0);" in generated_code
     assert (
-        "float4 badOffsetsRank = /* unsupported Slang texture gather: "
-        "textureGatherOffsets requires a 2-component offset for sampler2D */ "
-        "float4(0.0);" in generated_code
+        "Slang texture gather: textureGatherOffsets requires a 2-component offset for sampler2D"
+        in refused.reasons
     )
     assert "textureGather(" not in generated_code
     assert "textureGatherOffset(" not in generated_code
@@ -15032,38 +15185,44 @@ def test_shadow_compare_builtins_validate_target_result_types():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "int intCompareTarget = 0;" in generated_code
     assert (
-        "int intCompareTarget = /* unsupported Slang shadow compare: "
-        "textureCompare returns float but target expects int */ 0;" in generated_code
+        "Slang shadow compare: textureCompare returns float but target expects int"
+        in refused.reasons
     )
+    assert "float2 vectorCompareTarget = float2(0.0);" in generated_code
     assert (
-        "float2 vectorCompareTarget = /* unsupported Slang shadow compare: "
-        "textureCompareOffset returns float but target expects float2 */ "
-        "float2(0.0);" in generated_code
+        "Slang shadow compare: textureCompareOffset returns float but target expects float2"
+        in refused.reasons
     )
+    assert "float scalarGatherTarget = 0;" in generated_code
     assert (
-        "float scalarGatherTarget = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompare returns float4 but target expects float */ 0;"
-        in generated_code
+        "Slang shadow gather compare: textureGatherCompare returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "int2 intVectorGatherTarget = int2(0);" in generated_code
     assert (
-        "int2 intVectorGatherTarget = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompareOffset returns float4 but target expects int2 */ "
-        "int2(0);" in generated_code
+        "Slang shadow gather compare: textureGatherCompareOffset returns float4 but target expects int2"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang shadow gather compare: "
-        "textureGatherCompare returns float4 but target expects float */ 0);"
-        in generated_code
+        "Slang shadow gather compare: textureGatherCompare returns float4 but target expects float"
+        in refused.reasons
     )
+    assert "acceptVector(float4(0.0));" in generated_code
     assert (
-        "acceptVector(/* unsupported Slang shadow compare: textureCompare returns "
-        "float but target expects float4 */ float4(0.0));" in generated_code
+        "Slang shadow compare: textureCompare returns float but target expects float4"
+        in refused.reasons
     )
-    assert generated_code.count("unsupported Slang shadow compare") == 3
-    assert generated_code.count("unsupported Slang shadow gather compare") == 3
+    assert sum(site.startswith("Slang shadow compare") for site in refused.sites) == 3
+    assert (
+        sum(site.startswith("Slang shadow gather compare") for site in refused.sites)
+        == 3
+    )
     assert "textureCompare(" not in generated_code
     assert "textureCompareOffset(" not in generated_code
     assert "textureGatherCompare(" not in generated_code
@@ -15167,25 +15326,19 @@ def test_shadow_compare_expected_types_flow_through_nested_contexts():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
-    shadow_compare_diag = "/* unsupported Slang shadow compare: "
-    shadow_gather_diag = "/* unsupported Slang shadow gather compare: "
-    compare_int = (
-        f"{shadow_compare_diag}textureCompare returns float but target expects int */ 0"
+    # Each mistyped call is refused; the rendered program holds its zero value in the call's place.
+    assert refused.reasons == (
+        "Slang shadow compare: textureCompare returns float but target expects int",
+        "Slang shadow gather compare: textureGatherCompare returns float4 but target "
+        "expects float",
+        "Slang shadow compare: textureCompareOffset returns float but target expects int",
+        "Slang shadow gather compare: textureGatherCompareOffset returns float4 but "
+        "target expects float",
     )
-    compare_offset_int = (
-        f"{shadow_compare_diag}textureCompareOffset returns float but target expects "
-        "int */ 0"
-    )
-    gather_float = (
-        f"{shadow_gather_diag}textureGatherCompare returns float4 but target "
-        "expects float */ 0"
-    )
-    gather_offset_float = (
-        f"{shadow_gather_diag}textureGatherCompareOffset returns float4 but target "
-        "expects float */ 0"
-    )
+    compare_int = compare_offset_int = gather_float = gather_offset_float = "0"
 
     assert "return (take ? shadowMap.SampleCmp(uv, depth) : 1.0);" in generated_code
     assert f"return (take ? {compare_int} : {compare_int});" in generated_code
@@ -15231,8 +15384,11 @@ def test_shadow_compare_expected_types_flow_through_nested_contexts():
         f"acceptBadGatherArray({{{gather_float}, {gather_offset_float}}});"
         in generated_code
     )
-    assert generated_code.count(shadow_compare_diag) == 7
-    assert generated_code.count(shadow_gather_diag) == 7
+    assert sum(site.startswith("Slang shadow compare:") for site in refused.sites) == 7
+    assert (
+        sum(site.startswith("Slang shadow gather compare:") for site in refused.sites)
+        == 7
+    )
     assert "textureCompare(" not in generated_code
     assert "textureCompareOffset(" not in generated_code
     assert "textureGatherCompare(" not in generated_code
@@ -15373,132 +15529,138 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "float badResource = 0.0;" in generated_code
     assert (
-        "float badResource = /* unsupported Slang shadow compare: "
-        "textureCompare requires a shadow sampler resource */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompare requires a shadow sampler resource"
+        in refused.reasons
     )
+    assert "float samplerCompare = 0.0;" in generated_code
     assert (
-        "float samplerCompare = /* unsupported Slang shadow compare: "
-        "textureCompare requires a shadow sampler resource */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompare requires a shadow sampler resource"
+        in refused.reasons
     )
+    assert "float imageCompare = 0.0;" in generated_code
     assert (
-        "float imageCompare = /* unsupported Slang shadow compare: "
-        "textureCompare requires a shadow sampler resource */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompare requires a shadow sampler resource"
+        in refused.reasons
     )
+    assert "float multisampleCompare = 0.0;" in generated_code
     assert (
-        "float multisampleCompare = /* unsupported Slang shadow compare: "
-        "textureCompare requires a shadow sampler resource */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompare requires a shadow sampler resource"
+        in refused.reasons
     )
+    assert "float missingDepth = 0.0;" in generated_code
     assert (
-        "float missingDepth = /* unsupported Slang shadow compare: "
-        "textureCompare requires texture, coordinate, and compare arguments */ 0.0;"
-        in generated_code
+        "Slang shadow compare: textureCompare requires texture, coordinate, and compare arguments"
+        in refused.reasons
     )
+    assert "float missingLod = 0.0;" in generated_code
     assert (
-        "float missingLod = /* unsupported Slang shadow compare: "
-        "textureCompareLod requires one lod argument */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompareLod requires one lod argument"
+        in refused.reasons
     )
+    assert "float missingGrad = 0.0;" in generated_code
     assert (
-        "float missingGrad = /* unsupported Slang shadow compare: "
-        "textureCompareGrad requires gradient x and gradient y arguments */ 0.0;"
-        in generated_code
+        "Slang shadow compare: textureCompareGrad requires gradient x and gradient y arguments"
+        in refused.reasons
     )
+    assert "float4 badGatherResource = float4(0.0);" in generated_code
     assert (
-        "float4 badGatherResource = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompare requires a shadow sampler resource */ float4(0.0);"
-        in generated_code
+        "Slang shadow gather compare: textureGatherCompare requires a shadow sampler resource"
+        in refused.reasons
     )
+    assert "float4 missingGatherOffset = float4(0.0);" in generated_code
     assert (
-        "float4 missingGatherOffset = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompareOffset requires one offset argument */ float4(0.0);"
-        in generated_code
+        "Slang shadow gather compare: textureGatherCompareOffset requires one offset argument"
+        in refused.reasons
     )
+    assert "float badCoordRank = 0.0;" in generated_code
     assert (
-        "float badCoordRank = /* unsupported Slang shadow compare: "
-        "textureCompare requires a 2-component coordinate for sampler2DShadow */ 0.0;"
-        in generated_code
+        "Slang shadow compare: textureCompare requires a 2-component coordinate for sampler2DShadow"
+        in refused.reasons
     )
+    assert "float badCompareRank = 0.0;" in generated_code
     assert (
-        "float badCompareRank = /* unsupported Slang shadow compare: "
-        "textureCompare compare reference must be scalar float or double, got float2 */ "
-        "0.0;" in generated_code
+        "Slang shadow compare: textureCompare compare reference must be scalar float or double, got float2"
+        in refused.reasons
     )
+    assert "float intCompare = 0.0;" in generated_code
     assert (
-        "float intCompare = /* unsupported Slang shadow compare: "
-        "textureCompare compare reference must be scalar float or double, got int */ "
-        "0.0;" in generated_code
+        "Slang shadow compare: textureCompare compare reference must be scalar float or double, got int"
+        in refused.reasons
     )
+    assert "float boolLodCompare = 0.0;" in generated_code
     assert (
-        "float boolLodCompare = /* unsupported Slang shadow compare: "
-        "textureCompareLod lod argument must be scalar int, uint, float, or double, "
-        "got bool */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompareLod lod argument must be scalar int, uint, float, or double, got bool"
+        in refused.reasons
     )
+    assert "float vectorLodCompare = 0.0;" in generated_code
     assert (
-        "float vectorLodCompare = /* unsupported Slang shadow compare: "
-        "textureCompareLod lod argument must be scalar int, uint, float, or double, "
-        "got float2 */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompareLod lod argument must be scalar int, uint, float, or double, got float2"
+        in refused.reasons
     )
+    assert "float boolOffsetCompare = 0.0;" in generated_code
     assert (
-        "float boolOffsetCompare = /* unsupported Slang shadow compare: "
-        "textureCompareOffset compare reference must be scalar float or double, "
-        "got bool */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompareOffset compare reference must be scalar float or double, got bool"
+        in refused.reasons
     )
+    assert "float badOffsetRank = 0.0;" in generated_code
     assert (
-        "float badOffsetRank = /* unsupported Slang shadow compare: "
-        "textureCompareOffset requires a 2-component offset for sampler2DShadow */ "
-        "0.0;" in generated_code
+        "Slang shadow compare: textureCompareOffset requires a 2-component offset for sampler2DShadow"
+        in refused.reasons
     )
+    assert "float floatOffsetCompare = 0.0;" in generated_code
     assert (
-        "float floatOffsetCompare = /* unsupported Slang shadow compare: "
-        "textureCompareOffset offset must be scalar or vector int, got float2 */ "
-        "0.0;" in generated_code
+        "Slang shadow compare: textureCompareOffset offset must be scalar or vector int, got float2"
+        in refused.reasons
     )
+    assert "float badGradRank = 0.0;" in generated_code
     assert (
-        "float badGradRank = /* unsupported Slang shadow compare: "
-        "textureCompareGrad requires a 2-component gradient for sampler2DShadow */ "
-        "0.0;" in generated_code
+        "Slang shadow compare: textureCompareGrad requires a 2-component gradient for sampler2DShadow"
+        in refused.reasons
     )
+    assert "float intGradCompare = 0.0;" in generated_code
     assert (
-        "float intGradCompare = /* unsupported Slang shadow compare: "
-        "textureCompareGrad gradient must be scalar or vector float or double, "
-        "got int2 */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompareGrad gradient must be scalar or vector float or double, got int2"
+        in refused.reasons
     )
+    assert "float boolGradCompare = 0.0;" in generated_code
     assert (
-        "float boolGradCompare = /* unsupported Slang shadow compare: "
-        "textureCompareGrad gradient must be scalar or vector float or double, "
-        "got bool2 */ 0.0;" in generated_code
+        "Slang shadow compare: textureCompareGrad gradient must be scalar or vector float or double, got bool2"
+        in refused.reasons
     )
+    assert "float4 badGatherCoordRank = float4(0.0);" in generated_code
     assert (
-        "float4 badGatherCoordRank = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompare requires a 2-component coordinate for sampler2DShadow */ "
-        "float4(0.0);" in generated_code
+        "Slang shadow gather compare: textureGatherCompare requires a 2-component coordinate for sampler2DShadow"
+        in refused.reasons
     )
+    assert "float4 badGatherCompareRank = float4(0.0);" in generated_code
     assert (
-        "float4 badGatherCompareRank = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompare compare reference must be scalar float or double, "
-        "got float2 */ float4(0.0);" in generated_code
+        "Slang shadow gather compare: textureGatherCompare compare reference must be scalar float or double, got float2"
+        in refused.reasons
     )
+    assert "float4 intGatherCompare = float4(0.0);" in generated_code
     assert (
-        "float4 intGatherCompare = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompare compare reference must be scalar float or double, "
-        "got int */ float4(0.0);" in generated_code
+        "Slang shadow gather compare: textureGatherCompare compare reference must be scalar float or double, got int"
+        in refused.reasons
     )
+    assert "float4 boolGatherOffsetCompare = float4(0.0);" in generated_code
     assert (
-        "float4 boolGatherOffsetCompare = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompareOffset compare reference must be scalar float or double, "
-        "got bool */ float4(0.0);" in generated_code
+        "Slang shadow gather compare: textureGatherCompareOffset compare reference must be scalar float or double, got bool"
+        in refused.reasons
     )
+    assert "float4 boolOffsetGatherCompare = float4(0.0);" in generated_code
     assert (
-        "float4 boolOffsetGatherCompare = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompareOffset offset must be scalar or vector int, got bool2 */ "
-        "float4(0.0);" in generated_code
+        "Slang shadow gather compare: textureGatherCompareOffset offset must be scalar or vector int, got bool2"
+        in refused.reasons
     )
+    assert "float4 intVectorGatherCompare = float4(0.0);" in generated_code
     assert (
-        "float4 intVectorGatherCompare = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompare compare reference must be scalar float or double, "
-        "got int2 */ float4(0.0);" in generated_code
+        "Slang shadow gather compare: textureGatherCompare compare reference must be scalar float or double, got int2"
+        in refused.reasons
     )
     assert "textureCompare(" not in generated_code
     assert "textureCompareOffset(" not in generated_code
@@ -15619,87 +15781,90 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "float2 missingTexture = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 missingTexture = /* unsupported Slang resource query: "
-        "textureQueryLod requires texture and coordinate arguments */ "
-        "float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod requires texture and coordinate arguments"
+        in refused.reasons
     )
+    assert "float2 missingCoord = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 missingCoord = /* unsupported Slang resource query: "
-        "textureQueryLod requires texture and coordinate arguments */ "
-        "float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod requires texture and coordinate arguments"
+        in refused.reasons
     )
+    assert "float2 explicitMissingCoord = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 explicitMissingCoord = /* unsupported Slang resource query: "
-        "textureQueryLod requires texture and coordinate arguments */ "
-        "float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod requires texture and coordinate arguments"
+        in refused.reasons
     )
+    assert "float2 extraArg = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 extraArg = /* unsupported Slang resource query: "
-        "textureQueryLod accepts only texture, optional sampler, and coordinate "
-        "arguments */ float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod accepts only texture, optional sampler, and coordinate arguments"
+        in refused.reasons
     )
+    assert "float2 explicitExtraArg = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 explicitExtraArg = /* unsupported Slang resource query: "
-        "textureQueryLod accepts only texture, optional sampler, and coordinate "
-        "arguments */ float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod accepts only texture, optional sampler, and coordinate arguments"
+        in refused.reasons
     )
+    assert "float2 badImplicitCoord = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 badImplicitCoord = /* unsupported Slang resource query: "
-        "textureQueryLod requires a 2-component coordinate for sampler2D */ "
-        "float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float2 badExplicitCoord = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 badExplicitCoord = /* unsupported Slang resource query: "
-        "textureQueryLod requires a 2-component coordinate for sampler2D */ "
-        "float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod requires a 2-component coordinate for sampler2D"
+        in refused.reasons
     )
+    assert "float2 samplerOnly = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 samplerOnly = /* unsupported Slang resource query: "
-        "textureQueryLod requires a non-shadow non-multisampled sampled texture "
-        "resource */ float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float2 shadowLod = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 shadowLod = /* unsupported Slang resource query: "
-        "textureQueryLod requires a non-shadow non-multisampled sampled texture "
-        "resource */ float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float2 msLod = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 msLod = /* unsupported Slang resource query: "
-        "textureQueryLod requires a non-shadow non-multisampled sampled texture "
-        "resource */ float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float2 imageLod = float2(0.0, 0.0);" in generated_code
     assert (
-        "float2 imageLod = /* unsupported Slang resource query: "
-        "textureQueryLod requires a non-shadow non-multisampled sampled texture "
-        "resource */ float2(0.0, 0.0);" in generated_code
+        "Slang resource query: textureQueryLod requires a non-shadow non-multisampled sampled texture resource"
+        in refused.reasons
     )
+    assert "float scalarTarget = 0;" in generated_code
     assert (
-        "float scalarTarget = /* unsupported Slang resource query: "
-        "textureQueryLod returns float2 but target expects float */ 0;"
-        in generated_code
+        "Slang resource query: textureQueryLod returns float2 but target expects float"
+        in refused.reasons
     )
+    assert "float3 wideTarget = float3(0.0);" in generated_code
     assert (
-        "float3 wideTarget = /* unsupported Slang resource query: "
-        "textureQueryLod returns float2 but target expects float3 */ float3(0.0);"
-        in generated_code
+        "Slang resource query: textureQueryLod returns float2 but target expects float3"
+        in refused.reasons
     )
+    assert "int2 integerVectorTarget = int2(0);" in generated_code
     assert (
-        "int2 integerVectorTarget = /* unsupported Slang resource query: "
-        "textureQueryLod returns float2 but target expects int2 */ int2(0);"
-        in generated_code
+        "Slang resource query: textureQueryLod returns float2 but target expects int2"
+        in refused.reasons
     )
+    assert "acceptScalarLod(0);" in generated_code
     assert (
-        "acceptScalarLod(/* unsupported Slang resource query: textureQueryLod "
-        "returns float2 but target expects float */ 0);" in generated_code
+        "Slang resource query: textureQueryLod returns float2 but target expects float"
+        in refused.reasons
     )
+    assert "acceptWideLod(float3(0.0));" in generated_code
     assert (
-        "acceptWideLod(/* unsupported Slang resource query: textureQueryLod "
-        "returns float2 but target expects float3 */ float3(0.0));" in generated_code
+        "Slang resource query: textureQueryLod returns float2 but target expects float3"
+        in refused.reasons
     )
-    assert generated_code.count("unsupported Slang resource query") == 16
+    assert sum(site.startswith("Slang resource query") for site in refused.sites) == 16
     assert "textureQueryLod(" not in generated_code
     assert "CalculateLevelOfDetail(querySampler" not in generated_code
     assert "CalculateLevelOfDetailUnclamped(querySampler" not in generated_code
@@ -18539,235 +18704,293 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "int missingTextureSize = 0;" in generated_code
     assert (
-        "int missingTextureSize = /* unsupported Slang resource query: "
-        "textureSize requires a resource argument */ 0;" in generated_code
+        "Slang resource query: textureSize requires a resource argument"
+        in refused.reasons
+    )
+    assert "int missingImageSize = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSize requires a resource argument"
+        in refused.reasons
+    )
+    assert "int textureSizeFromSampler = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize requires a sampled texture resource"
+        in refused.reasons
+    )
+    assert "int textureSizeFromImage = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize requires a sampled texture resource"
+        in refused.reasons
+    )
+    assert "int imageSizeFromTexture = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSize requires an image resource" in refused.reasons
+    )
+    assert "int imageSizeFromSampler = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSize requires an image resource" in refused.reasons
+    )
+    assert "int extraTextureSize = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize accepts resource and optional mip argument"
+        in refused.reasons
+    )
+    assert "int badTextureMip = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize requires a scalar mip argument"
+        in refused.reasons
+    )
+    assert "int floatTextureMip = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize mip argument must be scalar int or uint, got float"
+        in refused.reasons
+    )
+    assert "int boolTextureMip = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize mip argument must be scalar int or uint, got bool"
+        in refused.reasons
+    )
+    assert "int badMultisampleTextureMip = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize requires a scalar mip argument"
+        in refused.reasons
+    )
+    assert "int floatMultisampleTextureMip = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize mip argument must be scalar int or uint, got float"
+        in refused.reasons
+    )
+    assert "int boolMultisampleTextureMip = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize mip argument must be scalar int or uint, got bool"
+        in refused.reasons
+    )
+    assert "int extraImageSize = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSize accepts only a resource argument"
+        in refused.reasons
+    )
+    assert "int msLevels = 0;" in generated_code
+    assert (
+        "Slang resource query: textureQueryLevels requires a mipmapped sampled texture resource"
+        in refused.reasons
+    )
+    assert "int msArrayLevels = 0;" in generated_code
+    assert (
+        "Slang resource query: textureQueryLevels requires a mipmapped sampled texture resource"
+        in refused.reasons
+    )
+    assert "int plainTextureSamples = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSamples requires a multisampled texture resource"
+        in refused.reasons
+    )
+    assert "int plainImageSamples = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSamples requires a multisampled image resource"
+        in refused.reasons
+    )
+    assert "int imageSamplesFromSampler = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSamples requires a multisampled image resource"
+        in refused.reasons
+    )
+    assert "int textureSamplesFromImage = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSamples requires a multisampled texture resource"
+        in refused.reasons
+    )
+    assert "int missingTextureSamples = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSamples requires a resource argument"
+        in refused.reasons
+    )
+    assert "int missingImageSamples = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSamples requires a resource argument"
+        in refused.reasons
+    )
+    assert "int missingLevels = 0;" in generated_code
+    assert (
+        "Slang resource query: textureQueryLevels requires a resource argument"
+        in refused.reasons
+    )
+    assert "int levelsFromSampler = 0;" in generated_code
+    assert (
+        "Slang resource query: textureQueryLevels requires a mipmapped sampled texture resource"
+        in refused.reasons
+    )
+    assert "int levelsFromImage = 0;" in generated_code
+    assert (
+        "Slang resource query: textureQueryLevels requires a mipmapped sampled texture resource"
+        in refused.reasons
+    )
+    assert "int extraTextureSamples = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSamples accepts only a resource argument"
+        in refused.reasons
+    )
+    assert "int extraImageSamples = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSamples accepts only a resource argument"
+        in refused.reasons
+    )
+    assert "int extraLevels = 0;" in generated_code
+    assert (
+        "Slang resource query: textureQueryLevels accepts only a resource argument"
+        in refused.reasons
+    )
+    assert "float levelsFloatTarget = 0;" in generated_code
+    assert (
+        "Slang resource query: textureQueryLevels returns int but target expects float"
+        in refused.reasons
+    )
+    assert "int2 levelsVectorTarget = int2(0);" in generated_code
+    assert (
+        "Slang resource query: textureQueryLevels returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "float textureSamplesFloatTarget = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSamples returns int but target expects float"
+        in refused.reasons
+    )
+    assert "int2 textureSamplesVectorTarget = int2(0);" in generated_code
+    assert (
+        "Slang resource query: textureSamples returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "float imageSamplesFloatTarget = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSamples returns int but target expects float"
+        in refused.reasons
+    )
+    assert "int2 imageSamplesVectorTarget = int2(0);" in generated_code
+    assert (
+        "Slang resource query: imageSamples returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "int3 scalarTextureTarget = int3(0);" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int3"
+        in refused.reasons
+    )
+    assert "int vectorTextureTarget = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "int2 scalarImageTarget = int2(0);" in generated_code
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "int vectorImageTarget = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "assignedTarget = int2(0);" in generated_code
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "fields.vectorTextureSize = int2(0);" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "fields.scalarTextureSize = 0;" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "fields.vectorImageSize = int2(0);" in generated_code
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "fields.scalarImageSize = 0;" in generated_code
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "int missingImageSize = /* unsupported Slang resource query: "
-        "imageSize requires a resource argument */ 0;" in generated_code
-    )
-    assert (
-        "int textureSizeFromSampler = /* unsupported Slang resource query: "
-        "textureSize requires a sampled texture resource */ 0;" in generated_code
-    )
-    assert (
-        "int textureSizeFromImage = /* unsupported Slang resource query: "
-        "textureSize requires a sampled texture resource */ 0;" in generated_code
-    )
-    assert (
-        "int imageSizeFromTexture = /* unsupported Slang resource query: "
-        "imageSize requires an image resource */ 0;" in generated_code
-    )
-    assert (
-        "int imageSizeFromSampler = /* unsupported Slang resource query: "
-        "imageSize requires an image resource */ 0;" in generated_code
-    )
-    assert (
-        "int extraTextureSize = /* unsupported Slang resource query: "
-        "textureSize accepts resource and optional mip argument */ 0;" in generated_code
-    )
-    assert (
-        "int badTextureMip = /* unsupported Slang resource query: "
-        "textureSize requires a scalar mip argument */ 0;" in generated_code
-    )
-    assert (
-        "int floatTextureMip = /* unsupported Slang resource query: "
-        "textureSize mip argument must be scalar int or uint, got float */ 0;"
+        "QueryShapeResult constructed = QueryShapeResult(0, int2(0), 0, int2(0));"
         in generated_code
     )
     assert (
-        "int boolTextureMip = /* unsupported Slang resource query: "
-        "textureSize mip argument must be scalar int or uint, got bool */ 0;"
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "QueryEnvelope nestedConstructed = QueryEnvelope(QueryShapeResult(0, int2(0), 0, int2(0)));"
         in generated_code
     )
     assert (
-        "int badMultisampleTextureMip = /* unsupported Slang resource query: "
-        "textureSize requires a scalar mip argument */ 0;" in generated_code
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "int floatMultisampleTextureMip = /* unsupported Slang resource query: "
-        "textureSize mip argument must be scalar int or uint, got float */ 0;"
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "acceptScalarTexture(0);" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "acceptVectorTexture(int2(0));" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "acceptEnvelope(QueryEnvelope(QueryShapeResult(0, int2(0), 0, int2(0))));"
         in generated_code
     )
     assert (
-        "int boolMultisampleTextureMip = /* unsupported Slang resource query: "
-        "textureSize mip argument must be scalar int or uint, got bool */ 0;"
-        in generated_code
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "int extraImageSize = /* unsupported Slang resource query: "
-        "imageSize accepts only a resource argument */ 0;" in generated_code
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
     )
     assert (
-        "int msLevels = /* unsupported Slang resource query: "
-        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
-        in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "int msArrayLevels = /* unsupported Slang resource query: "
-        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
-        in generated_code
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
     )
-    assert (
-        "int plainTextureSamples = /* unsupported Slang resource query: "
-        "textureSamples requires a multisampled texture resource */ 0;"
-        in generated_code
-    )
-    assert (
-        "int plainImageSamples = /* unsupported Slang resource query: "
-        "imageSamples requires a multisampled image resource */ 0;" in generated_code
-    )
-    assert (
-        "int imageSamplesFromSampler = /* unsupported Slang resource query: "
-        "imageSamples requires a multisampled image resource */ 0;" in generated_code
-    )
-    assert (
-        "int textureSamplesFromImage = /* unsupported Slang resource query: "
-        "textureSamples requires a multisampled texture resource */ 0;"
-        in generated_code
-    )
-    assert (
-        "int missingTextureSamples = /* unsupported Slang resource query: "
-        "textureSamples requires a resource argument */ 0;" in generated_code
-    )
-    assert (
-        "int missingImageSamples = /* unsupported Slang resource query: "
-        "imageSamples requires a resource argument */ 0;" in generated_code
-    )
-    assert (
-        "int missingLevels = /* unsupported Slang resource query: "
-        "textureQueryLevels requires a resource argument */ 0;" in generated_code
-    )
-    assert (
-        "int levelsFromSampler = /* unsupported Slang resource query: "
-        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
-        in generated_code
-    )
-    assert (
-        "int levelsFromImage = /* unsupported Slang resource query: "
-        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
-        in generated_code
-    )
-    assert (
-        "int extraTextureSamples = /* unsupported Slang resource query: "
-        "textureSamples accepts only a resource argument */ 0;" in generated_code
-    )
-    assert (
-        "int extraImageSamples = /* unsupported Slang resource query: "
-        "imageSamples accepts only a resource argument */ 0;" in generated_code
-    )
-    assert (
-        "int extraLevels = /* unsupported Slang resource query: "
-        "textureQueryLevels accepts only a resource argument */ 0;" in generated_code
-    )
-    assert (
-        "float levelsFloatTarget = /* unsupported Slang resource query: "
-        "textureQueryLevels returns int but target expects float */ 0;"
-        in generated_code
-    )
-    assert (
-        "int2 levelsVectorTarget = /* unsupported Slang resource query: "
-        "textureQueryLevels returns int but target expects int2 */ int2(0);"
-        in generated_code
-    )
-    assert (
-        "float textureSamplesFloatTarget = /* unsupported Slang resource query: "
-        "textureSamples returns int but target expects float */ 0;" in generated_code
-    )
-    assert (
-        "int2 textureSamplesVectorTarget = /* unsupported Slang resource query: "
-        "textureSamples returns int but target expects int2 */ int2(0);"
-        in generated_code
-    )
-    assert (
-        "float imageSamplesFloatTarget = /* unsupported Slang resource query: "
-        "imageSamples returns int but target expects float */ 0;" in generated_code
-    )
-    assert (
-        "int2 imageSamplesVectorTarget = /* unsupported Slang resource query: "
-        "imageSamples returns int but target expects int2 */ int2(0);" in generated_code
-    )
-    assert (
-        "int3 scalarTextureTarget = /* unsupported Slang resource query: "
-        "textureSize returns int but target expects int3 */ int3(0);" in generated_code
-    )
-    assert (
-        "int vectorTextureTarget = /* unsupported Slang resource query: "
-        "textureSize returns int2 but target expects int */ 0;" in generated_code
-    )
-    assert (
-        "int2 scalarImageTarget = /* unsupported Slang resource query: "
-        "imageSize returns int but target expects int2 */ int2(0);" in generated_code
-    )
-    assert (
-        "int vectorImageTarget = /* unsupported Slang resource query: "
-        "imageSize returns int2 but target expects int */ 0;" in generated_code
-    )
-    assert (
-        "assignedTarget = /* unsupported Slang resource query: "
-        "imageSize returns int but target expects int2 */ int2(0);" in generated_code
-    )
-    assert (
-        "fields.vectorTextureSize = /* unsupported Slang resource query: "
-        "textureSize returns int but target expects int2 */ int2(0);" in generated_code
-    )
-    assert (
-        "fields.scalarTextureSize = /* unsupported Slang resource query: "
-        "textureSize returns int2 but target expects int */ 0;" in generated_code
-    )
-    assert (
-        "fields.vectorImageSize = /* unsupported Slang resource query: "
-        "imageSize returns int but target expects int2 */ int2(0);" in generated_code
-    )
-    assert (
-        "fields.scalarImageSize = /* unsupported Slang resource query: "
-        "imageSize returns int2 but target expects int */ 0;" in generated_code
-    )
-    assert (
-        "QueryShapeResult constructed = QueryShapeResult("
-        "/* unsupported Slang resource query: textureSize returns int2 but target "
-        "expects int */ 0, "
-        "/* unsupported Slang resource query: textureSize returns int but target "
-        "expects int2 */ int2(0), "
-        "/* unsupported Slang resource query: imageSize returns int2 but target "
-        "expects int */ 0, "
-        "/* unsupported Slang resource query: imageSize returns int but target "
-        "expects int2 */ int2(0));" in generated_code
-    )
-    assert (
-        "QueryEnvelope nestedConstructed = QueryEnvelope(QueryShapeResult("
-        "/* unsupported Slang resource query: textureSize returns int2 but target "
-        "expects int */ 0, "
-        "/* unsupported Slang resource query: textureSize returns int but target "
-        "expects int2 */ int2(0), "
-        "/* unsupported Slang resource query: imageSize returns int2 but target "
-        "expects int */ 0, "
-        "/* unsupported Slang resource query: imageSize returns int but target "
-        "expects int2 */ int2(0)));" in generated_code
-    )
-    assert (
-        "acceptScalarTexture(/* unsupported Slang resource query: textureSize "
-        "returns int2 but target expects int */ 0);" in generated_code
-    )
-    assert (
-        "acceptVectorTexture(/* unsupported Slang resource query: textureSize "
-        "returns int but target expects int2 */ int2(0));" in generated_code
-    )
-    assert (
-        "acceptEnvelope(QueryEnvelope(QueryShapeResult("
-        "/* unsupported Slang resource query: textureSize returns int2 but target "
-        "expects int */ 0, "
-        "/* unsupported Slang resource query: textureSize returns int but target "
-        "expects int2 */ int2(0), "
-        "/* unsupported Slang resource query: imageSize returns int2 but target "
-        "expects int */ 0, "
-        "/* unsupported Slang resource query: imageSize returns int but target "
-        "expects int2 */ int2(0))));" in generated_code
-    )
-    assert generated_code.count("unsupported Slang resource query") == 57
+    assert sum(site.startswith("Slang resource query") for site in refused.sites) == 57
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code
@@ -18852,79 +19075,134 @@ def test_resource_query_expected_types_flow_into_ternaries_and_array_literals():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
+    assert "return (take ? 0 : 0);" in generated_code
     assert (
-        "return (take ? /* unsupported Slang resource query: textureSize returns "
-        "int2 but target expects int */ 0 : /* unsupported Slang resource query: "
-        "imageSize returns int2 but target expects int */ 0);" in generated_code
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "return (take ? /* unsupported Slang resource query: textureSize returns "
-        "int but target expects int2 */ int2(0) : /* unsupported Slang resource "
-        "query: imageSize returns int but target expects int2 */ int2(0));"
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "return (take ? int2(0) : int2(0));" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "int scalarFromTernary = (take ? 0 : 0);" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "int2 vectorFromTernary = (take ? int2(0) : int2(0));" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "QueryShapeResult constructed = QueryShapeResult((take ? 0 : 0), (take ? int2(0) : int2(0)), (take ? 0 : 0), (take ? int2(0) : int2(0)));"
         in generated_code
     )
     assert (
-        "int scalarFromTernary = (take ? /* unsupported Slang resource query: "
-        "textureSize returns int2 but target expects int */ 0 : /* unsupported "
-        "Slang resource query: imageSize returns int2 but target expects int */ 0);"
-        in generated_code
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "int2 vectorFromTernary = (take ? /* unsupported Slang resource query: "
-        "textureSize returns int but target expects int2 */ int2(0) : "
-        "/* unsupported Slang resource query: imageSize returns int but target "
-        "expects int2 */ int2(0));" in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "QueryShapeResult constructed = QueryShapeResult((take ? "
-        "/* unsupported Slang resource query: textureSize returns int2 but target "
-        "expects int */ 0 : /* unsupported Slang resource query: imageSize returns "
-        "int2 but target expects int */ 0), (take ? /* unsupported Slang resource "
-        "query: textureSize returns int but target expects int2 */ int2(0) : "
-        "/* unsupported Slang resource query: imageSize returns int but target "
-        "expects int2 */ int2(0)), (take ? /* unsupported Slang resource query: "
-        "imageSize returns int2 but target expects int */ 0 : /* unsupported Slang "
-        "resource query: textureSize returns int2 but target expects int */ 0), "
-        "(take ? /* unsupported Slang resource query: imageSize returns int but "
-        "target expects int2 */ int2(0) : /* unsupported Slang resource query: "
-        "textureSize returns int but target expects int2 */ int2(0)));"
-        in generated_code
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
     )
     assert (
-        "int scalarArray[2] = {/* unsupported Slang resource query: textureSize "
-        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
-        "query: imageSize returns int2 but target expects int */ 0};" in generated_code
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
     )
     assert (
-        "int2 vectorArray[2] = {/* unsupported Slang resource query: textureSize "
-        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
-        "resource query: imageSize returns int but target expects int2 */ int2(0)};"
-        in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "acceptScalarTexture((take ? /* unsupported Slang resource query: "
-        "textureSize returns int2 but target expects int */ 0 : /* unsupported "
-        "Slang resource query: imageSize returns int2 but target expects int */ 0));"
-        in generated_code
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "acceptVectorTexture((take ? /* unsupported Slang resource query: "
-        "textureSize returns int but target expects int2 */ int2(0) : "
-        "/* unsupported Slang resource query: imageSize returns int but target "
-        "expects int2 */ int2(0)));" in generated_code
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
     )
     assert (
-        "acceptScalarArray({/* unsupported Slang resource query: textureSize "
-        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
-        "query: imageSize returns int2 but target expects int */ 0});" in generated_code
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "int scalarArray[2] = {0, 0};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "acceptVectorArray({/* unsupported Slang resource query: textureSize "
-        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
-        "resource query: imageSize returns int but target expects int2 */ int2(0)});"
-        in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "int2 vectorArray[2] = {int2(0), int2(0)};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "acceptScalarTexture((take ? 0 : 0));" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "acceptVectorTexture((take ? int2(0) : int2(0)));" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "acceptScalarArray({0, 0});" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "acceptVectorArray({int2(0), int2(0)});" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
     )
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
@@ -19017,58 +19295,82 @@ def test_scalar_resource_query_expected_types_flow_through_nested_contexts():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert (
         "return (take ? cgl_textureQueryLevels_sampler2D(colorMap) : "
         "cgl_textureSamples_sampler2DMS(msTex));" in generated_code
     )
+    assert "return (take ? 0 : 0);" in generated_code
     assert (
-        "return (take ? /* unsupported Slang resource query: textureQueryLevels "
-        "returns int but target expects float */ 0 : /* unsupported Slang resource "
-        "query: imageSamples returns int but target expects float */ 0);"
-        in generated_code
+        "Slang resource query: textureQueryLevels returns int but target expects float"
+        in refused.reasons
     )
     assert (
-        "return (take ? /* unsupported Slang resource query: textureSamples "
-        "returns int but target expects int2 */ int2(0) : /* unsupported Slang "
-        "resource query: imageSamples returns int but target expects int2 */ "
-        "int2(0));" in generated_code
+        "Slang resource query: imageSamples returns int but target expects float"
+        in refused.reasons
+    )
+    assert "return (take ? int2(0) : int2(0));" in generated_code
+    assert (
+        "Slang resource query: textureSamples returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSamples returns int but target expects int2"
+        in refused.reasons
     )
     assert (
         "int scalarFromTernary = (take ? cgl_textureQueryLevels_sampler2D(colorMap) "
         ": cgl_imageSamples_image2DMS(msImage));" in generated_code
     )
+    assert "float floatFromTernary = (take ? 0 : 0);" in generated_code
     assert (
-        "float floatFromTernary = (take ? /* unsupported Slang resource query: "
-        "textureQueryLevels returns int but target expects float */ 0 : "
-        "/* unsupported Slang resource query: textureSamples returns int but "
-        "target expects float */ 0);" in generated_code
+        "Slang resource query: textureQueryLevels returns int but target expects float"
+        in refused.reasons
     )
     assert (
-        "int2 vectorFromTernary = (take ? /* unsupported Slang resource query: "
-        "textureSamples returns int but target expects int2 */ int2(0) : "
-        "/* unsupported Slang resource query: imageSamples returns int but target "
-        "expects int2 */ int2(0));" in generated_code
+        "Slang resource query: textureSamples returns int but target expects float"
+        in refused.reasons
+    )
+    assert "int2 vectorFromTernary = (take ? int2(0) : int2(0));" in generated_code
+    assert (
+        "Slang resource query: textureSamples returns int but target expects int2"
+        in refused.reasons
     )
     assert (
-        "ScalarQueryResult constructed = ScalarQueryResult("
-        "/* unsupported Slang resource query: textureQueryLevels returns int but "
-        "target expects float */ 0, /* unsupported Slang resource query: "
-        "textureSamples returns int but target expects int2 */ int2(0), "
-        "cgl_imageSamples_image2DMS(msImage));" in generated_code
+        "Slang resource query: imageSamples returns int but target expects int2"
+        in refused.reasons
     )
     assert (
-        "float floatArray[2] = {/* unsupported Slang resource query: "
-        "textureQueryLevels returns int but target expects float */ 0, "
-        "/* unsupported Slang resource query: imageSamples returns int but target "
-        "expects float */ 0};" in generated_code
+        "ScalarQueryResult constructed = ScalarQueryResult(0, int2(0), cgl_imageSamples_image2DMS(msImage));"
+        in generated_code
     )
     assert (
-        "int2 vectorArray[2] = {/* unsupported Slang resource query: "
-        "textureSamples returns int but target expects int2 */ int2(0), "
-        "/* unsupported Slang resource query: imageSamples returns int but target "
-        "expects int2 */ int2(0)};" in generated_code
+        "Slang resource query: textureQueryLevels returns int but target expects float"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: textureSamples returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "float floatArray[2] = {0, 0};" in generated_code
+    assert (
+        "Slang resource query: textureQueryLevels returns int but target expects float"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSamples returns int but target expects float"
+        in refused.reasons
+    )
+    assert "int2 vectorArray[2] = {int2(0), int2(0)};" in generated_code
+    assert (
+        "Slang resource query: textureSamples returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSamples returns int but target expects int2"
+        in refused.reasons
     )
     assert (
         "int scalarArray[3] = {cgl_textureQueryLevels_sampler2D(colorMap), "
@@ -19079,24 +19381,30 @@ def test_scalar_resource_query_expected_types_flow_through_nested_contexts():
         "acceptScalar((take ? cgl_textureQueryLevels_sampler2D(colorMap) : "
         "cgl_textureSamples_sampler2DMS(msTex)));" in generated_code
     )
+    assert "acceptFloatArray({0, 0});" in generated_code
     assert (
-        "acceptFloatArray({/* unsupported Slang resource query: textureQueryLevels "
-        "returns int but target expects float */ 0, /* unsupported Slang resource "
-        "query: imageSamples returns int but target expects float */ 0});"
-        in generated_code
+        "Slang resource query: textureQueryLevels returns int but target expects float"
+        in refused.reasons
     )
     assert (
-        "acceptVectorArray({/* unsupported Slang resource query: textureSamples "
-        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
-        "resource query: imageSamples returns int but target expects int2 */ "
-        "int2(0)});" in generated_code
+        "Slang resource query: imageSamples returns int but target expects float"
+        in refused.reasons
+    )
+    assert "acceptVectorArray({int2(0), int2(0)});" in generated_code
+    assert (
+        "Slang resource query: textureSamples returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSamples returns int but target expects int2"
+        in refused.reasons
     )
     assert (
         "acceptScalarArray({cgl_textureQueryLevels_sampler2D(colorMap), "
         "cgl_textureSamples_sampler2DMS(msTex), "
         "cgl_imageSamples_image2DMS(msImage)});" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 18
+    assert sum(site.startswith("Slang resource query") for site in refused.sites) == 18
     assert "textureQueryLevels(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "imageSamples(" not in generated_code
@@ -19167,46 +19475,70 @@ def test_resource_query_expected_types_flow_through_nested_array_return_helpers(
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "int[2] makeScalarRow()" in generated_code
     assert "int2[2] makeVectorRow()" in generated_code
     assert "ivec2[2] makeVectorRow()" not in generated_code
+    assert "return {0, 0};" in generated_code
     assert (
-        "return {/* unsupported Slang resource query: textureSize returns int2 "
-        "but target expects int */ 0, /* unsupported Slang resource query: "
-        "imageSize returns int2 but target expects int */ 0};" in generated_code
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "return {/* unsupported Slang resource query: textureSize returns int "
-        "but target expects int2 */ int2(0), /* unsupported Slang resource query: "
-        "imageSize returns int but target expects int2 */ int2(0)};" in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "return {int2(0), int2(0)};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
     )
     assert (
-        "int scalarRows[2][2] = {makeScalarRow(), "
-        "{/* unsupported Slang resource query: textureSize returns int2 but target "
-        "expects int */ 0, /* unsupported Slang resource query: imageSize returns "
-        "int2 but target expects int */ 0}};" in generated_code
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "int scalarRows[2][2] = {makeScalarRow(), {0, 0}};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "int2 vectorRows[2][2] = {makeVectorRow(), "
-        "{/* unsupported Slang resource query: textureSize returns int but target "
-        "expects int2 */ int2(0), /* unsupported Slang resource query: imageSize "
-        "returns int but target expects int2 */ int2(0)}};" in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "acceptScalarRows({makeScalarRow(), {/* unsupported Slang resource query: "
-        "textureSize returns int2 but target expects int */ 0, /* unsupported "
-        "Slang resource query: imageSize returns int2 but target expects int */ 0}});"
+        "int2 vectorRows[2][2] = {makeVectorRow(), {int2(0), int2(0)}};"
         in generated_code
     )
     assert (
-        "acceptVectorRows({makeVectorRow(), {/* unsupported Slang resource query: "
-        "textureSize returns int but target expects int2 */ int2(0), /* unsupported "
-        "Slang resource query: imageSize returns int but target expects int2 */ "
-        "int2(0)}});" in generated_code
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
     )
-    assert generated_code.count("unsupported Slang resource query") == 12
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "acceptScalarRows({makeScalarRow(), {0, 0}});" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "acceptVectorRows({makeVectorRow(), {int2(0), int2(0)}});" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert sum(site.startswith("Slang resource query") for site in refused.sites) == 12
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
 
@@ -19275,7 +19607,8 @@ def test_resource_query_struct_array_rows_preserve_remaining_element_types():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     codegen = SlangCodeGen()
     zero = LiteralNode(0, PrimitiveType("int"))
@@ -19297,33 +19630,60 @@ def test_resource_query_struct_array_rows_preserve_remaining_element_types():
     assert "int2 vectorRows[2][2];" in generated_code
     assert "int2[2] passVectorRow(int2 row[2])" in generated_code
     assert (
-        "return QueryRows({passScalarRow({/* unsupported Slang resource query: "
-        "textureSize returns int2 but target expects int */ 0, /* unsupported "
-        "Slang resource query: imageSize returns int2 but target expects int */ "
-        "0}), {/* unsupported Slang resource query: textureSize returns int2 "
-        "but target expects int */ 0, /* unsupported Slang resource query: "
-        "imageSize returns int2 but target expects int */ 0}}, "
-        "{passVectorRow({/* unsupported Slang resource query: textureSize "
-        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
-        "resource query: imageSize returns int but target expects int2 */ "
-        "int2(0)}), {/* unsupported Slang resource query: textureSize returns "
-        "int but target expects int2 */ int2(0), /* unsupported Slang resource "
-        "query: imageSize returns int but target expects int2 */ int2(0)}});"
+        "return QueryRows({passScalarRow({0, 0}), {0, 0}}, {passVectorRow({int2(0), int2(0)}), {int2(0), int2(0)}});"
         in generated_code
     )
     assert (
-        "rows.scalarRows[0] = {/* unsupported Slang resource query: textureSize "
-        "returns int2 but target expects int */ 0, /* unsupported Slang "
-        "resource query: imageSize returns int2 but target expects int */ 0};"
-        in generated_code
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "rows.vectorRows[0] = {/* unsupported Slang resource query: textureSize "
-        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
-        "resource query: imageSize returns int but target expects int2 */ "
-        "int2(0)};" in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
     )
-    assert generated_code.count("unsupported Slang resource query") == 12
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert "rows.scalarRows[0] = {0, 0};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "rows.vectorRows[0] = {int2(0), int2(0)};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert sum(site.startswith("Slang resource query") for site in refused.sites) == 12
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
 
@@ -19380,37 +19740,49 @@ def test_resource_query_expected_types_flow_through_tail_expression_returns():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "int[2] chooseScalarRow(bool take, int mode)" in generated_code
     assert "int2[2] chooseVectorRow(bool take, int mode)" in generated_code
     assert "ivec2[2] chooseVectorRow" not in generated_code
+    assert "if (take)\n    {\n        return {0, 0};\n    }" in generated_code
     assert (
-        "if (take)\n"
-        "    {\n"
-        "        return {/* unsupported Slang resource query: textureSize returns "
-        "int2 but target expects int */ 0, /* unsupported Slang resource query: "
-        "imageSize returns int2 but target expects int */ 0};\n"
-        "    }" in generated_code
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "case 0: {\n"
-        "            return {/* unsupported Slang resource query: textureSize "
-        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
-        "query: imageSize returns int2 but target expects int */ 0};" in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "case 0: {\n            return {0, 0};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "default: {\n"
-        "            return {/* unsupported Slang resource query: textureSize "
-        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
-        "query: imageSize returns int2 but target expects int */ 0};" in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
+    )
+    assert "default: {\n            return {0, 0};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "return {/* unsupported Slang resource query: textureSize returns int "
-        "but target expects int2 */ int2(0), /* unsupported Slang resource query: "
-        "imageSize returns int but target expects int2 */ int2(0)};" in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
     )
-    assert generated_code.count("unsupported Slang resource query") == 12
+    assert "return {int2(0), int2(0)};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert sum(site.startswith("Slang resource query") for site in refused.sites) == 12
     assert "break;" not in generated_code
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
@@ -19507,7 +19879,8 @@ def test_resource_query_expected_types_flow_through_match_expressions():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "MatchNode(" not in generated_code
     assert "int2[2] chooseVectorRow(int mode)" in generated_code
@@ -19516,7 +19889,7 @@ def test_resource_query_expected_types_flow_through_match_expressions():
     assert "int cgl_match_value[2];" in generated_code
     assert "int2 cgl_match_value[2];" in generated_code
     assert "return cgl_match_value;" in generated_code
-    assert "return {/* unsupported Slang resource query" not in generated_code
+    assert "return {0" not in generated_code
     assert (
         "int scalarRow[2] = cgl_match_value;" in generated_code
         or "int scalarRow[2] = cgl_match_value_1;" in generated_code
@@ -19527,18 +19900,25 @@ def test_resource_query_expected_types_flow_through_match_expressions():
     )
     assert "acceptScalarRow(cgl_match_value" in generated_code
     assert "acceptVectorRow(cgl_match_value" in generated_code
+    assert "cgl_match_value = {0, 0};" in generated_code
     assert (
-        "cgl_match_value = {/* unsupported Slang resource query: textureSize "
-        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
-        "query: imageSize returns int2 but target expects int */ 0};" in generated_code
+        "Slang resource query: textureSize returns int2 but target expects int"
+        in refused.reasons
     )
     assert (
-        "cgl_match_value = {/* unsupported Slang resource query: textureSize "
-        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
-        "resource query: imageSize returns int but target expects int2 */ int2(0)};"
-        in generated_code
+        "Slang resource query: imageSize returns int2 but target expects int"
+        in refused.reasons
     )
-    assert generated_code.count("unsupported Slang resource query") == 24
+    assert "cgl_match_value = {int2(0), int2(0)};" in generated_code
+    assert (
+        "Slang resource query: textureSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert (
+        "Slang resource query: imageSize returns int but target expects int2"
+        in refused.reasons
+    )
+    assert sum(site.startswith("Slang resource query") for site in refused.sites) == 24
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
 
@@ -19570,25 +19950,19 @@ def test_match_expression_defaults_assign_typed_values_for_missing_value_paths()
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "MatchNode(" not in generated_code
     assert "int chooseScalar(int mode)" in generated_code
     assert "int2[2] chooseVectorRow(int mode)" in generated_code
-    assert (
-        "cgl_match_value = /* unsupported Slang match expression: no wildcard "
-        "arm handles remaining cases */ 0;" in generated_code
-    )
-    assert (
-        "cgl_match_value = /* unsupported Slang match expression: arm does not "
-        "produce a value */ {int2(0), int2(0)};" in generated_code
-    )
-    assert (
-        "cgl_match_value = /* unsupported Slang match expression: no wildcard "
-        "arm handles remaining cases */ {int2(0), int2(0)};" in generated_code
-    )
+    # A subject no arm covers takes the zero value: a well-formed value match excludes that path, so it is not
+    # refused. The arm that produces no value is a malformed match and is refused.
+    assert "cgl_match_value = 0;" in generated_code
+    assert "cgl_match_value = {int2(0), int2(0)};" in generated_code
+    assert refused.reasons == ("Slang match expression: arm does not produce a value",)
     assert "cgl_match_value = scratch;" not in generated_code
-    assert generated_code.count("unsupported Slang match expression") == 3
+    assert refused.sites == ["Slang match expression: arm does not produce a value"]
 
 
 def test_match_expression_rejects_guarded_and_range_patterns_with_typed_values():
@@ -19616,17 +19990,16 @@ def test_match_expression_rejects_guarded_and_range_patterns_with_typed_values()
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "MatchNode(" not in generated_code
     assert "if (((mode == 0) && (mode > 0)))" in generated_code
     assert "cgl_match_value = 7;" in generated_code
     assert "cgl_match_value = 1;" in generated_code
     assert "case .." not in generated_code
-    assert (
-        "return /* unsupported Slang match expression: rest patterns are not "
-        "supported */ {int2(0), int2(0)};" in generated_code
-    )
+    assert "return {int2(0), int2(0)};" in generated_code
+    assert "Slang match expression: rest patterns are not supported" in refused.reasons
 
 
 def test_match_expression_lowers_wildcard_and_binding_patterns_and_reports_type_diagnostics():
@@ -19673,7 +20046,8 @@ def test_match_expression_lowers_wildcard_and_binding_patterns_and_reports_type_
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "MatchNode(" not in generated_code
     assert "case candidate" not in generated_code
@@ -19684,13 +20058,15 @@ def test_match_expression_lowers_wildcard_and_binding_patterns_and_reports_type_
     assert "int chooseNonFinalWildcard(int mode)" in generated_code
     assert "int candidate = mode;" in generated_code
     assert "cgl_match_value = candidate;" in generated_code
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang match expression: enum constructor pattern "
-        "Option::Some cannot match expression type int */ 0;" in generated_code
+        "Slang match expression: enum constructor pattern Option::Some cannot match expression type int"
+        in refused.reasons
     )
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang match expression: struct pattern Pair "
-        "cannot match expression type int */ 0;" in generated_code
+        "Slang match expression: struct pattern Pair cannot match expression type int"
+        in refused.reasons
     )
 
 
@@ -19913,7 +20289,8 @@ def test_slang_multisample_storage_backlog_load_store_queries_and_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "RWTexture2DMS<float4> msColor : register(u0);" in generated_code
     assert "RWTexture2DMSArray<float4> msLayers : register(u1);" in generated_code
@@ -19931,10 +20308,10 @@ def test_slang_multisample_storage_backlog_load_store_queries_and_diagnostics():
         "int counterSamples = cgl_imageSamples_uimage2DMS_RWTexture2DMS_uint"
         "(counters);" in generated_code
     )
+    assert "uint rejectedAtomic = 0u;" in generated_code
     assert (
-        "uint rejectedAtomic = /* unsupported Slang image atomic: imageAtomicAdd "
-        "requires scalar int or uint image1D/image1DArray/image2D/image3D/"
-        "image2DArray resource */ 0u;" in generated_code
+        "Slang image atomic: imageAtomicAdd requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray resource"
+        in refused.reasons
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
@@ -20018,13 +20395,17 @@ def test_storage_image_access_qualifiers_emit_slang_diagnostics():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "float4 color = source[pixel];" in generated_code
-    assert "imageStore requires writable image resource */;" in generated_code
+    assert "Slang image access: imageStore requires writable image resource" in (
+        refused.reasons
+    )
+    assert "float4 blocked = float4(0.0);" in generated_code
     assert (
-        "float4 blocked = /* unsupported Slang image access: imageLoad "
-        "requires readable image resource */ float4(0.0);" in generated_code
+        "Slang image access: imageLoad requires readable image resource"
+        in refused.reasons
     )
     assert "target[pixel] = color;" in generated_code
     assert "uint cgl_imageAtomicAdd_original;" in generated_code
@@ -20033,13 +20414,15 @@ def test_storage_image_access_qualifiers_emit_slang_diagnostics():
         in generated_code
     )
     assert "uint count = cgl_imageAtomicAdd_original;" in generated_code
+    assert "uint readOnlyAtomic = 0u;" in generated_code
     assert (
-        "uint readOnlyAtomic = /* unsupported Slang image atomic: imageAtomicAdd "
-        "requires readwrite image resource */ 0u;" in generated_code
+        "Slang image atomic: imageAtomicAdd requires readwrite image resource"
+        in refused.reasons
     )
+    assert "uint writeOnlyAtomic = 0u;" in generated_code
     assert (
-        "uint writeOnlyAtomic = /* unsupported Slang image atomic: imageAtomicAdd "
-        "requires readwrite image resource */ 0u;" in generated_code
+        "Slang image atomic: imageAtomicAdd requires readwrite image resource"
+        in refused.reasons
     )
     assert "source[pixel] = color;" not in generated_code
     assert "float4 blocked = target[pixel];" not in generated_code
@@ -20077,54 +20460,54 @@ def test_image_load_store_invalid_slang_calls_emit_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
+    assert "float4 missingLoad = float4(0.0);" in generated_code
     assert (
-        "float4 missingLoad = /* unsupported Slang image access: imageLoad "
-        "requires image and coordinate arguments */ float4(0.0);" in generated_code
+        "Slang image access: imageLoad requires image and coordinate arguments"
+        in refused.reasons
+    )
+    assert "float4 samplerLoad = float4(0.0);" in generated_code
+    assert "Slang image access: imageLoad requires an image resource" in refused.reasons
+    assert "float4 extraNonMsLoad = float4(0.0);" in generated_code
+    assert (
+        "Slang image access: imageLoad accepts image and coordinate arguments"
+        in refused.reasons
+    )
+    assert "float4 missingMsLoad = float4(0.0);" in generated_code
+    assert (
+        "Slang image access: imageLoad requires image, coordinate, and sample arguments"
+        in refused.reasons
+    )
+    assert "float4 badCoordLoad = float4(0.0);" in generated_code
+    assert (
+        "Slang image access: imageLoad requires a 2-component coordinate for image2D"
+        in refused.reasons
+    )
+    assert "float4 badSampleLoad = float4(0.0);" in generated_code
+    assert (
+        "Slang image access: imageLoad sample argument must be scalar int or uint, got bool"
+        in refused.reasons
     )
     assert (
-        "float4 samplerLoad = /* unsupported Slang image access: imageLoad "
-        "requires an image resource */ float4(0.0);" in generated_code
+        "Slang image access: imageStore requires image, coordinate, and value arguments"
+        in refused.reasons
     )
     assert (
-        "float4 extraNonMsLoad = /* unsupported Slang image access: imageLoad "
-        "accepts image and coordinate arguments */ float4(0.0);" in generated_code
+        "Slang image access: imageStore requires an image resource" in refused.reasons
     )
     assert (
-        "float4 missingMsLoad = /* unsupported Slang image access: imageLoad "
-        "requires image, coordinate, and sample arguments */ float4(0.0);"
-        in generated_code
+        "Slang image access: imageStore requires image, coordinate, sample, and value arguments"
+        in refused.reasons
     )
     assert (
-        "float4 badCoordLoad = /* unsupported Slang image access: imageLoad "
-        "requires a 2-component coordinate for image2D */ float4(0.0);"
-        in generated_code
+        "Slang image access: imageStore requires a 2-component coordinate for image2D"
+        in refused.reasons
     )
     assert (
-        "float4 badSampleLoad = /* unsupported Slang image access: imageLoad "
-        "sample argument must be scalar int or uint, got bool */ float4(0.0);"
-        in generated_code
-    )
-    assert (
-        "/* unsupported Slang image access: imageStore requires image, coordinate, "
-        "and value arguments */;" in generated_code
-    )
-    assert (
-        "/* unsupported Slang image access: imageStore requires an image resource */;"
-        in generated_code
-    )
-    assert (
-        "/* unsupported Slang image access: imageStore requires image, coordinate, "
-        "sample, and value arguments */;" in generated_code
-    )
-    assert (
-        "/* unsupported Slang image access: imageStore requires a 2-component "
-        "coordinate for image2D */;" in generated_code
-    )
-    assert (
-        "/* unsupported Slang image access: imageStore sample argument must be "
-        "scalar int or uint, got bool */;" in generated_code
+        "Slang image access: imageStore sample argument must be scalar int or uint, got bool"
+        in refused.reasons
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
@@ -20523,28 +20906,31 @@ def test_image_atomics_validate_target_result_types():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "uint validUnsigned = cgl_imageAtomicAdd_original;" in generated_code
     assert "int validSigned = cgl_imageAtomicMin_original;" in generated_code
     assert "uint stillValid = loadOld(counters, pixel);" in generated_code
+    assert "float scalarUnsigned = 0;" in generated_code
     assert (
-        "float scalarUnsigned = /* unsupported Slang image atomic: imageAtomicAdd "
-        "returns uint but target expects float */ 0;" in generated_code
+        "Slang image atomic: imageAtomicAdd returns uint but target expects float"
+        in refused.reasons
     )
+    assert "uint2 vectorUnsigned = uint2(0u);" in generated_code
     assert (
-        "uint2 vectorUnsigned = /* unsupported Slang image atomic: "
-        "imageAtomicExchange returns uint but target expects uint2 */ uint2(0u);"
-        in generated_code
+        "Slang image atomic: imageAtomicExchange returns uint but target expects uint2"
+        in refused.reasons
     )
+    assert "acceptFloat(0);" in generated_code
     assert (
-        "acceptFloat(/* unsupported Slang image atomic: imageAtomicExchange "
-        "returns uint but target expects float */ 0);" in generated_code
+        "Slang image atomic: imageAtomicExchange returns uint but target expects float"
+        in refused.reasons
     )
+    assert "float scalarArray[2] = {0, 1.0};" in generated_code
     assert (
-        "float scalarArray[2] = {/* unsupported Slang image atomic: "
-        "imageAtomicCompSwap returns uint but target expects float */ 0, 1.0};"
-        in generated_code
+        "Slang image atomic: imageAtomicCompSwap returns uint but target expects float"
+        in refused.reasons
     )
     assert "float scalarUnsigned = cgl_imageAtomicAdd_original" not in generated_code
     assert (
@@ -20729,32 +21115,28 @@ def test_image_expression_atomics_in_loop_contexts_emit_diagnostics():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert (
-        "imageAtomicAdd expression-valued atomic cannot be used in "
-        "for-loop initializer context; assign the atomic result before the loop"
-        in generated_code
+        "Slang image atomic: imageAtomicAdd expression-valued atomic cannot be used in for-loop initializer context; assign the atomic result before the loop"
+        in refused.reasons
     )
     assert (
-        "imageAtomicAdd expression-valued atomic cannot be used in "
-        "for-loop condition context; assign the atomic result before the loop"
-        in generated_code
+        "Slang image atomic: imageAtomicAdd expression-valued atomic cannot be used in for-loop condition context; assign the atomic result before the loop"
+        in refused.reasons
     )
     assert (
-        "imageAtomicExchange expression-valued atomic cannot be used in "
-        "for-loop update context; assign the atomic result before the loop"
-        in generated_code
+        "Slang image atomic: imageAtomicExchange expression-valued atomic cannot be used in for-loop update context; assign the atomic result before the loop"
+        in refused.reasons
     )
     assert (
-        "imageAtomicOr expression-valued atomic cannot be used in "
-        "while-loop condition context; assign the atomic result before the loop"
-        in generated_code
+        "Slang image atomic: imageAtomicOr expression-valued atomic cannot be used in while-loop condition context; assign the atomic result before the loop"
+        in refused.reasons
     )
     assert (
-        "imageAtomicAnd expression-valued atomic cannot be used in "
-        "do-while-loop condition context; assign the atomic result before the loop"
-        in generated_code
+        "Slang image atomic: imageAtomicAnd expression-valued atomic cannot be used in do-while-loop condition context; assign the atomic result before the loop"
+        in refused.reasons
     )
     assert "uint cgl_imageAtomicAdd_original;" in generated_code
     assert (
@@ -20806,20 +21188,21 @@ def test_unsupported_image_atomics_emit_slang_diagnostic_stubs():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    refused = generate_refused_code(ast)
+    generated_code = refused.code
 
     assert "RWTexture2DMS<uint> msCounters : register(u0);" in generated_code
     assert "RWTexture2DMSArray<int> msLayers : register(u1);" in generated_code
     assert "RWTexture2D<uint2> vectorCounters : register(u2);" in generated_code
+    assert "return 0u;" in generated_code
     assert (
-        "return /* unsupported Slang image atomic: imageAtomicAdd "
-        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
-        "resource */ 0u;" in generated_code
+        "Slang image atomic: imageAtomicAdd requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray resource"
+        in refused.reasons
     )
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang image atomic: imageAtomicCompSwap "
-        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
-        "resource */ 0;" in generated_code
+        "Slang image atomic: imageAtomicCompSwap requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray resource"
+        in refused.reasons
     )
     assert "imageAtomicAdd(image" not in generated_code
     assert "imageAtomicCompSwap(image" not in generated_code
@@ -20844,18 +21227,19 @@ def test_float_image_atomics_emit_slang_diagnostic_stubs():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "RWTexture2D<float> floats : register(u0);" in generated_code
+    assert "return 0;" in generated_code
     assert (
-        "return /* unsupported Slang image atomic: imageAtomicAdd "
-        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
-        "resource */ 0;" in generated_code
+        "Slang image atomic: imageAtomicAdd requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray resource"
+        in refused.reasons
     )
+    assert "float oldValue = 0;" in generated_code
     assert (
-        "float oldValue = /* unsupported Slang image atomic: imageAtomicExchange "
-        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
-        "resource */ 0;" in generated_code
+        "Slang image atomic: imageAtomicExchange requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray resource"
+        in refused.reasons
     )
     assert "imageAtomicAdd(image" not in generated_code
     assert "imageAtomicExchange(floats" not in generated_code
@@ -23516,18 +23900,20 @@ def test_glsl_buffer_block_access_qualifiers_and_atomics_emit_slang():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    generated_code = refused.code
 
     assert "ByteAddressBuffer readOnlyData : register(t0);" in generated_code
     assert "RWByteAddressBuffer writeOnlyData : register(u0);" in generated_code
     assert "RWByteAddressBuffer readWriteData : register(u1);" in generated_code
+    assert "uint blockedRead = 0u;" in generated_code
     assert (
-        "uint blockedRead = /* unsupported Slang GLSL buffer block: load "
-        "requires readable buffer block resource */ 0u;" in generated_code
+        "Slang GLSL buffer block: load requires readable buffer block resource"
+        in refused.reasons
     )
     assert (
-        "/* unsupported Slang GLSL buffer block store: readonly "
-        "ByteAddressBuffer cannot be written */;" in generated_code
+        "Slang GLSL buffer block store: readonly ByteAddressBuffer cannot be written"
+        in refused.reasons
     )
     assert (
         "uint __crossgl_slang_byteaddress_atomic_add_uint"
