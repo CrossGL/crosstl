@@ -288,6 +288,7 @@ from .image_access_contracts import (
     numeric_scalar_type_kind,
     operation_argument_type_error,
     operation_dimension_argument_error,
+    projected_texture_compare_reference,
     projected_texture_extra_argument_count_error,
     record_explicit_image_metadata,
     requires_integer_coordinate,
@@ -46609,16 +46610,16 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 return None
             projected_coord = f"{self.vector_component(coord, 'xy')} / {divisor}"
-            return f"vec3({projected_coord}, {compare})"
+            reference = projected_texture_compare_reference(compare, divisor)
+            return f"vec3({projected_coord}, {reference})"
 
         if texture_type == "samplerCubeShadow":
             if coord_type not in {"vec4", "float4"}:
                 return None
-            projected_coord = (
-                f"{self.vector_component(coord, 'xyz')} / "
-                f"{self.vector_component(coord, 'w')}"
-            )
-            return f"vec4({projected_coord}, {compare})"
+            divisor = self.vector_component(coord, "w")
+            projected_coord = f"{self.vector_component(coord, 'xyz')} / {divisor}"
+            reference = projected_texture_compare_reference(compare, divisor)
+            return f"vec4({projected_coord}, {reference})"
 
         if texture_type != "sampler2DArrayShadow" or coord_type not in {
             "vec4",
@@ -46626,12 +46627,11 @@ complex64_t crossgl_complex64_mod_assign(
         }:
             return None
 
-        projected_coord = (
-            f"{self.vector_component(coord, 'xy')} / "
-            f"{self.vector_component(coord, 'w')}"
-        )
+        divisor = self.vector_component(coord, "w")
+        projected_coord = f"{self.vector_component(coord, 'xy')} / {divisor}"
         layer = self.vector_component(coord, "z")
-        return f"vec4({projected_coord}, {layer}, {compare})"
+        reference = projected_texture_compare_reference(compare, divisor)
+        return f"vec4({projected_coord}, {layer}, {reference})"
 
     def unsupported_texture_compare_call(self, func_name, reason):
         return unsupported_texture_compare_scalar_expression("GLSL", func_name, reason)

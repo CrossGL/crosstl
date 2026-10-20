@@ -2407,11 +2407,13 @@ def test_generated_hlsl_shadow_texture_intrinsics_compile_with_dxc(tmp_path):
         "shadowMap.SampleCmp(compareSampler, input.uv, input.depth, int2(1, 0))",
         (
             "shadowMap.SampleCmp(compareSampler, "
-            "input.projected.xy / input.projected.z, input.depth)"
+            "input.projected.xy / input.projected.z, "
+            "input.depth / input.projected.z)"
         ),
         (
             "shadowMap.SampleCmp(compareSampler, "
-            "input.projected.xy / input.projected.z, input.depth, int2(1, 0))"
+            "input.projected.xy / input.projected.z, "
+            "input.depth / input.projected.z, int2(1, 0))"
         ),
         "shadowMap.GatherCmp(compareSampler, input.uv, input.depth)",
         "shadowMap.GatherCmp(compareSampler, input.uv, input.depth, offset)",

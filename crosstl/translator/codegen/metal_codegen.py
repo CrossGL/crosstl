@@ -258,6 +258,7 @@ from .image_access_contracts import (
     numeric_scalar_type_kind,
     operation_argument_type_error,
     operation_dimension_argument_error,
+    projected_texture_compare_reference,
     projected_texture_extra_argument_count_error,
     projected_texture_offset_capability_error,
     record_explicit_image_metadata,
@@ -25069,7 +25070,10 @@ class MetalCodeGen:
         args = [sampler_arg] + coord_args + [compare] + sample_options + trailing_args
         return f"{texture_name}.sample_compare({', '.join(args)})"
 
-    def texture_compare_projected_coord_args(self, texture_type, coord_arg, coord):
+    def texture_compare_projected_coord_args(
+        self, texture_type, coord_arg, coord, compare
+    ):
+        """The ``sample_compare`` coordinate arguments then the reference, divided by ``q``; else ``None``."""
         texture_type = self.resource_base_type(texture_type)
         coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
 
@@ -25080,28 +25084,24 @@ class MetalCodeGen:
                 divisor = self.vector_component(coord, "w")
             else:
                 return None
-            return [f"{self.vector_component(coord, 'xy')} / {divisor}"]
-
-        if texture_type == "depthcube<float>":
+            coord_args = [f"{self.vector_component(coord, 'xy')} / {divisor}"]
+        elif texture_type == "depthcube<float>":
             if coord_type not in {"vec4", "float4"}:
                 return None
-            return [
-                f"{self.vector_component(coord, 'xyz')} / "
-                f"{self.vector_component(coord, 'w')}"
-            ]
-
-        if texture_type != "depth2d_array<float>" or coord_type not in {
+            divisor = self.vector_component(coord, "w")
+            coord_args = [f"{self.vector_component(coord, 'xyz')} / {divisor}"]
+        elif texture_type == "depth2d_array<float>" and coord_type in {
             "vec4",
             "float4",
         }:
+            divisor = self.vector_component(coord, "w")
+            coord_args = [
+                f"{self.vector_component(coord, 'xy')} / {divisor}",
+                f"uint({self.vector_component(coord, 'z')})",
+            ]
+        else:
             return None
-
-        projected_coord = (
-            f"{self.vector_component(coord, 'xy')} / "
-            f"{self.vector_component(coord, 'w')}"
-        )
-        layer = f"uint({self.vector_component(coord, 'z')})"
-        return [projected_coord, layer]
+        return coord_args + [projected_texture_compare_reference(compare, divisor)]
 
     def generate_texture_compare_call(
         self,
@@ -25128,13 +25128,13 @@ class MetalCodeGen:
             coord_index = 2 if self.is_explicit_sampler_argument(args or []) else 1
             coord_arg = (args or [None, None])[coord_index]
             coord_args = self.texture_compare_projected_coord_args(
-                texture_type, coord_arg, coord
+                texture_type, coord_arg, coord, compare
             )
             if coord_args is None:
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_projected_coordinate_error("Metal")
                 )
-            projected_args = [sampler_arg] + coord_args + [compare]
+            projected_args = [sampler_arg] + coord_args
 
             if is_texture_compare_basic_operation(func_name):
                 count_error = texture_compare_extra_argument_count_error(

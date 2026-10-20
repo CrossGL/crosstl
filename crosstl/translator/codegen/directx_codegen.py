@@ -285,6 +285,7 @@ from .image_access_contracts import (
     numeric_scalar_type_kind,
     operation_argument_type_error,
     operation_dimension_argument_error,
+    projected_texture_compare_reference,
     projected_texture_extra_argument_count_error,
     record_explicit_image_metadata,
     requires_integer_coordinate,
@@ -47167,7 +47168,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "DirectX", func_name, reason
         )
 
-    def texture_compare_projected_coordinate(self, texture_type, coord_arg, coord):
+    def texture_compare_projected_coordinate(
+        self, texture_type, coord_arg, coord, compare
+    ):
+        """The projected coordinate and reference, both divided by ``q``, or ``None`` for an unsupported shape."""
         texture_type = self.sampled_texture_shape_type(texture_type)
         coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
 
@@ -47178,24 +47182,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 divisor = self.vector_component(coord, "w")
             else:
                 return None
-            return f"{self.vector_component(coord, 'xy')} / {divisor}"
-
-        if texture_type == "TextureCube":
+            projected_coord = f"{self.vector_component(coord, 'xy')} / {divisor}"
+        elif texture_type == "TextureCube":
             if coord_type not in {"vec4", "float4"}:
                 return None
-            return (
-                f"{self.vector_component(coord, 'xyz')} / "
-                f"{self.vector_component(coord, 'w')}"
+            divisor = self.vector_component(coord, "w")
+            projected_coord = f"{self.vector_component(coord, 'xyz')} / {divisor}"
+        elif texture_type == "Texture2DArray" and coord_type in {"vec4", "float4"}:
+            divisor = self.vector_component(coord, "w")
+            projected_coord = (
+                f"float3({self.vector_component(coord, 'xy')} / {divisor}, "
+                f"{self.vector_component(coord, 'z')})"
             )
-
-        if texture_type != "Texture2DArray" or coord_type not in {"vec4", "float4"}:
+        else:
             return None
-
-        projected_coord = (
-            f"{self.vector_component(coord, 'xy')} / "
-            f"{self.vector_component(coord, 'w')}"
-        )
-        return f"float3({projected_coord}, {self.vector_component(coord, 'z')})"
+        return projected_coord, projected_texture_compare_reference(compare, divisor)
 
     def hlsl_sample_cmp_level(
         self, texture_name, sampler_name, coord, compare, lod_arg, offset=None
@@ -47246,13 +47247,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         compare = self.generate_expression(extra_args[0])
         if is_projected_texture_compare_operation(func_name):
             coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
-            projected_coord = self.texture_compare_projected_coordinate(
-                texture_type, args[coord_index], coord
+            projected = self.texture_compare_projected_coordinate(
+                texture_type, args[coord_index], coord, compare
             )
-            if projected_coord is None:
+            if projected is None:
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_projected_coordinate_error("DirectX")
                 )
+            projected_coord, compare = projected
 
             if is_texture_compare_basic_operation(func_name):
                 count_error = texture_compare_extra_argument_count_error(

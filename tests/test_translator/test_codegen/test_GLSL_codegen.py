@@ -34665,11 +34665,11 @@ def test_opengl_implicit_projected_stage_input_members_strip_samplers():
     assert "vec4 colorLod = textureProjLod(colorMap, uvqw, lod);" in generated_code
     assert "vec4 volume = textureProj(volumeMap, xyzq);" in generated_code
     assert (
-        "float shadow = texture(shadowMap, vec3(uvq.xy / uvq.z, depth));"
+        "float shadow = texture(shadowMap, vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
-        "float shadowGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float shadowGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert "unsupported GLSL texture compare" not in generated_code
@@ -34774,10 +34774,11 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float projected = texture(tex, vec3(uvq.xy / uvq.z, depth));" in generated_code
+        "float projected = texture(tex, vec3(uvq.xy / uvq.z, depth / uvq.z));"
+        in generated_code
     )
     assert (
-        "float projectedW = texture(tex, vec3(uvqw.xy / uvqw.w, depth));"
+        "float projectedW = texture(tex, vec3(uvqw.xy / uvqw.w, depth / uvqw.w));"
         in generated_code
     )
     assert (
@@ -34785,7 +34786,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code_refusal
     )
     assert (
-        "float lodProjected = textureLod(tex, vec3(uvq.xy / uvq.z, depth), lod);"
+        "float lodProjected = textureLod(tex, vec3(uvq.xy / uvq.z, depth / uvq.z), lod);"
         in generated_code
     )
     assert (
@@ -34795,7 +34796,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code_refusal
     )
     assert (
-        "float gradProjected = textureGrad(tex, vec3(uvq.xy / uvq.z, depth), ddx, ddy);"
+        "float gradProjected = textureGrad(tex, vec3(uvq.xy / uvq.z, depth / uvq.z), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -34813,7 +34814,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float projected = texture(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
+        "float projected = texture(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w));"
         in generated_code
     )
     assert (
@@ -34827,7 +34828,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code_refusal
     )
     assert (
-        "float gradProjected = textureGrad(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float gradProjected = textureGrad(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -34884,7 +34885,7 @@ def test_opengl_direct_projected_shadow_compare_stage_input_members():
         in generated_code
     )
     assert (
-        "float planar = texture(shadowMap, vec3(uvq.xy / uvq.z, depth));"
+        "float planar = texture(shadowMap, vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -34892,7 +34893,7 @@ def test_opengl_direct_projected_shadow_compare_stage_input_members():
         in generated_code_refusal
     )
     assert (
-        "float arrayGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float arrayGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert "compareSampler" not in generated_code
@@ -34993,7 +34994,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code
     )
     assert (
-        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth));"
+        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35001,7 +35002,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code_refusal
     )
     assert (
-        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
+        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth / uvq.z), lod);"
         in generated_code
     )
     assert (
@@ -35011,7 +35012,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code_refusal
     )
     assert (
-        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
+        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w));"
         in generated_code
     )
     assert (
@@ -35019,7 +35020,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code_refusal
     )
     assert (
-        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -35129,7 +35130,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code
     )
     assert (
-        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth));"
+        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35137,7 +35138,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code_refusal
     )
     assert (
-        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
+        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth / uvq.z), lod);"
         in generated_code
     )
     assert (
@@ -35147,7 +35148,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code_refusal
     )
     assert (
-        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
+        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w));"
         in generated_code
     )
     assert (
@@ -35155,7 +35156,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code_refusal
     )
     assert (
-        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -35272,7 +35273,7 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
         "vec3 uvq, vec4 uvLayerQ, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset)"
     ) in generated_code
     assert (
-        "float planarHigh = texture(shadowMaps[LAYER], vec3(uvq.xy / uvq.z, depth));"
+        "float planarHigh = texture(shadowMaps[LAYER], vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35281,7 +35282,7 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
     )
     assert (
         "float arrayHigh = textureGrad(shadowArrays[(2 * 2)], "
-        "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
     ) in generated_code
     assert (
         "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
@@ -35452,7 +35453,7 @@ def test_opengl_projected_cube_shadow_compare_lowers_supported_basic_form():
         in generated_code
     )
     assert (
-        "float projected = texture(tex, vec4(cubeProj.xyz / cubeProj.w, depth));"
+        "float projected = texture(tex, vec4(cubeProj.xyz / cubeProj.w, depth / cubeProj.w));"
         in generated_code
     )
     expected_cube_diagnostics = {
@@ -35761,11 +35762,11 @@ def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_for
             in generated_code_refusal
         )
     assert (
-        "float fixedProjected = texture(maps[2], vec4(cubeProj.xyz / cubeProj.w, depth));"
+        "float fixedProjected = texture(maps[2], vec4(cubeProj.xyz / cubeProj.w, depth / cubeProj.w));"
         in generated_code
     )
     assert (
-        "float globalShadow = texture(shadowCubes[layer], vec4(cubeProj.xyz / cubeProj.w, depth));"
+        "float globalShadow = texture(shadowCubes[layer], vec4(cubeProj.xyz / cubeProj.w, depth / cubeProj.w));"
         in generated_code
     )
     assert (

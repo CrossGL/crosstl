@@ -5974,6 +5974,25 @@ class VulkanSPIRVCodeGen(
             self.image_offset_operand(extra_args[2]),
         )
 
+    def projected_shadow_reference(
+        self, coord_id: SpirvId, depth_id: SpirvId, float_type: SpirvId
+    ) -> SpirvId:
+        """The Dref of a projected compare, divided by the coordinate's last component ``q``.
+
+        CrossGL divides the reference by ``q`` as ``OpImageSampleProjDref*`` does (Vulkan, "Projection
+        Operation"); the coordinate is projected by hand, so the reference is too.
+        """
+        component_type_name, source_count = self.vector_component_type_and_count(
+            coord_id.type.base_type
+        )
+        component_type = self.register_primitive_type(component_type_name)
+        projection = self.convert_scalar_to_type(
+            self.composite_extract(coord_id, component_type, source_count - 1),
+            float_type,
+        )
+        depth = self.convert_scalar_to_type(depth_id, float_type)
+        return self.binary_operation("/", float_type, depth, projection)
+
     def call_projected_shadow_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
@@ -6022,6 +6041,7 @@ class VulkanSPIRVCodeGen(
         )
         if projected_coord is None:
             return self.default_value_for_type(result_type)
+        depth_id = self.projected_shadow_reference(coord_id, depth_id, result_type)
 
         image_operands = self.projected_shadow_image_operands(function_name, extra_args)
         id_value = self.get_id()

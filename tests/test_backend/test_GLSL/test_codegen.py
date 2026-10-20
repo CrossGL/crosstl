@@ -1293,9 +1293,12 @@ def test_codegen_native_projected_shadow_texture_imports_compare_helpers():
     assert "shadowMap.sample(" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
-    assert "texture(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z))" in glsl
     assert (
-        "textureLodOffset(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z), 0.0, offset)"
+        "texture(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z / uvRefQ.xyw.z))"
+        in glsl
+    )
+    assert (
+        "textureLodOffset(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z / uvRefQ.xyw.z), 0.0, offset)"
         in glsl
     )
     assert "textureCompareProj" not in glsl
