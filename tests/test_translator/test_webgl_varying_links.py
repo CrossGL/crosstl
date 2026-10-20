@@ -73,14 +73,14 @@ def _translate(tmp_path, source, name):
 
 
 def _declarations(code, direction):
-    return dict(
-        (name, layout or "")
+    return {
+        name: layout or ""
         for layout, name in re.findall(
             rf"^(layout\([^)]*\) )?{direction} (?:highp |mediump |lowp )?\w+ (\w+);",
             code,
             re.M,
         )
-    )
+    }
 
 
 def _link(tmp_path, vertex, fragment):
@@ -153,7 +153,8 @@ def test_component_qualified_varyings_are_refused(tmp_path):
 
 def test_location_names_the_program_already_uses_are_refused(tmp_path):
     source = STAGE_LOCAL_VERTEX_CGL.replace(
-        "void main() {", "float cgl_location_1(float x) { return x; }\n        void main() {"
+        "void main() {",
+        "float cgl_location_1(float x) { return x; }\n        void main() {",
     )
 
     with pytest.raises(WebGLLoweringRefused, match="already declares"):

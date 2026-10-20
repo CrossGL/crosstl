@@ -30,7 +30,10 @@ _WRITING_QUALIFIERS = frozenset({"out", "inout"})
 
 def copy_written_array_parameters(program, target) -> int:
     """Give callees that write an ``in`` array parameter a local copy; returns how many parameters were copied."""
-    if not isinstance(program, A.ShaderNode) or str(target or "").lower() not in _POINTER_ARRAY_TARGETS:
+    if (
+        not isinstance(program, A.ShaderNode)
+        or str(target or "").lower() not in _POINTER_ARRAY_TARGETS
+    ):
         return 0
     entry_points = {
         id(stage.entry_point)
@@ -93,7 +96,10 @@ def _is_by_value_array(parameter):
     # Pointers and resources are handles, not values GLSL copies; their arrays keep the emitter's own lowering.
     if isinstance(element, (A.PointerType, A.ReferenceType)) or _is_opaque(element):
         return False
-    qualifiers = {str(qualifier).lower() for qualifier in getattr(parameter, "qualifiers", None) or []}
+    qualifiers = {
+        str(qualifier).lower()
+        for qualifier in getattr(parameter, "qualifiers", None) or []
+    }
     return not qualifiers & _WRITING_QUALIFIERS
 
 
@@ -103,7 +109,10 @@ def _writing_positions(functions):
     for function in functions:
         written = positions.setdefault(function.name, set())
         for index, parameter in enumerate(getattr(function, "parameters", None) or []):
-            qualifiers = {str(qualifier).lower() for qualifier in getattr(parameter, "qualifiers", None) or []}
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(parameter, "qualifiers", None) or []
+            }
             if qualifiers & _WRITING_QUALIFIERS:
                 written.add(index)
     return positions
@@ -159,7 +168,9 @@ def _declared_names(program):
         name = getattr(current, "name", None)
         if isinstance(name, str):
             names.add(name)
-        stack.extend(get_child(current, field, key) for field, key in child_slots(current))
+        stack.extend(
+            get_child(current, field, key) for field, key in child_slots(current)
+        )
     return names
 
 

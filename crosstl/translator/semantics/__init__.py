@@ -34,11 +34,11 @@ from .shader_records import (
     refuse_shader_record_buffers,
 )
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
-from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
 from .stage_interface_structs import (
     StageInterfaceUnsupportedError,
     gather_stage_interface_variables,
 )
+from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,

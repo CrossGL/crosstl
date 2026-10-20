@@ -39,7 +39,9 @@ __all__ = [
     "render_metal_split_member_constructor_arguments",
 ]
 
-_ARRAY_TYPE = re.compile(r"^(?P<element>.*?)\s*\[\s*(?P<extent>\d+)\s*\](?P<rest>(?:\s*\[\s*\d+\s*\])*)\s*$")
+_ARRAY_TYPE = re.compile(
+    r"^(?P<element>.*?)\s*\[\s*(?P<extent>\d+)\s*\](?P<rest>(?:\s*\[\s*\d+\s*\])*)\s*$"
+)
 
 
 def _array_parts(type_name):
@@ -48,7 +50,9 @@ def _array_parts(type_name):
     match = _ARRAY_TYPE.match(type_name)
     if match is None:
         return None
-    return match.group("element").strip() + match.group("rest"), int(match.group("extent"))
+    return match.group("element").strip() + match.group("rest"), int(
+        match.group("extent")
+    )
 
 
 def _element(expr, index):
@@ -99,7 +103,10 @@ def generate_metal_array_initializer(codegen, expr, field_type):
     parts = _array_parts(codegen.type_name_string(field_type))
     if parts is None or expr is None or isinstance(expr, ArrayLiteralNode):
         return None
-    if _array_parts(codegen.type_name_string(codegen.expression_result_type(expr))) is None:
+    if (
+        _array_parts(codegen.type_name_string(codegen.expression_result_type(expr)))
+        is None
+    ):
         return None
     if not is_pure(expr):
         return codegen.refuse_lowering(
@@ -116,9 +123,13 @@ def _array_elements(codegen, expr, parts):
         element = _element(expr, index)
         nested = _array_parts(element_type)
         if nested is not None:
-            rendered.append("{" + ", ".join(_array_elements(codegen, element, nested)) + "}")
+            rendered.append(
+                "{" + ", ".join(_array_elements(codegen, element, nested)) + "}"
+            )
         else:
-            rendered.append(codegen.generate_expression_with_expected(element, element_type))
+            rendered.append(
+                codegen.generate_expression_with_expected(element, element_type)
+            )
     return rendered
 
 

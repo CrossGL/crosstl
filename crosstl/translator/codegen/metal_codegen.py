@@ -86,12 +86,6 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
-from .metal_fragment_outputs import metal_fragment_output_color_semantic
-from .metal_array_copies import (
-    generate_metal_array_copy,
-    generate_metal_array_initializer,
-    render_metal_split_member_constructor_arguments,
-)
 from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -345,6 +339,12 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .metal_array_copies import (
+    generate_metal_array_copy,
+    generate_metal_array_initializer,
+    render_metal_split_member_constructor_arguments,
+)
+from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_refusals import metal_refusals
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .operator_spellings import map_c_family_operator
@@ -6848,8 +6848,7 @@ class MetalCodeGen:
             attribute = parameter.get("attribute")
             attribute_index = self.metal_attribute_index_from_attribute(attribute)
             if (
-                attribute_index is None
-                and not parameter.get("preserve_user_attribute")
+                attribute_index is None and not parameter.get("preserve_user_attribute")
             ) and (
                 attribute is None
                 or not attribute.strip()

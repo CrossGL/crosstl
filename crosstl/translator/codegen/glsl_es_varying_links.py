@@ -15,13 +15,19 @@ from __future__ import annotations
 
 from .stage_utils import normalize_stage_name
 
-__all__ = ["LINKED_VARYING_PREFIX", "es300_linked_varying_name", "program_identifier_names"]
+__all__ = [
+    "LINKED_VARYING_PREFIX",
+    "es300_linked_varying_name",
+    "program_identifier_names",
+]
 
 LINKED_VARYING_PREFIX = "cgl_location_"
 _NAME_LINKED = frozenset({("vertex", "out"), ("fragment", "in")})
 
 
-def es300_linked_varying_name(codegen, node, direction, stage_name, taken_names, source_name):
+def es300_linked_varying_name(
+    codegen, node, direction, stage_name, taken_names, source_name
+):
     """The location-derived name of a varying GLSL ES 3.00 links by name, or ``None`` to keep the source name.
 
     ``node`` is a stage-level ``in``/``out`` variable or a member of a stage input or output structure; only an
@@ -63,5 +69,7 @@ def program_identifier_names(program):
         name = getattr(current, "name", None)
         if isinstance(name, str):
             names.add(name)
-        stack.extend(get_child(current, field, key) for field, key in child_slots(current))
+        stack.extend(
+            get_child(current, field, key) for field, key in child_slots(current)
+        )
     return names

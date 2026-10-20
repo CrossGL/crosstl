@@ -34,5 +34,7 @@ def _frag_data_index(codegen, member):
         arguments = getattr(attribute, "arguments", None) or []
         if len(arguments) == 1:
             return codegen.binding_index_value(arguments[0])
-    match = _FRAG_DATA.match(str(codegen.semantic_from_node(member) or "").replace(" ", ""))
+    match = _FRAG_DATA.match(
+        str(codegen.semantic_from_node(member) or "").replace(" ", "")
+    )
     return int(match.group(1)) if match else None

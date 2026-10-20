@@ -143,7 +143,9 @@ class _Hoister:
             self.expression(node, "condition", hoisted, once, effects)
             conditions = getattr(node, "else_if_conditions", None) or []
             for index in range(len(conditions)):
-                self.expression(conditions, index, hoisted, _Slot(conditional=True), effects)
+                self.expression(
+                    conditions, index, hoisted, _Slot(conditional=True), effects
+                )
             self.body(node, "then_branch")
             for body in getattr(node, "else_if_bodies", None) or []:
                 if isinstance(body, A.BlockNode):
@@ -308,7 +310,9 @@ def _declared_names(program):
         name = getattr(current, "name", None)
         if isinstance(name, str):
             names.add(name)
-        stack.extend(get_child(current, field, key) for field, key in child_slots(current))
+        stack.extend(
+            get_child(current, field, key) for field, key in child_slots(current)
+        )
     return names
 
 
@@ -323,4 +327,6 @@ def _span(location):
         )
     if not isinstance(line, int):
         return None
-    return SourceSpan(file=file, line=line, column=column if isinstance(column, int) else None)
+    return SourceSpan(
+        file=file, line=line, column=column if isinstance(column, int) else None
+    )
