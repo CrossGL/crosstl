@@ -270,6 +270,22 @@ def test_metal_reads_the_generated_list():
     )
 
 
+METAL_SIMDGROUP_HEADER = """
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle(T data METAL_MAYBE_UNDEF, ushort simd_lane_id)
+{
+  return __metal_simd_shuffle(data, simd_lane_id);
+}
+"""
+
+
+def test_metal_header_parse_drops_attribute_macros():
+    # METAL_MAYBE_UNDEF follows the parameter name; it is neither part of the type nor the name.
+    assert list(metal.declarations("metal_simdgroup", METAL_SIMDGROUP_HEADER)) == [
+        ("simd_shuffle", "float", ["float", "uint"])
+    ]
+
+
 def test_metal_list_records_its_toolchain():
     assert metal.source(METAL_LIST)["describes"] == (
         "Metal Shading Language 9.9 standard library, from Apple metal version 1.0 (test)"
