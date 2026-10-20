@@ -1,8 +1,10 @@
-"""Translate the pinned MLX steel attention entry and compare native results.
+"""Translate the pinned MLX steel attention entries and compare native results.
 
-``steel_attention_float32_bq32_bk32_bd64_bv64_wm4_wn1_maskfloat32`` computes
-``softmax(scale * Q K^T + mask) V`` with threadgroup Q, K and V tiles, simdgroup
-matrix fragments and an online base-2 softmax. The gate freezes the aligned,
+The float32 float-mask entries for head dimensions 64, 80 and 128
+(``steel_attention_float32_bq32_bk{32,32,16}_bd{64,80,128}_..._wm4_wn1_maskfloat32``)
+compute ``softmax(scale * Q K^T + mask) V`` with threadgroup Q, K and V tiles,
+simdgroup matrix fragments and an online base-2 softmax. They are the float32
+block shapes ``scaled_dot_product_attention.cpp`` selects. The gate freezes the aligned,
 float-mask constants that ``scaled_dot_product_attention.cpp`` selects for
 sequence lengths that are multiples of the 32-row blocks, fills ``AttnParams``
 and ``AttnMaskParams`` as that host code does, and dispatches the upstream
@@ -57,9 +59,7 @@ HEADER_HASHES = {
     "params.h": "f03c6ed73d7298fa69b75a49e7eec54954b6fafd59530a1f175934215412ed80",
     "transforms.h": "6479114663c5923a7ee2f9fc1cf9d5e99e680d47d793251749989056a8a63141",
 }
-ENTRY = "steel_attention_float32_bq32_bk32_bd64_bv64_wm4_wn1_maskfloat32"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_ATTENTION"
-BQ, BK, HEAD_DIM = 32, 32, 64
 WORKGROUP = (32, 4, 1)
 CONSTANT_IDS = {
     "align_Q": 200,
@@ -96,6 +96,32 @@ ORIGINAL_FLAGS = (
     "-Wno-c++20-extensions",
 )
 BINDINGS = ("Q", "K", "V", "O", "params", "mask_params", "mask", "sinks", "lse")
+
+
+@dataclass(frozen=True)
+class Variant:
+    """One instantiated entry: its query and key block rows and head dimension."""
+
+    bq: int
+    bk: int
+    head_dim: int
+
+    @property
+    def name(self):
+        return f"bd{self.head_dim}"
+
+    @property
+    def entry(self):
+        d = self.head_dim
+        return (
+            f"steel_attention_float32_bq{self.bq}_bk{self.bk}_bd{d}_bv{d}"
+            "_wm4_wn1_maskfloat32"
+        )
+
+
+# The float32 instantiations in steel_attention.metal, all with (32, 4, 1)
+# threadgroups. Head dimension 128 halves the key block to bound the tiles.
+VARIANTS = (Variant(32, 32, 64), Variant(32, 32, 80), Variant(32, 16, 128))
 
 
 @dataclass(frozen=True)
@@ -150,7 +176,7 @@ def _opengl_index_assertions(source=SOURCE):
     )
 
 
-def _config(root, output, target="metal"):
+def _config(root, output, target="metal", variant=VARIANTS[0]):
     assert target in {"metal", "directx", "opengl"}
     return ProjectConfig(
         root=root,
@@ -159,7 +185,7 @@ def _config(root, output, target="metal"):
         include_dirs=(".",),
         targets=(target,),
         output_dir=output,
-        entry_points={SOURCE: (ENTRY,)},
+        entry_points={SOURCE: (variant.entry,)},
         specialization_constants=dict(SPECIALIZATIONS),
         freeze_specialization_constants=True,
         workgroup_size_rules={SOURCE: WORKGROUP},
@@ -191,10 +217,12 @@ def _config(root, output, target="metal"):
     )
 
 
+@pytest.mark.parametrize("variant", VARIANTS, ids=lambda variant: variant.name)
 @pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
-def test_attention_target_contract_is_explicit(tmp_path, target):
-    config = _config(tmp_path, "out", target)
+def test_attention_target_contract_is_explicit(tmp_path, target, variant):
+    config = _config(tmp_path, "out", target, variant)
     assert list(config.targets) == [target]
+    assert config.entry_points == {SOURCE: (variant.entry,)}
     assert config.workgroup_size_rules == {SOURCE: ("32", "4", "1")}
     assert config.freeze_specialization_constants is True
     assert config.specialization_constants == SPECIALIZATIONS
@@ -221,9 +249,10 @@ def _strides(shape):
     return strides
 
 
-def _case_data(case):
+def _case_data(case, variant):
     """Inputs, AttnParams as the host fills them, and the float64 reference."""
-    assert case.query_length % BQ == 0 and case.key_length % BK == 0
+    bq, bk = variant.bq, variant.bk
+    assert case.query_length % bq == 0 and case.key_length % bk == 0
     assert case.heads % case.kv_heads == 0
     rng = np.random.default_rng(case.seed)
     b, h, kv, ql, kl, d = (
@@ -232,7 +261,7 @@ def _case_data(case):
         case.kv_heads,
         case.query_length,
         case.key_length,
-        HEAD_DIM,
+        variant.head_dim,
     )
     q = rng.uniform(-1, 1, (b, h, ql, d)).astype(np.float32)
     k = rng.uniform(-1, 1, (b, kv, kl, d)).astype(np.float32)
@@ -267,10 +296,10 @@ def _case_data(case):
         kL=kl,
         gqa_factor=group,
         scale=float(scale),
-        NQ=ql // BQ,
-        NK=kl // BK,
-        NQ_aligned=ql // BQ,
-        NK_aligned=kl // BK,
+        NQ=ql // bq,
+        NK=kl // bk,
+        NQ_aligned=ql // bq,
+        NK_aligned=kl // bk,
         qL_rem=0,
         kL_rem=0,
         qL_off=kl - ql,
@@ -286,27 +315,31 @@ def _case_data(case):
         "mask": mask.ravel(),
     }
     geometry = {
-        "workgroupCount": [ql // BQ, h, b],
+        "workgroupCount": [ql // bq, h, b],
         "workgroupSize": list(WORKGROUP),
     }
     return resources, params, {"M_strides": mask_strides}, reference.ravel(), geometry
 
 
+@pytest.mark.parametrize("variant", VARIANTS, ids=lambda variant: variant.name)
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
-def test_attention_reference_follows_the_definition(case):
-    resources, params, mask_params, reference, geometry = _case_data(case)
+def test_attention_reference_follows_the_definition(case, variant):
+    resources, params, mask_params, reference, geometry = _case_data(case, variant)
+    head_dim = variant.head_dim
     assert reference.shape == (
-        case.batches * case.heads * case.query_length * HEAD_DIM,
+        case.batches * case.heads * case.query_length * head_dim,
     )
     # Weighted averages of values in [-1, 1] stay in [-1, 1].
     assert np.all(np.abs(reference) <= 1.0)
     assert params["qL_off"] == case.key_length - case.query_length
     assert params["gqa_factor"] * case.kv_heads == case.heads
-    assert geometry["workgroupCount"][0] * BQ == case.query_length
+    assert geometry["workgroupCount"][0] * variant.bq == case.query_length
+    assert params["NK"] * variant.bk == case.key_length
+    assert params["D"] == head_dim
     assert (mask_params["M_strides"][1] == 0) is (not case.mask_per_head)
     if case.sequence_major:
-        assert params["Q_strides"][1] == HEAD_DIM
-        assert params["Q_strides"][2] == case.heads * HEAD_DIM
+        assert params["Q_strides"][1] == head_dim
+        assert params["Q_strides"][2] == case.heads * head_dim
 
 
 def _f32(values):
@@ -319,8 +352,8 @@ def _record(binding, values):
     return {"dtype": "uint32", "shape": [len(words)], "values": words}
 
 
-def _dispatch_values(bindings, case):
-    resources, params, mask_params, reference, geometry = _case_data(case)
+def _dispatch_values(bindings, case, variant):
+    resources, params, mask_params, reference, geometry = _case_data(case, variant)
     initial_output = [GUARD] * (len(reference) + GUARDS)
     values = {name: _f32(resources[name]) for name in ("Q", "K", "V", "mask")}
     values.update(
@@ -404,15 +437,17 @@ def attention_source(tmp_path_factory):
     return root, original, target
 
 
-@pytest.fixture(scope="module")
-def translated_attention(attention_source, tmp_path_factory):
-    """One translation, package and binding table shared by every case."""
+@pytest.fixture(scope="module", params=VARIANTS, ids=lambda variant: variant.name)
+def translated_attention(attention_source, tmp_path_factory, request):
+    """One translation, package and binding table shared by an entry's cases."""
     root, _original, target = attention_source
-    work = tmp_path_factory.mktemp("attention-translation")
+    variant = request.param
+    work = tmp_path_factory.mktemp(f"attention-translation-{variant.name}")
     with tempfile.TemporaryDirectory(prefix=".current-attention-", dir=root) as output:
         try:
             report = translate_project(
-                _config(root, Path(output).name, target), format_output=False
+                _config(root, Path(output).name, target, variant),
+                format_output=False,
             )
             payload = report.to_json()
             assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
@@ -440,10 +475,10 @@ def translated_attention(attention_source, tmp_path_factory):
     assert params["elementStrideBytes"] == 152
     assert len(params["structMembers"]) == 18
     assert bindings["mask_params"]["scalarLayout"]["elementStrideBytes"] == 24
-    return descriptor, package, bindings
+    return variant, descriptor, package, bindings
 
 
-def _dispatch_original(executor, state, native, source, module):
+def _dispatch_original(executor, state, native, source, module, entry):
     constants = {
         name: NativeRuntimeConstantBinding(
             name=name,
@@ -463,7 +498,7 @@ def _dispatch_original(executor, state, native, source, module):
         native,
         artifact_path=source,
         module_path=module,
-        entry_point=ENTRY,
+        entry_point=entry,
         loaded_artifact=None,
         constants=constants,
     )
@@ -479,8 +514,8 @@ def test_current_attention_executes(
     tmp_path, attention_source, translated_attention, case
 ):
     root, original, target = attention_source
-    descriptor, package, bindings = translated_attention
-    inputs, outputs, geometry = _dispatch_values(bindings, case)
+    variant, descriptor, package, bindings = translated_attention
+    inputs, outputs, geometry = _dispatch_values(bindings, case, variant)
     request = build_native_loader_dispatch_request(
         descriptor, package, inputs, outputs, geometry, expected_target=target
     )
@@ -502,7 +537,7 @@ def test_current_attention_executes(
         }
         if target == "metal":
             original_outputs = _dispatch_original(
-                executor, state, native, root / SOURCE, original
+                executor, state, native, root / SOURCE, original, variant.entry
             )
             result["maxAbsErrorOriginalMetal"] = _check(
                 "original Metal", original_outputs, outputs, bindings
@@ -511,15 +546,16 @@ def test_current_attention_executes(
             tmp_path / "parity.json",
             {
                 "sourceCommit": MLX_COMMIT,
-                "entryPoint": ENTRY,
+                "entryPoint": variant.entry,
                 "specializations": SPECIALIZATIONS,
                 "sourceSha256": SOURCE_SHA256,
                 "headerSha256": HEADER_HASHES,
                 "tolerance": {"rtol": TOLERANCE, "atol": TOLERANCE},
                 "result": result,
                 "scope": (
-                    "One float32 aligned float-mask entry with frozen constants; "
-                    "not the upstream suite or the full attention family."
+                    "Three float32 aligned float-mask entries with frozen "
+                    "constants; not the upstream suite or the half, bfloat16 "
+                    "and boolean-mask entries."
                 ),
             },
         )

@@ -4781,7 +4781,7 @@ jobs:
           set -euo pipefail
           mkdir -p mlx-attention-results
           python tools/run_bounded_command.py \
-            --label "current MLX attention native execution" --timeout-seconds 900 -- \
+            --label "current MLX attention native execution" --timeout-seconds 1800 -- \
             python -m pytest -q \
               --basetemp=mlx-attention-results/pytest \
               --junitxml=mlx-attention-results/results.xml \
