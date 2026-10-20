@@ -191,7 +191,10 @@ def test_cube_array_shadow_sample_takes_the_compare_operand(tmp_path):
         "shadowCubes.SampleCmp(shadowCubesSampler, input.dirLayer, input.depth)" in hlsl
     )
     metal = _flat(_edge(tmp_path, call, "metal"))
-    assert "input.dirLayer.xyz, uint(input.dirLayer.w), input.depth)" in metal
+    assert (
+        "input.dirLayer.xyz, uint(rint(clamp(float(input.dirLayer.w), 0.0, 2047.0))), input.depth)"
+        in metal
+    )
     slang = _flat(_edge(tmp_path, call, "slang"))
     assert "shadowCubes.SampleCmp(input.dirLayer, input.depth)" in slang
 

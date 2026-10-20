@@ -71,7 +71,7 @@ EXPECTED = {
         "input.uvq.xy / input.uvq.z, input.depth / input.uvq.z, level(0.0))",
         "input.uvq.xy / input.uvq.z, input.depth / input.uvq.z, int2(1, 0))",
         "input.dirq.xyz / input.dirq.w, input.depth / input.dirq.w)",
-        "input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z), input.depth / input.uvLayerQ.w)",
+        "input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0))), input.depth / input.uvLayerQ.w)",
     ],
     "slang": [
         "shadowMap.SampleCmp(input.uvq.xy / input.uvq.z, input.depth / input.uvq.z)",

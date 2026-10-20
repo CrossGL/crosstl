@@ -7439,10 +7439,10 @@ def test_generated_metal_integer_gather_offsets_compile_with_metal(tmp_path):
     # Component i of textureGatherOffsets is texel T_i0_j0 of the footprint at
     # offset i (GLSL 4.60, section 8.9.4); Metal's gather returns it in w.
     assert (
-        "return int4(tex.gather(s, uvLayer.xy, uint(uvLayer.z), offset, component::z).w, "
-        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 0), component::z).w, "
-        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(0, 1), component::z).w, "
-        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 1), component::z).w);"
+        "return int4(tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset, component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(1, 0), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(0, 1), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(1, 1), component::z).w);"
         in code
     )
 

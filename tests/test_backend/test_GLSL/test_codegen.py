@@ -1373,7 +1373,8 @@ def test_codegen_native_cube_array_shadow_texture_imports_separate_compare_refer
     assert (
         "shadowCubeArray.sample_compare("
         "sampler(mag_filter::linear, min_filter::linear), "
-        "input.cubeLayer.xyz, uint(input.cubeLayer.w), 0.5)" in metal
+        "input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), 0.5)"
+        in metal
     )
     assert "shadowCubeArray.sample(" not in metal
 

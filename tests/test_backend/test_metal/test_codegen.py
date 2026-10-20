@@ -1027,9 +1027,13 @@ def test_codegen_texture2d_array_sample_preserves_array_slice_from_filament_sdl(
     ast = parse_crossgl(crossgl)
     metal = MetalCodeGen().generate(ast)
     assert "texUV.sample(s, (float3(vert.texcoord, 0)).xy" in metal
-    assert "uint((float3(vert.texcoord, 0)).z)" in metal
+    assert (
+        "uint(rint(clamp(float((float3(vert.texcoord, 0)).z), 0.0, 2047.0)))" in metal
+    )
     assert "texUV.sample(s, (float3(vert.texcoord, 1)).xy" in metal
-    assert "uint((float3(vert.texcoord, 1)).z)" in metal
+    assert (
+        "uint(rint(clamp(float((float3(vert.texcoord, 1)).z), 0.0, 2047.0)))" in metal
+    )
 
 
 def test_codegen_texture2d_array_alias_preserves_sample_slice():
@@ -2553,26 +2557,30 @@ def test_codegen_texture_sample_compare_array_options_roundtrip():
     metal = MetalCodeGen().generate(ast)
     assert (
         "tex.sample_compare(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), depth)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth)" in metal
     )
     assert (
         "tex.sample_compare(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), depth, offset)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth, offset)"
+        in metal
     )
     assert (
         "tex.sample_compare(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), depth, level(lod), offset)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth, level(lod), offset)"
+        in metal
     )
     assert (
         "tex.sample_compare(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), depth, gradient2d(ddx, ddy), offset)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth, gradient2d(ddx, ddy), offset)"
+        in metal
     )
     assert (
         "cube.sample_compare(samp, (float4(dir, layer)).xyz, "
-        "uint((float4(dir, layer)).w), depth, gradientcube(ddxCube, ddyCube))" in metal
+        "uint(rint(clamp(float((float4(dir, layer)).w), 0.0, 2047.0))), depth, gradientcube(ddxCube, ddyCube))"
+        in metal
     )
     assert (
-        "sample_compare(samp, (float3(uv, layer)).xy, uint((float3(uv, layer)).z), depth, level(level("
+        "sample_compare(samp, (float3(uv, layer)).xy, uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth, level(level("
         not in metal
     )
 
@@ -2876,11 +2884,13 @@ def test_codegen_texture_gather_offset_and_array_slice_overloads_roundtrip():
     assert "tex.gather(samp, uv, offset, component::z)" in metal
     assert (
         "tex.gather(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), offset, component::w)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), offset, component::w)"
+        in metal
     )
     assert (
         "tex.gather(samp, (float4(dir, layer)).xyz, "
-        "uint((float4(dir, layer)).w), component::y)" in metal
+        "uint(rint(clamp(float((float4(dir, layer)).w), 0.0, 2047.0))), component::y)"
+        in metal
     )
     assert "textureGather" not in metal
 
@@ -2933,17 +2943,20 @@ def test_codegen_depth_gather_compare_array_slice_overloads_roundtrip():
     assert (
         "shadowMap.gather_compare("
         "shadowSampler, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), compare)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), compare)"
+        in metal
     )
     assert (
         "shadowMap.gather_compare("
         "shadowSampler, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), compare, offset)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), compare, offset)"
+        in metal
     )
     assert (
         "shadowMap.gather_compare("
         "shadowSampler, (float4(dir, layer)).xyz, "
-        "uint((float4(dir, layer)).w), compare)" in metal
+        "uint(rint(clamp(float((float4(dir, layer)).w), 0.0, 2047.0))), compare)"
+        in metal
     )
     assert "textureGatherCompare(" not in metal
 

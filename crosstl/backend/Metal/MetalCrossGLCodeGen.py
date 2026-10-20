@@ -24,6 +24,7 @@ from ...translator.precise_power import binary32_power_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
 from ...translator.resource_identity import source_resource_attribute
+from ...translator.semantics.array_layers import metal_sampled_layer_source_argument
 from ...translator.semantics.sampler_states import (
     SAMPLER_STATE_CALL_ARGUMENTS,
     canonical_sampler_argument,
@@ -2863,9 +2864,15 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         remaining_options = list(options)
         constructor = self.sampled_array_coordinate_constructor(texture_expr)
         if constructor and remaining_options:
-            layer = self.generate_expression(remaining_options.pop(0), is_main)
+            layer = self.sampled_array_layer_argument(remaining_options.pop(0), is_main)
             coords = f"{constructor}({coords}, {layer})"
         return coords, remaining_options
+
+    def sampled_array_layer_argument(self, layer_expr, is_main=False):
+        """Render a Metal sampled-array layer argument as a CrossGL coordinate."""
+        layer = self.generate_expression(layer_expr, is_main)
+        metal_type = self.resolve_type_alias(self.expression_metal_type(layer_expr))
+        return metal_sampled_layer_source_argument(layer, metal_type)
 
     def texture_compare_method_base_arguments(
         self, obj_expr, method_args, is_main=False
@@ -2876,13 +2883,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         if mapped_type == "sampler2DArrayShadow" and len(method_args) >= 4:
             sampler = self.generate_expression(method_args[0], is_main)
             coord = self.generate_expression(method_args[1], is_main)
-            layer = self.generate_expression(method_args[2], is_main)
+            layer = self.sampled_array_layer_argument(method_args[2], is_main)
             compare = self.generate_expression(method_args[3], is_main)
             return [sampler, f"vec3({coord}, {layer})", compare], 4
         if mapped_type == "samplerCubeArrayShadow" and len(method_args) >= 4:
             sampler = self.generate_expression(method_args[0], is_main)
             coord = self.generate_expression(method_args[1], is_main)
-            layer = self.generate_expression(method_args[2], is_main)
+            layer = self.sampled_array_layer_argument(method_args[2], is_main)
             compare = self.generate_expression(method_args[3], is_main)
             return [sampler, f"vec4({coord}, {layer})", compare], 4
         return [self.generate_expression(arg, is_main) for arg in method_args[:3]], 3
@@ -3011,7 +3018,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         tail = list(method_args[2:])
         constructor = self.sampled_array_coordinate_constructor(texture_expr)
         if constructor and tail:
-            layer = self.generate_expression(tail.pop(0), is_main)
+            layer = self.sampled_array_layer_argument(tail.pop(0), is_main)
             coords = f"{constructor}({coords}, {layer})"
 
         args = [sampler, coords]
@@ -3061,7 +3068,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             )
             sampler = self.generate_expression(method_args[0], is_main)
             coord = self.generate_expression(method_args[1], is_main)
-            layer = self.generate_expression(method_args[2], is_main)
+            layer = self.sampled_array_layer_argument(method_args[2], is_main)
             compare = self.generate_expression(method_args[3], is_main)
             return [sampler, f"{constructor}({coord}, {layer})", compare], 4
 

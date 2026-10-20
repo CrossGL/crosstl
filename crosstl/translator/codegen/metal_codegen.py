@@ -57,6 +57,7 @@ from ..math_namespaces import (
     METAL_PRECISE_MATH_FUNCTIONS,
 )
 from ..resource_identity import resource_identity_marker
+from ..semantics.array_layers import metal_sampled_array_layer
 from ..semantics.sampler_states import is_sampler_constructor
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
@@ -24273,19 +24274,19 @@ class MetalCodeGen:
 
     def array_texture_coordinate_parts(self, coord):
         coord_xy = self.vector_component(coord, "xy")
-        layer = f"uint({self.vector_component(coord, 'z')})"
+        layer = metal_sampled_array_layer(self.vector_component(coord, "z"))
         return coord_xy, layer
 
     def cube_array_texture_coordinate_parts(self, coord):
         coord_xyz = self.vector_component(coord, "xyz")
-        layer = f"uint({self.vector_component(coord, 'w')})"
+        layer = metal_sampled_array_layer(self.vector_component(coord, "w"))
         return coord_xyz, layer
 
     def texture_coordinate_parts(self, texture_type, coord):
         texture_type = self.resource_base_type(texture_type)
         if texture_type.startswith("texture1d_array<"):
             coord_x = self.vector_component(coord, "x")
-            layer = f"uint({self.vector_component(coord, 'y')})"
+            layer = metal_sampled_array_layer(self.vector_component(coord, "y"))
             return coord_x, layer
         if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
             return self.cube_array_texture_coordinate_parts(coord)
@@ -24519,7 +24520,8 @@ class MetalCodeGen:
             f"{self.vector_component(coord, divisor)}"
         )
         if texture_type == "texture2d_array<float>":
-            return f"{projected_coord}, uint({self.vector_component(coord, 'z')})"
+            layer = metal_sampled_array_layer(self.vector_component(coord, "z"))
+            return f"{projected_coord}, {layer}"
         return projected_coord
 
     def projected_texture_offset_supported(self, texture_type):
@@ -24960,7 +24962,7 @@ class MetalCodeGen:
         if texture_type.startswith("depth2d_array<"):
             return [
                 self.vector_component(coord, "xy"),
-                f"uint({self.vector_component(coord, 'z')})",
+                metal_sampled_array_layer(self.vector_component(coord, "z")),
             ], self.vector_component(coord, "w")
         if texture_type.startswith("depth2d<"):
             return [self.vector_component(coord, "xy")], self.vector_component(
@@ -24969,7 +24971,7 @@ class MetalCodeGen:
         if texture_type.startswith("depthcube_array<"):
             return [
                 self.vector_component(coord, "xyz"),
-                f"uint({self.vector_component(coord, 'w')})",
+                metal_sampled_array_layer(self.vector_component(coord, "w")),
             ], None
         if texture_type.startswith("depthcube<"):
             return [self.vector_component(coord, "xyz")], self.vector_component(
@@ -25097,7 +25099,7 @@ class MetalCodeGen:
             divisor = self.vector_component(coord, "w")
             coord_args = [
                 f"{self.vector_component(coord, 'xy')} / {divisor}",
-                f"uint({self.vector_component(coord, 'z')})",
+                metal_sampled_array_layer(self.vector_component(coord, "z")),
             ]
         else:
             return None
@@ -26385,7 +26387,7 @@ class MetalCodeGen:
                     )
                 offset = self.generate_expression(args[3])
                 if is_array_texture:
-                    texel_coord, layer = self.texture_coordinate_parts(
+                    texel_coord, layer, _ = self.texture_read_coordinate_components(
                         texture_type, coord
                     )
                     return (

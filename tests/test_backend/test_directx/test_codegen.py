@@ -5976,7 +5976,7 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     assert "depthcube<float> shadowCube" in metal
     assert "depth2d<float> shadowMap" in metal
     assert (
-        "shadowArray.sample_compare(compareSampler, uvLayer.xy, uint(uvLayer.z), depth, level(0.0))"
+        "shadowArray.sample_compare(compareSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, level(0.0))"
         in metal
     )
     assert (
@@ -6304,7 +6304,7 @@ def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():
     assert "depthcube_array<float> cubeShadowArray" in metal
     assert "float leaf(depthcube_array<float> leafShadow, sampler leafSampler" in metal
     assert (
-        "leafShadow.sample_compare(leafSampler, cubeLayer.xyz, uint(cubeLayer.w), depth, level(0.0))"
+        "leafShadow.sample_compare(leafSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, level(0.0))"
         in metal
     )
     assert "leaf(wrappedShadow, wrappedSampler, cubeLayer, depth)" in metal

@@ -14816,7 +14816,7 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
     )
     assert (
         "float4 arrayCall = shadowCubeArray.gather_compare(compareSampler, "
-        "(readCubeLayer(cubeBlock)).xyz, uint((readCubeLayer(cubeBlock)).w), "
+        "(readCubeLayer(cubeBlock)).xyz, uint(rint(clamp(float((readCubeLayer(cubeBlock)).w), 0.0, 2047.0))), "
         "readDepth(cubeBlock));" in metal
     )
     assert (
