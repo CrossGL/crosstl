@@ -18,7 +18,15 @@ import re
 from dataclasses import dataclass
 
 from .. import crossgl
-from ..model import VOID, Feature, Param, Signature, Type, raytracing_stage
+from ..model import (
+    NARROW_SCALARS,
+    VOID,
+    Feature,
+    Param,
+    Signature,
+    Type,
+    raytracing_stage,
+)
 from .common import pick, split
 
 # The scalar each generic constraint is probed with.
@@ -57,9 +65,14 @@ _SCALARS = {
     "float32_t": "float",
     "double": "double",
     "float64_t": "double",
+    "half": "half",
+    "float16_t": "half",
+    "int16_t": "int16",
+    "uint16_t": "uint16",
 }
 _SHORTHAND = re.compile(
-    r"(bool|int|uint|float|double|int32_t|uint32_t|float32_t|float64_t)([1-4])(?:x([1-4]))?"
+    r"(bool|int|uint|float|double|half|int32_t|uint32_t|float32_t|float64_t|float16_t|int16_t|uint16_t)"
+    r"([1-4])(?:x([1-4]))?"
 )
 # The targets a ``require`` capability atom such as ``cuda_glsl_hlsl_spirv`` is made of.
 TARGETS = frozenset("cpp cuda glsl hlsl metal spirv wgsl llvm".split())
@@ -404,8 +417,8 @@ def _stage(name: str, declaration: Declaration) -> str:
 
 
 def _preference(signature: Signature) -> tuple[bool, bool, int]:
-    """Sort key among overloads: value-returning before ``void``, 32-bit before ``double``, and vectors before
-    scalars before matrices, so a generic function is probed with two-component vectors as in the HLSL list.
+    """Sort key among overloads: value-returning before ``void``, 32-bit before ``double`` or 16-bit, and vectors
+    before scalars before matrices, so a generic function is probed with two-component vectors as in the HLSL list.
     """
     kinds = [signature.result, *(p.type for p in signature.params)]
     shapes = {len(k.shape) for k in kinds if not k.opaque}
@@ -413,7 +426,7 @@ def _preference(signature: Signature) -> tuple[bool, bool, int]:
     return (
         signature.result == VOID
         and any(p.direction == "out" for p in signature.params),
-        any(k.scalar == "double" for k in kinds),
+        any(k.scalar == "double" or k.scalar in NARROW_SCALARS for k in kinds),
         rank,
     )
 

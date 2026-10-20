@@ -13,7 +13,15 @@ from __future__ import annotations
 import re
 
 from .. import crossgl
-from ..model import VOID, Feature, Param, Signature, Type, raytracing_stage
+from ..model import (
+    NARROW_SCALARS,
+    VOID,
+    Feature,
+    Param,
+    Signature,
+    Type,
+    raytracing_stage,
+)
 from ..objects import OBJECTS, SAMPLERS, Object
 from ..validators import HLSL_SHADER_MODEL as SHADER_MODEL
 from .common import pick
@@ -53,6 +61,10 @@ SCALAR = {
     "any": "float",
     "double": "double",
     "double_only": "double",
+    "float16_t": "half",
+    "numeric16_only": "half",
+    "int16_t": "int16",
+    "uint16_t": "uint16",
 }
 # Intrinsics that only exist in one kind of shader stage (Direct3D 12 functional specification).
 STAGES = {
@@ -145,7 +157,7 @@ def _own(spelling: str) -> tuple[dict | None, Type | None]:
     if base not in SCALAR:
         return reference, Type.other(base)
     shape = _layout(layout)
-    if SCALAR[base] in ("int", "uint", "bool") and len(shape) == 2:
+    if SCALAR[base] in ("int", "uint", "bool", "int16", "uint16") and len(shape) == 2:
         shape = (shape[0],)
     return reference, Type(SCALAR[base], shape)
 
@@ -206,11 +218,12 @@ def _shader_model(attributes: str) -> tuple[int, ...]:
 
 
 def _preference(signature: Signature) -> tuple[bool, bool]:
-    """Sort key among overloads: value-returning before ``void``, 32-bit before ``double``; stable otherwise."""
+    """Sort key among overloads: value-returning before ``void``, 32-bit before ``double`` or 16-bit; stable
+    otherwise."""
     kinds = [signature.result, *(p.type for p in signature.params)]
     return signature.result == VOID and any(
         p.direction == "out" for p in signature.params
-    ), any(k.scalar == "double" for k in kinds)
+    ), any(k.scalar == "double" or k.scalar in NARROW_SCALARS for k in kinds)
 
 
 def declarations(text: str):

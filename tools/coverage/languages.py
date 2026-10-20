@@ -61,12 +61,18 @@ class HLSL(Dialect):
     rows_first = True
     entry_attributes: tuple[str, ...] = ("[numthreads(1, 1, 1)]",)
     fragment_attributes: tuple[str, ...] = ()
+    # The validators compile with 16-bit types enabled, so ``half`` is a 16-bit float (HLSL shader model 6.2).
+    narrow_scalars = True
+    _SCALARS = {"int16": "int16_t", "uint16": "uint16_t"}
+
+    def scalar(self, scalar: str) -> str:
+        return self._SCALARS.get(scalar, scalar)
 
     def vector(self, scalar: str, size: int) -> str:
-        return f"{scalar}{size}"
+        return f"{self.scalar(scalar)}{size}"
 
     def matrix(self, scalar: str, columns: int, rows: int) -> str:
-        return f"{scalar}{rows}x{columns}"
+        return f"{self.scalar(scalar)}{rows}x{columns}"
 
     def cast(self, kind: Type, value: str) -> str:
         return f"({self.type(kind)}){value}"

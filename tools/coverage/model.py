@@ -4,7 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCALARS = ("bool", "int", "uint", "float", "double", "int64", "uint64")
+SCALARS = (
+    "bool",
+    "int",
+    "uint",
+    "float",
+    "double",
+    "int64",
+    "uint64",
+    "half",
+    "int16",
+    "uint16",
+)
+# The 16-bit scalars, which a probe reads from and stores as 32-bit buffer elements.
+NARROW_SCALARS = frozenset({"half", "int16", "uint16"})
 OUTCOMES = ("supported", "refused", "wrong", "untested")
 LANGUAGES = (
     "cuda",

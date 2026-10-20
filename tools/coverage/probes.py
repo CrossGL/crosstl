@@ -42,7 +42,15 @@ def spell(kind: Type, language: str) -> str:
 
 
 # Scalars no input or output buffer holds: they are read from, and stored as, a 32-bit buffer element.
-_STORAGE = {"bool": "float", "double": "float", "int64": "int", "uint64": "uint"}
+_STORAGE = {
+    "bool": "float",
+    "double": "float",
+    "half": "float",
+    "int16": "int",
+    "int64": "int",
+    "uint16": "uint",
+    "uint64": "uint",
+}
 
 
 def _storage(scalar: str) -> str:

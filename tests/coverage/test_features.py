@@ -200,6 +200,8 @@ def test_spirv_explains_unreachable_and_unspelled_instructions():
 HLSL_TABLE = """
 namespace Intrinsics {
 double<> [[rn]] asdouble(in $match<0, 1> uint<> x, in $match<0, 2> uint<> y) : reinterpret_fuse_double;
+int16_t<> [[rn]] asint16(in $match<0,1> numeric16_only<> x) : reinterpret_int16;
+float [[rn]] dot2add(in float16_t<2> a, in $type1 b, in float c);
 $type1 [[rn]] lerp(in float_like<> a, in $type1 b, in $type1 s);
 $type1 [[rn,unsigned_op=umad]] mad(in numeric<> a, in $type1 b, in $type1 c);
 void [[]] InterlockedAdd(ref int32_only result, in uint value);
@@ -307,6 +309,17 @@ def test_hlsl_resolves_generic_layouts_and_matched_types():
     assert vertex.stage == "fragment"
     barrier = features["Barrier"].signature
     assert [p.direction for p in barrier.params] == ["const", "const"]
+
+
+def test_hlsl_reads_16_bit_scalars():
+    features = by_name(hlsl.parse(HLSL_TABLE, {"mix", "fma"}))
+    asint16 = features["asint16"].signature
+    assert asint16.result == Type("int16", (2,))
+    assert asint16.params[0].type == Type("half", (2,))
+    dot2add = features["dot2add"].signature
+    assert [p.type for p in dot2add.params] == [Type("half", (2,))] * 2 + [
+        Type("float")
+    ]
 
 
 def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
@@ -837,7 +850,10 @@ def test_slang_types():
     assert slang.slang_type("matrix<T, 3, 4>", generics) == Type("float", (4, 3))
     assert slang.slang_type("float3x4", {}) == Type("float", (4, 3))
     assert slang.slang_type("uint32_t4", {}) == Type("uint", (4,))
-    assert slang.slang_type("half", {}) == Type.other("half")
+    assert slang.slang_type("half", {}) == Type("half")
+    assert slang.slang_type("int16_t4", {}) == Type("int16", (4,))
+    assert slang.slang_type("vector<uint16_t, 3>", {}) == Type("uint16", (3,))
+    assert slang.slang_type("half*", {}) == Type.other("half*")
 
 
 MOJO_MATH_INIT = """

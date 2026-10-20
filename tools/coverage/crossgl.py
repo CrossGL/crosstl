@@ -256,14 +256,30 @@ class CrossGL(Dialect):
     language = "crossgl"
     suffix = ".cgl"
     wide_integers = True
+    narrow_scalars = True
+    # The spellings CrossGL's own importers write for these scalars.
+    _SCALARS = {
+        "int64": "int64_t",
+        "uint64": "uint64_t",
+        "half": "float16",
+        "int16": "int16",
+        "uint16": "uint16",
+    }
+    _PREFIX = {**Dialect._PREFIX, "half": "f16", "int16": "i16", "uint16": "u16"}
 
     def scalar(self, scalar: str) -> str:
-        return {"int64": "int64_t", "uint64": "uint64_t"}.get(scalar, scalar)
+        return self._SCALARS.get(scalar, scalar)
 
     def vector(self, scalar: str, size: int) -> str:
         if scalar in WIDE_INTEGERS:
             raise ProbeError("no 64-bit integer vector probe for CrossGL yet")
         return super().vector(scalar, size)
+
+    def matrix(self, scalar: str, columns: int, rows: int) -> str:
+        if scalar == "half":
+            shape = f"{columns}" if columns == rows else f"{columns}x{rows}"
+            return f"f16mat{shape}"
+        return super().matrix(scalar, columns, rows)
 
     # CrossGL declares HLSL's resource object types and calls their methods under HLSL's names; the backend assigns
     # the registers.

@@ -241,7 +241,29 @@ HLSL_SIGNATURES = [
         "InterlockedAdd", Type.other("void"), Param(Type("uint"), "inout"), Type("uint")
     ),
     feature("asdouble", Type("double", (2,)), Type("uint", (2,)), Type("uint", (2,))),
+    feature("asint16", Type("int16", (2,)), Type("half", (2,))),
+    feature("asuint16", Type("uint16"), Type("int16")),
 ]
+
+
+def test_16_bit_scalars_are_read_and_stored_through_32_bit_buffers():
+    asint16, asuint16 = HLSL_SIGNATURES[-2:]
+    source = probes.build(asint16, "hlsl").source
+    assert "RWStructuredBuffer<int2> outp : register(u1);" in source
+    assert "half2 a0 = half2((half)fin[i + 0u], (half)fin[i + 1u]);" in source
+    assert "int16_t2 r = asint16(a0);" in source
+    assert "outp[i] = (int2)r;" in source
+    assert "int16_t a0 = (int16_t)iin[i + 0u];" in probes.build(asuint16, "hlsl").source
+    assert "half2 a0" in probes.build(asint16, "slang").source
+    crossgl = probes.build(asint16, "crossgl").source
+    assert (
+        "f16vec2 a0 = f16vec2(float16(fin[i + 0u]), float16(fin[i + 1u]));" in crossgl
+    )
+    assert "i16vec2 r = asint16(a0);" in crossgl
+    assert "outp[i] = ivec2(r);" in crossgl
+    # A language whose 16-bit spelling has not been checked leaves the feature untested.
+    with pytest.raises(probes.ProbeError, match="16-bit"):
+        probes.build(asint16, "glsl")
 
 
 @pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
