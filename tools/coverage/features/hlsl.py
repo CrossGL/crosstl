@@ -38,6 +38,9 @@ LEFT_OUT = dict.fromkeys(
 )
 # Namespaces of global functions, and the prefix HLSL calls their functions by.
 _FUNCTIONS = {"Intrinsics": "", "DxIntrinsics": "dx::"}
+# The shader model 2 and 3 samplers. DXC's table still declares tex1D through texCUBEproj on them, but DXC has no
+# spelling for the types and rejects every call with "Unsupported intrinsic", so those functions are left out.
+_LEGACY_SAMPLER = re.compile(r"\bsampler(?:1d|2d|3d|_cube)\b")
 # Methods that take implicit derivatives, which a compute probe of one thread cannot.
 _DERIVATIVES = frozenset(
     "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped".split()
@@ -319,6 +322,8 @@ def parse(
     methods: dict[tuple[str, str], list] = {}
     for namespace, name, attributes, result, params in declarations(text):
         if namespace in LEFT_OUT or "hidden" in attributes or name.startswith("__"):
+            continue
+        if _LEGACY_SAMPLER.search(params):
             continue
         if namespace in _FUNCTIONS:
             name = _FUNCTIONS[namespace] + name

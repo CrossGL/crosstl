@@ -215,6 +215,8 @@ void [[]] IgnoreHit();
 void [[]] Barrier(in uint MemoryTypeFlags, in uint SemanticFlags);
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
 uint   [[rn,min_sm=6.10]] GetGroupWaveIndex();
+float_like<4> [[ro]] tex2D(in sampler2d s, in float_like<2> x) : tex2d;
+float_like<4> [[ro]] texCUBElod(in sampler_cube s, in float_like<4> x) : texcube_lod;
 } namespace
 
 namespace VkIntrinsics {
@@ -259,6 +261,8 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     features = by_name(hlsl.parse(HLSL_TABLE, {"mix", "fma"}))
     assert "ReadClock" not in features
     assert "VkSubpassInput.SubpassLoad" not in features
+    # DXC rejects every call to the shader model 2 and 3 sampling functions.
+    assert "tex2D" not in features and "texCUBElod" not in features
     assert features["Texture2D.CalculateLevelOfDetail"].category == "method"
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
