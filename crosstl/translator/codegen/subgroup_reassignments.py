@@ -12,6 +12,12 @@ is uniform at the end of every branch.
 ``followed_locals`` selects these locals. ``ReassignmentFlow`` updates a set of
 uniform names after each statement, given the backend's uniform-expression
 test.
+
+Immutable storage parameters (constant storage, or read-only storage named by
+a checked immutable-storage contract) may also move their view in place, as
+``mask += tid.z * strides[0];``. ``followed_offsets`` selects those whose only
+writes are such offsets outside loops. The view stays uniform after an offset
+by a uniform amount, and the flow follows it like a reassigned local.
 """
 
 from ..ast import (
@@ -52,6 +58,106 @@ def _expression(statement):
     if isinstance(statement, ExpressionStatementNode):
         return getattr(statement, "expression", None)
     return statement
+
+
+_OFFSETS = {"+=", "-="}
+
+
+def _offset_write(node, map_operator):
+    """The parameter that ``name += value;`` or ``name -= value;`` moves."""
+    target = getattr(node, "target", getattr(node, "left", None))
+    operator = getattr(node, "operator", getattr(node, "op", "="))
+    if isinstance(target, IdentifierNode) and (
+        operator in _OFFSETS or map_operator(operator) in _OFFSETS
+    ):
+        return target.name
+    return None
+
+
+def _outside_loop_writes(body, accept):
+    """Ids of top-level assignment statements outside loops that ``accept``."""
+    accepted = set()
+
+    def visit(statements, in_loop):
+        for statement in statement_list(statements):
+            node = _expression(statement)
+            if isinstance(node, AssignmentNode):
+                if not in_loop and accept(node):
+                    accepted.add(id(node))
+            elif isinstance(node, IfNode):
+                visit(getattr(node, "then_branch", None), in_loop)
+                for branch in getattr(node, "else_if_bodies", []) or []:
+                    visit(branch, in_loop)
+                visit(getattr(node, "else_branch", None), in_loop)
+            elif isinstance(node, _LOOPS):
+                visit(getattr(node, "body", None), True)
+            elif isinstance(node, BlockNode):
+                visit(node, in_loop)
+
+    visit(body, False)
+    return accepted
+
+
+def followed_offsets(
+    function,
+    resources,
+    call_mutations,
+    *,
+    walk,
+    map_operator,
+    identifier_names,
+    write_roots,
+):
+    """Return the immutable storage parameters whose writes only offset them.
+
+    ``resources`` names entry parameters whose storage nothing writes during
+    the dispatch. Each selected parameter is written only by ``name += value;``
+    or ``name -= value;`` statements outside loops. Any other write, a local of
+    the same name, address-taking, a reference or pointer view and a call that
+    may write it disqualify the parameter.
+    """
+    body = getattr(function, "body", None)
+    declared = {
+        node.name
+        for node in walk(body)
+        if isinstance(node, VariableNode) and getattr(node, "name", None)
+    }
+    candidates = set(resources) - declared
+    if not candidates:
+        return set()
+    accepted = _outside_loop_writes(
+        body, lambda node: _offset_write(node, map_operator) in candidates
+    )
+    for node in walk(body):
+        if isinstance(node, AssignmentNode):
+            if id(node) not in accepted:
+                target = getattr(node, "target", getattr(node, "left", None))
+                candidates.difference_update(write_roots(target))
+        elif isinstance(node, UnaryOpNode):
+            operator = getattr(node, "operator", getattr(node, "op", None))
+            if operator in _UNARY_WRITES or map_operator(operator) in _UNARY_WRITES:
+                candidates.difference_update(identifier_names(node.operand))
+        elif isinstance(node, FunctionCallNode):
+            candidates.difference_update(call_mutations.get(id(node), set()))
+        elif isinstance(node, VariableNode) and isinstance(
+            getattr(node, "var_type", None), (PointerType, ReferenceType)
+        ):
+            candidates.difference_update(identifier_names(node.initial_value))
+    return candidates
+
+
+def follow_offset(node, offsets, names, uniform_value, map_operator):
+    """Whether ``node`` keeps an offset parameter uniform; ``None`` if no offset.
+
+    An offset by a uniform amount keeps a uniform view uniform.
+    """
+    name = (
+        _offset_write(node, map_operator) if isinstance(node, AssignmentNode) else None
+    )
+    if name is None or name not in offsets:
+        return None
+    value = getattr(node, "value", getattr(node, "right", None))
+    return name in names and uniform_value(value)
 
 
 def _plain_write(node, map_operator):
@@ -165,8 +271,10 @@ class ReassignmentFlow:
         uniform_expression,
         declares_uniform,
         constant_condition=None,
+        offsets=(),
     ):
         self.followed = set(followed)
+        self.offsets = set(offsets)
         self.walk = walk
         self.map_operator = map_operator
         self.uniform_expression = uniform_expression
@@ -190,10 +298,21 @@ class ReassignmentFlow:
 
     def follow(self, statement, names, components):
         """Update ``names`` for the followed writes ``statement`` performs."""
-        written = self.followed & self.written(statement)
+        written = (self.followed | self.offsets) & self.written(statement)
         if not written:
             return
         node = _expression(statement)
+        kept = follow_offset(
+            node,
+            self.offsets,
+            names,
+            lambda value: self.uniform_expression(value, names, components),
+            self.map_operator,
+        )
+        if kept is not None:
+            if not kept:
+                names.difference_update(written)
+            return
         if isinstance(node, AssignmentNode):
             name = _plain_write(node, self.map_operator)
             value = getattr(node, "value", getattr(node, "right", None))

@@ -283,6 +283,10 @@ def build_native_loader_dispatch_request(
         artifact_path, artifact_content, target, normalized["bindings"]
     )
 
+    from .immutable_storage import (
+        artifact_immutable_bindings,
+        check_immutable_inputs,
+    )
     from .metadata_preconditions import (
         artifact_metadata_bindings,
         check_metadata_inputs,
@@ -297,6 +301,14 @@ def build_native_loader_dispatch_request(
     except (ValueError, UnicodeError) as exc:
         raise NativeLoaderDispatchError(
             "metadata-precondition-invalid", str(exc), path="$.bindings"
+        ) from exc
+    try:
+        immutable_names = artifact_immutable_bindings(
+            artifact_path, target, normalized["bindings"]
+        )
+    except (ValueError, UnicodeError) as exc:
+        raise NativeLoaderDispatchError(
+            "immutable-storage-invalid", str(exc), path="$.bindings"
         ) from exc
     dispatch = _dispatch_geometry(
         dispatch_geometry,
@@ -397,6 +409,12 @@ def build_native_loader_dispatch_request(
     except ValueError as exc:
         raise NativeLoaderDispatchError(
             "metadata-precondition-invalid", str(exc), path="$.inputValues"
+        ) from exc
+    try:
+        check_immutable_inputs(immutable_names, inputs, outputs, resource_bindings)
+    except ValueError as exc:
+        raise NativeLoaderDispatchError(
+            "immutable-storage-invalid", str(exc), path="$.inputValues"
         ) from exc
     constants = _specialization_constants(
         normalized["specializationConstants"],

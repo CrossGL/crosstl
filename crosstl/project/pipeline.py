@@ -136,6 +136,14 @@ from crosstl.translator.frozen_specializations import (
     frozen_specialization_header,
     frozen_specializations,
 )
+from crosstl.translator.immutable_storage import (
+    ImmutableStorageContract,
+    ImmutableStorageError,
+    parse_immutable_storage,
+    program_function_names,
+    resolve_immutable_storage,
+    with_immutable_storage_header,
+)
 from crosstl.translator.metadata_preconditions import (
     MetadataPreconditionError,
     MetadataRangePrecondition,
@@ -1529,6 +1537,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "indexRangeAssertionCount",
         "metadataPreconditions",
         "metadataPreconditionCount",
+        "immutableStorage",
+        "immutableStorageCount",
         "workgroupAccessAssertions",
         "workgroupAccessAssertionCount",
         "includeDirs",
@@ -7658,6 +7668,7 @@ class ProjectConfig:
     external_corpus_manifest: str | os.PathLike[str] | None = None
     index_range_assertions: Sequence[Any] = ()
     metadata_preconditions: Sequence[Any] = ()
+    immutable_storage: Sequence[Any] = ()
     workgroup_access_assertions: Sequence[Any] = ()
     translate_discovered_entry_points: Sequence[str] | str = ()
     _dispatch_contract_manifests: tuple[DispatchContractManifest, ...] = field(
@@ -7790,6 +7801,19 @@ class ProjectConfig:
                 )
                 for condition in parse_metadata_preconditions(
                     self.metadata_preconditions
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "immutable_storage",
+            tuple(
+                replace(
+                    contract, source=_normalize_project_relative_path(contract.source)
+                )
+                for contract in parse_immutable_storage(
+                    self.immutable_storage,
+                    field_name="ProjectConfig.immutable_storage",
                 )
             ),
         )
@@ -8946,6 +8970,10 @@ class ProjectPortabilityReport:
                     item.to_json() for item in self.config.metadata_preconditions
                 ],
                 "metadataPreconditionCount": len(self.config.metadata_preconditions),
+                "immutableStorage": [
+                    item.to_json() for item in self.config.immutable_storage
+                ],
+                "immutableStorageCount": len(self.config.immutable_storage),
                 "workgroupAccessAssertions": [
                     assertion.to_json()
                     for assertion in self.config.workgroup_access_assertions
@@ -9298,6 +9326,7 @@ def load_project_config(
         external_corpus_manifest=external_corpus_manifest,
         index_range_assertions=index_range_assertions,
         metadata_preconditions=project.get("metadata_preconditions", ()),
+        immutable_storage=project.get("immutable_storage", ()),
         workgroup_access_assertions=workgroup_access_assertions,
     )
 
@@ -9601,6 +9630,23 @@ def _metadata_precondition_pattern_diagnostics(config, units):
     ]
 
 
+def _immutable_storage_pattern_diagnostics(config, units):
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.immutable-storage-pattern-unmatched",
+            message=(
+                f"Immutable storage source pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            details={"pattern": pattern},
+        )
+        for pattern in sorted({item.source for item in config.immutable_storage})
+        if not any(fnmatch.fnmatch(unit.relative_path, pattern) for unit in units)
+    ]
+
+
 def _metadata_precondition_source_matches(config, units):
     """Resolve source selectors without assuming configured entries exist.
 
@@ -9880,6 +9926,7 @@ def scan_project(
     diagnostics.extend(_entry_workgroup_size_rule_diagnostics(scan_config, units))
     diagnostics.extend(_subgroup_width_rule_diagnostics(scan_config, units))
     diagnostics.extend(_metadata_precondition_pattern_diagnostics(scan_config, units))
+    diagnostics.extend(_immutable_storage_pattern_diagnostics(scan_config, units))
     if not units:
         diagnostics.append(
             ProjectDiagnostic(
@@ -27764,6 +27811,7 @@ def _generate_project_target_from_crossgl_ast(
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     metadata_preconditions: Sequence[Any] = (),
     metadata_source_matches: Mapping[MetadataRangePrecondition, set[str]] | None = None,
+    immutable_storage: Sequence[ImmutableStorageContract] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
     software_subgroup_applicability: str | None = None,
@@ -27898,6 +27946,19 @@ def _generate_project_target_from_crossgl_ast(
     configure_metadata = getattr(codegen, "set_metadata_preconditions", None)
     if callable(configure_metadata):
         configure_metadata(resolved_metadata)
+    resolved_immutable = []
+    if immutable_storage:
+        stages = _crossgl_compute_stages(selected_ast, remaining_entry_point)
+        if len(stages) != 1:
+            raise ImmutableStorageError(
+                "Immutable storage requires one selected compute entry."
+            )
+        resolved_immutable = _entry_immutable_storage(
+            stages[0].entry_point, immutable_storage, selected_ast, entry_point
+        )
+    configure_immutable = getattr(codegen, "set_immutable_storage", None)
+    if callable(configure_immutable):
+        configure_immutable(resolved_immutable)
     if software_subgroup_applicability is not None:
         entries = (
             codegen.hlsl_software_subgroup_stage_entries(selected_ast)
@@ -28006,9 +28067,31 @@ def _generate_project_target_from_crossgl_ast(
             generated = format_shader_code(generated, target, str(output_path))
     if resolved_metadata and not callable(configure_metadata):
         generated = with_metadata_precondition_header(generated, resolved_metadata)
+    if resolved_immutable and not callable(configure_immutable):
+        generated = with_immutable_storage_header(generated, resolved_immutable)
     with output_path.open("w", encoding="utf-8", newline="") as output_file:
         output_file.write(generated)
     return generated
+
+
+def _entry_immutable_storage(function, contracts, ast, entry_point):
+    """Resolve the contracts naming the selected entry's source entry point.
+
+    The source entry comes from the retained resource identities. Without them
+    a contract naming the entry cannot resolve, so translation fails closed.
+    """
+    entries = {
+        origin["entryPoint"]
+        for parameter in function.parameters
+        for origin in (source_resource_identity(parameter),)
+        if origin is not None
+    } or {entry_point, function.name} - {None}
+    return resolve_immutable_storage(
+        function,
+        [item for item in contracts if item.entry_point in entries],
+        getattr(ast, "structs", ()),
+        program_function_names(ast),
+    )
 
 
 def _project_target_workgroup_entries(
@@ -28757,6 +28840,7 @@ def _translate_project_impl(
             external_corpus_manifest=config.external_corpus_manifest,
             index_range_assertions=config.index_range_assertions,
             metadata_preconditions=config.metadata_preconditions,
+            immutable_storage=config.immutable_storage,
             workgroup_access_assertions=config.workgroup_access_assertions,
         )
     config = _config_with_selected_variants(config, variants)
@@ -28994,6 +29078,13 @@ def _translate_project_impl(
                     )
                     if target in {"opengl", "directx"}
                     else ()
+                )
+                # Only targets whose dispatch paths enforce the contract carry it.
+                immutable_storage = tuple(
+                    item
+                    for item in config.immutable_storage
+                    if target in {"metal", "directx", "opengl"}
+                    and fnmatch.fnmatch(unit.relative_path, item.source)
                 )
                 software_subgroup_width = None
                 software_subgroup_applicability = None
@@ -29725,6 +29816,7 @@ def _translate_project_impl(
                                                 metadata_source_matches,
                                             ),
                                             metadata_source_matches=metadata_source_matches,
+                                            immutable_storage=immutable_storage,
                                             workgroup_access_assertions=(
                                                 workgroup_access_assertions
                                             ),
@@ -29814,6 +29906,7 @@ def _translate_project_impl(
                                         index_range_assertions=(index_range_assertions),
                                         metadata_preconditions=metadata_preconditions,
                                         metadata_source_matches=metadata_source_matches,
+                                        immutable_storage=immutable_storage,
                                         workgroup_access_assertions=(
                                             workgroup_access_assertions
                                         ),
@@ -29863,6 +29956,7 @@ def _translate_project_impl(
                     if generated_source is None and (
                         index_range_assertions
                         or metadata_preconditions
+                        or immutable_storage
                         or any(
                             record.get("frozen") for record in specialization_constants
                         )
@@ -29904,6 +29998,7 @@ def _translate_project_impl(
                             index_range_assertions=index_range_assertions,
                             metadata_preconditions=metadata_preconditions,
                             metadata_source_matches=metadata_source_matches,
+                            immutable_storage=immutable_storage,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
                             software_subgroup_applicability=software_subgroup_applicability,
@@ -36688,6 +36783,11 @@ def _runtime_package_resource_identity_diagnostics(package_path, artifact, refle
                             ]
                         }
                         if "metadataMemberPreconditions" in provenance
+                        else {}
+                    ),
+                    **(
+                        {"immutableStorage": provenance["immutableStorage"]}
+                        if "immutableStorage" in provenance
                         else {}
                     ),
                 }
@@ -48281,6 +48381,7 @@ def _project_config_for_scan_validation(
         },
         variant_specialization_constants=variant_specializations,
         metadata_preconditions=project.get("metadataPreconditions", ()),
+        immutable_storage=project.get("immutableStorage", ()),
         workgroup_size=workgroup_size,
         variant_workgroup_sizes={
             name: value
@@ -54144,6 +54245,16 @@ def _project_metadata_contract_reasons(
             if type(count) is not int or count != len(values):
                 reasons.append(
                     "project.metadataPreconditionCount must match project.metadataPreconditions"
+                )
+        except ValueError as exc:
+            reasons.append(str(exc))
+    if "immutableStorage" in project or "immutableStorageCount" in project:
+        try:
+            values = parse_immutable_storage(project.get("immutableStorage", ()))
+            count = project.get("immutableStorageCount")
+            if type(count) is not int or count != len(values):
+                reasons.append(
+                    "project.immutableStorageCount must match project.immutableStorage"
                 )
         except ValueError as exc:
             reasons.append(str(exc))

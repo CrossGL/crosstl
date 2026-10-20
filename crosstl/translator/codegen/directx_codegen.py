@@ -67,6 +67,11 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..immutable_storage import (
+    checked_immutable_storage,
+    codegen_immutable_storage_names,
+    with_immutable_storage_header,
+)
 from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -492,6 +497,7 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
+from .subgroup_reassignments import follow_offset, followed_offsets
 from .texture_lod_clamp import (
     hlsl_texture_lod_clamp_call,
     is_texture_lod_clamp_operation,
@@ -2304,6 +2310,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         """Initialize DirectX type maps and per-generation resource state."""
         self.target_profile = self.normalize_directx_target_profile(target_profile)
         self.metadata_preconditions = []
+        self.immutable_storage = []
+        self.hlsl_immutable_storage_names = frozenset()
         self.set_cooperative_matrix_software_lowering(
             cooperative_matrix_software_lowering
         )
@@ -3391,6 +3399,10 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
     def set_metadata_preconditions(self, records):
         self.metadata_preconditions = checked_metadata_preconditions(records)
 
+    def set_immutable_storage(self, records):
+        """Name read-only storage parameters that no writable binding aliases."""
+        self.immutable_storage = checked_immutable_storage(records)
+
     def generate_program(self, ast, target_stage=None):
         """Render an AST to HLSL, optionally filtering stage entry points.
 
@@ -3412,9 +3424,21 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             self.metadata_preconditions,
             getattr(ast, "structs", ()),
         )
-        code = self.generate_hlsl_program_with_narrow_pointer_layouts(ast, target_stage)
+        immutable, self.hlsl_immutable_storage_names = codegen_immutable_storage_names(
+            self.hlsl_software_subgroup_stage_entries(ast, target_stage),
+            self.immutable_storage,
+            ast,
+        )
+        try:
+            code = self.generate_hlsl_program_with_narrow_pointer_layouts(
+                ast, target_stage
+            )
+        finally:
+            self.hlsl_immutable_storage_names = frozenset()
         if records:
             code = with_metadata_precondition_header(code, records)
+        if immutable:
+            code = with_immutable_storage_header(code, immutable)
         return with_dispatch_region_header(code, region)
 
     HLSL_NARROW_POINTER_LAYOUT_PASS_LIMIT = 4
@@ -7025,6 +7049,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         uniform_call_arguments=None,
         *,
         entry=False,
+        offset_names=frozenset(),
     ):
         body = getattr(function, "body", None)
         operation_records = self.hlsl_software_subgroup_operation_records(body)
@@ -7086,7 +7111,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         counter_names = {
             record[0] for record in self.hlsl_software_subgroup_counter_loops.values()
         }
-        reassigned_names = set(reassigned_names) | counter_names
+        reassigned_names = set(reassigned_names) | counter_names | set(offset_names)
         masked_if_plans = getattr(self, "hlsl_software_subgroup_masked_if_plans", {})
 
         def declares_uniform(statement, names, components):
@@ -7152,6 +7177,19 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             node = statement
             if isinstance(node, ExpressionStatementNode):
                 node = getattr(node, "expression", None)
+            kept = follow_offset(
+                node,
+                offset_names,
+                names,
+                lambda value: self.hlsl_software_subgroup_uniform_expression(
+                    value, names, components
+                ),
+                self.map_operator,
+            )
+            if kept is not None:
+                if not kept:
+                    names.difference_update(written)
+                return
             if isinstance(node, AssignmentNode):
                 name = self.hlsl_software_subgroup_assignment_target_name(node)
                 if self.map_operator(
@@ -7976,7 +8014,11 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                     & {"uniform", "constant"}
                     or (
                         parameter.name in self.hlsl_software_subgroup_resource_names
-                        and analysis._qualified(parameter, {"constant"})
+                        and (
+                            analysis._qualified(parameter, {"constant"})
+                            # A checked contract: no writable binding aliases it.
+                            or parameter.name in self.hlsl_immutable_storage_names
+                        )
                     )
                 )
             # A name alone is not a uniformity proof after writes, shadowing,
@@ -8003,7 +8045,32 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                     )
                 elif isinstance(node, FunctionCallNode):
                     mutable_names.update(call_mutations[id(node)])
-            uniform_names.difference_update(mutable_names)
+            # Immutable entry storage moved only by offsets outside loops keeps
+            # its uniform view where the flow can follow those offsets.
+            offset_names = (
+                followed_offsets(
+                    function,
+                    {
+                        parameter.name
+                        for parameter in parameters
+                        if parameter.name in uniform_names
+                        and parameter.name in self.hlsl_software_subgroup_resource_names
+                    },
+                    call_mutations,
+                    walk=self.walk_ast,
+                    map_operator=self.map_operator,
+                    identifier_names=(
+                        self.hlsl_software_subgroup_expression_identifier_names
+                    ),
+                    write_roots=lambda target: {
+                        self.hlsl_texture_offset_write_root_name(target)
+                    }
+                    - {None},
+                )
+                if function is entry_function
+                else set()
+            )
+            uniform_names.difference_update(mutable_names - offset_names)
             uniform_components = {
                 name: components
                 for name, components in uniform_components.items()
@@ -8019,6 +8086,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 uniform_components,
                 uniform_call_arguments,
                 entry=function is entry_function,
+                offset_names=offset_names,
             )
             for call, target in call_edges[function_id]:
                 facts = uniform_call_arguments.get(id(call), set())

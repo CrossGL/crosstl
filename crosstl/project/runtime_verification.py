@@ -1259,6 +1259,7 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             parse_dispatch_region_header,
         )
 
+        from .immutable_storage import check_native_immutable_snapshots
         from .metadata_preconditions import check_native_metadata_snapshots
 
         try:
@@ -1304,6 +1305,25 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 "bind",
                 "check-native-metadata-preconditions",
                 details={"requirements": receipts},
+            )
+        try:
+            immutable = check_native_immutable_snapshots(
+                artifact_snapshot.path, self.target, prepared.buffers
+            )
+        except (ValueError, UnicodeError) as exc:
+            raise RuntimeAdapterSetupError(
+                str(exc),
+                details={
+                    "reasonKind": "immutable-storage-invalid",
+                    "target": self.target,
+                },
+            ) from exc
+        if immutable:
+            state.details["immutableStorage"] = immutable
+            state.record_step(
+                "bind",
+                "check-native-immutable-storage",
+                details={"bindings": immutable},
             )
         state.details["nativeRuntimeDispatch"] = prepared.to_json()
         return prepared

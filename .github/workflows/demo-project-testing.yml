@@ -1576,6 +1576,7 @@ jobs:
           CROSTL_REQUIRE_BITWISE_RETURN_BOUNDS: "1"
           CROSTL_REQUIRE_WORKGROUP_VIEW_IDENTITY_BRANCHES: "1"
           CROSTL_REQUIRE_SUBGROUP_BRANCH_REASSIGNMENTS: "1"
+          CROSTL_REQUIRE_IMMUTABLE_STORAGE: "1"
           CROSTL_REQUIRE_WORKGROUP_IDENTITY_REINTERPRET: "1"
           CROSTL_REQUIRE_FORWARDED_LOOP_BOUNDS: "1"
           CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
@@ -1653,6 +1654,7 @@ jobs:
               tests/test_translator/test_bitwise_return_bounds.py \
               tests/test_translator/test_workgroup_view_identity_branches.py \
               tests/test_translator/test_subgroup_branch_reassignments.py \
+              tests/test_translator/test_immutable_storage.py \
               tests/test_translator/test_workgroup_identity_reinterpret.py \
               tests/test_translator/test_forwarded_resource_loop_bounds.py \
               tests/test_translator/test_reference_aliases.py \

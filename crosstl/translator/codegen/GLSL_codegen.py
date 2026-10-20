@@ -79,6 +79,11 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..immutable_storage import (
+    checked_immutable_storage,
+    codegen_immutable_storage_names,
+    with_immutable_storage_header,
+)
 from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -499,7 +504,11 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
-from .subgroup_reassignments import ReassignmentFlow, followed_locals
+from .subgroup_reassignments import (
+    ReassignmentFlow,
+    followed_locals,
+    followed_offsets,
+)
 from .texture_lod_clamp import (
     GLSL_LOD_CLAMP_EXTENSION,
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
@@ -2661,6 +2670,8 @@ class GLSLCodeGen(
         """Initialize GLSL type maps and per-generation stage/resource state."""
         self.float_atomic_storage = FloatAtomicStorage(self)
         self.metadata_preconditions = []
+        self.immutable_storage = []
+        self.glsl_immutable_storage_names = frozenset()
         self.set_cooperative_matrix_software_lowering(
             cooperative_matrix_software_lowering
         )
@@ -6343,6 +6354,27 @@ class GLSLCodeGen(
                     self.glsl_software_subgroup_expression_identifier_names(invalidated)
                 )
         mutable.update(name for name, count in declarations.items() if count > 1)
+        # Immutable entry storage moved only by uniform-trackable offsets stays a
+        # resource; the exit and argument flows follow its view.
+        offsets = (
+            followed_offsets(
+                function,
+                {
+                    parameter.name
+                    for parameter in function.parameters or []
+                    if declarations.get(parameter.name) == 1
+                    and self.glsl_software_subgroup_constant_resource(parameter)
+                },
+                self.glsl_software_subgroup_call_mutations,
+                walk=self.walk_ast,
+                map_operator=self.map_operator,
+                identifier_names=self.glsl_software_subgroup_expression_identifier_names,
+                write_roots=self.glsl_mutation_target_names,
+            )
+            if entry
+            else set()
+        )
+        names.update(offsets)
         self.glsl_software_subgroup_resource_names = {
             declaration.name
             for declaration in [
@@ -6354,7 +6386,7 @@ class GLSLCodeGen(
                 ),
             ]
             if declarations[declaration.name] == 1
-            and declaration.name not in mutable
+            and (declaration.name not in mutable or declaration.name in offsets)
             and self.glsl_software_subgroup_uniform_returns.resource_type(
                 getattr(
                     declaration, "param_type", getattr(declaration, "var_type", None)
@@ -6362,7 +6394,7 @@ class GLSLCodeGen(
                 declaration,
             )
         }
-        names.difference_update(mutable)
+        names.difference_update(mutable - offsets)
         if (
             self.glsl_software_subgroup_count == 1
             and "gl_SubgroupID" not in mutable
@@ -6376,6 +6408,7 @@ class GLSLCodeGen(
             "uniform_names": names,
             "uniform_components": components,
             "mutable_names": mutable,
+            "offset_names": offsets,
         }
 
     def glsl_software_subgroup_uniform_arguments(self, function, seeds, *, entry):
@@ -6436,6 +6469,7 @@ class GLSLCodeGen(
             map_operator=self.map_operator,
             uniform_expression=self.glsl_software_subgroup_exit_uniform_expression,
             declares_uniform=declares_uniform,
+            offsets=facts["offset_names"],
         )
 
         def visit(body, names, components):
@@ -6550,6 +6584,7 @@ class GLSLCodeGen(
         uniform_names=None,
         uniform_components=None,
         mutable_names=None,
+        offset_names=None,
     ):
         def contains_work(root):
             return bool(self.glsl_software_subgroup_operation_records(root)) or any(
@@ -6562,22 +6597,38 @@ class GLSLCodeGen(
         uniform_names = set(uniform_names or ())
         uniform_components = dict(uniform_components or {})
         mutable_names = set(mutable_names or ())
+        offset_names = set(offset_names or ())
+
+        def declares_uniform(statement, names, components):
+            return (
+                statement.name not in mutable_names
+                and (
+                    self.glsl_software_subgroup_uniform_returns.value_type(
+                        statement.var_type
+                    )
+                    or statement.name in self.glsl_software_subgroup_resource_names
+                )
+                and self.glsl_software_subgroup_exit_uniform_expression(
+                    statement.initial_value, names, components
+                )
+            )
+
+        # Only offsets of immutable entry storage are followed here.
+        flow = ReassignmentFlow(
+            (),
+            walk=self.walk_ast,
+            map_operator=self.map_operator,
+            uniform_expression=self.glsl_software_subgroup_exit_uniform_expression,
+            declares_uniform=declares_uniform,
+            offsets=offset_names,
+        )
         for index, statement in enumerate(statements):
+            if index and offset_names:
+                flow.follow(statements[index - 1], uniform_names, uniform_components)
             if isinstance(statement, VariableNode):
                 uniform_names.discard(statement.name)
                 uniform_components.pop(statement.name, None)
-                if (
-                    statement.name not in mutable_names
-                    and (
-                        self.glsl_software_subgroup_uniform_returns.value_type(
-                            statement.var_type
-                        )
-                        or statement.name in self.glsl_software_subgroup_resource_names
-                    )
-                    and self.glsl_software_subgroup_exit_uniform_expression(
-                        statement.initial_value, uniform_names, uniform_components
-                    )
-                ):
+                if declares_uniform(statement, uniform_names, uniform_components):
                     uniform_names.add(statement.name)
             subsequent_work = later_work or any(
                 contains_work(item) for item in statements[index + 1 :]
@@ -6621,6 +6672,7 @@ class GLSLCodeGen(
                         uniform_names=uniform_names,
                         uniform_components=uniform_components,
                         mutable_names=mutable_names,
+                        offset_names=offset_names,
                     )
             elif isinstance(
                 statement,
@@ -6650,6 +6702,7 @@ class GLSLCodeGen(
                     uniform_names=uniform_names,
                     uniform_components=uniform_components,
                     mutable_names=mutable_names,
+                    offset_names=offset_names,
                 )
 
     def glsl_software_subgroup_uniform_seed_names(
@@ -6708,10 +6761,17 @@ class GLSLCodeGen(
         return names
 
     def glsl_software_subgroup_constant_resource(self, parameter):
+        """Whether an entry parameter is read-only storage nothing writes.
+
+        Constant storage is immutable by type. Read-only storage is immutable
+        only when a checked contract names the parameter, because another
+        binding of the dispatch could otherwise alias it and write.
+        """
         analysis = self.glsl_software_subgroup_uniform_returns
         return analysis.resource_type(parameter.param_type, parameter) and (
             analysis._qualified(parameter, {"constant"})
             or getattr(parameter.param_type, "address_space", None) == "constant"
+            or getattr(parameter, "name", None) in self.glsl_immutable_storage_names
         )
 
     def glsl_software_subgroup_uniform_expression(self, expression, uniform_names):
@@ -8326,6 +8386,10 @@ class GLSLCodeGen(
     def set_metadata_preconditions(self, records):
         self.metadata_preconditions = checked_metadata_preconditions(records)
 
+    def set_immutable_storage(self, records):
+        """Name read-only storage parameters that no writable binding aliases."""
+        self.immutable_storage = checked_immutable_storage(records)
+
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points.
 
@@ -8381,18 +8445,28 @@ class GLSLCodeGen(
             self.metadata_preconditions,
             getattr(ast, "structs", ()),
         )
-        self.float_atomic_storage = FloatAtomicStorage(self, discover=True)
-        code = self._generate_program(ast, target_stage)
-        roots = self.float_atomic_storage.roots
-        if roots:
-            self.float_atomic_storage = FloatAtomicStorage(self, roots=roots)
+        immutable, self.glsl_immutable_storage_names = codegen_immutable_storage_names(
+            self.glsl_software_subgroup_stage_entries(ast, target_stage),
+            self.immutable_storage,
+            ast,
+        )
+        try:
+            self.float_atomic_storage = FloatAtomicStorage(self, discover=True)
             code = self._generate_program(ast, target_stage)
-            self.float_atomic_storage.verify()
+            roots = self.float_atomic_storage.roots
+            if roots:
+                self.float_atomic_storage = FloatAtomicStorage(self, roots=roots)
+                code = self._generate_program(ast, target_stage)
+                self.float_atomic_storage.verify()
+        finally:
+            self.glsl_immutable_storage_names = frozenset()
         if records:
             code = with_metadata_precondition_header(code, records)
         code = with_combined_sampler_header(
             code, getattr(self, "combined_sampler_records", ())
         )
+        if immutable:
+            code = with_immutable_storage_header(code, immutable)
         return with_dispatch_region_header(code, region)
 
     GLSL_EARLY_EXIT_RETRY_REASONS = frozenset(

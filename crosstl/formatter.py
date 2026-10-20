@@ -151,6 +151,7 @@ class CodeFormatter:
             or "// crosstl-resource-storage:" in code
             or "// crosstl-frozen-specializations:" in code
             or "// crosstl-metadata-preconditions:" in code
+            or "// crosstl-immutable-storage:" in code
             or "// crosstl-dispatch-region:" in code
             or "// crosstl-combined-samplers:" in code
         ):
@@ -159,7 +160,7 @@ class CodeFormatter:
                 {
                     "BasedOnStyle": style,
                     "CommentPragmas": (
-                        "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:|crosstl-dispatch-region:|crosstl-combined-samplers:)"
+                        "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:|crosstl-immutable-storage:|crosstl-dispatch-region:|crosstl-combined-samplers:)"
                     ),
                 }
             )

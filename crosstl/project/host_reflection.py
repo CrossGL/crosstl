@@ -29,6 +29,10 @@ from crosstl.project.uniform_layout import (
 from crosstl.translator.codegen.stage_utils import compute_local_size
 from crosstl.translator.dispatch_region_contract import parse_dispatch_region_header
 from crosstl.translator.frozen_specializations import parse_frozen_specializations
+from crosstl.translator.immutable_storage import (
+    apply_immutable_storage,
+    parse_immutable_storage_header,
+)
 from crosstl.translator.metadata_preconditions import (
     apply_metadata_preconditions,
     parse_metadata_precondition_header,
@@ -323,6 +327,24 @@ def _reflect_resource_identities(artifact_path, record):
                     f"Metadata precondition reflection failed: {exc}",
                     severity="error",
                     details={"contract": "metadata-precondition"},
+                ),
+            ),
+        )
+    try:
+        apply_immutable_storage(
+            record["resources"], parse_immutable_storage_header(source)
+        )
+    except ValueError as exc:
+        return empty_host_interface_record(
+            "failed",
+            parser=record["parser"],
+            artifact_format=record["artifactFormat"],
+            diagnostics=(
+                ReflectionDiagnostic(
+                    REFLECTION_PARSE_FAILED,
+                    f"Immutable storage reflection failed: {exc}",
+                    severity="error",
+                    details={"contract": "immutable-storage"},
                 ),
             ),
         )

@@ -5,12 +5,14 @@ from __future__ import annotations
 FROZEN_SPECIALIZATION_PREFIX = "// crosstl-frozen-specializations: "
 RESOURCE_STORAGE_PREFIX = "// crosstl-resource-storage: "
 METADATA_PRECONDITION_PREFIX = "// crosstl-metadata-preconditions: "
+IMMUTABLE_STORAGE_PREFIX = "// crosstl-immutable-storage: "
 DISPATCH_REGION_PREFIX = "// crosstl-dispatch-region: "
 COMBINED_SAMPLER_PREFIX = "// crosstl-combined-samplers: "
 ARTIFACT_CONTRACT_PREFIXES = (
     FROZEN_SPECIALIZATION_PREFIX,
     RESOURCE_STORAGE_PREFIX,
     METADATA_PRECONDITION_PREFIX,
+    IMMUTABLE_STORAGE_PREFIX,
     DISPATCH_REGION_PREFIX,
     COMBINED_SAMPLER_PREFIX,
 )
