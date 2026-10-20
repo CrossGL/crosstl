@@ -47,7 +47,12 @@ SUFFIX = {
     "wgsl": ".wgsl",
 }
 GLSL_STAGES = {"compute": "comp", "fragment": "frag", "vertex": "vert"}
-HLSL_PROFILES = {"compute": "cs_6_6", "fragment": "ps_6_6", "vertex": "vs_6_6"}
+# The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one.
+HLSL_SHADER_MODEL = (6, 9)
+HLSL_PROFILES = {
+    stage: f"{prefix}_{HLSL_SHADER_MODEL[0]}_{HLSL_SHADER_MODEL[1]}"
+    for stage, prefix in {"compute": "cs", "fragment": "ps", "vertex": "vs"}.items()
+}
 SPIRV_ENVIRONMENT = "vulkan1.1"
 # The language version of the Metal feature list (features/metal.txt); probes compile against the same version.
 METAL_STANDARD = "metal4.1"

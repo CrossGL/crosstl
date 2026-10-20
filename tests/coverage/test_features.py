@@ -145,6 +145,7 @@ $type1 [[rn,unsigned_op=umad]] mad(in numeric<> a, in $type1 b, in $type1 c);
 void [[]] InterlockedAdd(ref int32_only result, in uint value);
 $type1 [[rn]] ddx(in float_like<> x);
 $type1 [[rn]] GetAttributeAtVertex(in numeric<> value, in uint VertexID);
+void [[]] Barrier(in uint MemoryTypeFlags, in uint SemanticFlags);
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
 uint   [[rn,min_sm=6.10]] GetGroupWaveIndex();
 } namespace
@@ -190,8 +191,10 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
     assert features["GetGroupWaveIndex"].note == "needs shader model 6.10"
-    assert features["dx::MaybeReorderThread"].category == "function"
-    assert features["dx::MaybeReorderThread"].note == "needs shader model 6.9"
+    # The probes compile for shader model 6.9, so its intrinsics are probed in the stage they belong to.
+    reorder = features["dx::MaybeReorderThread"]
+    assert (reorder.category, reorder.stage, reorder.note) == ("function", "raytracing", "")
+    assert [p.type for p in reorder.signature.params] == [Type("uint")] * 2
 
 
 def test_hlsl_methods_take_the_element_type_of_their_object():
@@ -212,7 +215,7 @@ def test_hlsl_methods_take_the_element_type_of_their_object():
 
 def test_hlsl_methods_of_types_no_probe_declares_are_untested():
     features = by_name(hlsl.parse(HLSL_TABLE))
-    assert features["DxHitObject.MakeNop"].note == "needs shader model 6.9"
+    assert features["DxHitObject.MakeNop"].note == "no probe for DxHitObject objects yet"
     assert features["NodeOutput.IsValid"].signature is None
     assert features["NodeOutput.IsValid"].note == "no probe for NodeOutput objects yet"
 
@@ -231,6 +234,16 @@ def test_hlsl_resolves_generic_layouts_and_matched_types():
     vertex = features["GetAttributeAtVertex"]
     assert [p.direction for p in vertex.signature.params] == ["in", "const"]
     assert vertex.stage == "fragment"
+    barrier = features["Barrier"].signature
+    assert [p.direction for p in barrier.params] == ["const", "const"]
+
+
+def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
+    major, minor = hlsl.SHADER_MODEL
+    assert validators.HLSL_PROFILES == {
+        stage: f"{prefix}_{major}_{minor}"
+        for stage, prefix in (("compute", "cs"), ("fragment", "ps"), ("vertex", "vs"))
+    }
 
 
 def test_hlsl_takes_crossgl_spellings_from_the_template_layer():
