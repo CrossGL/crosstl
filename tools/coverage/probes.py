@@ -23,8 +23,10 @@ _BUFFERS = {"float": "fin", "int": "iin", "uint": "uin"}
 _INTERPOLANTS = frozenset(
     "interpolateAtCentroid interpolateAtOffset interpolateAtSample InterpolateAtCentroid InterpolateAtOffset "
     "InterpolateAtSample EvaluateAttributeAtCentroid EvaluateAttributeAtSample EvaluateAttributeCentroid "
-    "EvaluateAttributeSnapped".split()
+    "EvaluateAttributeSnapped GetAttributeAtVertex".split()
 )
+# Those whose input must not be interpolated, because the function reads one vertex's value.
+_FLAT = frozenset({"GetAttributeAtVertex"})
 
 
 @dataclass(frozen=True)
@@ -48,7 +50,7 @@ class _Builder:
         self,
         dialect: Dialect,
         receiver: Receiver | None = None,
-        interpolant: bool = False,
+        interpolant: str = "",
     ):
         self.dialect = dialect
         self.receiver = receiver
@@ -93,7 +95,10 @@ class _Builder:
             if receiver and receiver.takes(param.type):
                 arguments.append(receiver.argument(param.type))
             elif index == 0 and self.interpolant:
-                self.inputs.append((dialect.type(param.type), local))
+                kind = dialect.type(param.type)
+                if self.interpolant == "flat":
+                    kind = dialect.flat(kind)
+                self.inputs.append((kind, local))
                 arguments.append(dialect.stage_input(local))
             elif param.direction == "inout":
                 if output is not None:
@@ -178,7 +183,10 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     receiver = (
         Receiver(feature.group, dialect) if feature.category == "method" else None
     )
-    builder = _Builder(dialect, receiver, feature.name in _INTERPOLANTS)
+    interpolant = feature.name in _INTERPOLANTS and (
+        "flat" if feature.name in _FLAT else "smooth"
+    )
+    builder = _Builder(dialect, receiver, interpolant or "")
     body, output = builder.body(name, feature.signature, baseline)
     buffers = [
         (dialect.type(Type(scalar)), _BUFFERS[scalar])

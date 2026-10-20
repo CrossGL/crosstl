@@ -69,6 +69,9 @@ class HLSL(Dialect):
     def resource(self, spelling: str, name: str, register: str) -> str:
         return f"{spelling} {name} : register({register});"
 
+    def flat(self, kind: str) -> str:
+        return f"nointerpolation {kind}"
+
     def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
         lines = list(parts.get("prelude", ()))
         lines += [

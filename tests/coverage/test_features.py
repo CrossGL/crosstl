@@ -144,6 +144,7 @@ $type1 [[rn]] lerp(in float_like<> a, in $type1 b, in $type1 s);
 $type1 [[rn,unsigned_op=umad]] mad(in numeric<> a, in $type1 b, in $type1 c);
 void [[]] InterlockedAdd(ref int32_only result, in uint value);
 $type1 [[rn]] ddx(in float_like<> x);
+$type1 [[rn]] GetAttributeAtVertex(in numeric<> value, in uint VertexID);
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
 uint   [[rn,min_sm=6.10]] GetGroupWaveIndex();
 } namespace
@@ -226,6 +227,10 @@ def test_hlsl_resolves_generic_layouts_and_matched_types():
     assert asdouble.params[1].type == Type("uint", (2,))
     assert features["InterlockedAdd"].signature.params[0].direction == "inout"
     assert features["transpose"].signature.params[0].type == Type("float", (2, 2))
+    # The table declares the vertex index ``in``, but DXC requires a literal.
+    vertex = features["GetAttributeAtVertex"]
+    assert [p.direction for p in vertex.signature.params] == ["in", "const"]
+    assert vertex.stage == "fragment"
 
 
 def test_hlsl_takes_crossgl_spellings_from_the_template_layer():

@@ -116,6 +116,10 @@ class Dialect:
     def statement(self, expression: str) -> str:
         return f"{expression};"
 
+    def flat(self, kind: str) -> str:
+        """A shader input of type ``kind`` that is not interpolated."""
+        return f"flat {kind}"
+
     def stage_input(self, name: str) -> str:
         """How a fragment shader reads its input ``name``, which :meth:`fragment` declares from ``inputs``."""
         return name
