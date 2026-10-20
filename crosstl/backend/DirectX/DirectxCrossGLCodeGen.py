@@ -157,7 +157,7 @@ class HLSLToCrossGLConverter(HLSLMatrixImportMixin, ImportRefusalMixin):
             "bool2": "bvec2",
             "bool3": "bvec3",
             "bool4": "bvec4",
-            # Matrix Types: HLSL floatRxC is CrossGL matCxR (ADR 0003)
+            # Matrix Types: HLSL floatRxC is CrossGL matCxR (ADR 0004)
             **hlsl_matrix_type_map(),
             # Texture Types
             "Texture1D": "sampler1D",

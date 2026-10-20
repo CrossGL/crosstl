@@ -1,6 +1,6 @@
 """CrossGL matrix orientation in HLSL.
 
-CrossGL ``matCxR`` (ADR 0003) has C columns and R rows. The HLSL emitter declares it as ``floatRxC``, the same
+CrossGL ``matCxR`` (ADR 0004) has C columns and R rows. The HLSL emitter declares it as ``floatRxC``, the same
 R rows and C columns, so ``m * v`` stays ``mul(m, v)`` and HLSL's default ``column_major`` packing stores the
 columns contiguously as std140 and std430 do. HLSL disagrees with CrossGL in three places, which this module
 lowers:

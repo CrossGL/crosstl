@@ -1,4 +1,4 @@
-# ADR 0003: CrossGL matrices follow GLSL: `matCxR` has C columns and R rows
+# ADR 0004: CrossGL matrices follow GLSL: `matCxR` has C columns and R rows
 
 - Status: accepted
 - Date: 2026-10-19

@@ -2018,7 +2018,7 @@ def test_codegen_min_precision_vector_and_matrix_types():
 
     assert "f16vec3 hdr @ Color0;" in output
     assert "f16vec2 uv @ TexCoord0;" in output
-    # HLSL min16float2x3 has two rows of three: CrossGL f16mat3x2 (ADR 0003).
+    # HLSL min16float2x3 has two rows of three: CrossGL f16mat3x2 (ADR 0004).
     assert "f16mat3x2 colorMatrix;" in output
     assert "f16vec3 Shade(" in output
     assert "f16vec3 color @ Color0" in output

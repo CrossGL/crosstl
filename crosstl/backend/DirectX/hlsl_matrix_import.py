@@ -1,4 +1,4 @@
-"""Import HLSL matrices with CrossGL's column-by-row meaning (ADR 0003).
+"""Import HLSL matrices with CrossGL's column-by-row meaning (ADR 0004).
 
 HLSL ``floatRxC`` has R rows and C columns: ``m[i]`` is row ``i``, constructors and initializer lists fill rows,
 ``m._mRC`` (zero-based) and ``m._RC`` (one-based) name element (R, C), ``*`` between two matrices is componentwise

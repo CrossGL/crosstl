@@ -1,4 +1,4 @@
-"""HLSL floatRxC imports as CrossGL matCxR with rows, row-filling constructors and _mRC swizzles lowered (ADR 0003)."""
+"""HLSL floatRxC imports as CrossGL matCxR with rows, row-filling constructors and _mRC swizzles lowered (ADR 0004)."""
 
 import textwrap
 

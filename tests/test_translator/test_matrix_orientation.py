@@ -1,4 +1,4 @@
-"""CrossGL matrices follow GLSL: ``matCxR`` has C columns and R rows (ADR 0003).
+"""CrossGL matrices follow GLSL: ``matCxR`` has C columns and R rows (ADR 0004).
 
 The HLSL emitter declares ``matCxR`` as ``floatRxC`` and lowers the places where HLSL disagrees: ``m[i]`` (a row in
 HLSL, a column in CrossGL), constructors and ``{...}`` initializers (rows in HLSL, columns in CrossGL), ``matN(s)``
