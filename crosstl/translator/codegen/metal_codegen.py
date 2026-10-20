@@ -86,6 +86,11 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from .metal_array_copies import (
+    generate_metal_array_copy,
+    generate_metal_array_initializer,
+    render_metal_split_member_constructor_arguments,
+)
 from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -4196,6 +4201,9 @@ class MetalCodeGen:
 
     def generate_struct_constructor_argument(self, expr, field_type):
         """Convert promoted narrow values back to the aggregate's physical field type."""
+        array_initializer = generate_metal_array_initializer(self, expr, field_type)
+        if array_initializer is not None:
+            return array_initializer
         raw_type = self.resolve_metal_type_alias(self.type_name_string(field_type))
         base_type, array_suffix = split_array_type_suffix(raw_type)
         native = self.metal_native_narrow_bitcast_storage_type(base_type)
@@ -4240,12 +4248,19 @@ class MetalCodeGen:
             return None
 
         fields = list(self.struct_member_types[constructor_name].items())
-        rendered_args = render_constructor_arguments(
+        rendered_args = render_metal_split_member_constructor_arguments(
             self,
-            constructor_name,
             expr,
             fields,
+            self.metal_stage_io_member_lowerings.get(constructor_name, {}),
         )
+        if rendered_args is None:
+            rendered_args = render_constructor_arguments(
+                self,
+                constructor_name,
+                expr,
+                fields,
+            )
         return format_struct_constructor_expression(
             self,
             self.map_type(constructor_name),
@@ -7749,6 +7764,11 @@ class MetalCodeGen:
                     if address_space_mismatch is not None
                     else ""
                 )
+                if value_array_type is None:
+                    init_expr = (
+                        generate_metal_array_initializer(self, initial_value, var_type)
+                        or init_expr
+                    )
                 return f"{diagnostic_prefix}{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"
@@ -10158,6 +10178,9 @@ class MetalCodeGen:
             converted = self.metal_registered_structure_assignment(target, value)
             if converted is not None:
                 rhs = converted
+            array_copy = generate_metal_array_copy(self, target, value)
+            if array_copy is not None:
+                return array_copy
 
         reference_declaration = self.generate_local_reference_assignment_declaration(
             target, value, rhs

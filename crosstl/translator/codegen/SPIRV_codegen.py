@@ -14282,9 +14282,15 @@ class VulkanSPIRVCodeGen(
             metadata = self.struct_member_metadata.get(
                 param_value_type.type.base_type, {}
             )
-            for member_index, (member_type, member_name) in enumerate(members):
+            # A member that occupies several locations (an array or matrix) moves the later members along.
+            member_location = 0
+            for member_type, member_name in members:
                 member_info = metadata.get(member_name, {})
                 member_node = member_info.get("node")
+                location_index = member_location
+                member_location += self.struct_member_interface_location_span(
+                    member_node
+                )
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Input",
@@ -14297,7 +14303,7 @@ class VulkanSPIRVCodeGen(
                     member_type,
                     member_node,
                     member_name=member_name,
-                    member_index=member_index,
+                    member_index=location_index,
                 )
                 components.append(
                     self.load_entry_point_interface_value(variable, member_type)
@@ -14325,9 +14331,14 @@ class VulkanSPIRVCodeGen(
         if members:
             outputs = []
             metadata = self.struct_member_metadata.get(return_type.type.base_type, {})
+            member_location = 0
             for member_index, (member_type, member_name) in enumerate(members):
                 member_info = metadata.get(member_name, {})
                 member_node = member_info.get("node")
+                location_index = member_location
+                member_location += self.struct_member_interface_location_span(
+                    member_node
+                )
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Output",
@@ -14340,7 +14351,7 @@ class VulkanSPIRVCodeGen(
                     member_type,
                     member_node,
                     member_name=member_name,
-                    member_index=member_index,
+                    member_index=location_index,
                 )
                 outputs.append((member_index, variable, member_type))
             return {"kind": "struct", "type": return_type, "outputs": outputs}
@@ -19700,9 +19711,57 @@ class VulkanSPIRVCodeGen(
             or self.is_glsl_buffer_block_node(node)
         )
 
+    # Clip and cull distances are float arrays whose size the shader declares (GLSL 4.60 section 7.1).
+    DISTANCE_BUILTINS = {
+        "gl_ClipDistance": ("ClipDistance", "ClipDistance"),
+        "gl_CullDistance": ("CullDistance", "CullDistance"),
+    }
+    DISTANCE_BUILTIN_STAGES = {
+        "Output": {"Vertex", "TessellationEvaluation", "Geometry"},
+        "Input": {"Fragment"},
+    }
+
+    def global_interface_distance_builtin(
+        self, node: VariableNode, storage_class: str, type_id: SpirvId
+    ) -> Optional[SpirvId]:
+        """The ``ClipDistance`` or ``CullDistance`` built-in a stage-level variable declares, or ``None``."""
+        semantic = self.semantic_from_node(node)
+        name = str(semantic) if semantic is not None else getattr(node, "name", "")
+        if name not in self.DISTANCE_BUILTINS:
+            return None
+        builtin_name, capability = self.DISTANCE_BUILTINS[name]
+        execution_model = self.current_execution_model
+        if execution_model not in self.DISTANCE_BUILTIN_STAGES.get(storage_class, ()):
+            raise ValueError(
+                f"SPIR-V {name} is not a {storage_class.lower()} of the "
+                f"{execution_model or 'current'} stage"
+            )
+        array_info = self.array_type_info_from_type(type_id)
+        element_type = array_info[0] if array_info is not None else None
+        if (
+            element_type is None
+            or self.normalize_primitive_name(element_type.type.base_type) != "float"
+        ):
+            raise ValueError(f"SPIR-V {name} must be declared as a sized float array")
+        cache_key = f"__distance_builtin::{name}::{storage_class}"
+        if cache_key in self.global_variables:
+            builtin = self.global_variables[cache_key]
+            self.mark_builtin_interface_variable(builtin)
+            return builtin
+        self.require_capability(capability)
+        builtin = self.register_builtin_variable(
+            name, type_id, builtin_name, storage_class
+        )
+        self.global_variables[cache_key] = builtin
+        self.mark_builtin_interface_variable(builtin)
+        return builtin
+
     def global_interface_builtin_variable(
         self, node: VariableNode, storage_class: str, type_id: SpirvId
     ) -> Optional[SpirvId]:
+        distance = self.global_interface_distance_builtin(node, storage_class, type_id)
+        if distance is not None:
+            return distance
         semantic = self.semantic_from_node(node)
         if semantic is None and self.stage_builtin_info(getattr(node, "name", "")):
             semantic = node.name
@@ -20122,6 +20181,12 @@ class VulkanSPIRVCodeGen(
 
     def interface_location_span(self, node: VariableNode) -> int:
         return max(len(self.interface_location_component_widths(node)), 1)
+
+    def struct_member_interface_location_span(self, member_node) -> int:
+        """Locations a stage-interface structure member occupies; built-ins and unknown members count one."""
+        if member_node is None:
+            return 1
+        return self.interface_location_span(member_node)
 
     def explicit_interface_integer_attribute(
         self, node: VariableNode, attribute_name: str
@@ -29246,6 +29311,12 @@ class VulkanSPIRVCodeGen(
             "gl_Position": (
                 "vec4",
                 "Position",
+                "Output",
+                {"Vertex", "TessellationEvaluation"},
+            ),
+            "gl_PointSize": (
+                "float",
+                "PointSize",
                 "Output",
                 {"Vertex", "TessellationEvaluation"},
             ),

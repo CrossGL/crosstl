@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 
 from .annotate import Annotator
 from .array_length import fold_array_lengths
+from .array_parameters import copy_written_array_parameters
+from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_stage_interfaces import (
     HlslStageInterfaceUnsupportedError,
@@ -44,6 +46,7 @@ from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_array
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 
 __all__ = [
+    "ArrayConstructorUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
@@ -100,7 +103,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
-    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`); ``a.length()`` of a sized
+    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). For targets that build arrays
+    only in aggregate initializers, other array constructors become initializer lists or named locals
+    (:mod:`.array_values`), and Metal callees that write an ``in`` array parameter get a copy of it
+    (:mod:`.array_parameters`). ``a.length()`` of a sized
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
     (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), and
@@ -128,6 +134,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     expand_struct_scalar_splats(program, report.source, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
+    hoist_array_constructors(program, report.target)
+    copy_written_array_parameters(program, report.target)
     refuse_per_vertex_inputs(program, report.target)
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
