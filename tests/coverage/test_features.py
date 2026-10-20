@@ -370,6 +370,8 @@ def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
             ("fragment", "ps"),
             ("vertex", "vs"),
             ("geometry", "gs"),
+            ("tessellation-control", "hs"),
+            ("tessellation-evaluation", "ds"),
             ("ray-generation", "lib"),
             ("intersection", "lib"),
             ("any-hit", "lib"),

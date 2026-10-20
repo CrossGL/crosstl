@@ -52,6 +52,8 @@ GLSL_STAGES = {
     "fragment": "frag",
     "vertex": "vert",
     "geometry": "geom",
+    "tessellation-control": "tesc",
+    "tessellation-evaluation": "tese",
     # glslang's stage suffixes for GL_EXT_ray_tracing shaders.
     "ray-generation": "rgen",
     "intersection": "rint",
@@ -70,8 +72,16 @@ HLSL_PROFILES = {
         "fragment": "ps",
         "vertex": "vs",
         "geometry": "gs",
+        "tessellation-control": "hs",
+        "tessellation-evaluation": "ds",
         **dict.fromkeys(RAYTRACING_STAGES, "lib"),
     }.items()
+}
+# slangc's names for the stages it does not spell as the report does.
+SLANG_STAGES = {
+    **RAYTRACING_STAGES,
+    "tessellation-control": "hull",
+    "tessellation-evaluation": "domain",
 }
 SPIRV_ENVIRONMENT = "vulkan1.1"
 # Ray tracing needs SPIR-V 1.4, which Vulkan 1.1 allows only as an extension; DXC lowers it for Vulkan 1.2.
@@ -187,7 +197,13 @@ def _run(arguments: list[str], cwd: str) -> Verdict:
 
 
 # Entry-point names HLSL writers conventionally give each stage, tried when a shader has no ``main``.
-HLSL_STAGE_ENTRIES = {"vertex": "VSMain", "fragment": "PSMain", "geometry": "GSMain"}
+HLSL_STAGE_ENTRIES = {
+    "vertex": "VSMain",
+    "fragment": "PSMain",
+    "geometry": "GSMain",
+    "tessellation-control": "HSMain",
+    "tessellation-evaluation": "DSMain",
+}
 
 
 def hlsl_entry(source: str, stage: str) -> str:
@@ -205,6 +221,40 @@ def hlsl_entry(source: str, stage: str) -> str:
         if re.search(rf"\b{conventional}\s*\(", source):
             return conventional
     return "main"
+
+
+# The AIR metadata that marks a Metal entry point of each stage; a post-tessellation vertex function also describes
+# its patch.
+METAL_ENTRIES = {
+    "compute": (r"^!air\.kernel = ",),
+    "vertex": (r"^!air\.vertex = ",),
+    "fragment": (r"^!air\.fragment = ",),
+    "tessellation-evaluation": (r"^!air\.vertex = ", r'!"air\.patch"'),
+}
+
+
+def _metal(name: str, stage: str, scratch: str) -> Verdict:
+    """Compile a Metal probe to textual AIR and require an entry point of ``stage``: the compiler accepts a library
+    of plain functions, which no pipeline can run."""
+    compiled = _run(
+        [
+            *command("metal"),
+            f"-std={METAL_STANDARD}",
+            "-S",
+            "-emit-llvm",
+            name,
+            "-o",
+            "probe.ll",
+        ],
+        scratch,
+    )
+    if not compiled.accepted:
+        return compiled
+    air = Path(scratch, "probe.ll").read_text()
+    for pattern in METAL_ENTRIES.get(stage, ()):
+        if not re.search(pattern, air, re.MULTILINE):
+            return Verdict(False, f"error: the library has no {stage} entry point")
+    return compiled
 
 
 def validate(
@@ -247,17 +297,7 @@ def validate(
                 scratch,
             )
         if language == "metal":
-            return _run(
-                [
-                    *command("metal"),
-                    f"-std={METAL_STANDARD}",
-                    "-c",
-                    name,
-                    "-o",
-                    "probe.air",
-                ],
-                scratch,
-            )
+            return _metal(name, stage, scratch)
         if language == "wgsl":
             return _run([*command("naga"), name], scratch)
         if language == "cuda":
@@ -406,7 +446,7 @@ def lower(
     fields = {
         "source": name,
         "entry": entry,
-        "stage": RAYTRACING_STAGES.get(stage, stage),
+        "stage": SLANG_STAGES.get(stage, stage),
         "profile": HLSL_PROFILES.get(stage, ""),
         "environment": (
             RAYTRACING_ENVIRONMENT if stage in RAYTRACING_STAGES else SPIRV_ENVIRONMENT

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +9,7 @@ from tools.coverage.model import Feature
 _MODELS = [
     ("Vertex", ["Shader"]),
     ("TessellationControl", ["Tessellation"]),
+    ("TessellationEvaluation", ["Tessellation"]),
     ("Geometry", ["Geometry"]),
     ("Fragment", ["Shader"]),
     ("GLCompute", ["Shader"]),
@@ -67,6 +69,7 @@ def test_stages_are_the_shader_execution_models():
     assert stages == [
         "vertex",
         "tessellation-control",
+        "tessellation-evaluation",
         "geometry",
         "fragment",
         "compute",
@@ -117,8 +120,9 @@ def test_every_curated_construct_has_a_crossgl_template():
     assert {c.name for c in constructs._curated()} <= set(crossgl.CONSTRUCTS)
 
 
-def test_a_construct_without_a_template_is_untested_not_absent():
+def test_a_construct_without_a_template_is_untested_not_absent(monkeypatch):
     feature = _feature("glsl", "tessellation-control")
+    monkeypatch.delitem(templates.TEMPLATES["glsl"], "tessellation-control")
     with pytest.raises(probes.ProbeError, match="no glsl probe template"):
         probes.build(feature, "glsl")
 
@@ -136,6 +140,41 @@ def test_stage_programs_take_the_stage_suffix():
     assert probes.build(_feature("glsl", "geometry"), "glsl").suffix == ".geom"
     assert probes.build(_feature("glsl", "discard"), "glsl").suffix == ".frag"
     assert probes.build(_feature("glsl", "closest-hit"), "glsl").suffix == ".rchit"
+    tese = probes.build(_feature("glsl", "tessellation-evaluation"), "glsl")
+    assert tese.suffix == ".tese"
+
+
+def test_slang_names_the_hull_stage_on_its_entry_point():
+    hull = probes.build(_feature("slang", "tessellation-control"), "slang").source
+    assert '[shader("hull")]\n[domain("tri")]' in hull
+
+
+@pytest.mark.parametrize(
+    ("stage", "air", "accepted"),
+    [
+        ("vertex", "define void @f() {\n}\n", False),
+        ("vertex", "!air.vertex = !{!9}\n", True),
+        ("compute", "!air.vertex = !{!9}\n", False),
+        ("tessellation-evaluation", "!air.vertex = !{!9}\n", False),
+        (
+            "tessellation-evaluation",
+            '!air.vertex = !{!9}\n!17 = !{!"air.patch", !"triangle"}\n',
+            True,
+        ),
+    ],
+)
+def test_a_metal_probe_needs_an_entry_point_of_its_stage(
+    monkeypatch, stage, air, accepted
+):
+    def run(arguments, cwd):
+        Path(cwd, arguments[arguments.index("-o") + 1]).write_text(air)
+        return validators.Verdict(True)
+
+    monkeypatch.setattr(validators, "command", lambda name: (name,))
+    monkeypatch.setattr(validators, "_run", run)
+    verdict = validators.validate("metal", "", stage)
+    assert verdict.accepted is accepted
+    assert accepted or f"no {stage} entry point" in verdict.log
 
 
 def test_ray_tracing_stages_are_checked_for_vulkan(monkeypatch):

@@ -97,7 +97,25 @@ GLSL = {
         program="#version 460\nlayout(location = 0) in vec2 uv;\nlayout(location = 0) out vec4 color;\n"
         "void main() {\n    if (uv.x < 0.5) {\n        discard;\n    }\n    color = vec4(uv, 0.0, 1.0);\n}\n"
     ),
+    # A triangle patch of three control points, tessellated once.
+    "tessellation-control": Template(
+        program="#version 460\nlayout(vertices = 3) out;\nlayout(location = 0) in vec4 position[];\n"
+        "layout(location = 0) out vec4 outPosition[];\nvoid main() {\n"
+        "    outPosition[gl_InvocationID] = position[gl_InvocationID] * 2.0;\n"
+        "    gl_TessLevelOuter[0] = 1.0;\n    gl_TessLevelOuter[1] = 1.0;\n    gl_TessLevelOuter[2] = 1.0;\n"
+        "    gl_TessLevelInner[0] = 1.0;\n}\n"
+    ),
+    "tessellation-evaluation": Template(
+        program="#version 460\nlayout(triangles, equal_spacing, ccw) in;\nlayout(location = 0) in vec4 position[];\n"
+        "void main() {\n    gl_Position = position[0] * gl_TessCoord.x + position[1] * gl_TessCoord.y"
+        " + position[2] * gl_TessCoord.z;\n}\n"
+    ),
 }
+
+_HLSL_PATCH = (
+    "struct ControlPoint {\n    float4 position : POSITION;\n};\n\nstruct PatchConstants {\n"
+    "    float edges[3] : SV_TessFactor;\n    float inside : SV_InsideTessFactor;\n};\n\n"
+)
 
 HLSL = {
     **C_FAMILY,
@@ -167,6 +185,24 @@ HLSL = {
     "discard": Template(
         program="float4 main(float2 uv : TEXCOORD0) : SV_Target {\n    if (uv.x < 0.5) {\n        discard;\n"
         "    }\n    return float4(uv, 0.0, 1.0);\n}\n",
+        entry="main",
+    ),
+    "tessellation-control": Template(
+        program=_HLSL_PATCH
+        + "PatchConstants constants(InputPatch<ControlPoint, 3> patch) {\n    PatchConstants output;\n"
+        "    output.edges[0] = 1.0;\n    output.edges[1] = 1.0;\n    output.edges[2] = 1.0;\n"
+        "    output.inside = 1.0;\n    return output;\n}\n\n"
+        '[domain("tri")]\n[partitioning("integer")]\n[outputtopology("triangle_cw")]\n[outputcontrolpoints(3)]\n'
+        '[patchconstantfunc("constants")]\n'
+        "ControlPoint main(InputPatch<ControlPoint, 3> patch, uint id : SV_OutputControlPointID) {\n"
+        "    ControlPoint output;\n    output.position = patch[id].position * 2.0;\n    return output;\n}\n",
+        entry="main",
+    ),
+    "tessellation-evaluation": Template(
+        program=_HLSL_PATCH
+        + '[domain("tri")]\nfloat4 main(PatchConstants constants, float3 coord : SV_DomainLocation,\n'
+        "            const OutputPatch<ControlPoint, 3> patch) : SV_Position {\n"
+        "    return patch[0].position * coord.x + patch[1].position * coord.y + patch[2].position * coord.z;\n}\n",
         entry="main",
     ),
 }
@@ -284,6 +320,16 @@ METAL = {
         program=_METAL_HEADER + "struct FragmentIn {\n    float2 uv;\n};\n\n"
         "fragment float4 probe(FragmentIn in [[stage_in]]) {\n    if (in.uv.x < 0.5) {\n"
         "        discard_fragment();\n    }\n    return float4(in.uv, 0.0, 1.0);\n}\n"
+    ),
+    # The post-tessellation vertex function of a triangle patch.
+    "tessellation-evaluation": Template(
+        program=_METAL_HEADER
+        + "struct ControlPoint {\n    float4 position [[attribute(0)]];\n};\n\n"
+        "struct Patch {\n    patch_control_point<ControlPoint> points;\n};\n\n"
+        "[[patch(triangle, 3)]]\nvertex float4 probe(Patch patch [[stage_in]], "
+        "float3 coord [[position_in_patch]]) {\n"
+        "    return patch.points[0].position * coord.x + patch.points[1].position * coord.y"
+        " + patch.points[2].position * coord.z;\n}\n"
     ),
     # Metal has no geometry stage, runs tessellation factors in a compute kernel, and traces rays from kernels
     # with intersection functions rather than dedicated ray stages.
@@ -457,6 +503,18 @@ SLANG = {
         ),
     ),
     "discard": _slang(HLSL["discard"], "fragment"),
+    **{
+        name: replace(
+            HLSL[name],
+            program=HLSL[name].program.replace(
+                "[domain(", f'[shader("{stage}")]\n[domain('
+            ),
+        )
+        for name, stage in (
+            ("tessellation-control", "hull"),
+            ("tessellation-evaluation", "domain"),
+        )
+    },
     # slangc takes no payload access qualifiers.
     **{
         name: replace(template, program=template.program.replace(" : register(u0)", ""))

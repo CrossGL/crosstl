@@ -462,6 +462,39 @@ _RAYTRACING_STAGES = {
     ),
 }
 
+# A triangle patch of three control points, tessellated once. CrossGL states the domain, partitioning, topology and
+# patch-constant function on the stage, which every target needs, and names the tessellation values by their
+# semantics, as the HLSL importer does.
+_PATCH = (
+    "shader Probe {\n    struct ControlPoint {\n        vec4 position @ POSITION;\n    }\n"
+    "    struct PatchConstants {\n        float edges[3] @ SV_TessFactor;\n"
+    "        float inside @ SV_InsideTessFactor;\n    }\n"
+)
+_TESSELLATION_STAGES = {
+    "tessellation-control": Template(
+        program=_PATCH + "    tessellation_control {\n"
+        "        PatchConstants constants(InputPatch<ControlPoint, 3> patch) {\n"
+        "            PatchConstants output;\n            output.edges[0] = 1.0;\n            output.edges[1] = 1.0;\n"
+        "            output.edges[2] = 1.0;\n            output.inside = 1.0;\n            return output;\n"
+        "        }\n"
+        "        ControlPoint main(InputPatch<ControlPoint, 3> patch, uint id @ SV_OutputControlPointID)\n"
+        "            @domain(tri)\n            @partitioning(integer)\n            @outputtopology(triangle_cw)\n"
+        "            @outputcontrolpoints(3)\n            @patchconstantfunc(constants) {\n"
+        "            ControlPoint output;\n            output.position = patch[id].position * 2.0;\n"
+        "            return output;\n        }\n    }\n}\n"
+    ),
+    "tessellation-evaluation": Template(
+        program=_PATCH
+        + "    struct DomainOutput {\n        vec4 position @ SV_Position;\n    }\n"
+        "    tessellation_evaluation {\n"
+        "        DomainOutput main(PatchConstants constants, vec3 coord @ SV_DomainLocation,\n"
+        "                          OutputPatch<ControlPoint, 3> patch) @domain(tri) {\n"
+        "            DomainOutput output;\n"
+        "            output.position = patch[0].position * coord.x + patch[1].position * coord.y"
+        " + patch[2].position * coord.z;\n            return output;\n        }\n    }\n}\n"
+    ),
+}
+
 # Language-level probes (:mod:`.constructs`). Kernel templates use the CrossGL kernel above: ``prelude`` lines are
 # shader-level declarations, ``declarations`` go inside the compute block.
 CONSTRUCTS: dict[str, Template] = {
@@ -512,6 +545,7 @@ CONSTRUCTS: dict[str, Template] = {
         "            EmitVertex();\n            EndPrimitive();\n        }\n    }\n}\n"
     ),
     "fragment": Template(program=_FRAGMENT.replace("{body}", "")),
+    **_TESSELLATION_STAGES,
     **_RAYTRACING_STAGES,
     "discard": Template(
         program=_FRAGMENT.replace(
