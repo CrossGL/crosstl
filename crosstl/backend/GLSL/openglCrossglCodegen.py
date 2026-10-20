@@ -1869,6 +1869,27 @@ class GLSLToCrossGLConverter:
                 emitted.append(mapped)
         return " ".join(emitted)
 
+    # Qualifiers that do not give a global a storage class (GLSL 4.60 sections 4.5-4.7, 4.8 and 4.10).
+    _NON_STORAGE_QUALIFIERS = frozenset(
+        {"highp", "mediump", "lowp", "precise", "invariant"}
+    )
+
+    def private_global_prefix(self, var):
+        """``static `` for a global without a storage qualifier, which GLSL makes private to each invocation.
+
+        GLSL 4.60 section 4.3: a global with no storage qualifier is neither shared nor visible to the API; it
+        is a plain variable each invocation reads and writes. A CrossGL global without a qualifier is a
+        uniform, so the private one carries ``static``, the CrossGL storage class for per-invocation globals.
+        """
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", None) or []}
+        if qualifiers - self._NON_STORAGE_QUALIFIERS:
+            return ""
+        if getattr(var, "is_const", False):
+            return ""
+        if self._is_resource_type(self.variable_declaration_type(var)):
+            return ""
+        return "static "
+
     def interface_qualifier_prefix(self, var):
         qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
         emitted = []
@@ -2800,7 +2821,10 @@ class GLSLToCrossGLConverter:
                 result += self.indent_str + ssbo_block_decl + ";\n"
                 continue
             result += (
-                self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
+                self.indent_str
+                + self.private_global_prefix(global_var)
+                + self.generate_variable_declaration(global_var)
+                + ";\n"
             )
         if getattr(node, "global_variables", []):
             result += "\n"

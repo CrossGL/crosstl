@@ -124,6 +124,7 @@ from .spirv_stage_distances import (
     load_entry_point_distance,
     store_entry_point_distance,
 )
+from .spirv_unavailable_inputs import unread_unavailable_builtin_input
 from .stage_io_semantic_locations import spirv_semantic_location
 from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
@@ -14339,6 +14340,16 @@ class VulkanSPIRVCodeGen(
                     components.append(
                         load_entry_point_distance(self, array, distance, member_type)
                     )
+                    continue
+                if unread_unavailable_builtin_input(
+                    self,
+                    getattr(self, "spirv_program_ast", None),
+                    execution_model,
+                    member_node,
+                    member_type,
+                    member_name,
+                ):
+                    components.append(self.register_undefined_value(member_type))
                     continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
@@ -29340,6 +29351,8 @@ class VulkanSPIRVCodeGen(
             )
         if upper_name == "SV_BARYCENTRICS":
             return "gl_BaryCoordEXT"
+        if upper_name == "SV_SAMPLEINDEX":
+            return "gl_SampleID"
         if upper_name == "SV_STENCILREF":
             return "gl_FragStencilRefEXT"
         if upper_name == "SV_DEPTH":
@@ -29394,6 +29407,18 @@ class VulkanSPIRVCodeGen(
             "gl_FragInvocationCountEXT": (
                 "uint",
                 "FragInvocationCountEXT",
+                "Input",
+                {"Fragment"},
+            ),
+            "gl_SampleID": (
+                "int",
+                "SampleId",
+                "Input",
+                {"Fragment"},
+            ),
+            "gl_SamplePosition": (
+                "vec2",
+                "SamplePosition",
                 "Input",
                 {"Fragment"},
             ),
@@ -29745,6 +29770,8 @@ class VulkanSPIRVCodeGen(
         elif builtin_name in {"FragSizeEXT", "FragInvocationCountEXT"}:
             self.require_capability("FragmentDensityEXT")
             self.require_extension("SPV_EXT_fragment_invocation_density")
+        elif builtin_name in {"SampleId", "SamplePosition"}:
+            self.require_capability("SampleRateShading")
         elif builtin_name == "FragStencilRefEXT":
             self.require_capability("StencilExportEXT")
             self.require_extension("SPV_EXT_shader_stencil_export")
@@ -29848,6 +29875,13 @@ class VulkanSPIRVCodeGen(
         self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
         if builtin_name in {"TessLevelOuter", "TessLevelInner"}:
             self.decorations.append(f"OpDecorate %{id_value} Patch")
+        if (
+            storage_class == "Input"
+            and self.current_stage_builtin_execution_model() == "Fragment"
+            and self.interface_type_requires_flat(type_id)
+        ):
+            # Vulkan VUID-StandaloneSpirv-Flat-04744 covers built-in inputs too (gl_FragSizeEXT, gl_SampleID).
+            self.decorations.append(f"OpDecorate %{id_value} Flat")
         self.mark_fragment_builtin_execution_mode_if_needed(builtin_name, storage_class)
 
         spirv_id = SpirvId(id_value, ptr_type.type, name)
@@ -30925,6 +30959,7 @@ class VulkanSPIRVCodeGen(
         lower_relational_builtins(ast)
         lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
+        self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(
             (getattr(ast, "stages", None) or {}).items()
         )

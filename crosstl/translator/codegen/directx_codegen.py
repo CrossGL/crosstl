@@ -361,6 +361,7 @@ from .image_access_contracts import (
     validate_texture_operation_arity,
 )
 from .index_range_contracts import truncating_division_interval
+from .interface_conflicts import InterfaceLocationConflictError
 from .loop_induction import (
     checked_induction_value,
     fixed_stride_loop_terminates,
@@ -37664,10 +37665,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 used_label = self.hlsl_semantic_range_label(
                     semantic, used_start, used_end
                 )
-                raise ValueError(
+                raise InterfaceLocationConflictError(
+                    "directx",
                     f"Conflicting DirectX semantic range in struct '{struct_name}' "
                     f"for member '{member_name}': {range_label} overlaps "
-                    f"member '{used_member}' {used_label}"
+                    f"member '{used_member}' {used_label}",
                 )
         ranges.append((start, end, member_name))
 

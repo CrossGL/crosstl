@@ -18,12 +18,17 @@ from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
 )
+from .dxr_ray_interfaces import (
+    DxrRayInterfaceUnsupportedError,
+    lower_dxr_ray_interfaces,
+)
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_stage_interfaces import (
     HlslStageInterfaceUnsupportedError,
     legalize_hlsl_stage_interfaces,
 )
+from .hlsl_tess_factors import TessFactorUnsupportedError, fit_tess_factors_to_domain
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
 from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
@@ -61,8 +66,10 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 __all__ = [
     "ArrayConstructorUnsupportedError",
     "StageInterfaceUnsupportedError",
+    "TessFactorUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
     "DescriptorArrayUnsupportedError",
+    "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
     "GeometryStreamUnsupportedError",
@@ -156,9 +163,11 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_intrinsic_named_functions(program)
     canonicalize_texture_swizzles(program)
     gather_stage_interface_variables(program, report.target)
+    fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)
+    lower_dxr_ray_interfaces(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     hoist_array_constructors(program, report.target)
