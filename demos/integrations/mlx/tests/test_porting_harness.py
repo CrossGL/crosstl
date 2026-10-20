@@ -8997,7 +8997,9 @@ def _write_vulkan_refusal_report(module, report_path, *, codes=None):
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
 
-def test_vulkan_frontier_refusals_fail_closed_with_their_tracked_codes(tmp_path, monkeypatch):
+def test_vulkan_frontier_refusals_fail_closed_with_their_tracked_codes(
+    tmp_path, monkeypatch
+):
     module = _load_harness()
     refusals = module.MLX_VULKAN_FRONTIER_REFUSALS
     assert set(refusals) <= set(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
@@ -9016,7 +9018,9 @@ def test_vulkan_frontier_refusals_fail_closed_with_their_tracked_codes(tmp_path,
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         assert name == "vulkan-frontier-refusals" and check is False
         _write_vulkan_refusal_report(module, report_dir / f"{name}.json", codes=changed)
-        return module.CommandResult(name, list(command), 1, tmp_path / "o", tmp_path / "e")
+        return module.CommandResult(
+            name, list(command), 1, tmp_path / "o", tmp_path / "e"
+        )
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
     with pytest.raises(module.PortingCheckError, match="no longer fails with"):
@@ -12151,7 +12155,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
         "schema_version": 2,
-        "sha256": "aa34ec66b8e2b49680e18c1fbd892ce6f2f2c3aa749d261d6c510e703b65c233",
+        "sha256": "23c7515c9e0d4b86f88c8fce228947406843560a9bf03d02cc4c6c9d96344eed",
         "size_bytes": 317694,
         "entry_identity_fields": [
             "entryPoint",
@@ -12259,7 +12263,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 5316552,
+        "generated_size_bytes_total": 5317707,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3566},
             "maximum": {

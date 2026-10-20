@@ -53,8 +53,8 @@ ARTIFACTS = {
         "sizeBytes": 6526,
     },
     "opengl": {
-        "sha256": "c875953cd46217256c9228247220ebec524bb8b938b03b6733799e53bddfeeaa",
-        "sizeBytes": 10670,
+        "sha256": "30ead42ade86308f13e26a58711178ec8ab4c58c107ff900a4c5a204d0a1faa4",
+        "sizeBytes": 10678,
     },
     "directx": {
         "sha256": "d16c5a2ca22282d6445e13d642e80ef0d0e9f75761740a0e3cc125f99bb59169",
