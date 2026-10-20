@@ -1046,6 +1046,19 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "steel-conv-general-0",
         "steel-conv-general-1",
         "steel-conv-general-2",
+        "gemm-masked-0",
+        "gemm-masked-1",
+        "gemm-masked-2",
+        "gemm-masked-3",
+        "gemm-masked-4",
+        "gemm-masked-5",
+        "gemm-masked-6",
+        "gemm-masked-7",
+        "gemm-masked-8",
+        "gemm-masked-9",
+        "gemm-masked-10",
+        "gemm-masked-11",
+        "gemm-masked-12",
     ]
     assert job["runs-on"] == "${{ matrix.os }}"
     assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"

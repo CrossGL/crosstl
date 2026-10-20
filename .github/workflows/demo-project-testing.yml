@@ -6837,11 +6837,11 @@ jobs:
     timeout-minutes: 210
     strategy:
       fail-fast: false
-      # 198 legs, a third of them on macOS: leave runners for other pull requests.
+      # 285 legs, a third of them on macOS: leave runners for other pull requests.
       max-parallel: 24
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2]
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2, gemm-masked-0, gemm-masked-1, gemm-masked-2, gemm-masked-3, gemm-masked-4, gemm-masked-5, gemm-masked-6, gemm-masked-7, gemm-masked-8, gemm-masked-9, gemm-masked-10, gemm-masked-11, gemm-masked-12]
         include:
           - {group: copy-0, family: copy, shard: 0}
           - {group: copy-1, family: copy, shard: 1}
@@ -6914,6 +6914,19 @@ jobs:
           - {group: steel-conv-general-0, family: steel-conv-general, shard: 0}
           - {group: steel-conv-general-1, family: steel-conv-general, shard: 1}
           - {group: steel-conv-general-2, family: steel-conv-general, shard: 2}
+          - {group: gemm-masked-0, family: gemm-masked, shard: 0}
+          - {group: gemm-masked-1, family: gemm-masked, shard: 1}
+          - {group: gemm-masked-2, family: gemm-masked, shard: 2}
+          - {group: gemm-masked-3, family: gemm-masked, shard: 3}
+          - {group: gemm-masked-4, family: gemm-masked, shard: 4}
+          - {group: gemm-masked-5, family: gemm-masked, shard: 5}
+          - {group: gemm-masked-6, family: gemm-masked, shard: 6}
+          - {group: gemm-masked-7, family: gemm-masked, shard: 7}
+          - {group: gemm-masked-8, family: gemm-masked, shard: 8}
+          - {group: gemm-masked-9, family: gemm-masked, shard: 9}
+          - {group: gemm-masked-10, family: gemm-masked, shard: 10}
+          - {group: gemm-masked-11, family: gemm-masked, shard: 11}
+          - {group: gemm-masked-12, family: gemm-masked, shard: 12}
 
     steps:
       - name: Checkout CrossTL
@@ -7782,6 +7795,39 @@ jobs:
               --basetemp=mlx-current-results/${{ matrix.group }} \
               --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_gemm_gather.py
+
+      # steel_gemm_masked.metal's 768 block_masked_gemm entries, each with
+      # unbatched, one-dimensional and broadcast two-dimensional batches, in
+      # thirteen shards.
+      - name: Prove current MLX block-masked GEMM native parity
+        if: matrix.family == 'gemm-masked'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_MASKED: "1"
+          CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_COUNT: "13"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX block-masked GEMM native parity (shard ${{ matrix.shard }} of 13)" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_masked.py
 
       # The 144 implicit-GEMM convolution entries of steel_conv.metal and
       # steel_conv_3d.metal, each with three convolutions, in six shards.

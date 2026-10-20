@@ -385,6 +385,35 @@ The two `gather_mm_rhs` entries are not covered. They derive each row tile
 from `offsets` with subgroup scans, and DirectX and OpenGL can lower those
 scans only once the read-only storage they read is proved immutable (#2263).
 
+#### Block-masked GEMM
+
+`test_current_gemm_masked.py` executes all 768 `block_masked_gemm` entries of
+`steel_gemm_masked.metal`: three element types, two tile shapes, four
+transpositions, four alignment pairs and the eight pairings of a boolean,
+multiplicative or absent output mask with an operand mask.
+`gemm_masked_model.py` names every entry and gives the block-masked product:
+a false or zero output-mask block is written as zeros, a K block contributes
+only when its lhs and rhs mask values are both non-zero, and multiplicative
+masks also scale. Each entry runs three dispatches with the buffers
+`BlockMaskedMM::eval_gpu` binds: no batch, a one-dimensional batch, and a
+two-dimensional batch that takes the `elem_to_loc` path. Operands and masks
+broadcast along batch axes, mask matrices are row- or column-major with
+padding, and unread mask words hold a value no mask uses. The shapes give
+partial tiles and K tails as each entry's alignment allows. The masks are
+declared immutable (`immutable_storage`), which lets the DirectX and OpenGL
+software-subgroup proofs treat mask reads at uniform indices as uniform.
+Every output word, guards included, is compared with an exact reference, and
+on macOS with the original source too. The current-tree native parity job
+runs the entries in thirteen shards per operating system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_MASKED=1 \
+CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_COUNT=13 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_masked.py
+```
+
 #### Implicit-GEMM convolution
 
 `test_current_steel_conv.py` executes all 108 `implicit_gemm_conv_2d` entries
