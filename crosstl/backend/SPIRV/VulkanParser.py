@@ -2488,6 +2488,24 @@ class VulkanParser:
                 )
                 continue
 
+            if result_id and operation == "FMod" and len(operands) >= 3:
+                # OpFMod takes the sign of the divisor (x - y * floor(x / y)), which is
+                # CrossGL mod; the % operator is the truncated remainder of OpFRem.
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        "mod",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand, expressions, names, decorations, constants
+                            )
+                            for operand in operands[1:3]
+                        ],
+                    ),
+                )
+                continue
+
             if (
                 result_id
                 and operation in self.SPIRV_SPEC_CONSTANT_BINARY_OPS
