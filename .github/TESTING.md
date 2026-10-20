@@ -49,6 +49,7 @@ The merge queue requires:
 - `Complete Test Suite result`
 - `Examples Test result`
 - `Coverage result`
+- `Lint result`
 - `MLX validation result`
 
 A gating workflow runs on every pull request and uses a planning job, not a
@@ -63,6 +64,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `full-tests.yml` | The whole suite; shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
 | `examples-test.yml` | Every example translated to every backend |
 | `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md) |
+| `lint.yml` | The pinned black hook on the Python files a change touches, which pre-commit.ci skips |
 | `demo-project-testing.yml` | The MLX port: smoke tier on pull requests, full native, parity, corpus and host tier on `main` and nightly |
 | `conformance.yml` | Differential execution of `tests/conformance`; Linux on pull requests, all three platforms on `main` and nightly |
 | `corpus.yml` | The pinned third-party corpus in `tests/conformance/corpus` |
