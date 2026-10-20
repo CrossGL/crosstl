@@ -636,7 +636,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 590,
+        "unsupported_marker_count": 583,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -780,7 +780,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2628
+        "test_count": 2621
       },
       "translator_codegen": {
         "exists": true,
@@ -1503,6 +1503,15 @@
     }
   ],
   "backlog": [
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "stages",
+      "feature": "Tessellation stages",
+      "feature_id": "stage.tessellation",
+      "notes": "Metal tessellation writes factors from a compute kernel and evaluates patches in a [[patch]] post-tessellation vertex function (Metal Shading Language Specification 5.1.5). Lowering hull/control and domain/evaluation stages to that form is not implemented, so both are refused with the typed diagnostic project.translate.metal-stage-unsupported.",
+      "status": "unsupported"
+    },
     {
       "backend": "Metal",
       "backend_id": "metal",
@@ -2800,13 +2809,12 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_lowers_with_metadata_and_stream_placeholders",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mixed_shader_with_geometry_emits_all_requested_stages"
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_refuses_stage_without_metal_entry_point",
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_emits_the_other_stages_of_a_program_with_a_geometry_stage",
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_hlsl_geometry_shader_to_metal_is_a_typed_refusal"
           ],
-          "notes": "Metal has no traditional native geometry shader stage, so CrossGL geometry entry points lower to deterministic Metal helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder stream helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
-          "status": "diagnostic"
+          "notes": "Metal has no geometry stage (MSL entry points are vertex, fragment, kernel, visible, intersection, object and mesh functions, Metal Shading Language Specification 5.1), so a geometry entry point is refused with the typed diagnostic project.translate.metal-stage-unsupported instead of a helper function no pipeline can call. The other stages of the same program still translate.",
+          "status": "validated_rejection"
         },
         "mojo": {
           "evidence": [
@@ -2900,13 +2908,11 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_control_stage_lowers_with_patch_metadata",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_evaluation_stage_lowers_with_domain_metadata",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_refuses_stage_without_metal_entry_point",
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_glsl_stage_to_metal_is_a_typed_refusal"
           ],
-          "notes": "Metal tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves domain, partitioning, output topology, outputcontrolpoints, patchconstantfunc, maxtessfactor, patch parameter element/count metadata, and tessellation helper semantics while validating patch signatures and domain-location shapes.",
-          "status": "diagnostic"
+          "notes": "Metal tessellation writes factors from a compute kernel and evaluates patches in a [[patch]] post-tessellation vertex function (Metal Shading Language Specification 5.1.5). Lowering hull/control and domain/evaluation stages to that form is not implemented, so both are refused with the typed diagnostic project.translate.metal-stage-unsupported.",
+          "status": "unsupported"
         },
         "mojo": {
           "evidence": [
@@ -7380,10 +7386,9 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_rejects_texture_sampling_call_with_too_many_arguments",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_refuses_stage_without_metal_entry_point"
           ],
-          "notes": "Metal codegen validates geometry maxvertexcount/input primitive shapes, tessellation patch metadata and domain-location shapes, and invalid texture, image, resource-array, and resource-query shapes with deterministic errors or compile-safe diagnostics.",
+          "notes": "Metal codegen validates invalid texture, image, resource-array, and resource-query shapes with deterministic errors or compile-safe diagnostics.",
           "status": "supported"
         },
         "mojo": {
@@ -19829,7 +19834,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 46,
+    "backlog_count": 47,
     "feature_count": 89,
     "status_counts": {
       "cuda": {
@@ -19857,12 +19862,12 @@
         "validated_rejection": 9
       },
       "metal": {
-        "diagnostic": 4,
+        "diagnostic": 2,
         "partial": 2,
         "supported": 74,
         "unknown": 0,
-        "unsupported": 3,
-        "validated_rejection": 6
+        "unsupported": 4,
+        "validated_rejection": 7
       },
       "mojo": {
         "diagnostic": 6,

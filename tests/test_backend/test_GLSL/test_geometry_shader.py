@@ -8,6 +8,7 @@ from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_stage_refusals import MetalStageUnsupportedError
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -150,17 +151,19 @@ def test_codegen_geometry_layout_max_vertices_feeds_directx_attribute():
     assert "requires HLSL attribute(s): maxvertexcount" not in generated
 
 
-def test_codegen_geometry_layout_max_vertices_reaches_metal_validation():
+def test_codegen_geometry_layout_max_vertices_reaches_metal_stage_refusal():
     crossgl = generate_crossgl(GEOMETRY_POINTS_MAX_VERTICES_GLSL, "geometry")
 
     assert "layout(points, max_vertices = 1) out;" in crossgl
 
-    with pytest.raises(ValueError) as excinfo:
+    # Metal has no geometry stage, so the stage itself is refused before any geometry metadata is read.
+    with pytest.raises(MetalStageUnsupportedError) as excinfo:
         MetalCodeGen().generate_stage(parse_crossgl(crossgl), "geometry")
 
     message = str(excinfo.value)
     assert "maxvertexcount" not in message
-    assert "PointStream" in message
+    assert "(stage geometry)" in message
+    assert excinfo.value.code.endswith("metal-stage-unsupported")
 
 
 def test_codegen_geometry_repeated_stream_layouts_from_glslang_roundtrip():

@@ -4,6 +4,15 @@
       "backend": "Metal",
       "backend_id": "metal",
       "category": "stages",
+      "feature": "Tessellation stages",
+      "feature_id": "stage.tessellation",
+      "notes": "Metal tessellation writes factors from a compute kernel and evaluates patches in a [[patch]] post-tessellation vertex function (Metal Shading Language Specification 5.1.5). Lowering hull/control and domain/evaluation stages to that form is not implemented, so both are refused with the typed diagnostic project.translate.metal-stage-unsupported.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
       "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, are refused with project.translate.metal-lowering-unsupported. RayQuery declarations and methods are refused with the same code because Metal has no HLSL-style RayQuery object and no intersection_query lowering exists yet. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters are refused while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
@@ -464,13 +473,12 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_lowers_with_metadata_and_stream_placeholders",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mixed_shader_with_geometry_emits_all_requested_stages"
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_refuses_stage_without_metal_entry_point",
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_emits_the_other_stages_of_a_program_with_a_geometry_stage",
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_hlsl_geometry_shader_to_metal_is_a_typed_refusal"
           ],
-          "notes": "Metal has no traditional native geometry shader stage, so CrossGL geometry entry points lower to deterministic Metal helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder stream helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
-          "status": "diagnostic"
+          "notes": "Metal has no geometry stage (MSL entry points are vertex, fragment, kernel, visible, intersection, object and mesh functions, Metal Shading Language Specification 5.1), so a geometry entry point is refused with the typed diagnostic project.translate.metal-stage-unsupported instead of a helper function no pipeline can call. The other stages of the same program still translate.",
+          "status": "validated_rejection"
         },
         "opengl": {
           "evidence": [
@@ -496,13 +504,11 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_control_stage_lowers_with_patch_metadata",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_evaluation_stage_lowers_with_domain_metadata",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_refuses_stage_without_metal_entry_point",
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_glsl_stage_to_metal_is_a_typed_refusal"
           ],
-          "notes": "Metal tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves domain, partitioning, output topology, outputcontrolpoints, patchconstantfunc, maxtessfactor, patch parameter element/count metadata, and tessellation helper semantics while validating patch signatures and domain-location shapes.",
-          "status": "diagnostic"
+          "notes": "Metal tessellation writes factors from a compute kernel and evaluates patches in a [[patch]] post-tessellation vertex function (Metal Shading Language Specification 5.1.5). Lowering hull/control and domain/evaluation stages to that form is not implemented, so both are refused with the typed diagnostic project.translate.metal-stage-unsupported.",
+          "status": "unsupported"
         },
         "opengl": {
           "evidence": [
@@ -2245,10 +2251,9 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_rejects_texture_sampling_call_with_too_many_arguments",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_refuses_stage_without_metal_entry_point"
           ],
-          "notes": "Metal codegen validates geometry maxvertexcount/input primitive shapes, tessellation patch metadata and domain-location shapes, and invalid texture, image, resource-array, and resource-query shapes with deterministic errors or compile-safe diagnostics.",
+          "notes": "Metal codegen validates invalid texture, image, resource-array, and resource-query shapes with deterministic errors or compile-safe diagnostics.",
           "status": "supported"
         },
         "opengl": {
@@ -6376,22 +6381,22 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 7,
+      "backlog_count": 8,
       "by_backend": {
         "directx": 1,
-        "metal": 5,
+        "metal": 6,
         "opengl": 1
       },
       "by_category": {
         "project": 6,
-        "stages": 1
+        "stages": 2
       },
       "by_status": {
         "diagnostic": 0,
         "partial": 4,
         "supported": 0,
         "unknown": 0,
-        "unsupported": 3,
+        "unsupported": 4,
         "validated_rejection": 0
       }
     },
@@ -6406,12 +6411,12 @@
         "validated_rejection": 0
       },
       "metal": {
-        "diagnostic": 4,
+        "diagnostic": 2,
         "partial": 2,
         "supported": 74,
         "unknown": 0,
-        "unsupported": 3,
-        "validated_rejection": 6
+        "unsupported": 4,
+        "validated_rejection": 7
       },
       "opengl": {
         "diagnostic": 2,

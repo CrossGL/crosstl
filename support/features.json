@@ -833,13 +833,12 @@
           ]
         },
         "metal": {
-          "status": "diagnostic",
-          "notes": "Metal has no traditional native geometry shader stage, so CrossGL geometry entry points lower to deterministic Metal helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder stream helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
+          "status": "validated_rejection",
+          "notes": "Metal has no geometry stage (MSL entry points are vertex, fragment, kernel, visible, intersection, object and mesh functions, Metal Shading Language Specification 5.1), so a geometry entry point is refused with the typed diagnostic project.translate.metal-stage-unsupported instead of a helper function no pipeline can call. The other stages of the same program still translate.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_lowers_with_metadata_and_stream_placeholders",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mixed_shader_with_geometry_emits_all_requested_stages"
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_refuses_stage_without_metal_entry_point",
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_emits_the_other_stages_of_a_program_with_a_geometry_stage",
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_hlsl_geometry_shader_to_metal_is_a_typed_refusal"
           ]
         },
         "vulkan": {
@@ -933,13 +932,11 @@
           ]
         },
         "metal": {
-          "status": "diagnostic",
-          "notes": "Metal tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves domain, partitioning, output topology, outputcontrolpoints, patchconstantfunc, maxtessfactor, patch parameter element/count metadata, and tessellation helper semantics while validating patch signatures and domain-location shapes.",
+          "status": "unsupported",
+          "notes": "Metal tessellation writes factors from a compute kernel and evaluates patches in a [[patch]] post-tessellation vertex function (Metal Shading Language Specification 5.1.5). Lowering hull/control and domain/evaluation stages to that form is not implemented, so both are refused with the typed diagnostic project.translate.metal-stage-unsupported.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_control_stage_lowers_with_patch_metadata",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_evaluation_stage_lowers_with_domain_metadata",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_refuses_stage_without_metal_entry_point",
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_glsl_stage_to_metal_is_a_typed_refusal"
           ]
         },
         "vulkan": {
@@ -5338,11 +5335,10 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "Metal codegen validates geometry maxvertexcount/input primitive shapes, tessellation patch metadata and domain-location shapes, and invalid texture, image, resource-array, and resource-query shapes with deterministic errors or compile-safe diagnostics.",
+          "notes": "Metal codegen validates invalid texture, image, resource-array, and resource-query shapes with deterministic errors or compile-safe diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_rejects_texture_sampling_call_with_too_many_arguments",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
+            "tests/test_translator/test_codegen/test_metal_stage_refusals.py::def test_metal_refuses_stage_without_metal_entry_point"
           ]
         },
         "vulkan": {
@@ -11877,12 +11873,16 @@
         "webgl": {
           "status": "validated_rejection",
           "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
-          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"
+          ]
         },
         "wgsl": {
           "status": "validated_rejection",
           "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
-          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"
+          ]
         },
         "directx": {
           "status": "supported",
@@ -12075,32 +12075,44 @@
         "vulkan": {
           "status": "validated_rejection",
           "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
-          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"
+          ]
         },
         "cuda": {
           "status": "validated_rejection",
           "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
-          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"
+          ]
         },
         "hip": {
           "status": "validated_rejection",
           "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
-          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"
+          ]
         },
         "mojo": {
           "status": "validated_rejection",
           "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
-          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"
+          ]
         },
         "rust": {
           "status": "validated_rejection",
           "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
-          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"
+          ]
         },
         "slang": {
           "status": "validated_rejection",
           "notes": "Checked scalar metadata currently requires a Metal, DirectX or OpenGL native dispatch adapter.",
-          "evidence": ["tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"]
+          "evidence": [
+            "tests/test_translator/test_metadata_preconditions.py::def test_unsupported_runtime_targets_reject_preconditions"
+          ]
         }
       }
     },
