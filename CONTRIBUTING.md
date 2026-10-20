@@ -12,7 +12,7 @@ CrossTL needs Python 3.11 or later.
 git clone https://github.com/CrossGL/crosstl.git
 cd crosstl
 python -m venv .venv && source .venv/bin/activate
-pip install -e . -r requirements.txt pytest-xdist pre-commit
+pip install -e ".[test]" pre-commit
 pre-commit install
 ```
 
