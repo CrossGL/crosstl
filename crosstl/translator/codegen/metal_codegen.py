@@ -13,6 +13,7 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    ArrayType,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
@@ -94,6 +95,7 @@ from .array_utils import (
     format_c_style_array_declaration,
     get_array_size_from_node,
     parse_array_type,
+    prepend_array_dimension,
     split_array_type_suffix,
 )
 from .buffer_block_diagnostics import (
@@ -382,7 +384,6 @@ from .stage_utils import (
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
-    stage_layout_entry_value,
     stage_matches,
 )
 from .texture_lod_clamp import (
@@ -2559,16 +2560,26 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                         base_type = self.convert_type_node_to_string(
                             node.var_type.element_type
                         )
+                        # An array of arrays: the outer dimension is the first suffix.
+                        base_type, element_suffix = split_array_type_suffix(base_type)
                         array_size = (
                             self.expression_to_string(node.var_type.size)
                             if node.var_type.size
                             else self.resource_array_size_hints.get(node.name, "")
                         )
                         vtype = base_type
-                        array_suffix = f"[{array_size}]" if array_size else "[]"
+                        array_suffix = (
+                            f"[{array_size}]" if array_size else "[]"
+                        ) + element_suffix
                         resource_count = self.resource_array_count(
                             node.var_type.size if node.var_type.size else array_size
                         )
+                        element_type = node.var_type.element_type
+                        while isinstance(element_type, ArrayType):
+                            resource_count *= self.resource_array_count(
+                                element_type.size
+                            )
+                            element_type = element_type.element_type
                     else:
                         vtype = self.convert_type_node_to_string(node.var_type)
                         array_suffix = ""
@@ -26554,12 +26565,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     if isinstance(type_node.size, int):
-                        return f"{element_type}[{type_node.size}]"
+                        return prepend_array_dimension(element_type, type_node.size)
                     else:
                         size_str = self.safe_expression_to_string(type_node.size)
-                        return f"{element_type}[{size_str}]"
+                        return prepend_array_dimension(element_type, size_str)
                 else:
-                    return f"{element_type}[]"
+                    return prepend_array_dimension(element_type)
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size

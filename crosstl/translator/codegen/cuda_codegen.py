@@ -29,7 +29,11 @@ from ..ast import (
     WaveOpNode,
 )
 from ..matrix_shape import matrix_type_spelling
-from .array_utils import parse_array_type, split_array_type_suffix
+from .array_utils import (
+    parse_array_type,
+    prepend_array_dimension,
+    split_array_type_suffix,
+)
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -12930,9 +12934,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             elif str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
-                    return f"{element_type}[{self.format_array_size(type_node.size)}]"
+                    return prepend_array_dimension(
+                        element_type, self.format_array_size(type_node.size)
+                    )
                 else:
-                    return f"{element_type}[]"
+                    return prepend_array_dimension(element_type)
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size

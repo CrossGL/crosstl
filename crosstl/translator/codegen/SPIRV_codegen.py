@@ -65,6 +65,7 @@ from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
     parse_array_type,
+    prepend_array_dimension,
 )
 from .call_graph import validate_recursion_free
 from .enum_utils import (
@@ -5417,9 +5418,20 @@ class VulkanSPIRVCodeGen(
         return True
 
     def validate_sampled_texture_lod_operand(
-        self, function_name: str, lod_id: SpirvId
+        self, function_name: str, operands: list, index: int = 0
     ) -> bool:
+        """Check that ``operands[index]`` is a scalar LOD, converting a scalar integer to ``float`` in place.
+
+        HLSL ``SampleLevel(s, uv, 0)`` and GLSL ``textureLod(t, uv, 0)`` pass an integer level that both languages
+        convert implicitly (GLSL 4.60 section 6.1); ``OpImageSampleExplicitLod`` takes a floating-point ``Lod``.
+        """
+        lod_id = operands[index]
         if self.floating_value_component_count(lod_id) == 1:
+            return True
+        if self.integer_value_component_count(lod_id) == 1:
+            operands[index] = self.convert_value_to_type(
+                lod_id, self.register_primitive_type("float")
+            )
             return True
 
         self.refuse_lowering(
@@ -5964,7 +5976,7 @@ class VulkanSPIRVCodeGen(
             return self.default_value_for_type(result_type)
         if function_name in {"textureProjLod", "textureProjLodOffset"}:
             if not self.validate_sampled_texture_lod_operand(
-                function_name, extra_args[0]
+                function_name, extra_args, 0
             ):
                 return self.default_value_for_type(result_type)
         if function_name in {"textureProjGrad", "textureProjGradOffset"}:
@@ -6084,7 +6096,7 @@ class VulkanSPIRVCodeGen(
             "textureCompareProjLodOffset",
         }:
             if not self.validate_sampled_texture_lod_operand(
-                function_name, extra_args[0]
+                function_name, extra_args, 0
             ):
                 return self.default_value_for_type(result_type)
         if function_name in {
@@ -6531,7 +6543,7 @@ class VulkanSPIRVCodeGen(
 
             if function_name in {"textureCompareLod", "textureCompareLodOffset"}:
                 if not self.validate_sampled_texture_lod_operand(
-                    function_name, extra_args[0]
+                    function_name, extra_args, 0
                 ):
                     return self.default_value_for_type(result_type)
             if function_name in {"textureCompareGrad", "textureCompareGradOffset"}:
@@ -7106,13 +7118,13 @@ class VulkanSPIRVCodeGen(
 
             if function_name == "textureLod":
                 if not self.validate_sampled_texture_lod_operand(
-                    function_name, extra_args[0]
+                    function_name, extra_args, 0
                 ):
                     return self.default_value_for_type(result_type)
                 image_operands = f"Lod %{extra_args[0].id}"
             elif function_name == "textureLodOffset":
                 if not self.validate_sampled_texture_lod_operand(
-                    function_name, extra_args[0]
+                    function_name, extra_args, 0
                 ):
                     return self.default_value_for_type(result_type)
                 if not self.validate_sampled_texture_offset_operand(
@@ -16519,9 +16531,7 @@ class VulkanSPIRVCodeGen(
         if type_node.__class__.__name__ == "ArrayType":
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = self.format_array_size(type_node.size)
-            return (
-                f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
-            )
+            return prepend_array_dimension(element_type, size)
         if hasattr(type_node, "pointee_type"):
             pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
             return f"{pointee_type}*"
@@ -17191,18 +17201,18 @@ class VulkanSPIRVCodeGen(
                 member_name=member_name,
             )
             if type_name.size is None:
-                return f"{element_type}[]"
+                return prepend_array_dimension(element_type)
             value = evaluate_literal_int_expression(type_name.size, constants)
             if value is None:
                 extent = self.struct_array_extent_expression_text(type_name.size)
                 if self.named_specialization_array_length(extent) is not None:
-                    return f"{element_type}[{extent}]"
+                    return prepend_array_dimension(element_type, extent)
                 raise UnsupportedSPIRVFeatureError(
                     "unresolved fixed array extent",
                     "SPIR-V requires a concrete fixed-array extent for "
                     f"{struct_name}.{member_name}; could not resolve '{extent}'",
                 )
-            return f"{element_type}[{value}]"
+            return prepend_array_dimension(element_type, value)
 
         type_text = self.type_name_from_value(type_name)
         if type_text is None or "[" not in type_text:

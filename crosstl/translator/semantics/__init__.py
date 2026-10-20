@@ -14,6 +14,10 @@ from .annotate import Annotator
 from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
+from .descriptor_arrays import (
+    DescriptorArrayUnsupportedError,
+    flatten_descriptor_arrays,
+)
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_stage_interfaces import (
@@ -58,6 +62,7 @@ __all__ = [
     "ArrayConstructorUnsupportedError",
     "StageInterfaceUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
+    "DescriptorArrayUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
     "GeometryStreamUnsupportedError",
@@ -137,7 +142,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refused (:mod:`.implicit_lod`).
     Structs holding samplers,
     textures or images are flattened into separate resources for SPIR-V, or refused with
-    :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`).
+    :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
+    one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
     CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
     registers. The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target
@@ -164,6 +170,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
     legalize_opaque_struct_members(program, report.target)
+    flatten_descriptor_arrays(program, report.target)
     legalize_shadow_samples(program, report.target)
     legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)

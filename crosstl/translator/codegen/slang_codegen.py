@@ -57,6 +57,7 @@ from .array_utils import (
     evaluate_literal_int_expression,
     format_c_style_array_declaration,
     get_array_size_from_node,
+    prepend_array_dimension,
     split_array_type_suffix,
 )
 from .constant_ordering import partition_constants_by_struct_dependency
@@ -4631,9 +4632,9 @@ class SlangCodeGen:
             element_type = self.convert_type_node_to_string(type_node.element_type)
             if type_node.__class__.__name__ == "ArrayType":
                 if type_node.size is None:
-                    return f"{element_type}[]"
+                    return prepend_array_dimension(element_type)
                 size = self.format_array_size_expression(type_node.size)
-                return f"{element_type}[{size}]"
+                return prepend_array_dimension(element_type, size)
             if element_type == "float":
                 return f"vec{type_node.size}"
             if element_type == "f16":

@@ -2,7 +2,11 @@
 
 import re
 
-from ...translator.codegen.array_utils import evaluate_literal_int_expression
+from ...translator.codegen.array_utils import (
+    evaluate_literal_int_expression,
+    prepend_array_dimension,
+    split_array_type_suffix,
+)
 from ...translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
@@ -8814,7 +8818,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         suffix = f"[{self.format_array_extent(array_type[1])}]" if array_type else ""
         if not include_declarator_arrays:
             return suffix
-        return suffix + self.format_declarator_array_suffix(var)
+        # ``array<T, N> name[M]`` is M arrays of N: the declarator's dimensions are the outer ones.
+        return self.format_declarator_array_suffix(var) + suffix
 
     def format_declarator_array_suffix(self, var):
         if not hasattr(var, "array_sizes") or not var.array_sizes:
@@ -9106,7 +9111,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 include_declarator_arrays = False
                 name_array_suffix = self.format_declarator_array_suffix(var)
             type_array_suffix = self.format_array_suffix(var, include_declarator_arrays)
-            type_str = f"{mapped_type}{type_array_suffix}"
+            # The element of ``array<array<T, 3>, 2>`` maps to ``T[3]``; the outer dimensions come first.
+            element_base, element_suffix = (
+                split_array_type_suffix(mapped_type)
+                if type_array_suffix and str(mapped_type).rstrip().endswith("]")
+                else (mapped_type, "")
+            )
+            type_str = f"{element_base}{type_array_suffix}{element_suffix}"
         address_space = self.address_space_qualifier_prefix(var)
         qualifiers = set(self.effective_declaration_qualifiers(var))
         alias_name = str(getattr(var, "vtype", ""))
@@ -18410,7 +18421,9 @@ float {scalar}(float value) {{
         array_type = self.metal_array_type_parts(metal_type)
         if array_type:
             element_type, size = array_type
-            return f"{self.map_type(element_type)}[{self.format_array_extent(size)}]"
+            return prepend_array_dimension(
+                self.map_type(element_type), self.format_array_extent(size)
+            )
 
         base = metal_type.strip()
         if base.endswith("..."):
@@ -18506,7 +18519,9 @@ float {scalar}(float value) {{
             )
             if canonical_element is None:
                 return None
-            return f"{canonical_element}[{self.format_array_extent(size)}]"
+            return prepend_array_dimension(
+                canonical_element, self.format_array_extent(size)
+            )
         suffix = ""
         while candidate.endswith(("*", "&")):
             suffix = candidate[-1] + suffix

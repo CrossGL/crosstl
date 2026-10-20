@@ -1221,6 +1221,7 @@ class Parser:
             variable_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
+        sizes = []
         while self.current_token[
             0
         ] == "LBRACKET" and not self.current_token_starts_square_attribute(
@@ -1231,7 +1232,8 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
-            variable_type = ArrayType(variable_type, size)
+            sizes.append(size)
+        variable_type = self.wrap_array_dimensions(variable_type, sizes)
 
         self.eat("SEMICOLON")
 
@@ -1838,6 +1840,7 @@ class Parser:
             param_type = self.parse_type()
             name = self.parse_binding_identifier()
 
+        sizes = []
         while self.current_token[
             0
         ] == "LBRACKET" and not self.current_token_starts_square_attribute(
@@ -1848,7 +1851,8 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
-            param_type = ArrayType(param_type, size)
+            sizes.append(size)
+        param_type = self.wrap_array_dimensions(param_type, sizes)
 
         if isinstance(param_type, ReferenceType):
             qualifier_names = {str(qualifier).lower() for qualifier in qualifiers}
@@ -2078,10 +2082,11 @@ class Parser:
         name = self.parse_binding_identifier()
         self.eat("COLON")
         var_type = self.parse_resource_parameter_type()
-        var_type = self.parse_array_suffixes(var_type)
+        sizes = self.parse_array_suffix_sizes()
 
         attributes.extend(self.parse_post_declaration_attributes())
-        var_type = self.parse_array_suffixes(var_type)
+        sizes += self.parse_array_suffix_sizes()
+        var_type = self.wrap_array_dimensions(var_type, sizes)
 
         initial_value = None
         if self.current_token[0] == "EQUALS":
@@ -2131,10 +2136,11 @@ class Parser:
             name = self.parse_binding_identifier()
             self.eat("COLON")
             var_type = self.parse_type()
-            var_type = self.parse_array_suffixes(var_type)
+            sizes = self.parse_array_suffix_sizes()
 
             attributes.extend(self.parse_post_declaration_attributes())
-            var_type = self.parse_array_suffixes(var_type)
+            sizes += self.parse_array_suffix_sizes()
+            var_type = self.wrap_array_dimensions(var_type, sizes)
 
             initial_value = None
             if self.current_token[0] == "EQUALS":
@@ -2188,11 +2194,12 @@ class Parser:
         var_type = self.parse_array_suffixes(deepcopy(base_type))
         name = self.parse_binding_identifier()
         generic_params = self.parse_declaration_square_generic_parameters()
-        var_type = self.parse_array_suffixes(var_type)
+        sizes = self.parse_array_suffix_sizes()
 
         attributes = list(declaration_attributes)
         attributes.extend(self.parse_post_declaration_attributes())
-        var_type = self.parse_array_suffixes(var_type)
+        sizes += self.parse_array_suffix_sizes()
+        var_type = self.wrap_array_dimensions(var_type, sizes)
 
         initial_value = None
         if self.current_token[0] == "EQUALS":
@@ -2227,8 +2234,9 @@ class Parser:
             return self.parse_square_generic_arguments()
         return []
 
-    def parse_array_suffixes(self, type_node):
-        """Parse one or more non-attribute array suffixes after a type/name."""
+    def parse_array_suffix_sizes(self):
+        """Parse the sizes of consecutive non-attribute array suffixes, in source order (``None`` when unsized)."""
+        sizes = []
         while (
             self.current_token[0] == "LBRACKET"
             and not self.current_token_starts_square_attribute(
@@ -2241,8 +2249,23 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
+            sizes.append(size)
+        return sizes
+
+    @staticmethod
+    def wrap_array_dimensions(type_node, sizes):
+        """``T`` with suffixes ``[a][b]`` as an array of ``a`` arrays of ``b`` ``T``: the first suffix is outermost.
+
+        A declarator's suffixes enclose its type's own (GLSL 4.60 section 4.1.9: ``vec4[2] a[3]`` is an array of 3
+        ``vec4[2]``), so they wrap ``type_node`` whole.
+        """
+        for size in reversed(sizes):
             type_node = ArrayType(type_node, size)
         return type_node
+
+    def parse_array_suffixes(self, type_node):
+        """Parse one or more non-attribute array suffixes after a type/name."""
+        return self.wrap_array_dimensions(type_node, self.parse_array_suffix_sizes())
 
     def parse_variable_qualifiers(self):
         """Parse declaration qualifiers that precede a variable type."""
@@ -2763,9 +2786,11 @@ class Parser:
         else:
             base_type = PrimitiveType("float")
 
+        sizes = []
         while self.current_token[0] == "LBRACKET":
             if (
-                isinstance(base_type, NamedType)
+                not sizes
+                and isinstance(base_type, NamedType)
                 and self.square_brackets_form_type_arguments()
             ):
                 base_type.generic_args.extend(self.parse_square_generic_arguments())
@@ -2775,7 +2800,8 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
-            base_type = ArrayType(base_type, size)
+            sizes.append(size)
+        base_type = self.wrap_array_dimensions(base_type, sizes)
 
         while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
             if self.current_token[0] == "MULTIPLY":
