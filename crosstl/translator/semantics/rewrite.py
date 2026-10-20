@@ -69,6 +69,17 @@ def get_child(node, field, key):
     return value if key is None else value[key]
 
 
+def field_slots(node, field):
+    """``(field, key)`` for each node held in ``node.field``: one slot for a node, one per item for a list.
+
+    A ``for`` header's update is a list when it has several comma-separated expressions (``++i, ++j``).
+    """
+    value = getattr(node, field, None)
+    if isinstance(value, list):
+        return [(field, index) for index, item in enumerate(value) if item is not None]
+    return [] if value is None else [(field, None)]
+
+
 def set_child(node, field, key, new):
     """Replace a child, updating every alias attribute that referred to the same object."""
     if key is not None:

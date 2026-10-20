@@ -26,7 +26,7 @@ from .hub_types import (
     is_pure_callee,
     iter_functions,
 )
-from .rewrite import child_slots, get_child, set_child
+from .rewrite import child_slots, field_slots, get_child, set_child
 from .rule_table import (
     BINARY_UDIV_ZERO_INTRINSIC,
     BINARY_WRAP_INTRINSIC,
@@ -167,11 +167,11 @@ class Annotator:
         if proven is not None:
             self._proven.add(id(proven))
         for field in ("condition", "update", "body"):
-            child = getattr(node, field)
-            if child is not None:
+            for slot in field_slots(node, field):
+                child = get_child(node, *slot)
                 replacement = self.visit(child)
                 if replacement is not child:
-                    set_child(node, field, None, replacement)
+                    set_child(node, *slot, replacement)
         self.scope.pop()
         return node
 

@@ -69,7 +69,6 @@
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_struct_member_name::identity-fallback": 1,
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.is_fragment_only_call_name::identity-fallback": 1,
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_mesh_intrinsic::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_operator::identity-fallback": 1,
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_ray_tracing_intrinsic::identity-fallback": 1,
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_semantic::identity-fallback": 1,
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_type::identity-fallback": 1,
@@ -119,7 +118,6 @@
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.hlsl_struct_semantic_member_counts::identity-fallback": 1,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.hlsl_struct_semantics::identity-fallback": 1,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.hlsl_tess_factor_member_declaration::identity-fallback": 1,
-  "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.map_operator::identity-fallback": 1,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.map_type::identity-fallback": 1,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.normalize_directx_target_profile::identity-fallback": 1,
   "crosstl/translator/codegen/enum_utils.py::enum_value_expression::identity-fallback": 1,
@@ -156,7 +154,6 @@
   "crosstl/translator/codegen/metal_codegen.py::CharTypeMapper.map_char_type::identity-fallback": 1,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.canonical_metal_semantic::identity-fallback": 1,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_function::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.map_operator::identity-fallback": 1,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.map_semantic::identity-fallback": 1,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.map_type::identity-fallback": 1,
   "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.metal_attribute_index_from_semantic::identity-fallback": 1,
@@ -250,6 +247,6 @@
  "totals": {
   "empty-block-recovery": 1,
   "fallback-text": 84,
-  "identity-fallback": 184
+  "identity-fallback": 181
  }
 }
