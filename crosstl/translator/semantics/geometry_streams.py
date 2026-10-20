@@ -39,18 +39,34 @@ values in the vertex structures are refused with :class:`GeometryStreamUnsupport
 from __future__ import annotations
 
 from .. import ast as A
-from ..codegen.stage_io_semantic_locations import (
-    glsl_semantic_location,
-    spirv_semantic_location,
-)
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name
-from .rewrite import child_slots, get_child, set_child
+from .stage_varyings import GLSL_TARGETS as _GLSL_TARGETS
+from .stage_varyings import SPIRV_TARGETS as _SPIRV_TARGETS
+from .stage_varyings import FreshNames
+from .stage_varyings import builtin as _builtin
+from .stage_varyings import call_statement as _call_statement
+from .stage_varyings import indexed as _indexed
+from .stage_varyings import int_literal as _int
+from .stage_varyings import is_system_value as _is_system_value
+from .stage_varyings import literal_int as _literal_int
+from .stage_varyings import location_span as _location_span
+from .stage_varyings import member_type as _member_type
+from .stage_varyings import (
+    neighbour_location,
+    per_vertex_builtin,
+    replace_statement,
+    rewrite_array_reads,
+)
+from .stage_varyings import semantic as _semantic
+from .stage_varyings import slots as _slots
+from .stage_varyings import stage_name as _stage_name
+from .stage_varyings import stages as _stages
+from .stage_varyings import type_name as _type_name
+from .stage_varyings import varying_declaration
 
 __all__ = ["GeometryStreamUnsupportedError", "lower_geometry_streams"]
 
-_GLSL_TARGETS = frozenset({"opengl", "glsl"})
-_SPIRV_TARGETS = frozenset({"vulkan", "spirv"})
 _INPUT_TOPOLOGIES = {
     "point": ("points", 1),
     "line": ("lines", 2),
@@ -63,8 +79,6 @@ _OUTPUT_TOPOLOGIES = {
     "LineStream": "line_strip",
     "TriangleStream": "triangle_strip",
 }
-_INTERPOLATION = frozenset({"flat", "noperspective", "centroid", "sample", "smooth"})
-_LAYOUT_ATTRIBUTES = frozenset({"location", "component"})
 # Built-in members of the input vertex, read from gl_in[i].
 _INPUT_BUILTINS = frozenset({"gl_Position", "gl_PointSize"})
 # Built-in members of the output vertex, with the type GLSL declares them with.
@@ -120,7 +134,7 @@ class _GeometryLowering:
         self.stage = stage
         self.entry = stage.entry_point
         self.target = target
-        self.names = _declared_names(program)
+        self.fresh = FreshNames(program)
         self.structs = {
             struct.name: struct
             for struct in list(getattr(program, "structs", None) or []) + list(
@@ -290,38 +304,13 @@ class _GeometryLowering:
     # Stage interface variables.
 
     def varying_location(self, struct_name, member, running):
-        explicit = _explicit_location(member)
-        if explicit is not None:
-            return explicit
-        semantic = _semantic(member)
-        if self.target in _GLSL_TARGETS:
-            location = glsl_semantic_location(semantic)
-            if location is None:
-                self.refuse(
-                    f"member '{struct_name}.{member.name}' (semantic {semantic or 'none'}) has no GLSL location, "
-                    "so it would link by name, and a geometry stage cannot declare an input and an output of "
-                    "the same name",
-                    "unlocated-varying",
-                )
-            return location
-        location = spirv_semantic_location(semantic)
-        return running if location is None else location
+        return neighbour_location(
+            self.target, struct_name, member, running, self.refuse
+        )
 
     def varying(self, prefix, member, var_type, location, direction):
-        attributes = [A.AttributeNode("location", [_int(location)])]
-        semantic = _semantic(member)
-        if semantic is not None:
-            # Kept so that cross-stage validation matches the varying with the neighbouring stage's member.
-            attributes.append(A.AttributeNode(semantic))
-        attributes += [
-            A.AttributeNode(attr.name)
-            for attr in member.attributes or []
-            if str(attr.name).lower() in _INTERPOLATION
-        ]
         name = self.fresh(f"{prefix}_{member.name}")
-        return A.VariableNode(
-            name=name, var_type=var_type, attributes=attributes, qualifiers=[direction]
-        )
+        return varying_declaration(name, member, var_type, location, [direction])
 
     def input_sources(self, primitive, vertex_count, declarations):
         """``(member name or None) -> function(index expression) -> source expression`` of each input value."""
@@ -335,7 +324,7 @@ class _GeometryLowering:
             key = member.name if struct is not None else None
             builtin = _builtin(member)
             if builtin in _INPUT_BUILTINS:
-                sources[key] = _gl_in(builtin)
+                sources[key] = per_vertex_builtin("gl_in", builtin)
             elif builtin is not None or _is_system_value(member):
                 self.refuse(
                     f"input vertex member '{member.name}' carries {builtin or _semantic(member)}, which the "
@@ -399,41 +388,14 @@ class _GeometryLowering:
 
     def rewrite_input_reads(self, primitive, vertex_count, sources):
         """Rewrite ``input[i].m`` reads in place; returns the statements that build a local copy when one is needed."""
-        name = primitive.name
-        body = self.entry.body
-        struct = self.structs.get(_type_name(primitive.param_type.element_type))
-        if name in _function_local_names(self.entry):
-            self.refuse(
-                f"geometry entry point declares a local '{name}' that shadows its input primitive",
-                "shadowed-input",
-            )
-        reads, others = [], 0
-        for parent, field, key, node in _slots(body):
-            if not (isinstance(node, A.IdentifierNode) and node.name == name):
-                continue
-            others += 1
-        for parent, field, key, node in _slots(body):
-            access = _input_read(node, name, struct is not None)
-            if access is not None and not _is_written(parent, field, node):
-                reads.append((parent, field, key, access))
-        if others != len(reads):
-            # The array is used as a whole, written, or indexed without a member: read a local copy of it.
-            local_type = A.ArrayType(
-                primitive.param_type.element_type, _int(vertex_count)
-            )
-            statements = [A.VariableNode(name=name, var_type=local_type)]
-            for index in range(vertex_count):
-                for key, source in sources.items():
-                    target = A.ArrayAccessNode(A.IdentifierNode(name), _int(index))
-                    if key is not None:
-                        target = A.MemberAccessNode(target, key)
-                    statements.append(A.AssignmentNode(target, source(_int(index))))
-            return statements
-        for parent, field, key, (index, member) in reads:
-            if member not in sources:
-                self.refuse(f"input vertex has no member '{member}'", "input-member")
-            set_child(parent, field, key, sources[member](index))
-        return []
+        return rewrite_array_reads(
+            self.entry,
+            primitive.name,
+            primitive.param_type.element_type,
+            vertex_count,
+            sources,
+            self.refuse,
+        )
 
     def stream_helpers(self, element_name):
         """Functions other than the entry point that take the stream: ``function -> (index, parameter)``."""
@@ -495,7 +457,7 @@ class _GeometryLowering:
             replacement = self.stream_statements(
                 method, arguments, element_name, outputs
             )
-            _replace_statement(function.body, statement, replacement)
+            replace_statement(function.body, statement, replacement)
         for parent, field, key, node in _slots(function.body):
             if isinstance(node, A.IdentifierNode) and node.name in stream_names:
                 self.refuse(
@@ -540,148 +502,8 @@ class _GeometryLowering:
             local = list(getattr(self.stage, "local_functions", None) or [])
             self.stage.local_functions = [helper] + local
 
-    def fresh(self, preferred):
-        name, index = preferred, 0
-        while name in self.names:
-            index += 1
-            name = f"{preferred}{index}"
-        self.names.add(name)
-        return name
-
 
 # Helpers.
-
-
-def _stages(program):
-    stages = getattr(program, "stages", None) or {}
-    return list(stages.values()) if isinstance(stages, dict) else list(stages)
-
-
-def _stage_name(stage):
-    value = getattr(stage, "stage", None)
-    return str(getattr(value, "value", value) or "").lower()
-
-
-def _type_name(type_node):
-    if isinstance(type_node, str):
-        return type_node
-    return getattr(type_node, "name", None)
-
-
-def _member_type(member):
-    return getattr(member, "member_type", None) or getattr(member, "param_type", None)
-
-
-def _int(value):
-    return A.LiteralNode(int(value), A.PrimitiveType("int"))
-
-
-def _literal_int(node):
-    if isinstance(node, int):
-        return node
-    value = getattr(node, "value", None)
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
-
-
-def _semantic(node):
-    for attr in getattr(node, "attributes", None) or []:
-        name = str(getattr(attr, "name", ""))
-        if name.lower() in _INTERPOLATION or name.lower() in _LAYOUT_ATTRIBUTES:
-            continue
-        return name
-    return None
-
-
-def _builtin(node):
-    semantic = _semantic(node)
-    return semantic if semantic is not None and semantic.startswith("gl_") else None
-
-
-def _is_system_value(node):
-    semantic = _semantic(node)
-    return semantic is not None and semantic.upper().startswith("SV_")
-
-
-def _explicit_location(node):
-    for attr in getattr(node, "attributes", None) or []:
-        if str(getattr(attr, "name", "")).lower() == "location":
-            return _literal_int((attr.arguments or [None])[0])
-    return None
-
-
-def _location_span(type_node):
-    """Locations a varying of ``type_node`` occupies, counted as the SPIR-V emitter counts them."""
-    if isinstance(type_node, A.ArrayType):
-        return max(_literal_int(type_node.size) or 1, 1) * _location_span(
-            type_node.element_type
-        )
-    if isinstance(type_node, A.MatrixType):
-        return int(type_node.cols)
-    return 1
-
-
-def _gl_in(builtin):
-    def source(index):
-        return A.MemberAccessNode(
-            A.ArrayAccessNode(A.IdentifierNode("gl_in"), index), builtin
-        )
-
-    return source
-
-
-def _indexed(name):
-    def source(index):
-        return A.ArrayAccessNode(A.IdentifierNode(name), index)
-
-    return source
-
-
-def _call_statement(name):
-    return A.ExpressionStatementNode(A.FunctionCallNode(A.IdentifierNode(name), []))
-
-
-def _slots(root):
-    """``(parent, field, key, child)`` for every child under ``root``, parents before children, each once."""
-    stack, seen = [root], set()
-    while stack:
-        parent = stack.pop()
-        if id(parent) in seen or not isinstance(parent, A.ASTNode):
-            continue
-        seen.add(id(parent))
-        children = []
-        for field, key in child_slots(parent):
-            child = get_child(parent, field, key)
-            yield parent, field, key, child
-            children.append(child)
-        stack.extend(reversed(children))
-
-
-def _input_read(node, name, has_members):
-    """``(index, member)`` when ``node`` reads ``name[index].member`` (or ``name[index]`` for a plain input)."""
-    if has_members:
-        if not isinstance(node, A.MemberAccessNode):
-            return None
-        array = node.object_expr
-        member = node.member
-    else:
-        array, member = node, None
-    if (
-        isinstance(array, A.ArrayAccessNode)
-        and isinstance(array.array_expr, A.IdentifierNode)
-        and array.array_expr.name == name
-    ):
-        return array.index_expr, member
-    return None
-
-
-def _is_written(parent, field, node):
-    if isinstance(parent, A.AssignmentNode) and parent.target is node:
-        return True
-    return isinstance(parent, A.UnaryOpNode) and parent.operator in ("++", "--")
 
 
 def _stream_method(node, stream_names):
@@ -695,43 +517,3 @@ def _stream_method(node, stream_names):
     ):
         return callee.member, list(node.arguments or [])
     return None
-
-
-def _replace_statement(body, statement, replacement):
-    for parent, field, key, node in _slots(body):
-        if node is not statement:
-            continue
-        container = getattr(parent, field)
-        if (
-            key is not None
-            and isinstance(container, list)
-            and isinstance(parent, A.BlockNode)
-        ):
-            container[key : key + 1] = replacement
-        else:
-            set_child(parent, field, key, A.BlockNode(replacement))
-        return
-    raise AssertionError("stream statement not found in its function body")
-
-
-def _function_local_names(function):
-    names = set()
-    for _, _, _, node in _slots(function.body):
-        if isinstance(node, A.VariableNode):
-            names.add(node.name)
-    return names
-
-
-def _declared_names(program):
-    names = set()
-    stack, seen = [program], set()
-    while stack:
-        node = stack.pop()
-        if id(node) in seen or not isinstance(node, A.ASTNode):
-            continue
-        seen.add(id(node))
-        name = getattr(node, "name", None)
-        if isinstance(name, str):
-            names.add(name)
-        stack.extend(get_child(node, f, k) for f, k in child_slots(node))
-    return names

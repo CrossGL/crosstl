@@ -9606,9 +9606,18 @@ class GLSLCodeGen(
             for variable in getattr(stage, "local_variables", []) or []
         }
         for node in stage_local_interface_vars:
-            # A stage's own in/out variables exist only in that stage's section of a combined program.
-            declaration = self.generate_stage_local_interface_variable_declaration(node)
+            # A stage's own in/out variables exist only in that stage's section of a combined program, and
+            # take their locations in that stage's interface.
             owner = interface_var_stages.get(id(node))
+            previous_stage_io_stage = self.current_global_stage_io_stage
+            if owner is not None:
+                self.current_global_stage_io_stage = owner
+            try:
+                declaration = self.generate_stage_local_interface_variable_declaration(
+                    node
+                )
+            finally:
+                self.current_global_stage_io_stage = previous_stage_io_stage
             code += (
                 declaration
                 if owner is None
@@ -19688,6 +19697,8 @@ class GLSLCodeGen(
     def glsl_tessellation_partitioning(self, partitioning):
         partition_name = str(partitioning).strip().strip('"').lower()
         partition_map = {
+            # HLSL "integer" partitioning rounds levels up to integers, as equal_spacing does.
+            "integer": "equal_spacing",
             "equal": "equal_spacing",
             "equal_spacing": "equal_spacing",
             "fractional_even": "fractional_even_spacing",
@@ -31478,7 +31489,9 @@ class GLSLCodeGen(
         if direction is None:
             return
 
-        stage_name = self.current_target_stage or "global"
+        stage_name = (
+            self.current_global_stage_io_stage or self.current_target_stage or "global"
+        )
         if self.is_per_vertex_stage_io(node, qualifier, direction):
             mapped_type = self.stage_io_per_vertex_element_type(mapped_type)
         self.reserve_stage_io_layout(

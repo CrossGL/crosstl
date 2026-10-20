@@ -8,6 +8,7 @@ from crosstl.translator.codegen.glsl_hlsl_resources import HlslRegisterOverlapEr
 from crosstl.translator.codegen.glsl_refusals import OpenGLLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.semantics import TessellationPatchUnsupportedError
 
 STAGELESS_STRUCT_ENTRY = """
 shader main {
@@ -95,7 +96,7 @@ VSOutput main(VSInput input)
     assert "gl_Position = vec4(Pos, 0.0, 1.0);" in glsl
 
 
-def test_hlsl_domain_patch_parameter_is_refused(tmp_path):
+def test_hlsl_domain_without_its_hull_is_refused(tmp_path):
     source = tmp_path / "domain.hlsl"
     source.write_text("""
 struct HSOutput { float4 Pos : POSITION; };
@@ -117,7 +118,9 @@ DSOutput main(ConstantsHSOutput input, float3 TessCoord : SV_DomainLocation,
 }
 """)
 
-    with pytest.raises(OpenGLLoweringRefused, match="patch parameter 'patch'"):
+    # Lowered to GLSL's tessellation interface, but GLSL declares the spacing and winding on the evaluation
+    # shader, and only the hull stage, absent here, states them.
+    with pytest.raises(TessellationPatchUnsupportedError, match="no hull stage"):
         crosstl.translate(str(source), backend="opengl", source_backend="directx")
 
 
