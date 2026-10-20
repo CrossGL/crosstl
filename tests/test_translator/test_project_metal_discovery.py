@@ -272,13 +272,13 @@ def test_inferred_pointer_offsets_execute(tmp_path, original):
 
 @pytest.mark.parametrize("job", ["metal-host", "portable-host"])
 def test_ci_requires_native_argument_inference(job):
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, job, "Validate Metal argument inference"
     )
     assert_native_step_prerequisites(step, job=job)

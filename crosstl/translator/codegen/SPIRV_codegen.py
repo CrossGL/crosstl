@@ -91,6 +91,8 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
 )
+from .relational_builtins import lower_relational_builtins
+from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
@@ -4354,6 +4356,12 @@ class VulkanSPIRVCodeGen(
         if source_type_name == "bool" and target_type_name in self.INTEGER_TYPE_NAMES:
             true_value = self.register_constant(1, target_type)
             false_value = self.register_constant(0, target_type)
+            return self.select_operation(target_type, value, true_value, false_value)
+
+        if source_type_name == "bool" and target_type_name in float_types:
+            # true converts to 1.0 and false to 0.0 (GLSL 4.60 section 5.4.1).
+            true_value = self.register_constant(1.0, target_type)
+            false_value = self.register_constant(0.0, target_type)
             return self.select_operation(target_type, value, true_value, false_value)
 
         if source_type_name in self.INTEGER_TYPE_NAMES and target_type_name == "bool":
@@ -11809,6 +11817,9 @@ class VulkanSPIRVCodeGen(
             spirv_id = SpirvId(id_value, result_type.type)
             self.value_types[id_value] = result_type
             return spirv_id
+
+        elif function_name in BOOLEAN_REDUCTIONS and len(args) == 1:
+            return spirv_boolean_reduction(self, function_name, args[0])
 
         elif function_name in {"fmod", "mod"} and len(args) == 2:
             result_type = self.ensure_registered_type(args[0].type)
@@ -30448,6 +30459,7 @@ class VulkanSPIRVCodeGen(
             )
 
         validate_recursion_free(ast, "vulkan")
+        lower_relational_builtins(ast)
         self.reset_generation_state()
         try:
             module = self._generate_module(ast)

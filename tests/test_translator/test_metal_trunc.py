@@ -271,10 +271,10 @@ def test_trunc_executes_with_exact_finite_bits(tmp_path, dtype, start):
 
 
 def test_trunc_native_gate_is_required():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = Path(".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate Metal builtin ownership"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

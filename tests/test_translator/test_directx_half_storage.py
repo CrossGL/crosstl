@@ -176,9 +176,9 @@ def test_half_storage_updates_execute_with_logical_results(tmp_path, case):
 
 
 def test_half_lowering_controls_are_required_on_windows():
-    from tools import ci_coverage
+    from tests import workflow_text
 
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         Path(".github/workflows/demo-project-testing.yml").read_text(),
         "Validate indexed DirectX gather and resource aggregates",
     )

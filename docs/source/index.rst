@@ -10,7 +10,6 @@ systems-language targets.
    :caption: Guides
 
    quickstart
-   architecture
    translation-pipeline
    project-porting
    artifact-contract-refresh
@@ -18,9 +17,7 @@ systems-language targets.
    ast
    codegen-utilities
    backend-support
-   support-matrix
    backends/index
-   examples
    extending
    doxygen
    adr/index

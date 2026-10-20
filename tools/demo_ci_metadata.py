@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_METADATA_PATH = ROOT / "support" / "demo-ci-metadata.json"
+DEFAULT_METADATA_PATH = ROOT / "demos" / "open-source-porting" / "ci-metadata.json"
 SELECTOR_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 

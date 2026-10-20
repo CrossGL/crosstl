@@ -113,6 +113,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .relational_builtins import lower_relational_builtins
 from .stage_utils import (
     compute_local_size,
     is_fragment_output_parameter,
@@ -351,6 +352,7 @@ class SlangCodeGen:
         outermost = not self._generating
         if outermost:
             self._generating = True
+            lower_relational_builtins(ast)
             self.variable_types = {}
             self.local_variable_types = self.variable_types
             self.image_resource_types = {}
@@ -2857,6 +2859,17 @@ class SlangCodeGen:
     def function_return_semantic(self, node):
         return self.semantic_from_node(node, skip_stage_attributes=True)
 
+    @staticmethod
+    def slang_function_is_precise(node):
+        """Return whether a function's results must be computed precisely."""
+        qualifiers = {
+            str(item).lower() for item in getattr(node, "qualifiers", []) or []
+        }
+        return "precise" in qualifiers or any(
+            str(getattr(attribute, "name", "")).lower() == "precise"
+            for attribute in getattr(node, "attributes", []) or []
+        )
+
     def semantic_from_node(self, node, skip_stage_attributes=False):
         semantic = getattr(node, "semantic", None)
         if semantic:
@@ -2869,6 +2882,9 @@ class SlangCodeGen:
                 self.slang_stage_attribute_name(attr)
                 or self.slang_shader_stage_marker_name(getattr(attr, "name", None))
             ):
+                continue
+            if str(getattr(attr, "name", "")).lower() == "precise":
+                # A modifier of the declaration, rendered before its type.
                 continue
             if (
                 self.is_resource_format_attribute(attr)
@@ -6036,7 +6052,11 @@ class SlangCodeGen:
             shader_stage = self.slang_shader_stage_name(shader_type)
             result += f'[shader("{shader_stage}")]\n'
         function_name = entry_name or node.name
-        result += f"{ret_type} {function_name}({params_str}){semantic_str}\n{{\n"
+        precise_prefix = "precise " if self.slang_function_is_precise(node) else ""
+        result += (
+            f"{precise_prefix}{ret_type} {function_name}({params_str}){semantic_str}"
+            "\n{\n"
+        )
         self.indent_level += 1
 
         if builtin_return_rewrite is not None and builtin_return_rewrite["mode"] in {

@@ -1286,11 +1286,11 @@ kernel void products(device {kind}* numerators [[buffer(0)]],
 
 
 def test_wide_integer_native_gate_is_required_on_every_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate mixed-width integer arithmetic"
     )
     assert f'{REQUIRE_ENV}: "1"' in step
@@ -1301,6 +1301,6 @@ def test_wide_integer_native_gate_is_required_on_every_target():
     assert "--durations=20" in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_wide_integer_arithmetic.py",
         )

@@ -94,7 +94,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: ${{ matrix.python-version }}
 
       - name: Classify Python setup failure
@@ -148,20 +147,20 @@ jobs:
         id: run_translator_tests
         shell: bash
         run: |
-          mkdir -p support/generated
+          mkdir -p build/reports
           if [ "${{ matrix.component }}" == "all" ]; then
             python -m pytest tests/test_translator -n auto \
-              --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+              --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           elif [ "${{ matrix.component }}" == "general" ]; then
             python -m pytest tests/test_translator --ignore=tests/test_translator/test_codegen -n auto \
-              --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+              --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           elif [ "${{ matrix.component }}" == "GLSL" ]; then
             python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py -n auto \
               tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py \
-              --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+              --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           else
             python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py -n auto \
-              --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+              --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           fi
 
       - name: Write translator test failure summary
@@ -169,10 +168,10 @@ jobs:
         shell: bash
         run: |
           python tools/pytest_failure_summary.py \
-            support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml \
-            --json-output support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json \
-            --markdown-output support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
-          cat support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+            build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml \
+            --json-output build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json \
+            --markdown-output build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
+          cat build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload translator test failure summary
         if: failure() && steps.run_translator_tests.outcome == 'failure'
@@ -180,9 +179,9 @@ jobs:
         with:
           name: translator-tests-failure-summary-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}
           path: |
-            support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-            support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json
-            support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
+            build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+            build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json
+            build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
           if-no-files-found: ignore
           retention-days: 30
 

@@ -193,6 +193,45 @@ def test_metal_unregistered_structure_lookalike_is_not_projected():
     assert "(value).real" not in generated
 
 
+def test_metal_bfloat_stored_arguments_are_passed_without_conversion():
+    # A stored bfloat value already has the bfloat parameter type; only a
+    # computed value, which Metal evaluates as float, needs construction.
+    shader = """
+    shader MetalBfloatArguments {
+        struct Pair {
+            bfloat16 value;
+        };
+        bfloat16 passThrough(bfloat16 value) {
+            return value;
+        }
+        compute {
+            void main(
+                RWStructuredBuffer<bfloat16> src @buffer(0),
+                RWStructuredBuffer<bfloat16> dst @buffer(1),
+                uint3 tid @ gl_GlobalInvocationID) {
+                bfloat16 local = src[tid.x];
+                Pair pair;
+                pair.value = local;
+                dst[0] = passThrough(src[tid.x]);
+                dst[1] = passThrough(local);
+                dst[2] = passThrough(pair.value);
+                dst[3] = passThrough(local * local);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "passThrough(src[tid.x])" in generated
+    assert "passThrough(local)" in generated
+    assert "passThrough(pair.value)" in generated
+    assert "passThrough(bfloat(local * local))" in generated
+    assert "passThrough(bfloat(src" not in generated
+    compile_with_metal_if_available(generated)
+
+
 def test_metal_registered_complex_assignments_lower_implicit_conversions():
     # MLX's complex_t converts implicitly from scalars (imag = 0) and to
     # scalars (the real part); the plain translated struct needs both spelled.
@@ -1822,6 +1861,77 @@ def test_metal_glsl_bitcast_builtins_lower_to_as_type():
     assert "floatBitsToUint(" not in generated_code
     assert "intBitsToFloat(" not in generated_code
     assert "uintBitsToFloat(" not in generated_code
+
+
+def test_metal_integer_literals_beyond_int_keep_their_width():
+    # HLSL asfloat(0xFFC00000) reaches CrossGL as a uint literal; an
+    # unsuffixed decimal beyond int is 64-bit, as in C++. Each keeps its width:
+    # as_type cannot reinterpret a long as float, and a long would widen uint
+    # arithmetic and comparisons.
+    shader = """
+    shader MetalLiteralWidths {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID,
+                      RWStructuredBuffer<float> results @buffer(0),
+                      RWStructuredBuffer<uint> bits @buffer(1)) {
+                results[0] = uintBitsToFloat(4290772992u);
+                results[1] = intBitsToFloat(2139095040);
+                bits[0] = 4290772992u * 2;
+                bits[1] = 4290772992u > 0 ? 1u : 0u;
+                int64_t wide = 4290772992;
+                bits[2] = wide > 0 ? 1u : 0u;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "as_type<float>(4290772992u)" in generated_code
+    assert "as_type<float>(2139095040)" in generated_code
+    assert "4290772992u * 2" in generated_code
+    assert "4290772992u > 0" in generated_code
+    assert "int64_t wide = 4290772992l;" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_negated_integer_literals_beyond_int_stay_signed():
+    # -2147483648u is 2147483648 in a 64-bit context; the unsuffixed decimal
+    # is long in Metal, so its negation keeps the value in every width.
+    shader = """
+    shader MetalNegatedLiteralWidths {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID,
+                      RWStructuredBuffer<uint> bits @buffer(0)) {
+                int narrow = -2147483648;
+                int64_t wide = -2147483648;
+                int64_t wider = -5000000000;
+                int64_t positive = 5000000000;
+                uint explicitUnsigned = -4290772992u;
+                bits[0] = uint(narrow);
+                bits[1] = wide < 0 ? 1u : 0u;
+                bits[2] = wider < positive ? 1u : 0u;
+                bits[3] = explicitUnsigned;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    # Unsuffixed decimals beyond int are 64-bit, so each negation is signed.
+    assert "int narrow = -2147483648l;" in generated_code
+    assert "int64_t wide = -2147483648l;" in generated_code
+    assert "int64_t wider = -5000000000l;" in generated_code
+    assert "int64_t positive = 5000000000l;" in generated_code
+    assert "uint explicitUnsigned = -4290772992u;" in generated_code
+    assert "2147483648u" not in generated_code
+    assert "5000000000ul" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_hlsl_as_bitcast_aliases_lower_to_as_type():
@@ -8929,11 +9039,15 @@ def test_metal_stage_io_interpolation_attributes_preserve_semantics():
         crosstl.translator.parse(shader), "fragment"
     )
 
-    assert "float4 color [[attribute(5)]] [[flat]];" in generated_code
-    assert "float2 uv [[attribute(6)]] [[centroid_no_perspective]];" in generated_code
-    assert "int materialId [[attribute(7)]] [[flat]];" in generated_code
+    # Fragment inputs link to vertex outputs by [[user(...)]] key; [[attribute(n)]] is ignored there.
+    assert "float4 color [[user(TEXCOORD0)]] [[flat]];" in generated_code
     assert (
-        "float4 sampleColor [[attribute(8)]] [[sample_perspective]];" in generated_code
+        "float2 uv [[user(TEXCOORD1)]] [[centroid_no_perspective]];" in generated_code
+    )
+    assert "int materialId [[user(TEXCOORD2)]] [[flat]];" in generated_code
+    assert (
+        "float4 sampleColor [[user(TEXCOORD3)]] [[sample_perspective]];"
+        in generated_code
     )
     assert "[[linear_noperspective_centroid]]" not in generated_code
     assert "[[nointerpolation]]" not in generated_code
@@ -14444,8 +14558,10 @@ def test_metal_stage_entry_name_avoids_global_helper_collision():
 
     assert "float4 fragment_main(float2 uv)" in generated_code
     assert (
-        "fragment float4 fragment_main_2(float2 uv [[attribute(5)]])" in generated_code
+        "fragment float4 fragment_main_2(fragment_main_2_Input _crossglInput "
+        "[[stage_in]])" in generated_code
     )
+    assert "float2 uv [[user(TEXCOORD0)]];" in generated_code
 
 
 def test_metal_stage_entry_name_avoids_local_helper_collision():
@@ -14469,8 +14585,10 @@ def test_metal_stage_entry_name_avoids_local_helper_collision():
 
     assert "float4 fragment_main(float2 uv)" in generated_code
     assert (
-        "fragment float4 fragment_main_2(float2 uv [[attribute(5)]])" in generated_code
+        "fragment float4 fragment_main_2(fragment_main_2_Input _crossglInput "
+        "[[stage_in]])" in generated_code
     )
+    assert "float2 uv [[user(TEXCOORD0)]];" in generated_code
     assert "return fragment_main(uv);" in generated_code
 
 
@@ -15999,7 +16117,7 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "uint primitiveID [[primitive_id]]" in fragment_code
-    assert "bool frontFacing [[is_front_facing]]" in fragment_code
+    assert "bool frontFacing [[front_facing]]" in fragment_code
     assert "float4 coord [[position]]" in fragment_code
     assert "float2 point [[point_coord]]" in fragment_code
     assert "uint sampleID [[sample_id]]" in fragment_code
@@ -16072,7 +16190,7 @@ def test_graphics_hlsl_system_value_semantic_alias_variants_lower_to_metal_built
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "uint primitiveID [[primitive_id]]" in fragment_code
-    assert "bool frontFacing [[is_front_facing]]" in fragment_code
+    assert "bool frontFacing [[front_facing]]" in fragment_code
     assert "SV_PrimitiveId" not in fragment_code
     assert "sv_isfrontface" not in fragment_code
 
@@ -16132,7 +16250,7 @@ def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
     [
         ("vertex", "float", "gl_InstanceID", "instance_id", "uint"),
         ("fragment", "int", "gl_PrimitiveID", "primitive_id", "uint"),
-        ("fragment", "int", "gl_FrontFacing", "is_front_facing", "bool"),
+        ("fragment", "int", "gl_FrontFacing", "front_facing", "bool"),
         ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
         ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
         ("fragment", "int", "gl_SampleID", "sample_id", "uint"),
@@ -16258,7 +16376,7 @@ def test_struct_builtin_member_semantics_are_validated():
     assert "float pointSize [[point_size]];" in generated
     assert "float4 coord [[position]];" in generated
     assert "float2 point [[point_coord]];" in generated
-    assert "bool frontFacing [[is_front_facing]];" in generated
+    assert "bool frontFacing [[front_facing]];" in generated
     assert "uint primitiveID [[primitive_id]];" in generated
     assert "uint sampleID [[sample_id]];" in generated
     assert "uint sampleMaskIn [[sample_mask]];" in generated
@@ -16304,7 +16422,7 @@ def test_metal_clip_distance_array_keeps_native_vertex_attribute_order():
         ("vec3 position @ gl_Position", "position", "float4"),
         ("vec3 color @ gl_FragColor", "color\\(0\\)", "float4"),
         ("vec2 depth @ gl_FragDepth", "depth\\(any\\)", "float"),
-        ("int frontFacing @ gl_FrontFacing", "is_front_facing", "bool"),
+        ("int frontFacing @ gl_FrontFacing", "front_facing", "bool"),
         ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
         ("int primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
         ("vec2 pointSize @ gl_PointSize", "point_size", "float"),
@@ -32256,6 +32374,46 @@ def test_metal_sampler_1d_sampling_options_emit_target_diagnostics():
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
     assert "textureOffset(" not in generated_code
+
+
+def test_metal_1d_base_lod_sampling_depends_on_program_stages():
+    graphics_shader = """
+    shader OneDBaseLevel {
+        sampler1D lineMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return textureLod(lineMap, linearSampler, 0.5, 0);
+            }
+        }
+    }
+    """
+    compute_shader = """
+    shader OneDBaseLevelCompute {
+        sampler1D lineMap;
+        sampler linearSampler;
+        image1D output;
+
+        compute {
+            void main() {
+                imageStore(output, 0, textureLod(lineMap, linearSampler, 0.5, 0));
+            }
+        }
+    }
+    """
+
+    # Fragment sampling derives its own LOD, which can select the minification
+    # filter, so an explicit base level has no exact Metal 1D equivalent.
+    with pytest.raises(
+        MetalLoweringRefused,
+        match="textureLod on texture1d<float> supports only implicit sampling",
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(graphics_shader))
+
+    compute_code = MetalCodeGen().generate(crosstl.translator.parse(compute_shader))
+    assert "lineMap.sample(linearSampler, 0.5)" in compute_code
+    assert "unsupported Metal texture sampling" not in compute_code
 
 
 def test_metal_image_1d_and_1d_array_storage_operations():

@@ -7,7 +7,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from demos.integrations.mlx.ci_plan import changed_paths, main, validation_plan
+from demos.integrations.mlx.ci_plan import (
+    PLAN_JOB,
+    _without_plan_job,
+    changed_paths,
+    classify_workflow_change,
+    main,
+    validation_plan,
+)
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
@@ -226,15 +233,193 @@ def test_documentation_only_pull_request_skips_every_mlx_job():
     }
 
 
-def test_merge_queue_runs_every_tier(tmp_path, capsys):
-    assert validation_plan("merge_group", ["docs/source/index.rst"]) == {
-        "heavy": True,
+@pytest.mark.parametrize(
+    "path,heavy",
+    [
+        ("docs/source/index.rst", False),
+        ("README.md", False),
+        (".github/workflows/conformance.yml", False),
+        ("crosstl/translator/codegen/directx_codegen.py", False),
+        ("tests/conformance/test_ci_tiers.py", False),
+        ("demos/integrations/mlx/portable_host/runtime.py", True),
+        (".github/workflows/demo-project-testing.yml", True),
+    ],
+)
+def test_merge_queue_runs_full_tier_only_for_mlx_changes(path, heavy):
+    # The queue builds one group at a time, so a group that cannot affect MLX
+    # must not wait for the multi-hour native tier; smoke still gates it.
+    assert validation_plan("merge_group", [path]) == {"heavy": heavy, "smoke": True}
+    assert validation_plan("merge_group", [path]) == {
+        "heavy": validation_plan("push", [path])["heavy"],
         "smoke": True,
     }
-    output = tmp_path / "output"
-    assert main(["--event", "merge_group", "--output", str(output)]) == 0
+
+
+@pytest.mark.parametrize(
+    "path,heavy",
+    [
+        ("docs/index.rst", "false"),
+        ("crosstl/translator/parser.py", "false"),
+        ("demos/integrations/mlx/source.metal", "true"),
+    ],
+)
+def test_merge_group_reads_the_diff_from_its_base(tmp_path, monkeypatch, path, heavy):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    (tmp_path / "README.md").write_text("start\n")
+    base = _commit("Start")
+    changed = tmp_path / path
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    changed.write_text("change\n")
+    head = _commit("Queued change")
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", "merge_group", "--base", base, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
+    assert output.read_text() == f"heavy={heavy}\nsmoke=true\n"
+
+
+def test_merge_group_without_its_base_gets_full_validation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    (tmp_path / "README.md").write_text("start\n")
+    head = _commit("Start")
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", "merge_group", "--base", "c" * 40, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
     assert output.read_text() == "heavy=true\nsmoke=true\n"
-    assert json.loads(capsys.readouterr().out) == {"heavy": True, "smoke": True}
+
+
+def test_merge_group_without_revisions_fails(tmp_path):
+    with pytest.raises(ValueError, match="full Git commit hashes"):
+        main(["--event", "merge_group", "--output", str(tmp_path / "output")])
+
+
+def test_plan_inputs_cover_pull_requests_merge_groups_and_pushes():
+    plan = yaml.safe_load(WORKFLOW.read_text())["jobs"]["ci-plan"]
+    tier = next(step for step in plan["steps"] if step.get("id") == "plan")
+    assert tier["env"]["MLX_CI_BASE"] == (
+        "${{ github.event.pull_request.base.sha || "
+        "github.event.merge_group.base_sha || github.event.before }}"
+    )
+    assert tier["env"]["MLX_CI_HEAD"] == (
+        "${{ github.event.pull_request.head.sha || "
+        "github.event.merge_group.head_sha || github.sha }}"
+    )
+
+
+def _run_result_gate(results):
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["result"]
+    step = next(step for step in job["steps"] if "run" in step)
+    return subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env={"RESULTS": " ".join(results), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_result_gate_needs_every_job_and_passes_when_the_plan_skips_them():
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    job = workflow["jobs"]["result"]
+    assert job["if"] == "always()"
+    assert set(job["needs"]) == set(workflow["jobs"]) - {"result"}
+    skipped = ["skipped"] * (len(job["needs"]) - 2)
+    assert _run_result_gate(["success", "success", *skipped]).returncode == 0
+
+
+@pytest.mark.parametrize("outcome", ["failure", "cancelled"])
+def test_result_gate_fails_when_a_job_that_ran_fails(outcome):
+    job = yaml.safe_load(WORKFLOW.read_text())["jobs"]["result"]
+    results = ["success"] * (len(job["needs"]) - 1)
+    results.insert(3, outcome)
+    completed = _run_result_gate(results)
+    assert completed.returncode == 1
+    assert f"ended with '{outcome}'" in completed.stdout
+
+
+@pytest.mark.parametrize("event", ["push", "merge_group"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "demos/integrations/mlx/ci_plan.py",
+        "demos/integrations/mlx/tests/test_ci_plan.py",
+        "demos/integrations/mlx/README.md",
+        "demos/integrations/mlx/portable_host/README.md",
+        PLAN_JOB,
+    ],
+)
+def test_planner_changes_need_only_the_smoke_tier(event, path):
+    assert validation_plan(event, [path]) == {"heavy": False, "smoke": True}
+    kernel = "demos/integrations/mlx/tests/kernels/test_current_arange.py"
+    assert validation_plan(event, [path, kernel]) == {"heavy": True, "smoke": True}
+
+
+def test_plan_job_split_removes_exactly_the_plan_job():
+    text = WORKFLOW.read_text()
+    workflow = yaml.safe_load(text)
+    remaining = yaml.safe_load("\n".join(_without_plan_job(text)) + "\n")
+    del workflow["jobs"]["ci-plan"]
+    assert remaining == workflow
+
+
+_PLANNED_WORKFLOW = """name: Demo
+on:
+  push:
+    branches: [main]
+jobs:
+  ci-plan:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo {plan}
+  native:
+    runs-on: windows-2025
+    steps:
+      - run: echo {native}
+"""
+
+
+@pytest.mark.parametrize(
+    "plan,native,trigger,heavy",
+    [
+        ("planner-two", "native", "main", "false"),
+        ("planner", "native-two", "main", "true"),
+        ("planner", "native", "release", "true"),
+    ],
+)
+def test_workflow_change_confined_to_plan_job_skips_full_tier(
+    tmp_path, monkeypatch, plan, native, trigger, heavy
+):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_PLANNED_WORKFLOW.format(plan="planner", native="native"))
+    base = _commit("Start")
+    changed = _PLANNED_WORKFLOW.format(plan=plan, native=native)
+    workflow.write_text(changed.replace("[main]", f"[{trigger}]"))
+    head = _commit("Edit workflow")
+    paths = classify_workflow_change(base, head, changed_paths(base, head))
+    assert paths == (
+        (PLAN_JOB,) if heavy == "false" else (str(WORKFLOW.relative_to(ROOT)),)
+    )
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", "merge_group", "--base", base, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
+    assert output.read_text() == f"heavy={heavy}\nsmoke=true\n"
+
+
+def test_added_workflow_keeps_the_full_tier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    (tmp_path / "README.md").write_text("start\n")
+    base = _commit("Start")
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_PLANNED_WORKFLOW.format(plan="planner", native="native"))
+    head = _commit("Add workflow")
+    paths = changed_paths(base, head)
+    assert classify_workflow_change(base, head, paths) == paths
+    assert validation_plan("push", paths)["heavy"] is True
 
 
 def test_unsupported_event_fails():

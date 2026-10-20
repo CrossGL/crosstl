@@ -204,6 +204,31 @@ def test_conformance_merge_queue_runs_the_held_out_kernels():
     assert '"$GITHUB_EVENT_NAME" = merge_group' in tier["run"]
 
 
+def test_windows_leg_runs_the_reference_warp_library():
+    """The WARP leg installs one checksum-verified library and refuses any other build at run time.
+
+    WARP 1.0.19 is the reference library of the WARP conformance matrix in demo-project-testing.yml; the leg
+    verifies both the package and the DLL it installs, and exports the version the adapter checks.
+    """
+    install = next(
+        step
+        for step in load("conformance.yml")["jobs"]["native"]["steps"]
+        if step.get("name") == "Install pinned WARP"
+    )
+    environment = install["env"]
+    assert install["if"] == "runner.os == 'Windows'"
+    assert environment["WARP_VERSION"] == "1.0.19"
+    assert all(
+        len(environment[name]) == 64
+        and set(environment[name]) <= set("0123456789abcdef")
+        for name in ("WARP_ARCHIVE_SHA256", "WARP_DLL_SHA256")
+    )
+    script = install["run"]
+    assert "$env:WARP_ARCHIVE_SHA256" in script and "$env:WARP_DLL_SHA256" in script
+    assert "microsoft.direct3d.warp/$env:WARP_VERSION/" in script
+    assert "CROSSTL_CONFORMANCE_WARP_VERSION=$env:WARP_VERSION.0" in script
+
+
 def test_fuzz_runs_weekly_on_linux_only():
     workflow = load("fuzz.yml")
     assert set(workflow["on"]) == {"schedule", "workflow_dispatch"}

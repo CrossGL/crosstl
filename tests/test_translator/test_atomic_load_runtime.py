@@ -352,7 +352,7 @@ def test_atomic_load_readonly_storage_contract(tmp_path, target):
 
 
 def test_atomic_loads_are_required_on_each_native_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
@@ -363,7 +363,7 @@ def test_atomic_loads_are_required_on_each_native_target():
         "Validate indexed DirectX gather and resource aggregates",
         "Validate indexed OpenGL gather and resource aggregates",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_atomic_load_runtime.py" in step
         assert "test_atomic_load_runtime.py" in step

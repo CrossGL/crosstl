@@ -8,7 +8,7 @@ import json
 import math
 import os
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -129,6 +129,61 @@ def _read_shader_source(file_path: str, source_name: str) -> str:
     return shader_bytes.decode("utf-8", errors="replace")
 
 
+@dataclass(frozen=True)
+class TranslationResult:
+    """Generated target code together with its resource binding table.
+
+    ``resource_bindings`` lists one record per bound resource as reported by the
+    target code generator: the source resource name, the target binding namespace
+    and slot, the slot count and, when the source bound it with an HLSL
+    ``register``, that register. Targets that do not report bindings return an
+    empty tuple.
+    """
+
+    code: str
+    backend: str
+    resource_bindings: tuple = ()
+
+
+def translate_with_metadata(
+    file_path: str,
+    backend: str = "cgl",
+    save_shader: Optional[str] = None,
+    format_output: bool = True,
+    source_backend: Optional[str] = None,
+    *,
+    include_paths: Optional[Sequence[str]] = None,
+    defines: Optional[Mapping[str, str]] = None,
+    source_options: Optional[Mapping[str, Any]] = None,
+    entry_point: Optional[str] = None,
+) -> TranslationResult:
+    """Translate a shader file and return the code with its binding table.
+
+    Accepts the same arguments as :func:`translate`.
+    """
+
+    generated_code, codegen = _translate_with_codegen(
+        file_path,
+        backend,
+        save_shader,
+        format_output,
+        source_backend,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+        entry_point=entry_point,
+    )
+    records = ()
+    reporter = getattr(codegen, "resource_binding_records", None)
+    if callable(reporter):
+        records = tuple(dict(record) for record in reporter())
+    return TranslationResult(
+        code=generated_code,
+        backend=normalize_backend_name(backend) or backend,
+        resource_bindings=records,
+    )
+
+
 def translate(
     file_path: str,
     backend: str = "cgl",
@@ -162,6 +217,33 @@ def translate(
     Returns:
         str: The translated shader code
     """
+    generated_code, _codegen = _translate_with_codegen(
+        file_path,
+        backend,
+        save_shader,
+        format_output,
+        source_backend,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+        entry_point=entry_point,
+    )
+    return generated_code
+
+
+def _translate_with_codegen(
+    file_path,
+    backend="cgl",
+    save_shader=None,
+    format_output=True,
+    source_backend=None,
+    *,
+    include_paths=None,
+    defines=None,
+    source_options=None,
+    entry_point=None,
+):
+    target_codegen = None
     file_path = os.fspath(file_path)
     if not isinstance(file_path, str):
         raise TypeError(
@@ -221,6 +303,10 @@ def translate(
             defines = materialized_source.defines
             source_options = materialized_source.source_options
 
+    if source_spec.name == "cgl":
+        # A CrossGL body the parser cannot read is refused; skipping it would emit a
+        # function that returns an undefined value.
+        source_options = {**(source_options or {}), "strict_function_bodies": True}
     ast = source_spec.parse(
         shader_code,
         file_path=file_path,
@@ -249,6 +335,7 @@ def translate(
             generated_code = _generate_target_code(
                 codegen, selected_ast, remaining_entry_point, normalized_backend
             )
+            target_codegen = codegen
     else:
         if normalized_backend in ["cgl", "crossgl"]:
             codegen = source_spec.create_reverse_codegen(source_options)
@@ -262,7 +349,10 @@ def translate(
                 cgl_spec = SOURCE_REGISTRY.get("cgl")
                 if not cgl_spec:
                     raise ValueError("CrossGL parser not available for validation")
-                cgl_ast = cgl_spec.parse(generated_code)
+                cgl_ast = cgl_spec.parse(
+                    generated_code,
+                    source_options={"strict_function_bodies": True},
+                )
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
         else:
             reverse_codegen = source_spec.create_reverse_codegen(source_options)
@@ -277,7 +367,7 @@ def translate(
             if not cgl_spec:
                 raise ValueError("CrossGL parser not available for intermediate step")
             cgl_source_options = {
-                "strict_function_bodies": source_spec.name != "mojo",
+                "strict_function_bodies": True,
             }
             cgl_ast = cgl_spec.parse(
                 intermediate_code,
@@ -310,6 +400,7 @@ def translate(
             generated_code = _generate_target_code(
                 codegen, selected_ast, remaining_entry_point, normalized_backend
             )
+            target_codegen = codegen
 
     if (
         format_output
@@ -324,7 +415,7 @@ def translate(
         with open(save_shader, "w", encoding="utf-8", newline="") as file:
             file.write(generated_code)
 
-    return generated_code
+    return generated_code, target_codegen
 
 
 def _generate_target_code(codegen, ast, entry_point, backend=None):
