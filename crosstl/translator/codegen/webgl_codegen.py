@@ -17,6 +17,7 @@ from .GLSL_codegen import (
     OpenGLBooleanCompoundAssignmentError,
     OpenGLBooleanOrderedIntrinsicError,
     OpenGLIndexTypeError,
+    OpenGLPreciseQualifierError,
     OpenGLStructConstructionError,
 )
 from .glsl_es_expression_forms import GLSLESExpressionFormsMixin
@@ -70,6 +71,13 @@ class WebGLIndexTypeError(OpenGLIndexTypeError):
     missing_capabilities = ("webgl.index-width-normalization",)
 
 
+class WebGLPreciseQualifierError(OpenGLPreciseQualifierError):
+    """Raised when source arithmetic must be evaluated as written in GLSL ES 3.00."""
+
+    project_diagnostic_code = "project.translate.webgl-precise-unsupported"
+    missing_capabilities = ("webgl.precise-qualifier",)
+
+
 class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
@@ -86,6 +94,11 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = WebGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError
     GLSL_INDEX_RANGE_ERROR = WebGLIndexTypeError
+    GLSL_PRECISE_QUALIFIER_ERROR = WebGLPreciseQualifierError
+    GLSL_PRECISE_QUALIFIER_REMEDY = (
+        "WebGL 2 shaders are GLSL ES 3.00, so translate the shader for a "
+        "desktop OpenGL or GLSL ES 3.20 target instead"
+    )
     GLSL_INDEX_TARGET_PROFILE = WEBGL_INDEX_PROFILE
     GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32})
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32})

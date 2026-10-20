@@ -64,7 +64,8 @@ def test_parse_layout_locations_and_components():
         "out mediump vec4 out_fragColor;" in glsl
     )
     assert "fragColor = color;" in glsl
-    assert "\n    vec4 fragColor;" in glsl
+    # The precise output makes the function precise, so its locals are too.
+    assert "\n    precise vec4 fragColor;" in glsl
     assert "out_fragColor = fragColor;" in glsl
     assert "\n    fragColor = fragColor;" not in glsl
 

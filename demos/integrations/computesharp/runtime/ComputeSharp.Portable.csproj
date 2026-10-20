@@ -1,0 +1,97 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Portable ComputeSharp runtime. It builds an assembly named ComputeSharp with the
+    upstream public API: the pure upstream sources (attributes, dispatch intrinsics,
+    pixel types, extension methods, views and interfaces) are compiled unchanged from
+    the pinned checkout, and the Direct3D 12 specific types are reimplemented over the
+    native backend ABI in native/csbackend.h (Metal on macOS, OpenGL 4.5 on Linux).
+
+    ComputeSharpRoot must point to an adapted checkout of the pinned upstream revision.
+    The assembly is signed with the upstream key so that ComputeSharp.Core grants it the
+    same internals access as the original runtime.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>ComputeSharp</AssemblyName>
+    <RootNamespace>ComputeSharp</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyVersion>4.0.0.0</AssemblyVersion>
+    <Version>4.0.0-portable</Version>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>$(ComputeSharpRoot)/build/computesharp.snk</AssemblyOriginatorKeyFile>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS8500;CS1591;CA1416;IL2026;IL2091;IL2090</NoWarn>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IsTrimmable>false</IsTrimmable>
+  </PropertyGroup>
+
+  <Target Name="CheckComputeSharpRoot" BeforeTargets="ResolveAssemblyReferences;CoreCompile">
+    <Error Condition="'$(ComputeSharpRoot)' == '' Or !Exists('$(ComputeSharpRoot)/src/ComputeSharp/ComputeSharp.csproj')"
+           Text="Set ComputeSharpRoot to the adapted ComputeSharp checkout (got '$(ComputeSharpRoot)')." />
+  </Target>
+
+  <PropertyGroup>
+    <UpstreamRuntime>$(ComputeSharpRoot)/src/ComputeSharp</UpstreamRuntime>
+    <!-- The upstream runtime grants ComputeSharp.Tests.Internals access to its internals;
+         the key is read from the pinned build properties instead of being copied. -->
+    <UpstreamBuildProps>$(ComputeSharpRoot)/build/Directory.Build.props</UpstreamBuildProps>
+    <UpstreamAssemblySignPublicKey Condition="Exists('$(UpstreamBuildProps)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(UpstreamBuildProps)')), '(?&lt;=&lt;AssemblySignPublicKey&gt;)[0-9A-Fa-f]+(?=&lt;/AssemblySignPublicKey&gt;)'))</UpstreamAssemblySignPublicKey>
+  </PropertyGroup>
+
+  <Target Name="CheckUpstreamPublicKey" BeforeTargets="GenerateAssemblyInfo;CoreCompile">
+    <Error Condition="'$(UpstreamAssemblySignPublicKey)' == ''"
+           Text="No AssemblySignPublicKey in $(UpstreamBuildProps)." />
+  </Target>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ComputeSharp.Tests.Internals, PublicKey=$(UpstreamAssemblySignPublicKey)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core/ComputeSharp.Core.csproj" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
+  </ItemGroup>
+
+  <!-- Unchanged upstream sources (see README.md for the classification). -->
+  <ItemGroup>
+    <Compile Include="$(UpstreamRuntime)/Attributes/**/*.cs" Link="Upstream/Attributes/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamRuntime)/Dispatch/**/*.cs" Link="Upstream/Dispatch/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamRuntime)/Imaging/**/*.cs" Link="Upstream/Imaging/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamRuntime)/Properties/Configuration.cs" Link="Upstream/Properties/Configuration.cs" />
+    <Compile Include="$(UpstreamRuntime)/Interfaces/IComputeShader.cs" Link="Upstream/Interfaces/IComputeShader.cs" />
+    <Compile Include="$(UpstreamRuntime)/Interfaces/IComputeShader{TPixel}.cs" Link="Upstream/Interfaces/IComputeShader{TPixel}.cs" />
+    <Compile Include="$(UpstreamRuntime)/Interfaces/Descriptors/IConstantBufferLoader.cs" Link="Upstream/Interfaces/Descriptors/IConstantBufferLoader.cs" />
+    <Compile Include="$(UpstreamRuntime)/Interfaces/Descriptors/IGraphicsResourceLoader.cs" Link="Upstream/Interfaces/Descriptors/IGraphicsResourceLoader.cs" />
+    <Compile Include="$(UpstreamRuntime)/Interfaces/Descriptors/IComputeShaderDescriptor{T}.cs" Link="Upstream/Interfaces/Descriptors/IComputeShaderDescriptor{T}.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/DeviceLostEventArgs.cs" Link="Upstream/Graphics/DeviceLostEventArgs.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/GraphicsDevice.GetDevice.cs" Link="Upstream/Graphics/GraphicsDevice.GetDevice.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Exceptions/*.cs" Link="Upstream/Graphics/Exceptions/%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Extensions/*.cs" Link="Upstream/Graphics/Extensions/%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Interop/ResourceDescriptorRange.cs" Link="Upstream/Graphics/Interop/ResourceDescriptorRange.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Helpers/AlignmentHelper.cs" Link="Upstream/Graphics/Helpers/AlignmentHelper.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Helpers/MemoryHelper.cs" Link="Upstream/Graphics/Helpers/MemoryHelper.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Helpers/TypeInfo{T}.cs" Link="Upstream/Graphics/Helpers/TypeInfo{T}.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Interop/IReferenceTrackedObject.cs" Link="Upstream/Graphics/Interop/IReferenceTrackedObject.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Interop/ReferenceTrackedObject.cs" Link="Upstream/Graphics/Interop/ReferenceTrackedObject.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Interop/ReferenceTracker.cs" Link="Upstream/Graphics/Interop/ReferenceTracker.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Interop/ReferenceTrackedTypes.g.cs" Link="Upstream/Graphics/Interop/ReferenceTrackedTypes.g.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/Debug/*.cs" Link="Upstream/Graphics/Resources/Debug/%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/Enums/AllocationMode.cs" Link="Upstream/Graphics/Resources/Enums/AllocationMode.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/Enums/ResourceState.cs" Link="Upstream/Graphics/Resources/Enums/ResourceState.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/Enums/ResourceType.cs" Link="Upstream/Graphics/Resources/Enums/ResourceType.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/Interfaces/*.cs" Link="Upstream/Graphics/Resources/Interfaces/%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/ReadBack*.cs" Link="Upstream/Graphics/Resources/%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/Upload*.cs" Link="Upstream/Graphics/Resources/%(Filename)%(Extension)" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/ReadOnlyBuffer{T}.cs" Link="Upstream/Graphics/Resources/ReadOnlyBuffer{T}.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/ReadWriteBuffer{T}.cs" Link="Upstream/Graphics/Resources/ReadWriteBuffer{T}.cs" />
+    <Compile Include="$(UpstreamRuntime)/Graphics/Resources/Views/*.cs" Link="Upstream/Graphics/Resources/Views/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- Portable reimplementations of the Direct3D 12 specific types. -->
+  <ItemGroup>
+    <Compile Include="src/**/*.cs" />
+  </ItemGroup>
+</Project>

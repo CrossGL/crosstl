@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Evaluates single-precision HLSL intrinsics over a fixed input set on one device and
+    writes the raw results. The shaders are ordinary ComputeSharp shaders, so the same
+    generated HLSL runs on the original Direct3D 12 runtime (WARP) and, after CrossTL
+    translation, on the portable Metal and OpenGL runtime. Comparing the results shows
+    how each device rounds the transcendental intrinsics that hash-based shaders amplify.
+
+      ProbeRuntime=directx  (default) reference the original Direct3D 12 runtime
+      ProbeRuntime=portable reference the portable runtime in ../runtime
+
+    ComputeSharpRoot must point to the pinned upstream checkout (the adapted checkout
+    for the portable runtime).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>ComputeSharp.IntrinsicProbe</AssemblyName>
+    <RootNamespace>ComputeSharp.IntrinsicProbe</RootNamespace>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <ProbeRuntime Condition="'$(ProbeRuntime)' == ''">directx</ProbeRuntime>
+  </PropertyGroup>
+
+  <Target Name="CheckProbeConfiguration" BeforeTargets="ResolveProjectReferences">
+    <Error Condition="'$(ComputeSharpRoot)' == '' Or !Exists('$(ComputeSharpRoot)/src/ComputeSharp/ComputeSharp.csproj')"
+           Text="Set ComputeSharpRoot to the pinned ComputeSharp checkout (got '$(ComputeSharpRoot)')." />
+    <Error Condition="'$(ProbeRuntime)' != 'directx' And '$(ProbeRuntime)' != 'portable'"
+           Text="ProbeRuntime must be directx or portable (got '$(ProbeRuntime)')." />
+  </Target>
+
+  <ItemGroup>
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core/ComputeSharp.Core.csproj" />
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core.SourceGenerators/ComputeSharp.Core.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="contentfiles;build" />
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.SourceGenerators/ComputeSharp.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="contentfiles;build" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(ProbeRuntime)' == 'directx'">
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp/ComputeSharp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(ProbeRuntime)' == 'portable'">
+    <ProjectReference Include="../runtime/ComputeSharp.Portable.csproj"
+                      AdditionalProperties="ComputeSharpRoot=$(ComputeSharpRoot);CrossTLTrustedCorpusBaseline=$(CrossTLTrustedCorpusBaseline)" />
+  </ItemGroup>
+</Project>

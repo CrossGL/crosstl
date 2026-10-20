@@ -191,12 +191,13 @@ def test_zero_cast_vertex_output_initializes_every_glsl_output(tmp_path):
     glsl = _translate(tmp_path, ZERO_CAST_VERTEX_HLSL, ".hlsl", "opengl")
     body = _main_body(glsl)
 
+    # The HLSL importer writes (VSOutput)0 as the zero value of every member.
     assert "VSOutput" not in body
-    assert re.search(r"gl_Position = vec4\(0\);", body)
-    assert re.search(r"\bNormal = vec3\(0\);", body)
-    assert re.search(r"\bId = int\(0\);", body)
+    assert re.search(r"gl_Position = vec4\(0\.0\);", body)
+    assert re.search(r"\bNormal = vec3\(0\.0\);", body)
+    assert re.search(r"\bId = 0;", body)
     # The zero stores come before the source's own member writes.
-    assert body.index("gl_Position = vec4(0);") < body.index("gl_Position = vec4(Pos")
+    assert body.index("gl_Position = vec4(0.0);") < body.index("gl_Position = vec4(Pos")
     _validate_glsl(glsl, "vert")
 
 
@@ -204,7 +205,7 @@ def test_zero_cast_fragment_output_initializes_every_glsl_output(tmp_path):
     glsl = _translate(tmp_path, ZERO_CAST_FRAGMENT_HLSL, ".hlsl", "opengl")
     body = _main_body(glsl)
 
-    assert body.count("= vec4(0);") == 2
+    assert body.count("= vec4(0.0);") == 2
     _validate_glsl(glsl, "frag")
 
 
@@ -214,7 +215,7 @@ def test_zero_cast_vertex_output_reaches_spirv_and_metal(tmp_path):
     _validate_spirv(tmp_path, spirv)
 
     metal = _translate(tmp_path, ZERO_CAST_VERTEX_HLSL, ".hlsl", "metal")
-    assert "VSOutput{float4(0), float2(0), float3(0), int(0)}" in metal
+    assert "VSOutput{float4(0.0), float2(0.0), float3(0.0), 0}" in metal
     _validate_metal(tmp_path, metal)
 
 
@@ -231,7 +232,7 @@ def test_zero_cast_vertex_output_stays_a_splat_in_hlsl(tmp_path):
     hlsl = _translate(tmp_path, ZERO_CAST_VERTEX_HLSL, ".hlsl", "directx")
     assert "VSOutput VSMain" in hlsl or "VSOutput main" in hlsl
     # HLSL has no one-argument vector constructor: ``float3(0)`` does not compile.
-    assert "output.Normal = float3(0, 0, 0);" in hlsl
+    assert "output.Normal = float3(0.0, 0.0, 0.0);" in hlsl
     assert not re.search(r"float[234]\(0\)", hlsl)
     _validate_hlsl(tmp_path, hlsl, "vs_6_0", "VSMain")
 

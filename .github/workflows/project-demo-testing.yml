@@ -1,0 +1,518 @@
+name: ComputeSharp Port Testing
+
+# Pull requests, merge-queue groups and pushes to main always start this
+# workflow, so its result check can be required. The plan job skips the port's
+# jobs when an event changes nothing the port depends on: the demo, this
+# workflow, packaging and the CrossTL modules its HLSL translation imports
+# (demos/integrations/computesharp/ci_plan.py; tests/test_workflow.py keeps
+# those paths in step with the modules a translation actually loads). A change
+# confined to the published records (README.md, results.json) runs only the
+# contract job, which checks them; the execution jobs need code changes.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push replaces the pull request's superseded run; main, merge-queue and
+# dispatched runs use their unique run IDs and always finish.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  plan:
+    name: ComputeSharp validation plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      execute: ${{ steps.plan.outputs.execute }}
+      run: ${{ steps.plan.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Select the port's validation
+        id: plan
+        env:
+          COMPUTESHARP_CI_EVENT: ${{ github.event_name }}
+          COMPUTESHARP_CI_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          COMPUTESHARP_CI_HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: python demos/integrations/computesharp/ci_plan.py --event "$COMPUTESHARP_CI_EVENT"
+
+  discovery-contract:
+    name: Compute discovery contract (Linux)
+    needs: plan
+    if: ${{ needs.plan.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Install test dependencies
+        run: python -m pip install pytest pytest-xdist pyyaml==6.0.3 numpy==2.5.4 pillow==13.0.0
+      - uses: actions/checkout@v7
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - name: Account every upstream test project and its workflow steps
+        run: >-
+          python demos/integrations/computesharp/suites.py check
+          --source upstream-computesharp
+      - name: Verify compiled discovery and original-result accounting
+        env:
+          CROSSTL_REQUIRE_DOTNET: "1"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "4"
+        run: >-
+          python -m pytest -q -n auto demos/integrations/computesharp/tests
+          --junitxml=evidence/discovery-tests.xml
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: compute-discovery-contract
+          path: evidence/
+          retention-days: 7
+
+  original-directx:
+    name: Original compute baseline (Windows WARP)
+    needs: plan
+    if: ${{ needs.plan.outputs.execute == 'true' }}
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      CI_RUNNER_DOTNET_TEST_PLATFORM: x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Record the immutable upstream inputs
+        run: >-
+          python demos/integrations/computesharp/source.py
+          --source upstream-computesharp --output evidence/source.json
+      - name: Build the original upstream test assembly
+        working-directory: upstream-computesharp
+        shell: pwsh
+        run: |
+          $audit = Join-Path $env:GITHUB_WORKSPACE "demos/integrations/computesharp/baseline-audit.props"
+          dotnet build tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj -c Release -p:Platform=x64 -p:CrossTLTrustedCorpusBaseline=true "-p:CustomAfterMicrosoftCommonTargets=$audit"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Export the actual test cases and generated HLSL
+        working-directory: upstream-computesharp
+        shell: pwsh
+        run: |
+          $assembly = (dotnet msbuild tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj -getProperty:TargetPath -p:Configuration=Release -p:Platform=x64).Trim()
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path $assembly)) { throw "Test assembly is missing" }
+          "COMPUTESHARP_BASELINE_ASSEMBLY=$assembly" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $tool = Join-Path $env:GITHUB_WORKSPACE "demos/integrations/computesharp/discovery/Discovery.csproj"
+          $output = Join-Path $env:GITHUB_WORKSPACE "evidence/discovery"
+          dotnet run --project $tool -c Release -- $assembly $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/discovery
+      - name: Execute the complete original core test project
+        working-directory: upstream-computesharp
+        run: >-
+          dotnet test tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
+          -c Release -p:Platform=x64 --no-build
+          --logger "trx;LogFileName=baseline.trx"
+          --results-directory ../evidence/trx
+      - name: Collect the original output images
+        if: always()
+        shell: pwsh
+        run: |
+          $output = Split-Path -Parent $env:COMPUTESHARP_BASELINE_ASSEMBLY
+          python demos/integrations/computesharp/collect_outputs.py --test-output $output --output evidence/outputs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify complete baseline case accounting
+        shell: pwsh
+        run: |
+          $discovery = Get-Content evidence/discovery/discovery.json -Raw | ConvertFrom-Json
+          $actual = (Get-FileHash $env:COMPUTESHARP_BASELINE_ASSEMBLY -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $discovery.assembly.sha256) { throw "Original assembly changed during execution" }
+          python demos/integrations/computesharp/baseline.py --discovery evidence/discovery --trx evidence/trx/baseline.trx --output evidence/baseline.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python demos/integrations/computesharp/source.py --source upstream-computesharp --check evidence/source.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run the companion test projects on the original runtime
+        if: ${{ !cancelled() }}
+        run: >-
+          python demos/integrations/computesharp/companions.py baseline
+          --source upstream-computesharp --output evidence/suites
+      - name: Retain the original Windows-specific and CPU-only test projects
+        if: ${{ !cancelled() }}
+        run: >-
+          python demos/integrations/computesharp/retained.py run
+          --source upstream-computesharp --output evidence/retained
+      - name: Evaluate the HLSL intrinsics on WARP
+        shell: pwsh
+        run: |
+          $probe = Join-Path $env:GITHUB_WORKSPACE "demos/integrations/computesharp/precision/IntrinsicProbe.csproj"
+          $root = Join-Path $env:GITHUB_WORKSPACE "upstream-computesharp"
+          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" -- run warp evidence/precision/directx
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" --no-build -- export evidence/precision/shaders
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: original-compute-directx-baseline
+          path: evidence/
+          retention-days: 7
+
+  adapted-source-parity:
+    name: Adapted source parity (Linux)
+    needs: [plan, original-directx]
+    if: ${{ !cancelled() && needs.plan.outputs.execute == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Apply the documented non-Windows upstream patches
+        run: >-
+          python demos/integrations/computesharp/prepare_upstream.py
+          --source upstream-computesharp --output adapted-computesharp
+          --receipt evidence/adapted-source.json
+      - name: Build the adapted upstream test assembly
+        working-directory: adapted-computesharp
+        run: >-
+          dotnet build tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj -c Release
+          -p:CrossTLTrustedCorpusBaseline=true
+          -p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/baseline-audit.props
+      - name: Export the adapted test cases and generated HLSL
+        run: >-
+          dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
+          adapted-computesharp/tests/ComputeSharp.Tests/bin/Release/net10.0/ComputeSharp.Tests.dll
+          evidence/adapted-discovery
+      - uses: actions/download-artifact@v8
+        with:
+          name: original-compute-directx-baseline
+          path: original
+      - name: Require identical inventory and generated HLSL
+        run: >-
+          python demos/integrations/computesharp/compare_discovery.py
+          --reference original/discovery --candidate evidence/adapted-discovery
+          --output evidence/discovery-parity.json
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/adapted-discovery
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: adapted-source-parity
+          path: evidence/
+          retention-days: 7
+
+  translated-metal:
+    name: Translated compute tests (macOS Metal)
+    needs: plan
+    if: ${{ needs.plan.outputs.execute == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Install CrossTL
+        run: python -m pip install -e . pytest==9.1.1
+      - name: Install the Metal toolchain
+        run: |
+          set -euo pipefail
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version
+      - name: Report the Metal device
+        run: system_profiler SPDisplaysDataType
+      - name: Apply the documented non-Windows upstream patches
+        run: >-
+          python demos/integrations/computesharp/prepare_upstream.py
+          --source upstream-computesharp --output adapted-computesharp
+          --receipt evidence/adapted-source.json
+      - name: Build the upstream tests against the portable runtime
+        run: >-
+          dotnet build adapted-computesharp/tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
+          -c Release -p:CrossTLTrustedCorpusBaseline=true
+          -p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets
+      - name: Export the test cases and generated HLSL
+        run: >-
+          dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
+          adapted-computesharp/tests/ComputeSharp.Tests/bin/Release/net10.0/ComputeSharp.Tests.dll
+          evidence/discovery
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/discovery
+      - name: Run every required case on Metal with negative controls
+        run: >-
+          python demos/integrations/computesharp/run_tests.py
+          --adapted adapted-computesharp --discovery evidence/discovery
+          --profile metal-apple-gpu --work evidence/run
+          --prebuilt-tests --negative-controls
+      - name: Run the companion test projects on Metal with negative controls
+        if: ${{ !cancelled() }}
+        run: >-
+          python demos/integrations/computesharp/companions.py translated
+          --adapted adapted-computesharp --profile metal-apple-gpu
+          --output evidence/suites
+      - name: Evaluate the HLSL intrinsics on Metal
+        if: ${{ !cancelled() }}
+        run: >-
+          python demos/integrations/computesharp/precision/run_probe.py
+          --adapted adapted-computesharp --target metal
+          --native-library evidence/run/native/libcsbackend_metal.dylib
+          --output evidence/precision
+      - name: Dispatch the HLSL constant-buffer layout checks on Metal
+        if: ${{ !cancelled() }}
+        env:
+          CROSSTL_REQUIRE_HLSL_CBUFFER_EXECUTION: "1"
+        run: >-
+          python -m pytest -q -rs
+          tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py
+          --junitxml=evidence/hlsl-cbuffer-layouts.xml
+      - name: Compress dispatch evidence
+        if: always()
+        run: find evidence -name evidence.jsonl -exec gzip -9 {} \;
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: translated-metal
+          path: evidence/
+          retention-days: 7
+
+  translated-opengl:
+    name: Translated compute tests (Linux OpenGL, Mesa llvmpipe)
+    needs: plan
+    if: ${{ needs.plan.outputs.execute == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: Sergio0694/ComputeSharp
+          ref: 40dbe40de0b1eafb570e2af43f78bcdbffdcc00a
+          path: upstream-computesharp
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.400"
+      - name: Install Mesa EGL and OpenGL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl-dev libgl-dev libegl1 libegl-mesa0 libgl1-mesa-dri libgbm1
+          dpkg-query -W libegl-mesa0 libgl1-mesa-dri
+      - name: Install CrossTL
+        run: python -m pip install -e . pytest==9.1.1 moderngl==5.12.0
+      - name: Apply the documented non-Windows upstream patches
+        run: >-
+          python demos/integrations/computesharp/prepare_upstream.py
+          --source upstream-computesharp --output adapted-computesharp
+          --receipt evidence/adapted-source.json
+      - name: Build the upstream tests against the portable runtime
+        run: >-
+          dotnet build adapted-computesharp/tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
+          -c Release -p:CrossTLTrustedCorpusBaseline=true
+          -p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets
+      - name: Export the test cases and generated HLSL
+        run: >-
+          dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
+          adapted-computesharp/tests/ComputeSharp.Tests/bin/Release/net10.0/ComputeSharp.Tests.dll
+          evidence/discovery
+      - name: Require the frozen coverage inventory
+        run: >-
+          python demos/integrations/computesharp/coverage_contract.py check
+          --discovery evidence/discovery
+      - name: Run every required case on OpenGL with negative controls
+        env:
+          EGL_PLATFORM: surfaceless
+        run: >-
+          python demos/integrations/computesharp/run_tests.py
+          --adapted adapted-computesharp --discovery evidence/discovery
+          --profile opengl-mesa-llvmpipe --work evidence/run
+          --prebuilt-tests --negative-controls
+      - name: Run the companion test projects on OpenGL with negative controls
+        if: ${{ !cancelled() }}
+        env:
+          EGL_PLATFORM: surfaceless
+        run: >-
+          python demos/integrations/computesharp/companions.py translated
+          --adapted adapted-computesharp --profile opengl-mesa-llvmpipe
+          --output evidence/suites
+      - name: Evaluate the HLSL intrinsics on OpenGL
+        if: ${{ !cancelled() }}
+        env:
+          EGL_PLATFORM: surfaceless
+        run: >-
+          python demos/integrations/computesharp/precision/run_probe.py
+          --adapted adapted-computesharp --target opengl
+          --native-library evidence/run/native/libcsbackend_gl.so
+          --output evidence/precision
+      - name: Dispatch the HLSL constant-buffer layout checks on OpenGL
+        if: ${{ !cancelled() }}
+        env:
+          CROSSTL_REQUIRE_HLSL_CBUFFER_EXECUTION: "1"
+          EGL_PLATFORM: surfaceless
+        run: >-
+          python -m pytest -q -rs
+          tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py
+          --junitxml=evidence/hlsl-cbuffer-layouts.xml
+      - name: Compress dispatch evidence
+        if: always()
+        run: find evidence -name evidence.jsonl -exec gzip -9 {} \;
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: translated-opengl
+          path: evidence/
+          retention-days: 7
+
+  qualification:
+    name: ComputeSharp port qualification (Linux)
+    needs: [plan, original-directx, adapted-source-parity, translated-metal, translated-opengl]
+    if: ${{ !cancelled() && needs.plan.outputs.execute == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+            setup.cfg
+          python-version: "3.12"
+      - name: Install image comparison dependencies
+        run: python -m pip install numpy==2.5.4 pillow==13.0.0
+      - uses: actions/download-artifact@v8
+        with:
+          name: original-compute-directx-baseline
+          path: profiles/directx
+      - uses: actions/download-artifact@v8
+        with:
+          name: translated-metal
+          path: profiles/metal
+      - uses: actions/download-artifact@v8
+        with:
+          name: translated-opengl
+          path: profiles/opengl
+      - name: Qualify every profile and companion suite against the frozen contracts
+        env:
+          WORKFLOW_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python demos/integrations/computesharp/qualify.py
+          --directx profiles/directx --metal profiles/metal --opengl profiles/opengl
+          --output qualification
+          --workflow-run "$WORKFLOW_RUN" --source-commit "$SOURCE_COMMIT"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: computesharp-qualification
+          path: qualification/
+          retention-days: 14
+
+  result:
+    # The one ComputeSharp check that branch protection and the merge queue can
+    # require. Jobs the plan skips count as passing; a failed or cancelled job
+    # fails it.
+    name: ComputeSharp validation result
+    if: always()
+    needs:
+      - plan
+      - discovery-contract
+      - original-directx
+      - adapted-source-parity
+      - translated-metal
+      - translated-opengl
+      - qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A required ComputeSharp job ended with '$result'."; exit 1 ;;
+            esac
+          done

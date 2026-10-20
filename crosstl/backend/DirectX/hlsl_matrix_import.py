@@ -28,7 +28,7 @@ from .DirectxAst import (
     VectorConstructorNode,
 )
 
-# HLSL scalar spelling -> CrossGL matrix prefix. Integer and boolean matrices have no CrossGL spelling.
+# HLSL scalar spelling -> CrossGL matrix prefix.
 _MATRIX_PREFIX = {
     "float": "mat",
     "fixed": "mat",
@@ -86,6 +86,9 @@ _ELEMENTWISE_INTRINSICS = frozenset(
     }
 )
 _ARITHMETIC_OPERATORS = frozenset({"+", "-", "*", "/", "%"})
+# Componentwise on integer matrices, keeping the shape.
+_BITWISE_OPERATORS = frozenset({"<<", ">>", "&", "|", "^"})
+_COMPARISON_OPERATORS = frozenset({"<", ">", "<=", ">=", "==", "!="})
 _SCALAR_TYPES = frozenset(
     {
         "bool",
@@ -128,10 +131,23 @@ _TRUNCATING_INTRINSICS = {
 }
 
 
+# HLSL integer and boolean matrix scalars -> the scalar of their CrossGL spelling.
+_INTEGER_MATRIX_SCALAR = {"int": "int", "uint": "uint", "bool": "bool"}
+
+
 def crossgl_matrix_type_name(scalar, rows, cols):
-    """CrossGL spelling of the HLSL ``scalar`` matrix with ``rows`` rows and ``cols`` columns."""
+    """CrossGL spelling of the HLSL ``scalar`` matrix with ``rows`` rows and ``cols`` columns.
+
+    Floating-point matrices are ``matCxR``. Integer and boolean matrices keep HLSL's row-first spelling
+    ``intRxC`` with CrossGL's column indexing, so ``int3x2`` is the integer counterpart of ``mat2x3``.
+    """
+    if not (2 <= rows <= 4 and 2 <= cols <= 4):
+        return None
+    integer_scalar = _INTEGER_MATRIX_SCALAR.get(scalar)
+    if integer_scalar is not None:
+        return f"{integer_scalar}{rows}x{cols}"
     prefix = _MATRIX_PREFIX.get(scalar)
-    if prefix is None or not (2 <= rows <= 4 and 2 <= cols <= 4):
+    if prefix is None:
         return None
     return f"{prefix}{cols}" if rows == cols else f"{prefix}{cols}x{rows}"
 
@@ -197,7 +213,13 @@ class HLSLMatrixImportMixin:
 
     def _matrix_expression_shape(self, expr):
         if isinstance(expr, BinaryOpNode):
-            if _operator_text(expr.op) not in _ARITHMETIC_OPERATORS:
+            operator = _operator_text(expr.op)
+            if operator in _COMPARISON_OPERATORS:
+                shape = self.matrix_expression_shape(
+                    expr.left
+                ) or self.matrix_expression_shape(expr.right)
+                return None if shape is None else ("bool", shape[1], shape[2])
+            if operator not in _ARITHMETIC_OPERATORS | _BITWISE_OPERATORS:
                 return None
             return self.matrix_expression_shape(
                 expr.left
@@ -272,8 +294,21 @@ class HLSLMatrixImportMixin:
 
     # ------------------------------------------------------------- rendering
 
+    def hlsl_matrix_rows_are_columns(self):
+        """Whether CrossGL holds each HLSL row as a column.
+
+        With row-major packing (DXC ``-Zpr``) the importer represents HLSL ``floatRxC`` by its transpose, the
+        CrossGL ``matRxC``, so the CrossGL column-major storage has the bytes of the HLSL rows. Rows are then
+        CrossGL columns: ``m[i]``, ``m[i][j]``, ``m._mRC``, constructors and initializers keep their order, and
+        :meth:`generate_mul_expression` swaps the operands of ``mul``.
+        """
+        return getattr(self, "matrix_packing", None) == "row_major"
+
     def matrix_crossgl_type(self, shape):
-        return crossgl_matrix_type_name(*shape)
+        scalar, rows, cols = shape
+        if self.hlsl_matrix_rows_are_columns():
+            return crossgl_matrix_type_name(scalar, cols, rows)
+        return crossgl_matrix_type_name(scalar, rows, cols)
 
     def matrix_transposed_crossgl_type(self, shape):
         """CrossGL type whose columns are the HLSL rows: ``matRxC`` for HLSL ``floatRxC``."""
@@ -298,6 +333,8 @@ class HLSLMatrixImportMixin:
 
     def matrix_index_expression(self, expr, is_main):
         """Render ``m[i]`` (an HLSL row) or ``m[i][j]`` (element (i, j)) with CrossGL's column-first indexing."""
+        if self.hlsl_matrix_rows_are_columns():
+            return None
         inner = self.matrix_row_access(getattr(expr, "array", None))
         if inner is not None:
             matrix, row = inner
@@ -344,13 +381,21 @@ class HLSLMatrixImportMixin:
                     f"HLSL matrix swizzle .{member} is outside {shape[0]}{shape[1]}x{shape[2]}",
                     rendered,
                 )
-            parts = [f"{rendered}[{col}][{row}]" for row, col in elements]
+            if self.hlsl_matrix_rows_are_columns():
+                parts = [f"{rendered}[{row}][{col}]" for row, col in elements]
+            else:
+                parts = [f"{rendered}[{col}][{row}]" for row, col in elements]
             if len(parts) == 1:
                 return parts[0]
             vector_type = self.matrix_vector_type(shape[0], len(parts))
             return f"{vector_type}({', '.join(parts)})"
         access = self.matrix_row_access(expr.object)
-        if access is None or not isinstance(member, str) or len(member) != 1:
+        if (
+            access is None
+            or not isinstance(member, str)
+            or len(member) != 1
+            or self.hlsl_matrix_rows_are_columns()
+        ):
             return None
         column = "xyzw".find(member) if member in "xyzw" else "rgba".find(member)
         if column < 0:
@@ -375,6 +420,12 @@ class HLSLMatrixImportMixin:
         if reordered is not None:
             return reordered
         rendered = ", ".join(self.generate_expression(arg, is_main) for arg in args)
+        return self.row_filled_matrix_expression(shape, rendered)
+
+    def row_filled_matrix_expression(self, shape, rendered):
+        """CrossGL value of the HLSL matrix whose rows the rendered argument list fills."""
+        if self.hlsl_matrix_rows_are_columns():
+            return f"{self.matrix_crossgl_type(shape)}({rendered})"
         return f"transpose({self.matrix_transposed_crossgl_type(shape)}({rendered}))"
 
     def column_filled_matrix_expression(self, shape, leaves, is_main):
@@ -393,9 +444,12 @@ class HLSLMatrixImportMixin:
         ):
             return None
         rendered = [self.generate_expression(leaf, is_main) for leaf in leaves]
-        ordered = [
-            rendered[row * cols + col] for col in range(cols) for row in range(rows)
-        ]
+        if self.hlsl_matrix_rows_are_columns():
+            ordered = rendered
+        else:
+            ordered = [
+                rendered[row * cols + col] for col in range(cols) for row in range(rows)
+            ]
         return f"{self.matrix_crossgl_type(shape)}({', '.join(ordered)})"
 
     def matrix_conversion_expression(self, shape, value, is_main):
@@ -411,9 +465,7 @@ class HLSLMatrixImportMixin:
             raw_type = None
         if raw_type and self.vector_element_raw_type(raw_type):
             # A vector lists the elements row by row.
-            return (
-                f"transpose({self.matrix_transposed_crossgl_type(shape)}({rendered}))"
-            )
+            return self.row_filled_matrix_expression(shape, rendered)
         if (
             isinstance(value, (int, float))
             and not isinstance(value, bool)
@@ -430,8 +482,11 @@ class HLSLMatrixImportMixin:
                 "HLSL scalar-to-matrix conversion of an expression with side effects",
                 f"{target}({rendered})",
             )
-        column_type = self.matrix_vector_type(shape[0], shape[1])
-        columns = ", ".join(f"{column_type}({rendered})" for _ in range(shape[2]))
+        column_length, column_count = shape[1], shape[2]
+        if self.hlsl_matrix_rows_are_columns():
+            column_length, column_count = column_count, column_length
+        column_type = self.matrix_vector_type(shape[0], column_length)
+        columns = ", ".join(f"{column_type}({rendered})" for _ in range(column_count))
         return f"{target}({columns})"
 
     def matrix_initializer_expression(self, expected_type, initializer, is_main):
@@ -449,9 +504,7 @@ class HLSLMatrixImportMixin:
             rendered = ", ".join(
                 self.generate_expression(leaf, is_main) for leaf in leaves
             )
-            return (
-                f"transpose({self.matrix_transposed_crossgl_type(shape)}({rendered}))"
-            )
+            return self.row_filled_matrix_expression(shape, rendered)
         elements = list(initializer.elements or [])
         groups = [self.flatten_initializer(element) for element in elements]
         if elements and all(
@@ -463,9 +516,12 @@ class HLSLMatrixImportMixin:
         ):
             matrices = ", ".join(
                 self.column_filled_matrix_expression(shape, group, is_main)
-                or f"transpose({self.matrix_transposed_crossgl_type(shape)}("
-                + ", ".join(self.generate_expression(leaf, is_main) for leaf in group)
-                + "))"
+                or self.row_filled_matrix_expression(
+                    shape,
+                    ", ".join(
+                        self.generate_expression(leaf, is_main) for leaf in group
+                    ),
+                )
                 for group in groups
             )
             return f"{{{matrices}}}"
@@ -517,7 +573,8 @@ class HLSLMatrixImportMixin:
         """HLSL ``mul``: the linear-algebra product, with DXC's implicit vector truncation.
 
         ``mul(M, v)`` takes the first C components of ``v`` for a ``floatRxC`` ``M`` and ``mul(v, M)`` the first R;
-        ``mul`` of two vectors is their inner product.
+        ``mul`` of two vectors is their inner product. Operand order and precise
+        evaluation follow :meth:`generate_mul_expression`.
         """
         left_shape = self.matrix_expression_shape(args[0])
         right_shape = self.matrix_expression_shape(args[1])
@@ -533,10 +590,9 @@ class HLSLMatrixImportMixin:
                 width = min(left_width, right_width)
                 left = self._truncated_mul_vector(args[0], left, width)
                 right = self._truncated_mul_vector(args[1], right, width)
-                return f"dot({left}, {right})"
-        left = self.maybe_parenthesize(args[0], left)
-        right = self.maybe_parenthesize(args[1], right)
-        return f"({left} * {right})"
+                precise_dot = self.precise_intrinsic_call("dot", args, [left, right])
+                return precise_dot or f"dot({left}, {right})"
+        return self.generate_mul_expression(args, [left, right])
 
     def _truncated_mul_vector(self, expr, rendered, width):
         current = self.value_vector_width(expr)
@@ -592,6 +648,8 @@ class HLSLMatrixImportMixin:
                 lhs = self.generate_expression(target, is_main)
                 rhs = self.generate_expression(node.right, is_main)
                 return f"{lhs} = matrixCompMult({lhs}, {rhs})"
+            return None
+        if self.hlsl_matrix_rows_are_columns():
             return None
         if isinstance(target, MemberAccessNode):
             elements = self.matrix_element_members(target.member)

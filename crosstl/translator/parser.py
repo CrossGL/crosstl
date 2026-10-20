@@ -1641,11 +1641,21 @@ class Parser:
                 "ATTRIBUTE",
             }
             or self.current_token_starts_square_attribute()
+            or self.current_token_is_function_precise_qualifier()
         ):
             if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                 attributes.extend(self.parse_attributes())
             elif self.current_token_starts_square_attribute():
                 attributes.extend(self.parse_square_attributes())
+            elif self.current_token_is_function_precise_qualifier():
+                # Kept in the attribute form that codegen honors for functions;
+                # leading qualifiers name stages for several targets.
+                self.eat("IDENTIFIER")
+                if not any(
+                    getattr(attribute, "name", None) == "precise"
+                    for attribute in attributes
+                ):
+                    attributes.append(AttributeNode(name="precise"))
             else:
                 qualifiers.append(self.current_token[1])
                 self.eat(self.current_token[0])
@@ -5818,6 +5828,7 @@ class Parser:
                     "ATTRIBUTE",
                 }
                 or self.current_token_starts_square_attribute()
+                or self.current_token_is_function_precise_qualifier()
             ):
                 if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                     self.parse_attributes()
@@ -5865,6 +5876,21 @@ class Parser:
             self.current_token = saved_token
 
         return False
+
+    def current_token_is_function_precise_qualifier(self):
+        """Return whether ``precise`` qualifies the result of a declared function.
+
+        ``precise float f(...)`` requires the computation of the function's
+        results without value-changing optimizations such as contraction, as
+        ``precise`` does for a variable. The qualifier is kept on the function
+        instead of being skipped as an unknown token.
+        """
+        token_type, token_value = self.current_token
+        return (
+            token_type == "IDENTIFIER"
+            and token_value == "precise"
+            and self.peek()[0] not in {"LPAREN", "EQUALS", "SEMICOLON", "COMMA"}
+        )
 
     def is_type_token(self):
         """Return whether the current token can start a type expression."""

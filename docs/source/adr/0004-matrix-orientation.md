@@ -53,6 +53,13 @@ Per target:
   brace initializers and vector casts become `transpose(matRxC(...))`, `m._mRC` and `m._RC` become `m[C][R]`,
   `*` of two matrices becomes `matrixCompMult`, a matrix cast keeps the upper-left elements and a scalar cast fills
   every element. Row writes and multi-component swizzle writes whose operands have side effects are refused.
+- With row-major packing (`matrix_packing="row_major"`, DXC `-Zpr`) the HLSL importer represents each HLSL matrix
+  by its transpose, so that CrossGL's column-major storage holds the bytes of the HLSL rows: `floatRxC` becomes
+  `matRxC`, `m[i]`, `m[i][j]`, `m._mRC`, constructors and initializers keep their order, and `mul(a, b)` becomes
+  `b * a`.
+- Integer and boolean matrices, which only HLSL has, keep HLSL's row-first spelling in CrossGL with the column
+  indexing above: `int3x2` has three rows and two columns, `m[i]` is one of its two `ivec3` columns, and it is the
+  integer counterpart of `mat2x3`. The GLSL and Metal emitters emulate them as structs of columns.
 - MSL takes only whole columns or one scalar per element in a matrix constructor, so the Metal emitter spreads the
   components of a mixed argument list, such as `mat2(vec4)`, through a helper.
 - Still open: Slang keeps its previous spelling until it gets the HLSL lowering.

@@ -169,7 +169,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "@ RootSignature(Present_RootSig)",
             "sampler2D ColorTex;",
-            "vec3 LinearRGB = texelFetch(ColorTex, ivec2(position.xy), 0);",
+            "vec3 LinearRGB = texelFetch(ColorTex, ivec2(position.xy), 0).xyz;",
         ),
     ),
     ExternalFixture(
@@ -729,7 +729,9 @@ EXTERNAL_FIXTURES = [
         contains=(
             "static const uint PSInput_Val = 3;",
             "uint PSMain(PSInput input) @ gl_FragData[0]",
-            "return input.Func();",
+            "return PSInput_Func(input);",
+            "uint PSInput_Func(in PSInput __this) {",
+            "return PSInput_Val;",
         ),
     ),
     ExternalFixture(
@@ -1524,7 +1526,7 @@ EXTERNAL_FIXTURES = [
             "uimage2D AutomaticExposureSpdAtomicCounter;",
             "groupshared uint spdCounter;",
             "spdCounter = imageAtomicAdd(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), 1u);",
-            "imageStore(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), 0);",
+            "imageStore(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), uvec4(0, 0u, 0u, 0u));",
             "@ numthreads(64, 1, 1)",
         ),
     ),
@@ -1675,7 +1677,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "@ register(u1)",
             "image2D output;",
-            "imageStore(output, did, FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1);",
+            "imageStore(output, did, vec4(FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1, 0.0, 0.0, 0.0));",
         ),
     ),
     ExternalFixture(
@@ -1759,7 +1761,8 @@ EXTERNAL_FIXTURES = [
             "struct SomeStruct {",
             "void Fun()",
             "rayQuery RayQ1 = RayQuery<0>();",
-            "Payload.DummyMethod();",
+            "void SomeStruct_DummyMethod(in SomeStruct __this) {",
+            "SomeStruct_DummyMethod(Payload);",
         ),
     ),
     ExternalFixture(
