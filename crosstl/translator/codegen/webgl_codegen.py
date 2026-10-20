@@ -314,10 +314,11 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
             static_args[dynamic_info["arg_index"]] = (
                 self.glsl_static_array_access_argument(dynamic_info, index)
             )
-            rendered_args = ", ".join(
-                self.generate_function_call_arguments(func_name, static_args)
-            )
-            cases.append((index, f"{func_name}({rendered_args})"))
+            # Rendered as the call itself, so that texture built-ins drop explicit samplers and take their
+            # GLSL ES spelling as they would with a constant index.
+            static_call = copy(expr)
+            static_call.arguments = static_call.args = static_args
+            cases.append((index, self.generate_expression(static_call)))
 
         return {
             "index_expr": dynamic_info["index_expr"],
