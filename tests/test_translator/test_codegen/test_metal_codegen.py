@@ -24097,10 +24097,11 @@ def test_metal_texture_sampling_capability_descriptors():
         "gather_compare_offset": False,
     }
     assert codegen.texture_sampling_capabilities("depth2d<float>") == {
+        # MSL 6.12.6: depth2d has sample(s, coord, int2 offset) and gather(s, coord, int2 offset).
         "texture_type": "depth2d<float>",
-        "gather": False,
-        "gather_offset": False,
-        "sample_offset": False,
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
         "projected_offset": False,
         "compare_offset": True,
         "gather_compare_offset": True,
@@ -24155,6 +24156,7 @@ def test_metal_texture_dimension_descriptors():
     expect(
         "depth2d<float>",
         coordinate_dimension=2,
+        gather_offset_dimension=2,
         compare_offset_dimension=2,
         compare_lod_offset_dimension=2,
         compare_grad_offset_dimension=2,

@@ -1883,7 +1883,7 @@ class MetalCodeGen:
 
     def render_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
-        ast = canonicalize_separate_textures(ast)
+        ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
@@ -24349,6 +24349,9 @@ class MetalCodeGen:
         )
         is_depth2d = texture_type.startswith("depth2d<")
         is_depth2d_array = texture_type.startswith("depth2d_array<")
+        # MSL depth textures gather (one depth per texel) and sample with offsets like their colour
+        # counterparts (MSL specification 6.12.6-6.12.9).
+        is_depth = is_depth2d or is_depth2d_array
         return {
             "texture_type": texture_type,
             "gather": (
@@ -24356,9 +24359,13 @@ class MetalCodeGen:
                 or is_texture2d_array
                 or is_texturecube
                 or is_texturecube_array
+                or is_depth
+                or texture_type.startswith(("depthcube<", "depthcube_array<"))
             ),
-            "gather_offset": is_texture2d or is_texture2d_array,
-            "sample_offset": is_texture2d or is_texture2d_array or is_texture3d,
+            "gather_offset": is_texture2d or is_texture2d_array or is_depth,
+            "sample_offset": (
+                is_texture2d or is_texture2d_array or is_texture3d or is_depth
+            ),
             "projected_offset": is_texture2d or is_texture2d_array or is_texture3d,
             "compare_offset": is_depth2d or is_depth2d_array,
             "gather_compare_offset": is_depth2d or is_depth2d_array,
@@ -24957,7 +24964,58 @@ class MetalCodeGen:
             return False
         return self.is_depth_texture_resource(
             self.texture_argument_resource_type(args[0])
+        ) and not self.is_plain_depth_read(func_name, args)
+
+    # ``depthcube_array`` is absent: CrossGL's ``texture(t, P, ref)`` on it passes the reference after a full
+    # coordinate (GLSL's samplerCubeArrayShadow overload), so the coordinate size cannot tell a plain read.
+    DEPTH_SAMPLE_COORDINATE_SIZES = {
+        "depth2d<": 2,
+        "depth2d_array<": 3,
+        "depthcube<": 3,
+    }
+    PLAIN_DEPTH_READ_OPERATIONS = frozenset(
+        {
+            "texture",
+            "textureLod",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGrad",
+            "textureGradOffset",
+            "texelFetch",
+            "texelFetchOffset",
+        }
+    )
+
+    def is_plain_depth_read(self, func_name, args):
+        """Whether a sample or fetch reads a depth texture's value rather than comparing against it.
+
+        A coordinate with exactly the texture's sampling dimensions carries no packed reference (GLSL's
+        ``texture(sampler2DShadow, vec3)`` packs one in ``.z``), and fetches never compare. MSL returns the depth
+        as a scalar where HLSL and GLSL return ``(d, 0, 0, 1)``.
+        """
+        if func_name not in self.PLAIN_DEPTH_READ_OPERATIONS or len(args) < 2:
+            return False
+        texture_type = self.resource_base_type(
+            self.texture_argument_resource_type(args[0])
         )
+        if not self.is_depth_texture_resource(texture_type):
+            return False
+        if func_name.startswith("texelFetch"):
+            return True
+        size = next(
+            (
+                count
+                for prefix, count in self.DEPTH_SAMPLE_COORDINATE_SIZES.items()
+                if texture_type.startswith(prefix)
+            ),
+            None,
+        )
+        coord_index = 2 if self.texture_call_uses_explicit_sampler(args) else 1
+        if size is None or len(args) <= coord_index:
+            return False
+        if func_name.startswith("textureGrad"):
+            return True
+        return self.expression_component_count(args[coord_index]) == size
 
     def packed_shadow_compare_coord_args(self, texture_type, coord):
         texture_type = self.resource_base_type(texture_type)
@@ -26194,6 +26252,13 @@ class MetalCodeGen:
         return None
 
     def generate_texture_call(self, func_name, args):
+        expression = self.generate_texture_call_value(func_name, args)
+        if expression is not None and self.is_plain_depth_read(func_name, args):
+            # An MSL depth read is a scalar; HLSL and GLSL read a depth texel as (d, 0, 0, 1).
+            return f"float4({expression}, 0.0, 0.0, 1.0)"
+        return expression
+
+    def generate_texture_call_value(self, func_name, args):
         if not func_name:
             return None
 
@@ -26244,13 +26309,17 @@ class MetalCodeGen:
         if storage_image_operation is not None:
             return storage_image_operation
 
-        packed_shadow_call = self.generate_packed_shadow_texture_sample_call(
-            func_name,
-            texture_name,
-            sampler_arg,
-            coord,
-            extra_args,
-            texture_type,
+        packed_shadow_call = (
+            self.generate_packed_shadow_texture_sample_call(
+                func_name,
+                texture_name,
+                sampler_arg,
+                coord,
+                extra_args,
+                texture_type,
+            )
+            if not self.is_plain_depth_read(func_name, args)
+            else None
         )
         if packed_shadow_call is not None:
             return packed_shadow_call

@@ -18,6 +18,7 @@ from crosstl.translator.artifact_contracts import (
     artifact_contract_headers,
 )
 from crosstl.translator.codegen.glsl_refusals import OpenGLLoweringRefused
+from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
 
 TWO_SAMPLERS_HLSL = """
 Texture2D albedo : register(t0);
@@ -379,3 +380,78 @@ def test_metal_entry_textures_split_into_opengl_pairs(tmp_path):
     assert "uniform sampler2D albedo_linearSampler;" in glsl
     assert "texture(albedo_linearSampler, uv)" in glsl
     _validate_glsl(glsl)
+
+
+DEPTH_READS_CGL = """
+shader DepthReads {
+    struct FragmentInput {
+        vec2 uv;
+    }
+    struct FragmentOutput {
+        vec4 color;
+    }
+    sampler2D shadowMap;
+    sampler lessCompare;
+    sampler pointSampler;
+    fragment {
+        FragmentOutput main(FragmentInput input) {
+            FragmentOutput output;
+            float lit = textureCompare(shadowMap, lessCompare, input.uv, 0.5);
+            vec4 raw = texture(shadowMap, pointSampler, input.uv);
+            vec4 level0 = textureLod(shadowMap, pointSampler, input.uv, 0.0);
+            vec4 quad = textureGather(shadowMap, pointSampler, input.uv);
+            vec4 texel = texelFetch(shadowMap, ivec2(0, 0), 0);
+            output.color = vec4(lit) + raw + level0 + quad + texel;
+            return output;
+        }
+    }
+}
+"""
+
+
+def test_metal_declares_compared_textures_as_depth_textures(tmp_path):
+    metal = _translate(tmp_path, DEPTH_READS_CGL, ".cgl", "metal")
+
+    # MSL's sample_compare exists only on depth textures; plain reads of one return the depth as a scalar,
+    # which HLSL and GLSL read as (d, 0, 0, 1).
+    assert "depth2d<float> shadowMap [[texture(0)]]" in metal
+    assert "shadowMap.sample_compare(lessCompare, input.uv, 0.5)" in metal
+    assert "float4(shadowMap.sample(pointSampler, input.uv), 0.0, 0.0, 1.0)" in metal
+    assert (
+        "float4(shadowMap.sample(pointSampler, input.uv, level(0.0)), 0.0, 0.0, 1.0)"
+        in metal
+    )
+    assert "shadowMap.gather(pointSampler, input.uv)" in metal
+    assert "float4(shadowMap.read(" in metal
+    _validate_metal(tmp_path, metal)
+
+
+def test_metal_vulkan_separate_shadow_texture_is_a_depth_texture(tmp_path):
+    metal = _translate(tmp_path, VULKAN_SEPARATE_GLSL, ".frag", "metal")
+
+    assert "depth2d<float> depthTex [[texture(0)]]" in metal
+    assert "depthTex.sample_compare(compareSampler, " in metal
+    assert "float4(depthTex.sample(pointSampler, " in metal
+    _validate_metal(tmp_path, metal)
+
+
+def test_metal_refuses_a_helper_shared_by_depth_and_colour_textures(tmp_path):
+    source = """
+    Texture2D shadowMap : register(t0);
+    Texture2D colorMap : register(t1);
+    SamplerComparisonState lessCompare : register(s0);
+    SamplerState pointSampler : register(s1);
+    float lit(Texture2D t, SamplerComparisonState c, float2 uv) { return t.SampleCmp(c, uv, 0.5); }
+    float4 plain(Texture2D t, SamplerState s, float2 uv) { return t.Sample(s, uv); }
+    float4 main(float2 uv : TEXCOORD0) : SV_Target {
+        return lit(shadowMap, lessCompare, uv) + plain(shadowMap, pointSampler, uv)
+            + plain(colorMap, pointSampler, uv);
+    }
+    """
+    with pytest.raises(
+        MetalLoweringRefused,
+        match=re.escape(
+            "texture parameter 't' of 'plain' receives both depth and colour textures"
+        ),
+    ):
+        _translate(tmp_path, source, ".hlsl", "metal")

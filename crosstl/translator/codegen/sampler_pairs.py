@@ -219,6 +219,7 @@ class _Resource:
         self.site_ids = set()
         self.preserved = False
         self.reaching = []  # sampler parameters: the sampler sources callers bind
+        self.arguments = []  # texture parameters: the resources callers pass
 
     @property
     def is_shadow_type(self):
@@ -408,6 +409,8 @@ class _Lowering:
         if texture is None or texture.kind != "texture":
             return False
         changed = False
+        if texture not in parameter.arguments:
+            parameter.arguments.append(texture)
         if parameter.preserved and not texture.preserved:
             texture.preserved = True
             changed = True
@@ -480,6 +483,94 @@ class _Lowering:
                 return (_DYNAMIC, shadow)
             mapped = (mapped[0], literal)
         return (mapped, shadow)
+
+    # Native texture types ---------------------------------------------------------------------------------------
+
+    def texture_resources(self):
+        resources, seen = [], set()
+        for function in self.functions:
+            for resource in self.scopes[id(function)].values():
+                if resource.kind == "texture" and id(resource) not in seen:
+                    seen.add(id(resource))
+                    resources.append(resource)
+        for scope in self.scopes.values():
+            for resource in scope.values():
+                if resource.kind == "texture" and id(resource) not in seen:
+                    seen.add(id(resource))
+                    resources.append(resource)
+        return resources
+
+    @staticmethod
+    def compares(resource):
+        return any(key[1] and key[0] != _FETCH for key in resource.keys)
+
+    @staticmethod
+    def shadow_capable(base):
+        return base in _SHADOW_OF
+
+    def texture_retypes(self, depth_for_compares):
+        """``{resource: combined base type}`` for every texture whose spelling changes."""
+        retypes = {}
+        resources = self.texture_resources()
+        for resource in resources:
+            if resource.base_type not in _SEPARATE_TO_COMBINED:
+                continue
+            sampled = [key for key in resource.keys if key[0] != _FETCH]
+            base = _SEPARATE_TO_COMBINED[resource.base_type]
+            if (
+                sampled
+                and all(key[1] for key in sampled)
+                and len(sampled) == len(resource.keys)
+                and self.shadow_capable(base)
+            ):
+                base = _SHADOW_OF[base]
+            retypes[resource] = base
+        if not depth_for_compares:
+            return retypes
+        depth = {}
+        for resource in resources:
+            base = retypes.get(resource, resource.base_type)
+            if resource.is_root and self.compares(resource):
+                depth[id(resource)] = self.shadow_capable(base) or base in _PLAIN_OF
+                if not depth[id(resource)]:
+                    self.refuse(
+                        f"texture {self.resource_label(resource)} of type {resource.base_type} is "
+                        "depth-compared, which needs a depth texture type"
+                    )
+        for resource in resources:
+            base = retypes.get(resource, resource.base_type)
+            wants_depth = (
+                depth.get(id(resource))
+                if resource.is_root
+                else self.parameter_depth(resource, depth, ())
+            )
+            if wants_depth and self.shadow_capable(base):
+                retypes[resource] = _SHADOW_OF[base]
+        return retypes
+
+    def parameter_depth(self, parameter, depth, visiting):
+        """Whether the textures callers pass to a helper parameter are depth textures; refuses a mix."""
+        if id(parameter) in visiting:
+            return False
+        kinds = set()
+        for argument in parameter.arguments:
+            if argument.is_root:
+                kinds.add(
+                    bool(depth.get(id(argument))) or argument.base_type in _PLAIN_OF
+                )
+            else:
+                kinds.add(
+                    self.parameter_depth(argument, depth, visiting + (id(parameter),))
+                )
+        if self.compares(parameter):
+            kinds.add(True)
+        if len(kinds) > 1 and not getattr(parameter, "refused_mix", False):
+            parameter.refused_mix = True
+            self.refuse(
+                f"texture {self.resource_label(parameter)} receives both depth and colour textures; "
+                "Metal needs a copy of the function per texture type"
+            )
+        return True in kinds
 
     # Lowering ---------------------------------------------------------------------------------------------------
 
@@ -693,47 +784,33 @@ def lower_combined_sampler_pairs(ast, target):
     return lowering.lower(), lowering.records
 
 
-def canonicalize_separate_textures(ast):
+def canonicalize_separate_textures(ast, target=None, depth_for_compares=False):
     """Return ``ast`` with separate texture types spelled as the combined CrossGL type of the same image.
 
     HLSL and MSL textures are separate objects whatever CrossGL spelling they come from: ``sampler2D`` with
     explicit samplers is how the HLSL and MSL importers write ``Texture2D`` and ``texture2d``. A ``texture2D``
-    (Vulkan GLSL, SPIR-V) therefore emits as the same native texture, and as the depth texture (``sampler2DShadow``,
-    MSL ``depth2d``) when every sample of it is a depth comparison, as the HLSL importer infers. The caller's AST is
-    not mutated.
+    (Vulkan GLSL, SPIR-V) therefore emits as the same native texture, and as the depth texture (``sampler2DShadow``)
+    when every sample of it is a depth comparison, as the HLSL importer infers.
+
+    ``depth_for_compares`` (MSL, whose ``sample_compare`` exists only on ``depth2d`` and friends) also declares a
+    colour texture that any operation depth-compares as the depth texture, with its helper parameters; plain reads
+    of it widen the scalar depth back to ``(d, 0, 0, 1)``. A helper parameter that receives both a depth and a colour
+    texture would need one copy per type and is refused under ``target``. The caller's AST is not mutated.
     """
     if not isinstance(ast, ASTNode) or not hasattr(ast, "global_variables"):
         return ast
-    survey = _Lowering(ast, None)
+    survey = _Lowering(ast, target)
     survey.collect()
-    if not any(
-        resource.base_type in _SEPARATE_TO_COMBINED
-        for scope in survey.scopes.values()
-        for resource in scope.values()
-    ):
+    survey.scan()
+    survey.propagate()
+    if not survey.texture_retypes(depth_for_compares):
         return ast
-    lowering = _Lowering(deepcopy(ast), None)
+    lowering = _Lowering(deepcopy(ast), target)
     lowering.collect()
     lowering.scan()
     lowering.propagate()
-    seen = set()
-    for scope in lowering.scopes.values():
-        for resource in scope.values():
-            if id(resource) in seen or resource.base_type not in _SEPARATE_TO_COMBINED:
-                continue
-            seen.add(id(resource))
-            sampled = [key for key in resource.keys if key[0] != _FETCH]
-            shadow = (
-                bool(sampled)
-                and all(key[1] for key in sampled)
-                and len(sampled) == len(resource.keys)
-                and resource.base_type[0] not in "iu"
-                and resource.base_type != "texture3D"
-            )
-            base = _SEPARATE_TO_COMBINED[resource.base_type]
-            if shadow and base in _SHADOW_OF:
-                base = _SHADOW_OF[base]
-            _set_type(resource.node, _with_base_type(_type_of(resource.node), base))
+    for resource, base in lowering.texture_retypes(depth_for_compares).items():
+        _set_type(resource.node, _with_base_type(_type_of(resource.node), base))
     return lowering.ast
 
 
