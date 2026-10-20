@@ -60,6 +60,7 @@ from ..math_namespaces import (
 from ..matrix_shape import length_method_object
 from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
+from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.sampler_states import is_sampler_constructor
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
@@ -1929,6 +1930,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
     def render_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
+        ast = lower_constant_buffer_resources(
+            ast,
+            lambda name: self.refuse_lowering(
+                f"array of constant buffers '{name}': Metal binds an array of buffers only through an "
+                "argument buffer"
+            ),
+        )
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")

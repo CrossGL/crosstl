@@ -4052,6 +4052,8 @@ class HLSLToCrossGLConverter(
             or self.is_crossgl_resource_type(mapped_base_type)
             or base_type.startswith(("Texture", "FeedbackTexture"))
             or base_type in {
+                # A ConstantBuffer<T> binds a constant buffer of its own, outside $Globals.
+                "ConstantBuffer",
                 "Sampler",
                 "SamplerState",
                 "SamplerComparisonState",
