@@ -160,7 +160,13 @@ class Metal(Dialect):
     suffix = ".metal"
     entry = "probe"
     wide_integers = True
-    _SCALARS = {"int64": "long", "uint64": "ulong"}
+    narrow_scalars = True
+    _SCALARS = {
+        "int64": "long",
+        "uint64": "ulong",
+        "int16": "short",
+        "uint16": "ushort",
+    }
     # The constant a probe passes for each enumeration a Metal function takes (features.metal.ENUMS). Metal allows
     # only relaxed ordering on device atomics, and mem_none makes a barrier an execution barrier only.
     _ENUMERATORS = {
@@ -197,9 +203,9 @@ class Metal(Dialect):
         return f"{self.scalar(scalar)}{size}"
 
     def matrix(self, scalar: str, columns: int, rows: int) -> str:
-        if scalar != "float":
+        if scalar not in ("float", "half"):
             raise ProbeError(f"Metal has no {scalar} matrices")
-        return f"float{columns}x{rows}"
+        return f"{scalar}{columns}x{rows}"
 
     def _params(self, buffers: list[Buffer]) -> list[str]:
         return [

@@ -467,12 +467,15 @@ metal_math frexp float3(float3, out int3)
 metal_matrix determinant float(float3x3)
 metal_graphics dfdx float3(float3)
 metal_atomic atomic_fetch_add_explicit -
+metal_pack pack_half_to_unorm4x8 uint(half4)
 """
 
 
 def test_metal_reads_the_generated_list():
     features = by_name(metal.parse(METAL_LIST, {"fma", "dFdx", "frexp", "determinant"}))
     assert features["frexp"].signature.params[1] == Param(Type("int", (3,)), "out")
+    pack = features["pack_half_to_unorm4x8"].signature
+    assert pack == Signature(Type("uint"), (Param(Type("half", (4,))),))
     assert features["determinant"].signature.params[0].type == Type("float", (3, 3))
     assert features["dfdx"].stage == "fragment"
     assert features["dfdx"].crossgl == "dFdx"

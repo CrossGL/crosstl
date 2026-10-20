@@ -537,6 +537,8 @@ METAL_SIGNATURES = [
         Type.other("void"),
         Param(Type.other("mem_flags"), "const"),
     ),
+    feature("pack_half_to_unorm4x8", Type("uint"), Type("half", (4,))),
+    feature("unpack_unorm565_to_half", Type("half", (3,)), Type("uint")),
 ]
 
 
@@ -548,6 +550,16 @@ def test_metal_probes_are_valid_metal(probe_feature):
     probe = probes.build(probe_feature, "metal")
     verdict = validators.validate("metal", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_metal_half_arguments_are_read_from_float_buffers():
+    pack, unpack = METAL_SIGNATURES[-2:]
+    source = probes.build(pack, "metal").source
+    assert "half4 a0 = half4(half(fin[i + 0u]), half(fin[i + 1u])" in source
+    assert "uint r = pack_half_to_unorm4x8(a0);" in source
+    source = probes.build(unpack, "metal").source
+    assert "device float3* outp [[buffer(1)]]" in source
+    assert "outp[i] = float3(r);" in source
 
 
 def test_metal_atomic_probe_passes_the_output_element_and_a_relaxed_order():

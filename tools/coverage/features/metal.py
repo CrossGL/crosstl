@@ -46,6 +46,7 @@ _SCALARS = {
     "bool": "bool",
     "long": "int64",
     "ulong": "uint64",
+    "half": "half",
 }
 # Narrow integer parameters (lane ids, deltas) take a 32-bit argument, which converts implicitly.
 _WIDENED = {"ushort": "uint", "short": "int"}
@@ -103,7 +104,8 @@ def _value(spelling: str) -> bool:
     spelling = re.sub(r"^(?:out|inout) ", "", spelling)
     return spelling in ENUMS or bool(
         re.fullmatch(
-            r"(float|int|uint|bool|long|ulong)([2-4])?|float[2-4]x[2-4]|void", spelling
+            r"(float|int|uint|bool|long|ulong|half)([2-4])?|(?:float|half)[2-4]x[2-4]|void",
+            spelling,
         )
     )
 
@@ -178,7 +180,7 @@ def declarations(header: str, text: str):
         template = ""
 
 
-_PREFERRED = ("float", "int", "uint", "bool", "long", "ulong")
+_PREFERRED = ("float", "int", "uint", "bool", "long", "ulong", "half")
 
 
 def _preference(overload: tuple[str, list[str]]) -> tuple:
@@ -240,7 +242,7 @@ def metal_type(spelling: str) -> Type:
     if spelling == "void":
         return VOID
     match = re.fullmatch(
-        r"(float|int|uint|bool|long|ulong)(?:([2-4])(?:x([2-4]))?)?", spelling
+        r"(float|int|uint|bool|long|ulong|half)(?:([2-4])(?:x([2-4]))?)?", spelling
     )
     if not match:
         return Type.other(spelling)
