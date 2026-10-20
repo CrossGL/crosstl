@@ -121,7 +121,13 @@ from .barrier_peephole import (
     merge_adjacent_hlsl_barriers,
 )
 from .bfloat_constants import bfloat16_constant_bits, scalar_constant_value
+from .bitfield_builtins import (
+    BITFIELD_ARITIES,
+    emit_hlsl_bitfield_helpers,
+    hlsl_bitfield_call,
+)
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
+from .boolean_mix import boolean_mix_selector, hlsl_boolean_mix
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
 from .builtin_result_types import (
@@ -395,6 +401,7 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .operator_spellings import map_c_family_operator
+from .pack_builtins import PACK_FUNCTIONS, emit_hlsl_pack_helpers, hlsl_pack_call
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     same_scalar_lane_view,
@@ -2405,6 +2412,8 @@ class HLSLCodeGen(LoweringRefusalMixin):
         self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.hlsl_wave_extension_helpers = {}
+        self.hlsl_pack_helpers = {}
+        self.hlsl_bitfield_helpers = {}
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
         self.required_hlsl_software_subgroup_helpers = set()
@@ -2620,6 +2629,21 @@ class HLSLCodeGen(LoweringRefusalMixin):
             "u64vec2": "uint64_t2",
             "u64vec3": "uint64_t3",
             "u64vec4": "uint64_t4",
+            "dvec2": "double2",
+            "dvec3": "double3",
+            "dvec4": "double4",
+            "dmat2": "double2x2",
+            "dmat3": "double3x3",
+            "dmat4": "double4x4",
+            "dmat2x2": "double2x2",
+            "dmat2x3": "double3x2",
+            "dmat2x4": "double4x2",
+            "dmat3x2": "double2x3",
+            "dmat3x3": "double3x3",
+            "dmat3x4": "double4x3",
+            "dmat4x2": "double2x4",
+            "dmat4x3": "double3x4",
+            "dmat4x4": "double4x4",
             "vec2<bool>": "bool2",
             "vec3<bool>": "bool3",
             "vec4<bool>": "bool4",
@@ -3767,6 +3791,8 @@ class HLSLCodeGen(LoweringRefusalMixin):
         self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.hlsl_wave_extension_helpers = {}
+        self.hlsl_pack_helpers = {}
+        self.hlsl_bitfield_helpers = {}
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
         self.required_hlsl_software_subgroup_helpers = set()
@@ -5070,6 +5096,8 @@ class HLSLCodeGen(LoweringRefusalMixin):
         code += self.generate_hlsl_fragment_shading_rate_helper()
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
         code += emit_hlsl_wave_extension_helpers(self)
+        code += emit_hlsl_pack_helpers(self)
+        code += emit_hlsl_bitfield_helpers(self)
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_wide_integer_compound_helpers()
         code += self.generate_hlsl_inverse_hyperbolic_helpers()
@@ -26894,6 +26922,27 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if interpolation_call is not None:
                 return interpolation_call
 
+            if func_name in PACK_FUNCTIONS and func_name not in getattr(
+                self, "function_return_types", {}
+            ):
+                return hlsl_pack_call(
+                    self, func_name, [self.generate_expression(arg) for arg in args]
+                )
+            if func_name in BITFIELD_ARITIES and func_name not in getattr(
+                self, "function_return_types", {}
+            ):
+                return hlsl_bitfield_call(
+                    self,
+                    func_name,
+                    args,
+                    [self.generate_expression(arg) for arg in args],
+                )
+            boolean_mix = boolean_mix_selector(
+                self, func_name, args, getattr(self, "function_return_types", {})
+            )
+            if boolean_mix is not None:
+                return hlsl_boolean_mix(self, args, boolean_mix)
+
             if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 return self.generate_hlsl_wave_intrinsic_call(func_name, args)
 
@@ -27156,6 +27205,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "f16mat4x2",
                 "f16mat4x3",
                 "f16mat4x4",
+                "dvec2",
+                "dvec3",
+                "dvec4",
+                "dmat2",
+                "dmat3",
+                "dmat4",
+                "dmat2x2",
+                "dmat2x3",
+                "dmat2x4",
+                "dmat3x2",
+                "dmat3x3",
+                "dmat3x4",
+                "dmat4x2",
+                "dmat4x3",
+                "dmat4x4",
                 "char2",
                 "char3",
                 "char4",
@@ -27490,6 +27554,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         if func_name == "atan" and args is not None and len(args) == 2:
             return "atan2"
+        if func_name == "fma" and args:
+            # HLSL fma is the fused double-precision intrinsic; mad may be
+            # evaluated unfused, which GLSL and SPIR-V Fma do not allow.
+            argument_type = self.expression_result_type(args[0])
+            mapped = self.map_type(argument_type) if argument_type else None
+            if isinstance(mapped, str) and mapped.startswith("double"):
+                return "fma"
         return self.function_map.get(func_name)
 
     def hlsl_builtin_function_call(self, func_name, args, *, source_location=None):
@@ -30434,6 +30505,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and not args
         ):
             return None
+        object_expr = getattr(
+            func_expr, "object_expr", getattr(func_expr, "object", None)
+        )
+        if isinstance(object_expr, (IdentifierNode, VariableNode)):
+            # 'buffer T* name' is a runtime-sized element view of a structured
+            # buffer: its length() is GetDimensions' element count.
+            resource_type = self.hlsl_buffer_helper_resource_type(object_expr)
+            if resource_type is not None:
+                return f"int({self.hlsl_buffer_element_count(object_expr)})"
         access = self.glsl_buffer_block_member_access(
             getattr(func_expr, "object_expr", getattr(func_expr, "object", None))
         )
@@ -34615,9 +34695,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 mapped_type = self.map_type(argument_type_name)
                 base_type, array_suffix = split_array_type_suffix(mapped_type)
                 if array_suffix or base_type not in {"int", "uint"}:
-                    raise ValueError(
+                    raise DirectXContextualConversionError(
                         "DirectX NonUniformResourceIndex index argument must be "
-                        f"scalar int or uint, got {mapped_type}"
+                        f"scalar int or uint, got {mapped_type}",
+                        source_type=mapped_type,
+                        target_type="int or uint",
+                        reason="non-uniform-resource-index-not-integer",
                     )
         finally:
             self.local_variable_types = previous_local_variable_types
@@ -48381,6 +48464,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value_kind = self.scalar_expression_kind(value_arg)
             if value_kind is None or value_kind == target_kind:
                 continue
+            if {value_kind, target_kind} <= {"int", "uint"}:
+                # The memory operand fixes the operation's signedness, as in
+                # GLSL, SPIR-V and Metal; the operand is rendered as an
+                # explicit bit-preserving int/uint conversion.
+                continue
             role = "compare value" if value_arg_count == 2 and index == 1 else "value"
             if value_arg_count == 2 and index == 2:
                 role = "replacement"
@@ -48440,6 +48528,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value_code, value = self.render_hlsl_typed_buffer_atomic_value_expression(
                 value_arg, target_type, 0
             )
+            value_kind = self.scalar_expression_kind(value_arg)
+            if value_kind in {"int", "uint"} and value_kind != target_kind:
+                value = f"{target_kind}({value})"
             code += value_code
             rendered_values.append(value)
         if func_name == "atomicLoad" and not float_atomic:

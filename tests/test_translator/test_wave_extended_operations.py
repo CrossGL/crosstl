@@ -385,3 +385,54 @@ def test_crossgl_accepts_the_glsl_spelling_of_wave_operations():
     assert "subgroup" not in hlsl and "subgroup" not in metal
     assert "WaveActiveSum(values[i])" in hlsl
     assert "simd_sum(values[i]) + quad_max(values[i])" in metal
+
+
+GROUP_VOTE = """#version 460
+#extension GL_ARB_shader_group_vote : require
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Results { uint results[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    bool a = allInvocations(i < 32u);
+    bool b = anyInvocationARB(i == 3u);
+    bool c = allInvocationsEqual(i / 64u);
+    results[i] = uint(a) + uint(b) * 2u + uint(c) * 4u;
+}
+"""
+
+
+def test_shader_group_vote_functions_are_canonical_wave_votes(tmp_path):
+    # GLSL 4.60 section 8.18 and GL_ARB_shader_group_vote; glslang gives the group subgroup scope.
+    crossgl = _crossgl(
+        "results[i] = uint(allInvocations(i < 32u)) + uint(anyInvocation(i == 3u))"
+        " + uint(allInvocationsEqual(i / 64u)) + uint(allInvocationsEqualARB(i));"
+    )
+    operations = {
+        node.operation for node in _walk(parse(crossgl)) if isinstance(node, WaveOpNode)
+    }
+    assert operations == {
+        "WaveActiveAllEqual",
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+    }
+
+    glsl = _translate(tmp_path, GROUP_VOTE, "opengl")
+    hlsl = _translate(tmp_path, GROUP_VOTE, "directx")
+    metal = _translate(tmp_path, GROUP_VOTE, "metal")
+    spirv = _translate(tmp_path, GROUP_VOTE, "vulkan")
+
+    assert "#extension GL_KHR_shader_subgroup_vote : require" in glsl
+    assert "subgroupAll((i < 32u))" in glsl
+    assert "subgroupAny((i == 3u))" in glsl
+    assert "subgroupAllEqual((i / 64u))" in glsl
+    assert "Invocation(" not in glsl and "Invocations(" not in glsl
+    assert "WaveActiveAllTrue((i < 32u))" in hlsl
+    assert "WaveActiveAnyTrue((i == 3u))" in hlsl
+    assert "WaveActiveAllEqual((i / 64u))" in hlsl
+    assert "simd_all(i < 32u)" in metal and "simd_any(i == 3u)" in metal
+    assert "simd_all(i / 64u == simd_broadcast_first(i / 64u))" in metal
+    assert _spirv_operations(spirv) == [
+        "OpGroupNonUniformAll",
+        "OpGroupNonUniformAllEqual",
+        "OpGroupNonUniformAny",
+    ]

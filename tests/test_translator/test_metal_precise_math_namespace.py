@@ -47,6 +47,7 @@ import pytest
 
 from crosstl import translate
 from crosstl.translator.ast import FunctionCallNode
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.math_namespaces import (
     METAL_FAST_MATH_FUNCTIONS,
@@ -178,6 +179,15 @@ def _translate_text(tmp_path, text, target, name):
     return translate(str(path), backend=target, format_output=False)
 
 
+def _translate_or_refusal(tmp_path, text, target, name):
+    # A target that refuses an unrelated construct must refuse every spelling
+    # identically; the namespace may not change either outcome.
+    try:
+        return _translate_text(tmp_path, text, target, name)
+    except LoweringRefused as refusal:
+        return f"refused: {refusal}"
+
+
 def test_precise_math_operation_names():
     for operation in sorted(METAL_PRECISE_MATH_FUNCTIONS):
         assert metal_precise_math_operation(f"precise::{operation}") == operation
@@ -234,7 +244,7 @@ def test_crossgl_parser_normalizes_precise_calls():
 )
 def test_other_targets_ignore_the_precise_namespace(tmp_path, target):
     outputs = [
-        _translate_text(tmp_path, _crossgl(prefix), target, f"{label}.cgl")
+        _translate_or_refusal(tmp_path, _crossgl(prefix), target, f"{label}.cgl")
         for label, prefix in (
             ("plain", ""),
             ("precise", "precise::"),

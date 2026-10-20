@@ -79,8 +79,8 @@ WAVE_EXTENDED_VALUE_OPERATIONS = frozenset(
 
 WAVE_BITWISE_OPERATORS = frozenset({"and", "or", "xor"})
 
-# GL_KHR_shader_subgroup_{basic,vote,arithmetic,ballot,shuffle,shuffle_relative,clustered,quad} and
-# GL_NV_shader_subgroup_partitioned functions that have a CrossGL wave operation.
+# GL_KHR_shader_subgroup_{basic,vote,arithmetic,ballot,shuffle,shuffle_relative,clustered,quad},
+# GL_NV_shader_subgroup_partitioned and GL_ARB_shader_group_vote functions that have a CrossGL wave operation.
 GLSL_SUBGROUP_FUNCTIONS = {
     "subgroupElect": "WaveIsFirstLane",
     "subgroupAll": "WaveActiveAllTrue",
@@ -139,6 +139,14 @@ GLSL_SUBGROUP_FUNCTIONS = {
     "subgroupPartitionedExclusiveAndNV": "WaveMultiPrefixBitAnd",
     "subgroupPartitionedExclusiveOrNV": "WaveMultiPrefixBitOr",
     "subgroupPartitionedExclusiveXorNV": "WaveMultiPrefixBitXor",
+    # GLSL 4.60 (8.18, "Shader Invocation Group Functions") and GL_ARB_shader_group_vote. The invocation group is
+    # implementation-defined; SPIR-V gives it subgroup scope (SPV_KHR_subgroup_vote OpSubgroupAllKHR and friends).
+    "allInvocations": "WaveActiveAllTrue",
+    "anyInvocation": "WaveActiveAnyTrue",
+    "allInvocationsEqual": "WaveActiveAllEqual",
+    "allInvocationsARB": "WaveActiveAllTrue",
+    "anyInvocationARB": "WaveActiveAnyTrue",
+    "allInvocationsEqualARB": "WaveActiveAllEqual",
 }
 
 # GLSL lane-mask builtins and the lanes each one selects, relative to the calling lane.

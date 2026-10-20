@@ -68,6 +68,7 @@ from .array_utils import (
     parse_array_type,
     prepend_array_dimension,
 )
+from .bitfield_builtins import BITFIELD_ARITIES, spirv_bitfield_call
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     collect_generic_enum_specializations,
@@ -98,6 +99,7 @@ from .image_access_contracts import (
     image_access_requirement_label,
     image_access_satisfies_requirement,
 )
+from .pack_builtins import PACK_FUNCTIONS, spirv_pack_call, spirv_pack_result_type
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
@@ -11631,6 +11633,10 @@ class VulkanSPIRVCodeGen(
             "lerp": "mix",
             "rsqrt": "inversesqrt",
         }.get(function_name, function_name)
+        if function_name in PACK_FUNCTIONS:
+            return spirv_pack_call(self, function_name, args)
+        if function_name in BITFIELD_ARITIES:
+            return spirv_bitfield_call(self, function_name, args)
         synchronization_call = self.call_synchronization_function(function_name, args)
         if synchronization_call is not None:
             return synchronization_call
@@ -19218,7 +19224,9 @@ class VulkanSPIRVCodeGen(
             )
             if integer_bit_type is not None:
                 return integer_bit_type
-            return None
+            if callee_name in BITFIELD_ARITIES and expr.args:
+                return self.infer_expression_result_type(expr.args[0])
+            return spirv_pack_result_type(self, callee_name)
         if isinstance(expr, ArrayAccessNode):
             array_type = self.infer_expression_result_type(expr.array)
             if array_type is None:
@@ -24622,6 +24630,15 @@ class VulkanSPIRVCodeGen(
         A runtime array's length is ``OpArrayLength`` on the block variable; a sized array's is its size.
         """
         callee = getattr(expr, "function", None)
+        if (
+            isinstance(callee, MemberAccessNode)
+            and callee.member == "length"
+            and not (getattr(expr, "args", None) or [])
+            and isinstance(callee.object_expr, (IdentifierNode, VariableNode))
+        ):
+            handled = self.process_runtime_view_length_call(callee.object_expr)
+            if handled is not None:
+                return True, handled
         if not (
             isinstance(callee, MemberAccessNode)
             and callee.member == "length"
@@ -24653,6 +24670,25 @@ class VulkanSPIRVCodeGen(
         self.value_types[id_value] = uint_type
         length = SpirvId(id_value, uint_type.type)
         return True, self.convert_value_to_type(length, int_type)
+
+    def process_runtime_view_length_call(self, object_expr):
+        """``name.length()`` for a ``buffer T* name`` view: ``OpArrayLength`` of its block's runtime array."""
+        pointer = self.variable_pointer_from_expression(object_expr)
+        if pointer is None:
+            return None
+        metadata = self.structured_buffer_metadata_for_pointer(pointer)
+        if metadata is None or metadata.get("runtime_array_type") is None:
+            return None
+        member_index = metadata.get("member_index", 0)
+        uint_type = self.register_primitive_type("uint")
+        int_type = self.register_primitive_type("int")
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpArrayLength %{uint_type.id} %{pointer.id} {member_index}"
+        )
+        self.value_types[id_value] = uint_type
+        length = SpirvId(id_value, uint_type.type)
+        return self.convert_value_to_type(length, int_type)
 
     def single_struct_buffer_zero_index_alias(
         self, buffer_pointer: SpirvId, index_expr

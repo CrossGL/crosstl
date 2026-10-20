@@ -7,6 +7,8 @@ from ...translator.codegen.array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from ...translator.codegen.bitfield_builtins import METAL_BITFIELD_FUNCTIONS
+from ...translator.codegen.pack_builtins import METAL_PACK_FUNCTIONS
 from ...translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
@@ -1231,6 +1233,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
     metal_bit_intrinsics = {
         "popcount": "bitCount",
         "reverse_bits": "bitfieldReverse",
+        # Bit-field, pack and unpack functions with exactly the GLSL meaning (MSL sections 6.13 and 6.16).
+        **METAL_BITFIELD_FUNCTIONS,
+        **METAL_PACK_FUNCTIONS,
     }
     metal_scalar_arithmetic_types = {
         "bool": ("integer", True, 1),

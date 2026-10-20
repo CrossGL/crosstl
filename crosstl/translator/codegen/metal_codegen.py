@@ -101,6 +101,8 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .barrier_peephole import merge_adjacent_metal_barriers
+from .bitfield_builtins import BITFIELD_ARITIES, metal_bitfield_call
+from .boolean_mix import boolean_mix_selector, metal_boolean_mix
 from .buffer_block_diagnostics import (
     BufferBlockUnsupportedError,
     record_unsupported_layout_failures,
@@ -370,6 +372,7 @@ from .metal_wave_extended import (
     metal_wave_extension_lane_requirements,
 )
 from .operator_spellings import map_c_family_operator
+from .pack_builtins import PACK_FUNCTIONS, metal_pack_call
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     crossgl_literal_positive_integer,
@@ -11528,6 +11531,26 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             else:
                 callee = self.generate_expression(func_expr)
 
+            if (
+                func_name in PACK_FUNCTIONS
+                and func_name not in self.user_function_names
+            ):
+                return metal_pack_call(
+                    self, func_name, [self.generate_expression(a) for a in expr.args]
+                )
+            if (
+                func_name in BITFIELD_ARITIES
+                and func_name not in self.user_function_names
+            ):
+                return metal_bitfield_call(
+                    self, func_name, [self.generate_expression(a) for a in expr.args]
+                )
+            boolean_mix = boolean_mix_selector(
+                self, func_name, expr.args, self.user_function_names
+            )
+            if boolean_mix is not None:
+                return metal_boolean_mix(self, expr.args, boolean_mix)
+
             vector_set = re.fullmatch(
                 r"CrossGLMetalVectorIndex_([iu](?:8|16)vec[234])_set",
                 str(func_name),
@@ -22115,9 +22138,21 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             and not args
         ):
             return None
-        access = self.glsl_buffer_block_member_access(
-            getattr(func_expr, "object_expr", getattr(func_expr, "object", None))
+        object_expr = getattr(
+            func_expr, "object_expr", getattr(func_expr, "object", None)
         )
+        if isinstance(object_expr, (IdentifierNode, VariableNode)):
+            name = getattr(object_expr, "name", None)
+            if self.current_address_space_variables.get(name) in {
+                "device",
+                "constant",
+            } and str(self.local_variable_types.get(name, "")).endswith("*"):
+                raise BufferLengthUnsupportedError(
+                    "metal",
+                    f"length() of buffer view '{name}' needs the bound buffer's "
+                    "size, which a Metal buffer argument does not carry",
+                )
+        access = self.glsl_buffer_block_member_access(object_expr)
         if access is None or not access.get("is_array"):
             return None
         if access.get("array_size") is not None:
