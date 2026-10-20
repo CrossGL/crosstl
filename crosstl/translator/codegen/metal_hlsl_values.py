@@ -168,11 +168,16 @@ class MetalHlslValueMixin:
         if left_info is None and right_info is None:
             if operator != "%":
                 return left, right, None
-            scalar_components = {
-                self.vector_component_type(
-                    self.map_type(self.expression_result_type(operand))
-                )
+            # An operand of unknown type gives no evidence of a floating
+            # remainder; map_type(None) would otherwise default it to float.
+            operand_types = [
+                self.expression_result_type(operand)
                 for operand in (expr.left, expr.right)
+            ]
+            scalar_components = {
+                self.vector_component_type(self.map_type(operand_type))
+                for operand_type in operand_types
+                if operand_type is not None
             }
             if "float" in scalar_components:
                 return left, right, "float"
