@@ -29215,6 +29215,7 @@ class VulkanSPIRVCodeGen(
             "GL_VERTEXINDEX": "gl_VertexID",
             "SV_INSTANCEID": "gl_InstanceID",
             "SV_PRIMITIVEID": "gl_PrimitiveID",
+            "SV_VIEWID": "gl_ViewIndex",
             "SV_ISFRONTFACE": "gl_FrontFacing",
             "SV_BARYCENTRICS": "gl_BaryCoordEXT",
             "SV_STENCILREF": "gl_FragStencilRefEXT",
@@ -29377,6 +29378,18 @@ class VulkanSPIRVCodeGen(
                 "PrimitiveId",
                 "Input",
                 {
+                    "Fragment",
+                    "Geometry",
+                    "TessellationControl",
+                    "TessellationEvaluation",
+                },
+            ),
+            "gl_ViewIndex": (
+                "int",
+                "ViewIndex",
+                "Input",
+                {
+                    "Vertex",
                     "Fragment",
                     "Geometry",
                     "TessellationControl",
@@ -29648,6 +29661,10 @@ class VulkanSPIRVCodeGen(
         elif builtin_name == "FragStencilRefEXT":
             self.require_capability("StencilExportEXT")
             self.require_extension("SPV_EXT_shader_stencil_export")
+        elif builtin_name == "ViewIndex":
+            # SPV_KHR_multiview: core in SPIR-V 1.3, an extension before it.
+            self.require_capability("MultiView")
+            self.require_extension("SPV_KHR_multiview")
 
     def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:
         builtin = self.ensure_compute_builtin(name)

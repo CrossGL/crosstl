@@ -2725,7 +2725,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
             "gl_IsFrontFace": "SV_IsFrontFace",
             "gl_FrontFacing": "SV_IsFrontFace",
             "gl_PrimitiveID": "SV_PrimitiveID",
-            "gl_ViewID": "SV_ViewID",
+            "gl_ViewIndex": "SV_ViewID",
             "gl_Layer": "SV_RenderTargetArrayIndex",
             "gl_ViewportIndex": "SV_ViewportArrayIndex",
             "InstanceID": "INSTANCE_ID",
@@ -37550,7 +37550,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return semantic
 
         name_semantics = {
-            "view": "gl_ViewID",
+            "view": "gl_ViewIndex",
             "layer": "gl_Layer",
             "viewport": "gl_ViewportIndex",
         }
@@ -39545,7 +39545,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return params_str
 
     def used_hlsl_vertex_builtin_names(self, body):
-        builtin_names = {"gl_VertexIndex"}
+        builtin_names = {"gl_VertexIndex", "gl_ViewIndex"}
         used_names = set()
         for node in self.walk_ast(body):
             class_name = node.__class__.__name__
@@ -39561,6 +39561,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_names = self.used_hlsl_vertex_builtin_names(getattr(func, "body", []))
         builtin_parameters = [
             ("gl_VertexIndex", "uint", "SV_VertexID"),
+            ("gl_ViewIndex", "uint", "SV_ViewID"),
         ]
         return [
             parameter for parameter in builtin_parameters if parameter[0] in used_names

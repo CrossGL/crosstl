@@ -388,7 +388,7 @@ class HLSLToCrossGLConverter(HLSLMatrixImportMixin, ImportRefusalMixin):
             "SV_InsideTessFactor": "gl_TessLevelInner",
             "SV_DomainLocation": "gl_TessCoord",
             # Mesh/Task semantics
-            "SV_ViewID": "gl_ViewID",
+            "SV_ViewID": "gl_ViewIndex",
             "SV_DispatchMeshID": "mesh_DispatchMeshID",
             # Raytracing semantics
             "SV_RayFlags": "rt_RayFlags",

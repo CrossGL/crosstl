@@ -19,8 +19,13 @@ from .GLSL_codegen import (
     OpenGLIndexTypeError,
     OpenGLStructConstructionError,
 )
+from .glsl_es_expression_forms import GLSLESExpressionFormsMixin
 from .glsl_es_varying_links import es300_linked_varying_name, program_identifier_names
 from .glsl_refusals import WebGLLoweringRefused
+from .glsl_target_builtins import (
+    WEBGL_UNAVAILABLE_BUILTINS,
+    WEBGL_UNAVAILABLE_FUNCTION_PATTERNS,
+)
 from .index_range_contracts import WEBGL_INDEX_PROFILE
 from .stage_refusals import StageUnsupportedError
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
@@ -65,10 +70,13 @@ class WebGLIndexTypeError(OpenGLIndexTypeError):
     missing_capabilities = ("webgl.index-width-normalization",)
 
 
-class WebGLCodeGen(GLSLCodeGen):
+class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
     GLSL_TARGET_DISPLAY_NAME = "WebGL"
+    GLSL_IMPLICIT_LITERAL_CONVERSIONS = False
+    GLSL_UNAVAILABLE_BUILTINS = WEBGL_UNAVAILABLE_BUILTINS
+    GLSL_UNAVAILABLE_FUNCTION_PATTERNS = WEBGL_UNAVAILABLE_FUNCTION_PATTERNS
     webgl_program_identifier_names = frozenset()
     # WebGL 2 exposes no GL_EXT_texture_shadow_lod.
     GLSL_SHADOW_LOD_EXTENSION_SUPPORTED = False
@@ -229,7 +237,20 @@ class WebGLCodeGen(GLSLCodeGen):
             return replacement
         if isinstance(expr, FunctionCallNode):
             self.validate_webgl_function_call_support(self.function_call_name(expr))
+        es_form = self.glsl_es_expression_form(expr)
+        if es_form is not None:
+            return es_form
         return super().generate_expression(expr, is_main=is_main)
+
+    def local_variable_qualifier(self, node):
+        qualifier = super().local_variable_qualifier(node)
+        name = getattr(node, "name", None)
+        if qualifier.startswith("const ") and self.glsl_es_local_const_allowed(node):
+            return qualifier
+        self.glsl_es_constant_locals.discard(name)
+        return (
+            qualifier[len("const ") :] if qualifier.startswith("const ") else qualifier
+        )
 
     def validate_webgl_function_call_support(self, func_name):
         if func_name in self.STORAGE_IMAGE_INTRINSIC_NAMES:

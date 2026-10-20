@@ -27495,7 +27495,7 @@ def test_directx_mesh_view_id_semantic_lowers_and_validates():
 
         mesh {
             void main(
-                vec2 viewId @ gl_ViewID,
+                vec2 viewId @ gl_ViewIndex,
                 @vertices out MeshVertex verts[3],
                 @indices out uvec3 tris[1]
             ) @numthreads(32, 1, 1) @outputtopology(triangle) {
@@ -27510,7 +27510,7 @@ def test_directx_mesh_view_id_semantic_lowers_and_validates():
     wrong_stage_code = """
     shader BadTaskViewID {
         task {
-            void main(uint viewId @ gl_ViewID) @numthreads(1, 1, 1) {
+            void main(uint viewId @ gl_ViewIndex) @numthreads(1, 1, 1) {
                 DispatchMesh(1, 1, 1);
             }
         }
@@ -27527,7 +27527,7 @@ def test_directx_mesh_view_id_semantic_lowers_and_validates():
 
         mesh {
             void main(
-                uint viewId @ gl_ViewID,
+                uint viewId @ gl_ViewIndex,
                 @vertices out MeshVertex verts[3],
                 @indices out uvec3 tris[1]
             ) @numthreads(32, 1, 1) @outputtopology(triangle) {
@@ -27543,7 +27543,7 @@ def test_directx_mesh_view_id_semantic_lowers_and_validates():
     )
 
     assert "uint viewId : SV_ViewID" in generated
-    assert "gl_ViewID" not in generated
+    assert "gl_ViewIndex" not in generated
 
 
 def test_wave_and_rayquery_intrinsics_codegen():
@@ -29387,7 +29387,7 @@ def test_multiview_and_viewport_semantics_roundtrip():
     shader ViewShader {
         struct VSOut {
             vec4 position @ gl_Position;
-            uint view @ gl_ViewID;
+            uint view @ gl_ViewIndex;
             uint layer @ gl_Layer;
             uint viewport @ gl_ViewportIndex;
         };

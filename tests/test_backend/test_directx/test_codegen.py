@@ -2801,12 +2801,12 @@ def test_codegen_mesh_view_id_semantic_roundtrip():
 
     crossgl = generate_crossgl(code)
 
-    assert "uint viewId @ gl_ViewID" in crossgl
+    assert "uint viewId @ gl_ViewIndex" in crossgl
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "uint viewId : SV_ViewID" in hlsl
-    assert "gl_ViewID" not in hlsl
+    assert "gl_ViewIndex" not in hlsl
 
 
 def test_codegen_raytracing_stage():
@@ -6980,7 +6980,7 @@ def test_codegen_multiview_and_viewport_semantics():
     """).strip()
 
     output = generate_crossgl(code)
-    for expected in ["gl_ViewID", "gl_Layer", "gl_ViewportIndex"]:
+    for expected in ["gl_ViewIndex", "gl_Layer", "gl_ViewportIndex"]:
         assert expected in output
 
 
@@ -7011,7 +7011,7 @@ def test_codegen_case_insensitive_raster_system_semantics_reparse():
 
     for expected in [
         "vec4 position @ gl_Position;",
-        "uint view @ gl_ViewID;",
+        "uint view @ gl_ViewIndex;",
         "uint layer @ gl_Layer;",
         "uint viewport @ gl_ViewportIndex;",
         "float clip @ gl_ClipDistance;",

@@ -1414,6 +1414,8 @@ class MetalCodeGen:
             "gl_ClipDistance": "clip_distance",
             "gl_Layer": "render_target_array_index",
             "gl_ViewportIndex": "viewport_array_index",
+            # Vertex amplification is Metal's multiview (MSL 2.2 section 5.2.3.1).
+            "gl_ViewIndex": "amplification_id",
             # Fragment inputs
             "gl_FragColor": "[[color(0)]]",
             "gl_FragColor0": "[[color(0)]]",
@@ -6138,7 +6140,11 @@ class MetalCodeGen:
     def metal_graphics_builtin_expression_name(self, name):
         if name is None or name in self.local_variable_types:
             return name
-        return self.current_metal_graphics_builtin_parameter_names.get(name, name)
+        parameter = self.current_metal_graphics_builtin_parameter_names.get(name, name)
+        if name == "gl_ViewIndex" and parameter != name:
+            # GLSL's view index is an int; Metal's amplification_id is a uint.
+            return f"int({parameter})"
+        return parameter
 
     def metal_builtin_expression_name(self, name):
         graphics_name = self.metal_graphics_builtin_expression_name(name)
@@ -6161,6 +6167,8 @@ class MetalCodeGen:
             return None
         if name == "gl_VertexIndex":
             return "uint"
+        if name == "gl_ViewIndex":
+            return "int"
         if name == "gl_FragCoord":
             return "float4"
         return None
@@ -6472,6 +6480,7 @@ class MetalCodeGen:
     def metal_vertex_builtin_parameter_specs(self):
         return [
             ("gl_VertexIndex", "uint", "vertex_id"),
+            ("gl_ViewIndex", "uint", "amplification_id"),
         ]
 
     def metal_fragment_builtin_parameter_specs(self):
@@ -6511,13 +6520,21 @@ class MetalCodeGen:
         ) in self.metal_vertex_builtin_parameter_specs():
             if builtin_name not in used_names or attribute in explicit_stage_builtins:
                 continue
-            name = self.unique_metal_generated_name("_crossglVertexID", reserved_names)
+            base_name = {"gl_ViewIndex": "_crossglViewIndex"}.get(
+                builtin_name, "_crossglVertexID"
+            )
+            name = self.unique_metal_generated_name(base_name, reserved_names)
             reserved_names.add(name)
             required_parameters.append((builtin_name, name, param_type, attribute))
         return required_parameters
 
     def used_metal_vertex_builtin_names(self, body):
-        builtin_names = {"gl_VertexIndex"}
+        builtin_names = {
+            builtin
+            for builtin, _type, _attribute in (
+                self.metal_vertex_builtin_parameter_specs()
+            )
+        }
         used_names = set()
         for node in self.iter_ast_nodes(body):
             class_name = node.__class__.__name__
@@ -6612,6 +6629,7 @@ class MetalCodeGen:
             "front_facing": "bool",
             "render_target_array_index": "uint",
             "viewport_array_index": "uint",
+            "amplification_id": "uint",
             "position": "float4",
             "point_coord": "float2",
             "sample_id": "uint",
@@ -6973,6 +6991,7 @@ class MetalCodeGen:
             "front_facing": "bool",
             "render_target_array_index": "uint",
             "viewport_array_index": "uint",
+            "amplification_id": "uint",
             "position": "float4",
             "point_coord": "float2",
             "point_size": "float",
@@ -18022,6 +18041,7 @@ class MetalCodeGen:
         if canonical.startswith("color(") or canonical.startswith("depth("):
             return False
         return canonical not in {
+            "amplification_id",
             "barycentric_coord",
             "clip_distance",
             "front_facing",

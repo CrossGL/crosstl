@@ -207,6 +207,10 @@ from .glsl_stage_output_values import (
     flattened_stage_output_assignment,
     render_flattened_stage_output_store,
 )
+from .glsl_target_builtins import (
+    OPENGL_UNAVAILABLE_BUILTINS,
+    unavailable_builtin_reasons,
+)
 from .glsl_union_storage import UnionStorage
 from .glsl_version_requirements import (
     VARIABLE_GATHER_OFFSET,
@@ -1454,6 +1458,10 @@ class GLSLCodeGen(LoweringRefusalMixin):
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
+    # Desktop GLSL converts integer literals to float and uint implicitly.
+    GLSL_IMPLICIT_LITERAL_CONVERSIONS = True
+    GLSL_UNAVAILABLE_BUILTINS = OPENGL_UNAVAILABLE_BUILTINS
+    GLSL_UNAVAILABLE_FUNCTION_PATTERNS = ()
     LOWERING_REFUSAL_TYPE = OpenGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = OpenGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = OpenGLBooleanCompoundAssignmentError
@@ -3185,6 +3193,7 @@ class GLSLCodeGen(LoweringRefusalMixin):
             "fwidth_fine": "fwidthFine",
             "fwidth_coarse": "fwidthCoarse",
             "rsqrt": "inversesqrt",
+            "printf": "debugPrintfEXT",
             "metal::rint": "roundEven",
             "metal_u3a_u3arint": "roundEven",
             "rint": "roundEven",
@@ -3886,7 +3895,20 @@ class GLSLCodeGen(LoweringRefusalMixin):
             # GLSL ES has no such extension; the version requirements refuse the clamp functions there.
             lines.append(f"#extension {GLSL_LOD_CLAMP_EXTENSION} : require")
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
+        if self.uses_glsl_debug_printf(ast):
+            lines.append("#extension GL_EXT_debug_printf : require")
         return lines
+
+    def uses_glsl_debug_printf(self, ast):
+        """HLSL's ``printf`` (a SPIR-V-only DXC feature) is GLSL's ``debugPrintfEXT``."""
+        for directive in getattr(ast, "preprocessors", []) or []:
+            if "GL_EXT_debug_printf" in str(getattr(directive, "content", "") or ""):
+                return False
+        return any(
+            isinstance(node, FunctionCallNode)
+            and self.function_call_name(node) in {"printf", "debugPrintfEXT"}
+            for node in self.walk_ast(ast)
+        )
 
     def uses_texture_lod_clamp(self, ast, target_stage=None):
         return any(
@@ -8079,8 +8101,19 @@ class GLSLCodeGen(LoweringRefusalMixin):
         Raises the emitter's ``LOWERING_REFUSAL_TYPE`` listing every construct that has no faithful lowering.
         """
         return self.refusals.run(
-            self.render_program_at_required_version, ast, target_stage
+            self.render_program_with_profile_builtins, ast, target_stage
         )
+
+    def render_program_with_profile_builtins(self, ast, target_stage=None):
+        """Render the program and refuse every built-in the target profile does not have."""
+        code = self.render_program_at_required_version(ast, target_stage)
+        for reason in unavailable_builtin_reasons(
+            code,
+            self.GLSL_UNAVAILABLE_BUILTINS,
+            self.GLSL_UNAVAILABLE_FUNCTION_PATTERNS,
+        ):
+            self.refuse_lowering(reason)
+        return code
 
     GLSL_VERSION_RESOLUTION_PASSES = 3
 
@@ -8799,6 +8832,18 @@ class GLSLCodeGen(LoweringRefusalMixin):
             + stage_local_interface_vars
             + stage_resource_params
         )
+        # Code names cbuffer members directly; their types drive conversions.
+        for cbuffer in list(getattr(ast, "cbuffers", []) or []) + list(
+            collect_stage_local_cbuffers(ast, target_stage)
+        ):
+            for member in getattr(cbuffer, "members", []) or []:
+                member_type = getattr(member, "member_type", None) or getattr(
+                    member, "vtype", None
+                )
+                if getattr(member, "name", None) and member_type is not None:
+                    self.global_variable_types.setdefault(
+                        member.name, self.type_name_string(member_type)
+                    )
         self.prepare_glsl_compile_time_globals(ast, global_vars)
         self.function_private_pointer_array_size_hints = (
             self.collect_private_pointer_array_size_hints(ast)
@@ -22646,6 +22691,8 @@ class GLSLCodeGen(LoweringRefusalMixin):
     def vertex_output_member_name(self, member):
         semantic = self.stage_io_semantic_from_node(member)
         mapped_semantic = self.map_semantic(semantic)
+        if mapped_semantic in {"gl_ClipDistance", "gl_CullDistance"}:
+            return self.glsl_distance_output_member_name(member, mapped_semantic)
         if self.is_vertex_builtin_output(mapped_semantic):
             return mapped_semantic
         if member.name in self.vertex_input_member_names:
@@ -22654,6 +22701,21 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 f"out_{member.name}",
             )
         return self.glsl_module_identifier_name(member.name)
+
+    def glsl_distance_output_member_name(self, member, builtin):
+        """A scalar clip or cull distance (HLSL ``SV_ClipDistance0``) is element 0 of the GLSL array."""
+        member_type = self.type_name_string(
+            getattr(member, "member_type", None) or getattr(member, "vtype", None)
+        )
+        if isinstance(member, ArrayNode) or "[" in str(member_type or ""):
+            return builtin
+        if self.map_type(member_type) == "float":
+            return f"{builtin}[0]"
+        return self.refuse_lowering(
+            f"{builtin} output '{member.name}' of type '{member_type}': only a float array "
+            "or one float maps onto the GLSL distance array",
+            builtin,
+        )
 
     def fragment_output_member_name(
         self, member, struct_name=None, reserved_names=None
@@ -22722,6 +22784,8 @@ class GLSLCodeGen(LoweringRefusalMixin):
         )
 
     def is_vertex_builtin_output(self, name):
+        # A scalar distance output is named by its element, ``gl_ClipDistance[0]``.
+        name = re.sub(r"\[\d+\]$", "", str(name or ""))
         return name in {
             "gl_Position",
             "gl_PointSize",
@@ -34985,6 +35049,15 @@ complex64_t crossgl_complex64_mod_assign(
             return generated
         return f"bitfieldExtract({generated}, 0, {narrow['bits']})"
 
+    def glsl_explicit_literal_conversion(self, generated, expected):
+        """Spell a non-negative integer literal in the expected scalar family."""
+        if re.fullmatch(r"[0-9]+", generated):
+            if expected["family"] == "float":
+                return f"{generated}.0"
+            if expected["family"] == "uint":
+                return f"{generated}u"
+        return f"{expected['mapped']}({generated})"
+
     def glsl_expected_type_conversion(self, expr, generated, expected_type):
         if expected_type is None or not isinstance(generated, str):
             return generated
@@ -35084,7 +35157,13 @@ complex64_t crossgl_complex64_mod_assign(
             and isinstance(getattr(expr, "value", expr), (int, float))
             and getattr(expr, "value", expr) >= 0
         ):
-            return generated
+            if (
+                self.GLSL_IMPLICIT_LITERAL_CONVERSIONS
+                or expected["family"] == actual["family"]
+            ):
+                return generated
+            # GLSL ES has no implicit conversions (ESSL 3.00 section 4.1.10).
+            return self.glsl_explicit_literal_conversion(generated, expected)
         if (
             isinstance(expr, FunctionCallNode)
             and self.function_call_name(expr) == "imageLoad"
