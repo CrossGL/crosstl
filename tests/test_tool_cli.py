@@ -1,6 +1,6 @@
-import configparser
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -368,12 +368,13 @@ def test_pull_request_template_mentions_support_traceability_marker():
 def test_local_temporary_worktrees_are_ignored_by_developer_tooling():
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     pre_commit = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    config = configparser.ConfigParser()
-    config.read(ROOT / "setup.cfg", encoding="utf-8")
+    pytest_options = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["tool"]["pytest"]["ini_options"]
 
     assert "worktrees/" in gitignore
     assert "worktrees/" in pre_commit
-    assert "worktrees" in config["tool:pytest"]["norecursedirs"].split()
+    assert "worktrees" in pytest_options["norecursedirs"]
 
 
 def test_public_docs_reference_project_porting_workflow():
