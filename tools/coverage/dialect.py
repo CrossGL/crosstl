@@ -75,8 +75,8 @@ class Dialect:
 
     def literal(self, kind: Type) -> str:
         """A constant of ``kind``, for an argument the language requires to be a constant expression."""
-        if kind.shape:
-            raise ProbeError("no constant probe argument of a vector or matrix type")
+        if len(kind.shape) > 1:
+            raise ProbeError("no constant probe argument of a matrix type")
         constants = {
             "bool": "false",
             "int": "0",
@@ -84,7 +84,10 @@ class Dialect:
             "uint": "0u",
             "uint64": "0u",
         }
-        return constants.get(kind.scalar, "0.0")
+        zero = constants.get(kind.scalar, "0.0")
+        if kind.shape:
+            return self.construct(kind, [zero] * kind.shape[0])
+        return zero
 
     def buffer_element(self, kind: Type, atomic: bool) -> str:
         """The element type of the output buffer; ``atomic`` when the probe passes it to an atomic operation."""
@@ -105,6 +108,10 @@ class Dialect:
     def resource(self, spelling: str, name: str, register: str) -> str:
         """The declaration of a resource object, such as a texture or a sampler, of type ``spelling``."""
         raise ProbeError(f"no probe for {self.language} {spelling} objects yet")
+
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        """The declaration of a GLSL sampler or image uniform; ``image_format`` is the image's format qualifier."""
+        raise ProbeError(f"no probe for {self.language} {spelling} uniforms yet")
 
     def call(self, name: str, arguments: list[str]) -> str:
         return f"{name}({', '.join(arguments)})"

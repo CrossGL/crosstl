@@ -61,9 +61,10 @@ def test_matrix_spellings(language, spelling):
 
 
 def test_probe_refuses_what_it_cannot_express():
-    with pytest.raises(probes.ProbeError, match="sampler2D"):
+    with pytest.raises(probes.ProbeError, match="samplerCubeShadow"):
         probes.build(
-            feature("texture", Type("float", (4,)), Type.other("sampler2D")), "crossgl"
+            feature("texture", Type("float"), Type.other("samplerCubeShadow")),
+            "crossgl",
         )
     with pytest.raises(probes.ProbeError, match="no vertex-stage probe"):
         probes.build(feature("dFdx", VEC3, VEC3, stage="vertex"), "crossgl")
@@ -226,6 +227,55 @@ def test_method_probe_declares_its_object_and_sampler():
     assert "        Texture2D<vec4> obj;" in crossgl
     assert "        SamplerState smp;" in crossgl
     assert "vec4 r = obj.SampleLevel(smp, a1, a2);" in crossgl
+
+
+VEC4 = Type("float", (4,))
+TEXTURE_LOD = feature(
+    "textureLod", VEC4, Type.other("sampler2D"), Type("float", (2,)), Type("float")
+)
+IMAGE_ATOMIC = feature(
+    "imageAtomicAdd",
+    Type("uint"),
+    Type.other("uimage2D"),
+    Type("int", (2,)),
+    Type("uint"),
+)
+TEXEL_OFFSET = feature(
+    "textureLodOffset",
+    VEC4,
+    Type.other("sampler2D"),
+    Type("float", (2,)),
+    Type("float"),
+    Param(Type("int", (2,)), "const"),
+)
+
+
+def test_function_probe_declares_the_samplers_and_images_it_passes():
+    source = probes.build(TEXTURE_LOD, "glsl").source
+    assert "layout(binding = 8) uniform sampler2D u0;" in source
+    assert "vec4 r = textureLod(u0, a1, a2);" in source
+    image = probes.build(IMAGE_ATOMIC, "glsl").source
+    assert "layout(r32ui, binding = 8) uniform uimage2D u0;" in image
+    crossgl = probes.build(IMAGE_ATOMIC, "crossgl").source
+    assert "        layout(r32ui) uniform uimage2D u0;" in crossgl
+    assert "uint r = imageAtomicAdd(u0, a1, a2);" in crossgl
+
+
+def test_constant_vector_arguments_are_zero_vectors():
+    source = probes.build(TEXEL_OFFSET, "glsl").source
+    assert "textureLodOffset(u0, a1, a2, ivec2(0, 0))" in source
+
+
+@pytest.mark.skipif(
+    not validators.available("glsl"), reason="glslangValidator is not installed"
+)
+@pytest.mark.parametrize(
+    "probe_feature", [TEXTURE_LOD, IMAGE_ATOMIC, TEXEL_OFFSET], ids=lambda f: f.name
+)
+def test_glsl_texture_and_image_probes_are_valid_glsl(probe_feature):
+    probe = probes.build(probe_feature, "glsl")
+    verdict = validators.validate("glsl", probe.source)
+    assert verdict.accepted, verdict.log
 
 
 def test_ray_query_is_a_local_variable():

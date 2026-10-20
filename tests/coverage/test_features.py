@@ -105,8 +105,68 @@ def test_glsl_records_section_stage_and_opaque_types():
     features = by_name(glsl.parse(GLSL_EXCERPT))
     assert features["dFdx"].stage == "fragment"
     assert features["abs"].group == "common-functions"
-    assert features["texture"].signature.unsupported == "gvec4"
+    assert features["texture"].signature.unsupported == "sampler2D"
     assert len(features["texture"].signature.params) == 2
+
+
+TEXTURE_EXCERPT = """
+== Texture Functions
+
+[source,glsl]
+----
+int textureSize(gsampler1D sampler, int lod)
+ivec2 textureSize(gsampler2D sampler, int lod)
+gvec4 texture(gsampler2D sampler, vec2 P [, float bias] )
+gvec4 textureLod(gsampler2D sampler, vec2 P, float lod)
+gvec4 textureLodOffset(gsampler2D sampler, vec2 P, float lod, ivec2 offset)
+gvec4 textureGatherOffsets(gsampler2D sampler, vec2 P, ivec2 offsets[4] [, int comp])
+----
+
+== Image Functions
+
+[source,glsl]
+----
+gvec4 imageLoad(readonly IMAGE_PARAMS)
+uint imageAtomicAdd(IMAGE_PARAMS, uint data)
+int imageAtomicAdd(IMAGE_PARAMS, int data)
+----
+
+== Fragment Processing Functions
+
+[source,glsl]
+----
+vec2 interpolateAtOffset(float interpolant, vec2 offset)
+----
+"""
+
+
+def test_glsl_probes_textures_and_images_through_their_2d_forms():
+    features = by_name(glsl.parse(TEXTURE_EXCERPT))
+    size = features["textureSize"].signature
+    assert size.result == Type("int", (2,))
+    assert size.params[0].type == Type.other("sampler2D")
+    assert features["textureLod"].signature.result == Type("float", (4,))
+    assert features["textureLod"].stage == "compute"
+    load = features["imageLoad"].signature
+    assert [p.type for p in load.params] == [
+        Type.other("image2D"),
+        Type("int", (2,)),
+    ]
+    atomic = features["imageAtomicAdd"].signature
+    assert atomic.params[0].type == Type.other("uimage2D")
+    assert atomic.params[2].type == Type("uint")
+
+
+def test_glsl_marks_constant_offsets_arrays_and_implicit_lod():
+    features = by_name(glsl.parse(TEXTURE_EXCERPT))
+    offset = features["textureLodOffset"].signature.params[3]
+    assert offset == Param(Type("int", (2,)), "const")
+    # An interpolation offset is a float and need not be constant.
+    assert features["interpolateAtOffset"].signature.params[1].direction == "in"
+    gather = features["textureGatherOffsets"].signature
+    assert gather.params[2].type == Type.other("ivec2[4]")
+    assert len(gather.params) == 3
+    assert features["texture"].stage == "fragment"
 
 
 GRAMMAR = """{"instructions": [

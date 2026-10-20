@@ -25,8 +25,8 @@ DIRECTIONS = ("output", "input")
 class Type:
     """A value type: a scalar, a vector ``(n,)`` or a matrix ``(columns, rows)``.
 
-    Any other kind of type, such as a sampler or an image, is carried as ``opaque`` with its upstream spelling; no
-    probe can be built for it yet.
+    Any other kind of type, such as a sampler or an image, is carried as ``opaque`` with its upstream spelling. A
+    probe can pass only the samplers, images and objects that :mod:`.objects` declares.
     """
 
     scalar: str

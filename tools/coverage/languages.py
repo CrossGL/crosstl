@@ -19,6 +19,14 @@ class GLSL(Dialect):
         ]
         return lines + list(parts.get("declarations", ()))
 
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        layout = (
+            f"{image_format}, binding = {binding}"
+            if image_format
+            else f"binding = {binding}"
+        )
+        return f"layout({layout}) uniform {spelling} {name};"
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = [
             "#version 460",

@@ -216,6 +216,11 @@ class CrossGL(Dialect):
     def resource(self, spelling: str, name: str, register: str) -> str:
         return f"{spelling} {name};"
 
+    # GLSL's samplers and images keep their GLSL spelling; the backend assigns the bindings.
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        layout = f"layout({image_format}) " if image_format else ""
+        return f"{layout}uniform {spelling} {name};"
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = ["shader Probe {"]
         lines += [f"    {line}" for line in parts.get("prelude", ())]

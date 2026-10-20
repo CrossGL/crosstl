@@ -1,4 +1,5 @@
-"""The object types whose methods the probes call, such as HLSL's ``Texture2D`` with ``SampleLevel``.
+"""The resources a probe declares: object types whose methods it calls, such as HLSL's ``Texture2D`` with
+``SampleLevel``, and the GLSL samplers and images a built-in function takes.
 
 A method probe declares one object, named ``obj``, and the samplers its overload takes, then calls the method once on
 arguments read from the input buffers, as a function probe calls a function. Resources are bound to registers past
@@ -81,6 +82,40 @@ SAMPLERS = {
 }
 # The probe's buffers take the first registers of their class; resources bind after them.
 _REGISTERS = {"t": "t0", "u": "u8"}
+
+
+# GLSL's opaque uniform types that a function probe can pass, with the image format each is declared with. Probes
+# use the 2D forms; the others stay untested.
+UNIFORMS = {
+    "sampler2D": "",
+    "sampler2DMS": "",
+    "image2D": "rgba32f",
+    "image2DMS": "rgba32f",
+    "iimage2D": "r32i",
+    "uimage2D": "r32ui",
+}
+# Uniforms bind past the probe's buffers.
+_FIRST_UNIFORM = 8
+
+
+class Uniforms:
+    """The samplers and images a function probe passes, declared the first time each parameter needs one."""
+
+    def __init__(self, dialect: Dialect):
+        self.dialect = dialect
+        self.declarations: list[str] = []
+
+    @staticmethod
+    def takes(kind: Type) -> bool:
+        return kind.opaque in UNIFORMS
+
+    def argument(self, kind: Type) -> str:
+        name = f"u{len(self.declarations)}"
+        binding = _FIRST_UNIFORM + len(self.declarations)
+        self.declarations.append(
+            self.dialect.uniform(kind.opaque, name, binding, UNIFORMS[kind.opaque])
+        )
+        return name
 
 
 class Receiver:

@@ -15,7 +15,7 @@ from . import constructs
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
 from .model import Feature, Signature, Type
-from .objects import Receiver
+from .objects import Receiver, Uniforms
 
 __all__ = ["DIALECTS", "NoSpelling", "Probe", "ProbeError", "build", "spell"]
 _BUFFERS = {"float": "fin", "int": "iin", "uint": "uin"}
@@ -59,6 +59,7 @@ class _Builder:
         self.dialect = dialect
         self.receiver = receiver
         self.interpolant = interpolant
+        self.uniforms = Uniforms(dialect)
         self.offsets: dict[str, int] = {}
         self.lines: list[str] = list(receiver.locals) if receiver else []
         # Fragment-shader inputs as ``(type spelling, name)``.
@@ -86,11 +87,22 @@ class _Builder:
         inner = Type(kind.scalar, (size,))
         return self.dialect.construct(kind, [self.value(inner) for _ in range(count)])
 
+    @property
+    def declarations(self) -> list[str]:
+        """The resources the probe declares before its entry point."""
+        objects = self.receiver.declarations if self.receiver else []
+        return objects + self.uniforms.declarations
+
+    def _resource(self, kind: Type) -> bool:
+        return bool(self.receiver and self.receiver.takes(kind)) or self.uniforms.takes(
+            kind
+        )
+
     def _arguments(self, signature: Signature) -> tuple[list[str], Type | None]:
         dialect, arguments, output = self.dialect, [], None
         receiver = self.receiver
         for kind in (signature.result, *(p.type for p in signature.params)):
-            if not (receiver and receiver.takes(kind)):
+            if not self._resource(kind):
                 dialect.type(
                     kind
                 )  # raises ProbeError for what the language cannot spell
@@ -98,6 +110,8 @@ class _Builder:
             local = f"a{index}"
             if receiver and receiver.takes(param.type):
                 arguments.append(receiver.argument(param.type))
+            elif self.uniforms.takes(param.type):
+                arguments.append(self.uniforms.argument(param.type))
             elif index == 0 and self.interpolant:
                 kind = dialect.type(param.type)
                 if self.interpolant == "flat":
@@ -199,7 +213,7 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     ]
     atomic = any(p.direction == "inout" for p in feature.signature.params)
     buffers.append((dialect.buffer_element(output, atomic), "outp"))
-    declarations = receiver.declarations if receiver else []
+    declarations = builder.declarations
     if feature.stage == "fragment":
         source = dialect.fragment(
             buffers, body, declarations=declarations, inputs=builder.inputs
