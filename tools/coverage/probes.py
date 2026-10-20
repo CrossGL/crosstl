@@ -34,6 +34,11 @@ _STAGE_PROGRAMS = {
     "mesh": "mesh",
     "task": "task",
 }
+# Stages whose probe declares a payload, which a parameter of a user-defined or by-reference type takes: the task
+# payload a task shader hands to its mesh workgroups, and the ray payload a hit shader receives and can trace with.
+_PAYLOAD_STAGES = frozenset({"task", "any-hit", "closest-hit"})
+# A ray descriptor, as the HLSL and Slang feature lists spell its type. A probe fills one in field by field.
+_RAY_DESCRIPTIONS = frozenset({"ray_desc", "RayDesc"})
 
 
 @dataclass(frozen=True)
@@ -77,7 +82,7 @@ class _Builder:
         self.dialect = dialect
         self.receiver = receiver
         self.interpolant = interpolant
-        # Whether the probe declares a task payload, which a parameter of a user-defined or by-reference type takes.
+        # Whether the probe declares a payload (:data:`_PAYLOAD_STAGES`).
         self.payload = payload
         self.uniforms = Uniforms(dialect)
         self.offsets: dict[str, int] = {}
@@ -116,9 +121,22 @@ class _Builder:
     def _resource(self, kind: Type) -> bool:
         if self.payload and kind.opaque == "udt":
             return True
+        if kind.opaque in _RAY_DESCRIPTIONS:
+            return True
         return bool(self.receiver and self.receiver.takes(kind)) or self.uniforms.takes(
             kind
         )
+
+    def _ray(self, name: str) -> list[str]:
+        """A ray descriptor ``name`` whose origin and direction the input buffers give."""
+        vector = Type("float", (3,))
+        return [
+            f"RayDesc {name};",
+            f"{name}.Origin = {self.value(vector)};",
+            f"{name}.TMin = 0.0;",
+            f"{name}.Direction = {self.value(vector)};",
+            f"{name}.TMax = 1.0;",
+        ]
 
     def _arguments(self, signature: Signature) -> tuple[list[str], Type | None]:
         dialect, arguments, output = self.dialect, [], None
@@ -138,6 +156,9 @@ class _Builder:
                 arguments.append(receiver.argument(param.type))
             elif self.uniforms.takes(param.type):
                 arguments.append(self.uniforms.argument(param.type))
+            elif param.type.opaque in _RAY_DESCRIPTIONS:
+                self.lines += self._ray(local)
+                arguments.append(local)
             elif index == 0 and self.interpolant:
                 kind = dialect.type(param.type)
                 if self.interpolant == "flat":
@@ -238,7 +259,9 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     interpolant = feature.name in _INTERPOLANTS and (
         "flat" if feature.name in _FLAT else "smooth"
     )
-    builder = _Builder(dialect, receiver, interpolant or "", feature.stage == "task")
+    builder = _Builder(
+        dialect, receiver, interpolant or "", feature.stage in _PAYLOAD_STAGES
+    )
     signature = feature.signature
     if language == "crossgl" and feature.counterpart:
         signature = feature.counterpart

@@ -284,6 +284,70 @@ def test_a_task_shader_hands_its_payload_to_dispatch_mesh(language):
     )
 
 
+def trace_ray(language):
+    """TraceRay as the HLSL list declares it, or as the Slang list does with its generic payload read as ``int``."""
+    hlsl = language == "hlsl"
+    acceleration = Type(
+        "", (), "acceleration_struct" if hlsl else "RaytracingAccelerationStructure"
+    )
+    ray = Type("", (), "ray_desc" if hlsl else "RayDesc")
+    payload = Type("", (), "udt") if hlsl else Type("int")
+    params = (acceleration, *[UINT] * 5, ray, Param(payload, "inout"))
+    signature = Signature(
+        VOID, tuple(p if isinstance(p, Param) else Param(p) for p in params)
+    )
+    return Feature(
+        language,
+        "function",
+        "TraceRay",
+        signature,
+        crossgl="TraceRay",
+        stage="closest-hit",
+    )
+
+
+@pytest.mark.parametrize(
+    ("language", "acceleration", "origin"),
+    [
+        (
+            "hlsl",
+            "RaytracingAccelerationStructure u0 : register(t8);",
+            "float3(fin[i + 0u], fin[i + 1u], fin[i + 2u])",
+        ),
+        (
+            "slang",
+            "RaytracingAccelerationStructure u0 : register(t8);",
+            "float3(fin[i + 0u], fin[i + 1u], fin[i + 2u])",
+        ),
+        (
+            "crossgl",
+            "uniform accelerationStructureEXT u0;",
+            "vec3(fin[i + 0u], fin[i + 1u], fin[i + 2u])",
+        ),
+    ],
+)
+def test_a_hit_shader_traces_a_ray_with_its_payload(language, acceleration, origin):
+    native = "slang" if language == "slang" else "hlsl"
+    source = probes.build(trace_ray(native), language).source
+    assert acceleration in source
+    assert "RayDesc a6;" in source
+    assert f"a6.Origin = {origin};" in source
+    assert "a6.TMax = 1.0;" in source
+    assert "TraceRay(u0, a1, a2, a3, a4, a5, a6, payload);" in source
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang"])
+def test_trace_ray_probes_are_valid(language):
+    if not validators.available(language):
+        pytest.skip(f"no {language} validator")
+    for baseline in (False, True):
+        probe = probes.build(trace_ray(language), language, baseline=baseline)
+        verdict = validators.validate(
+            language, probe.source, "closest-hit", probe.entry
+        )
+        assert verdict.accepted, verdict.log
+
+
 def test_stages_without_a_function_probe_say_so():
     for stage in STAGE_FUNCTIONS:
         with pytest.raises(probes.ProbeError, match=f"no {stage}-stage probe for glsl"):

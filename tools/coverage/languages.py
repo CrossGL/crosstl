@@ -108,6 +108,9 @@ class HLSL(Dialect):
     def resource(self, spelling: str, name: str, register: str) -> str:
         return f"{spelling} {name} : register({register});"
 
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        return self.resource(spelling, name, f"t{binding}")
+
     def flat(self, kind: str) -> str:
         return f"nointerpolation {kind}"
 

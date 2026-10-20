@@ -123,12 +123,29 @@ _WGSL_UNIFORMS = {
     "texture_multisampled_2d<T>": Uniform("texture_multisampled_2d<f32>"),
     "texture_storage_2d<F, W>": Uniform("texture_storage_2d<rgba32float, write>"),
 }
+
+
+def _acceleration_structure(spelling: str) -> dict[str, Uniform]:
+    """A ray-tracing acceleration structure of type ``spelling``, under the names the HLSL and Slang lists give it."""
+    return {
+        name: Uniform(spelling)
+        for name in ("acceleration_struct", "RaytracingAccelerationStructure")
+    }
+
+
 # The opaque parameter types a function probe can pass, by language and as each feature list spells them. Probes use
 # the 2D forms; functions that only take the others stay untested. CrossGL calls texture functions as GLSL does.
 UNIFORMS: dict[str, dict[str, Uniform]] = {
     "glsl": _GLSL_UNIFORMS,
     # The CrossGL counterparts of WGSL's depth and array textures (:data:`.crossgl.COUNTERPARTS`) take two more.
-    "crossgl": {**_GLSL_UNIFORMS, **_same("sampler2DShadow", "sampler2DArray")},
+    # CrossGL spells an acceleration structure as every generator reads it.
+    "crossgl": {
+        **_GLSL_UNIFORMS,
+        **_same("sampler2DShadow", "sampler2DArray"),
+        **_acceleration_structure("accelerationStructureEXT"),
+    },
+    "hlsl": _acceleration_structure("RaytracingAccelerationStructure"),
+    "slang": _acceleration_structure("RaytracingAccelerationStructure"),
     "wgsl": _WGSL_UNIFORMS,
 }
 # Uniforms bind past the probe's buffers.
