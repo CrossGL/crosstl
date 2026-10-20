@@ -8074,9 +8074,15 @@ def test_glsl_std450_struct_extinst_codegen_reparse():
     assert "struct FrexpResult" in generated_code
     assert "float significand;" in generated_code
     assert "int exponent;" in generated_code
+    assert "float modf_parts_fract = modf(inputValue, modf_parts_whole);" in (
+        generated_code
+    )
     assert (
-        "outputValue = (modf(inputValue).fractional + frexp(inputValue).significand);"
+        "float frexp_parts_significand = frexp(inputValue, frexp_parts_exponent);"
         in generated_code
+    )
+    assert "outputValue = (modf_parts_fract + frexp_parts_significand);" in (
+        generated_code
     )
     assert "spirv_GLSL_std_450_ModfStruct" not in generated_code
     assert "spirv_GLSL_std_450_instruction_52" not in generated_code

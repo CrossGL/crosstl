@@ -27,6 +27,7 @@ __all__ = [
     "emit_glsl_exponent_helpers",
     "emit_metal_exponent_helpers",
     "glsl_exponent_call",
+    "hlsl_exponent_call",
     "metal_exponent_call",
 ]
 
@@ -181,6 +182,22 @@ def glsl_exponent_call(codegen, name, args):
     )
     x, part = (codegen.generate_expression(arg) for arg in args)
     return f"{helper}({x}, {part})"
+
+
+def hlsl_exponent_call(codegen, name, args):
+    """A refusal for a ``frexp``, ``modf`` or ``ldexp`` call HLSL cannot take, or ``None`` to emit it natively.
+
+    HLSL's intrinsics take exactly two operands and convert the output operand as any ``out`` argument does, so
+    only the operand count needs checking. A SPIR-V ``ModfStruct`` or ``FrexpStruct`` result used as a whole struct
+    imports as the one-operand call, which has no HLSL spelling.
+    """
+    if name not in EXPONENT_FUNCTIONS or name in getattr(
+        codegen, "function_return_types", {}
+    ):
+        return None
+    if len(args or ()) != 2:
+        return _refuse(codegen, name, "it takes a value and a second operand")
+    return None
 
 
 def metal_exponent_call(codegen, name, args):
