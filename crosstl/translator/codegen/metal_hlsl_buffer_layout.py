@@ -169,7 +169,8 @@ class MetalHlslBufferLayouts:
             )
 
         metal_type = str(resolved)
-        metal_type = METAL_SCALAR_ALIASES.get(metal_type, metal_type)
+        if metal_type in METAL_SCALAR_ALIASES:
+            return scalar_type(METAL_SCALAR_ALIASES[metal_type])
         scalar_match = re.fullmatch(
             r"(bool|int|uint|float|double|long|ulong)([234])?", metal_type
         )
