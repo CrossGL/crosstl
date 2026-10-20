@@ -435,8 +435,8 @@ python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_st
 
 ### Full-Entry Attention Execution
 
-`tests/kernels/test_current_attention.py` translates eight unchanged `wm4_wn1`
-entries of `steel_attention.metal` at commit
+`tests/kernels/test_current_attention.py` translates twelve configurations of
+unchanged `wm4_wn1` entries of `steel_attention.metal` at commit
 `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. The float32 float-mask entries cover
 head dimensions 64, 80 and 128
 (`steel_attention_float32_bq32_bk32_bd64_bv64_wm4_wn1_maskfloat32`, its `bd80`
@@ -444,8 +444,13 @@ counterpart and `steel_attention_float32_bq32_bk16_bd128_bv128_wm4_wn1_maskfloat
 The float16 and bfloat16 float-mask entries cover head dimension 64. The
 boolean-mask (`maskbool_`) entries cover float32 at 64, float16 at 128 and
 bfloat16 at 80. Each is dispatched through the native Metal, DirectX or OpenGL
-loader. The six function constants are frozen to the aligned, masked
-configuration. `AttnParams` and `AttnMaskParams` are filled as
+loader. These eight freeze the six function constants to the aligned, masked
+configuration. Four more freeze other sets the host selects: unaligned
+sequences with attention sinks (float32 float mask at 64, float16 boolean mask
+at 128), an unaligned causal mask with the logsumexp (float32 at 80) and an
+aligned causal mask with sinks and the logsumexp (bfloat16 at 64). The host
+returns the logsumexp only without an array mask. `AttnParams` and
+`AttnMaskParams` are filled as
 `scaled_dot_product_attention.cpp` fills them, and the grid is the upstream
 `(NQ, H, B)` grid of `(32, 4, 1)` threadgroups.
 
@@ -457,13 +462,19 @@ element type, and buffers use the storage each backend reflects: the element
 type on Metal, 16-bit words on DirectX, float32 on OpenGL, and 32-bit words
 for DirectX and OpenGL booleans. A boolean mask keeps three quarters of the
 keys; every third query row drops its whole first key block, which the online
-softmax must then discard.
+softmax must then discard. Unaligned entries run a 50-row query over 77 keys
+with a per-head mask, and a single partial 21-row query block over 70 keys in
+the second layout, so both the partial query block and the partial key block
+are exercised. A causal row keeps the keys up to its own position plus
+`qL_off`, and a sink adds one logit per query head without a value.
 
 With `WN == 1` the kernel accumulates in float32, so each case must match a
 float64 evaluation of `softmax(scale * Q K^T + mask) V` to within
 `1e-5 * (1 + |reference|)`. A float16 or bfloat16 output must also be a value
-that its final store can round that interval to. Every case must leave four
-output guards and the unused `lse` buffer unchanged. On Metal, the original MLX
+that its final store can round that interval to. A saved logsumexp is float32
+and must meet the same tolerance. Every case must leave four output guards
+unchanged, as well as the four `lse` guards or the unused `lse` buffer. On
+Metal, the original MLX
 kernel, compiled with the same constants, must meet the same reference. The
 CI step runs the entries in parallel `loadgroup` groups, one translation each.
 
@@ -471,8 +482,10 @@ The threadgroup Q, K and V views need no access assertions: OpenGL proves
 their offsets from the loaders and from `BaseMMAFrag::get_coord`, and the view
 identity selects the tile each accessor reads. OpenGL asserts that device
 offsets, including the boolean mask's, stay below 2^31 elements, as the GEMM
-gate does. This does not cover the causal, sink or `lse` variants, the other
-head dimensions, the `wm4_wn2` entries or the upstream suite.
+gate does. DirectX and OpenGL accept the causal bound because their software
+subgroup proofs follow the block limit's writes outside loops, including the
+locals declared in the causal branch. This does not cover the other head
+dimensions, the `wm4_wn2` entries or the upstream suite.
 
 ### Resource-Index Controls
 

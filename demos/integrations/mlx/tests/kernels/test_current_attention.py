@@ -6,17 +6,21 @@ simdgroup matrix fragments and an online base-2 softmax. The gate covers the
 float32 float-mask entries for head dimensions 64, 80 and 128, the float16 and
 bfloat16 float-mask entries for head dimension 64, and boolean-mask entries for
 all three element types. These are block shapes ``scaled_dot_product_attention.cpp``
-selects. The gate freezes the aligned, masked constants that host code selects
-for sequence lengths that are multiples of the blocks, fills ``AttnParams`` and
-``AttnMaskParams`` as it does, and dispatches the upstream ``(NQ, H, B)`` grid
-of ``(32, 4, 1)`` threadgroups.
+selects. Those eight entries freeze the aligned, masked constants that host
+code selects for sequence lengths that are multiples of the blocks. Four more
+freeze the other sets the host selects: unaligned sequences with attention
+sinks under float and boolean masks, and causal masks, unaligned with the
+logsumexp and aligned with sinks and the logsumexp. The gate fills
+``AttnParams`` and ``AttnMaskParams`` as the host does, and dispatches the
+upstream ``(NQ, H, B)`` grid of ``(32, 4, 1)`` threadgroups.
 
 With ``WN == 1`` the kernel widens its tiles to float32 and accumulates in
 float32, so every case must match a float64 evaluation of the definition on the
 decoded inputs to within ``1e-5 * (1 + |reference|)``, the tolerance of the
 other attention gates. float16 and bfloat16 outputs must also be one of the
-values that their final store can round that interval to. Every case must leave
-the output guards and the unused ``lse`` buffer unchanged. On Metal the original
+values that their final store can round that interval to. A saved logsumexp is
+float32 and must meet the same tolerance. Every case must leave the output
+guards, and the ``lse`` buffer when it is unused, unchanged. On Metal the original
 MLX source, compiled and dispatched with the same constants and buffers, must
 meet the same reference.
 """
@@ -120,21 +124,60 @@ BINDINGS = ("Q", "K", "V", "O", "params", "mask_params", "mask", "sinks", "lse")
 
 @dataclass(frozen=True)
 class Variant:
-    """One instantiated entry: element type, block shape and mask type."""
+    """One instantiated entry and the function constants it is frozen with.
+
+    ``aligned`` sets ``align_Q`` and ``align_K``, which the host derives from
+    the sequence lengths, so it also selects the cases. A causal mask is the
+    host's ``mask="causal"``, which is not an array mask, and the host returns
+    the logsumexp only without an array mask.
+    """
 
     dtype: str
     bq: int
     bk: int
     head_dim: int
     boolean_mask: bool = False
+    aligned: bool = True
+    has_mask: bool = True
+    causal: bool = False
+    sinks: bool = False
+    lse: bool = False
+
+    def __post_init__(self):
+        assert self.has_mask or not self.boolean_mask
+        assert not (self.causal and self.has_mask)
+        assert not (self.lse and self.has_mask)
 
     @property
     def mask_dtype(self):
         return "bool" if self.boolean_mask else self.dtype
 
     @property
+    def specializations(self):
+        return {
+            "align_Q": self.aligned,
+            "align_K": self.aligned,
+            "has_mask": self.has_mask,
+            "do_causal": self.causal,
+            "has_sinks": self.sinks,
+            "save_lse": self.lse,
+        }
+
+    @property
+    def cases(self):
+        return CASES if self.aligned else UNALIGNED_CASES
+
+    @property
     def name(self):
-        return f"{self.dtype}-bd{self.head_dim}-mask{self.mask_dtype}"
+        flags = (
+            ("unaligned", not self.aligned),
+            ("unmasked", not self.has_mask),
+            ("causal", self.causal),
+            ("sinks", self.sinks),
+            ("lse", self.lse),
+        )
+        suffix = "".join(f"-{flag}" for flag, chosen in flags if chosen)
+        return f"{self.dtype}-bd{self.head_dim}-mask{self.mask_dtype}{suffix}"
 
     @property
     def entry(self):
@@ -159,6 +202,14 @@ VARIANTS = (
     Variant("float32", 32, 32, 64, boolean_mask=True),
     Variant("float16", 32, 16, 128, boolean_mask=True),
     Variant("bfloat16", 32, 32, 80, boolean_mask=True),
+    # Other function-constant sets the host selects: unaligned sequences with
+    # attention sinks, and causal masks with and without the logsumexp.
+    Variant("float32", 32, 32, 64, aligned=False, sinks=True),
+    Variant("float16", 32, 16, 128, boolean_mask=True, aligned=False, sinks=True),
+    Variant(
+        "float32", 32, 32, 80, aligned=False, has_mask=False, causal=True, lse=True
+    ),
+    Variant("bfloat16", 32, 32, 64, has_mask=False, causal=True, sinks=True, lse=True),
 )
 
 
@@ -192,6 +243,12 @@ CASES = (
     # broadcast over heads with a zero head stride.
     Case(2, 4, 2, 32, 96, True, False, 11),
 )
+# Partial last query and key blocks for both key block sizes. The second case
+# has a single, partial query block, so its first block is also its last.
+UNALIGNED_CASES = (
+    Case(1, 2, 2, 50, 77, False, True, 13),
+    Case(2, 4, 2, 21, 70, True, False, 17),
+)
 
 
 def _opengl_index_assertions(variant, source=SOURCE):
@@ -200,12 +257,15 @@ def _opengl_index_assertions(variant, source=SOURCE):
     The kernel offsets Q, K, V, O and the mask by ``int64_t`` strides from
     ``AttnParams``; MLX buffers stay below 2^31 elements. The threadgroup tiles
     need no assertion: their view offsets are proven from the loaders and the
-    fragment coordinates. A boolean mask is read through its own accessor.
+    fragment coordinates. A boolean mask is read through its own accessor, and
+    a narrow entry stores its float32 logsumexp through the float accessor.
     """
     element = HELPER_ELEMENTS[variant.dtype]
     accesses = [f"load_{element}", f"store_{element}"]
     if variant.boolean_mask:
         accesses.append("load_bool")
+    if variant.lse and element != "float":
+        accesses.append("store_float")
     return tuple(
         {
             "source": source,
@@ -228,7 +288,7 @@ def _config(root, output, target="metal", variant=VARIANTS[0]):
         targets=(target,),
         output_dir=output,
         entry_points={SOURCE: (variant.entry,)},
-        specialization_constants=dict(SPECIALIZATIONS),
+        specialization_constants=variant.specializations,
         freeze_specialization_constants=True,
         workgroup_size_rules={SOURCE: WORKGROUP},
         index_range_assertions=(
@@ -267,7 +327,7 @@ def test_attention_target_contract_is_explicit(tmp_path, target, variant):
     assert config.entry_points == {SOURCE: (variant.entry,)}
     assert config.workgroup_size_rules == {SOURCE: ("32", "4", "1")}
     assert config.freeze_specialization_constants is True
-    assert config.specialization_constants == SPECIALIZATIONS
+    assert config.specialization_constants == variant.specializations
     assert not config.workgroup_access_assertions
     ranges = [item.to_json() for item in config.index_range_assertions]
     if target != "opengl":
@@ -279,6 +339,11 @@ def test_attention_target_contract_is_explicit(tmp_path, target, variant):
         f"crosstl_resource_load_{element}",
         f"crosstl_resource_store_{element}",
         *(("crosstl_resource_load_bool",) if variant.boolean_mask else ()),
+        *(
+            ("crosstl_resource_store_float",)
+            if variant.lse and variant.dtype != "float32"
+            else ()
+        ),
     }
     assert all(
         item["minimum"] == 0 and item["maximum"] == SIGNED_MAX for item in ranges
@@ -288,20 +353,33 @@ def test_attention_target_contract_is_explicit(tmp_path, target, variant):
 def test_attention_variants_span_types_shapes_and_masks():
     """Each element type and each mask type meets several block shapes.
 
-    Translating an entry proves that it is instantiated upstream.
+    Translating an entry proves that it is instantiated upstream. Every other
+    function constant is set by at least one entry and cleared by another.
     """
     shapes = {(32, 32, 64), (32, 32, 80), (32, 16, 128)}
-    assert len({variant.entry for variant in VARIANTS}) == len(VARIANTS)
+    assert len({variant.name for variant in VARIANTS}) == len(VARIANTS)
+    assert Variant("float32", 32, 32, 64).specializations == SPECIALIZATIONS
+    default = [v for v in VARIANTS if v.specializations == SPECIALIZATIONS]
+    assert len({variant.entry for variant in default}) == len(default) == 8
     assert {variant.dtype for variant in VARIANTS} == set(SIGNIFICAND_BITS) | {
         "float32"
     }
     for boolean in (False, True):
-        chosen = [v for v in VARIANTS if v.boolean_mask is boolean]
+        chosen = [v for v in default if v.boolean_mask is boolean]
         assert {v.dtype for v in chosen} == {"float32", "float16", "bfloat16"}
-    assert {
-        (v.bq, v.bk, v.head_dim) for v in VARIANTS if v.dtype == "float32"
-    } == shapes
-    assert {(v.bq, v.bk, v.head_dim) for v in VARIANTS if v.boolean_mask} == shapes
+    assert {(v.bq, v.bk, v.head_dim) for v in default if v.dtype == "float32"} == shapes
+    assert {(v.bq, v.bk, v.head_dim) for v in default if v.boolean_mask} == shapes
+    for name in CONSTANT_IDS:
+        values = {variant.specializations[name] for variant in VARIANTS}
+        assert values == {False, True}, name
+    # Each other set covers a narrow element type, and the causal sets both
+    # alignments.
+    others = [v for v in VARIANTS if v not in default]
+    assert {v.dtype for v in others} == {"float32", "float16", "bfloat16"}
+    assert {v.aligned for v in others if v.causal} == {False, True}
+    assert any(v.boolean_mask and v.sinks for v in others)
+    # Every entry runs two cases of its alignment.
+    assert len(CASES) == len(UNALIGNED_CASES) == 2
 
 
 def _strides(shape):
@@ -341,11 +419,16 @@ def _case_data(case, variant):
     evaluates the definition on the values the kernel decodes. A boolean mask
     keeps three quarters of the keys; every third query row also drops its
     whole first key block, which the online softmax must then discard, and
-    every row keeps its last key so that the softmax is defined.
+    every row keeps its last key so that the softmax is defined. A causal row
+    ``i`` keeps the keys ``j <= i + qL_off``. A sink adds one logit per query
+    head to every row's softmax without a value. The logsumexp is the natural
+    logarithm of each row's softmax denominator, the sink included.
     """
     bq, bk = variant.bq, variant.bk
-    assert case.query_length % bq == 0 and case.key_length % bk == 0
+    assert (case.query_length % bq == 0) is variant.aligned
+    assert (case.key_length % bk == 0) is variant.aligned
     assert case.key_length >= 2 * bk
+    assert case.key_length >= case.query_length
     assert case.heads % case.kv_heads == 0
     rng = np.random.default_rng(case.seed)
     b, h, kv, ql, kl, d = (
@@ -361,7 +444,10 @@ def _case_data(case, variant):
     k = _quantized(dtype, rng.uniform(-1, 1, (b, kv, kl, d)))
     v = _quantized(dtype, rng.uniform(-1, 1, (b, kv, kl, d)))
     mask_heads = h if case.mask_per_head else 1
-    if variant.boolean_mask:
+    if not variant.has_mask:
+        mask = np.zeros(1, dtype=np.float32)
+        additive = np.zeros((1, 1, ql, kl))
+    elif variant.boolean_mask:
         mask = rng.random((b, mask_heads, ql, kl)) < 0.75
         mask[:, :, ::3, :bk] = False
         mask[..., -1] = True
@@ -369,15 +455,27 @@ def _case_data(case, variant):
     else:
         mask = _quantized(dtype, rng.uniform(-2, 0, (b, mask_heads, ql, kl)))
         additive = mask.astype(np.float64)
+    if variant.causal:
+        rows = np.arange(ql)[:, None] + (kl - ql)
+        additive = np.where(rows >= np.arange(kl)[None, :], additive, -np.inf)
+    sinks = _quantized(dtype, rng.uniform(-1, 2, h)) if variant.sinks else None
     scale = np.float32(1.0 / math.sqrt(d))
     group = h // kv
     keys = np.repeat(k.astype(np.float64), group, axis=1)
     values = np.repeat(v.astype(np.float64), group, axis=1)
     scores = np.einsum("bhqd,bhkd->bhqk", q.astype(np.float64), keys)
     scores = scores * np.float64(scale) + additive
-    weights = np.exp(scores - scores.max(axis=-1, keepdims=True))
-    weights /= weights.sum(axis=-1, keepdims=True)
+    peak = scores.max(axis=-1)
+    if sinks is not None:
+        sink = np.broadcast_to(sinks.astype(np.float64)[None, :, None], peak.shape)
+        peak = np.maximum(peak, sink)
+    weights = np.exp(scores - peak[..., None])
+    denominator = weights.sum(axis=-1)
+    if sinks is not None:
+        denominator = denominator + np.exp(sink - peak)
     reference = np.einsum("bhqk,bhkd->bhqd", weights, values)
+    reference /= denominator[..., None]
+    lse = peak + np.log(denominator)
     if case.sequence_major:
         q_storage = np.ascontiguousarray(q.transpose(0, 2, 1, 3))
         reference = reference.transpose(0, 2, 1, 3)
@@ -386,9 +484,12 @@ def _case_data(case, variant):
         q_storage = q
         q_strides = _strides([b, h, ql, d])[:3]
     kv_strides = _strides([b, kv, kl, d])[:3]
-    mask_strides = _strides([b, mask_heads, ql, kl])[:3]
-    if not case.mask_per_head:
-        mask_strides[1] = 0
+    if variant.has_mask:
+        mask_strides = _strides([b, mask_heads, ql, kl])[:3]
+        if not case.mask_per_head:
+            mask_strides[1] = 0
+    else:
+        mask_strides = [0, 0, 0]
     params = dict(
         B=b,
         H=h,
@@ -397,12 +498,12 @@ def _case_data(case, variant):
         kL=kl,
         gqa_factor=group,
         scale=float(scale),
-        NQ=ql // bq,
-        NK=kl // bk,
+        NQ=-(-ql // bq),
+        NK=-(-kl // bk),
         NQ_aligned=ql // bq,
         NK_aligned=kl // bk,
-        qL_rem=0,
-        kL_rem=0,
+        qL_rem=ql % bq,
+        kL_rem=kl % bk,
         qL_off=kl - ql,
         Q_strides=q_strides,
         K_strides=kv_strides,
@@ -414,37 +515,65 @@ def _case_data(case, variant):
         "K": k.ravel(),
         "V": v.ravel(),
         "mask": mask.ravel(),
+        "sinks": sinks,
     }
     geometry = {
-        "workgroupCount": [ql // bq, h, b],
+        "workgroupCount": [params["NQ"], h, b],
         "workgroupSize": list(WORKGROUP),
     }
-    return resources, params, {"M_strides": mask_strides}, reference.ravel(), geometry
-
-
-@pytest.mark.parametrize("variant", VARIANTS, ids=lambda variant: variant.name)
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
-def test_attention_reference_follows_the_definition(case, variant):
-    resources, params, mask_params, reference, geometry = _case_data(case, variant)
-    head_dim = variant.head_dim
-    assert reference.shape == (
-        case.batches * case.heads * case.query_length * head_dim,
+    return (
+        resources,
+        params,
+        {"M_strides": mask_strides},
+        reference.ravel(),
+        lse.ravel() if variant.lse else None,
+        geometry,
     )
-    # Weighted averages of values in [-1, 1] stay in [-1, 1].
+
+
+def _pairs():
+    return [
+        pytest.param(case, variant, id=f"{case.name}-{variant.name}")
+        for variant in VARIANTS
+        for case in variant.cases
+    ]
+
+
+@pytest.mark.parametrize(("case", "variant"), _pairs())
+def test_attention_reference_follows_the_definition(case, variant):
+    resources, params, mask_params, reference, lse, geometry = _case_data(case, variant)
+    head_dim = variant.head_dim
+    rows = case.batches * case.heads * case.query_length
+    assert reference.shape == (rows * head_dim,)
+    # Weighted averages of values in [-1, 1] stay in [-1, 1]; a sink only
+    # moves weight to a zero value.
     assert np.all(np.abs(reference) <= 1.0)
     assert params["qL_off"] == case.key_length - case.query_length
     assert params["gqa_factor"] * case.kv_heads == case.heads
-    assert geometry["workgroupCount"][0] * variant.bq == case.query_length
-    assert params["NK"] * variant.bk == case.key_length
+    for length, block, count, aligned, remainder in (
+        ("qL", variant.bq, "NQ", "NQ_aligned", "qL_rem"),
+        ("kL", variant.bk, "NK", "NK_aligned", "kL_rem"),
+    ):
+        assert params[aligned] * block + params[remainder] == params[length]
+        assert params[count] == params[aligned] + (params[remainder] > 0)
+        assert (params[remainder] == 0) is variant.aligned
+    assert geometry["workgroupCount"] == [params["NQ"], case.heads, case.batches]
     assert params["D"] == head_dim
-    assert (mask_params["M_strides"][1] == 0) is (not case.mask_per_head)
+    if variant.has_mask:
+        assert (mask_params["M_strides"][1] == 0) is (not case.mask_per_head)
+    else:
+        assert mask_params["M_strides"] == [0, 0, 0]
     if case.sequence_major:
         assert params["Q_strides"][1] == head_dim
         assert params["Q_strides"][2] == case.heads * head_dim
-    for name in ("Q", "K", "V") + (() if variant.boolean_mask else ("mask",)):
+    narrow = ["Q", "K", "V"]
+    narrow += ["mask"] if variant.has_mask and not variant.boolean_mask else []
+    narrow += ["sinks"] if variant.sinks else []
+    for name in narrow:
         values = resources[name]
         assert values.dtype == np.float32
         assert np.array_equal(_quantized(variant.dtype, values), values), name
+    assert (resources["sinks"] is None) is (not variant.sinks)
     if variant.boolean_mask:
         mask = resources["mask"].reshape(
             case.batches, -1, case.query_length, case.key_length
@@ -454,6 +583,26 @@ def test_attention_reference_follows_the_definition(case, variant):
         assert not mask[:, :, ::3, : variant.bk].any()
         assert mask[:, :, 1::3, : variant.bk].any()
         assert 0.6 < mask.mean() < 0.8
+    assert (lse is None) is (not variant.lse)
+    if variant.lse:
+        assert lse.shape == (rows,) and np.all(np.isfinite(lse))
+
+
+def test_attention_reference_masks_causal_rows_and_counts_sinks():
+    """The causal reference ignores later keys, and a sink lowers every weight."""
+    variant = next(v for v in VARIANTS if v.causal and v.sinks)
+    case = variant.cases[0]
+    _, _, _, reference, lse, _ = _case_data(case, variant)
+    plain = replace(variant, causal=False, sinks=False, lse=False, has_mask=False)
+    unmasked = _case_data(case, plain)[3]
+    assert not np.allclose(reference, unmasked)
+    # The last query row sees every key, so only the sink changes it.
+    d, ql = variant.head_dim, case.query_length
+    shape = (case.batches, case.heads, ql, d)
+    last = reference.reshape(shape)[:, :, -1]
+    plain_last = unmasked.reshape(shape)[:, :, -1]
+    assert np.all(np.abs(last) <= np.abs(plain_last) + 1e-12)
+    assert lse is not None and lse.shape == (case.batches * case.heads * ql,)
 
 
 @pytest.mark.parametrize("dtype", sorted(SIGNIFICAND_BITS))
@@ -512,21 +661,29 @@ def _stored_mask(binding, target, values):
 
 
 def _dispatch_values(bindings, case, variant, target):
-    resources, params, mask_params, reference, geometry = _case_data(case, variant)
+    resources, params, mask_params, reference, lse, geometry = _case_data(case, variant)
     dtype, guard = variant.dtype, GUARD[variant.dtype]
+    wide = GUARD["float32"]
     values = {
         name: _stored(bindings[name], dtype, resources[name])
         for name in ("Q", "K", "V")
     }
+    # Buffers a cleared constant leaves unused hold guards.
+    sinks = resources["sinks"] if variant.sinks else [guard]
+    lse_initial = [wide] * (len(lse) + GUARDS) if variant.lse else [wide]
     values.update(
         O=_stored(bindings["O"], dtype, [guard] * (len(reference) + GUARDS)),
         mask=(
             _stored_mask(bindings["mask"], target, resources["mask"])
             if variant.boolean_mask
-            else _stored(bindings["mask"], dtype, resources["mask"])
+            else _stored(
+                bindings["mask"],
+                dtype,
+                resources["mask"] if variant.has_mask else [guard],
+            )
         ),
-        sinks=_stored(bindings["sinks"], dtype, [guard]),
-        lse=_stored(bindings["lse"], "float32", [GUARD["float32"]]),
+        sinks=_stored(bindings["sinks"], dtype, sinks),
+        lse=_stored(bindings["lse"], "float32", lse_initial),
         params=_record(bindings["params"], params),
         mask_params=_record(bindings["mask_params"], mask_params),
     )
@@ -541,33 +698,48 @@ def _dispatch_values(bindings, case, variant, target):
             ]
             + [guard] * GUARDS,
         ),
-        bindings["lse"]["name"]: values["lse"],
+        bindings["lse"]["name"]: (
+            _stored(bindings["lse"], "float32", list(lse) + [wide] * GUARDS)
+            if variant.lse
+            else values["lse"]
+        ),
     }
-    return inputs, outputs, geometry, reference
+    return inputs, outputs, geometry, reference, lse
 
 
-def _check(label, actual, outputs, reference, bindings, dtype):
-    """Compare the decoded output with the float64 reference.
+def _check(label, actual, outputs, reference, lse, bindings, dtype):
+    """Compare the decoded outputs with the float64 references.
 
     float32 results must lie within ``TOLERANCE * (1 + |reference|)``. A narrow
     result must be a value that the store can round that interval to, the
-    interval's rounded end points included.
+    interval's rounded end points included. The logsumexp is float32 for every
+    element type.
     """
-    name, lse = bindings["O"]["name"], bindings["lse"]["name"]
+    name, lse_name = bindings["O"]["name"], bindings["lse"]["name"]
     # DirectX may report 16-bit floating storage by its uint16 word type.
     physical = bindings["O"]["scalarLayout"]["elementType"]
     assert actual[name]["dtype"] in {outputs[name]["dtype"], physical}, label
     output = np.asarray(_decode(dtype, actual[name]), dtype=np.float64)
     assert output.shape == (len(reference) + GUARDS,), label
     assert output[-GUARDS:].tolist() == [GUARD[dtype]] * GUARDS, label
-    assert _decode("float32", actual[lse]) == [GUARD["float32"]], label
+    saved = np.asarray(_decode("float32", actual[lse_name]), dtype=np.float64)
+    result = {}
+    if lse is None:
+        assert saved.tolist() == [GUARD["float32"]], label
+    else:
+        assert saved.shape == (len(lse) + GUARDS,), label
+        assert saved[-GUARDS:].tolist() == [GUARD["float32"]] * GUARDS, label
+        np.testing.assert_allclose(
+            saved[:-GUARDS], lse, rtol=TOLERANCE, atol=TOLERANCE, err_msg=label
+        )
+        result["lseMaxAbsError"] = float(np.max(np.abs(saved[:-GUARDS] - lse)))
     output = output[:-GUARDS]
-    error = float(np.max(np.abs(output - reference)))
+    result["maxAbsError"] = float(np.max(np.abs(output - reference)))
     if dtype == "float32":
         np.testing.assert_allclose(
             output, reference, rtol=TOLERANCE, atol=TOLERANCE, err_msg=label
         )
-        return {"maxAbsError": error}
+        return result
     bad = []
     for index, (got, want) in enumerate(zip(output.tolist(), reference.tolist())):
         bound = TOLERANCE * (1 + abs(want))
@@ -576,10 +748,8 @@ def _check(label, actual, outputs, reference, bindings, dtype):
             bad.append((index, got, want, low, high))
     assert not bad, (label, len(bad), bad[:8])
     exact = [_round(dtype, want) for want in reference.tolist()]
-    return {
-        "maxAbsError": error,
-        "correctlyRoundedFraction": float(np.mean(output == np.asarray(exact))),
-    }
+    result["correctlyRoundedFraction"] = float(np.mean(output == np.asarray(exact)))
+    return result
 
 
 def _write_json(path, payload):
@@ -666,7 +836,8 @@ def translated_attention(attention_source, tmp_path_factory, request):
     constants = descriptor["specializationConstants"]
     assert {item["name"]: item["id"] for item in constants} == CONSTANT_IDS
     assert all(
-        item["frozen"] is True and item["value"] is SPECIALIZATIONS[item["name"]]
+        item["frozen"] is True
+        and item["value"] is variant.specializations[item["name"]]
         for item in constants
     )
     bindings = {
@@ -689,7 +860,8 @@ def translated_attention(attention_source, tmp_path_factory, request):
     return variant, descriptor, package, bindings
 
 
-def _dispatch_original(executor, state, native, source, module, entry):
+def _dispatch_original(executor, state, native, source, module, variant):
+    specializations = variant.specializations
     constants = {
         name: NativeRuntimeConstantBinding(
             name=name,
@@ -697,10 +869,10 @@ def _dispatch_original(executor, state, native, source, module, entry):
                 name=name,
                 constant_id=identifier,
                 dtype="bool",
-                value=SPECIALIZATIONS[name],
+                value=specializations[name],
                 kind="function-constant",
             ),
-            value=SPECIALIZATIONS[name],
+            value=specializations[name],
             source="original-source-specialization",
         )
         for name, identifier in CONSTANT_IDS.items()
@@ -709,7 +881,7 @@ def _dispatch_original(executor, state, native, source, module, entry):
         native,
         artifact_path=source,
         module_path=module,
-        entry_point=entry,
+        entry_point=variant.entry,
         loaded_artifact=None,
         constants=constants,
     )
@@ -720,13 +892,14 @@ def _dispatch_original(executor, state, native, source, module, entry):
     return actual
 
 
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
+@pytest.mark.parametrize("case_index", (0, 1), ids=("case0", "case1"))
 def test_current_attention_executes(
-    tmp_path, attention_source, translated_attention, case
+    tmp_path, attention_source, translated_attention, case_index
 ):
     root, original, target = attention_source
     variant, descriptor, package, bindings = translated_attention
-    inputs, outputs, geometry, reference = _dispatch_values(
+    case = variant.cases[case_index]
+    inputs, outputs, geometry, reference, lse = _dispatch_values(
         bindings, case, variant, target
     )
     request = build_native_loader_dispatch_request(
@@ -746,19 +919,20 @@ def test_current_attention_executes(
             "target": target,
             "checkedValues": len(reference),
             "generated": _check(
-                "generated", actual, outputs, reference, bindings, variant.dtype
+                "generated", actual, outputs, reference, lse, bindings, variant.dtype
             ),
             "moduleSha256": hashlib.sha256(native.module_path.read_bytes()).hexdigest(),
         }
         if target == "metal":
             original_outputs = _dispatch_original(
-                executor, state, native, root / SOURCE, original, variant.entry
+                executor, state, native, root / SOURCE, original, variant
             )
             result["originalMetal"] = _check(
                 "original Metal",
                 original_outputs,
                 outputs,
                 reference,
+                lse,
                 bindings,
                 variant.dtype,
             )
@@ -767,7 +941,7 @@ def test_current_attention_executes(
             {
                 "sourceCommit": MLX_COMMIT,
                 "entryPoint": variant.entry,
-                "specializations": SPECIALIZATIONS,
+                "specializations": variant.specializations,
                 "sourceSha256": SOURCE_SHA256,
                 "headerSha256": HEADER_HASHES,
                 "tolerance": {
@@ -777,10 +951,10 @@ def test_current_attention_executes(
                 },
                 "result": result,
                 "scope": (
-                    "Eight aligned wm4_wn1 entries (float32, float16 and "
-                    "bfloat16; float and boolean masks) with frozen constants; "
-                    "not the causal, sink or lse variants, the wn2 entries or "
-                    "the upstream suite."
+                    "Twelve wm4_wn1 entry configurations (float32, float16 and "
+                    "bfloat16; float, boolean and causal masks; aligned and "
+                    "unaligned sequences; sinks and the logsumexp) with frozen "
+                    "constants; not the wn2 entries or the upstream suite."
                 ),
             },
         )
