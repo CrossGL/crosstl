@@ -30,6 +30,7 @@ from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
 from .conditional_types import select_conditional_type
+from .deduction_arguments import deduction_argument_type
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
 from .function_specialization import (
@@ -16557,6 +16558,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 # Internal method-body inference retains the element type for
                 # local arrays. It is still a concrete pointee for validation.
                 indirect_pointee_types.append((declared_type, concrete_value_type))
+            concrete_value_type = deduction_argument_type(
+                self, declared_type, concrete_value_type, structs_by_name
+            )
             self._infer_template_parameter_bindings_from_type(
                 declared_type,
                 concrete_value_type,

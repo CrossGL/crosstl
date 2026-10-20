@@ -2279,7 +2279,24 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             unqualified_struct = resolved_struct.rsplit("::", 1)[-1]
             if unqualified_struct in self.struct_name_map:
                 resolved_struct = unqualified_struct
+            else:
+                resolved_struct = (
+                    self.struct_member_alias_owner(resolved_struct) or resolved_struct
+                )
         return resolved_struct, member_name
+
+    def struct_member_alias_owner(self, qualified_name):
+        # `Tile::Frag_t::kElems` names a static member of the struct that the
+        # member alias `Tile::Frag_t` denotes ([class.qual]); follow the alias
+        # chain from a visible concrete struct, or give up with None.
+        owner, aliases = qualified_name.split("::", 1)
+        if owner not in self.struct_name_map:
+            return None
+        target = self.resolve_concrete_struct_member_aliases(owner, f"::{aliases}")
+        if target is None:
+            return None
+        target = self.normalized_metal_type(self.resolve_type_alias(target))
+        return target if target in self.struct_name_map else None
 
     def static_struct_member_type(self, name):
         owner = self.static_struct_member_owner(name)
@@ -6777,6 +6794,32 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 break
         return values, duplicates, set(pending)
 
+    def sibling_member_alias_target(
+        self, struct_node, local_target, target, binding_context, member_stack
+    ):
+        # `typedef typename Frag_t::frag_type frag_type;` names a member of the
+        # struct that the sibling alias `Frag_t` denotes; follow it when that
+        # struct is concrete and visible, and keep `target` otherwise.
+        head, _separator, rest = local_target.partition("::")
+        if not rest or not re.fullmatch(r"[A-Za-z_]\w*", head):
+            return target
+        scalar_bindings, pack_bindings, signature = binding_context
+        chained = self.struct_member_alias_candidate(
+            struct_node,
+            head,
+            scalar_bindings,
+            pack_bindings,
+            signature,
+            member_stack=member_stack,
+        )
+        if chained is None:
+            return target
+        owner = self.normalized_metal_type(self.resolve_type_alias(chained[0]))
+        if owner not in self.struct_name_map:
+            return target
+        resolved = self.resolve_concrete_struct_member_aliases(owner, f"::{rest}")
+        return target if resolved is None else resolved
+
     def struct_member_alias_candidate(
         self,
         struct_node,
@@ -6835,6 +6878,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 nested_qualifiers = ()
         else:
             nested_qualifiers = ()
+            target = self.sibling_member_alias_target(
+                struct_node,
+                local_target,
+                target,
+                (scalar_bindings, pack_bindings, signature),
+                (*member_stack, member_name),
+            )
 
         target += "".join(
             "[]" if size is None else f"[{self.format_array_extent(size)}]"

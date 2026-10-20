@@ -16402,6 +16402,28 @@ def _metal_concrete_function_definition_fingerprints(
     return fingerprints
 
 
+def _metal_statement_start(source: str, start: int, end: int) -> int:
+    """Return where the statement in ``source[start:end]`` begins.
+
+    A statement span runs from the previous ``;``, so it can begin with the
+    trailing comment of the line before (``int n = 8; // size``).  Comments are
+    not part of the statement ([lex.comment]), so skip them and whitespace.
+    """
+    position = start
+    while position < end:
+        if source[position].isspace():
+            position += 1
+        elif source.startswith("//", position):
+            line_end = source.find("\n", position, end)
+            position = end if line_end == -1 else line_end + 1
+        elif source.startswith("/*", position):
+            comment_end = source.find("*/", position + 2, end)
+            position = end if comment_end == -1 else comment_end + 2
+        else:
+            return position
+    return start
+
+
 def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     statement_start = start
@@ -16432,7 +16454,9 @@ def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int,
             and angle_depth == 0
             and brace_depth == 0
         ):
-            spans.append((statement_start, i + 1))
+            spans.append(
+                (_metal_statement_start(source, statement_start, i + 1), i + 1)
+            )
             statement_start = i + 1
         elif ch == "(":
             paren_depth += 1
@@ -16488,7 +16512,9 @@ def _metal_scoped_statement_spans(
             continue
         ch = source[i]
         if ch == ";" and paren_depth == bracket_depth == 0:
-            spans.append((statement_start, i + 1))
+            spans.append(
+                (_metal_statement_start(source, statement_start, i + 1), i + 1)
+            )
             statement_start = i + 1
         elif ch == "(":
             paren_depth += 1
