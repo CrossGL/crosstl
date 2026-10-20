@@ -361,6 +361,9 @@ TEXEL_OFFSET = feature(
     Type("float"),
     Param(Type("int", (2,)), "const"),
 )
+ATOMIC_COUNTER = feature(
+    "atomicCounterAdd", Type("uint"), Type.other("atomic_uint"), Type("uint")
+)
 
 
 def test_function_probe_declares_the_samplers_and_images_it_passes():
@@ -374,6 +377,17 @@ def test_function_probe_declares_the_samplers_and_images_it_passes():
     assert "uint r = imageAtomicAdd(u0, a1, a2);" in crossgl
 
 
+def test_atomic_counters_use_the_first_atomic_counter_binding():
+    source = probes.build(ATOMIC_COUNTER, "glsl").source
+    assert "layout(binding = 0) uniform atomic_uint u0;" in source
+    assert "uint r = atomicCounterAdd(u0, a1);" in source
+    assert (
+        "        uniform atomic_uint u0;" in probes.build(
+            ATOMIC_COUNTER, "crossgl"
+        ).source
+    )
+
+
 def test_constant_vector_arguments_are_zero_vectors():
     source = probes.build(TEXEL_OFFSET, "glsl").source
     assert "textureLodOffset(u0, a1, a2, ivec2(0, 0))" in source
@@ -383,7 +397,9 @@ def test_constant_vector_arguments_are_zero_vectors():
     not validators.available("glsl"), reason="glslangValidator is not installed"
 )
 @pytest.mark.parametrize(
-    "probe_feature", [TEXTURE_LOD, IMAGE_ATOMIC, TEXEL_OFFSET], ids=lambda f: f.name
+    "probe_feature",
+    [TEXTURE_LOD, IMAGE_ATOMIC, TEXEL_OFFSET, ATOMIC_COUNTER],
+    ids=lambda f: f.name,
 )
 def test_glsl_texture_and_image_probes_are_valid_glsl(probe_feature):
     probe = probes.build(probe_feature, "glsl")

@@ -86,11 +86,13 @@ _REGISTERS = {"t": "t0", "u": "u8"}
 
 @dataclass(frozen=True)
 class Uniform:
-    """A sampler, texture or image a function probe declares at module scope; ``image_format`` is GLSL's format
-    qualifier for an image."""
+    """A sampler, texture, image or atomic counter a function probe declares at module scope; ``image_format`` is
+    GLSL's format qualifier for an image, and ``binding`` a binding the uniform must use.
+    """
 
     spelling: str
     image_format: str = ""
+    binding: int | None = None
 
 
 def _same(*names: str) -> dict[str, Uniform]:
@@ -103,6 +105,9 @@ _GLSL_UNIFORMS = {
     "image2DMS": Uniform("image2DMS", "rgba32f"),
     "iimage2D": Uniform("iimage2D", "r32i"),
     "uimage2D": Uniform("uimage2D", "r32ui"),
+    # Atomic counters bind in a namespace of their own, and glslang's default limits allow only binding 0
+    # (gl_MaxAtomicCounterBindings).
+    "atomic_uint": Uniform("atomic_uint", binding=0),
 }
 # Tint's table writes a texture's texel type as ``T`` where any sampled type will do; a probe samples ``f32``.
 _WGSL_UNIFORMS = {
@@ -140,7 +145,11 @@ class Uniforms:
     def argument(self, kind: Type) -> str:
         uniform = self.table[kind.opaque]
         name = f"u{len(self.declarations)}"
-        binding = _FIRST_UNIFORM + len(self.declarations)
+        binding = (
+            _FIRST_UNIFORM + len(self.declarations)
+            if uniform.binding is None
+            else uniform.binding
+        )
         self.declarations.append(
             self.dialect.uniform(uniform.spelling, name, binding, uniform.image_format)
         )
