@@ -12360,18 +12360,16 @@ def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_gls
     run_validator([glslang, "-S", "frag", str(source)])
 
 
-def test_generated_glsl_fragment_cube_array_shadow_compare_lod_grad_fails_closed():
+def test_generated_glsl_fragment_cube_array_shadow_compare_grad_fails_closed():
+    # GL_EXT_texture_shadow_lod adds textureLod for cube-array shadows; no extension adds textureGrad.
     message = refused_glsl(
         GLSLCodeGen().generate_stage,
         crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
         "fragment",
     )
 
-    assert "OpenGL cannot lower 2 constructs" in message
-    assert (
-        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in message
-    )
+    assert "OpenGL cannot lower 1 construct" in message
+    assert "textureCompareLod" not in message
     assert (
         "texture compare: textureCompareGrad explicit gradients require 2D, "
         "2D-array, or cube shadow samplers" in message

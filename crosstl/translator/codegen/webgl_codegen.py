@@ -67,6 +67,8 @@ class WebGLCodeGen(GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
     GLSL_TARGET_DISPLAY_NAME = "WebGL"
+    # WebGL 2 exposes no GL_EXT_texture_shadow_lod.
+    GLSL_SHADOW_LOD_EXTENSION_SUPPORTED = False
     LOWERING_REFUSAL_TYPE = WebGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError

@@ -318,7 +318,8 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
             "SampleCmpLevel": "textureCompareLod",
             "SampleCmpGrad": "textureCompareGrad",
             "SampleCmpBias": "textureCompare",
-            "SampleCmpLevelZero": "textureCompare",
+            # SampleCmpLevelZero compares at mip level 0, with no implicit derivatives.
+            "SampleCmpLevelZero": "textureCompareLod",
             "Load": "texelFetch",
             "Gather": "textureGather",
             "GatherCmp": "textureGatherCompare",
@@ -866,10 +867,10 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
                 and cube_family_resource
                 and arg_count == 4
             ):
-                texture_function = "textureCompare"
+                texture_function = "textureCompareLod"
                 dropped_parameters.append("status output")
             elif member == "SampleCmpLevelZero" and arg_count in {4, 5}:
-                texture_function = "textureCompareOffset"
+                texture_function = "textureCompareLodOffset"
                 if arg_count == 5:
                     dropped_parameters.append("status output")
             elif member == "Gather" and cube_family_resource and arg_count == 3:
@@ -1089,6 +1090,10 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
         ):
             sampler, coords, bias, clamp = rendered_args[:4]
             method_args = [obj, sampler, coords, clamp, bias]
+        elif member == "SampleCmpLevelZero" and len(rendered_args) >= 3:
+            # The explicit level 0 goes between the reference and the offset (textureCompareLod[Offset]).
+            sampler, coords, compare = rendered_args[:3]
+            method_args = [obj, sampler, coords, compare, "0.0", *rendered_args[3:]]
         elif member == "SampleCmpBias" and descriptor["function"] == "textureCompare":
             sampler, coords, compare = rendered_args[:3]
             method_args = [obj, sampler, coords, compare]

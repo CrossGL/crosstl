@@ -191,6 +191,12 @@ from .generic_struct_utils import (
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_refusals import OpenGLLoweringRefused
+from .glsl_shadow_lod import (
+    SHADOW_LOD_EXTENSION_SAMPLERS,
+    is_zero_lod_literal,
+    require_shadow_lod_extension,
+    zero_lod_compare_gradient_call,
+)
 from .glsl_union_storage import UnionStorage
 from .glsl_version_requirements import (
     VARIABLE_GATHER_OFFSET,
@@ -8361,6 +8367,7 @@ class GLSLCodeGen(LoweringRefusalMixin):
         self.glsl_shared_dimension_constants = {}
         self.current_target_stage = target_stage
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_shadow_lod_extension_used = False
         stage_names = {
             stage_name
             for stage_name in self.glsl_stage_names(ast, target_stage)
@@ -9651,6 +9658,8 @@ class GLSLCodeGen(LoweringRefusalMixin):
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
+        if getattr(self, "glsl_shadow_lod_extension_used", False):
+            code = require_shadow_lod_extension(code)
         return self.ensure_glsl_int64_support(code)
 
     def collect_called_function_names(self, root):
@@ -46584,6 +46593,47 @@ complex64_t crossgl_complex64_mod_assign(
     def texture_compare_offset_supported(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["compare_offset"]
 
+    # GL_EXT_texture_shadow_lod (glsl_shadow_lod); WebGL 2 has no such extension.
+    GLSL_SHADOW_LOD_EXTENSION_SUPPORTED = True
+
+    def shadow_lod_extension_compare_call(
+        self, texture_type, texture_name, coord, compare, lod_arg, offset=None
+    ):
+        """An explicit-level compare through GL_EXT_texture_shadow_lod, or None when it adds no overload."""
+        base_type = self.resource_base_type(texture_type)
+        has_offset = SHADOW_LOD_EXTENSION_SAMPLERS.get(base_type)
+        if not self.GLSL_SHADOW_LOD_EXTENSION_SUPPORTED or has_offset is None:
+            return None
+        if offset is not None and not has_offset:
+            return None
+        lod = self.generate_expression(lod_arg)
+        if base_type == "samplerCubeArrayShadow":
+            call = f"textureLod({texture_name}, {coord}, {compare}, {lod})"
+        else:
+            compare_coord = self.texture_compare_coordinate(base_type, coord, compare)
+            if compare_coord is None:
+                return None
+            if offset is None:
+                call = f"textureLod({texture_name}, {compare_coord}, {lod})"
+            else:
+                call = f"textureLodOffset({texture_name}, {compare_coord}, {lod}, {offset})"
+        self.glsl_shadow_lod_extension_used = True
+        return call
+
+    def zero_lod_compare_gradient_call(
+        self, texture_type, texture_name, coord, compare, lod_arg, offset=None
+    ):
+        """A level-zero compare on a shadow sampler without textureLod, as textureGrad (glsl_shadow_lod)."""
+        base_type = self.resource_base_type(texture_type)
+        if not is_zero_lod_literal(lod_arg):
+            return None
+        compare_coord = self.texture_compare_coordinate(base_type, coord, compare)
+        if compare_coord is None:
+            return None
+        return zero_lod_compare_gradient_call(
+            base_type, texture_name, compare_coord, lod_arg, offset
+        )
+
     def texture_compare_lod_supported(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["compare_lod"]
 
@@ -47046,7 +47096,8 @@ complex64_t crossgl_complex64_mod_assign(
                 func_name, texture_compare_argument_error()
             )
 
-        texture_type = self.texture_resource_type(args[0])
+        # Struct members and other non-identifier resources resolve through their expression type.
+        texture_type = self.texture_argument_resource_type(args[0])
         if self.is_multisample_texture_resource_type(texture_type):
             return self.unsupported_multisample_texture_compare_call(
                 func_name, texture_type
@@ -47211,6 +47262,13 @@ complex64_t crossgl_complex64_mod_assign(
             if count_error:
                 return self.unsupported_texture_compare_call(func_name, count_error)
             if not self.texture_compare_lod_supported(texture_type):
+                gradient_call = self.zero_lod_compare_gradient_call(
+                    texture_type, texture_name, coord, compare, extra_args[1]
+                ) or self.shadow_lod_extension_compare_call(
+                    texture_type, texture_name, coord, compare, extra_args[1]
+                )
+                if gradient_call is not None:
+                    return gradient_call
                 return self.unsupported_texture_compare_call(
                     func_name, "explicit LOD requires 2D shadow samplers"
                 )
@@ -47231,6 +47289,27 @@ complex64_t crossgl_complex64_mod_assign(
             if count_error:
                 return self.unsupported_texture_compare_call(func_name, count_error)
             if not self.texture_compare_lod_offset_supported(texture_type):
+                offset_arg = extra_args[2]
+                gradient_call = None
+                if self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+                    offset = self.generate_expression(offset_arg)
+                    gradient_call = self.zero_lod_compare_gradient_call(
+                        texture_type,
+                        texture_name,
+                        coord,
+                        compare,
+                        extra_args[1],
+                        offset,
+                    ) or self.shadow_lod_extension_compare_call(
+                        texture_type,
+                        texture_name,
+                        coord,
+                        compare,
+                        extra_args[1],
+                        offset,
+                    )
+                if gradient_call is not None:
+                    return gradient_call
                 return self.unsupported_texture_compare_call(
                     func_name, "explicit LOD offsets require 2D shadow samplers"
                 )

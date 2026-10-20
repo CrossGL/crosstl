@@ -4200,7 +4200,7 @@ def test_codegen_texture_method_descriptors():
     ]
     assert (
         converter.texture_method_descriptor("SampleCmpLevelZero", 4)["function"]
-        == "textureCompareOffset"
+        == "textureCompareLodOffset"
     )
     assert converter.texture_method_descriptor("SampleCmpLevelZero", 5)[
         "dropped_parameters"
@@ -5901,18 +5901,18 @@ def test_codegen_sample_cmp_infers_shadow_texture_for_translator_roundtrip():
     assert "sampler2DShadow shadowMap;" in crossgl
     assert "sampler compareSampler;" in crossgl
     assert "samplerShadow" not in crossgl
-    assert "textureCompare(shadowMap, compareSampler, uv, depth)" in crossgl
+    assert "textureCompareLod(shadowMap, compareSampler, uv, depth, 0.0)" in crossgl
 
     ast = parse_crossgl(crossgl)
     glsl = GLSLCodeGen().generate(ast)
     assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in glsl
-    assert "texture(shadowMap, vec3(uv, depth))" in glsl
+    assert "textureLod(shadowMap, vec3(uv, depth), 0.0)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     assert "Texture2D shadowMap" in hlsl
     assert "SamplerComparisonState compareSampler" in hlsl
-    assert "shadowMap.SampleCmp(compareSampler, uv, depth)" in hlsl
+    assert "shadowMap.SampleCmpLevelZero(compareSampler, uv, depth)" in hlsl
 
 
 def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
@@ -5940,8 +5940,13 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     assert "samplerCubeShadow shadowCube;" in crossgl
     assert "sampler2DShadow shadowMap;" in crossgl
     assert "float helper(sampler2DShadow localShadow, sampler localSampler" in crossgl
-    assert "textureCompare(shadowArray, compareSampler, uvLayer, depth)" in crossgl
-    assert "textureCompare(shadowCube, compareSampler, direction, depth)" in crossgl
+    assert (
+        "textureCompareLod(shadowArray, compareSampler, uvLayer, depth, 0.0)" in crossgl
+    )
+    assert (
+        "textureCompareLod(shadowCube, compareSampler, direction, depth, 0.0)"
+        in crossgl
+    )
     assert "helper(shadowMap, compareSampler, uv, depth)" in crossgl
 
     ast = parse_crossgl(crossgl)
@@ -5949,8 +5954,12 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     assert "layout(binding = 0) uniform sampler2DArrayShadow shadowArray;" in glsl
     assert "layout(binding = 1) uniform samplerCubeShadow shadowCube;" in glsl
     assert "layout(binding = 2) uniform sampler2DShadow shadowMap;" in glsl
-    assert "texture(shadowArray, vec4(uvLayer, depth))" in glsl
-    assert "texture(shadowCube, vec4(direction, depth))" in glsl
+    assert (
+        "textureGrad(shadowArray, vec4(uvLayer, depth), vec2(0.0), vec2(0.0))" in glsl
+    )
+    assert (
+        "textureGrad(shadowCube, vec4(direction, depth), vec3(0.0), vec3(0.0))" in glsl
+    )
     assert "helper(shadowMap, uv, depth)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
@@ -5958,20 +5967,23 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     assert "Texture2DArray shadowArray" in hlsl
     assert "TextureCube shadowCube" in hlsl
     assert "Texture2D shadowMap" in hlsl
-    assert "shadowArray.SampleCmp(compareSampler, uvLayer, depth)" in hlsl
-    assert "shadowCube.SampleCmp(compareSampler, direction, depth)" in hlsl
-    assert "localShadow.SampleCmp(localSampler, uv, depth)" in hlsl
+    assert "shadowArray.SampleCmpLevelZero(compareSampler, uvLayer, depth)" in hlsl
+    assert "shadowCube.SampleCmpLevelZero(compareSampler, direction, depth)" in hlsl
+    assert "localShadow.SampleCmpLevelZero(localSampler, uv, depth)" in hlsl
 
     metal = MetalCodeGen().generate(ast)
     assert "depth2d_array<float> shadowArray" in metal
     assert "depthcube<float> shadowCube" in metal
     assert "depth2d<float> shadowMap" in metal
     assert (
-        "shadowArray.sample_compare(compareSampler, uvLayer.xy, uint(uvLayer.z), depth)"
+        "shadowArray.sample_compare(compareSampler, uvLayer.xy, uint(uvLayer.z), depth, level(0.0))"
         in metal
     )
-    assert "shadowCube.sample_compare(compareSampler, direction, depth)" in metal
-    assert "localShadow.sample_compare(localSampler, uv, depth)" in metal
+    assert (
+        "shadowCube.sample_compare(compareSampler, direction, depth, level(0.0))"
+        in metal
+    )
+    assert "localShadow.sample_compare(localSampler, uv, depth, level(0.0))" in metal
 
 
 def test_codegen_sample_cmp_infers_shadow_struct_members():
@@ -5999,21 +6011,23 @@ def test_codegen_sample_cmp_infers_shadow_struct_members():
     assert "sampler2DShadow shadow;" in crossgl
     assert "sampler2D color;" in crossgl
     assert "sampler2DShadow color;" not in crossgl
-    assert "textureCompare(resources.shadow, compareSampler, uv, depth)" in crossgl
+    assert (
+        "textureCompareLod(resources.shadow, compareSampler, uv, depth, 0.0)" in crossgl
+    )
     assert "texture(resources.color, linearSampler, uv)" in crossgl
 
     ast = parse_crossgl(crossgl)
     glsl = GLSLCodeGen().generate(ast)
     assert "sampler2DShadow shadow;" in glsl
     assert "sampler2D color;" in glsl
-    assert "texture(resources.shadow, vec3(uv, depth))" in glsl
+    assert "textureLod(resources.shadow, vec3(uv, depth), 0.0)" in glsl
     assert "texture(resources.color, uv)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     assert "Texture2D shadow" in hlsl
     assert "Texture2D color" in hlsl
-    assert "resources.shadow.SampleCmp(compareSampler, uv, depth)" in hlsl
+    assert "resources.shadow.SampleCmpLevelZero(compareSampler, uv, depth)" in hlsl
     assert "resources.color.Sample(linearSampler, uv)" in hlsl
     assert "textureCompare(" not in hlsl
 
@@ -6047,8 +6061,9 @@ def test_codegen_shadow_struct_member_inference_is_scoped_by_struct_type():
     assert "struct ShadowBundle {\n        sampler2DShadow texture;" in crossgl
     assert "struct ColorBundle {\n        sampler2D texture;" in crossgl
     assert "struct ColorBundle {\n        sampler2DShadow texture;" not in crossgl
-    assert "textureCompare(shadowResources.texture, compareSampler, uv, depth)" in (
-        crossgl
+    assert (
+        "textureCompareLod(shadowResources.texture, compareSampler, uv, depth, 0.0)"
+        in (crossgl)
     )
     assert "texture(colorResources.texture, linearSampler, uv)" in crossgl
 
@@ -6114,7 +6129,7 @@ def test_codegen_sample_cmp_infers_shadow_struct_members_through_helpers():
     assert "sampler2DShadow shadow;" in glsl
     assert "sampler2D color;" in glsl
     assert "readShadowWrapper(resources.shadow, uv, depth)" in glsl
-    assert "texture(source, vec3(uv, depth))" in glsl
+    assert "textureLod(source, vec3(uv, depth), 0.0)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
 
@@ -6169,7 +6184,7 @@ def test_codegen_sample_cmp_infers_shadow_struct_member_arrays_through_helpers()
     assert "sampler2DShadow shadows[2];" in glsl
     assert "sampler2D colors[2];" in glsl
     assert "readShadow(resources.shadows[index], uv, depth)" in glsl
-    assert "texture(source, vec3(uv, depth))" in glsl
+    assert "textureLod(source, vec3(uv, depth), 0.0)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
 
 
@@ -6223,7 +6238,7 @@ def test_codegen_shadow_inference_keeps_parameter_names_scoped():
 
     assert "sampler2DShadow shared;" in crossgl
     assert "vec4 readRegular(sampler2D shared_, sampler localSampler" in crossgl
-    assert "textureCompare(shared, compareSampler, uv, depth)" in crossgl
+    assert "textureCompareLod(shared, compareSampler, uv, depth, 0.0)" in crossgl
     assert "texture(shared_, localSampler, uv)" in crossgl
     assert parse_crossgl(crossgl) is not None
 
@@ -6257,7 +6272,9 @@ def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():
         "float wrapper(samplerCubeArrayShadow wrappedShadow, sampler wrappedSampler"
         in crossgl
     )
-    assert "textureCompare(leafShadow, leafSampler, cubeLayer, depth)" in crossgl
+    assert (
+        "textureCompareLod(leafShadow, leafSampler, cubeLayer, depth, 0.0)" in crossgl
+    )
     assert "leaf(wrappedShadow, wrappedSampler, cubeLayer, depth)" in crossgl
     assert "wrapper(cubeShadowArray, compareSampler, cubeLayer, depth)" in crossgl
 
@@ -6268,7 +6285,8 @@ def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():
         "float leaf(samplerCubeArrayShadow leafShadow, vec4 cubeLayer, float depth)"
         in glsl
     )
-    assert "texture(leafShadow, cubeLayer, depth)" in glsl
+    assert "#extension GL_EXT_texture_shadow_lod : require" in glsl
+    assert "textureLod(leafShadow, cubeLayer, depth, 0.0)" in glsl
     assert "leaf(wrappedShadow, cubeLayer, depth)" in glsl
     assert "wrapper(cubeShadowArray, cubeLayer, depth)" in glsl
     assert "unsupported GLSL texture compare" not in glsl
@@ -6279,14 +6297,14 @@ def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():
         "float leaf(TextureCubeArray leafShadow, SamplerComparisonState leafSampler"
         in hlsl
     )
-    assert "leafShadow.SampleCmp(leafSampler, cubeLayer, depth)" in hlsl
+    assert "leafShadow.SampleCmpLevelZero(leafSampler, cubeLayer, depth)" in hlsl
     assert "leaf(wrappedShadow, wrappedSampler, cubeLayer, depth)" in hlsl
 
     metal = MetalCodeGen().generate(ast)
     assert "depthcube_array<float> cubeShadowArray" in metal
     assert "float leaf(depthcube_array<float> leafShadow, sampler leafSampler" in metal
     assert (
-        "leafShadow.sample_compare(leafSampler, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "leafShadow.sample_compare(leafSampler, cubeLayer.xyz, uint(cubeLayer.w), depth, level(0.0))"
         in metal
     )
     assert "leaf(wrappedShadow, wrappedSampler, cubeLayer, depth)" in metal

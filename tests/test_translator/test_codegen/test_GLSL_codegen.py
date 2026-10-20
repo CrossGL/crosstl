@@ -36823,9 +36823,9 @@ def test_opengl_nested_implicit_shadow_compare_lod_grad_strips_samplers():
     assert "textureGradOffset(" not in generated_code
 
 
-def test_opengl_array_shadow_compare_lod_reports_unsupported():
+def test_opengl_array_shadow_compare_lod_requires_shadow_lod_extension():
     shader = """
-    shader ArrayShadowCompareLodUnsupported {
+    shader ArrayShadowCompareLod {
         sampler2DArrayShadow shadowArray;
         sampler compareSampler;
 
@@ -36842,8 +36842,8 @@ def test_opengl_array_shadow_compare_lod_reports_unsupported():
             float depth,
             float lod
         ) {
-            float rejected = textureCompareLod(tex, s, uvLayer, depth, lod);
-            return rejected;
+            float sampled = textureCompareLod(tex, s, uvLayer, depth, lod);
+            return sampled;
         }
 
         fragment {
@@ -36861,15 +36861,14 @@ def test_opengl_array_shadow_compare_lod_reports_unsupported():
     }
     """
 
-    generated_code, generated_code_refusal = glsl_partial_output(
-        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
     )
 
-    assert (
-        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert "float sampled = textureLod(tex, vec4(uvLayer, depth), lod);" in (
+        generated_code
     )
-    assert "textureLod(" not in generated_code
 
 
 def test_opengl_array_shadow_compare_lod_offset_reports_unsupported():
@@ -37008,9 +37007,17 @@ def test_opengl_cube_shadow_compare_lod_offset_diagnostics():
         GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
+    # GL_EXT_texture_shadow_lod adds textureLod for cube and cube-array shadows, but no textureLodOffset.
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert "float lodRejected = textureLod(tex, vec4(direction, depth), lod);" in (
+        generated_code
+    )
+    assert "float lodRejected = textureLod(tex, cubeLayer, depth, lod);" in (
+        generated_code
+    )
     assert (
         "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+        not in generated_code_refusal
     )
     assert (
         "texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers"
@@ -37028,7 +37035,6 @@ def test_opengl_cube_shadow_compare_lod_offset_diagnostics():
         "texture compare: textureCompareGrad explicit gradients require 2D, 2D-array, or cube shadow samplers"
         in generated_code_refusal
     )
-    assert "textureLod(" not in generated_code
     assert "textureLodOffset(" not in generated_code
     assert "textureGradOffset(" not in generated_code
     assert "textureCompareLod(" not in generated_code
@@ -37180,9 +37186,14 @@ def test_opengl_array_shadow_compare_lod_grad_resource_arrays():
         )
         in generated_code_refusal
     )
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert (
+        "float arrayLod = textureLod(shadowArrays[2], vec4(uvLayer, depth), lod);"
+        in generated_code
+    )
     assert (
         "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+        not in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
@@ -37271,9 +37282,18 @@ def test_opengl_cube_shadow_compare_lod_grad_resource_arrays():
         "float cubeShadowLayer(samplerCubeShadow cubeMaps[4], samplerCubeArrayShadow cubeArrays[4], int layer, vec3 direction, vec4 cubeLayer, float depth, float lod, vec3 ddx, vec3 ddy)"
         in generated_code
     )
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert (
+        "float cubeLod = textureLod(cubeMaps[layer], vec4(direction, depth), lod);"
+        in generated_code
+    )
+    assert (
+        "float cubeArrayLod = textureLod(cubeArrays[2], cubeLayer, depth, lod);"
+        in generated_code
+    )
     assert (
         "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+        not in generated_code_refusal
     )
     assert (
         "float cubeGrad = textureGrad(cubeMaps[1], vec4(direction, depth), ddx, ddy);"
@@ -42201,10 +42221,10 @@ def test_opengl_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes()
     )
     assert "vec2 lodValue = textureQueryLod(tex, direction);" in generated_code
     assert "float cmp = texture(tex, vec4(direction, depth));" in generated_code
-    assert (
-        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+    assert "float cmpLod = textureLod(tex, vec4(direction, depth), lod);" in (
+        generated_code
     )
+    assert "float cmpLod = textureLod(tex, cubeLayer, depth, lod);" in generated_code
     assert (
         "float grad = textureGrad(tex, vec4(direction, depth), ddx, ddy);"
         in generated_code

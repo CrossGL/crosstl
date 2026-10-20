@@ -27,6 +27,7 @@ from .shader_records import (
     ShaderRecordBufferUnsupportedError,
     refuse_shader_record_buffers,
 )
+from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
@@ -50,6 +51,7 @@ __all__ = [
     "RuleReport",
     "SOURCE_RULES",
     "ShaderRecordBufferUnsupportedError",
+    "ShadowSampleUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
     "TARGET_ENTRIES",
     "UnsizedArrayUnsupportedError",
@@ -93,6 +95,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`).
+    GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
+    gathers and explicit-level samples do (:mod:`.shadow_samples`).
     Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
     targets that sample implicitly only in fragment shaders, and bias, derivative and LOD-query operations there are
     refused (:mod:`.implicit_lod`).
@@ -117,6 +121,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
     legalize_opaque_struct_members(program, report.target)
+    legalize_shadow_samples(program, report.target)
     legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
     legalize_half_floats(program, report.source, report.target)
