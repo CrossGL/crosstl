@@ -193,7 +193,11 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     assert features["GetGroupWaveIndex"].note == "needs shader model 6.10"
     # The probes compile for shader model 6.9, so its intrinsics are probed in the stage they belong to.
     reorder = features["dx::MaybeReorderThread"]
-    assert (reorder.category, reorder.stage, reorder.note) == ("function", "raytracing", "")
+    assert (reorder.category, reorder.stage, reorder.note) == (
+        "function",
+        "raytracing",
+        "",
+    )
     assert [p.type for p in reorder.signature.params] == [Type("uint")] * 2
 
 
@@ -215,7 +219,9 @@ def test_hlsl_methods_take_the_element_type_of_their_object():
 
 def test_hlsl_methods_of_types_no_probe_declares_are_untested():
     features = by_name(hlsl.parse(HLSL_TABLE))
-    assert features["DxHitObject.MakeNop"].note == "no probe for DxHitObject objects yet"
+    assert (
+        features["DxHitObject.MakeNop"].note == "no probe for DxHitObject objects yet"
+    )
     assert features["NodeOutput.IsValid"].signature is None
     assert features["NodeOutput.IsValid"].note == "no probe for NodeOutput objects yet"
 

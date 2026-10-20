@@ -45,7 +45,9 @@ _TYPE_WORDS = frozenset(
 def _plain(text: str) -> str:
     """A declaration's type without its parameter name, with fixed-width and macro spellings resolved."""
     text = re.sub(
-        r"\b(?:u?int(?:32|64)_t|__RETURN_TYPE)\b", lambda m: _SPELLINGS[m.group(0)], text
+        r"\b(?:u?int(?:32|64)_t|__RETURN_TYPE)\b",
+        lambda m: _SPELLINGS[m.group(0)],
+        text,
     ).strip()
     words = re.match(r"(.*?[\w*&])\s*\b(\w+)$", text)
     if words and words.group(2) not in _TYPE_WORDS:

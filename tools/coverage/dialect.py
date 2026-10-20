@@ -77,7 +77,13 @@ class Dialect:
         """A constant of ``kind``, for an argument the language requires to be a constant expression."""
         if kind.shape:
             raise ProbeError("no constant probe argument of a vector or matrix type")
-        constants = {"bool": "false", "int": "0", "int64": "0", "uint": "0u", "uint64": "0u"}
+        constants = {
+            "bool": "false",
+            "int": "0",
+            "int64": "0",
+            "uint": "0u",
+            "uint64": "0u",
+        }
         return constants.get(kind.scalar, "0.0")
 
     def buffer_element(self, kind: Type, atomic: bool) -> str:

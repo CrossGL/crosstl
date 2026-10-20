@@ -237,7 +237,11 @@ class CUDA(Dialect):
     suffix = ".cu"
     entry = "probe"
     wide_integers = True
-    _SCALARS = {"uint": "unsigned int", "int64": "long long", "uint64": "unsigned long long"}
+    _SCALARS = {
+        "uint": "unsigned int",
+        "int64": "long long",
+        "uint64": "unsigned long long",
+    }
     _VECTORS = {"int64": "longlong", "uint64": "ulonglong"}
 
     def scalar(self, scalar: str) -> str:
