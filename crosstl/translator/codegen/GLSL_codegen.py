@@ -31210,12 +31210,22 @@ class GLSLCodeGen(LoweringRefusalMixin):
         mapped_type = f"{self.map_type(vtype)}{array_suffix}"
         source_name = self.resource_node_name(node, "")
         emitted_name = self.glsl_global_identifier_name(source_name)
-        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         direction = self.stage_local_interface_direction(node)
+        stage_name = getattr(
+            self, "current_global_stage_io_stage", self.current_target_stage
+        )
+        linked_name = (
+            self.stage_local_interface_linked_name(node, direction, stage_name)
+            if direction is not None
+            else None
+        )
+        if linked_name is not None and linked_name != emitted_name:
+            emitted_name = linked_name
+            self.current_identifier_aliases[source_name] = linked_name
+        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         if direction is not None:
-            prefix = self.stage_io_declaration_prefix(node, direction)
-            stage_name = getattr(
-                self, "current_global_stage_io_stage", self.current_target_stage
+            prefix = self.stage_io_declaration_prefix(
+                node, direction, stage_name=stage_name
             )
             if direction == "in" and self.requires_flat_stage_input(
                 stage_name, mapped_type
@@ -31228,6 +31238,10 @@ class GLSLCodeGen(LoweringRefusalMixin):
         return self.generate_global_variable_declaration(
             node, declaration, vtype, mapped_type_for_layout=mapped_type
         )
+
+    def stage_local_interface_linked_name(self, node, direction, stage_name):
+        """The name a stage-level ``in`` or ``out`` must carry to link with its neighbour stage, or ``None``."""
+        return None
 
     def stage_local_interface_direction(self, node):
         names = {

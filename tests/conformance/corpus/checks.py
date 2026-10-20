@@ -270,6 +270,21 @@ def check_spirv(path, scratch):
     return _verdict(results, environment=environment)
 
 
+# GLSL ES requires #version before anything else, comments included (GLSL ES 3.00 section 3.4).
+ESSL_VERSION = re.compile(r"\A#[ \t]*version[ \t]+300[ \t]+es\b")
+
+
+def check_essl(path, stages):
+    """WebGL 2 compiles GLSL ES 3.00 only; glslang would judge a desktop ``#version`` by desktop rules instead."""
+    if not ESSL_VERSION.match(Path(path).read_text(errors="replace")):
+        return {
+            "verdict": "rejected",
+            "commands": [],
+            "log": "the WebGL 2 artifact does not begin with #version 300 es",
+        }
+    return check_glsl(path, stages)
+
+
 def check(path, target, stages):
     """Validate one artifact; returns verdict (accepted, rejected, timeout, unavailable, harness-error) and log."""
     with tempfile.TemporaryDirectory() as scratch:
@@ -277,7 +292,9 @@ def check(path, target, stages):
             return check_metal(path, scratch)
         if target == "hlsl":
             return check_hlsl(path, scratch, stages)
-        if target in ("glsl", "essl"):
+        if target == "essl":
+            return check_essl(path, stages)
+        if target == "glsl":
             return check_glsl(path, stages)
         if target == "spirv":
             return check_spirv(path, scratch)

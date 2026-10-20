@@ -268,6 +268,19 @@ def test_glsl_environment_checks_ray_stages_with_vulkan_rules():
     assert checks.glsl_environment(["mesh"]) == []
 
 
+def test_essl_artifacts_must_declare_glsl_es_300(tmp_path):
+    desktop = tmp_path / "desktop.essl.glsl"
+    desktop.write_text("#version 450\nvoid main() {}\n")
+    result = checks.check_essl(desktop, ["vertex"])
+    assert result["verdict"] == "rejected"
+    assert "#version 300 es" in result["log"]
+
+    es = tmp_path / "es.essl.glsl"
+    es.write_text("#version 300 es\nvoid main() { gl_Position = vec4(0.0); }\n")
+    if checks.tool("glslangValidator").available:
+        assert checks.check_essl(es, ["vertex"])["verdict"] == "accepted"
+
+
 def test_spirv_environment_follows_module_version():
     assert checks.spirv_environment("; SPIR-V\n; Version: 1.0\n") == "vulkan1.1"
     assert checks.spirv_environment("; Version: 1.5\n") == "vulkan1.2"
