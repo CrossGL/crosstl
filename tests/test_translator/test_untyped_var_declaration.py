@@ -1,7 +1,7 @@
-from crosstl.translator.parser import Parser
-from crosstl.translator.lexer import Lexer
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def test_untyped_var_declaration_preserves_function_body():
