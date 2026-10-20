@@ -328,7 +328,10 @@ REJECTED_REWRITES = [
             "k = int(lane);\n  simdgroup_store(C, out, 8);",
         )
     ],
-    [("int k = T;", "uint k = uint(T);"), ("k > 0;", "k >= 0u;")],
+    # A signed counter with an unranged bound may overflow, which Metal
+    # leaves undefined; 32-bit unsigned counters wrap alike everywhere
+    # (test_branch_declared_counters.py).
+    [("for (; k > 0; k--)", "for (; k < mode; k += 2)")],
     [
         ("int k = T;", "int k = T;\n  for (int r = 0; r < 2; r++) {"),
         ("  simdgroup_store", "  }\n  simdgroup_store"),
@@ -339,7 +342,7 @@ REJECTED_IDS = [
     "divergent-branch",
     "written-in-body",
     "written-elsewhere",
-    "unsigned-wrap",
+    "signed-unranged-bound",
     "inside-another-loop",
 ]
 

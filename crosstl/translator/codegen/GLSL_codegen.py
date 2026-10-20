@@ -163,6 +163,7 @@ from .counter_loops import (
     any_start_counter_loop_terminates,
     any_start_counter_loops,
     counter_update,
+    wrapping_counter_loop_uniform,
 )
 from .entry_selection import entry_type_references
 from .enum_utils import (
@@ -6536,6 +6537,7 @@ class GLSLCodeGen(
             trip_uniform=lambda loop, names, components: (
                 self.glsl_software_subgroup_uniform_for(loop, names)
             ),
+            counter_loop=self.glsl_software_subgroup_uniform_counter,
         )
 
         def visit(body, names, components):
@@ -6731,6 +6733,7 @@ class GLSLCodeGen(
             trip_uniform=lambda loop, names, components: (
                 self.glsl_software_subgroup_uniform_for(loop, names)
             ),
+            counter_loop=self.glsl_software_subgroup_uniform_counter,
         )
         for index, statement in enumerate(statements):
             if index and (offset_names or followed_names):
@@ -7481,6 +7484,15 @@ class GLSLCodeGen(
         loops.update(fresh)
         return loops
 
+    def glsl_software_subgroup_uniform_counter(self, node, uniform_names, _components):
+        """The counter of ``node`` when every invocation runs its trips alike."""
+        record = getattr(self, "glsl_software_subgroup_counter_loops", {}).get(id(node))
+        if record is None or not self.glsl_software_subgroup_counter_loop_uniform(
+            node, uniform_names
+        ):
+            return None
+        return record[0]
+
     def glsl_software_subgroup_counter_loop_uniform(self, node, uniform_names):
         """Accept MLX's ``int t = 0; for (; t + C <= T; t += C)`` chunk loop.
 
@@ -7489,7 +7501,8 @@ class GLSLCodeGen(
         bound, a literal offset and stride, and a body that leaves them alone,
         every invocation runs the same trips, so the counter stays uniform
         after the loop too. The checked termination proof uses the bound's
-        literal value or metadata range.
+        literal value or metadata range; a 32-bit unsigned counter, which
+        wraps alike on every target, needs none.
         """
         record = getattr(self, "glsl_software_subgroup_counter_loops", {}).get(id(node))
         if record is None or uniform_names is None:
@@ -7548,17 +7561,19 @@ class GLSLCodeGen(
         if literal_bound is not None:
             stops = [literal_bound]
         else:
+            if not self.glsl_software_subgroup_uniform_expression(bound, uniform_names):
+                return False
             record = (
                 getattr(self, "glsl_software_subgroup_loop_metadata", {})
                 .get(id(node), {})
                 .get(metadata_bound_key(bound))
             )
-            if record is None or not self.glsl_software_subgroup_uniform_expression(
-                bound, uniform_names
-            ):
-                return False
-            convert = _UnsignedLiteralInt if record["dtype"].startswith("u") else int
-            stops = [convert(record["minimum"]), convert(record["maximum"])]
+            stops = []
+            if record is not None:
+                convert = (
+                    _UnsignedLiteralInt if record["dtype"].startswith("u") else int
+                )
+                stops = [convert(record["minimum"]), convert(record["maximum"])]
         update = counter_update(node.update)
         if update is None or update[0] != name:
             return False
@@ -7573,13 +7588,17 @@ class GLSLCodeGen(
             )
         type_name = self.type_name_string(declaration.var_type)
         if step is None or not (
-            start is not None
-            and offset_counter_loop_terminates(
-                type_name, start, offset, stops, step, operator
+            stops
+            and (
+                start is not None
+                and offset_counter_loop_terminates(
+                    type_name, start, offset, stops, step, operator
+                )
+                or any_start_counter_loop_terminates(
+                    type_name, offset, stops, step, operator
+                )
             )
-            or any_start_counter_loop_terminates(
-                type_name, offset, stops, step, operator
-            )
+            or wrapping_counter_loop_uniform(type_name, offset, step, operator)
         ):
             return False
         return self.glsl_software_subgroup_loop_controls_preserved(

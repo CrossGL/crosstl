@@ -229,9 +229,10 @@ def followed_locals(
 ):
     """Return the written locals whose writes a flow analysis can follow.
 
-    Each is a value declared once with an initializer, and every write to it
-    is a plain ``name = value;`` or member ``name.member op= value;`` statement
-    outside loops. Increments, compound writes of the whole value, element
+    Each is a value declared once, and every write to it is a plain
+    ``name = value;`` or member ``name.member op= value;`` statement outside
+    loops. A local declared without an initializer is not uniform until a
+    write makes it so. Increments, compound writes of the whole value, element
     writes, address-taking, pointer or reference views and calls that may
     write it disqualify a name. ``walk`` yields every node below a
     root, ``identifier_names`` the names an expression reads, ``write_roots``
@@ -257,7 +258,6 @@ def followed_locals(
         if counts[name] == 1
         and name not in parameters
         and name in mutable_names
-        and getattr(declaration, "initial_value", None) is not None
         and value_type(declaration.var_type)
         and not volatile(declaration)
         and not volatile(declaration.var_type)
@@ -315,7 +315,10 @@ class ReassignmentFlow:
     ``carried`` names locals that loops advance on every trip (see
     ``subgroup_loop_carried``). ``trip_uniform(loop, names, components)``
     proves that every invocation runs the same trips of ``loop``; without it
-    a loop carries nothing.
+    a loop carries nothing. ``counter_loop(loop, names, components)`` names
+    the counter of an initializer-free counter loop that every invocation
+    runs alike, as ``for (; k <= end; k += 16)``; that counter stays uniform
+    after the loop.
     """
 
     def __init__(
@@ -330,11 +333,13 @@ class ReassignmentFlow:
         offsets=(),
         carried=(),
         trip_uniform=None,
+        counter_loop=None,
     ):
         self.followed = set(followed)
         self.offsets = set(offsets)
         self.carried = set(carried)
         self.trip_uniform = trip_uniform
+        self.counter_loop = counter_loop
         self.walk = walk
         self.map_operator = map_operator
         self.uniform_expression = uniform_expression
@@ -404,10 +409,18 @@ class ReassignmentFlow:
             is not None
         ):
             return
+        counter = (
+            self.counter_loop(node, names, components)
+            if isinstance(node, ForNode) and self.counter_loop is not None
+            else None
+        )
         if isinstance(node, ForNode) and written & self.carried:
             # Every invocation ran the same trips, each keeping ``kept``.
             _trip, kept = self.carried_trip(node, names, components)
-            names.difference_update(written - kept)
+            names.difference_update(written - kept - {counter})
+            return
+        if counter is not None and written == {counter}:
+            # Every invocation ran the uniform loop's trips.
             return
         kept = follow_offset(
             node,
@@ -453,12 +466,15 @@ class ReassignmentFlow:
             if self.uniform_expression(node.condition, names, components):
                 # Every invocation takes the same branch, so a fact holds
                 # afterwards when it holds at the end of both branches.
+                # Both branches start from the same facts, so a local either
+                # branch makes uniform stays so only when both do.
                 results = []
                 for branch in (node.then_branch, node.else_branch):
                     branch_names = set(names)
                     self.follow_branch(branch, branch_names, components)
                     results.append(branch_names)
-                names.intersection_update(*results)
+                names.clear()
+                names.update(set.intersection(*results))
                 return
         names.difference_update(written)
 

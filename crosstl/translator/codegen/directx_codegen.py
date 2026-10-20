@@ -167,6 +167,7 @@ from .counter_loops import (
     any_start_counter_loop_terminates,
     any_start_counter_loops,
     counter_update,
+    wrapping_counter_loop_uniform,
 )
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -5829,7 +5830,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         bound, a literal offset and stride, and a body that leaves them alone,
         every invocation runs the same trips, so the counter stays uniform
         after the loop too. The checked termination proof uses the bound's
-        literal value or metadata range. ``any_start_counter_loops`` adds
+        literal value or metadata range; a 32-bit unsigned counter, which
+        wraps alike on every target, needs none. ``any_start_counter_loops`` adds
         loops, such as ``for (; k > 0; k--)`` in each branch of an ``if``,
         that the counter may reach with any value; the flow analysis proves
         that value uniform and termination must hold from every start.
@@ -5891,13 +5893,17 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         if literal_bound is not None:
             stops = [literal_bound]
         else:
-            record = (metadata_bounds or {}).get(metadata_bound_key(bound))
-            if record is None or not self.hlsl_software_subgroup_uniform_expression(
+            if not self.hlsl_software_subgroup_uniform_expression(
                 bound, uniform_names, uniform_components
             ):
                 return False
-            convert = _UnsignedLiteralInt if record["dtype"].startswith("u") else int
-            stops = [convert(record["minimum"]), convert(record["maximum"])]
+            record = (metadata_bounds or {}).get(metadata_bound_key(bound))
+            stops = []
+            if record is not None:
+                convert = (
+                    _UnsignedLiteralInt if record["dtype"].startswith("u") else int
+                )
+                stops = [convert(record["minimum"]), convert(record["maximum"])]
         update = counter_update(node.update)
         if update is None or update[0] != name:
             return False
@@ -5912,13 +5918,17 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             )
         type_name = self.type_name_string(declaration.var_type)
         if step is None or not (
-            start is not None
-            and offset_counter_loop_terminates(
-                type_name, start, offset, stops, step, operator
+            stops
+            and (
+                start is not None
+                and offset_counter_loop_terminates(
+                    type_name, start, offset, stops, step, operator
+                )
+                or any_start_counter_loop_terminates(
+                    type_name, offset, stops, step, operator
+                )
             )
-            or any_start_counter_loop_terminates(
-                type_name, offset, stops, step, operator
-            )
+            or wrapping_counter_loop_uniform(type_name, offset, step, operator)
         ):
             return False
         if not self.hlsl_software_subgroup_loop_controls_preserved(
@@ -6118,10 +6128,12 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
     ):
         """Return written locals whose uniformity can follow their writes.
 
-        Each is a value declared once with an initializer and written only by
-        plain ``name = value;`` statements outside loops, as MLX's RMS VJP
-        clamps ``row_end`` to ``n_rows``, or by member writes such as a
-        resource view's ``view.offset += stride;`` outside loops.
+        Each is a value declared once and written only by plain
+        ``name = value;`` statements outside loops, as MLX's RMS VJP clamps
+        ``row_end`` to ``n_rows``, or by member writes such as a resource
+        view's ``view.offset += stride;`` outside loops. A local declared
+        without an initializer is not uniform until a write makes it so, as
+        ``uint k_start; if (c) { k_start = a; } else { k_start = b; }``.
         Address-taking, increments, other writes, reference views and possibly
         mutating calls disqualify a name.
         """
@@ -6144,7 +6156,6 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             if counts[name] == 1
             and name not in parameters
             and name in mutable_names
-            and getattr(declaration, "initial_value", None) is not None
             and analysis.value_type(declaration.var_type)
             and not analysis._qualified(declaration, {"volatile"})
             and not analysis._qualified(declaration.var_type, {"volatile"})
