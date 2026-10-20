@@ -42,6 +42,10 @@ from .identifier_rewrites import (
     replace_unqualified_identifiers,
     unqualified_identifiers,
 )
+from .integral_constant_arithmetic import (
+    fold_integral_constant_function_arithmetic,
+    fold_integral_constant_parameter_arithmetic,
+)
 from .local_decltypes import complete_declared_type, substitute_local_decltypes_in
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .static_member_constants import (
@@ -16348,6 +16352,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         ordered_arguments = [bindings[name] for name in selected.template_parameters]
         free_name = self._template_member_free_name(struct, selected, ordered_arguments)
+        previous = self._instantiated_template_member_calls.get(free_name)
+        if previous is not None and (
+            previous[1].parameters,
+            previous[1].body,
+        ) != (selected.parameters, selected.body):
+            # Overloads that differ only in their function parameters, such as a
+            # fragment `mma` forwarding to a matrix `mma` with the same template
+            # arguments, would share one name and read as a self call.
+            free_name = f"{free_name}__overload_{overloads.index(selected)}"
         self._instantiated_template_member_calls[free_name] = (
             struct,
             selected,
@@ -16666,6 +16679,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         instantiated_body = self._substitute_integral_constant_parameter_values(
             instantiated_parameters, instantiated_body
         )
+        instantiated_body = fold_integral_constant_parameter_arithmetic(
+            self, instantiated_parameters, instantiated_body
+        )
         concrete_parameters = self._strip_function_parameter_defaults(
             instantiated_parameters
         )
@@ -16896,8 +16912,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             compact = re.sub(r"\s+", "", body)
             type_name = re.escape(match.group("type"))
             alias = re.compile(rf"usingvalue_type={type_name};")
+            # A `const thread` member qualifier only restricts the object's
+            # address space (MSL section 4.2); the conversion is unchanged.
             conversion = re.compile(
-                r"(?:METAL_FUNC)?constexproperatorvalue_type\(\)const"
+                r"(?:METAL_FUNC)?constexproperatorvalue_type\(\)const(?:thread)?"
                 r"(?:noexcept)?\{returnvalue;\}"
             )
             if alias.search(compact) and conversion.search(compact):
@@ -17007,8 +17025,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 r"returnintegral_constant<"
                 r"decltype\((?P=result)\),(?P=result)>\{\};$"
             )
+            # `remove_addrspace_t` drops only an address-space qualifier, so the
+            # aliased result type names the same integral type (MSL 6.2).
+            aliased_result = re.compile(
+                rf"^constexprauto(?P<result>[A-Za-z_]\w*)="
+                rf"{left}{arithmetic_operator}{right};"
+                r"using(?P<alias>[A-Za-z_]\w*)=(?:metal::)?remove_addrspace_t<"
+                r"decltype\((?P=result)\)>;"
+                r"returnintegral_constant<(?P=alias),(?P=result)>\{\};$"
+            )
             operator_name = match.group("operator")
-            if direct_return.fullmatch(compact) or named_result.fullmatch(compact):
+            if (
+                direct_return.fullmatch(compact)
+                or named_result.fullmatch(compact)
+                or aliased_result.fullmatch(compact)
+            ):
                 operators.add(operator_name)
             else:
                 rejected_operators.add(operator_name)
@@ -23572,6 +23603,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 substitutions,
             )
         )
+        materialized = fold_integral_constant_function_arithmetic(self, materialized)
         materialized = self._rename_function_definition(
             materialized,
             template.name,

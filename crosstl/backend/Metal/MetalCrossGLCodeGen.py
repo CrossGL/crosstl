@@ -41,6 +41,10 @@ from ...translator.semantics.sampler_states import (
 )
 from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
+from .aggregate_scalar_conversions import (
+    refuse_aggregate_builtin_operation,
+    render_aggregate_scalar_conversion,
+)
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
@@ -10393,7 +10397,16 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                             )
                         )
                         try:
-                            if (
+                            converted_value = render_aggregate_scalar_conversion(
+                                self,
+                                self.current_function_return_type,
+                                stmt.value,
+                                "=",
+                                is_main,
+                            )
+                            if converted_value is not None:
+                                value = converted_value
+                            elif (
                                 self.metal_constructor_contract(
                                     self.current_function_return_type
                                 )
@@ -11654,10 +11667,26 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             initializer_type = self.expression_metal_type(node.left)
         if self.binary16_widening_profile is not None and not initializer_type:
             initializer_type = self.expression_metal_type(node.left)
+        converted_rhs = None
+        if component_info is None and lhs_info is None:
+            converted_rhs = render_aggregate_scalar_conversion(
+                self,
+                (
+                    getattr(node.left, "vtype", None)
+                    if isinstance(node.left, VariableNode)
+                    else None
+                )
+                or self.expression_metal_type(node.left),
+                node.right,
+                node.operator,
+                is_main,
+            )
         try:
             # `device T& r = buffer[i]` binds the element; buffer_load would
             # bind a copy and drop every write through `r`.
-            if self.binds_reference_to_structured_buffer_element(node):
+            if converted_rhs is not None:
+                rhs = converted_rhs
+            elif self.binds_reference_to_structured_buffer_element(node):
                 rhs = self.generate_structured_buffer_element_lvalue(
                     node.right, is_main
                 )
@@ -12124,6 +12153,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         f"{helper_name}({self.generate_expression(operand, is_main)})"
                     )
                 return f"{operands[0]} {expr.op} {operands[1]}"
+            refuse_aggregate_builtin_operation(
+                self, expr, getattr(expr, "source_location", None)
+            )
             left = self.generate_binary_operand(expr.left, expr.op, False, is_main)
             right = self.generate_binary_operand(expr.right, expr.op, True, is_main)
             source_types = [

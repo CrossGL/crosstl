@@ -10545,8 +10545,14 @@ def test_preprocessor_expands_nested_const_for_loop_in_template_member_ordered()
 
     assert calls == [name for name, _, _ in expected]
     assert definitions == expected
-    assert "integral_constant_int_1{} * Int<(4)>{}" in output
-    assert "integral_constant_int_1{} * Int<(1)>{}" in output
+    # `idx_row * Int<RowStride>{}` multiplies two integral constants, so the
+    # operator template's result `integral_constant<int, idx_row * 4>` is the
+    # argument ([over.match.oper]); each call passes that folded constant.
+    arguments = re.findall(
+        r"Fragment__load__\w+\(src,\s*(\w+)\{\},\s*(\w+)\{\}\);", output
+    )
+    assert arguments == [(row, col) for _name, row, col in expected]
+    assert "Int<(4)>{}" not in output and "Int<(1)>{}" not in output
     assert "src[0 + 0]" in output
     assert "src[0 + 1]" in output
     assert "src[4 + 0]" in output

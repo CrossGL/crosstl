@@ -1564,6 +1564,8 @@ jobs:
           CROSTL_REQUIRE_CONSTEXPR_BRANCH_ASSERTIONS: "1"
           CROSTL_REQUIRE_METAL_MEMBER_CALL_ARGUMENTS: "1"
           CROSTL_REQUIRE_METAL_MEMBER_ALIAS_DEDUCTION: "1"
+          CROSTL_REQUIRE_METAL_INTEGRAL_CONSTANT_ARITHMETIC: "1"
+          CROSTL_REQUIRE_METAL_MEMBER_OVERLOAD_NAMES: "1"
           CROSTL_REQUIRE_FORWARDED_LOOP_BOUNDS: "1"
           CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
           CROSTL_REQUIRE_PARAMETER_USAGE: "1"
@@ -1628,6 +1630,8 @@ jobs:
               tests/test_translator/test_metal_constexpr_branch_assertions.py \
               tests/test_translator/test_metal_member_call_arguments.py \
               tests/test_translator/test_metal_member_alias_deduction.py \
+              tests/test_translator/test_metal_integral_constant_arithmetic.py \
+              tests/test_translator/test_metal_member_overload_names.py \
               tests/test_translator/test_forwarded_resource_loop_bounds.py \
               tests/test_translator/test_reference_aliases.py \
               tests/test_translator/test_parameter_usage.py \
