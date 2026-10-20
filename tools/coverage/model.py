@@ -19,6 +19,30 @@ LANGUAGES = (
     "wgsl",
 )
 DIRECTIONS = ("output", "input")
+# The ray-tracing stages a probe can run in, each with the name HLSL's ``[shader(...)]`` attribute and slangc's
+# ``-stage`` give it. A ray-tracing intrinsic is probed in a closest-hit shader, which allows most of them, unless only
+# one other stage has it (DirectX Raytracing functional specification, "Intrinsics", and HLSL shader execution
+# reordering).
+RAYTRACING_STAGES = {
+    "ray-generation": "raygeneration",
+    "intersection": "intersection",
+    "any-hit": "anyhit",
+    "closest-hit": "closesthit",
+}
+_RAYTRACING_ONLY = {
+    "AcceptHitAndEndSearch": "any-hit",
+    "IgnoreHit": "any-hit",
+    "ReportHit": "intersection",
+    "ReportHitOptix": "intersection",
+    "MaybeReorderThread": "ray-generation",
+    "ReorderThread": "ray-generation",
+    "dx::MaybeReorderThread": "ray-generation",
+}
+
+
+def raytracing_stage(name: str) -> str:
+    """The ray-tracing stage that probes the intrinsic ``name``."""
+    return _RAYTRACING_ONLY.get(name, "closest-hit")
 
 
 @dataclass(frozen=True)

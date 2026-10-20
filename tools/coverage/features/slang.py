@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass
 
 from .. import crossgl
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import VOID, Feature, Param, Signature, Type, raytracing_stage
 from .common import pick, split
 
 # The scalar each generic constraint is probed with.
@@ -397,6 +397,12 @@ def stage(declaration: Declaration) -> str:
     return stages[0] if stages else "compute"
 
 
+def _stage(name: str, declaration: Declaration) -> str:
+    """:func:`stage`, with a ray-tracing function probed in the ray-tracing stage that has it."""
+    found = stage(declaration)
+    return raytracing_stage(name) if found == "raytracing" else found
+
+
 def _preference(signature: Signature) -> tuple[bool, bool, int]:
     """Sort key among overloads: value-returning before ``void``, 32-bit before ``double``, and vectors before
     scalars before matrices, so a generic function is probed with two-component vectors as in the HLSL list.
@@ -479,7 +485,7 @@ def parse(
                 chosen,
                 group=declared[0][0],
                 crossgl=crossgl.spelling("slang", name, glsl_names),
-                stage=stage(declared[0][1]),
+                stage=_stage(name, declared[0][1]),
                 note=note,
                 spelling=explicit(source, chosen) if chosen else "",
             )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .crossgl import DIALECT as CROSSGL
 from .dialect import Buffer, Dialect, ProbeError
-from .model import Type
+from .model import RAYTRACING_STAGES, Type
 
 
 class GLSL(Dialect):
@@ -112,6 +112,32 @@ class HLSL(Dialect):
         ]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["    return float4(0.0, 0.0, 0.0, 0.0);", "}"]) + "\n"
+
+    # Hit shaders take the ray payload, which shader model 6.7 and later require to declare who reads and writes each
+    # field, and the triangle's barycentrics.
+    _PAYLOAD = (
+        "struct [raypayload] Payload",
+        "{",
+        "    float4 color : read(caller) : write(anyhit, closesthit);",
+        "};",
+    )
+    _HIT_PARAMETERS = (
+        "inout Payload payload, in BuiltInTriangleIntersectionAttributes attributes"
+    )
+
+    def raytracing(
+        self, stage: str, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        hit = stage in ("any-hit", "closest-hit")
+        lines = [
+            *(self._PAYLOAD if hit else ()),
+            *self._globals(buffers, parts),
+            f'[shader("{RAYTRACING_STAGES[stage]}")]',
+            f"void main({self._HIT_PARAMETERS if hit else ''}) {{",
+            "    uint i = 0u;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["}"]) + "\n"
 
 
 class Metal(Dialect):
@@ -337,6 +363,8 @@ class Slang(HLSL):
     suffix = ".slang"
     entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
     fragment_attributes = ('[shader("fragment")]',)
+    # Slang declares a ray payload as a plain struct; payload access qualifiers are an HLSL shader model 6.7 rule.
+    _PAYLOAD = ("struct Payload", "{", "    float4 color;", "};")
 
     def buffer(self, kind: str, name: str, binding: int) -> str:
         # slangc assigns bindings in declaration order; a D3D register would only draw a warning for SPIR-V.

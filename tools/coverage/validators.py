@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import rustgpu
+from .model import RAYTRACING_STAGES
 
 TIMEOUT = 60
 # Terminal colour codes some validators (naga) write even when their output is not a terminal.
@@ -49,11 +50,19 @@ SUFFIX = {
 GLSL_STAGES = {"compute": "comp", "fragment": "frag", "vertex": "vert"}
 # The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one.
 HLSL_SHADER_MODEL = (6, 9)
+# Ray-tracing shaders compile as a library, whose ``[shader(...)]`` attributes name the entry points.
 HLSL_PROFILES = {
     stage: f"{prefix}_{HLSL_SHADER_MODEL[0]}_{HLSL_SHADER_MODEL[1]}"
-    for stage, prefix in {"compute": "cs", "fragment": "ps", "vertex": "vs"}.items()
+    for stage, prefix in {
+        "compute": "cs",
+        "fragment": "ps",
+        "vertex": "vs",
+        **dict.fromkeys(RAYTRACING_STAGES, "lib"),
+    }.items()
 }
 SPIRV_ENVIRONMENT = "vulkan1.1"
+# Ray tracing needs SPIR-V 1.4, which Vulkan 1.1 allows only as an extension; DXC lowers it for Vulkan 1.2.
+RAYTRACING_ENVIRONMENT = "vulkan1.2"
 # The language version of the Metal feature list (features/metal.txt); probes compile against the same version.
 METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
@@ -197,15 +206,18 @@ def validate(
         if language == "glsl":
             return _run([*command("glslangValidator"), name], scratch)
         if language == "hlsl":
-            entry = entry or hlsl_entry(source, stage)
             profile = HLSL_PROFILES[stage]
+            entry_point = (
+                []
+                if profile.startswith("lib_")
+                else ["-E", entry or hlsl_entry(source, stage)]
+            )
             return _run(
                 [
                     *command("dxc"),
                     "-T",
                     profile,
-                    "-E",
-                    entry,
+                    *entry_point,
                     "-HV",
                     "2021",
                     "-enable-16bit-types",
@@ -300,8 +312,8 @@ def validate(
         return _run([*command("spirv-val"), *environment, "probe.spv"], scratch)
 
 
-# How each language's reference compiler lowers a probe to SPIR-V; ``{source}``, ``{entry}``, ``{stage}`` and the HLSL
-# ``{profile}`` are filled in.
+# How each language's reference compiler lowers a probe to SPIR-V; ``{source}``, ``{entry}``, ``{stage}``, the HLSL
+# ``{profile}`` and the Vulkan ``{environment}`` are filled in.
 SPIRV_COMPILERS = {
     "glsl": (
         "glslangValidator",
@@ -319,7 +331,7 @@ SPIRV_COMPILERS = {
             "2021",
             "-enable-16bit-types",
             "-O0",
-            "-fspv-target-env=" + SPIRV_ENVIRONMENT,
+            "-fspv-target-env={environment}",
             "{source}",
             "-Fo",
             "probe.spv",
@@ -368,8 +380,11 @@ def lower(
     fields = {
         "source": name,
         "entry": entry,
-        "stage": stage,
+        "stage": RAYTRACING_STAGES.get(stage, stage),
         "profile": HLSL_PROFILES.get(stage, ""),
+        "environment": (
+            RAYTRACING_ENVIRONMENT if stage in RAYTRACING_STAGES else SPIRV_ENVIRONMENT
+        ),
     }
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
         Path(scratch, name).write_text(source)

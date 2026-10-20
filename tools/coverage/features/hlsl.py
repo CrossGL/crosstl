@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 
 from .. import crossgl
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import VOID, Feature, Param, Signature, Type, raytracing_stage
 from ..objects import OBJECTS, SAMPLERS, Object
 from ..validators import HLSL_SHADER_MODEL as SHADER_MODEL
 from .common import pick
@@ -76,7 +76,11 @@ STAGES = {
         "ProcessTriTessFactorsAvg ProcessTriTessFactorsMax ProcessTriTessFactorsMin"
     ),
 }
-_STAGE_OF = {name: stage for stage, names in STAGES.items() for name in names.split()}
+_STAGE_OF = {
+    name: raytracing_stage(name) if stage == "raytracing" else stage
+    for stage, names in STAGES.items()
+    for name in names.split()
+}
 # Parameters that must be immediate values although the table declares them ``in``: GetAttributeAtVertex
 # reads one of the primitive's three vertices, so its index is a literal 0, 1 or 2 (HLSL SM 6.1 barycentrics),
 # and Barrier's memory-type and semantic flags must be constants (HLSL SM 6.8 barriers).

@@ -1,7 +1,7 @@
 import pytest
 
 from tools.coverage import probes, validators
-from tools.coverage.model import Feature, Param, Signature, Type
+from tools.coverage.model import VOID, Feature, Param, Signature, Type
 
 VEC3 = Type("float", (3,))
 
@@ -114,6 +114,63 @@ def test_fragment_probes_are_valid(language):
         probe = probes.build(spelled, language, baseline=baseline)
         verdict = validators.validate(language, probe.source, "fragment", probe.entry)
         assert verdict.accepted, verdict.log
+
+
+WORLD_RAY_ORIGIN = feature("WorldRayOrigin", VEC3, stage="closest-hit")
+HIT_PARAMETERS = "void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attributes) {"
+
+
+@pytest.mark.parametrize(
+    ("language", "entry"),
+    [
+        (
+            "crossgl",
+            "    ray_closest_hit {\n        buffer vec3* outp;\n        void main(Payload payload @ payload, "
+            "BuiltInTriangleIntersectionAttributes attributes @ hit_attribute) {",
+        ),
+        (
+            "hlsl",
+            f'RWStructuredBuffer<float3> outp : register(u0);\n[shader("closesthit")]\n{HIT_PARAMETERS}',
+        ),
+        (
+            "slang",
+            f'RWStructuredBuffer<float3> outp;\n[shader("closesthit")]\n{HIT_PARAMETERS}',
+        ),
+    ],
+)
+def test_raytracing_features_get_a_shader_of_their_stage(language, entry):
+    probe = probes.build(WORLD_RAY_ORIGIN, language)
+    assert entry in probe.source
+    assert "numthreads" not in probe.source
+    # Payload access qualifiers are required from HLSL shader model 6.7; Slang takes a plain struct.
+    payload = {"hlsl": "struct [raypayload] Payload", "slang": "struct Payload\n{"}
+    if language in payload:
+        assert payload[language] in probe.source
+
+
+def test_a_raytracing_shader_without_a_hit_takes_no_payload():
+    reorder = feature("ReorderThread", VOID, Type("uint"), stage="ray-generation")
+    source = probes.build(reorder, "hlsl").source
+    assert '[shader("raygeneration")]\nvoid main() {' in source
+    assert "Payload" not in source
+    assert "    ray_generation {" in probes.build(reorder, "crossgl").source
+    with pytest.raises(probes.ProbeError, match="no closest-hit-stage probe for glsl"):
+        probes.build(WORLD_RAY_ORIGIN, "glsl")
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang"])
+def test_raytracing_probes_are_valid(language):
+    if not validators.available(language):
+        pytest.skip(f"no {language} validator")
+    for stage, name in (("closest-hit", "WorldRayOrigin"), ("any-hit", "HitKind")):
+        result = Type("uint") if name == "HitKind" else VEC3
+        spelled = Feature(
+            language, "function", name, Signature(result, ()), crossgl=name, stage=stage
+        )
+        for baseline in (False, True):
+            probe = probes.build(spelled, language, baseline=baseline)
+            verdict = validators.validate(language, probe.source, stage, probe.entry)
+            assert verdict.accepted, verdict.log
 
 
 def test_an_interpolant_is_read_straight_from_a_shader_input():

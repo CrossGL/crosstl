@@ -1,5 +1,5 @@
-"""Minimal probe programs: one call of one feature inside a compute kernel, or a fragment shader for a feature only
-that stage has.
+"""Minimal probe programs: one call of one feature inside a compute kernel, or a fragment or ray-tracing shader for a
+feature only that stage has.
 
 Arguments are read from input buffers, so no call folds to a constant, and the result is written to an output
 buffer, so no call is dead code. Output probes are CrossGL (:mod:`.crossgl`); input probes are written in the source
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from . import constructs
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
-from .model import Feature, Signature, Type
+from .model import RAYTRACING_STAGES, Feature, Signature, Type
 from .objects import Receiver, Uniforms
 
 __all__ = ["DIALECTS", "NoSpelling", "Probe", "ProbeError", "build", "spell"]
@@ -186,7 +186,7 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         return Probe(language, source, entry, suffix)
     if feature.signature is None:
         raise ProbeError(feature.note or "the feature list gives no signature")
-    if feature.stage not in ("compute", "fragment"):
+    if feature.stage not in ("compute", "fragment", *RAYTRACING_STAGES):
         raise ProbeError(f"no {feature.stage}-stage probe yet")
     name = (
         feature.crossgl if language == "crossgl" else feature.spelling or feature.name
@@ -224,5 +224,10 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         return Probe(
             language, source, dialect.entry, dialect.fragment_suffix or dialect.suffix
         )
+    if feature.stage in RAYTRACING_STAGES:
+        source = dialect.raytracing(
+            feature.stage, buffers, body, declarations=declarations
+        )
+        return Probe(language, source, dialect.entry, dialect.suffix)
     source = dialect.kernel(buffers, body, declarations=declarations)
     return Probe(language, source, dialect.entry, dialect.suffix)

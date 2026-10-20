@@ -162,3 +162,10 @@ class Dialect:
         ``parts`` may add ``inputs``, the shader inputs as ``(type spelling, name)``, for a function that takes one.
         """
         raise ProbeError(f"{self.language} has no fragment stage")
+
+    def raytracing(
+        self, stage: str, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        """A shader of the ray-tracing ``stage`` that runs ``body`` with ``i`` set to 0, for a feature only that stage
+        has; the buffers and ``parts`` are :meth:`kernel`'s."""
+        raise ProbeError(f"no {stage}-stage probe for {self.language} yet")

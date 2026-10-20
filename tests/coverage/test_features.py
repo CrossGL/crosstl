@@ -205,6 +205,8 @@ $type1 [[rn,unsigned_op=umad]] mad(in numeric<> a, in $type1 b, in $type1 c);
 void [[]] InterlockedAdd(ref int32_only result, in uint value);
 $type1 [[rn]] ddx(in float_like<> x);
 $type1 [[rn]] GetAttributeAtVertex(in numeric<> value, in uint VertexID);
+float<3> [[rn]] WorldRayOrigin();
+void [[]] IgnoreHit();
 void [[]] Barrier(in uint MemoryTypeFlags, in uint SemanticFlags);
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
 uint   [[rn,min_sm=6.10]] GetGroupWaveIndex();
@@ -251,11 +253,14 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
     assert features["GetGroupWaveIndex"].note == "needs shader model 6.10"
+    # Ray-tracing intrinsics run in a closest-hit shader unless another stage alone has them.
+    assert features["WorldRayOrigin"].stage == "closest-hit"
+    assert features["IgnoreHit"].stage == "any-hit"
     # The probes compile for shader model 6.9, so its intrinsics are probed in the stage they belong to.
     reorder = features["dx::MaybeReorderThread"]
     assert (reorder.category, reorder.stage, reorder.note) == (
         "function",
-        "raytracing",
+        "ray-generation",
         "",
     )
     assert [p.type for p in reorder.signature.params] == [Type("uint")] * 2
@@ -308,7 +313,15 @@ def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
     major, minor = hlsl.SHADER_MODEL
     assert validators.HLSL_PROFILES == {
         stage: f"{prefix}_{major}_{minor}"
-        for stage, prefix in (("compute", "cs"), ("fragment", "ps"), ("vertex", "vs"))
+        for stage, prefix in (
+            ("compute", "cs"),
+            ("fragment", "ps"),
+            ("vertex", "vs"),
+            ("ray-generation", "lib"),
+            ("intersection", "lib"),
+            ("any-hit", "lib"),
+            ("closest-hit", "lib"),
+        )
     }
 
 
@@ -745,6 +758,13 @@ void clip(float x);
 [require(hlsl, sm_5_0)]
 void ProcessTriTessFactorsAvg(in float3 RawEdgeFactors, in float InsideScale, out float3 Rounded);
 
+[require(cuda_glsl_hlsl_spirv, raytracing_anyhit_closesthit_intersection_miss)]
+float3 WorldRayOrigin();
+
+__generic<A>
+[require(glsl_hlsl_spirv, raytracing_intersection)]
+bool ReportHit(float tHit, uint hitKind, A attributes);
+
 [require(glsl_spirv, GLSL_430_SPIRV_1_0_compute)]
 [require(glsl_spirv, meshshading)]
 uint3 WorkgroupCount()
@@ -776,7 +796,9 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
         "InterlockedAdd",
         "InterlockedExchange",
         "ProcessTriTessFactorsAvg",
+        "ReportHit",
         "WorkgroupCount",
+        "WorldRayOrigin",
         "bit_cast",
         "clip",
         "lerp",
@@ -797,6 +819,8 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
 def test_slang_stages_targets_and_explicit_generic_arguments():
     features = by_name(slang.parse(SLANG_CORE, SLANG_HLSL))
     assert features["clip"].stage == "fragment"
+    assert features["WorldRayOrigin"].stage == "closest-hit"
+    assert features["ReportHit"].stage == "intersection"
     # One require alternative works in compute, so no other stage is needed.
     assert features["WorkgroupCount"].stage == "compute"
     tess = features["ProcessTriTessFactorsAvg"]

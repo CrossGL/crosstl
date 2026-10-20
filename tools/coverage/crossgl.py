@@ -243,6 +243,15 @@ def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) ->
     return renamed if renamed in glsl_names else name
 
 
+# The stage block of each ray-tracing stage a probe runs in.
+_RAYTRACING_BLOCKS = {
+    "ray-generation": "ray_generation",
+    "intersection": "ray_intersection",
+    "any-hit": "ray_any_hit",
+    "closest-hit": "ray_closest_hit",
+}
+
+
 class CrossGL(Dialect):
     language = "crossgl"
     suffix = ".cgl"
@@ -314,6 +323,32 @@ class CrossGL(Dialect):
             "    }",
             "}",
         ]
+        return "\n".join(lines) + "\n"
+
+    # A hit shader's parameters are the ray payload and the hit attributes, which the backends declare as their
+    # target requires.
+    _HIT_PARAMETERS = (
+        "Payload payload @ payload, "
+        "BuiltInTriangleIntersectionAttributes attributes @ hit_attribute"
+    )
+
+    def raytracing(
+        self, stage: str, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        hit = stage in ("any-hit", "closest-hit")
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in parts.get("prelude", ())]
+        if hit:
+            lines += ["    struct Payload {", "        vec4 color;", "    }"]
+        lines += [f"    {_RAYTRACING_BLOCKS[stage]} {{"]
+        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += [
+            f"        void main({self._HIT_PARAMETERS if hit else ''}) {{",
+            "            uint i = 0u;",
+        ]
+        lines += [f"            {line}" for line in body]
+        lines += ["        }", "    }", "}"]
         return "\n".join(lines) + "\n"
 
 
