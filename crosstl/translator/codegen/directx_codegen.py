@@ -52511,19 +52511,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
         if operation == "compare_exchange":
-            compare_value = self.generate_expression_with_expected(
-                args[1], access["type"]
-            )
-            replacement = self.generate_expression_with_expected(
-                args[2], access["type"]
-            )
+            compare_value = self.hlsl_byteaddress_atomic_value(args[1], access)
+            replacement = self.hlsl_byteaddress_atomic_value(args[2], access)
             return (
                 f"{helper_name}({access['buffer']}, {offset}, "
                 f"{compare_value}, {replacement})"
             )
 
-        value = self.generate_expression_with_expected(args[1], access["type"])
+        value = self.hlsl_byteaddress_atomic_value(args[1], access)
         return f"{helper_name}({access['buffer']}, {offset}, {value})"
+
+    def hlsl_byteaddress_atomic_value(self, arg, access):
+        value = self.generate_expression_with_expected(arg, access["type"])
+        if (
+            access.get("component_type") == "uint"
+            and self.scalar_expression_kind(arg) == "int"
+        ):
+            return f"uint({value})"
+        return value
 
     def validate_hlsl_byteaddress_atomic_argument_count(
         self, func_name, args, expected_args
@@ -52549,6 +52554,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for index, role in value_roles:
             value_kind = self.scalar_expression_kind(args[index])
             if value_kind is None or value_kind == expected_kind:
+                continue
+            if (value_kind, expected_kind) == ("int", "uint"):
+                # GLSL converts an int argument to a uint parameter implicitly (GLSL 4.60 section 4.1.10); the
+                # value is passed through an explicit uint conversion.
                 continue
             raise ValueError(
                 f"DirectX GLSL buffer block atomic '{func_name}' {role} "

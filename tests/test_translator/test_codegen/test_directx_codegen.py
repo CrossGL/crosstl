@@ -14711,14 +14711,52 @@ def test_directx_glsl_buffer_block_atomics_validate_return_result_contexts(
             "atomic 'atomicAdd' value argument must be scalar uint, got float",
         ),
         (
-            "atomicCompSwap(atomicBlock.counter, 1u, -1)",
-            "atomic 'atomicCompSwap' replacement argument must be scalar uint, got int",
+            "atomicCompSwap(atomicBlock.counter, 1u, 2.0)",
+            "atomic 'atomicCompSwap' replacement argument must be scalar uint, got float",
+        ),
+        (
+            "atomicAdd(atomicBlock.signedCounter, 1u)",
+            "atomic 'atomicAdd' value argument must be scalar int, got uint",
         ),
     ],
 )
 def test_directx_glsl_buffer_block_atomics_validate_arguments(call, match):
     shader = f"""
     shader BadGlslBufferBlockAtomicHLSL {{
+        struct AtomicBlock {{
+            uint counter;
+            int signedCounter;
+        }};
+
+        AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+
+        uint update() {{
+            return uint({call});
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        (
+            "atomicAdd(atomicBlock.counter, 1)",
+            "atomic_add_uint(atomicBlock, 0, uint(1))",
+        ),
+        (
+            "atomicCompSwap(atomicBlock.counter, 1u, -1)",
+            "atomic_compare_exchange_uint(atomicBlock, 0, 1u, uint(-1))",
+        ),
+    ],
+)
+def test_directx_glsl_buffer_block_atomics_convert_int_values_to_uint(call, expected):
+    # GLSL converts an int argument to a uint parameter implicitly (GLSL 4.60 section 4.1.10).
+    shader = f"""
+    shader IntValueGlslBufferBlockAtomicHLSL {{
         struct AtomicBlock {{
             uint counter;
         }};
@@ -14731,8 +14769,8 @@ def test_directx_glsl_buffer_block_atomics_validate_arguments(call, match):
     }}
     """
 
-    with pytest.raises(ValueError, match=match):
-        generate_code(parse_code(tokenize_code(shader)))
+    generated = generate_code(parse_code(tokenize_code(shader)))
+    assert expected in generated
 
 
 def test_directx_typed_buffer_atomics_lower_to_interlocked_statements():

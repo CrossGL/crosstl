@@ -18,6 +18,10 @@ from .hlsl_stage_interfaces import (
     legalize_hlsl_stage_interfaces,
 )
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
+from .intrinsic_named_functions import (
+    IntrinsicOverloadAmbiguousError,
+    resolve_intrinsic_named_functions,
+)
 from .lower import Lowerer, RuleInexpressibleError
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
@@ -34,6 +38,7 @@ from .storage_blocks import (
     normalize_spirv_storage_blocks,
 )
 from .texture_lod_clamp import refuse_texture_lod_clamp
+from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 
@@ -44,6 +49,7 @@ __all__ = [
     "HalfFloatUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
+    "IntrinsicOverloadAmbiguousError",
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
@@ -87,7 +93,10 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
-    SPIR-V storage block variables are first rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
+    User functions named like texture or image built-ins are first renamed, with the calls that resolve to them
+    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
+    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`).
+    SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
     being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`); ``a.length()`` of a sized
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
@@ -112,6 +121,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    resolve_intrinsic_named_functions(program)
+    canonicalize_texture_swizzles(program)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     refuse_per_vertex_inputs(program, report.target)
