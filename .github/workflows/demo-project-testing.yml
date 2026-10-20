@@ -1570,6 +1570,7 @@ jobs:
           CROSTL_REQUIRE_METAL_LOCAL_CONDITIONAL_ALIASES: "1"
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES: "1"
           CROSTL_REQUIRE_SUBGROUP_LOOP_ELEMENT_ADDRESSES: "1"
+          CROSTL_REQUIRE_METAL_LATE_MEMBER_SPECIALIZATIONS: "1"
           CROSTL_REQUIRE_FORWARDED_LOOP_BOUNDS: "1"
           CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
           CROSTL_REQUIRE_PARAMETER_USAGE: "1"
@@ -1640,6 +1641,7 @@ jobs:
               tests/test_translator/test_metal_local_conditional_aliases.py \
               tests/test_translator/test_software_subgroup_relative_shuffles.py \
               tests/test_translator/test_subgroup_loop_element_addresses.py \
+              tests/test_translator/test_metal_late_member_specializations.py \
               tests/test_translator/test_forwarded_resource_loop_bounds.py \
               tests/test_translator/test_reference_aliases.py \
               tests/test_translator/test_parameter_usage.py \

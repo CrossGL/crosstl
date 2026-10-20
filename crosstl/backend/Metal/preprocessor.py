@@ -47,6 +47,7 @@ from .integral_constant_arithmetic import (
     fold_integral_constant_parameter_arithmetic,
 )
 from .local_decltypes import complete_declared_type, substitute_local_decltypes_in
+from .member_lowering_layers import lower_members_with_late_specializations
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
@@ -1130,14 +1131,22 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = self._materialize_explicit_template_struct_instantiations(processed)
         processed = self._materialize_free_operator_overloads(processed)
         processed = self._elide_stateless_compile_time_globals(processed)
-        processed = self._lower_struct_member_functions(processed)
         # Member lowering can introduce fresh concrete struct-template spellings
         # in emitted free-function signatures.  In particular, a non-type member
         # parameter substituted from `Int<(N)>` is not visible to the first pass
         # above.  Materialize that generated layer before checking for residual
         # function templates; equivalent parenthesized arguments share the
-        # original concrete specialization through normalized keys.
-        processed = self._materialize_explicit_template_struct_instantiations(processed)
+        # original concrete specialization through normalized keys.  A layer
+        # struct that still declares members is lowered by a retry.
+        processed = lower_members_with_late_specializations(
+            self,
+            processed,
+            lambda source: self._materialize_explicit_template_struct_instantiations(
+                self._lower_struct_member_functions(source)
+            ),
+            self._materialize_explicit_template_struct_instantiations,
+            MetalStructMethodError,
+        )
         processed = self._materialize_explicit_template_function_calls(processed)
         processed = self._materialize_inferred_constrained_template_function_calls(
             processed

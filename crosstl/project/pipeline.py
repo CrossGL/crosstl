@@ -38,6 +38,9 @@ from crosstl.backend.Metal.function_specialization import (
     _strip_metal_attribute_blocks,
     _template_parameter_values_from_arguments,
 )
+from crosstl.backend.Metal.member_lowering_layers import (
+    lower_members_with_late_specializations,
+)
 from crosstl.backend.Metal.template_overloads import (
     declared_type_names,
     select_instantiated_overload,
@@ -20255,37 +20258,50 @@ def _lower_metal_struct_members_with_generated_aliases(
         if alias_declarations is not None
         else _metal_template_alias_declarations(preprocessor, source)
     )
-    if prematerialize:
-        source = preprocessor._materialize_explicit_template_struct_instantiations(
-            source,
+
+    def materialize(text: str) -> str:
+        return preprocessor._materialize_explicit_template_struct_instantiations(
+            text,
             work_budget=work_budget,
             allow_partial_object_specializations=True,
         )
-    preexisting_template_spans = preprocessor._find_template_declaration_spans(source)
-    preexisting_function_headers = frozenset(
-        re.sub(
-            r"\s+",
-            " ",
-            _metal_function_header(source, function).strip(),
+
+    def lower(text: str) -> str:
+        preexisting_template_spans = preprocessor._find_template_declaration_spans(text)
+        preexisting_function_headers = frozenset(
+            re.sub(
+                r"\s+",
+                " ",
+                _metal_function_header(text, function).strip(),
+            )
+            for function in preprocessor._find_non_template_function_definitions(
+                text,
+                list(preexisting_template_spans),
+            )
         )
-        for function in preprocessor._find_non_template_function_definitions(
-            source,
-            list(preexisting_template_spans),
+        lowered = preprocessor._lower_struct_member_functions(text)
+        canonicalized = _canonicalize_relocated_metal_template_aliases(
+            preprocessor,
+            lowered,
+            captured_declarations,
+            preexisting_function_headers=preexisting_function_headers,
         )
-    )
-    lowered = preprocessor._lower_struct_member_functions(source)
-    canonicalized = _canonicalize_relocated_metal_template_aliases(
+        if canonicalized == lowered and not rematerialize:
+            return lowered
+        return materialize(canonicalized)
+
+    from crosstl.backend.Metal.preprocessor import MetalStructMethodError
+
+    if prematerialize:
+        source = materialize(source)
+    # A lowered member body can name a struct specialization nothing else
+    # names; lower again with it materialized up front (see the helper).
+    return lower_members_with_late_specializations(
         preprocessor,
-        lowered,
-        captured_declarations,
-        preexisting_function_headers=preexisting_function_headers,
-    )
-    if canonicalized == lowered and not rematerialize:
-        return lowered
-    return preprocessor._materialize_explicit_template_struct_instantiations(
-        canonicalized,
-        work_budget=work_budget,
-        allow_partial_object_specializations=True,
+        source,
+        lower,
+        materialize,
+        MetalStructMethodError,
     )
 
 

@@ -50,6 +50,7 @@ from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
 from .conditional_types import split_template_arguments
 from .scoped_member_types import resolve_concrete_scoped_member_type
+from .static_member_calls import unresolved_static_member_call_owner
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -12421,6 +12422,19 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 expr.args,
                 getattr(expr, "source_location", None),
             )
+            unbound_member = unresolved_static_member_call_owner(
+                self, materialized_name
+            )
+            if unbound_member is not None:
+                raise MetalStructMethodCallResolutionError(
+                    unbound_member[0],
+                    unbound_member[1],
+                    (),
+                    (),
+                    "the struct declares no materialized static member function of "
+                    "that name",
+                    getattr(expr, "source_location", None),
+                )
             function_name = self.map_function_call_name(
                 materialized_name,
                 expr.args,
