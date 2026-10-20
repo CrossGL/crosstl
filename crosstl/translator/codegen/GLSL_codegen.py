@@ -422,6 +422,12 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
+from .texture_lod_clamp import (
+    GLSL_LOD_CLAMP_EXTENSION,
+    TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
+    glsl_texture_lod_clamp_call,
+    is_texture_lod_clamp_operation,
+)
 from .uniform_returns import UniformReturnAnalysis
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
@@ -3851,8 +3857,21 @@ class GLSLCodeGen(LoweringRefusalMixin):
             lines.append("#extension GL_EXT_ray_tracing_position_fetch : require")
         if self.uses_fragment_stencil_export(ast, target_stage):
             lines.append("#extension GL_ARB_shader_stencil_export : require")
+        if self.uses_texture_lod_clamp(ast, target_stage) and not (
+            self.glsl_version_is_es(getattr(self, "current_glsl_version_line", None))
+        ):
+            # GLSL ES has no such extension; the version requirements refuse the clamp functions there.
+            lines.append(f"#extension {GLSL_LOD_CLAMP_EXTENSION} : require")
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
         return lines
+
+    def uses_texture_lod_clamp(self, ast, target_stage=None):
+        return any(
+            isinstance(node, FunctionCallNode)
+            and self.function_call_name(node) in TEXTURE_LOD_CLAMP_INTRINSIC_NAMES
+            for root in self.ray_query_search_roots(ast, target_stage)
+            for node in self.walk_ast(root)
+        )
 
     def uses_fragment_stencil_export(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
@@ -39010,6 +39029,11 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if enum_constructor is not None:
                 return enum_constructor
+
+            if is_texture_lod_clamp_operation(original_func_name):
+                return glsl_texture_lod_clamp_call(
+                    self, original_func_name, expr.args, expr
+                )
 
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:

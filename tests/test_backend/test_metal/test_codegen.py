@@ -2596,7 +2596,7 @@ def test_codegen_depth_array_sample_compare_bias_option_from_msl_spec_is_diagnos
 
     assert (
         "Metal depth compare LOD option bias on shadowMap: CrossGL depth compares "
-        "have no bias or minimum-LOD clamp operand"
+        "have no bias operand"
     ) in message
     assert "textureCompare(shadowMap, shadowSampler, uv, layer, compare" not in crossgl
     assert "bias(lodBias)" not in crossgl
@@ -2642,7 +2642,7 @@ def test_codegen_texture_sample_min_lod_clamp_option_roundtrip():
     """
     crossgl = convert(code)
 
-    assert "textureMinLodClamp(colorMap, colorSampler, uv, firstTailMip)" in crossgl
+    assert "textureClamp(colorMap, colorSampler, uv, firstTailMip)" in crossgl
     assert "textureLod(colorMap" not in crossgl
 
     ast = parse_crossgl(crossgl)
@@ -2673,7 +2673,7 @@ def test_codegen_texture_sample_namespace_qualified_options_roundtrip():
     assert "textureLod(tex, samp, uv, lod)" in crossgl
     assert "texture(tex, samp, uv, biasValue)" in crossgl
     assert "textureGrad(tex, samp, uv, ddx, ddy)" in crossgl
-    assert "textureMinLodClamp(tex, samp, uv, firstTailMip)" in crossgl
+    assert "textureClamp(tex, samp, uv, firstTailMip)" in crossgl
     assert "metal_u3a_u3a" not in crossgl
 
     ast = parse_crossgl(crossgl)

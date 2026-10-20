@@ -766,18 +766,55 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
         if member in self.texture_method_map:
             texture_function = self.texture_method_map[member]
             dropped_parameters = []
-            if member == "Sample" and cube_family_resource and arg_count in {3, 4}:
-                texture_function = "texture"
-                if arg_count == 3:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "Sample" and arg_count in {3, 4, 5}:
-                texture_function = "textureOffset"
-                if arg_count == 4:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 5:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
+            # The Shader Model 5 tiled-resource overloads take a minimum-LOD Clamp after the offset (cube
+            # textures have none) and an optional status output last; CrossGL carries the clamp as the
+            # texture*Clamp operations, so only a status output is still dropped.
+            clamp_overloads = {
+                # member: (operands before the offset, unclamped, clamped, cube clamped)
+                "Sample": (2, "textureOffset", "textureOffsetClamp", "textureClamp"),
+                "SampleBias": (
+                    3,
+                    "textureOffset",
+                    "textureOffsetClamp",
+                    "textureClamp",
+                ),
+                "SampleGrad": (
+                    4,
+                    "textureGradOffset",
+                    "textureGradOffsetClamp",
+                    "textureGradClamp",
+                ),
+                "SampleCmp": (
+                    3,
+                    "textureCompareOffset",
+                    "textureCompareOffsetClamp",
+                    "textureCompareClamp",
+                ),
+                "SampleCmpGrad": (
+                    5,
+                    "textureCompareGradOffset",
+                    "textureCompareGradOffsetClamp",
+                    "textureCompareGradClamp",
+                ),
+            }
+            if member in clamp_overloads and arg_count is not None:
+                operands, offset_form, clamp_form, cube_clamp_form = clamp_overloads[
+                    member
+                ]
+                if cube_family_resource and arg_count in {operands + 1, operands + 2}:
+                    texture_function = cube_clamp_form
+                    if arg_count == operands + 2:
+                        dropped_parameters.append("status output")
+                elif not cube_family_resource and arg_count in {
+                    operands + 1,
+                    operands + 2,
+                    operands + 3,
+                }:
+                    texture_function = (
+                        offset_form if arg_count == operands + 1 else clamp_form
+                    )
+                    if arg_count == operands + 3:
+                        dropped_parameters.append("status output")
             elif member == "SampleLevel" and cube_family_resource and arg_count == 4:
                 texture_function = "textureLod"
                 dropped_parameters.append("status output")
@@ -785,63 +822,6 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
                 texture_function = "textureLodOffset"
                 if arg_count == 5:
                     dropped_parameters.append("status output")
-            elif (
-                member == "SampleGrad"
-                and cube_family_resource
-                and arg_count in {
-                    5,
-                    6,
-                }
-            ):
-                texture_function = "textureGrad"
-                if arg_count == 5:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "SampleGrad" and arg_count in {5, 6, 7}:
-                texture_function = "textureGradOffset"
-                if arg_count == 6:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 7:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif (
-                member == "SampleBias"
-                and cube_family_resource
-                and arg_count in {
-                    4,
-                    5,
-                }
-            ):
-                texture_function = "texture"
-                if arg_count == 4:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "SampleBias" and arg_count in {4, 5, 6}:
-                texture_function = "textureOffset"
-                if arg_count == 5:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 6:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif (
-                member == "SampleCmp"
-                and cube_family_resource
-                and arg_count in {
-                    4,
-                    5,
-                }
-            ):
-                texture_function = "textureCompare"
-                if arg_count == 4:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "SampleCmp" and arg_count in {4, 5, 6}:
-                texture_function = "textureCompareOffset"
-                if arg_count == 5:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 6:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
             elif member == "SampleCmpLevel" and cube_family_resource and arg_count == 5:
                 texture_function = "textureCompareLod"
                 dropped_parameters.append("status output")
@@ -849,25 +829,6 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
                 texture_function = "textureCompareLodOffset"
                 if arg_count == 6:
                     dropped_parameters.append("status output")
-            elif (
-                member == "SampleCmpGrad"
-                and cube_family_resource
-                and arg_count in {
-                    6,
-                    7,
-                }
-            ):
-                texture_function = "textureCompareGrad"
-                if arg_count == 6:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "SampleCmpGrad" and arg_count in {6, 7, 8}:
-                texture_function = "textureCompareGradOffset"
-                if arg_count == 7:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 8:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
             elif (
                 member == "SampleCmpBias"
                 and cube_family_resource
@@ -1114,6 +1075,20 @@ class HLSLToCrossGLConverter(ImportRefusalMixin):
         ):
             sampler, coords, bias, offset = rendered_args[:4]
             method_args = [obj, sampler, coords, offset, bias]
+        elif (
+            member == "SampleBias"
+            and descriptor["function"] == "textureOffsetClamp"
+            and len(rendered_args) >= 5
+        ):
+            sampler, coords, bias, offset, clamp = rendered_args[:5]
+            method_args = [obj, sampler, coords, offset, clamp, bias]
+        elif (
+            member == "SampleBias"
+            and descriptor["function"] == "textureClamp"
+            and len(rendered_args) >= 4
+        ):
+            sampler, coords, bias, clamp = rendered_args[:4]
+            method_args = [obj, sampler, coords, clamp, bias]
         elif member == "SampleCmpBias" and descriptor["function"] == "textureCompare":
             sampler, coords, compare = rendered_args[:3]
             method_args = [obj, sampler, coords, compare]

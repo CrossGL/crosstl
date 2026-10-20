@@ -7784,7 +7784,7 @@ def test_spirv_implicit_lod_min_lod_offset_codegen_reparse():
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
-        "outColor = spirvTextureOffsetMinLod(colorTex, uv, int2(1, 2), 0.5);"
+        "outColor = textureOffsetClamp(colorTex, uv, int2(1, 2), 0.5);"
         in generated_code
     )
     assert "outColor = textureOffset(colorTex, uv, 0.5);" not in generated_code

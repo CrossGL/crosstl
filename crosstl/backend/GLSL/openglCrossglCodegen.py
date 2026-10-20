@@ -3,6 +3,9 @@
 import re
 
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.translator.codegen.texture_lod_clamp import (
+    TextureLodClampUnsupportedError,
+)
 
 from .OpenglAst import (
     ArrayAccessNode,
@@ -254,6 +257,18 @@ class GLSLToCrossGLConverter:
         "textureGrad": 4,
         "textureGradOffset": 5,
         "textureOffset": 3,
+    }
+    # GL_ARB_sparse_texture_clamp functions: (CrossGL operation, its depth-compare form, operands between the
+    # coordinate and the clamp). The clamp precedes an optional bias, as in CrossGL.
+    ARB_LOD_CLAMP_FUNCTIONS = {
+        "textureClampARB": ("textureClamp", "textureCompareClamp", 0),
+        "textureOffsetClampARB": ("textureOffsetClamp", "textureCompareOffsetClamp", 1),
+        "textureGradClampARB": ("textureGradClamp", "textureCompareGradClamp", 2),
+        "textureGradOffsetClampARB": (
+            "textureGradOffsetClamp",
+            "textureCompareGradOffsetClamp",
+            3,
+        ),
     }
     LEGACY_SHADOW_TEXTURE_COMPARE_FUNCTIONS = {
         "shadow2D": "textureCompare",
@@ -926,6 +941,42 @@ class GLSLToCrossGLConverter:
             *[self.generate_expression(arg) for arg in args[2:]],
         ]
         return self.SHADOW_TEXTURE_COMPARE_FUNCTIONS[name], call_args
+
+    def texture_lod_clamp_call(self, name, args):
+        """CrossGL for a GL_ARB_sparse_texture_clamp call; shadow samplers split the reference out of ``P``."""
+        sample_name, compare_name, operands = self.ARB_LOD_CLAMP_FUNCTIONS[name]
+        rendered = [self.generate_expression(arg) for arg in args]
+        sampler_type = self.expression_shadow_sampler_type(args[0]) if args else None
+        if sampler_type is None:
+            return f"{sample_name}({', '.join(rendered)})"
+        if sampler_type in self.SHADOW_SAMPLER_SEPARATE_COMPARE_TYPES:
+            if name == "textureClampARB" and len(args) == 4:
+                return f"{compare_name}({', '.join(rendered)})"
+            raise TextureLodClampUnsupportedError(
+                "cgl",
+                name,
+                f"GL_ARB_sparse_texture_clamp has no {name} overload for {sampler_type} with "
+                f"{len(args)} arguments",
+            )
+        if sampler_type not in self.SHADOW_SAMPLER_PACKED_COORD_SWIZZLES:
+            raise TextureLodClampUnsupportedError(
+                "cgl", name, f"the shadow sampler type {sampler_type} is not supported"
+            )
+        if len(args) != 3 + operands:
+            raise TextureLodClampUnsupportedError(
+                "cgl",
+                name,
+                (
+                    "a depth compare takes no LOD bias in CrossGL"
+                    if len(args) == 4 + operands
+                    else f"{name} on {sampler_type} takes {3 + operands} arguments, got {len(args)}"
+                ),
+            )
+        coord_expr, compare_expr = self.shadow_texture_compare_coord_ref(
+            args[1], sampler_type
+        )
+        call_args = [rendered[0], coord_expr, compare_expr, *rendered[2:]]
+        return f"{compare_name}({', '.join(call_args)})"
 
     def legacy_shadow_texture_compare_call(self, name, args):
         compare_name = self.LEGACY_SHADOW_TEXTURE_COMPARE_FUNCTIONS.get(name)
@@ -3582,6 +3633,9 @@ class GLSLToCrossGLConverter:
         ray_query_call = self.generate_ray_query_method_call(name, node.args)
         if ray_query_call is not None:
             return ray_query_call
+
+        if name in self.ARB_LOD_CLAMP_FUNCTIONS:
+            return self.texture_lod_clamp_call(name, node.args)
 
         legacy_shadow_texture_call = self.legacy_shadow_texture_compare_call(
             name, node.args

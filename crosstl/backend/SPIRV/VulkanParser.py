@@ -4549,29 +4549,39 @@ class VulkanParser:
         bias,
         min_lod,
     ):
-        function_parts = ["spirvTexture"]
-        if "Proj" in opcode:
-            function_parts.append("Proj")
-        if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
-            function_parts.append("Grad")
-        elif "Lod" in parsed_operands and parsed_operands["Lod"]:
-            function_parts.append("Lod")
-        if offset is not None:
-            function_parts.append("Offset")
-        function_parts.append("MinLod")
+        """CrossGL ``texture*Clamp`` for a sample with the ``MinLod`` image operand (SPIR-V 3.14).
 
+        ``base_args`` are the sampled image, the coordinate and, for a ``Dref`` sample, the reference.
+        """
+        is_compare = "Dref" in opcode
+        gradient = parsed_operands.get("Grad") or []
+        if "Proj" in opcode:
+            raise SpirvInstructionUnsupportedError(
+                opcode,
+                "with a MinLod operand has no CrossGL form: CrossGL has no projective minimum-LOD clamped sample",
+            )
+        if parsed_operands.get("Lod") or (gradient and len(gradient) < 2):
+            raise SpirvInstructionUnsupportedError(
+                opcode,
+                "combines MinLod with an explicit Lod, which SPIR-V allows only on implicit-LOD or Grad sampling",
+            )
+        if is_compare and bias is not None:
+            raise SpirvInstructionUnsupportedError(
+                opcode,
+                "with Bias and MinLod has no CrossGL form: CrossGL depth compares take no bias",
+            )
+        name = "textureCompare" if is_compare else "texture"
         args = list(base_args)
-        if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
-            args.extend(parsed_operands["Grad"][:2])
-        elif "Lod" in parsed_operands and parsed_operands["Lod"]:
-            args.append(parsed_operands["Lod"][0])
+        if gradient:
+            name += "Grad"
+            args.extend(gradient[:2])
         if offset is not None:
+            name += "Offset"
             args.append(offset)
         args.append(min_lod)
         if bias is not None:
             args.append(bias)
-
-        return FunctionCallNode("".join(function_parts), args)
+        return FunctionCallNode(f"{name}Clamp", args)
 
     def spirv_assembly_image_sparse_sample_expression(
         self,

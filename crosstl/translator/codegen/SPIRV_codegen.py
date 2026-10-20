@@ -104,6 +104,11 @@ from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
 from .spirv_refusals import SpirvRefusals
+from .texture_lod_clamp import (
+    TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
+    is_texture_lod_clamp_operation,
+    spirv_texture_lod_clamp_call,
+)
 
 
 class SpirvType:
@@ -4723,7 +4728,7 @@ class VulkanSPIRVCodeGen(
             "imageSamples",
             "textureQueryLevels",
             "textureQueryLod",
-        }
+        } | TEXTURE_LOD_CLAMP_INTRINSIC_NAMES
 
     def image_atomic_function_names(self):
         return {
@@ -6026,6 +6031,16 @@ class VulkanSPIRVCodeGen(
     def call_resource_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
+        if is_texture_lod_clamp_operation(function_name):
+            sampler = (
+                self.resource_metadata_for_value(args[1]) if len(args) > 1 else None
+            )
+            return spirv_texture_lod_clamp_call(
+                self,
+                function_name,
+                args,
+                bool(sampler) and sampler.get("kind") == "sampler",
+            )
         if function_name in self.image_atomic_function_names():
             return self.call_image_atomic_function(function_name, args)
         if function_name in self.buffer_atomic_function_names():
@@ -7064,6 +7079,10 @@ class VulkanSPIRVCodeGen(
             "textureCompareLodOffset": {4, 5},
             "textureCompareGradOffset": {5, 6},
             "textureGatherCompareOffset": {3, 4},
+            "textureOffsetClamp": {2, 3},
+            "textureGradOffsetClamp": {4, 5},
+            "textureCompareOffsetClamp": {3, 4},
+            "textureCompareGradOffsetClamp": {5, 6},
         }.get(function_name, set())
 
     def literal_integer_vector_constant(self, expr) -> Optional[SpirvId]:

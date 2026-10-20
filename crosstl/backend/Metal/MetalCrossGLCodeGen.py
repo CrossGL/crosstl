@@ -2654,6 +2654,11 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
     def texture_sample_options_call(self, options, sample_args, is_main=False):
         if not options:
             return f"texture({', '.join(sample_args)})"
+        clamp_split = self.texture_min_lod_clamp_options(options, is_main)
+        if clamp_split is not None:
+            return self.texture_min_lod_clamp_sample_call(
+                clamp_split, sample_args, is_main
+            )
         if len(options) > 2:
             return None
 
@@ -2684,17 +2689,6 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 )
             return f"textureGrad({', '.join(sample_args + [ddx, ddy])})"
 
-        min_lod_clamp_arg = self.unwrap_texture_option_argument(option, "min_lod_clamp")
-        if min_lod_clamp_arg is not option:
-            min_lod = self.generate_expression(min_lod_clamp_arg, is_main)
-            if offset is not None:
-                rendered_offset = self.generate_expression(offset, is_main)
-                return (
-                    "textureMinLodClampOffset("
-                    f"{', '.join(sample_args + [min_lod, rendered_offset])})"
-                )
-            return f"textureMinLodClamp({', '.join(sample_args + [min_lod])})"
-
         level_arg = self.unwrap_texture_option_argument(option, "level")
         if level_arg is not option or not self.texture_sample_option_is_offset(option):
             lod = self.generate_expression(level_arg, is_main)
@@ -2708,6 +2702,89 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
 
         rendered_offset = self.generate_expression(option, is_main)
         return f"textureOffset({', '.join(sample_args + [rendered_offset])})"
+
+    METAL_SAMPLE_OPTION_NAMES = frozenset(
+        {
+            "bias",
+            "level",
+            "min_lod_clamp",
+            "gradient2d",
+            "gradient3d",
+            "gradientcube",
+        }
+    )
+
+    def texture_min_lod_clamp_options(self, options, is_main=False):
+        """``(leading option, clamp, offset)`` for MSL options that hold ``min_lod_clamp``, otherwise ``None``.
+
+        MSL accepts ``min_lod_clamp`` alone or after ``bias`` or a ``gradient*`` option, and before the offset
+        (MSL specification, section 6.12). CrossGL's ``texture*Clamp`` operations carry the same clamp.
+        """
+        positions = [
+            index
+            for index, option in enumerate(options)
+            if self.unwrap_texture_option_argument(option, "min_lod_clamp")
+            is not option
+        ]
+        if not positions:
+            return None
+        index = positions[0]
+        leading, trailing = options[:index], options[index + 1 :]
+        if (
+            len(positions) > 1
+            or len(leading) > 1
+            or len(trailing) > 1
+            or any(
+                isinstance(option, FunctionCallNode)
+                and self.unscoped_function_name(option.name)
+                in self.METAL_SAMPLE_OPTION_NAMES
+                for option in trailing
+            )
+        ):
+            return False
+        clamp = self.generate_expression(
+            self.unwrap_texture_option_argument(options[index], "min_lod_clamp"),
+            is_main,
+        )
+        offset = self.generate_expression(trailing[0], is_main) if trailing else None
+        return (leading[0] if leading else None), clamp, offset
+
+    def texture_min_lod_clamp_sample_call(self, clamp_split, sample_args, is_main):
+        if clamp_split is False:
+            return self.refuse_import(
+                "Metal sample options around min_lod_clamp: MSL takes at most one bias or gradient option before "
+                "min_lod_clamp and an offset after it",
+                "vec4(0.0)",
+            )
+        option, clamp, offset = clamp_split
+        if option is None:
+            if offset is not None:
+                return f"textureOffsetClamp({', '.join(sample_args + [offset, clamp])})"
+            return f"textureClamp({', '.join(sample_args + [clamp])})"
+        bias_arg = self.unwrap_texture_option_argument(option, "bias")
+        if bias_arg is not option:
+            bias = self.generate_expression(bias_arg, is_main)
+            if offset is not None:
+                return (
+                    "textureOffsetClamp("
+                    f"{', '.join(sample_args + [offset, clamp, bias])})"
+                )
+            return f"textureClamp({', '.join(sample_args + [clamp, bias])})"
+        gradient_args = self.texture_gradient_option_arguments(option)
+        if gradient_args is not None:
+            ddx = self.generate_expression(gradient_args[0], is_main)
+            ddy = self.generate_expression(gradient_args[1], is_main)
+            if offset is not None:
+                return (
+                    "textureGradOffsetClamp("
+                    f"{', '.join(sample_args + [ddx, ddy, offset, clamp])})"
+                )
+            return f"textureGradClamp({', '.join(sample_args + [ddx, ddy, clamp])})"
+        return self.refuse_import(
+            "Metal sample option combined with min_lod_clamp: MSL clamps only a computed level of detail, so "
+            "min_lod_clamp combines with bias or gradient options, not with an explicit level",
+            "vec4(0.0)",
+        )
 
     def texture_sample_option_is_offset(self, option):
         mapped_type = self.expression_mapped_type(option)
@@ -2818,6 +2895,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         )
         if len(method_args) == compare_arg_count and compare_arg_count == 4:
             return f"textureCompare({obj}, {', '.join(compare_args)})"
+        clamp_split = self.texture_min_lod_clamp_options(
+            method_args[compare_arg_count:], is_main
+        )
+        if clamp_split is not None:
+            return self.texture_compare_min_lod_clamp_call(
+                obj, compare_args, clamp_split, is_main
+            )
         if len(method_args) not in {compare_arg_count + 1, compare_arg_count + 2}:
             return None
 
@@ -2863,15 +2947,51 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
 
         return None
 
+    def texture_compare_min_lod_clamp_call(
+        self, obj, compare_args, clamp_split, is_main
+    ):
+        if clamp_split is False:
+            return self.refuse_import(
+                f"Metal depth compare options around min_lod_clamp on {obj}: MSL takes at most one gradient "
+                "option before min_lod_clamp and an offset after it",
+                "0.0",
+            )
+        option, clamp, offset = clamp_split
+        gradient_args = (
+            self.texture_gradient_option_arguments(option)
+            if option is not None
+            else None
+        )
+        if option is not None and gradient_args is None:
+            return self.unsupported_texture_compare_lod_option(obj, option) or (
+                self.refuse_import(
+                    f"Metal depth compare option combined with min_lod_clamp on {obj}: MSL clamps only a "
+                    "computed level of detail",
+                    "0.0",
+                )
+            )
+        args = [obj, *compare_args]
+        if gradient_args is not None:
+            args += [
+                self.generate_expression(gradient_args[0], is_main),
+                self.generate_expression(gradient_args[1], is_main),
+            ]
+        function = (
+            "textureCompareGrad" if gradient_args is not None else "textureCompare"
+        )
+        if offset is not None:
+            return f"{function}OffsetClamp({', '.join(args + [offset, clamp])})"
+        return f"{function}Clamp({', '.join(args + [clamp])})"
+
     def unsupported_texture_compare_lod_option(self, obj, option):
         if not isinstance(option, FunctionCallNode):
             return None
         option_name = self.unscoped_function_name(option.name)
-        if option_name not in {"bias", "min_lod_clamp"}:
+        if option_name != "bias":
             return None
         return self.refuse_import(
             f"Metal depth compare LOD option {option_name} on {obj}: CrossGL depth "
-            "compares have no bias or minimum-LOD clamp operand",
+            "compares have no bias operand",
             "0.0",
         )
 

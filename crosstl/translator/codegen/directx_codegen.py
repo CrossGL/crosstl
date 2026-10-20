@@ -412,6 +412,10 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
+from .texture_lod_clamp import (
+    hlsl_texture_lod_clamp_call,
+    is_texture_lod_clamp_operation,
+)
 from .uniform_returns import UniformReturnAnalysis
 from .union_layout import UnionLayoutCollector
 from .workgroup_access_contracts import parse_workgroup_access_assertions
@@ -53231,6 +53235,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_texture_call(self, func_name, args, *, call_node=None):
         if not func_name:
             return None
+        if is_texture_lod_clamp_operation(func_name):
+            return hlsl_texture_lod_clamp_call(self, func_name, args, call_node)
 
         feedback_call = self.generate_hlsl_feedback_write_call(func_name, args)
         if feedback_call is not None:

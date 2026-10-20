@@ -12,6 +12,10 @@ from ..validation import (
     texture_intrinsic_min_argument_count,
 )
 from .lowering_refusals import refuse_unsupported
+from .texture_lod_clamp import (
+    TEXTURE_COMPARE_LOD_CLAMP_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_LOD_CLAMP_INTRINSIC_NAMES,
+)
 
 IMAGE_ATOMIC_INTRINSIC_NAMES = {
     "imageAtomicAdd",
@@ -1217,6 +1221,8 @@ TEXTURE_COMPARE_INTRINSIC_NAMES = (
     | TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES
     | TEXTURE_COMPARE_GRAD_INTRINSIC_NAMES
     | TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES
+    # Minimum-LOD clamped compares (texture_lod_clamp.py); emitters lower them before their compare dispatch.
+    | TEXTURE_COMPARE_LOD_CLAMP_INTRINSIC_NAMES
 )
 
 
@@ -1255,6 +1261,8 @@ TEXTURE_SAMPLE_INTRINSIC_NAMES = (
     TEXTURE_SAMPLE_BASIC_INTRINSIC_NAMES
     | TEXTURE_SAMPLE_LOD_INTRINSIC_NAMES
     | TEXTURE_SAMPLE_GRAD_INTRINSIC_NAMES
+    # Minimum-LOD clamped samples (texture_lod_clamp.py); emitters lower them before their sample dispatch.
+    | TEXTURE_SAMPLE_LOD_CLAMP_INTRINSIC_NAMES
 )
 
 
