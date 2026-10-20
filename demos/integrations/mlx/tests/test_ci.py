@@ -173,8 +173,10 @@ def test_current_attention_runs_in_the_native_jobs_and_retains_evidence():
     assert step["env"]["EGL_PLATFORM"] == "surfaceless"
     assert step["env"]["LIBGL_ALWAYS_SOFTWARE"] == "1"
     assert step["env"]["PYOPENGL_PLATFORM"] == "egl"
-    # Three entries translate serially; Windows runners take several minutes each.
+    # Entries translate in parallel groups; Windows runners take several
+    # minutes for each one.
     assert "--timeout-seconds 1800" in step["run"]
+    assert "-n auto --dist loadgroup" in step["run"]
     assert "--junitxml=mlx-attention-results/results.xml" in step["run"]
     upload = job["steps"][names.index("Upload current MLX attention native evidence")]
     assert names.index("Upload current MLX attention native evidence") == (

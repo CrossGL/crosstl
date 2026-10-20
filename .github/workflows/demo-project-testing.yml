@@ -4782,7 +4782,7 @@ jobs:
           mkdir -p mlx-attention-results
           python tools/run_bounded_command.py \
             --label "current MLX attention native execution" --timeout-seconds 1800 -- \
-            python -m pytest -q \
+            python -m pytest -q -n auto --dist loadgroup --durations=20 \
               --basetemp=mlx-attention-results/pytest \
               --junitxml=mlx-attention-results/results.xml \
               demos/integrations/mlx/tests/kernels/test_current_attention.py
