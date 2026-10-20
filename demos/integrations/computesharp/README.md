@@ -659,7 +659,11 @@ modules, `crosstl/backend/**` and `crosstl/translator/**`.
 `crosstl/project/**` and other demos do not select it; manual dispatches always
 do. `tests/test_workflow.py` translates generated ComputeSharp HLSL in a fresh
 interpreter and fails if a loaded CrossTL module falls outside these paths. A
-new push to a pull request cancels that pull request's superseded run.
+change confined to this README and `results.json`, such as citing a new
+qualifying run, runs only the Linux contract job, which checks the two against
+each other; the test also fails if a build, translation or execution input
+starts reading either file. A new push to a pull request cancels that pull
+request's superseded run.
 
 ## Licenses
 

@@ -10,6 +10,7 @@ translation path cannot silently skip the port's CI.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -36,6 +37,19 @@ RELEVANT_PATHS = {
     "pyproject.toml",
     "setup.py",
     "tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py",
+}
+RECORD_PATHS = {
+    "demos/integrations/computesharp/README.md",
+    "demos/integrations/computesharp/results.json",
+}
+# The jobs that build, translate and execute the port, as opposed to the Linux
+# contract job that checks the demo's tests and published records.
+EXECUTION_JOBS = {
+    "original-directx",
+    "adapted-source-parity",
+    "translated-metal",
+    "translated-opengl",
+    "qualification",
 }
 RESULT_CHECK = "ComputeSharp validation result"
 MAX_RETENTION_DAYS = 14
@@ -105,6 +119,56 @@ def load_workflow() -> dict:
 def test_planner_owns_the_relevant_paths():
     assert set(PLAN.RELEVANT_PATHS) == RELEVANT_PATHS
     assert len(PLAN.RELEVANT_PATHS) == len(RELEVANT_PATHS)
+    assert set(PLAN.RECORD_PATHS) == RECORD_PATHS
+    assert all(PLAN.is_relevant(path) for path in RECORD_PATHS)
+
+
+# The demo's scripts write and read per-run ``results.json`` files under a
+# run's work or output directory; none of them names the published summary.
+PER_RUN_RESULTS = {
+    "companions.py": {"directory / 'run' / 'results.json'"},
+    "qualify.py": {"run / 'results.json'", "output / 'results.json'"},
+    "run_tests.py": {"self.work / 'results.json'", "run.work / 'results.json'"},
+}
+
+
+def _record_names(text: str) -> list[str]:
+    return [name for name in ("README.md", "results.json") if name in text]
+
+
+def test_published_records_are_read_only_by_the_contract_tests():
+    """No build, translation or execution input names the published records.
+
+    The plan skips the execution jobs for a change confined to these files,
+    which is sound only while the contract tests (``test_results.py``) are
+    their only reader.
+    """
+    jobs = load_workflow()["jobs"]
+    for name in EXECUTION_JOBS:
+        for step in jobs[name]["steps"]:
+            assert _record_names(json.dumps(step)) == [], (name, step.get("name"))
+    for path in ROOT.rglob("*.py"):
+        relative = path.relative_to(ROOT)
+        if relative.parts[0] in {"tests", "__pycache__"} or path.name == "ci_plan.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        parents = {
+            child: node
+            for node in ast.walk(tree)
+            for child in ast.iter_child_nodes(node)
+        }
+        for node in ast.walk(tree):
+            # Path operands, not prose: docstrings and messages contain spaces.
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if _record_names(node.value) and not re.search(r"\s", node.value):
+                    expression = ast.unparse(parents[node])
+                    allowed = PER_RUN_RESULTS.get(relative.as_posix(), set())
+                    assert expression in allowed, (relative, node.lineno)
+    for pattern in ("*.cs", "*.csproj", "*.props", "*.targets", "*.sh", "*.ps1"):
+        for path in ROOT.rglob(pattern):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+            assert _record_names(text) == [], path.relative_to(ROOT)
 
 
 def test_every_pull_request_and_merge_group_starts_the_workflow():
@@ -120,7 +184,10 @@ def test_every_pull_request_and_merge_group_starts_the_workflow():
 
 def test_plan_job_selects_the_port_from_the_event_diff():
     plan = load_workflow()["jobs"]["plan"]
-    assert plan["outputs"] == {"run": "${{ steps.plan.outputs.run }}"}
+    assert plan["outputs"] == {
+        "execute": "${{ steps.plan.outputs.execute }}",
+        "run": "${{ steps.plan.outputs.run }}",
+    }
     assert plan["timeout-minutes"] <= 5
     checkout = plan["steps"][0]
     assert checkout["uses"].startswith("actions/checkout@")
@@ -149,7 +216,11 @@ def test_every_port_job_waits_for_the_plan():
             continue
         needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
         assert "plan" in needs, name
-        assert "needs.plan.outputs.run == 'true'" in job["if"], name
+        output = "execute" if name in EXECUTION_JOBS else "run"
+        assert f"needs.plan.outputs.{output} == 'true'" in job["if"], name
+        other = "run" if output == "execute" else "execute"
+        assert f"needs.plan.outputs.{other}" not in job["if"], name
+    assert EXECUTION_JOBS | {"plan", "result", "discovery-contract"} == set(jobs)
 
 
 def test_one_result_job_reports_every_job():
@@ -185,24 +256,44 @@ def test_jobs_are_bounded_and_cache_pip_downloads():
                 assert (step["with"].get("cache") == "pip") == installs, name
 
 
+RECORDS = (
+    "demos/integrations/computesharp/README.md",
+    "demos/integrations/computesharp/results.json",
+)
+
+
 @pytest.mark.parametrize(
-    "event,paths,run",
+    "event,paths,run,execute",
     [
-        ("schedule", (), True),
-        ("workflow_dispatch", (), True),
-        ("pull_request", (), False),
-        ("pull_request", ("docs/source/project-porting.rst",), False),
-        ("pull_request", ("demos/integrations/mlx/run_mlx_porting.py",), False),
-        ("pull_request", ("crosstl/translator/codegen/GLSL_codegen.py",), True),
-        ("merge_group", ("crosstl/project/pipeline.py",), False),
-        ("merge_group", ("README.md", "crosstl/_crosstl.py"), True),
-        ("push", ("demos/integrations/computesharp/results.json",), True),
-        ("push", (".github/workflows/project-demo-testing.yml",), True),
-        ("push", (".github/workflows/demo-project-testing.yml",), False),
+        ("schedule", (), True, True),
+        ("workflow_dispatch", (), True, True),
+        ("pull_request", (), False, False),
+        ("pull_request", ("docs/source/project-porting.rst",), False, False),
+        ("pull_request", ("demos/integrations/mlx/run_mlx_porting.py",), False, False),
+        ("pull_request", ("crosstl/translator/codegen/GLSL_codegen.py",), True, True),
+        ("merge_group", ("crosstl/project/pipeline.py",), False, False),
+        ("merge_group", ("README.md", "crosstl/_crosstl.py"), True, True),
+        ("push", ("demos/integrations/computesharp/results.json",), True, False),
+        ("pull_request", RECORDS, True, False),
+        ("pull_request", (*RECORDS, "docs/source/index.rst"), True, False),
+        (
+            "pull_request",
+            (*RECORDS, "demos/integrations/computesharp/qualify.py"),
+            True,
+            True,
+        ),
+        (
+            "pull_request",
+            ("demos/integrations/computesharp/patches/README.md",),
+            True,
+            True,
+        ),
+        ("push", (".github/workflows/project-demo-testing.yml",), True, True),
+        ("push", (".github/workflows/demo-project-testing.yml",), False, False),
     ],
 )
-def test_validation_plan_follows_the_changed_paths(event, paths, run):
-    assert PLAN.validation_plan(event, paths) == {"run": run}
+def test_validation_plan_follows_the_changed_paths(event, paths, run, execute):
+    assert PLAN.validation_plan(event, paths) == {"execute": execute, "run": run}
 
 
 def test_validation_plan_rejects_unknown_events():
@@ -253,12 +344,19 @@ def test_plan_reads_the_diff_from_the_merge_base(tmp_path, monkeypatch):
     base = _commit(repo, "crosstl/translator/parser.py", "base change")
     monkeypatch.chdir(repo)
     assert PLAN.changed_paths(base, head) == ("docs/notes.md",)
-    assert PLAN.plan_for_event("pull_request", base, head) == {"run": False}
+    nothing = {"execute": False, "run": False}
+    everything = {"execute": True, "run": True}
+    assert PLAN.plan_for_event("pull_request", base, head) == nothing
     moved = _commit(repo, "demos/integrations/computesharp/run_tests.py", "port")
-    assert PLAN.plan_for_event("merge_group", root, moved) == {"run": True}
+    assert PLAN.plan_for_event("merge_group", root, moved) == everything
+    cited = _commit(repo, "demos/integrations/computesharp/README.md", "cite")
+    assert PLAN.plan_for_event("pull_request", moved, cited) == {
+        "execute": False,
+        "run": True,
+    }
     # A push without a known old tip validates everything.
-    assert PLAN.plan_for_event("push", "0" * 40, head) == {"run": True}
-    assert PLAN.plan_for_event("push", "f" * 40, head) == {"run": True}
+    assert PLAN.plan_for_event("push", "0" * 40, head) == everything
+    assert PLAN.plan_for_event("push", "f" * 40, head) == everything
     with pytest.raises(ValueError, match="full Git commit hashes"):
         PLAN.changed_paths("main", head)
 
@@ -278,7 +376,7 @@ def test_plan_reads_the_diff_from_the_merge_base(tmp_path, monkeypatch):
         )
         == 0
     )
-    assert output.read_text(encoding="utf-8") == "run=false\n"
+    assert output.read_text(encoding="utf-8") == "execute=false\nrun=false\n"
 
 
 def test_target_jobs_require_the_hlsl_cbuffer_layout_dispatches():

@@ -5,7 +5,9 @@ name: ComputeSharp Port Testing
 # jobs when an event changes nothing the port depends on: the demo, this
 # workflow, packaging and the CrossTL modules its HLSL translation imports
 # (demos/integrations/computesharp/ci_plan.py; tests/test_workflow.py keeps
-# those paths in step with the modules a translation actually loads).
+# those paths in step with the modules a translation actually loads). A change
+# confined to the published records (README.md, results.json) runs only the
+# contract job, which checks them; the execution jobs need code changes.
 on:
   pull_request:
     branches: [main]
@@ -34,6 +36,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
+      execute: ${{ steps.plan.outputs.execute }}
       run: ${{ steps.plan.outputs.run }}
     steps:
       - uses: actions/checkout@v7
@@ -99,7 +102,7 @@ jobs:
   original-directx:
     name: Original compute baseline (Windows WARP)
     needs: plan
-    if: ${{ needs.plan.outputs.run == 'true' }}
+    if: ${{ needs.plan.outputs.execute == 'true' }}
     runs-on: windows-2025
     timeout-minutes: 45
     env:
@@ -198,7 +201,7 @@ jobs:
   adapted-source-parity:
     name: Adapted source parity (Linux)
     needs: [plan, original-directx]
-    if: ${{ !cancelled() && needs.plan.outputs.run == 'true' }}
+    if: ${{ !cancelled() && needs.plan.outputs.execute == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -254,7 +257,7 @@ jobs:
   translated-metal:
     name: Translated compute tests (macOS Metal)
     needs: plan
-    if: ${{ needs.plan.outputs.run == 'true' }}
+    if: ${{ needs.plan.outputs.execute == 'true' }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -346,7 +349,7 @@ jobs:
   translated-opengl:
     name: Translated compute tests (Linux OpenGL, Mesa llvmpipe)
     needs: plan
-    if: ${{ needs.plan.outputs.run == 'true' }}
+    if: ${{ needs.plan.outputs.execute == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -442,7 +445,7 @@ jobs:
   qualification:
     name: ComputeSharp port qualification (Linux)
     needs: [plan, original-directx, adapted-source-parity, translated-metal, translated-opengl]
-    if: ${{ !cancelled() && needs.plan.outputs.run == 'true' }}
+    if: ${{ !cancelled() && needs.plan.outputs.execute == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

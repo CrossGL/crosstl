@@ -9,6 +9,13 @@ modules that translating the generated HLSL imports.
 interpreter and requires every CrossTL module it loads to match one of these
 paths, so a new dependency of the translation cannot silently skip the port.
 
+The plan has two outputs. ``run`` selects the Linux contract job, which checks
+the demo's tests and its published records. ``execute`` selects the original
+DirectX, translated Metal and OpenGL and qualification jobs. A change confined
+to the published records (the README and ``results.json``, which only cite a
+qualifying run and are read by no build, translation or execution step) runs
+the contract job alone, so citing a run does not repeat it.
+
 Usage (from the repository root)::
 
     python demos/integrations/computesharp/ci_plan.py --event pull_request \
@@ -34,6 +41,12 @@ RELEVANT_PATHS = (
     "setup.py",
     # The translated target jobs dispatch these general layout checks.
     "tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py",
+)
+# Published records of a qualifying run. No job reads them except the
+# contract tests, which check them against each other.
+RECORD_PATHS = (
+    "demos/integrations/computesharp/README.md",
+    "demos/integrations/computesharp/results.json",
 )
 # Events without a meaningful change set validate everything.
 UNCONDITIONAL_EVENTS = frozenset({"schedule", "workflow_dispatch"})
@@ -62,10 +75,14 @@ def is_relevant(path: str) -> bool:
 def validation_plan(event: str, paths=()) -> dict[str, bool]:
     """Select the port's validation for an event and the files it changes."""
     if event in UNCONDITIONAL_EVENTS:
-        return {"run": True}
+        return {"execute": True, "run": True}
     if event not in DIFFED_EVENTS:
         raise ValueError(f"Unsupported workflow event: {event}")
-    return {"run": any(is_relevant(path) for path in paths)}
+    relevant = [path for path in paths if is_relevant(path)]
+    return {
+        "execute": any(path not in RECORD_PATHS for path in relevant),
+        "run": bool(relevant),
+    }
 
 
 def _require_hashes(*revisions: str) -> None:
@@ -111,7 +128,7 @@ def plan_for_event(event: str, base: str, head: str) -> dict[str, bool]:
         return validation_plan(event)
     if event == "push" and (base == NO_COMMIT or not has_commit(base)):
         # A new branch has no old tip, and a rewritten one may not be fetched.
-        return {"run": True}
+        return {"execute": True, "run": True}
     return validation_plan(event, changed_paths(base, head))
 
 
