@@ -1002,6 +1002,13 @@ class HLSLToCrossGLConverter(
 
     def resource_method_descriptor(self, member, arg_count=None, resource_type=None):
         member = self.templated_method_base(member)
+        if self.raw_type_base(resource_type) in {
+            "PointStream",
+            "LineStream",
+            "TriangleStream",
+        }:
+            # Geometry stream Append/RestartStrip stay stream methods in CrossGL.
+            return None
         if (
             member == "SubpassLoad"
             and self.raw_type_base(resource_type) == "SubpassInput"

@@ -7923,13 +7923,16 @@ class TestVulkanSPIRVCodeGen:
             "groupMemoryBarrier",
             "memoryBarrierShared",
         ]:
-            assert (
-                spv_code_refused.count(
-                    f"synchronization builtin '{function_name}' "
-                    "requires a workgroup-capable execution model"
-                )
-                == 2
-            )
+            # GLSL's barrier() orders a tessellation control patch's invocations
+            # (GLSL 4.60 section 8.16); only the evaluation stage refuses it.
+            assert spv_code_refused.count(
+                f"synchronization builtin '{function_name}' "
+                "requires a workgroup-capable execution model"
+            ) == (1 if function_name == "barrier" else 2)
+        assert (
+            "synchronization builtin 'barrier' requires a workgroup-capable "
+            "execution model; current execution model: TessellationEvaluation"
+        ) in spv_code_refused
 
     def test_geometry_stage_layouts_emit_execution_modes(self, tmp_path):
         source_code = """

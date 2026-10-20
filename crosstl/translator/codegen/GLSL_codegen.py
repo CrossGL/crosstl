@@ -56853,6 +56853,7 @@ complex64_t crossgl_complex64_mod_assign(
             "fractional_even_spacing",
             "fractional_odd_spacing",
             "hlsl_wavesize",
+            "instance",
             "invocations",
             "inputtopology",
             "isolines",
