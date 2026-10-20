@@ -102,6 +102,7 @@ from .pointer_reinterpret import (
 )
 from .relational_builtins import lower_relational_builtins
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
+from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
@@ -17220,7 +17221,10 @@ class VulkanSPIRVCodeGen(
         )
         self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
 
-        self.global_variables[cbuffer_node.name] = var_id
+        # HLSL and CrossGL constant-buffer names are not in expression scope: in ``cbuffer ubo { UBO ubo; }`` the
+        # identifier ``ubo`` names the member, so the block keeps its name only for reflection.
+        if all(member_name != cbuffer_node.name for _, member_name in members):
+            self.global_variables[cbuffer_node.name] = var_id
         self.cbuffer_variables[cbuffer_node.name] = var_id
         self.uniform_buffers.append(var_id)
         for member_index, (member_type, member_name) in enumerate(members):
@@ -26287,6 +26291,12 @@ class VulkanSPIRVCodeGen(
                 if struct_constant is not None:
                     return struct_constant
 
+            matrix_constant = constant_matrix_constructor(
+                self, expr, callee_name, target_type
+            )
+            if matrix_constant is not None:
+                return matrix_constant
+
             vector_type = target_type
             if vector_type is None and isinstance(callee_name, str):
                 if self.vector_component_type_and_count(callee_name) is not None:
@@ -29598,7 +29608,10 @@ class VulkanSPIRVCodeGen(
             }
             and any(
                 global_variable.id == variable.id
-                for global_variable in self.global_variables.values()
+                for global_variable in (
+                    *self.global_variables.values(),
+                    *self.cbuffer_variables.values(),
+                )
             )
         ):
             self.mark_function_interface_variable(variable)

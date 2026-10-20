@@ -195,6 +195,7 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_refusals import OpenGLLoweringRefused
 from .glsl_shadow_lod import (
@@ -1454,7 +1455,7 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
     )
 
 
-class GLSLCodeGen(LoweringRefusalMixin):
+class GLSLCodeGen(GLSLDescriptorSetBindingsMixin, LoweringRefusalMixin):
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
@@ -1473,7 +1474,6 @@ class GLSLCodeGen(LoweringRefusalMixin):
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32, 64})
     GLSL_PRIVATE_POINTER_MAX_REBASE_ITERATIONS = 4096
     GLSL_PRIVATE_POINTER_BASE_MAX = (1 << 31) - 1
-    OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
     METAL_ONLY_SYSTEM_INCLUDES = frozenset(
         {
             "metal_math",
@@ -3257,7 +3257,8 @@ class GLSLCodeGen(LoweringRefusalMixin):
     def generate_entry(self, ast, entry_point):
         """Generate one independently loadable GLSL stage entry artifact."""
         scoped_ast = self.entry_scoped_ast(ast, entry_point)
-        return self.generate_program(scoped_ast)
+        with self.opengl_descriptor_set_plan_for(ast):
+            return self.generate_program(scoped_ast)
 
     def entry_scoped_ast(self, ast, entry_point):
         if not isinstance(entry_point, str) or not entry_point.strip():
@@ -8100,9 +8101,10 @@ class GLSLCodeGen(LoweringRefusalMixin):
 
         Raises the emitter's ``LOWERING_REFUSAL_TYPE`` listing every construct that has no faithful lowering.
         """
-        return self.refusals.run(
-            self.render_program_with_profile_builtins, ast, target_stage
-        )
+        with self.opengl_descriptor_set_plan_for(ast):
+            return self.refusals.run(
+                self.render_program_with_profile_builtins, ast, target_stage
+            )
 
     def render_program_with_profile_builtins(self, ast, target_stage=None):
         """Render the program and refuse every built-in the target profile does not have."""
@@ -8519,6 +8521,7 @@ class GLSLCodeGen(LoweringRefusalMixin):
         self.structs_by_name = {
             node.name: node for node in structs if self.is_struct_declaration_node(node)
         }
+        self.prepare_opengl_descriptor_set_plan()
         self.struct_member_types = collect_struct_member_types(
             structs, self.type_name_string
         )
@@ -54903,6 +54906,17 @@ complex64_t crossgl_complex64_mod_assign(
         return vtype, resource_count
 
     def global_resource_binding_metadata(self, node):
+        classified = self.global_resource_binding_namespace(node)
+        if classified is None:
+            return None
+        namespace, resource_count, var_name = classified
+        binding = self.explicit_resource_binding_index(node)
+        if binding is None:
+            return None
+        return namespace, binding, resource_count, var_name
+
+    def global_resource_binding_namespace(self, node):
+        """``(namespace, count, name)`` of a resource declaration that takes an OpenGL binding point."""
         source_var_name = self.resource_node_name(node)
         if not source_var_name:
             return None
@@ -54931,11 +54945,7 @@ complex64_t crossgl_complex64_mod_assign(
                     if self.is_storage_image_type(vtype)
                     else "texture binding"
                 )
-
-        binding = self.explicit_resource_binding_index(node)
-        if binding is None:
-            return None
-        return namespace, binding, resource_count, var_name
+        return namespace, resource_count, var_name
 
     def reserve_explicit_global_resource_bindings(self, global_vars, used_bindings):
         used_source_bindings = {}
@@ -54946,11 +54956,12 @@ complex64_t crossgl_complex64_mod_assign(
             namespace, binding, resource_count, var_name = metadata
             source_binding = self.source_descriptor_binding_index(node)
             if source_binding is not None:
+                # Vulkan descriptors are unique per (set, binding), whatever OpenGL binding point they get.
                 self.reserve_resource_binding_range(
                     used_source_bindings,
                     "source descriptor",
-                    "descriptor binding",
-                    source_binding,
+                    f"descriptor set {self.resource_descriptor_set_index(node)} binding",
+                    self.raw_descriptor_binding_index(node),
                     1,
                     var_name,
                 )
@@ -56105,6 +56116,14 @@ complex64_t crossgl_complex64_mod_assign(
         self.explicit_resource_binding_index(node)
         return binding_choices[0]
 
+    def raw_descriptor_binding_index(self, node):
+        """The ``binding`` of ``node`` inside its descriptor set, before OpenGL binding points are assigned."""
+        choices = self.explicit_resource_binding_choices(node, flatten_sets=False)
+        return next(
+            (binding for attr_name, _, binding in choices if attr_name == "binding"),
+            choices[0][2] if choices else None,
+        )
+
     def should_remap_descriptor_array_target_binding(self, node, resource_count):
         return (
             resource_count > 1
@@ -56121,7 +56140,7 @@ complex64_t crossgl_complex64_mod_assign(
             "or readwrite"
         )
 
-    def explicit_resource_binding_choices(self, node):
+    def explicit_resource_binding_choices(self, node, flatten_sets=True):
         choices = []
         if not hasattr(node, "attributes"):
             return choices
@@ -56159,6 +56178,9 @@ complex64_t crossgl_complex64_mod_assign(
             descriptor_set = resource_space
             descriptor_set_description = description
 
+        if descriptor_set_description is None:
+            descriptor_set = self.register_space_index(node)
+
         for attr in node.attributes:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
@@ -56181,8 +56203,8 @@ complex64_t crossgl_complex64_mod_assign(
                 raise ValueError(
                     self.invalid_resource_binding_message(node, attr_name, source)
                 )
-            if descriptor_set:
-                binding += descriptor_set * self.OPENGL_DESCRIPTOR_SET_BINDING_STRIDE
+            if flatten_sets:
+                binding = self.opengl_set_binding(node, descriptor_set, binding)
             choices.append((attr_name, source, binding))
         return choices
 

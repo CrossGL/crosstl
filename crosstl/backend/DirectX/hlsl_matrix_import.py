@@ -108,6 +108,24 @@ _SCALAR_TYPES = frozenset(
         "uint64_t",
     }
 )
+# Intrinsics whose vector arguments DXC truncates to a common (narrowest) width, with the argument positions that
+# take part (``None``: every argument). ``refract``'s index of refraction and ``ldexp``-style exponents stay out.
+_TRUNCATING_INTRINSICS = {
+    "dot": None,
+    "distance": None,
+    "reflect": None,
+    "refract": (0, 1),
+    "faceforward": None,
+    "min": None,
+    "max": None,
+    "clamp": None,
+    "lerp": None,
+    "step": None,
+    "smoothstep": None,
+    "pow": None,
+    "atan2": None,
+    "fmod": None,
+}
 
 
 def crossgl_matrix_type_name(scalar, rows, cols):
@@ -353,8 +371,32 @@ class HLSLMatrixImportMixin:
         args = list(args or [])
         if len(args) == 1:
             return self.matrix_conversion_expression(shape, args[0], is_main)
+        reordered = self.column_filled_matrix_expression(shape, args, is_main)
+        if reordered is not None:
+            return reordered
         rendered = ", ".join(self.generate_expression(arg, is_main) for arg in args)
         return f"transpose({self.matrix_transposed_crossgl_type(shape)}({rendered}))"
+
+    def column_filled_matrix_expression(self, shape, leaves, is_main):
+        """Row-major scalar elements of side-effect-free leaves, re-listed column by column.
+
+        The result stays a constant expression when the elements are (``static const`` matrices), which
+        ``transpose(...)`` is not in GLSL ES 3.00 or glslang's global initializers.
+        """
+        _, rows, cols = shape
+        if len(leaves) != rows * cols:
+            return None
+        if any(
+            self.initializer_component_count(leaf) != 1
+            or not self.matrix_operand_is_pure(leaf)
+            for leaf in leaves
+        ):
+            return None
+        rendered = [self.generate_expression(leaf, is_main) for leaf in leaves]
+        ordered = [
+            rendered[row * cols + col] for col in range(cols) for row in range(rows)
+        ]
+        return f"{self.matrix_crossgl_type(shape)}({', '.join(ordered)})"
 
     def matrix_conversion_expression(self, shape, value, is_main):
         """``(floatRxC)value`` and one-argument constructors: truncate a matrix, splat a scalar, reshape a vector."""
@@ -401,6 +443,9 @@ class HLSLMatrixImportMixin:
         leaves = self.flatten_initializer(initializer)
         counts = [self.initializer_component_count(leaf) for leaf in leaves]
         if None not in counts and sum(counts) == size:
+            reordered = self.column_filled_matrix_expression(shape, leaves, is_main)
+            if reordered is not None:
+                return reordered
             rendered = ", ".join(
                 self.generate_expression(leaf, is_main) for leaf in leaves
             )
@@ -417,7 +462,8 @@ class HLSLMatrixImportMixin:
             for group in groups
         ):
             matrices = ", ".join(
-                f"transpose({self.matrix_transposed_crossgl_type(shape)}("
+                self.column_filled_matrix_expression(shape, group, is_main)
+                or f"transpose({self.matrix_transposed_crossgl_type(shape)}("
                 + ", ".join(self.generate_expression(leaf, is_main) for leaf in group)
                 + "))"
                 for group in groups
@@ -450,6 +496,75 @@ class HLSLMatrixImportMixin:
         if raw_type and self.vector_element_raw_type(raw_type):
             return int(raw_type[-1])
         return 1 if raw_type in _SCALAR_TYPES else None
+
+    def value_vector_width(self, expr):
+        """Component count of a vector-valued ``expr``, ``None`` for scalars, matrices and unknown types."""
+        if self.matrix_expression_shape(expr) is not None:
+            return None
+        try:
+            raw_type = self.resolve_integer_alias(self.expression_value_raw_type(expr))
+        except ValueError:
+            return None
+        if (
+            raw_type
+            and self.vector_element_raw_type(raw_type)
+            and raw_type[-1].isdigit()
+        ):
+            return int(raw_type[-1])
+        return None
+
+    def mul_call_expression(self, args, rendered):
+        """HLSL ``mul``: the linear-algebra product, with DXC's implicit vector truncation.
+
+        ``mul(M, v)`` takes the first C components of ``v`` for a ``floatRxC`` ``M`` and ``mul(v, M)`` the first R;
+        ``mul`` of two vectors is their inner product.
+        """
+        left_shape = self.matrix_expression_shape(args[0])
+        right_shape = self.matrix_expression_shape(args[1])
+        left, right = rendered
+        if left_shape is not None and right_shape is None:
+            right = self._truncated_mul_vector(args[1], right, left_shape[2])
+        elif right_shape is not None and left_shape is None:
+            left = self._truncated_mul_vector(args[0], left, right_shape[1])
+        elif left_shape is None and right_shape is None:
+            left_width = self.value_vector_width(args[0])
+            right_width = self.value_vector_width(args[1])
+            if left_width and right_width and left_width > 1 and right_width > 1:
+                width = min(left_width, right_width)
+                left = self._truncated_mul_vector(args[0], left, width)
+                right = self._truncated_mul_vector(args[1], right, width)
+                return f"dot({left}, {right})"
+        left = self.maybe_parenthesize(args[0], left)
+        right = self.maybe_parenthesize(args[1], right)
+        return f"({left} * {right})"
+
+    def _truncated_mul_vector(self, expr, rendered, width):
+        current = self.value_vector_width(expr)
+        if current is None or current <= width:
+            return rendered
+        return self.swizzle_rendered_expression(rendered, "xyzw"[:width])
+
+    def truncate_intrinsic_vector_arguments(self, name, args, rendered):
+        """DXC resolves componentwise intrinsics over mixed vector widths by truncating to the narrowest vector."""
+        if name not in _TRUNCATING_INTRINSICS or len(args) < 2:
+            return rendered
+        positions = _TRUNCATING_INTRINSICS[name] or range(len(args))
+        widths = {
+            index: self.value_vector_width(args[index])
+            for index in positions
+            if index < len(args)
+        }
+        known = [width for width in widths.values() if width and width > 1]
+        if len(set(known)) < 2:
+            return rendered
+        narrowest = min(known)
+        result = list(rendered)
+        for index, width in widths.items():
+            if width and width > narrowest:
+                result[index] = self.swizzle_rendered_expression(
+                    result[index], "xyzw"[:narrowest]
+                )
+        return result
 
     def matrix_product_expression(self, expr, left, right):
         """HLSL ``*`` of two matrices is componentwise."""

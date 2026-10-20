@@ -4200,6 +4200,42 @@ def test_hlsl_parameter_qualifiers_parse():
     assert patch_param.param_type.generic_args[1].value == 3
 
 
+def test_struct_named_like_a_primitive_qualifier_is_a_type():
+    """Primitive qualifiers are lower-case keywords; ``Triangle`` and ``Point`` stay user type names."""
+    code = """
+    shader UserPrimitiveTypes {
+        struct Triangle {
+            vec3 normal;
+        };
+
+        struct Point {
+            vec3 position;
+        };
+
+        Triangle unpack(uint index, int vertexSize) {
+            Triangle tri;
+            tri.normal = vec3(float(index + uint(vertexSize)));
+            return tri;
+        }
+
+        Point lift(Point point, triangle Triangle prims[3]) {
+            return point;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    unpack, lift = ast.functions
+    assert unpack.name == "unpack"
+    assert unpack.return_type.name == "Triangle"
+    assert [param.name for param in unpack.parameters] == ["index", "vertexSize"]
+    point_param, prims_param = lift.parameters
+    assert point_param.qualifiers == []
+    assert point_param.param_type.name == "Point"
+    assert prims_param.qualifiers == ["triangle"]
+    assert prims_param.param_type.element_type.name == "Triangle"
+
+
 def test_backend_parameter_address_and_access_qualifiers_parse():
     code = """
     shader BackendParameterQualifiers {

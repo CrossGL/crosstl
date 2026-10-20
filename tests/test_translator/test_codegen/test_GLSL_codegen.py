@@ -15515,7 +15515,8 @@ def test_glsl_repeated_struct_storage_resources_use_distinct_block_names(tmp_pat
 
 
 def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
-    # Mirrors the compiler OpenGL lowering policy: set N, binding M -> N * 1024 + M.
+    # OpenGL has no descriptor sets: set 0 keeps its bindings, and a resource of another set keeps its binding
+    # when that is free in its class (uniform blocks, storage blocks, texture units), else takes the lowest free one.
     code = """
     shader DescriptorSetFlatteningGLSL {
         struct Params {
@@ -15543,9 +15544,9 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
 
     assert "layout(std140, binding = 0) uniform Params {" in generated
     assert "} frameParams;" in generated
-    assert "layout(std140, binding = 1024) uniform Params_materialParams {" in generated
+    assert "layout(std140, binding = 1) uniform Params_materialParams {" in generated
     assert "} materialParams;" in generated
-    assert "layout(std140, binding = 1024) uniform Params {" not in generated
+    assert "layout(std140, binding = 1) uniform Params {" not in generated
     assert "frameParams.color" in generated
     assert "materialParams.color" in generated
     assert (
@@ -15553,11 +15554,11 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
         in generated
     )
     assert (
-        "layout(std430, binding = 2049) buffer historyBuffer { float history[]; };"
+        "layout(std430, binding = 0) buffer historyBuffer { float history[]; };"
         in generated
     )
     assert "layout(binding = 4) uniform sampler2D baseMap;" in generated
-    assert "layout(binding = 1028) uniform sampler2D detailMap;" in generated
+    assert "layout(binding = 0) uniform sampler2D detailMap;" in generated
 
 
 def test_glsl_struct_uniform_derived_block_name_collision_uses_stable_suffix(
@@ -15704,7 +15705,7 @@ def test_glsl_descriptor_set_flattening_is_attribute_order_independent():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
+    assert "layout(binding = 2) uniform sampler2D tex;" in generated
 
 
 def test_glsl_register_space_flattens_to_opengl_binding():
@@ -15722,7 +15723,7 @@ def test_glsl_register_space_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(rgba32f, binding = 2051) uniform image2D img;" in generated
+    assert "layout(rgba32f, binding = 3) uniform image2D img;" in generated
 
 
 def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
@@ -15744,7 +15745,7 @@ def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(std140, binding = 1026) uniform Params {" in generated
+    assert "layout(std140, binding = 2) uniform Params {" in generated
     assert "} materialParams;" in generated
 
 
@@ -15761,7 +15762,7 @@ def test_glsl_stage_resource_descriptor_set_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
+    assert "layout(binding = 2) uniform sampler2D tex;" in generated
 
 
 @pytest.mark.parametrize(

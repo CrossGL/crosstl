@@ -6356,7 +6356,8 @@ def test_codegen_math_intrinsics_mapping():
     output = generate_crossgl(MATH_INTRINSICS_HLSL)
     assert "dot" in output
     assert "normalize" in output
-    assert "vec4 m = (a * b);" in output
+    # mul of two vectors is their inner product (DXC lowers it to Dot4).
+    assert "vec4 m = dot(a, b);" in output
     assert "mix" in output
     assert "clamp(" in output
 

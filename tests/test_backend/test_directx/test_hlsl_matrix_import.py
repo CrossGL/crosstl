@@ -55,17 +55,15 @@ def test_constructors_and_initializer_lists_fill_rows():
         float2x2 f = float2x2(float4(1.0, 2.0, 3.0, 4.0));
         o[0] = a[0][0] + b[0][0] + c[0][0] + d[0][0] + e[1][0][0] + f[0][0];
     """)
-    assert "mat3x2 a = transpose(mat2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0));" in output
+    # Side-effect-free scalars are re-listed column by column, so constant matrices stay constant expressions.
+    assert "mat3x2 a = mat3x2(1.0, 4.0, 2.0, 5.0, 3.0, 6.0);" in output
     assert (
         "mat3 b = transpose(mat3(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0), vec3(7.0, 8.0, 9.0)));"
         in output
     )
-    assert "mat2 c = transpose(mat2(1.0, 2.0, 3.0, 4.0));" in output
-    assert "mat2 d = transpose(mat2(1.0, 2.0, 3.0, 4.0));" in output
-    assert (
-        "mat2 e[2] = {transpose(mat2(1.0, 2.0, 3.0, 4.0)), transpose(mat2(5.0, 6.0, 7.0, 8.0))};"
-        in output
-    )
+    assert "mat2 c = mat2(1.0, 3.0, 2.0, 4.0);" in output
+    assert "mat2 d = mat2(1.0, 3.0, 2.0, 4.0);" in output
+    assert "mat2 e[2] = {mat2(1.0, 3.0, 2.0, 4.0), mat2(5.0, 7.0, 6.0, 8.0)};" in output
     assert "mat2 f = transpose(mat2(vec4(1.0, 2.0, 3.0, 4.0)));" in output
     assert "e[1][0][0]" in output
 
@@ -152,6 +150,45 @@ def test_componentwise_star_and_linear_algebra_mul():
     assert "mat2 p = (a * transpose(b));" in output
     assert "vec2 v = (a * vec3(1.0, 2.0, 3.0));" in output
     assert "vec3 w = (vec2(1.0, 2.0) * a);" in output
+
+
+def test_mul_and_componentwise_intrinsics_truncate_wider_vectors_like_dxc():
+    output = to_crossgl(
+        """
+        float3x3 n = (float3x3)world;
+        float4 t = float4(1.0, 2.0, 3.0, 4.0);
+        float3 a = mul(n, t);
+        float3 b = mul(t, n);
+        float d = mul(t, float3(1.0, 0.0, 0.0));
+        float e = dot(t, a);
+        float3 f = max(t, a);
+        o[0] = a.x + b.x + d + e + f.x;
+    """,
+        "float4x4 world;\n",
+    )
+    assert "vec3 a = (n * t.xyz);" in output
+    assert "vec3 b = (t.xyz * n);" in output
+    assert "float d = dot(t.xyz, vec3(1.0, 0.0, 0.0));" in output
+    assert "float e = dot(t.xyz, a);" in output
+    assert "vec3 f = max(t.xyz, a);" in output
+
+
+def test_constant_matrix_constructor_stays_a_constant_expression():
+    output = to_crossgl(
+        "o[0] = bias[3][0];",
+        """
+        static const float4x4 bias = float4x4(
+            0.5, 0.0, 0.0, 0.5,
+            0.0, 0.5, 0.0, 0.5,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0);
+        """,
+    )
+    assert (
+        "mat4 bias = mat4(0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.5, 0.5, 0.0, 1.0);"
+        in output
+    )
+    assert "transpose" not in output
 
 
 def test_arrays_of_matrices_and_constant_buffer_members():

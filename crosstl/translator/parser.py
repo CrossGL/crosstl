@@ -1894,7 +1894,7 @@ class Parser:
 
             if (
                 token_type == "IDENTIFIER"
-                and normalized in PARAMETER_PRIMITIVE_QUALIFIER_NAMES
+                and str(token_value) in PARAMETER_PRIMITIVE_QUALIFIER_NAMES
                 and self.current_token_starts_qualified_parameter_type()
             ):
                 qualifiers.append(normalized)

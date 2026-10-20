@@ -4869,6 +4869,10 @@ class HLSLToCrossGLConverter(HLSLMatrixImportMixin, ImportRefusalMixin):
                     raise HLSLSelectOverloadError()
                 condition, true_value, false_value = rendered_args
                 return f"select({false_value}, {true_value}, {condition})"
+            if func_name not in self.source_function_names:
+                rendered_args = self.truncate_intrinsic_vector_arguments(
+                    func_name, expr.args, rendered_args
+                )
             args = ", ".join(rendered_args)
             matrix_constructor = self.matrix_constructor_expression(
                 func_name, expr.args, is_main
@@ -4876,9 +4880,7 @@ class HLSLToCrossGLConverter(HLSLMatrixImportMixin, ImportRefusalMixin):
             if matrix_constructor is not None:
                 return matrix_constructor
             if func_name == "mul" and len(expr.args) == 2:
-                left = self.maybe_parenthesize(expr.args[0], rendered_args[0])
-                right = self.maybe_parenthesize(expr.args[1], rendered_args[1])
-                return f"({left} * {right})"
+                return self.mul_call_expression(expr.args, rendered_args)
             if func_name == "mad" and len(expr.args) == 3:
                 left = self.maybe_parenthesize(expr.args[0], rendered_args[0])
                 right = self.maybe_parenthesize(expr.args[1], rendered_args[1])
