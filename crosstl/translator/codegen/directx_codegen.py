@@ -115,6 +115,10 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .barrier_peephole import (
+    HLSL_EXECUTION_BARRIER_PLACEHOLDER,
+    merge_adjacent_hlsl_barriers,
+)
 from .bfloat_constants import bfloat16_constant_bits, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
@@ -1825,7 +1829,8 @@ class HLSLCodeGen(LoweringRefusalMixin):
         "atomicThreadFence": "GroupMemoryBarrier",
         "barrier": "GroupMemoryBarrierWithGroupSync",
         "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
-        "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
+        # GroupMemoryBarrierWithGroupSync once barrier_peephole has merged adjacent barriers.
+        "workgroupExecutionBarrier": HLSL_EXECUTION_BARRIER_PLACEHOLDER,
         # CrossGL's groupMemoryBarrier orders buffer and image accesses as well as shared memory (GLSL 4.60
         # section 8.16); GroupMemoryBarrier orders groupshared memory only, so the device-scope fence covers it.
         "groupMemoryBarrier": "AllMemoryBarrier",
@@ -1835,6 +1840,12 @@ class HLSLCodeGen(LoweringRefusalMixin):
         "memoryBarrierImage": "DeviceMemoryBarrier",
         "memoryBarrier": "AllMemoryBarrier",
         "allMemoryBarrier": "AllMemoryBarrier",
+        # HLSL has no wave-scope fence; the group- and device-scope fences order the same memory for every
+        # thread of the group, which includes the wave.
+        "subgroupMemoryBarrier": "AllMemoryBarrier",
+        "subgroupMemoryBarrierBuffer": "DeviceMemoryBarrier",
+        "subgroupMemoryBarrierShared": "GroupMemoryBarrier",
+        "subgroupMemoryBarrierImage": "DeviceMemoryBarrier",
     }
     HLSL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
         {
@@ -3285,7 +3296,9 @@ class HLSLCodeGen(LoweringRefusalMixin):
         Raises :class:`DirectXLoweringRefused` listing every construct that has no faithful HLSL lowering.
         """
         lower_relational_builtins(ast)
-        return self.refusals.run(self.render_program, ast, target_stage)
+        return merge_adjacent_hlsl_barriers(
+            self.refusals.run(self.render_program, ast, target_stage)
+        )
 
     def render_program(self, ast, target_stage=None):
         region = codegen_dispatch_region(
@@ -27400,7 +27413,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
 
-        if func_name == "subgroupExecutionBarrier":
+        if func_name in {"subgroupExecutionBarrier", "subgroupBarrier"}:
             if args:
                 raise self.hlsl_software_subgroup_error(
                     "DirectX subgroup execution barriers require zero arguments",
@@ -27433,6 +27446,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="target-intrinsic-shadowed",
                     source_location=source_location,
                 )
+            if func_name == "subgroupBarrier":
+                # The subgroup barrier also orders buffer and image memory (GL_KHR_shader_subgroup).
+                return "AllMemoryBarrierWithGroupSync()"
             return "GroupMemoryBarrierWithGroupSync()"
 
         if func_name == "atomicThreadFence":
@@ -53240,7 +53256,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if shader_type in supported_stages:
                 continue
 
-            intrinsic = self.HLSL_SYNCHRONIZATION_INTRINSICS[builtin_name]
+            intrinsic = self.HLSL_SYNCHRONIZATION_INTRINSICS[builtin_name].replace(
+                HLSL_EXECUTION_BARRIER_PLACEHOLDER, "GroupMemoryBarrierWithGroupSync"
+            )
             stage_description = self.hlsl_synchronization_stage_description(
                 supported_stages
             )

@@ -10256,9 +10256,8 @@ def test_generated_metal_threadgroup_helper_barriers_compile_with_metal(tmp_path
     assert "void writeScratch(threadgroup float scratch[64]" in code
     assert "float readScratch(threadgroup float scratch[64]" in code
     assert "threadgroup float scratch[64];" in code
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 3
-    assert code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
-    assert "threadgroup_barrier(mem_flags::mem_texture);" in code
+    # The eight adjacent barriers fold into one barrier with the union of flags.
+    assert code.count("threadgroup_barrier(") == 1
     assert (
         "threadgroup_barrier(mem_flags::mem_device | "
         "mem_flags::mem_threadgroup | mem_flags::mem_texture);"

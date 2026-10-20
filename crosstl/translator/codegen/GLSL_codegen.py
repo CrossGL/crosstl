@@ -2033,6 +2033,24 @@ class GLSLCodeGen(
         "WavePrefixInclusiveSum": ("+", True),
         "WavePrefixInclusiveProduct": ("*", True),
     }
+    # GL_KHR_shader_subgroup_basic barriers, plus CrossGL's execution-only subgroup barrier.
+    GLSL_SUBGROUP_BARRIER_FUNCTIONS = frozenset(
+        {
+            "subgroupBarrier",
+            "subgroupExecutionBarrier",
+            "subgroupMemoryBarrier",
+            "subgroupMemoryBarrierBuffer",
+            "subgroupMemoryBarrierShared",
+            "subgroupMemoryBarrierImage",
+        }
+    )
+    # Workgroup-scope fences that order the memory of each subgroup fence for the subgroup as well.
+    GLSL_SUBGROUP_FENCE_WIDENINGS = {
+        "subgroupMemoryBarrier": "groupMemoryBarrier",
+        "subgroupMemoryBarrierBuffer": "memoryBarrierBuffer",
+        "subgroupMemoryBarrierShared": "memoryBarrierShared",
+        "subgroupMemoryBarrierImage": "memoryBarrierImage",
+    }
     GLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
         {
             "WaveActiveSum",
@@ -4056,7 +4074,7 @@ class GLSLCodeGen(
                     continue
                 function_name = self.function_call_name(node)
                 if (
-                    function_name in {"subgroupBarrier", "subgroupExecutionBarrier"}
+                    function_name in self.GLSL_SUBGROUP_BARRIER_FUNCTIONS
                     and function_name not in self.function_return_types
                 ):
                     return True
@@ -40514,6 +40532,18 @@ complex64_t crossgl_complex64_mod_assign(
                     source_location=source_location,
                 )
             return "subgroupBarrier()"
+        if self.software_subgroup_width is not None and not args:
+            # Software subgroups are slices of the workgroup, so a workgroup-scope fence orders their memory.
+            widened = self.GLSL_SUBGROUP_FENCE_WIDENINGS.get(func_name)
+            if widened is not None:
+                return f"{widened}()"
+            if func_name == "subgroupBarrier":
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software subgroups have no subgroup barrier over buffer, image and shared memory",
+                    operation=func_name,
+                    reason="subgroup-memory-barrier-unsupported",
+                    source_location=source_location,
+                )
         if func_name == "atomicThreadFence":
             return self.generate_glsl_atomic_thread_fence(
                 args,

@@ -5605,20 +5605,31 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     shader SynchronizationBuiltins {
         compute {
             void main() {
+                int k = 0;
                 barrier();
+                k = k + 1;
                 memoryBarrier();
+                k = k + 1;
                 workgroupBarrier();
+                k = k + 1;
                 groupMemoryBarrier();
+                k = k + 1;
                 memoryBarrierShared();
+                k = k + 1;
                 deviceMemoryBarrier();
+                k = k + 1;
                 memoryBarrierBuffer();
+                k = k + 1;
                 memoryBarrierImage();
+                k = k + 1;
                 allMemoryBarrier();
+                k = k + 1;
             }
         }
     }
     """
 
+    # The statements between the barriers keep the emitter from merging them.
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
@@ -6244,9 +6255,13 @@ def test_directx_device_memory_synchronization_builtins_allow_fragment_stage():
     shader FragmentDeviceMemorySynchronization {
         fragment {
             void main() {
+                int k = 0;
                 deviceMemoryBarrier();
+                k = k + 1;
                 memoryBarrierBuffer();
+                k = k + 1;
                 memoryBarrierImage();
+                k = k + 1;
             }
         }
     }

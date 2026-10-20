@@ -2850,7 +2850,9 @@ def test_codegen_atomic_counter_memory_barrier_imports_as_crossgl_barrier():
 
     shader_ast = parse_crossgl(crossgl)
     hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "AllMemoryBarrier();" in hlsl
+    # memoryBarrier(); barrier(); is one HLSL barrier over all memory with group sync.
+    assert "AllMemoryBarrierWithGroupSync();" in hlsl
+    assert "GroupMemoryBarrierWithGroupSync();" not in hlsl
     assert "memoryBarrierAtomicCounter(" not in hlsl
 
 
