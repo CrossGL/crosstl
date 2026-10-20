@@ -193,7 +193,7 @@ def test_hlsl_output_compiles_with_dxc(tmp_path):
         pytest.skip("dxc is not installed")
     path = tmp_path / "out.hlsl"
     path.write_text(_translate(tmp_path, PROJECTED_COMPARES, "directx"))
-    _run(["dxc", "-T", "ps_6_0", "-E", "main", str(path), "-Fo", str(tmp_path / "o")])
+    _run(["dxc", "-T", "ps_6_0", "-E", "PSMain", str(path), "-Fo", str(tmp_path / "o")])
 
 
 def test_slang_output_compiles_with_slangc(tmp_path):

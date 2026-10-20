@@ -10,13 +10,15 @@ own: the parameter is renamed, and a local with the parameter's name and type is
 of the body. A parameter counts as written when it is the root of an assignment target or an increment, or of an
 argument to an ``out`` or ``inout`` parameter of a user function or to a built-in that may write memory. Parameters
 the body only reads stay pointers, which reads cannot tell apart from copies. ``out`` and ``inout`` array
-parameters already have the caller's array as their storage.
+parameters already have the caller's array as their storage, and arrays of pointers or resources are handles
+rather than values.
 """
 
 from __future__ import annotations
 
 from .. import ast as A
 from .hub_types import call_name, is_pure_callee
+from .opaque_structs import _is_opaque
 from .rewrite import child_slots, get_child
 
 __all__ = ["copy_written_array_parameters"]
@@ -84,6 +86,12 @@ def _is_by_value_array(parameter):
     if not isinstance(getattr(parameter, "param_type", None), A.ArrayType):
         return False
     if parameter.param_type.size is None:
+        return False
+    element = parameter.param_type
+    while isinstance(element, A.ArrayType):
+        element = element.element_type
+    # Pointers and resources are handles, not values GLSL copies; their arrays keep the emitter's own lowering.
+    if isinstance(element, (A.PointerType, A.ReferenceType)) or _is_opaque(element):
         return False
     qualifiers = {str(qualifier).lower() for qualifier in getattr(parameter, "qualifiers", None) or []}
     return not qualifiers & _WRITING_QUALIFIERS

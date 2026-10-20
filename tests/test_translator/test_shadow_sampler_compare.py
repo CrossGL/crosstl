@@ -339,4 +339,4 @@ def test_hlsl_output_compiles_with_dxc(tmp_path):
         pytest.skip("dxc is not installed")
     path = tmp_path / "out.hlsl"
     path.write_text(_translate(tmp_path, SHADOW_SAMPLES, "directx"))
-    _run(["dxc", "-T", "ps_6_0", "-E", "main", str(path), "-Fo", str(tmp_path / "o")])
+    _run(["dxc", "-T", "ps_6_0", "-E", "PSMain", str(path), "-Fo", str(tmp_path / "o")])
