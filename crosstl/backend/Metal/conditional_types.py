@@ -11,13 +11,24 @@ spelling yields ``None`` so callers keep failing closed.
 import re
 from typing import Callable, List, Optional, Tuple
 
-__all__ = ["select_conditional_type", "split_template_arguments"]
+__all__ = [
+    "select_conditional_type",
+    "select_nested_conditional_types",
+    "split_template_arguments",
+]
 
 _CONDITIONAL_RE = re.compile(
     r"(?:typename\s+)?(?:::\s*)?(?:metal\s*::\s*)?"
     r"(?P<name>conditional_t|conditional)\s*<"
 )
 _TYPENAME_RE = re.compile(r"^typename\s+")
+# A selection nested in a larger spelling, e.g. a template argument of
+# ``Frag<metal::conditional_t<C, A, B>, 8, 8>``.
+_NESTED_CONDITIONAL_RE = re.compile(
+    r"(?<![\w:])(?:typename\s+)?(?:::\s*)?(?:metal\s*::\s*)?"
+    r"(?P<name>conditional_t|conditional)\s*<"
+)
+_TYPE_MEMBER_RE = re.compile(r"\s*::\s*type\b")
 # Nested selections deeper than this are not followed.
 _MAX_DEPTH = 16
 
@@ -147,3 +158,37 @@ def select_conditional_type(
         current = _TYPENAME_RE.sub("", (when_true if value else when_false).strip())
         selected = True
     return None
+
+
+def select_nested_conditional_types(
+    text: str, evaluate: Callable[[str], Tuple[bool, Optional[int]]]
+) -> str:
+    """Replace every selection inside ``text`` whose condition folds.
+
+    ``Frag<metal::conditional_t<1 == 2, half, float>, 8, 8>`` becomes
+    ``Frag<float, 8, 8>``. Selections whose condition does not fold, and
+    spellings that are not selections, are kept unchanged.
+    """
+    result: List[str] = []
+    position = 0
+    for _ in range(len(text)):
+        match = _NESTED_CONDITIONAL_RE.search(text, position)
+        if match is None:
+            break
+        closing = _closing_angle(text, match.end() - 1)
+        if closing is None:
+            break
+        end = closing + 1
+        if match.group("name") == "conditional":
+            member = _TYPE_MEMBER_RE.match(text, end)
+            end = member.end() if member is not None else end
+        selected = select_conditional_type(text[match.start() : end], evaluate)
+        result.append(text[position : match.start()])
+        if selected is None:
+            result.append(text[match.start() : match.end()])
+            position = match.end()
+            continue
+        result.append(select_nested_conditional_types(selected, evaluate))
+        position = end
+    result.append(text[position:])
+    return "".join(result)

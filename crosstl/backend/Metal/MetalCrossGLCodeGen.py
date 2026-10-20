@@ -49,6 +49,7 @@ from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
 from .conditional_types import split_template_arguments
+from .scoped_member_types import resolve_concrete_scoped_member_type
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -11083,6 +11084,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         if not name or not alias_type:
             return
         alias_type = self.resolve_metal_decltype_type(alias_type) or alias_type
+        alias_type = resolve_concrete_scoped_member_type(self, alias_type) or alias_type
         alias_qualifiers = list(getattr(alias, "qualifiers", None) or [])
         binding = self.scalar_alias_binding(alias_type)
         if binding is not None:

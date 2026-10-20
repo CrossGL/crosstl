@@ -29,7 +29,7 @@ from typing import (
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
-from .conditional_types import select_conditional_type
+from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .deduction_arguments import deduction_argument_type
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
@@ -5489,7 +5489,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         """Replace each argument spelled ``conditional_t<C, A, B>`` by ``A`` or ``B`` once ``C`` folds."""
         return [
             select_conditional_type(argument, self._evaluate_static_integral_expression)
-            or argument
+            or select_nested_conditional_types(
+                argument, self._evaluate_static_integral_expression
+            )
             for argument in arguments
         ]
 
@@ -24175,15 +24177,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 if binding.value is not None
             }
             if local_constants:
-                resolved_arguments = self._select_conditional_template_arguments(
-                    [
-                        self._substitute_template_argument_static_constants(
-                            argument,
-                            local_constants,
-                        )
-                        for argument in resolved_arguments
-                    ]
-                )
+                resolved_arguments = [
+                    self._substitute_template_argument_static_constants(
+                        argument,
+                        local_constants,
+                    )
+                    for argument in resolved_arguments
+                ]
+            resolved_arguments = self._select_conditional_template_arguments(
+                resolved_arguments
+            )
             unresolved_constexpr_calls: Set[str] = set()
             constexpr_resolved_arguments: List[str] = []
             for argument in resolved_arguments:
@@ -24515,15 +24518,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     if binding.value is not None
                 }
                 if local_constants:
-                    template_arguments = self._select_conditional_template_arguments(
-                        [
-                            self._substitute_template_argument_static_constants(
-                                argument,
-                                local_constants,
-                            )
-                            for argument in template_arguments
-                        ]
-                    )
+                    template_arguments = [
+                        self._substitute_template_argument_static_constants(
+                            argument,
+                            local_constants,
+                        )
+                        for argument in template_arguments
+                    ]
+                template_arguments = self._select_conditional_template_arguments(
+                    template_arguments
+                )
                 unresolved_local_constants = unresolved_constant_references(
                     template_arguments,
                     (

@@ -50488,6 +50488,15 @@ complex64_t crossgl_complex64_mod_assign(
         constants = self.visible_literal_int_constants(function)
         arrays = {}
         ambiguous = set()
+        # CrossGL keeps a fixed private array parameter as a whole array, so a
+        # view into it is backed by that array just as a local one is.
+        for parameter in getattr(function, "parameters", []) or []:
+            if self.glsl_private_pointer_array_parameter(parameter):
+                info = self.glsl_private_pointer_local_array_node_info(
+                    parameter, constants
+                )
+                if info is not None:
+                    arrays[parameter.name] = info
         for node in self.walk_ast(getattr(function, "body", [])):
             if not isinstance(node, (VariableNode, ArrayNode)):
                 continue
@@ -50506,8 +50515,27 @@ complex64_t crossgl_complex64_mod_assign(
             arrays[name]["extent"] = None
         return arrays
 
+    @staticmethod
+    def glsl_private_pointer_array_parameter(parameter):
+        parameter_type = getattr(
+            parameter, "param_type", getattr(parameter, "vtype", None)
+        )
+        if not isinstance(parameter_type, ArrayType) or isinstance(
+            getattr(parameter_type, "element_type", None), (PointerType, ArrayType)
+        ):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return bool(qualifiers.intersection({"thread", "private", "function"}))
+
     def glsl_private_pointer_local_array_node_info(self, node, constants):
-        node_type = getattr(node, "var_type", getattr(node, "vtype", None))
+        node_type = getattr(
+            node,
+            "var_type",
+            getattr(node, "vtype", getattr(node, "param_type", None)),
+        )
         if isinstance(node_type, ArrayType):
             element_type = node_type.element_type
             size_expression = node_type.size

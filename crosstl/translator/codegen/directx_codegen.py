@@ -41918,24 +41918,30 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def collect_hlsl_private_pointer_fixed_array_parameters(self, functions_by_name):
         candidates = {}
+        pointer_callees = {}
         selected = set()
         for function_name, function in functions_by_name.items():
             indexed = {}
+            pointers = {}
             for index, parameter in enumerate(
                 getattr(function, "parameters", []) or []
             ):
+                if is_private_pointer_parameter(parameter):
+                    pointers[index] = parameter
                 if not self.hlsl_private_pointer_fixed_array_candidate(parameter):
                     continue
                 indexed[index] = parameter
             if indexed:
                 candidates[function_name] = indexed
+            if pointers:
+                pointer_callees[function_name] = pointers
 
-        def resolve_callee(call, arguments):
+        def resolve_callee(call, arguments, callees=candidates):
             raw_name = self.function_call_name(call)
             specialized_name = generic_function_call_name(self, raw_name, arguments)
             materialized_name = self.hlsl_materialized_function_name(raw_name)
             for candidate in (specialized_name, materialized_name, raw_name):
-                if candidate in candidates:
+                if candidate in callees:
                     return candidate
             return None
 
@@ -42064,6 +42070,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if not isinstance(node, FunctionCallNode):
                     continue
                 arguments = list(getattr(node, "arguments", []) or [])
+                # A fixed array parameter that roots a view passed to a private
+                # pointer parameter backs that view, so it is lowered as one.
+                pointer_callee = resolve_callee(node, arguments, pointer_callees)
+                if caller_parameters and pointer_callee is not None:
+                    for index in pointer_callees[pointer_callee]:
+                        if index >= len(arguments):
+                            continue
+                        root_name = candidate_root(arguments[index], caller_parameters)
+                        if root_name is not None:
+                            selected.add((caller_name, root_name))
                 callee_name = resolve_callee(node, arguments)
                 if callee_name is None:
                     continue

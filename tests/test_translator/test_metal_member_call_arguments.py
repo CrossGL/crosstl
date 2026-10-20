@@ -13,8 +13,7 @@ Their row reductions add a second shape. Inside ``Tile::row_reduce``, ``Frag_t::
 of the enclosing method; ``Frag_t`` is the default template argument ``Frag<T, 1>``, whose static members fold
 through the struct materialized for it, also in the array extent of ``thread T vals[kRowsPerThread]`` and in other
 structs' static initializers; and a parameter spelled ``thread const frag_type&`` is a vector whose components are
-typed. Direct3D and OpenGL cannot yet view ``&vals[i]`` through the array parameter, so they refuse it with their
-private-pointer diagnostics.
+typed. Direct3D and OpenGL view ``&vals[i]`` as the array parameter plus an element offset.
 """
 
 import os
@@ -42,6 +41,8 @@ GROUPS = 2
 K = 3
 ROW = 6 + 2 * K
 GUARD = [0x6D2B79F5, -7, 0x1234567, -0x5A5A5A5]
+# float32 guards, each exactly representable so that a float32 buffer holds it unchanged.
+FLOAT_GUARD = [1831565568.0, -7.0, 19088640.0, -94742016.0]
 VALUES = [((index * 2654435761) % 2003) - 1001 for index in range(GROUPS * 32 * ROW)]
 
 ELEMENT_LOAD = "Frag<T>::load(tiles[k].frag_at(0), row + 4 + 2 * k, 1);"
@@ -174,7 +175,7 @@ def _row_reduce_expected():
     for index in range(GROUPS * 32):
         row = ROW_REDUCE_VALUES[index * 4 : index * 4 + 4]
         results.append(max(row[0], row[1]) + 2 * max(row[2], row[3]))
-    return results + [float(value) for value in GUARD]
+    return results + FLOAT_GUARD
 
 
 def _translate(root, target, source, entry):
@@ -293,17 +294,17 @@ def test_element_receivers_with_unsafe_indices_stay_refused(
     assert "project.translate.metal-struct-method" in codes, codes
 
 
-def _row_reduce_request(root):
+def _row_reduce_request(root, target="metal"):
     source, descriptor, package = _package(
         root,
-        "metal",
+        target,
         "float",
         WORKGROUP,
         source=ROW_REDUCE_SOURCE,
         software_subgroups=False,
     )
     expected = _row_reduce_expected()
-    initial = [-12345.0] * (len(expected) - len(GUARD)) + [float(v) for v in GUARD]
+    initial = [-12345.0] * (len(expected) - len(GUARD)) + FLOAT_GUARD
     inputs = _bound_values(
         descriptor,
         {
@@ -335,7 +336,7 @@ def _row_reduce_request(root):
         inputs,
         outputs,
         {"workgroupCount": [GROUPS, 1, 1], "workgroupSize": list(WORKGROUP)},
-        expected_target="metal",
+        expected_target=target,
     )
     assert not request.execution_plan.diagnostics
     return request, outputs
@@ -351,19 +352,21 @@ def test_qualified_template_member_row_reduction_compiles_for_metal(tmp_path):
 
 
 @pytest.mark.parametrize("target", ("directx", "opengl"))
-def test_row_reduction_through_array_parameters_is_refused(tmp_path, target):
-    report = _translate(tmp_path, target, ROW_REDUCE_SOURCE, ROW_REDUCE_ENTRY)
-    assert report["summary"]["translatedCount"] == 0
-    codes = {item["code"] for item in report["diagnostics"]}
-    assert codes == {f"project.translate.{target}-private-pointer-unsupported"}, codes
+def test_row_reduction_through_array_parameters_compiles(tmp_path, target):
+    request, _ = _row_reduce_request(tmp_path, target)
+    generated = request.artifact_path.read_text()
+    # The fragment reduction receives the tile's array and an element offset.
+    assert "reduced_vals_base" in generated
+    _compile(generated, target, tmp_path)
 
 
-def test_qualified_template_member_row_reduction_executes_on_metal(tmp_path):
-    if os.environ.get(REQUIRE_ENV) != "1" or sys.platform != "darwin":
-        pytest.skip(f"set {REQUIRE_ENV}=1 on macOS for the native row reduction")
+def test_qualified_template_member_row_reduction_executes(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for the native row reduction")
     from tests.test_translator.test_loop_updates import _execute
 
-    request, expected = _row_reduce_request(tmp_path)
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    request, expected = _row_reduce_request(tmp_path, target)
     _execute(
         request,
         expected,
@@ -371,7 +374,7 @@ def test_qualified_template_member_row_reduction_executes_on_metal(tmp_path):
         original_source=ROW_REDUCE_SOURCE,
         original_entry=ROW_REDUCE_ENTRY,
         metal_compile_flags=("-Wall", "-Wextra"),
-        compare_with_original=True,
+        compare_with_original=target == "metal",
     )
 
 
