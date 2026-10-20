@@ -243,11 +243,14 @@ HLSL_SIGNATURES = [
     feature("asdouble", Type("double", (2,)), Type("uint", (2,)), Type("uint", (2,))),
     feature("asint16", Type("int16", (2,)), Type("half", (2,))),
     feature("asuint16", Type("uint16"), Type("int16")),
+    feature("unpack_s8s32", Type("int", (4,)), Type("int8x4_packed")),
+    feature("pack_u8", Type("uint8x4_packed"), Type("int", (4,))),
 ]
+HLSL_BY_NAME = {f.name: f for f in HLSL_SIGNATURES}
 
 
 def test_16_bit_scalars_are_read_and_stored_through_32_bit_buffers():
-    asint16, asuint16 = HLSL_SIGNATURES[-2:]
+    asint16, asuint16 = HLSL_BY_NAME["asint16"], HLSL_BY_NAME["asuint16"]
     source = probes.build(asint16, "hlsl").source
     assert "RWStructuredBuffer<int2> outp : register(u1);" in source
     assert "half2 a0 = half2((half)fin[i + 0u], (half)fin[i + 1u]);" in source
@@ -264,6 +267,37 @@ def test_16_bit_scalars_are_read_and_stored_through_32_bit_buffers():
     # A language whose 16-bit spelling has not been checked leaves the feature untested.
     with pytest.raises(probes.ProbeError, match="16-bit"):
         probes.build(asint16, "glsl")
+
+
+def test_packed_8_bit_integers_are_read_and_stored_as_32_bit_words():
+    unpack, pack = HLSL_BY_NAME["unpack_s8s32"], HLSL_BY_NAME["pack_u8"]
+    source = probes.build(unpack, "hlsl").source
+    assert "int8_t4_packed a0 = (int8_t4_packed)uin[i + 0u];" in source
+    assert "int4 r = unpack_s8s32(a0);" in source
+    source = probes.build(pack, "hlsl").source
+    assert "RWStructuredBuffer<uint> outp : register(u1);" in source
+    assert "uint8_t4_packed r = pack_u8(a0);" in source
+    assert "outp[i] = (uint)r;" in source
+    # CrossGL's HLSL importer reads a packed word as uint.
+    assert "uint r = pack_u8(a0);" in probes.build(pack, "crossgl").source
+    with pytest.raises(probes.ProbeError, match="packed 8-bit"):
+        probes.build(pack, "metal")
+
+
+def test_64_bit_integers_are_read_through_32_bit_buffers_in_hlsl():
+    exchange = method(
+        "RWByteAddressBuffer",
+        "InterlockedExchange64",
+        Type.other("void"),
+        Type("uint"),
+        Type("int64"),
+    )
+    source = probes.build(exchange, "hlsl").source
+    assert "int64_t a1 = (int64_t)iin[i + 0u];" in source
+    assert "obj.InterlockedExchange64(a0, a1);" in source
+    assert (
+        "int64_t a1 = int64_t(iin[i + 0u]);" in probes.build(exchange, "crossgl").source
+    )
 
 
 @pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
@@ -395,6 +429,13 @@ HLSL_METHODS = [
         "Texture2DArrayMS", "Load", Type("float", (4,)), Type("int", (3,)), Type("int")
     ),
     method("RayQuery", "CommittedRayT", Type("float")),
+    method(
+        "RWByteAddressBuffer",
+        "InterlockedAdd64",
+        Type.other("void"),
+        Type("uint"),
+        Type("uint64"),
+    ),
 ]
 
 

@@ -50,6 +50,8 @@ _STORAGE = {
     "int64": "int",
     "uint16": "uint",
     "uint64": "uint",
+    "int8x4_packed": "uint",
+    "uint8x4_packed": "uint",
 }
 
 

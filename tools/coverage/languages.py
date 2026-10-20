@@ -62,8 +62,17 @@ class HLSL(Dialect):
     entry_attributes: tuple[str, ...] = ("[numthreads(1, 1, 1)]",)
     fragment_attributes: tuple[str, ...] = ()
     # The validators compile with 16-bit types enabled, so ``half`` is a 16-bit float (HLSL shader model 6.2).
+    wide_integers = True
     narrow_scalars = True
-    _SCALARS = {"int16": "int16_t", "uint16": "uint16_t"}
+    packed_bytes = True
+    _SCALARS = {
+        "int64": "int64_t",
+        "uint64": "uint64_t",
+        "int16": "int16_t",
+        "uint16": "uint16_t",
+        "int8x4_packed": "int8_t4_packed",
+        "uint8x4_packed": "uint8_t4_packed",
+    }
 
     def scalar(self, scalar: str) -> str:
         return self._SCALARS.get(scalar, scalar)

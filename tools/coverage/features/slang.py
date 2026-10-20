@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from .. import crossgl
 from ..model import (
-    NARROW_SCALARS,
+    OTHER_WIDTHS,
     VOID,
     Feature,
     Param,
@@ -69,13 +69,19 @@ _SCALARS = {
     "float16_t": "half",
     "int16_t": "int16",
     "uint16_t": "uint16",
+    "int64_t": "int64",
+    "uint64_t": "uint64",
+    "int8_t4_packed": "int8x4_packed",
+    "uint8_t4_packed": "uint8x4_packed",
 }
 _SHORTHAND = re.compile(
-    r"(bool|int|uint|float|double|half|int32_t|uint32_t|float32_t|float64_t|float16_t|int16_t|uint16_t)"
-    r"([1-4])(?:x([1-4]))?"
+    r"(bool|int|uint|float|double|half|int32_t|uint32_t|float32_t|float64_t|float16_t|int16_t|uint16_t|int64_t"
+    r"|uint64_t)([1-4])(?:x([1-4]))?"
 )
 # The targets a ``require`` capability atom such as ``cuda_glsl_hlsl_spirv`` is made of.
 TARGETS = frozenset("cpp cuda glsl hlsl metal spirv wgsl llvm".split())
+# Capability atoms that imply one target without naming it (source/slang/slang-capabilities.capdef).
+_ATOM_TARGETS = {"optix_coopvec": "cuda", "optix_multilevel_traversal": "cuda"}
 _GENERIC_TYPE = re.compile(r"(vector|matrix)\s*<(.*)>")
 _QUALIFIERS = {
     "in": "in",
@@ -417,7 +423,7 @@ def _stage(name: str, declaration: Declaration) -> str:
 
 
 def _preference(signature: Signature) -> tuple[bool, bool, int]:
-    """Sort key among overloads: value-returning before ``void``, 32-bit before ``double`` or 16-bit, and vectors
+    """Sort key among overloads: value-returning before ``void``, 32-bit before 64-bit or 16-bit, and vectors
     before scalars before matrices, so a generic function is probed with two-component vectors as in the HLSL list.
     """
     kinds = [signature.result, *(p.type for p in signature.params)]
@@ -426,7 +432,7 @@ def _preference(signature: Signature) -> tuple[bool, bool, int]:
     return (
         signature.result == VOID
         and any(p.direction == "out" for p in signature.params),
-        any(k.scalar == "double" or k.scalar in NARROW_SCALARS for k in kinds),
+        any(k.scalar in OTHER_WIDTHS for k in kinds),
         rank,
     )
 
@@ -435,9 +441,10 @@ def spirv_target(declaration: Declaration) -> bool:
     """Whether some ``require`` alternative allows SPIR-V; one that names no target allows every target."""
     clauses = re.findall(r"require\s*\(([^)]*)\)", declaration.requires)
     for clause in clauses or [""]:
+        atoms = [_ATOM_TARGETS.get(atom, atom) for atom in re.findall(r"\w+", clause)]
         targets = {
             part
-            for atom in re.findall(r"\w+", clause)
+            for atom in atoms
             if set(atom.split("_")) <= TARGETS
             for part in atom.split("_")
         }

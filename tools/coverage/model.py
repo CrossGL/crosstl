@@ -15,9 +15,16 @@ SCALARS = (
     "half",
     "int16",
     "uint16",
+    "int8x4_packed",
+    "uint8x4_packed",
 )
-# The 16-bit scalars, which a probe reads from and stores as 32-bit buffer elements.
+# Scalars a probe reads from and stores as 32-bit buffer elements: the 64-bit integers, the 16-bit scalars, and the
+# 32-bit words that pack four 8-bit integers (HLSL shader model 6.6).
+WIDE_INTEGERS = frozenset({"int64", "uint64"})
 NARROW_SCALARS = frozenset({"half", "int16", "uint16"})
+PACKED_BYTES = frozenset({"int8x4_packed", "uint8x4_packed"})
+# Overload selection prefers a signature without these when a function has one.
+OTHER_WIDTHS = frozenset({"double"}) | WIDE_INTEGERS | NARROW_SCALARS
 OUTCOMES = ("supported", "refused", "wrong", "untested")
 LANGUAGES = (
     "cuda",

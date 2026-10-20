@@ -14,7 +14,7 @@ import re
 
 from .. import crossgl
 from ..model import (
-    NARROW_SCALARS,
+    OTHER_WIDTHS,
     VOID,
     Feature,
     Param,
@@ -65,6 +65,11 @@ SCALAR = {
     "numeric16_only": "half",
     "int16_t": "int16",
     "uint16_t": "uint16",
+    "u64": "uint64",
+    "any_int64": "int64",
+    "int64_only": "int64",
+    "p32i8": "int8x4_packed",
+    "p32u8": "uint8x4_packed",
 }
 # Intrinsics that only exist in one kind of shader stage (Direct3D 12 functional specification).
 STAGES = {
@@ -157,7 +162,7 @@ def _own(spelling: str) -> tuple[dict | None, Type | None]:
     if base not in SCALAR:
         return reference, Type.other(base)
     shape = _layout(layout)
-    if SCALAR[base] in ("int", "uint", "bool", "int16", "uint16") and len(shape) == 2:
+    if SCALAR[base] not in ("float", "double", "half") and len(shape) == 2:
         shape = (shape[0],)
     return reference, Type(SCALAR[base], shape)
 
@@ -218,12 +223,11 @@ def _shader_model(attributes: str) -> tuple[int, ...]:
 
 
 def _preference(signature: Signature) -> tuple[bool, bool]:
-    """Sort key among overloads: value-returning before ``void``, 32-bit before ``double`` or 16-bit; stable
-    otherwise."""
+    """Sort key among overloads: value-returning before ``void``, 32-bit before 64-bit or 16-bit; stable otherwise."""
     kinds = [signature.result, *(p.type for p in signature.params)]
     return signature.result == VOID and any(
         p.direction == "out" for p in signature.params
-    ), any(k.scalar == "double" or k.scalar in NARROW_SCALARS for k in kinds)
+    ), any(k.scalar in OTHER_WIDTHS for k in kinds)
 
 
 def declarations(text: str):

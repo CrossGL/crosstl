@@ -205,6 +205,9 @@ float [[rn]] dot2add(in float16_t<2> a, in $type1 b, in float c);
 $type1 [[rn]] lerp(in float_like<> a, in $type1 b, in $type1 s);
 $type1 [[rn,unsigned_op=umad]] mad(in numeric<> a, in $type1 b, in $type1 c);
 void [[]] InterlockedAdd(ref int32_only result, in uint value);
+void [[]] InterlockedAdd(ref int64_only result, in u64 value);
+int<4> [[rn]] unpack_s8s32(in p32i8 pk);
+p32u8 [[rn]] pack_u8(in any_int16or32<4> v);
 $type1 [[rn]] ddx(in float_like<> x);
 $type1 [[rn]] GetAttributeAtVertex(in numeric<> value, in uint VertexID);
 float<3> [[rn]] WorldRayOrigin();
@@ -227,6 +230,10 @@ $classT [[ro]] Load(in int<3> x) : tex2d_t_load;
 
 namespace ByteAddressBufferMethods {
 $funcT [[ro]] Load(in uint byteOffset) : byteaddress_load;
+} namespace
+
+namespace RWByteAddressBufferMethods {
+void [[]] InterlockedExchange64(in uint byteOffset, in any_int64 value, out any_int64 original);
 } namespace
 
 namespace DxHitObjectMethods {
@@ -320,6 +327,18 @@ def test_hlsl_reads_16_bit_scalars():
     assert [p.type for p in dot2add.params] == [Type("half", (2,))] * 2 + [
         Type("float")
     ]
+
+
+def test_hlsl_reads_64_bit_and_packed_8_bit_integers():
+    features = by_name(hlsl.parse(HLSL_TABLE, {"mix", "fma"}))
+    exchange = features["RWByteAddressBuffer.InterlockedExchange64"].signature
+    assert [p.type for p in exchange.params] == [Type("uint")] + [Type("int64")] * 2
+    unpack = features["unpack_s8s32"].signature
+    assert unpack.result == Type("int", (4,))
+    assert unpack.params[0].type == Type("int8x4_packed")
+    assert features["pack_u8"].signature.result == Type("uint8x4_packed")
+    # The 32-bit overload of a function is probed rather than its 64-bit one.
+    assert features["InterlockedAdd"].signature.params[0].type == Type("int")
 
 
 def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
@@ -785,6 +804,9 @@ uint3 WorkgroupCount()
     return uint3(0);
 }
 
+[require(optix_multilevel_traversal, raytracing_stages)]
+uint64_t GetTraversableChild(uint64_t handle);
+
 __generic<T : __BuiltinFloatingPointType>
 T lerp(T x, T y, T s);
 
@@ -806,6 +828,7 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
     glsl_names = {"sin", "mix"}
     features = by_name(slang.parse(SLANG_CORE, SLANG_HLSL, glsl_names))
     assert sorted(features) == [
+        "GetTraversableChild",
         "InterlockedAdd",
         "InterlockedExchange",
         "ProcessTriTessFactorsAvg",
@@ -839,6 +862,9 @@ def test_slang_stages_targets_and_explicit_generic_arguments():
     tess = features["ProcessTriTessFactorsAvg"]
     assert tess.signature is None
     assert tess.note == "needs a target other than SPIR-V"
+    # An OptiX capability implies the CUDA target.
+    traversable = features["GetTraversableChild"]
+    assert (traversable.signature, traversable.note) == (None, tess.note)
     # No argument fixes bit_cast's result type, so the probe names it.
     assert features["bit_cast"].spelling == "bit_cast<int>"
     assert features["sin"].spelling == ""
@@ -854,6 +880,9 @@ def test_slang_types():
     assert slang.slang_type("int16_t4", {}) == Type("int16", (4,))
     assert slang.slang_type("vector<uint16_t, 3>", {}) == Type("uint16", (3,))
     assert slang.slang_type("half*", {}) == Type.other("half*")
+    assert slang.slang_type("uint64_t", {}) == Type("uint64")
+    assert slang.slang_type("int64_t2", {}) == Type("int64", (2,))
+    assert slang.slang_type("int8_t4_packed", {}) == Type("int8x4_packed")
 
 
 MOJO_MATH_INIT = """

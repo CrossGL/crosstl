@@ -8,7 +8,8 @@ anywhere else.
 
 from __future__ import annotations
 
-from .dialect import WIDE_INTEGERS, Buffer, Dialect, ProbeError
+from .dialect import Buffer, Dialect, ProbeError
+from .model import WIDE_INTEGERS
 from .templates import C_FAMILY, Template
 
 # Built-in functions CrossGL spells as GLSL does rather than as the backend does. A rename applies only when the GLSL
@@ -257,13 +258,17 @@ class CrossGL(Dialect):
     suffix = ".cgl"
     wide_integers = True
     narrow_scalars = True
-    # The spellings CrossGL's own importers write for these scalars.
+    packed_bytes = True
+    # The spellings CrossGL's own importers write for these scalars; the HLSL importer reads a packed 8-bit word as
+    # ``uint``, which HLSL converts to and from implicitly.
     _SCALARS = {
         "int64": "int64_t",
         "uint64": "uint64_t",
         "half": "float16",
         "int16": "int16",
         "uint16": "uint16",
+        "int8x4_packed": "uint",
+        "uint8x4_packed": "uint",
     }
     _PREFIX = {**Dialect._PREFIX, "half": "f16", "int16": "i16", "uint16": "u16"}
 
