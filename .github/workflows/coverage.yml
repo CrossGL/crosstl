@@ -30,7 +30,8 @@ on:
   pull_request:
   merge_group:
   schedule:
-    - cron: "41 3 * * *"
+    # Clear of the conformance, corpus and MLX nightly runs, which share the runners.
+    - cron: "53 1 * * *"
   workflow_dispatch:
 
 permissions:
