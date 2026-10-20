@@ -2,7 +2,8 @@
 
 ``merge`` combines the reports of runners that measured different backends, such as the Linux and macOS CI jobs, and
 rebuilds the CrossGL IR row from all of them. ``publish`` writes what CI publishes to the ``coverage`` branch, and
-``issues`` reconciles the tracking and bug issues with a report.
+``issues`` reconciles the tracking and bug issues with a report, and ``compare`` shows how a pull request's report
+differs from the published one.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import features, issues, publish, report, runner, validators
+from . import compare, features, issues, publish, report, runner, validators
 from .model import DIRECTIONS
 from .upstream import UpstreamError
 
@@ -76,6 +77,12 @@ def _parser() -> argparse.ArgumentParser:
         default=issues.NEW_BUGS,
         help=f"most bug issues to open in one run; default: {issues.NEW_BUGS}",
     )
+    comparing = commands.add_parser(
+        "compare",
+        help="print, as Markdown, how a report differs from the published one",
+    )
+    comparing.add_argument("published", type=Path)
+    comparing.add_argument("report", type=Path)
     listing = commands.add_parser(
         "features", help="print the feature list of one language"
     )
@@ -171,6 +178,13 @@ def main(argv: list[str] | None = None) -> int:
             return _publish(args)
         if args.command == "issues":
             return _issues(args)
+        if args.command == "compare":
+            published, current = (
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in (args.published, args.report)
+            )
+            print(compare.compare(published, current), end="")
+            return 0
         for feature in features.load(args.backend, offline=args.offline):
             print(f"{feature.group:<44} {feature.name}")
         return 0

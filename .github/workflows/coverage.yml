@@ -376,6 +376,18 @@ jobs:
           path: coverage.json
           retention-days: 14
 
+      # The coverage branch is public, so reading it needs no token.
+      - name: Compare with the published coverage
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          if git fetch --quiet --depth=1 origin coverage && git show FETCH_HEAD:coverage.json > published.json; then
+            python -m tools.coverage compare published.json coverage.json | tee compare.md
+            { echo "### Change against main"; echo; cat compare.md; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No published coverage to compare with yet."
+          fi
+
       # Pull requests and the merge queue only print what the issues job would change on main.
       - name: Plan the issue changes
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
