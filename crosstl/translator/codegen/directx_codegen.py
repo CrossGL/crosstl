@@ -5909,9 +5909,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 and isinstance(child.var_type, (PointerType, ReferenceType))
                 and call_mutations.get(
                     id(child),
-                    self.hlsl_software_subgroup_expression_identifier_names(
-                        child.initial_value
-                    ),
+                    self.hlsl_software_subgroup_aliased_names(child.initial_value),
                 )
                 & visible
             ):
@@ -5919,10 +5917,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             if (
                 isinstance(child, UnaryOpNode)
                 and self.map_operator(child.operator) == "&"
-                and self.hlsl_software_subgroup_expression_identifier_names(
-                    child.operand
-                )
-                & visible
+                and self.hlsl_software_subgroup_aliased_names(child) & visible
             ):
                 return False
             if call_mutations.get(id(child), set()) & visible:
@@ -5938,6 +5933,29 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 if target_name in visible:
                     return False
         return True
+
+    def hlsl_software_subgroup_aliased_names(self, expression):
+        """Names whose storage an address expression may alias.
+
+        ``&vals[i * 2]`` and ``&s.rows[i]`` designate an element of ``vals``
+        or ``s``: the index is only read, so it is never aliased. Any other
+        expression conservatively aliases every name it reads.
+        """
+        node = None
+        if isinstance(expression, UnaryOpNode) and (
+            self.map_operator(getattr(expression, "operator", None)) == "&"
+        ):
+            node = expression.operand
+        while isinstance(node, (ArrayAccessNode, MemberAccessNode, SwizzleNode)):
+            if isinstance(node, ArrayAccessNode):
+                node = node.array_expr
+            elif isinstance(node, MemberAccessNode):
+                node = node.object_expr
+            else:
+                node = node.vector_expr
+        if isinstance(node, IdentifierNode):
+            return {node.name}
+        return self.hlsl_software_subgroup_expression_identifier_names(expression)
 
     def hlsl_software_subgroup_trip_uniform_for(
         self, node, uniform_names, call_mutations, constants

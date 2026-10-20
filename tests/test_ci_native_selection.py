@@ -182,7 +182,7 @@ def test_native_collective_batches_limit_software_driver_threads():
     assert step["run"].count("-n auto -vv --durations=25") == 2
     batches = step["run"].split("python -m pytest ")[1:]
     assert len(batches) == 2
-    for index, (batch, count) in enumerate(zip(batches, (32, 34))):
+    for index, (batch, count) in enumerate(zip(batches, (33, 34))):
         selectors = re.findall(r"tests/[^\s\\]+", batch)
         assert len(selectors) == len(set(selectors)) == count
         assert not re.search(r"(?:^|\s)(?:-m|--maxfail)(?:\s|=|$)", batch)
