@@ -11,6 +11,16 @@ import re
 from ..ast import FunctionCallNode
 
 
+class HlslRegisterOverlapError(ValueError):
+    """Two resources of one HLSL register class and space claim the same register.
+
+    Direct3D rejects such a program, so no binding assignment can preserve it.
+    """
+
+    project_diagnostic_code = "project.translate.hlsl-register-overlap"
+    missing_capabilities = ("source.hlsl-register-allocation",)
+
+
 class GLSLHlslResourceMixin:
     """HLSL resource and binding members of ``GLSLCodeGen``."""
 
@@ -86,14 +96,17 @@ class GLSLHlslResourceMixin:
         )
         for node, namespace, register, count, name, _order in ordered:
             register_class, register_index = register
-            self.reserve_resource_binding_range(
-                source_ranges,
-                "HLSL",
-                f"register {register_class}",
-                register_index,
-                count,
-                name,
-            )
+            try:
+                self.reserve_resource_binding_range(
+                    source_ranges,
+                    "HLSL",
+                    f"register {register_class}",
+                    register_index,
+                    count,
+                    name,
+                )
+            except ValueError as error:
+                raise HlslRegisterOverlapError(str(error)) from error
             target = self.next_available_resource_binding_from(
                 used_bindings, namespace, register_index, count
             )

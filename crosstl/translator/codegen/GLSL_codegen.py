@@ -192,7 +192,11 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
-from .glsl_refusals import OpenGLLoweringRefused
+from .glsl_refusals import (
+    OpenGLLoweringRefused,
+    patch_parameter_refusal_reason,
+    stageless_entry_refusal_reason,
+)
 from .glsl_union_storage import UnionStorage
 from .glsl_version_requirements import (
     VARIABLE_GATHER_OFFSET,
@@ -9695,6 +9699,7 @@ class GLSLCodeGen(
                 )
                 code += self.wrap_stage_guard(stage_code, "compute")
             else:
+                self.refuse_stageless_glsl_entry(func)
                 function_code = self.generate_function(
                     func,
                     stage_context=helper_stage_context,
@@ -9866,6 +9871,13 @@ class GLSLCodeGen(
             getattr(func, "parameters", getattr(func, "params", [])) or []
         )
         return bool(parameters and getattr(parameters[0], "name", None) == "self")
+
+    def refuse_stageless_glsl_entry(self, func):
+        reason = stageless_entry_refusal_reason(
+            func, self.type_name_string(getattr(func, "return_type", None))
+        )
+        if reason is not None:
+            self.refuse_lowering(reason)
 
     def should_skip_unresolved_top_level_helper(self, func, called_function_names):
         if generic_function_parameters(func):
@@ -22024,6 +22036,12 @@ class GLSLCodeGen(
                 return
             semantic = self.semantic_from_node(param)
             if self.is_stage_builtin_semantic(semantic):
+                return
+            patch_refusal = patch_parameter_refusal_reason(
+                param.name, self.type_name_string(self.resource_node_type(param))
+            )
+            if patch_refusal is not None:
+                self.refuse_lowering(patch_refusal)
                 return
 
             param_type = self.map_type(self.resource_node_type(param))
