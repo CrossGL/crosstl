@@ -53,6 +53,18 @@ _UNSIGNED_BUILTINS = frozenset(
         "gl_SampleID",
     }
 )
+_BUILTIN_MEMBER_NAMES = {
+    "gl_Position": "position",
+    "gl_PointSize": "pointSize",
+    "gl_ClipDistance": "clipDistance",
+    "gl_CullDistance": "cullDistance",
+    "gl_FragDepth": "depth",
+    "gl_SampleMask": "sampleMask",
+}
+_BUILTIN_BLOCKS = frozenset({"gl_PerVertex"})
+_BUILTIN_BLOCK_MEMBERS = frozenset(
+    {"gl_Position", "gl_PointSize", "gl_ClipDistance", "gl_CullDistance"}
+)
 
 
 class StageInterfaceUnsupportedError(TranslationDiagnostic):
@@ -98,8 +110,9 @@ class _Gatherer:
         self.entry = stage.entry_point
         self.helpers = [
             function
-            for function in list(getattr(program, "functions", None) or [])
-            + list(getattr(stage, "local_functions", None) or [])
+            for function in list(getattr(program, "functions", None) or []) + list(
+                getattr(stage, "local_functions", None) or []
+            )
             if function is not self.entry
         ]
 
@@ -145,10 +158,11 @@ class _Gatherer:
         if inputs:
             input_name = self._local_name("input")
             struct_name = self._struct_name(input_struct_name)
-            self.program.structs.append(_struct(struct_name, inputs))
+            members = _member_names(inputs)
+            self.program.structs.append(_struct(struct_name, inputs, members))
             parameters.append(A.ParameterNode(input_name, A.NamedType(struct_name)))
             for variable in inputs:
-                renames[variable.name] = _member(input_name, variable.name)
+                renames[variable.name] = _member(input_name, members[variable.name])
         tokens = {}
         conversions = []
         for variable in builtin_inputs:
@@ -160,7 +174,9 @@ class _Gatherer:
                 raw = self._parameter_name(f"{variable.name}_bits")
                 parameters.append(
                     A.ParameterNode(
-                        raw, A.PrimitiveType("uint"), attributes=[A.AttributeNode(builtin)]
+                        raw,
+                        A.PrimitiveType("uint"),
+                        attributes=[A.AttributeNode(builtin)],
                     )
                 )
                 conversions.append(
@@ -185,12 +201,18 @@ class _Gatherer:
         if outputs:
             output_name = self._local_name("output")
             struct_name = self._struct_name(output_struct_name)
+            members = _member_names(outputs)
             self.program.structs.append(
-                _struct(struct_name, outputs, colour_attachments=self.stage_name == "fragment")
+                _struct(
+                    struct_name,
+                    outputs,
+                    members,
+                    colour_attachments=self.stage_name == "fragment",
+                )
             )
             entry.return_type = A.NamedType(struct_name)
             for variable in outputs:
-                renames[variable.name] = _member(output_name, variable.name)
+                renames[variable.name] = _member(output_name, members[variable.name])
                 tokens[variable.name] = (output_name, A.NamedType(struct_name), "inout")
             statements = entry.body.statements
             statements.insert(
@@ -203,6 +225,7 @@ class _Gatherer:
         self._thread(tokens)
         for function in [entry, *self.helpers]:
             _rename(function.body, renames)
+        _drop_unused_builtin_blocks(self.program)
 
     def _thread(self, tokens):
         """Pass built-in inputs and the output structure to the helpers that use them, directly or not.
@@ -214,7 +237,9 @@ class _Gatherer:
             return
         needs = {}
         for helper in self.helpers:
-            direct = {tokens[source][0] for source in _referenced_names(helper) & set(tokens)}
+            direct = {
+                tokens[source][0] for source in _referenced_names(helper) & set(tokens)
+            }
             needs.setdefault(helper.name, set()).update(direct)
         changed = True
         while changed:
@@ -325,7 +350,55 @@ def _type_name(type_node):
     return str(getattr(type_node, "name", type_node))
 
 
-def _struct(name, variables, colour_attachments=False):
+def _member_names(variables):
+    """Structure member names for interface variables, unique within one structure.
+
+    Built-in outputs take the names the HLSL and MSL vertex contracts use (``position``, ``pointSize``, ...); user
+    variables drop the leading underscores SPIR-V producers add (``_ua_position``), keeping them when that would
+    collide. Members are reached through the structure, so the names cannot clash with the program's own.
+    """
+    names, used = {}, set()
+    for variable in variables:
+        preferred = _BUILTIN_MEMBER_NAMES.get(_builtin_name(variable))
+        if preferred is None:
+            preferred = variable.name.lstrip("_") or variable.name
+        if preferred in used or preferred.startswith("gl_"):
+            preferred = variable.name
+        name, index = preferred, 1
+        while name in used:
+            index += 1
+            name = f"{preferred}{index}"
+        used.add(name)
+        names[variable.name] = name
+    return names
+
+
+def _drop_unused_builtin_blocks(program):
+    """Drop SPIR-V ``gl_PerVertex``-style blocks once their members became structure members.
+
+    The SPIR-V importer keeps the block's declaration next to the stage-level built-ins it split it into; HLSL and
+    MSL have no such block, and a declaration nothing references would be emitted as a stray structure.
+    """
+    structs = list(getattr(program, "structs", None) or [])
+    candidates = {
+        struct.name
+        for struct in structs
+        if struct.name in _BUILTIN_BLOCKS
+        and {member.name for member in struct.members or []} <= _BUILTIN_BLOCK_MEMBERS
+    }
+    if not candidates:
+        return
+    referenced = {
+        node.name
+        for node in _walk(program)
+        if isinstance(node, A.NamedType) and node.name in candidates
+    }
+    unused = candidates - referenced
+    if unused:
+        program.structs = [struct for struct in structs if struct.name not in unused]
+
+
+def _struct(name, variables, member_names, colour_attachments=False):
     members = []
     for variable in variables:
         attributes = []
@@ -334,9 +407,13 @@ def _struct(name, variables, colour_attachments=False):
             if attribute_name in _DIRECTION_ATTRIBUTES:
                 continue
             if colour_attachments and attribute_name == "location":
-                attribute = A.AttributeNode("gl_FragData", list(attribute.arguments or []))
+                attribute = A.AttributeNode(
+                    "gl_FragData", list(attribute.arguments or [])
+                )
             attributes.append(attribute)
-        member = A.StructMemberNode(variable.name, variable.var_type, attributes=attributes)
+        member = A.StructMemberNode(
+            member_names[variable.name], variable.var_type, attributes=attributes
+        )
         member.source_location = getattr(variable, "source_location", None)
         members.append(member)
     return A.StructNode(name, members)
@@ -354,7 +431,9 @@ def _walk(node):
             continue
         seen.add(id(current))
         yield current
-        stack.extend(get_child(current, field, key) for field, key in child_slots(current))
+        stack.extend(
+            get_child(current, field, key) for field, key in child_slots(current)
+        )
 
 
 def _referenced_names(function):
@@ -374,7 +453,9 @@ def _called_names(function):
 
 
 def _function_declared_names(function):
-    names = {parameter.name for parameter in getattr(function, "parameters", None) or []}
+    names = {
+        parameter.name for parameter in getattr(function, "parameters", None) or []
+    }
     names.update(
         node.name
         for node in _walk(getattr(function, "body", None))

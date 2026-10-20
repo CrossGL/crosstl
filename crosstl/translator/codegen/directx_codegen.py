@@ -14789,6 +14789,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "maybe_unused",
             "source_resource",
             "precise",
+            # GLSL precision qualifiers set a minimum precision (GLSL ES 3.00 section 4.5.2); HLSL's 32-bit types
+            # meet it, so they carry no semantic and must not become one.
+            "highp",
+            "mediump",
+            "lowp",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
         return str(getattr(attr, "name", "")).lower() in metadata

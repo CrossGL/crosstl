@@ -125,13 +125,15 @@ def test_vertex_interface_becomes_entry_structures_and_helper_parameters():
     inputs = _struct(program, "VertexInput")
     outputs = _struct(program, "VertexOutput")
     assert [member.name for member in inputs.members] == ["inPos"]
-    # Unused gl_PerVertex members are dropped; used built-in outputs stay members.
+    # Unused gl_PerVertex members are dropped; used built-in outputs stay members, named as the HLSL and MSL
+    # vertex contracts name them.
     assert [member.name for member in outputs.members] == [
         "outColor",
         "outId",
-        "gl_Position",
+        "position",
     ]
     assert _attributes(outputs.members[1]) == ["location", "flat"]
+    assert _attributes(outputs.members[2]) == ["gl_Position"]
     entry = stage.entry_point
     assert [(p.name, p.param_type.name, _attributes(p)) for p in entry.parameters] == [
         ("input", "VertexInput", []),
@@ -222,9 +224,62 @@ def test_entry_points_with_their_own_interface_are_refused():
 
 def test_helpers_declaring_an_interface_name_are_refused():
     source = VERTEX_CGL.replace(
-        "return p * float(gl_VertexID);", "float inPos = 1.0;\n        return p * inPos;"
+        "return p * float(gl_VertexID);",
+        "float inPos = 1.0;\n        return p * inPos;",
     )
 
     with pytest.raises(StageInterfaceUnsupportedError) as raised:
         gather_stage_interface_variables(parse(source), "directx")
     assert raised.value.reason_code == "shadowed-interface-variable"
+
+
+SPIRV_PERVERTEX_CGL = """
+shader main {
+    @glsl_interface_block(out)
+    @glsl_interface_block_name(gl_PerVertex)
+    struct gl_PerVertex {
+        float4 gl_Position;
+        float gl_PointSize @mediump;
+        float gl_ClipDistance[8];
+        float gl_CullDistance[8];
+    }
+    vertex {
+        float4 _ua_position @input @location(0);
+        float4 ua_color @input @location(1);
+        float4 gl_Position @output @gl_Position;
+        float gl_PointSize @output @gl_PointSize @mediump;
+        void main() {
+            gl_Position = _ua_position + ua_color;
+            return;
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("target", ["metal", "directx"])
+def test_spirv_pervertex_block_is_dropped_and_member_names_are_plain(tmp_path, target):
+    program = parse(SPIRV_PERVERTEX_CGL)
+
+    assert gather_stage_interface_variables(program, target) == 1
+
+    assert [struct.name for struct in program.structs] == [
+        "VertexInput",
+        "VertexOutput",
+    ]
+    # The leading underscore goes unless it would make two members collide.
+    assert [m.name for m in _struct(program, "VertexInput").members] == [
+        "ua_position",
+        "ua_color",
+    ]
+    assert [m.name for m in _struct(program, "VertexOutput").members] == ["position"]
+
+
+def test_hlsl_spirv_pervertex_block_emits_no_precision_semantic(tmp_path):
+    code = _translate(tmp_path, SPIRV_PERVERTEX_CGL, "directx")
+
+    assert "gl_PerVertex" not in code
+    assert "mediump" not in code
+    assert "float4 position: SV_POSITION;" in code
+    assert "output.position = (input.ua_position + input.ua_color);" in code
+    _validate_hlsl(tmp_path, code, "vs_6_0", "VSMain")
