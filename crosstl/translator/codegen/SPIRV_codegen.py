@@ -30524,7 +30524,7 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return "SpacingEqual"
+        return None if self.tessellation_modes_follow_hlsl(stage) else "SpacingEqual"
 
     def tessellation_vertex_order_mode(self, stage) -> str:
         """Return the tessellation-evaluation vertex-order execution mode."""
@@ -30545,7 +30545,16 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return "VertexOrderCcw"
+        return None if self.tessellation_modes_follow_hlsl(stage) else "VertexOrderCcw"
+
+    def tessellation_modes_follow_hlsl(self, stage) -> bool:
+        """Whether ``stage`` declares its domain as an HLSL-style ``@domain`` attribute.
+
+        HLSL declares the spacing and winding on the hull shader only, so an HLSL-style stage that names neither
+        leaves them to the control stage, as DXC does. A GLSL evaluation shader that omits them means
+        ``equal_spacing`` and ``ccw`` (GLSL 4.60 section 4.4.1.2), which SPIR-V must state.
+        """
+        return self.stage_attribute_value(stage, "domain") is not None
 
     def tessellation_point_mode(self, stage) -> bool:
         """Return whether tessellation evaluation should emit PointMode."""
@@ -30571,20 +30580,20 @@ class VulkanSPIRVCodeGen(
                 f"OpExecutionMode %{function_id.id} OutputVertices "
                 f"{self.tessellation_control_output_vertices(stage)}"
             )
-            return
+            if not self.tessellation_modes_follow_hlsl(stage):
+                return
+            # An HLSL hull declares the domain, spacing and winding; DXC states them on the control stage too.
 
-        self.emit(
-            f"OpExecutionMode %{function_id.id} {self.tessellation_domain_mode(stage)}"
-        )
-        self.emit(
-            f"OpExecutionMode %{function_id.id} {self.tessellation_spacing_mode(stage)}"
-        )
-        self.emit(
-            f"OpExecutionMode %{function_id.id} "
-            f"{self.tessellation_vertex_order_mode(stage)}"
-        )
+        modes = [
+            self.tessellation_domain_mode(stage),
+            self.tessellation_spacing_mode(stage),
+            self.tessellation_vertex_order_mode(stage),
+        ]
         if self.tessellation_point_mode(stage):
-            self.emit(f"OpExecutionMode %{function_id.id} PointMode")
+            modes.append("PointMode")
+        for mode in modes:
+            if mode is not None:
+                self.emit(f"OpExecutionMode %{function_id.id} {mode}")
 
     def mesh_stage_output_limits(self, function_id: SpirvId, stage) -> Tuple[int, int]:
         """Return OutputVertices and OutputPrimitivesEXT execution-mode limits."""
