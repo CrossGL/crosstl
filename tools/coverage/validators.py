@@ -52,6 +52,13 @@ GLSL_STAGES = {
     "fragment": "frag",
     "vertex": "vert",
     "geometry": "geom",
+    # glslang's stage suffixes for GL_EXT_ray_tracing shaders.
+    "ray-generation": "rgen",
+    "intersection": "rint",
+    "any-hit": "rahit",
+    "closest-hit": "rchit",
+    "miss": "rmiss",
+    "callable": "rcall",
 }
 # The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one.
 HLSL_SHADER_MODEL = (6, 9)
@@ -210,7 +217,13 @@ def validate(
         )
         Path(scratch, name).write_text(source)
         if language == "glsl":
-            return _run([*command("glslangValidator"), name], scratch)
+            # GL_EXT_ray_tracing exists only for SPIR-V 1.4 and later, so ray-tracing shaders are checked for Vulkan.
+            environment = (
+                ["--target-env", RAYTRACING_ENVIRONMENT]
+                if stage in RAYTRACING_STAGES
+                else []
+            )
+            return _run([*command("glslangValidator"), *environment, name], scratch)
         if language == "hlsl":
             profile = HLSL_PROFILES[stage]
             entry_point = (
@@ -309,7 +322,14 @@ def validate(
                 ],
                 scratch,
             )
-        environment = ["--target-env", SPIRV_ENVIRONMENT]
+        environment = [
+            "--target-env",
+            (
+                RAYTRACING_ENVIRONMENT
+                if stage in RAYTRACING_STAGES
+                else SPIRV_ENVIRONMENT
+            ),
+        ]
         assembled = _run(
             [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch
         )
@@ -323,7 +343,7 @@ def validate(
 SPIRV_COMPILERS = {
     "glsl": (
         "glslangValidator",
-        ("-V", "--target-env", SPIRV_ENVIRONMENT, "{source}", "-o", "probe.spv"),
+        ("-V", "--target-env", "{environment}", "{source}", "-o", "probe.spv"),
     ),
     "hlsl": (
         "dxc",

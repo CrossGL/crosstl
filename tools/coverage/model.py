@@ -48,6 +48,8 @@ RAYTRACING_STAGES = {
     "intersection": "intersection",
     "any-hit": "anyhit",
     "closest-hit": "closesthit",
+    "miss": "miss",
+    "callable": "callable",
 }
 _RAYTRACING_ONLY = {
     "AcceptHitAndEndSearch": "any-hit",

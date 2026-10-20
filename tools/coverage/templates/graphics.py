@@ -12,8 +12,39 @@ def _glsl_extension(name: str) -> str:
     return f"#extension GL_EXT_shader_explicit_arithmetic_types_{name} : require"
 
 
+# Ray-tracing stage programs. Each stage writes a buffer or the ray data it is handed, which is all a stage needs to
+# exist; the hit stages also read the triangle's barycentrics.
+_GLSL_RAYTRACING = "#version 460\n#extension GL_EXT_ray_tracing : require\n"
+_GLSL_WRITE = (
+    "layout(std430, binding = 0) buffer Output {\n    float outp[];\n};\n"
+    "void main() {\n    outp[0] = 1.0;\n}\n"
+)
+_GLSL_PAYLOAD = "struct Payload {\n    vec4 color;\n};\nlayout(location = 0) rayPayloadInEXT Payload payload;\n"
+_GLSL_HIT = (
+    _GLSL_RAYTRACING
+    + _GLSL_PAYLOAD
+    + "hitAttributeEXT vec2 attributes;\nvoid main() {\n    payload.color = vec4(attributes, 0.0, 1.0);\n}\n"
+)
+_GLSL_RAYTRACING_STAGES = {
+    "ray-generation": Template(program=_GLSL_RAYTRACING + _GLSL_WRITE),
+    "intersection": Template(program=_GLSL_RAYTRACING + _GLSL_WRITE),
+    "any-hit": Template(program=_GLSL_HIT),
+    "closest-hit": Template(program=_GLSL_HIT),
+    "miss": Template(
+        program=_GLSL_RAYTRACING
+        + _GLSL_PAYLOAD
+        + "void main() {\n    payload.color = vec4(0.0, 0.0, 0.0, 1.0);\n}\n"
+    ),
+    "callable": Template(
+        program=_GLSL_RAYTRACING
+        + "struct CallData {\n    vec4 color;\n};\nlayout(location = 0) callableDataInEXT CallData data;\n"
+        "void main() {\n    data.color = vec4(1.0, 0.0, 0.0, 1.0);\n}\n"
+    ),
+}
+
 GLSL = {
     **C_FAMILY,
+    **_GLSL_RAYTRACING_STAGES,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "const float SCALE = 2.0;"
     ),
@@ -139,6 +170,49 @@ HLSL = {
         entry="main",
     ),
 }
+
+
+def _hlsl_raytracing(payload: str) -> dict[str, Template]:
+    """HLSL's ray-tracing stage programs, which compile as a library; ``payload`` declares the ray payload."""
+
+    def write(stage: str) -> Template:
+        return Template(
+            program=f'RWStructuredBuffer<float> outp : register(u0);\n\n[shader("{stage}")]\n'
+            "void main() {\n    outp[0] = 1.0;\n}\n"
+        )
+
+    def hit(stage: str) -> Template:
+        return Template(
+            program=f'{payload}\n[shader("{stage}")]\nvoid main(inout Payload payload, '
+            "in BuiltInTriangleIntersectionAttributes attributes) {\n"
+            "    payload.color = float4(attributes.barycentrics, 0.0, 1.0);\n}\n"
+        )
+
+    miss = Template(
+        program=f'{payload}\n[shader("miss")]\nvoid main(inout Payload payload) {{\n'
+        "    payload.color = float4(0.0, 0.0, 0.0, 1.0);\n}\n"
+    )
+    callable = Template(
+        program='struct CallData {\n    float4 color;\n};\n\n[shader("callable")]\n'
+        "void main(inout CallData data) {\n    data.color = float4(1.0, 0.0, 0.0, 1.0);\n}\n"
+    )
+    return {
+        "ray-generation": write("raygeneration"),
+        "intersection": write("intersection"),
+        "any-hit": hit("anyhit"),
+        "closest-hit": hit("closesthit"),
+        "miss": miss,
+        "callable": callable,
+    }
+
+
+# Shader model 6.7 and later require a payload to say which stages read and write each field.
+HLSL.update(
+    _hlsl_raytracing(
+        "struct [raypayload] Payload {\n"
+        "    float4 color : read(caller) : write(anyhit, closesthit, miss);\n};\n"
+    )
+)
 
 _METAL_HEADER = "#include <metal_stdlib>\nusing namespace metal;\n\n"
 
@@ -383,4 +457,11 @@ SLANG = {
         ),
     ),
     "discard": _slang(HLSL["discard"], "fragment"),
+    # slangc takes no payload access qualifiers.
+    **{
+        name: replace(template, program=template.program.replace(" : register(u0)", ""))
+        for name, template in _hlsl_raytracing(
+            "struct Payload {\n    float4 color;\n};\n"
+        ).items()
+    },
 }

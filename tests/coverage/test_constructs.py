@@ -14,7 +14,12 @@ _MODELS = [
     ("Kernel", ["Kernel"]),
     ("TaskNV", ["MeshShadingNV"]),
     ("MeshEXT", ["MeshShadingEXT"]),
+    ("RayGenerationKHR", ["RayTracingNV", "RayTracingKHR"]),
+    ("IntersectionKHR", ["RayTracingNV", "RayTracingKHR"]),
     ("AnyHitKHR", ["RayTracingNV", "RayTracingKHR"]),
+    ("ClosestHitKHR", ["RayTracingNV", "RayTracingKHR"]),
+    ("MissKHR", ["RayTracingNV", "RayTracingKHR"]),
+    ("CallableKHR", ["RayTracingNV", "RayTracingKHR"]),
 ]
 
 
@@ -66,7 +71,12 @@ def test_stages_are_the_shader_execution_models():
         "fragment",
         "compute",
         "mesh",
+        "ray-generation",
+        "intersection",
         "any-hit",
+        "closest-hit",
+        "miss",
+        "callable",
     ]
 
 
@@ -125,6 +135,24 @@ def test_stage_programs_take_the_stage_suffix():
     assert probe.suffix == ".frag"
     assert probes.build(_feature("glsl", "geometry"), "glsl").suffix == ".geom"
     assert probes.build(_feature("glsl", "discard"), "glsl").suffix == ".frag"
+    assert probes.build(_feature("glsl", "closest-hit"), "glsl").suffix == ".rchit"
+
+
+def test_ray_tracing_stages_are_checked_for_vulkan(monkeypatch):
+    commands = []
+
+    def run(arguments, cwd):
+        commands.append(arguments)
+        return validators.Verdict(True)
+
+    monkeypatch.setattr(validators, "command", lambda name: (name,))
+    monkeypatch.setattr(validators, "_run", run)
+    validators.validate("glsl", "", "miss")
+    validators.validate("glsl", "", "fragment")
+    assert commands == [
+        ["glslangValidator", "--target-env", "vulkan1.2", "probe.rmiss"],
+        ["glslangValidator", "probe.frag"],
+    ]
 
 
 def test_entry_parameters_join_the_kernel_signature():

@@ -22,6 +22,7 @@ from . import crossgl, templates
 from .dialect import ProbeError
 from .model import Feature, Type
 from .templates import ABSENT, Template
+from .validators import GLSL_STAGES
 
 CATEGORIES = ("control-flow", "type", "compute", "resource", "stage")
 # The capabilities that make an execution model a shader stage; Kernel and the NV-only mesh models are left out.
@@ -192,8 +193,9 @@ def _lines(text: str, spelled: dict[str, str]) -> list[str]:
     return _Text(text).substitute(spelled).splitlines() if text else []
 
 
+# GLSL tools tell a program's stage from its file suffix.
 _PROGRAM_SUFFIX = {
-    "glsl": {"vertex": ".vert", "fragment": ".frag", "geometry": ".geom"}
+    "glsl": {stage: f".{suffix}" for stage, suffix in GLSL_STAGES.items()}
 }
 
 

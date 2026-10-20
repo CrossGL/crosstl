@@ -419,6 +419,49 @@ _FRAGMENT = (
     "            return output;\n        }\n    }\n}\n"
 )
 
+
+def _raytracing(
+    block: str, parameters: str = "", body: str = "outp[0] = 1.0;"
+) -> Template:
+    """A ray-tracing stage program; a stage that takes ``parameters`` declares their struct, else writes a buffer."""
+    kind = parameters.split(" ", 1)[0]
+    lines = ["shader Probe {"]
+    if kind:
+        lines += [f"    struct {kind} {{", "        vec4 color;", "    }"]
+    lines += [f"    {block} {{"]
+    if not kind:
+        lines += ["        buffer float* outp;"]
+    lines += [
+        f"        void main({parameters}) {{",
+        f"            {body}",
+        "        }",
+        "    }",
+        "}",
+    ]
+    return Template(program="\n".join(lines) + "\n")
+
+
+_HIT = (
+    "Payload payload @ payload, BuiltInTriangleIntersectionAttributes attributes @ hit_attribute",
+    "payload.color = vec4(attributes.barycentrics, 0.0, 1.0);",
+)
+_RAYTRACING_STAGES = {
+    "ray-generation": _raytracing("ray_generation"),
+    "intersection": _raytracing("ray_intersection"),
+    "any-hit": _raytracing("ray_any_hit", *_HIT),
+    "closest-hit": _raytracing("ray_closest_hit", *_HIT),
+    "miss": _raytracing(
+        "ray_miss",
+        "Payload payload @ payload",
+        "payload.color = vec4(0.0, 0.0, 0.0, 1.0);",
+    ),
+    "callable": _raytracing(
+        "ray_callable",
+        "CallData data @ callable_data",
+        "data.color = vec4(1.0, 0.0, 0.0, 1.0);",
+    ),
+}
+
 # Language-level probes (:mod:`.constructs`). Kernel templates use the CrossGL kernel above: ``prelude`` lines are
 # shader-level declarations, ``declarations`` go inside the compute block.
 CONSTRUCTS: dict[str, Template] = {
@@ -469,6 +512,7 @@ CONSTRUCTS: dict[str, Template] = {
         "            EmitVertex();\n            EndPrimitive();\n        }\n    }\n}\n"
     ),
     "fragment": Template(program=_FRAGMENT.replace("{body}", "")),
+    **_RAYTRACING_STAGES,
     "discard": Template(
         program=_FRAGMENT.replace(
             "{body}",

@@ -374,6 +374,8 @@ def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
             ("intersection", "lib"),
             ("any-hit", "lib"),
             ("closest-hit", "lib"),
+            ("miss", "lib"),
+            ("callable", "lib"),
         )
     }
 
