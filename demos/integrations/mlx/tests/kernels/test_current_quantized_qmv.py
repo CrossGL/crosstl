@@ -105,16 +105,16 @@ KERNELS = {
     "batch_0": "affine_qmv_fast",
 }
 # The 108 quantize and dequantize entries have their own gate,
-# test_current_quantized.py, and the 432 affine_qmv_wide entries theirs,
-# test_current_quantized_qmv_wide.py.
+# test_current_quantized.py, the 162 affine_qmv and affine_gather_qmv entries
+# theirs, test_current_quantized_qmv_unaligned.py, and the 432
+# affine_qmv_wide entries theirs, test_current_quantized_qmv_wide.py.
 QUANTIZE_ENTRY_COUNT = 108
+QMV_UNALIGNED_ENTRY_COUNT = 162
 QMV_WIDE_ENTRY_COUNT = 432
 # Kernels of quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
-    "affine_gather_qmv",
     "affine_gather_qvm",
     "affine_gather_qmm_n",
-    "affine_qmv",
     "affine_qvm",
     "affine_qmm_n",
     "affine_gather_qmm_t",
@@ -264,8 +264,13 @@ INFO = dict(_instantiations())
 ENTRIES = tuple(INFO)
 
 
-def _config(directory, target, entry):
-    """The translation of one entry, as the gate and contract run it."""
+def _config(directory, target, entry, variant=None):
+    """The translation of one entry, as the gate and contract run it.
+
+    ``variant`` defaults to the entry's own; the qmv gate passes its
+    entries' variants.
+    """
+    variant = variant or INFO[entry]["variant"]
     # simd_sum: software subgroups give DirectX and OpenGL MLX's 32 lanes.
     options = {
         "directx": {
@@ -274,11 +279,7 @@ def _config(directory, target, entry):
         },
         "opengl": {"software_subgroup_width": SIMD_SIZE},
     }
-    assertions = (
-        OPENGL_INDEX_RANGE_ASSERTIONS[INFO[entry]["variant"]]
-        if target == "opengl"
-        else ()
-    )
+    assertions = OPENGL_INDEX_RANGE_ASSERTIONS[variant] if target == "opengl" else ()
     return ProjectConfig(
         root=Path(directory).parent,
         source_roots=("mlx/backend/metal/kernels",),
@@ -343,23 +344,39 @@ BROADCAST_LHS = (3, 0, 1, 2)
 BROADCAST_RHS = (3, 0)
 
 
+# The batch layout each case follows.
+LAYOUTS = {
+    "vector": "unbatched",
+    "matrix": "unbatched",
+    "stacked": "stacked",
+    "broadcast": "broadcast",
+    "shared": "shared",
+    "experts": "experts",
+}
+
+
 def _layout(entry, case):
+    info = INFO[entry]
+    assert case in CASES[info["variant"]], (entry, case)
+    m, n, blocks = SHAPES[case]
+    k = blocks * _geometry(info["bits"], info["groupSize"])["blockSize"]
+    return layout_for(info, LAYOUTS[case], m, n, k)
+
+
+def layout_for(info, kind, m, n, k):
     """quantized.cpp's shapes, strides and index buffers for one case.
 
-    ``batches`` gives, per ``tid.z``, the x element offset, the physical
-    weight matrix and the output offset the arrays are built for; the kernel
-    model derives the same from the bound parameters.
+    ``kind`` is one of LAYOUTS' values. ``batches`` gives, per ``tid.z``, the
+    x element offset, the physical weight matrix and the output offset the
+    arrays are built for; the kernel model derives the same from the bound
+    parameters.
     """
-    info = INFO[entry]
     variant, bits, group_size = info["variant"], info["bits"], info["groupSize"]
-    assert case in CASES[variant], (entry, case)
-    m, n, blocks = SHAPES[case]
-    k = blocks * _geometry(bits, group_size)["blockSize"]
     groups, words = k // group_size, k * bits // 32
     matrix = m * k
     layout = {"M": m, "N": n, "K": k, "groups": groups, "words": words}
     params = {}
-    if case in ("vector", "matrix"):
+    if kind == "unbatched":
         # add_strides_and_shapes would bind these unbatched shapes; with
         # B <= 1 qmv skips it and the kernel never reads them.
         params = {
@@ -374,7 +391,7 @@ def _layout(entry, case):
         }
         batches = [{"x": 0, "w": 0}]
         x_rows, matrices = m, 1
-    elif case == "stacked":
+    elif kind == "stacked":
         params = {
             "x_batch_ndims": 1,
             "x_shape": [2, m, k],
@@ -387,7 +404,7 @@ def _layout(entry, case):
         }
         batches = [{"x": z * matrix, "w": z} for z in range(2)]
         x_rows, matrices = 2 * m, 2
-    elif case == "shared":
+    elif kind == "shared":
         # Every other row of a strided activation view against one weight
         # matrix: w.ndim() == 2 gives w_batch_ndims 0.
         params = {
@@ -421,7 +438,7 @@ def _layout(entry, case):
         def x_offset(index):
             return (index % 2) * 2 * matrix + (index // 2) * matrix
 
-        if case == "experts":
+        if kind == "experts":
             params = {
                 "x_batch_ndims": 1,
                 "x_shape": [2, m, k],
@@ -471,13 +488,13 @@ def _layout(entry, case):
         batches=batches,
         xRows=x_rows,
         matrices=matrices,
-        grid=(m, n // ROWS_PER_GROUP, len(batches)),
+        grid=(m, -(-n // ROWS_PER_GROUP), len(batches)),
     )
     return layout
 
 
-def _parameters(entry):
-    return GATHER_PARAMETERS if INFO[entry]["variant"] == "gather" else QMV_PARAMETERS
+def _parameters(variant):
+    return GATHER_PARAMETERS if variant == "gather" else QMV_PARAMETERS
 
 
 def _exact_dyadic(value, scale=32):
@@ -487,11 +504,13 @@ def _exact_dyadic(value, scale=32):
 
 @functools.lru_cache(maxsize=None)
 def _case_data(entry, case):
+    return case_data_for(INFO[entry], entry, case, _layout(entry, case))
+
+
+def case_data_for(info, entry, case, layout):
     """Logical storage of every parameter, the grid and the expected outputs."""
-    info = INFO[entry]
     dtype, bits, group_size = info["dtype"], info["bits"], info["groupSize"]
     n_bins = (1 << bits) - 1
-    layout = _layout(entry, case)
     m, n, k = layout["M"], layout["N"], layout["K"]
     groups = layout["groups"]
     draws = _draws("quantized-qmv", entry, case)
@@ -552,7 +571,7 @@ def _case_data(entry, case):
     if info["variant"] == "gather":
         values["lhs_indices"] = ("uint32", list(layout["lhs"]))
         values["rhs_indices"] = ("uint32", list(layout["rhs"]))
-    assert set(values) == {name for name, _ in _parameters(entry)}, entry
+    assert set(values) == {name for name, _ in _parameters(info["variant"])}, entry
     data = {
         "layout": layout,
         "codes": codes,
@@ -561,18 +580,17 @@ def _case_data(entry, case):
         "kinds": {"y": dtype},
         "grid": layout["grid"],
     }
-    data["expected"], data["totals"], data["budget"] = _direct(entry, data)
+    data["expected"], data["totals"], data["budget"] = _direct(info, data)
     return data
 
 
-def _direct(entry, data):
+def _direct(info, data):
     """Each output as a dequantized dot product, its float32 total and budget.
 
     The budget bounds the magnitude of every partial sum of the kernel's
     float32 arithmetic, whatever its order: below 2^19, every multiple of
     2^-5 it can reach is exact in float32.
     """
-    info = INFO[entry]
     dtype, group_size = info["dtype"], info["groupSize"]
     layout = data["layout"]
     m, n, k, groups = layout["M"], layout["N"], layout["K"], layout["groups"]
@@ -593,7 +611,7 @@ def _direct(entry, data):
                     scale, bias = scales[group], biases[group]
                     total += (scale * codes[index] + bias) * value
                     bound += abs(value) * (abs(scale) * codes[index] + abs(bias))
-                assert _exact_dyadic(total) and bound < 2**19, (entry, total, bound)
+                assert _exact_dyadic(total) and bound < 2**19, (info, total, bound)
                 budget = max(budget, bound)
                 index = batch["y"] + row * n + col
                 totals[index] = total
@@ -759,9 +777,8 @@ MUTATIONS = {
 }
 
 
-def _adjust(entry, storage, z, mutation, records):
+def _adjust(variant, storage, z, mutation, records):
     """adjust_matrix_offsets for ``tid.z``: x, w, scales, biases and y bases."""
-    variant = INFO[entry]["variant"]
 
     def scalar(name):
         return storage[name][0]
@@ -846,7 +863,7 @@ def _simulate(entry, data, mutation=None):
     for z in range(grid_z):
         bases = (0, 0, 0, 0, 0)
         if info["variant"] != "batch_0":
-            bases = _adjust(entry, storage, z, mutation, records)
+            bases = _adjust(info["variant"], storage, z, mutation, records)
         x_base, w_base, s_base, b_base, y_base = bases
         for tid_x in range(grid_x):
             for tid_y in range(grid_y):
@@ -999,11 +1016,17 @@ def _expected_validation_contract():
 
 
 def _expected_scope():
-    covered = QUANTIZE_ENTRY_COUNT + len(ENTRIES) + QMV_WIDE_ENTRY_COUNT
+    covered = (
+        QUANTIZE_ENTRY_COUNT
+        + len(ENTRIES)
+        + QMV_UNALIGNED_ENTRY_COUNT
+        + QMV_WIDE_ENTRY_COUNT
+    )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
         "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
+        "qmvUnalignedGateEntryCount": QMV_UNALIGNED_ENTRY_COUNT,
         "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
@@ -1080,7 +1103,11 @@ def test_quantized_qmv_entries_follow_mlx_instantiation():
     assert ENTRIES[-1] == "affine_qmv_fast_bfloat16_t_gs_32_b_8_batch_0"
     assert not set(KERNELS.values()) & set(EXCLUDED_KERNELS)
     assert (
-        QUANTIZE_ENTRY_COUNT + len(ENTRIES) + QMV_WIDE_ENTRY_COUNT + 1350
+        QUANTIZE_ENTRY_COUNT
+        + len(ENTRIES)
+        + QMV_UNALIGNED_ENTRY_COUNT
+        + QMV_WIDE_ENTRY_COUNT
+        + 1188
         == UNIT_ENTRY_COUNT
     )
 
@@ -1377,10 +1404,10 @@ def metal_reference(current_mlx, tmp_path_factory):
     )
 
 
-def _translate(root, work, target, entry, record):
-    """Translate one entry and check it against its pinned artifact."""
+def _translate(root, work, target, config, record):
+    """Translate one entry's ``config`` and check it against its pinned artifact."""
     translation = translate_project(
-        _config(work, target, entry),
+        config,
         format_output=False,
         validate=True,
         run_toolchains=False,
@@ -1409,7 +1436,7 @@ def _translate(root, work, target, entry, record):
     return _prepare_native_package(translation, work)
 
 
-def _request(descriptor, package, target, entry, data):
+def _request(descriptor, package, target, variant, data):
     """Bind every reflected binding by source parameter and build one dispatch."""
     from crosstl.project.runtime_value_encoding import FLOAT16_BITS
 
@@ -1447,7 +1474,7 @@ def _request(descriptor, package, target, entry, data):
         for binding in descriptor["bindings"]
     }
     # The translation reflects every kernel parameter, batched or not.
-    assert output is not None and bound == {name for name, _ in _parameters(entry)}
+    assert output is not None and bound == {name for name, _ in _parameters(variant)}
     expected = _runtime_value(target, data["kinds"]["y"], data["expected"]["y"])
     request = build_native_loader_dispatch_request(
         descriptor,
@@ -1463,11 +1490,11 @@ def _request(descriptor, package, target, entry, data):
     return request, output, len(observed)
 
 
-def _upstream(work, reference, entry, label, data):
+def _upstream(work, reference, entry, variant, label, data):
     """Run the unchanged upstream kernel on raw ``[[buffer(i)]]`` storage."""
     runner, library = reference
-    parameters = _parameters(entry)
-    if INFO[entry]["variant"] == "batch_0":
+    parameters = _parameters(variant)
+    if variant == "batch_0":
         # qmv binds only buffers 0-6 when B <= 1.
         parameters = parameters[:UNBATCHED_BOUND]
     files, payloads = [], {}
@@ -1522,14 +1549,16 @@ def test_current_mlx_quantized_qmv_native_parity(
     with tempfile.TemporaryDirectory(prefix=".current-qmv-", dir=root) as path:
         work = Path(path)
         try:
-            descriptor, package = _translate(root, work, target, entry, record)
+            config = _config(work, target, entry)
+            descriptor, package = _translate(root, work, target, config, record)
             executor = _executor(target)
             evidence = []
+            variant = INFO[entry]["variant"]
             try:
-                for case in CASES[INFO[entry]["variant"]]:
+                for case in CASES[variant]:
                     data = _case_data(entry, case)
                     request, output, observed = _request(
-                        descriptor, package, target, entry, data
+                        descriptor, package, target, variant, data
                     )
                     words = _execute(
                         executor, work, case, request, {"y": output}, observed
@@ -1537,7 +1566,7 @@ def test_current_mlx_quantized_qmv_native_parity(
                     upstream = None
                     if target == "metal":
                         device, upstream_words = _upstream(
-                            work, metal_reference, entry, case, data
+                            work, metal_reference, entry, variant, case, data
                         )
                         # The translation reproduces the unchanged upstream
                         # kernel word for word on the same device.

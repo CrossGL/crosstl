@@ -2431,6 +2431,23 @@ guards and inputs must be unchanged, and Metal also runs the unchanged
 upstream kernels. This is a 162/17,832 increment; it does not run the
 upstream MLX test suite or redirect the MLX host runtime.
 
+``quantized_qmv_unaligned.current-tree.translation.json`` pins a further 162
+entries of ``quantized.metal``: ``affine_qmv`` with and without batching and
+``affine_gather_qmv``, which ``quantized.cpp`` picks over the ``_fast``
+kernels when ``N`` is not a multiple of 8 or ``K`` of
+``qmv_fast_k_alignment(bits)``. ``qmv_impl``'s guarded rows, its
+simdgroup-uniform return before ``simd_sum`` and its moved-back last tile run
+on 32-lane software subgroups on OpenGL and DirectX, and DirectX bounds the
+private pointer that ``qdot_safe`` advances by seeding helper parameters
+with the intervals of their call arguments. Each target executes 486
+dispatches on ``(32, 2, 1)`` threadgroups and ``(M, ceil(N / 8), B)`` grids
+that reach every path, including a ``K`` below one block and the safe tail
+of each lane. A lane-level model must reach direct dequantized dot products
+and store each moved row twice with the same value; every word is compared
+exactly, guards and inputs must be unchanged, and Metal also runs the
+unchanged upstream kernels. This is a 162/17,832 increment; it does not run
+the upstream MLX test suite or redirect the MLX host runtime.
+
 ``quantized_qmv_wide.current-tree.translation.json`` pins a further 432
 entries of ``quantized.metal``: ``affine_qmv_wide`` with and without batching
 for the same types, group sizes and bit widths and tiles of 2 to 5 input

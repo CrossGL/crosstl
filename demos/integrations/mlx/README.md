@@ -1915,6 +1915,44 @@ matrix-matrix kernels of `quantized.metal` are not gated yet. This covers
 162/17,832 entries; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+`contracts/quantized_qmv_unaligned.current-tree.translation.json` pins a
+further 162 entries of `quantized.metal` and their 486 artifacts:
+`affine_qmv` with and without batching and `affine_gather_qmv`, for the same
+element types, group sizes and bit widths, which `quantized.cpp`'s `qmv` and
+`gather_qmv` pick over the `_fast` kernels whenever `N` is not a multiple of 8
+or `K` of `qmv_fast_k_alignment(bits)`. `qmv_impl` reads one pack per lane,
+runs whole blocks and then a tail that `load_vector_safe` and `qdot_safe`
+read only where it reaches the lane; below eight output rows it guards each
+row and a simdgroup past the last row returns before `simd_sum`, and
+otherwise its last tile moves back to end on row `N - 1`. These
+simdgroup-uniform returns now converge on the 32-lane software subgroups of
+OpenGL and DirectX, which are given the index-range preconditions of
+`qmv_fast`. For 3-, 5- and 6-bit packs `qdot_safe` advances its private
+`x_thread` pointer by a count that only the caller's `clamp` bounds, so the
+DirectX private pointer analysis now seeds a helper's signed integer
+parameters with the hull of their arguments at every call. Required CI
+executes 486 dispatches and 21,060 checked elements
+per target on Metal, Mesa EGL and Direct3D 12 WARP in the
+`quantized-qmv-unaligned-0` through `quantized-qmv-unaligned-3` legs, on
+`(32, 2, 1)` threadgroups over a `(M, ceil(N / 8), B)` grid. Unbatched
+entries run five guarded rows, three rows whose second simdgroup returns
+with `K` below one block for most widths, thirteen rows whose last tile is
+moved back, and whole tiles with a misaligned `K`; batched and gather entries
+combine guarded, returning and moved tiles with the layouts of the
+`qmv_fast` gate, and `K` grows by a group wherever `quantized.cpp` would pick
+`qmv_fast` or `qmv_quad` instead. The inputs of `qmv_fast` keep every float32
+intermediate exact; only the final `static_cast<T>` rounds, which 5,103
+float16 and bfloat16 results need, 1,362 of them halfway cases. A lane-level
+model of the blocks, the tail, the guarded rows, the return and the moved
+tile must reach direct dequantized dot products, store every row once and
+each moved row twice with the same value, and mutated models that drop the
+tail, the bias, the simdgroup row or the weight batch offset, share one
+scale per block or reverse a pack are rejected. Every word is compared
+exactly, eight trailing guards must keep their values and inputs must be
+unchanged; Metal also runs the unchanged upstream kernels, which must produce
+the same words. This covers 162/17,832 entries; it does not run the upstream
+MLX test suite or redirect the MLX host runtime.
+
 `contracts/quantized_qmv_wide.current-tree.translation.json` pins a further
 432 entries of `quantized.metal` and their 1,296 artifacts: `affine_qmv_wide`
 with and without batching, for the same element types, group sizes and bit

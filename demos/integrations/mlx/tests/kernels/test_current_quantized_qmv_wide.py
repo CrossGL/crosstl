@@ -93,6 +93,7 @@ from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
     POISON,
     QMV_HEADERS,
+    QMV_UNALIGNED_ENTRY_COUNT,
     QMV_WIDE_ENTRY_COUNT,
     QUANTIZE_ENTRY_COUNT,
     ROWS_PER_GROUP,
@@ -875,12 +876,18 @@ def _expected_validation_contract():
 
 
 def _expected_scope():
-    covered = QUANTIZE_ENTRY_COUNT + len(QMV_FAST_ENTRIES) + len(ENTRIES)
+    covered = (
+        QUANTIZE_ENTRY_COUNT
+        + len(QMV_FAST_ENTRIES)
+        + QMV_UNALIGNED_ENTRY_COUNT
+        + len(ENTRIES)
+    )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
         "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
         "qmvFastGateEntryCount": len(QMV_FAST_ENTRIES),
+        "qmvUnalignedGateEntryCount": QMV_UNALIGNED_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
             "count": UNIT_ENTRY_COUNT - covered,
@@ -956,7 +963,11 @@ def test_quantized_qmv_wide_entries_follow_mlx_instantiation():
     assert KERNEL not in EXCLUDED_KERNELS
     assert not set(ENTRIES) & set(QMV_FAST_ENTRIES)
     assert (
-        QUANTIZE_ENTRY_COUNT + len(QMV_FAST_ENTRIES) + len(ENTRIES) + 1350
+        QUANTIZE_ENTRY_COUNT
+        + len(QMV_FAST_ENTRIES)
+        + QMV_UNALIGNED_ENTRY_COUNT
+        + len(ENTRIES)
+        + 1188
         == UNIT_ENTRY_COUNT
     )
 
