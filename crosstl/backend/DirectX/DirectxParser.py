@@ -2353,12 +2353,24 @@ class HLSLParser:
                 has_struct_input = True
                 input_semantics.update(param_semantics)
 
-        if not has_struct_input or not has_struct_output:
+        # A structure returned by ``main`` is the stage output, as an ``out`` structure parameter is.
+        return_struct = structs_by_name.get(
+            self.struct_type_base_name(getattr(function, "return_type", None))
+        )
+        if return_struct is not None:
+            has_struct_output = True
+            output_semantics.update(self.struct_member_stage_semantics(return_struct))
+        elif not has_struct_input:
+            return None
+
+        if not has_struct_output:
             return None
         if any(self.is_fragment_output_semantic(name) for name in output_semantics):
             return "fragment"
         if any(self.is_vertex_output_semantic(name) for name in output_semantics):
             return "vertex"
+        if not has_struct_input:
+            return None
         if any(self.is_vertex_input_semantic(name) for name in input_semantics) or any(
             self.is_vertex_attribute_semantic(name) for name in input_semantics
         ):
@@ -2366,12 +2378,14 @@ class HLSLParser:
         return None
 
     def parameter_struct_node(self, param, structs_by_name):
-        type_name = str(getattr(param, "vtype", "") or "").strip()
-        if not type_name:
-            return None
+        type_name = self.struct_type_base_name(getattr(param, "vtype", None))
+        return structs_by_name.get(type_name) if type_name else None
+
+    def struct_type_base_name(self, type_name):
+        type_name = str(type_name or "").strip()
         if "<" in type_name and type_name.endswith(">"):
             type_name = type_name.split("<", 1)[0].strip()
-        return structs_by_name.get(type_name)
+        return type_name or None
 
     def struct_member_stage_semantics(self, struct):
         semantics = set()

@@ -37,6 +37,7 @@ from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
 )
+from .struct_scalar_splats import expand_struct_scalar_splats
 from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
@@ -95,7 +96,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
 
     User functions named like texture or image built-ins are first renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
-    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`).
+    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). A structure an
+    HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
     being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`); ``a.length()`` of a sized
@@ -123,6 +125,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     resolve_intrinsic_named_functions(program)
     canonicalize_texture_swizzles(program)
+    expand_struct_scalar_splats(program, report.source, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     refuse_per_vertex_inputs(program, report.target)

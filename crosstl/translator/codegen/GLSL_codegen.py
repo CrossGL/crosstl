@@ -197,6 +197,10 @@ from .glsl_shadow_lod import (
     require_shadow_lod_extension,
     zero_lod_compare_gradient_call,
 )
+from .glsl_stage_output_values import (
+    flattened_stage_output_assignment,
+    render_flattened_stage_output_store,
+)
 from .glsl_union_storage import UnionStorage
 from .glsl_version_requirements import (
     VARIABLE_GATHER_OFFSET,
@@ -18204,6 +18208,16 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 "std140", binding=resource_binding
             )
             block_name = self.glsl_module_identifier_name(node.name)
+            member_names = {
+                self.glsl_global_identifier_name(member.name)
+                for member in getattr(node, "members", None) or []
+            }
+            if block_name in member_names:
+                # HLSL's ``cbuffer ubo { UBO ubo; }`` names the buffer like its member; a GLSL block name shares
+                # the global namespace with the members of an unnamed block, so the block takes another name.
+                block_name = self.glsl_generated_module_identifier(
+                    ("cbuffer-block", node.name), f"{block_name}_block"
+                )
             code += resource_identity_marker(node, block_name)
             if isinstance(node, StructNode):
                 code += f"{layout} uniform {block_name} {{\n"
@@ -18558,16 +18572,35 @@ class GLSLCodeGen(LoweringRefusalMixin):
                     "requires exactly one function name"
                 )
             patch_name = self.attribute_value_to_string(arguments[0])
-            raise ValueError(
+            self.refuse_lowering(
                 "GLSL tessellation_control stage patchconstantfunc "
                 f"'{patch_name}' is unsupported; write tessellation factors "
                 "directly to gl_TessLevelOuter and gl_TessLevelInner in the "
                 "tessellation_control entry point"
             )
 
+    def refuse_glsl_hlsl_patch_parameters(self, func, stage_name):
+        """Refuse HLSL ``InputPatch``/``OutputPatch`` entry parameters, which GLSL has no declaration for."""
+        for param in (
+            getattr(func, "parameters", None) or getattr(func, "params", None) or []
+        ):
+            param_type = getattr(param, "param_type", None) or getattr(
+                param, "vtype", None
+            )
+            type_name = str(self.type_node_name(param_type) or "")
+            if type_name.split("<", 1)[0].strip().lower() in {
+                "inputpatch",
+                "outputpatch",
+            }:
+                self.refuse_lowering(
+                    f"GLSL {stage_name} stage cannot declare HLSL control-point patch parameter "
+                    f"'{getattr(param, 'name', '<unnamed>')}' of type '{type_name}'"
+                )
+
     def generate_tessellation_evaluation_layout(
         self, func, stage_layout_qualifiers=None
     ):
+        self.refuse_glsl_hlsl_patch_parameters(func, "tessellation_evaluation")
         layout_parts = []
         mapped_domain = self.glsl_stage_consistent_layout_value(
             "tessellation",
@@ -24204,7 +24237,11 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 self.current_type_aliases[stmt.name] = getattr(stmt, "var_type", None)
                 return ""
             if stmt.name in self.flattened_stage_variables:
-                return ""
+                if getattr(stmt, "initial_value", None) is None:
+                    return ""
+                return render_flattened_stage_output_store(
+                    self, stmt.name, stmt.initial_value, indent
+                )
             scalar_array_view = self.generate_glsl_scalar_array_view_declaration(
                 stmt, indent
             )
@@ -24494,6 +24531,11 @@ class GLSLCodeGen(LoweringRefusalMixin):
             if mesh_helper is not None:
                 return mesh_helper
             expression = getattr(stmt, "expression", None)
+            flattened_output = flattened_stage_output_assignment(self, expression)
+            if flattened_output is not None:
+                return render_flattened_stage_output_store(
+                    self, flattened_output, expression.value, indent
+                )
             if isinstance(expression, AssignmentNode):
                 storage_pointer_array_assignment = (
                     self.generate_glsl_storage_pointer_array_assignment(
