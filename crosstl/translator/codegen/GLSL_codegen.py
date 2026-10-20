@@ -91,6 +91,10 @@ from ..metadata_preconditions import (
 )
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
+from ..semantics.shader_records import (
+    is_shader_record_buffer,
+    shader_record_memory_layout,
+)
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
@@ -192,6 +196,16 @@ from .generic_struct_utils import (
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_refusals import OpenGLLoweringRefused
+from .glsl_shadow_lod import (
+    SHADOW_LOD_EXTENSION_SAMPLERS,
+    is_zero_lod_literal,
+    require_shadow_lod_extension,
+    zero_lod_compare_gradient_call,
+)
+from .glsl_stage_output_values import (
+    flattened_stage_output_assignment,
+    render_flattened_stage_output_store,
+)
 from .glsl_union_storage import UnionStorage
 from .glsl_version_requirements import (
     VARIABLE_GATHER_OFFSET,
@@ -289,6 +303,7 @@ from .image_access_contracts import (
     numeric_scalar_type_kind,
     operation_argument_type_error,
     operation_dimension_argument_error,
+    projected_texture_compare_reference,
     projected_texture_extra_argument_count_error,
     record_explicit_image_metadata,
     requires_integer_coordinate,
@@ -397,6 +412,10 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
+from .sampler_pairs import (
+    lower_combined_sampler_pairs,
+    with_combined_sampler_header,
+)
 from .scalar_return_bounds import (
     aggregate_call_intervals,
     scalar_return_interval,
@@ -425,8 +444,17 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
+from .texture_lod_clamp import (
+    GLSL_LOD_CLAMP_EXTENSION,
+    TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
+    glsl_texture_lod_clamp_call,
+    is_texture_lod_clamp_operation,
+)
 from .uniform_returns import UniformReturnAnalysis
 from .workgroup_access_contracts import parse_workgroup_access_assertions
+
+# Opens the branch a SPIR-V compilation of the emitted GLSL takes (GL_ARB_gl_spirv, GL_KHR_vulkan_glsl).
+GLSL_SPIRV_GUARD = "#if defined(GL_SPIRV) || defined(VULKAN)\n"
 
 
 class OpenGLTemplateTypeError(ValueError):
@@ -3851,8 +3879,21 @@ class GLSLCodeGen(LoweringRefusalMixin):
             lines.append("#extension GL_EXT_ray_tracing_position_fetch : require")
         if self.uses_fragment_stencil_export(ast, target_stage):
             lines.append("#extension GL_ARB_shader_stencil_export : require")
+        if self.uses_texture_lod_clamp(ast, target_stage) and not (
+            self.glsl_version_is_es(getattr(self, "current_glsl_version_line", None))
+        ):
+            # GLSL ES has no such extension; the version requirements refuse the clamp functions there.
+            lines.append(f"#extension {GLSL_LOD_CLAMP_EXTENSION} : require")
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
         return lines
+
+    def uses_texture_lod_clamp(self, ast, target_stage=None):
+        return any(
+            isinstance(node, FunctionCallNode)
+            and self.function_call_name(node) in TEXTURE_LOD_CLAMP_INTRINSIC_NAMES
+            for root in self.ray_query_search_roots(ast, target_stage)
+            for node in self.walk_ast(root)
+        )
 
     def uses_fragment_stencil_export(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
@@ -8082,6 +8123,9 @@ class GLSLCodeGen(LoweringRefusalMixin):
             self.float_atomic_storage.verify()
         if records:
             code = with_metadata_precondition_header(code, records)
+        code = with_combined_sampler_header(
+            code, getattr(self, "combined_sampler_records", ())
+        )
         return with_dispatch_region_header(code, region)
 
     GLSL_EARLY_EXIT_RETRY_REASONS = frozenset(
@@ -8119,6 +8163,9 @@ class GLSLCodeGen(LoweringRefusalMixin):
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "opengl")
+        ast, self.combined_sampler_records = lower_combined_sampler_pairs(
+            ast, self.LOWERING_REFUSAL_TYPE.label
+        )
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_divergent_barriers(
@@ -8341,6 +8388,7 @@ class GLSLCodeGen(LoweringRefusalMixin):
         self.glsl_shared_dimension_constants = {}
         self.current_target_stage = target_stage
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_shadow_lod_extension_used = False
         stage_names = {
             stage_name
             for stage_name in self.glsl_stage_names(ast, target_stage)
@@ -9631,6 +9679,8 @@ class GLSLCodeGen(LoweringRefusalMixin):
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
+        if getattr(self, "glsl_shadow_lod_extension_used", False):
+            code = require_shadow_lod_extension(code)
         return self.ensure_glsl_int64_support(code)
 
     def collect_called_function_names(self, root):
@@ -17448,25 +17498,34 @@ class GLSLCodeGen(LoweringRefusalMixin):
         )
         if builtin_declaration is not None:
             return builtin_declaration
-        metadata = ""
-        layout = ""
-        if constant_id is not None:
-            self.validate_glsl_specialization_constant_type(node, const_type)
-            layout = f"layout(constant_id = {constant_id}) "
-            if value is None:
-                value_code = self.zero_value_expression(const_type)
-                metadata = (
-                    "/* CrossGL specialization metadata: "
-                    f"name={name}; constant_id={constant_id}; "
-                    "required_override=true; "
-                    f"encoding_default={value_code} */\n"
-                )
-            else:
-                value_code = self.generate_constant_expression(value, const_type)
+        if constant_id is None:
+            value_code = self.generate_constant_expression(value, const_type)
+            return f"const {declaration} = {value_code};\n"
+
+        self.validate_glsl_specialization_constant_type(node, const_type)
+        layout = f"layout(constant_id = {constant_id}) "
+        if value is None:
+            value_code = self.zero_value_expression(const_type)
+            metadata = (
+                "/* CrossGL specialization metadata: "
+                f"name={name}; constant_id={constant_id}; "
+                "required_override=true; "
+                f"encoding_default={value_code} */\n"
+            )
+            fallback = (
+                f'#error "specialization constant {name} has no default: '
+                'compile this shader to SPIR-V and specialize it"\n'
+            )
         else:
             value_code = self.generate_constant_expression(value, const_type)
-
-        return f"{metadata}{layout}const {declaration} = {value_code};\n"
+            metadata = ""
+            fallback = f"const {declaration} = {value_code};\n"
+        # constant_id exists only when the shader is compiled to SPIR-V (GLSL 4.60 section 4.4.5,
+        # GL_ARB_gl_spirv, GL_KHR_vulkan_glsl); a driver compiling the source keeps the default value.
+        return (
+            f"{GLSL_SPIRV_GUARD}{metadata}{layout}const {declaration} = {value_code};\n"
+            f"#else\n{fallback}#endif\n"
+        )
 
     def glsl_builtin_specialization_constant_declaration(
         self,
@@ -17500,7 +17559,9 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 reason="builtin-default-mismatch",
                 source_location=self.glsl_specialization_constant_source_location(node),
             )
-        return f"layout(constant_id = {constant_id}) {name};\n"
+        return (
+            f"{GLSL_SPIRV_GUARD}layout(constant_id = {constant_id}) {name};\n#endif\n"
+        )
 
     def glsl_constant_layout_prefix(self, node):
         constant_id = self.glsl_specialization_constant_id(node)
@@ -18154,6 +18215,16 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 "std140", binding=resource_binding
             )
             block_name = self.glsl_module_identifier_name(node.name)
+            member_names = {
+                self.glsl_global_identifier_name(member.name)
+                for member in getattr(node, "members", None) or []
+            }
+            if block_name in member_names:
+                # HLSL's ``cbuffer ubo { UBO ubo; }`` names the buffer like its member; a GLSL block name shares
+                # the global namespace with the members of an unnamed block, so the block takes another name.
+                block_name = self.glsl_generated_module_identifier(
+                    ("cbuffer-block", node.name), f"{block_name}_block"
+                )
             code += resource_identity_marker(node, block_name)
             if isinstance(node, StructNode):
                 code += f"{layout} uniform {block_name} {{\n"
@@ -18508,16 +18579,35 @@ class GLSLCodeGen(LoweringRefusalMixin):
                     "requires exactly one function name"
                 )
             patch_name = self.attribute_value_to_string(arguments[0])
-            raise ValueError(
+            self.refuse_lowering(
                 "GLSL tessellation_control stage patchconstantfunc "
                 f"'{patch_name}' is unsupported; write tessellation factors "
                 "directly to gl_TessLevelOuter and gl_TessLevelInner in the "
                 "tessellation_control entry point"
             )
 
+    def refuse_glsl_hlsl_patch_parameters(self, func, stage_name):
+        """Refuse HLSL ``InputPatch``/``OutputPatch`` entry parameters, which GLSL has no declaration for."""
+        for param in (
+            getattr(func, "parameters", None) or getattr(func, "params", None) or []
+        ):
+            param_type = getattr(param, "param_type", None) or getattr(
+                param, "vtype", None
+            )
+            type_name = str(self.type_node_name(param_type) or "")
+            if type_name.split("<", 1)[0].strip().lower() in {
+                "inputpatch",
+                "outputpatch",
+            }:
+                self.refuse_lowering(
+                    f"GLSL {stage_name} stage cannot declare HLSL control-point patch parameter "
+                    f"'{getattr(param, 'name', '<unnamed>')}' of type '{type_name}'"
+                )
+
     def generate_tessellation_evaluation_layout(
         self, func, stage_layout_qualifiers=None
     ):
+        self.refuse_glsl_hlsl_patch_parameters(func, "tessellation_evaluation")
         layout_parts = []
         mapped_domain = self.glsl_stage_consistent_layout_value(
             "tessellation",
@@ -22454,15 +22544,19 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 continue
 
             layout = self.stage_io_layout_for_node(member)
+            member_type = self.member_type_name(member)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "fragment",
                 "input",
                 layout,
-                self.member_type_name(member),
+                (
+                    self.stage_io_per_vertex_element_type(member_type)
+                    if self.is_pervertex_stage_io(member, "")
+                    else member_type
+                ),
                 input_name,
             )
-            member_type = self.member_type_name(member)
             prefix = self.stage_io_declaration_prefix(
                 member, "in", stage_name="fragment"
             )
@@ -24150,7 +24244,11 @@ class GLSLCodeGen(LoweringRefusalMixin):
                 self.current_type_aliases[stmt.name] = getattr(stmt, "var_type", None)
                 return ""
             if stmt.name in self.flattened_stage_variables:
-                return ""
+                if getattr(stmt, "initial_value", None) is None:
+                    return ""
+                return render_flattened_stage_output_store(
+                    self, stmt.name, stmt.initial_value, indent
+                )
             scalar_array_view = self.generate_glsl_scalar_array_view_declaration(
                 stmt, indent
             )
@@ -24440,6 +24538,11 @@ class GLSLCodeGen(LoweringRefusalMixin):
             if mesh_helper is not None:
                 return mesh_helper
             expression = getattr(stmt, "expression", None)
+            flattened_output = flattened_stage_output_assignment(self, expression)
+            if flattened_output is not None:
+                return render_flattened_stage_output_store(
+                    self, flattened_output, expression.value, indent
+                )
             if isinstance(expression, AssignmentNode):
                 storage_pointer_array_assignment = (
                     self.generate_glsl_storage_pointer_array_assignment(
@@ -30972,6 +31075,8 @@ class GLSLCodeGen(LoweringRefusalMixin):
             return
 
         stage_name = self.current_target_stage or "global"
+        if self.is_per_vertex_stage_io(node, qualifier, direction):
+            mapped_type = self.stage_io_per_vertex_element_type(mapped_type)
         self.reserve_stage_io_layout(
             self.stage_io_used_locations,
             stage_name,
@@ -30980,6 +31085,40 @@ class GLSLCodeGen(LoweringRefusalMixin):
             mapped_type,
             self.resource_node_name(node, "<unnamed>"),
         )
+
+    # Arrayed interfaces whose outer dimension indexes vertices, not locations (GLSL 4.60 section 4.4.1):
+    # geometry inputs, tessellation inputs and non-patch control outputs, mesh outputs, pervertex inputs.
+    PER_VERTEX_STAGE_IO = {
+        ("geometry", "input"),
+        ("tessellation_control", "input"),
+        ("tessellation_control", "output"),
+        ("tessellation_evaluation", "input"),
+        ("mesh", "output"),
+    }
+
+    @staticmethod
+    def is_pervertex_stage_io(node, qualifier):
+        names = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", None) or []
+        }
+        return "pervertex" in names or bool(
+            set(str(qualifier).split()) & {"pervertexEXT", "pervertexNV"}
+        )
+
+    def is_per_vertex_stage_io(self, node, qualifier, direction):
+        if "patch" in str(qualifier).split():
+            return False
+        if self.is_pervertex_stage_io(node, qualifier):
+            return True
+        stage = str(self.current_global_stage_io_stage or "").lower()
+        return (stage, direction) in self.PER_VERTEX_STAGE_IO
+
+    @staticmethod
+    def stage_io_per_vertex_element_type(mapped_type):
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        close = array_suffix.find("]")
+        return base_type + array_suffix[close + 1 :] if close >= 0 else mapped_type
 
     def stage_io_layout_has(self, layout, names):
         if not layout.startswith("layout("):
@@ -31084,12 +31223,22 @@ class GLSLCodeGen(LoweringRefusalMixin):
         mapped_type = f"{self.map_type(vtype)}{array_suffix}"
         source_name = self.resource_node_name(node, "")
         emitted_name = self.glsl_global_identifier_name(source_name)
-        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         direction = self.stage_local_interface_direction(node)
+        stage_name = getattr(
+            self, "current_global_stage_io_stage", self.current_target_stage
+        )
+        linked_name = (
+            self.stage_local_interface_linked_name(node, direction, stage_name)
+            if direction is not None
+            else None
+        )
+        if linked_name is not None and linked_name != emitted_name:
+            emitted_name = linked_name
+            self.current_identifier_aliases[source_name] = linked_name
+        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         if direction is not None:
-            prefix = self.stage_io_declaration_prefix(node, direction)
-            stage_name = getattr(
-                self, "current_global_stage_io_stage", self.current_target_stage
+            prefix = self.stage_io_declaration_prefix(
+                node, direction, stage_name=stage_name
             )
             if direction == "in" and self.requires_flat_stage_input(
                 stage_name, mapped_type
@@ -31102,6 +31251,10 @@ class GLSLCodeGen(LoweringRefusalMixin):
         return self.generate_global_variable_declaration(
             node, declaration, vtype, mapped_type_for_layout=mapped_type
         )
+
+    def stage_local_interface_linked_name(self, node, direction, stage_name):
+        """The name a stage-level ``in`` or ``out`` must carry to link with its neighbour stage, or ``None``."""
+        return None
 
     def stage_local_interface_direction(self, node):
         names = {
@@ -31177,6 +31330,8 @@ class GLSLCodeGen(LoweringRefusalMixin):
             normalized = normalized.replace("-", "_")
             if normalized in {"perprimitive", "perprimitiveext"}:
                 add("perprimitiveEXT")
+            elif normalized in {"pervertex", "pervertexext"}:
+                add("pervertexEXT")
             elif normalized in {
                 "task_payload_shared",
                 "taskpayloadshared",
@@ -31222,6 +31377,7 @@ class GLSLCodeGen(LoweringRefusalMixin):
             "precise": 1,
             "patch": 2,
             "perprimitiveEXT": 3,
+            "pervertexEXT": 3,
             "flat": 4,
             "smooth": 5,
             "noperspective": 6,
@@ -38968,6 +39124,11 @@ complex64_t crossgl_complex64_mod_assign(
             if enum_constructor is not None:
                 return enum_constructor
 
+            if is_texture_lod_clamp_operation(original_func_name):
+                return glsl_texture_lod_clamp_call(
+                    self, original_func_name, expr.args, expr
+                )
+
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
                 return texture_call
@@ -46519,6 +46680,47 @@ complex64_t crossgl_complex64_mod_assign(
     def texture_compare_offset_supported(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["compare_offset"]
 
+    # GL_EXT_texture_shadow_lod (glsl_shadow_lod); WebGL 2 has no such extension.
+    GLSL_SHADOW_LOD_EXTENSION_SUPPORTED = True
+
+    def shadow_lod_extension_compare_call(
+        self, texture_type, texture_name, coord, compare, lod_arg, offset=None
+    ):
+        """An explicit-level compare through GL_EXT_texture_shadow_lod, or None when it adds no overload."""
+        base_type = self.resource_base_type(texture_type)
+        has_offset = SHADOW_LOD_EXTENSION_SAMPLERS.get(base_type)
+        if not self.GLSL_SHADOW_LOD_EXTENSION_SUPPORTED or has_offset is None:
+            return None
+        if offset is not None and not has_offset:
+            return None
+        lod = self.generate_expression(lod_arg)
+        if base_type == "samplerCubeArrayShadow":
+            call = f"textureLod({texture_name}, {coord}, {compare}, {lod})"
+        else:
+            compare_coord = self.texture_compare_coordinate(base_type, coord, compare)
+            if compare_coord is None:
+                return None
+            if offset is None:
+                call = f"textureLod({texture_name}, {compare_coord}, {lod})"
+            else:
+                call = f"textureLodOffset({texture_name}, {compare_coord}, {lod}, {offset})"
+        self.glsl_shadow_lod_extension_used = True
+        return call
+
+    def zero_lod_compare_gradient_call(
+        self, texture_type, texture_name, coord, compare, lod_arg, offset=None
+    ):
+        """A level-zero compare on a shadow sampler without textureLod, as textureGrad (glsl_shadow_lod)."""
+        base_type = self.resource_base_type(texture_type)
+        if not is_zero_lod_literal(lod_arg):
+            return None
+        compare_coord = self.texture_compare_coordinate(base_type, coord, compare)
+        if compare_coord is None:
+            return None
+        return zero_lod_compare_gradient_call(
+            base_type, texture_name, compare_coord, lod_arg, offset
+        )
+
     def texture_compare_lod_supported(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["compare_lod"]
 
@@ -46545,16 +46747,16 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 return None
             projected_coord = f"{self.vector_component(coord, 'xy')} / {divisor}"
-            return f"vec3({projected_coord}, {compare})"
+            reference = projected_texture_compare_reference(compare, divisor)
+            return f"vec3({projected_coord}, {reference})"
 
         if texture_type == "samplerCubeShadow":
             if coord_type not in {"vec4", "float4"}:
                 return None
-            projected_coord = (
-                f"{self.vector_component(coord, 'xyz')} / "
-                f"{self.vector_component(coord, 'w')}"
-            )
-            return f"vec4({projected_coord}, {compare})"
+            divisor = self.vector_component(coord, "w")
+            projected_coord = f"{self.vector_component(coord, 'xyz')} / {divisor}"
+            reference = projected_texture_compare_reference(compare, divisor)
+            return f"vec4({projected_coord}, {reference})"
 
         if texture_type != "sampler2DArrayShadow" or coord_type not in {
             "vec4",
@@ -46562,12 +46764,11 @@ complex64_t crossgl_complex64_mod_assign(
         }:
             return None
 
-        projected_coord = (
-            f"{self.vector_component(coord, 'xy')} / "
-            f"{self.vector_component(coord, 'w')}"
-        )
+        divisor = self.vector_component(coord, "w")
+        projected_coord = f"{self.vector_component(coord, 'xy')} / {divisor}"
         layer = self.vector_component(coord, "z")
-        return f"vec4({projected_coord}, {layer}, {compare})"
+        reference = projected_texture_compare_reference(compare, divisor)
+        return f"vec4({projected_coord}, {layer}, {reference})"
 
     def unsupported_texture_compare_call(self, func_name, reason):
         return unsupported_texture_compare_scalar_expression("GLSL", func_name, reason)
@@ -46586,6 +46787,13 @@ complex64_t crossgl_complex64_mod_assign(
             "u64vec2",
             "u64vec3",
             "u64vec4",
+            # CrossGL also spells integer vectors as HLSL does (the SPIR-V importer's spelling).
+            "int2",
+            "int3",
+            "int4",
+            "uint2",
+            "uint3",
+            "uint4",
         }
 
     def glsl_compile_time_int_constants(self):
@@ -46975,7 +47183,8 @@ complex64_t crossgl_complex64_mod_assign(
                 func_name, texture_compare_argument_error()
             )
 
-        texture_type = self.texture_resource_type(args[0])
+        # Struct members and other non-identifier resources resolve through their expression type.
+        texture_type = self.texture_argument_resource_type(args[0])
         if self.is_multisample_texture_resource_type(texture_type):
             return self.unsupported_multisample_texture_compare_call(
                 func_name, texture_type
@@ -47140,6 +47349,13 @@ complex64_t crossgl_complex64_mod_assign(
             if count_error:
                 return self.unsupported_texture_compare_call(func_name, count_error)
             if not self.texture_compare_lod_supported(texture_type):
+                gradient_call = self.zero_lod_compare_gradient_call(
+                    texture_type, texture_name, coord, compare, extra_args[1]
+                ) or self.shadow_lod_extension_compare_call(
+                    texture_type, texture_name, coord, compare, extra_args[1]
+                )
+                if gradient_call is not None:
+                    return gradient_call
                 return self.unsupported_texture_compare_call(
                     func_name, "explicit LOD requires 2D shadow samplers"
                 )
@@ -47160,6 +47376,27 @@ complex64_t crossgl_complex64_mod_assign(
             if count_error:
                 return self.unsupported_texture_compare_call(func_name, count_error)
             if not self.texture_compare_lod_offset_supported(texture_type):
+                offset_arg = extra_args[2]
+                gradient_call = None
+                if self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+                    offset = self.generate_expression(offset_arg)
+                    gradient_call = self.zero_lod_compare_gradient_call(
+                        texture_type,
+                        texture_name,
+                        coord,
+                        compare,
+                        extra_args[1],
+                        offset,
+                    ) or self.shadow_lod_extension_compare_call(
+                        texture_type,
+                        texture_name,
+                        coord,
+                        compare,
+                        extra_args[1],
+                        offset,
+                    )
+                if gradient_call is not None:
+                    return gradient_call
                 return self.unsupported_texture_compare_call(
                     func_name, "explicit LOD offsets require 2D shadow samplers"
                 )
@@ -54064,14 +54301,21 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_buffer_block_layout(self, node):
         attr = self.glsl_buffer_block_attribute(node)
         arguments = getattr(attr, "arguments", []) if attr is not None else []
-        if arguments:
-            layout_parts = [
-                self.attribute_value_to_string(argument) for argument in arguments
-            ]
-            layout_parts = [part for part in layout_parts if part]
-            if layout_parts:
-                self.validate_glsl_buffer_block_layout_parts(node, layout_parts)
-                return ", ".join(layout_parts)
+        layout_parts = [
+            self.attribute_value_to_string(argument) for argument in arguments or []
+        ]
+        layout_parts = [part for part in layout_parts if part]
+        if is_shader_record_buffer(node) and not any(
+            self.normalized_glsl_buffer_block_layout_part(part) == "shaderrecordext"
+            for part in layout_parts
+        ):
+            # ``layout(shaderRecordEXT, std430) buffer B {...} b;`` parses with shaderRecordEXT as its own attribute.
+            layout_parts.insert(0, "shaderRecordEXT")
+            if len(layout_parts) == 1:
+                layout_parts.append(shader_record_memory_layout(node))
+        if layout_parts:
+            self.validate_glsl_buffer_block_layout_parts(node, layout_parts)
+            return ", ".join(layout_parts)
         return "std430"
 
     def validate_glsl_buffer_block_layout_parts(self, node, layout_parts):

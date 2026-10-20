@@ -14711,14 +14711,52 @@ def test_directx_glsl_buffer_block_atomics_validate_return_result_contexts(
             "atomic 'atomicAdd' value argument must be scalar uint, got float",
         ),
         (
-            "atomicCompSwap(atomicBlock.counter, 1u, -1)",
-            "atomic 'atomicCompSwap' replacement argument must be scalar uint, got int",
+            "atomicCompSwap(atomicBlock.counter, 1u, 2.0)",
+            "atomic 'atomicCompSwap' replacement argument must be scalar uint, got float",
+        ),
+        (
+            "atomicAdd(atomicBlock.signedCounter, 1u)",
+            "atomic 'atomicAdd' value argument must be scalar int, got uint",
         ),
     ],
 )
 def test_directx_glsl_buffer_block_atomics_validate_arguments(call, match):
     shader = f"""
     shader BadGlslBufferBlockAtomicHLSL {{
+        struct AtomicBlock {{
+            uint counter;
+            int signedCounter;
+        }};
+
+        AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+
+        uint update() {{
+            return uint({call});
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        (
+            "atomicAdd(atomicBlock.counter, 1)",
+            "atomic_add_uint(atomicBlock, 0, uint(1))",
+        ),
+        (
+            "atomicCompSwap(atomicBlock.counter, 1u, -1)",
+            "atomic_compare_exchange_uint(atomicBlock, 0, 1u, uint(-1))",
+        ),
+    ],
+)
+def test_directx_glsl_buffer_block_atomics_convert_int_values_to_uint(call, expected):
+    # GLSL converts an int argument to a uint parameter implicitly (GLSL 4.60 section 4.1.10).
+    shader = f"""
+    shader IntValueGlslBufferBlockAtomicHLSL {{
         struct AtomicBlock {{
             uint counter;
         }};
@@ -14731,8 +14769,8 @@ def test_directx_glsl_buffer_block_atomics_validate_arguments(call, match):
     }}
     """
 
-    with pytest.raises(ValueError, match=match):
-        generate_code(parse_code(tokenize_code(shader)))
+    generated = generate_code(parse_code(tokenize_code(shader)))
+    assert expected in generated
 
 
 def test_directx_typed_buffer_atomics_lower_to_interlocked_statements():
@@ -37270,11 +37308,11 @@ def test_directx_implicit_projected_stage_input_members_generate_samplers():
         in generated_code
     )
     assert (
-        "float shadow = shadowMap.SampleCmp(shadowMapSampler, input.uvq.xy / input.uvq.z, input.depth);"
+        "float shadow = shadowMap.SampleCmp(shadowMapSampler, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
         in generated_code
     )
     assert (
-        "float shadowGrad = shadowArray.SampleCmpGrad(shadowArraySampler, float3(input.uvLayerQ.xy / input.uvLayerQ.w, input.uvLayerQ.z), input.depth, input.ddx, input.ddy);"
+        "float shadowGrad = shadowArray.SampleCmpGrad(shadowArraySampler, float3(input.uvLayerQ.xy / input.uvLayerQ.w, input.uvLayerQ.z), input.depth / input.uvLayerQ.w, input.ddx, input.ddy);"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -37408,19 +37446,19 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(texSampler, uvq.xy / uvq.z, depth);"
+        "float projected = tex.SampleCmp(texSampler, uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.SampleCmpLevel(texSampler, uvq.xy / uvq.z, depth, lod, offset);"
+        "float lodOffsetProjected = tex.SampleCmpLevel(texSampler, uvq.xy / uvq.z, depth / uvq.z, lod, offset);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.SampleCmpGrad(texSampler, uvq.xy / uvq.z, depth, ddx, ddy);"
+        "float gradProjected = tex.SampleCmpGrad(texSampler, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy);"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.SampleCmpGrad(texSampler, uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        "float gradOffsetProjected = tex.SampleCmpGrad(texSampler, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy, offset);"
         in generated_code
     )
     assert (
@@ -37428,30 +37466,31 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(s, uvq.xy / uvq.z, depth);" in generated_code
-    )
-    assert (
-        "float projectedW = tex.SampleCmp(s, uvqw.xy / uvqw.w, depth);"
+        "float projected = tex.SampleCmp(s, uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.SampleCmp(s, uvq.xy / uvq.z, depth, int2(1, -1));"
+        "float projectedW = tex.SampleCmp(s, uvqw.xy / uvqw.w, depth / uvqw.w);"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.SampleCmpLevel(s, uvq.xy / uvq.z, depth, lod);"
+        "float offsetProjected = tex.SampleCmp(s, uvq.xy / uvq.z, depth / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.SampleCmpLevel(s, uvq.xy / uvq.z, depth, lod, offset);"
+        "float lodProjected = tex.SampleCmpLevel(s, uvq.xy / uvq.z, depth / uvq.z, lod);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.SampleCmpGrad(s, uvq.xy / uvq.z, depth, ddx, ddy);"
+        "float lodOffsetProjected = tex.SampleCmpLevel(s, uvq.xy / uvq.z, depth / uvq.z, lod, offset);"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.SampleCmpGrad(s, uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        "float gradProjected = tex.SampleCmpGrad(s, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float gradOffsetProjected = tex.SampleCmpGrad(s, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy, offset);"
         in generated_code
     )
     assert (
@@ -37467,27 +37506,27 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth);"
+        "float projected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
+        "float offsetProjected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.SampleCmpLevel(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, lod);"
+        "float lodProjected = tex.SampleCmpLevel(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, lod);"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.SampleCmpLevel(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, lod, offset);"
+        "float lodOffsetProjected = tex.SampleCmpLevel(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, lod, offset);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.SampleCmpGrad(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        "float gradProjected = tex.SampleCmpGrad(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy);"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.SampleCmpGrad(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy, offset);"
+        "float gradOffsetProjected = tex.SampleCmpGrad(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy, offset);"
         in generated_code
     )
     assert (
@@ -37533,15 +37572,15 @@ def test_directx_direct_projected_shadow_compare_stage_input_members():
     assert "Texture2DArray shadowArray : register(t1);" in generated_code
     assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
     assert (
-        "float planar = shadowMap.SampleCmp(compareSampler, input.uvq.xy / input.uvq.z, input.depth);"
+        "float planar = shadowMap.SampleCmp(compareSampler, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMap.SampleCmp(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth, int2(1, -1));"
+        "float planarOffset = shadowMap.SampleCmp(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth / input.uvqw.w, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArray.SampleCmpGrad(compareSampler, float3(input.uvLayerQ.xy / input.uvLayerQ.w, input.uvLayerQ.z), input.depth, input.ddx, input.ddy);"
+        "float arrayGrad = shadowArray.SampleCmpGrad(compareSampler, float3(input.uvLayerQ.xy / input.uvLayerQ.w, input.uvLayerQ.z), input.depth / input.uvLayerQ.w, input.ddx, input.ddy);"
         in generated_code
     )
     assert "unsupported DirectX texture compare" not in generated_code
@@ -37635,31 +37674,31 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
         in generated_code
     )
     assert (
-        "float planar = shadowMaps[layer].SampleCmp(shadowSamplers[layer], uvq.xy / uvq.z, depth);"
+        "float planar = shadowMaps[layer].SampleCmp(shadowSamplers[layer], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, int2(1, -1));"
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowSamplers[2], uvq.xy / uvq.z, depth, lod);"
+        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowSamplers[2], uvq.xy / uvq.z, depth / uvq.z, lod);"
         in generated_code
     )
     assert (
-        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowSamplers[layer], uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowSamplers[layer], uvq.xy / uvq.z, depth / uvq.z, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "float arrayProjected = shadowArrays[2].SampleCmp(shadowSamplers[2], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth);"
+        "float arrayProjected = shadowArrays[2].SampleCmp(shadowSamplers[2], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowSamplers[layer], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowSamplers[layer], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowSamplers[1], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowSamplers[1], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy);"
         in generated_code
     )
     assert (
@@ -37763,31 +37802,31 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
         in generated_code
     )
     assert (
-        "float planar = shadowMaps[layer].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth);"
+        "float planar = shadowMaps[layer].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth, int2(1, -1));"
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowMapsSampler, uvq.xy / uvq.z, depth, lod);"
+        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowMapsSampler, uvq.xy / uvq.z, depth / uvq.z, lod);"
         in generated_code
     )
     assert (
-        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowMapsSampler, uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowMapsSampler, uvq.xy / uvq.z, depth / uvq.z, ddx, ddy, offset);"
         in generated_code
     )
     assert (
-        "float arrayProjected = shadowArrays[2].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth);"
+        "float arrayProjected = shadowArrays[2].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy);"
         in generated_code
     )
     assert (
@@ -37894,19 +37933,19 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
         in generated_code
     )
     assert (
-        "float planarHigh = shadowMaps[LAYER].SampleCmp(shadowSamplers[LAYER], uvq.xy / uvq.z, depth);"
+        "float planarHigh = shadowMaps[LAYER].SampleCmp(shadowSamplers[LAYER], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarLow = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, int2(1, -1));"
+        "float planarLow = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float arrayHigh = shadowArrays[(2 * 2)].SampleCmpGrad(shadowSamplers[(2 * 2)], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        "float arrayHigh = shadowArrays[(2 * 2)].SampleCmpGrad(shadowSamplers[(2 * 2)], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, ddx, ddy);"
         in generated_code
     )
     assert (
-        "float arrayLow = shadowArrays[3].SampleCmp(shadowSamplers[3], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
+        "float arrayLow = shadowArrays[3].SampleCmp(shadowSamplers[3], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth / uvLayerQ.w, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -38024,7 +38063,7 @@ def test_directx_projected_cube_shadow_compare_lowers_supported_forms():
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(s, cubeProj.xyz / cubeProj.w, depth);"
+        "float projected = tex.SampleCmp(s, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     for func_name in {
@@ -38147,15 +38186,15 @@ def test_directx_projected_cube_shadow_compare_implicit_samplers_lowers_supporte
         in generated_code
     )
     assert (
-        "float projected = tex.SampleCmp(texSampler, cubeProj.xyz / cubeProj.w, depth);"
+        "float projected = tex.SampleCmp(texSampler, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.SampleCmpLevel(texSampler, cubeProj.xyz / cubeProj.w, depth, lod);"
+        "float lodProjected = tex.SampleCmpLevel(texSampler, cubeProj.xyz / cubeProj.w, depth / cubeProj.w, lod);"
         in generated_code
     )
     assert (
-        "float globalProjected = cubeMap.SampleCmp(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth);"
+        "float globalProjected = cubeMap.SampleCmp(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w);"
         in generated_code
     )
     assert (
@@ -38278,15 +38317,15 @@ def test_directx_projected_cube_shadow_compare_resource_arrays_thread_supported_
         in generated_code
     )
     assert (
-        "float fixedProjected = maps[2].SampleCmp(mapsSampler, cubeProj.xyz / cubeProj.w, depth);"
+        "float fixedProjected = maps[2].SampleCmp(mapsSampler, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     assert (
-        "float dynamicLodProjected = maps[layer].SampleCmpLevel(mapsSampler, cubeProj.xyz / cubeProj.w, depth, lod);"
+        "float dynamicLodProjected = maps[layer].SampleCmpLevel(mapsSampler, cubeProj.xyz / cubeProj.w, depth / cubeProj.w, lod);"
         in generated_code
     )
     assert (
-        "float globalProjected = cubeMaps[input.layer].SampleCmp(cubeMapsSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth);"
+        "float globalProjected = cubeMaps[input.layer].SampleCmp(cubeMapsSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w);"
         in generated_code
     )
     assert (
@@ -38623,7 +38662,8 @@ def test_directx_projected_cube_sampler_role_conflicts_and_compare_diagnostics()
     )
     assert (
         "cubeShadow.SampleCmp(sharedSampler_cglComparison, "
-        "input.cubeProj.xyz / input.cubeProj.w, input.depth)" in comparison_code
+        "input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w)"
+        in comparison_code
     )
     assert "colorMap.Sample(sharedSampler, input.uv)" in comparison_code
 

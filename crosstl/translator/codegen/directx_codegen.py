@@ -291,6 +291,7 @@ from .image_access_contracts import (
     numeric_scalar_type_kind,
     operation_argument_type_error,
     operation_dimension_argument_error,
+    projected_texture_compare_reference,
     projected_texture_extra_argument_count_error,
     record_explicit_image_metadata,
     requires_integer_coordinate,
@@ -394,6 +395,8 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
+from .sampler_pairs import canonicalize_separate_textures
+from .stage_refusals import RayStageInterfaceUnsupportedError
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -419,6 +422,10 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
+from .texture_lod_clamp import (
+    hlsl_texture_lod_clamp_call,
+    is_texture_lod_clamp_operation,
+)
 from .uniform_returns import UniformReturnAnalysis
 from .union_layout import UnionLayoutCollector
 from .workgroup_access_contracts import parse_workgroup_access_assertions
@@ -427,7 +434,27 @@ from .workgroup_access_contracts import parse_workgroup_access_assertions
 # ``nullptr`` cannot name a groupshared array and real backings always have a
 # positive extent, so the pair cannot collide with a concrete contract.
 HLSL_NULL_WORKGROUP_POINTER_CONTRACT = ("nullptr", 0)
-
+# DXR system-value intrinsics and their result types (DirectX Raytracing specification, "System value intrinsics").
+HLSL_RAY_SYSTEM_VALUE_TYPES = {
+    "DispatchRaysIndex": "uint3",
+    "DispatchRaysDimensions": "uint3",
+    "WorldRayOrigin": "float3",
+    "WorldRayDirection": "float3",
+    "ObjectRayOrigin": "float3",
+    "ObjectRayDirection": "float3",
+    "RayTMin": "float",
+    "RayTCurrent": "float",
+    "RayFlags": "uint",
+    "InstanceIndex": "uint",
+    "InstanceID": "uint",
+    "GeometryIndex": "uint",
+    "PrimitiveIndex": "uint",
+    "HitKind": "uint",
+    "ObjectToWorld3x4": "float3x4",
+    "ObjectToWorld4x3": "float4x3",
+    "WorldToObject3x4": "float3x4",
+    "WorldToObject4x3": "float4x3",
+}
 # Private pointer parameters lower to ``array, int base``.  A Metal rebase such
 # as ``x_thread += 8 * i`` becomes ``x_thread_base += int(8 * i)``; the analysis
 # tracks the rebased view start as an interval under this tuple key, which can
@@ -2651,6 +2678,13 @@ class HLSLCodeGen(LoweringRefusalMixin):
             "image2DArray": "RWTexture2DArray<float4>",
             "image2DMS": "RWTexture2DMS<float4>",
             "image2DMSArray": "RWTexture2DMSArray<float4>",
+            # CrossGL's spelling of a float storage image without a format (the SPIR-V importer's); HLSL's
+            # default element type for these templates is float4 as well.
+            "RWTexture1D": "RWTexture1D<float4>",
+            "RWTexture1DArray": "RWTexture1DArray<float4>",
+            "RWTexture2D": "RWTexture2D<float4>",
+            "RWTexture2DArray": "RWTexture2DArray<float4>",
+            "RWTexture3D": "RWTexture3D<float4>",
             "sampler": "SamplerState",
             "comparison_sampler": "SamplerComparisonState",
         }
@@ -3500,6 +3534,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "directx")
+        ast = canonicalize_separate_textures(ast)
         # HLSL resource parameters cannot carry a caller's pointer rebase, so
         # Metal helpers whose pointer parameters merely carry [[buffer(n)]]
         # attributes take the storage-pointer offset ABI instead.
@@ -4648,7 +4683,11 @@ class HLSLCodeGen(LoweringRefusalMixin):
             qualifier = self.resource_memory_qualifier(mapped_type, node)
             if not qualifier and not is_hlsl_resource_global:
                 qualifier = self.local_variable_qualifier(node)
-                if "thread" in (getattr(node, "qualifiers", []) or []):
+                # A module variable without ``static`` is an implicitly constant member of the $Globals
+                # constant buffer in HLSL; private per-invocation state needs ``static``.
+                if {"thread", "static"} & {
+                    str(value) for value in getattr(node, "qualifiers", []) or []
+                } and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
             code += f"{qualifier}{declaration}{register};\n"
@@ -17821,6 +17860,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if (
+                not args
+                and isinstance(func_name, str)
+                and func_name in HLSL_RAY_SYSTEM_VALUE_TYPES
+                and func_name not in getattr(self, "function_return_types", {})
+            ):
+                return HLSL_RAY_SYSTEM_VALUE_TYPES[func_name]
             if isinstance(func_expr, MemberAccessNode) or (
                 hasattr(func_expr, "__class__")
                 and "MemberAccess" in str(func_expr.__class__)
@@ -33715,7 +33761,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for role in sorted(
             required_roles.get(shader_type, set()) - set(role_parameters)
         ):
-            raise ValueError(f"DirectX {shader_type} stage requires a {role} parameter")
+            raise RayStageInterfaceUnsupportedError(
+                "directx",
+                shader_type,
+                role,
+                "the entry declares none and the program declares no ray interface "
+                "variable (GLSL rayPayloadInEXT, hitAttributeEXT, callableDataInEXT) "
+                "to pass as one; DXR requires it (DirectX Raytracing spec, shader "
+                "signatures)",
+            )
 
         exact_role_order = {
             "ray_generation": [],
@@ -34546,7 +34600,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if expected_type is None:
             return
 
-        if array_suffix or actual_base_type != expected_type:
+        if array_suffix or not self.hlsl_builtin_semantic_type_matches(
+            mapped_semantic, actual_base_type, expected_type
+        ):
             raise ValueError(
                 f"DirectX {shader_type} return semantic '{semantic}' maps to "
                 f"'{mapped_semantic}' and requires function '{function_name}' "
@@ -34579,12 +34635,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             return
 
-        if array_suffix or actual_base_type != expected_type:
+        if array_suffix or not self.hlsl_builtin_semantic_type_matches(
+            mapped_semantic, actual_base_type, expected_type
+        ):
             raise ValueError(
                 f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
                 f"'{mapped_semantic}' and requires member '{member_name}' to "
                 f"have type {expected_type}, got {actual_type}"
             )
+
+    # A render target written as a 16-bit four-component vector keeps its
+    # meaning: SV_Target accepts any numeric vector, and only the width differs.
+    HLSL_HALF_RENDER_TARGET_TYPES = frozenset({"float16_t4", "half4", "min16float4"})
+
+    def hlsl_builtin_semantic_type_matches(
+        self, mapped_semantic, actual_base_type, expected_type
+    ):
+        if actual_base_type == expected_type:
+            return True
+        return (
+            expected_type == "float4"
+            and self.hlsl_render_target_semantic(mapped_semantic)
+            and actual_base_type in self.HLSL_HALF_RENDER_TARGET_TYPES
+        )
 
     def validate_hlsl_tess_factor_member_semantic_type(
         self, struct_name, member_name, member_type, semantic, mapped_semantic=None
@@ -47129,7 +47202,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "DirectX", func_name, reason
         )
 
-    def texture_compare_projected_coordinate(self, texture_type, coord_arg, coord):
+    def texture_compare_projected_coordinate(
+        self, texture_type, coord_arg, coord, compare
+    ):
+        """The projected coordinate and reference, both divided by ``q``, or ``None`` for an unsupported shape."""
         texture_type = self.sampled_texture_shape_type(texture_type)
         coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
 
@@ -47140,24 +47216,48 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 divisor = self.vector_component(coord, "w")
             else:
                 return None
-            return f"{self.vector_component(coord, 'xy')} / {divisor}"
-
-        if texture_type == "TextureCube":
+            projected_coord = f"{self.vector_component(coord, 'xy')} / {divisor}"
+        elif texture_type == "TextureCube":
             if coord_type not in {"vec4", "float4"}:
                 return None
-            return (
-                f"{self.vector_component(coord, 'xyz')} / "
-                f"{self.vector_component(coord, 'w')}"
+            divisor = self.vector_component(coord, "w")
+            projected_coord = f"{self.vector_component(coord, 'xyz')} / {divisor}"
+        elif texture_type == "Texture2DArray" and coord_type in {"vec4", "float4"}:
+            divisor = self.vector_component(coord, "w")
+            projected_coord = (
+                f"float3({self.vector_component(coord, 'xy')} / {divisor}, "
+                f"{self.vector_component(coord, 'z')})"
             )
-
-        if texture_type != "Texture2DArray" or coord_type not in {"vec4", "float4"}:
+        else:
             return None
+        return projected_coord, projected_texture_compare_reference(compare, divisor)
 
-        projected_coord = (
-            f"{self.vector_component(coord, 'xy')} / "
-            f"{self.vector_component(coord, 'w')}"
-        )
-        return f"float3({projected_coord}, {self.vector_component(coord, 'z')})"
+    def hlsl_sample_cmp_level(
+        self, texture_name, sampler_name, coord, compare, lod_arg, offset=None
+    ):
+        """An explicit-LOD compare: SampleCmpLevelZero (Shader Model 4) at a literal level 0, else SampleCmpLevel
+        (Shader Model 6.7)."""
+        arguments = [sampler_name, coord, compare]
+        if self.hlsl_is_zero_literal(lod_arg):
+            method = "SampleCmpLevelZero"
+        else:
+            method = "SampleCmpLevel"
+            arguments.append(self.generate_expression(lod_arg))
+        if offset is not None:
+            arguments.append(offset)
+        return f"{texture_name}.{method}({', '.join(arguments)})"
+
+    @staticmethod
+    def hlsl_is_zero_literal(node):
+        if not isinstance(node, LiteralNode) or isinstance(node.value, bool):
+            return False
+        value = node.value
+        if isinstance(value, str):
+            value = value.strip().rstrip("fFhHlLuU")
+        try:
+            return float(value) == 0.0
+        except (TypeError, ValueError):
+            return False
 
     def generate_texture_compare_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)
@@ -47181,13 +47281,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         compare = self.generate_expression(extra_args[0])
         if is_projected_texture_compare_operation(func_name):
             coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
-            projected_coord = self.texture_compare_projected_coordinate(
-                texture_type, args[coord_index], coord
+            projected = self.texture_compare_projected_coordinate(
+                texture_type, args[coord_index], coord, compare
             )
-            if projected_coord is None:
+            if projected is None:
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_projected_coordinate_error("DirectX")
                 )
+            projected_coord, compare = projected
 
             if is_texture_compare_basic_operation(func_name):
                 count_error = texture_compare_extra_argument_count_error(
@@ -47228,10 +47329,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
-                lod = self.generate_expression(extra_args[1])
-                return (
-                    f"{texture_name}.SampleCmpLevel("
-                    f"{sampler_name}, {projected_coord}, {compare}, {lod})"
+                return self.hlsl_sample_cmp_level(
+                    texture_name, sampler_name, projected_coord, compare, extra_args[1]
                 )
 
             if is_texture_compare_lod_offset_operation(func_name):
@@ -47244,11 +47343,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return self.unsupported_texture_compare_call(
                         func_name, texture_compare_offset_capability_error("DirectX")
                     )
-                lod = self.generate_expression(extra_args[1])
                 offset = self.generate_expression(extra_args[2])
-                return (
-                    f"{texture_name}.SampleCmpLevel("
-                    f"{sampler_name}, {projected_coord}, {compare}, {lod}, {offset})"
+                return self.hlsl_sample_cmp_level(
+                    texture_name,
+                    sampler_name,
+                    projected_coord,
+                    compare,
+                    extra_args[1],
+                    offset,
                 )
 
             if is_texture_compare_grad_operation(func_name):
@@ -47319,10 +47421,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if count_error:
                 return self.unsupported_texture_compare_call(func_name, count_error)
-            lod = self.generate_expression(extra_args[1])
-            return (
-                f"{texture_name}.SampleCmpLevel("
-                f"{sampler_name}, {coord}, {compare}, {lod})"
+            return self.hlsl_sample_cmp_level(
+                texture_name, sampler_name, coord, compare, extra_args[1]
             )
 
         if is_texture_compare_lod_offset_operation(func_name):
@@ -47335,11 +47435,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_offset_capability_error("DirectX")
                 )
-            lod = self.generate_expression(extra_args[1])
             offset = self.generate_expression(extra_args[2])
-            return (
-                f"{texture_name}.SampleCmpLevel("
-                f"{sampler_name}, {coord}, {compare}, {lod}, {offset})"
+            return self.hlsl_sample_cmp_level(
+                texture_name, sampler_name, coord, compare, extra_args[1], offset
             )
 
         if is_texture_compare_grad_operation(func_name):
@@ -51655,6 +51753,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "iimage2DMSArray": "RWTexture2DMSArray",
             "uimage2DMSArray": "RWTexture2DMSArray",
             "imageCube": "RWTextureCube",
+            "RWTexture1D": "RWTexture1D",
+            "RWTexture1DArray": "RWTexture1DArray",
+            "RWTexture2D": "RWTexture2D",
+            "RWTexture2DArray": "RWTexture2DArray",
+            "RWTexture3D": "RWTexture3D",
         }
         texture_type = texture_types.get(base_type)
         if component_type and texture_type:
@@ -52440,19 +52543,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
         if operation == "compare_exchange":
-            compare_value = self.generate_expression_with_expected(
-                args[1], access["type"]
-            )
-            replacement = self.generate_expression_with_expected(
-                args[2], access["type"]
-            )
+            compare_value = self.hlsl_byteaddress_atomic_value(args[1], access)
+            replacement = self.hlsl_byteaddress_atomic_value(args[2], access)
             return (
                 f"{helper_name}({access['buffer']}, {offset}, "
                 f"{compare_value}, {replacement})"
             )
 
-        value = self.generate_expression_with_expected(args[1], access["type"])
+        value = self.hlsl_byteaddress_atomic_value(args[1], access)
         return f"{helper_name}({access['buffer']}, {offset}, {value})"
+
+    def hlsl_byteaddress_atomic_value(self, arg, access):
+        value = self.generate_expression_with_expected(arg, access["type"])
+        if (
+            access.get("component_type") == "uint"
+            and self.scalar_expression_kind(arg) == "int"
+        ):
+            return f"uint({value})"
+        return value
 
     def validate_hlsl_byteaddress_atomic_argument_count(
         self, func_name, args, expected_args
@@ -52478,6 +52586,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for index, role in value_roles:
             value_kind = self.scalar_expression_kind(args[index])
             if value_kind is None or value_kind == expected_kind:
+                continue
+            if (value_kind, expected_kind) == ("int", "uint"):
+                # GLSL converts an int argument to a uint parameter implicitly (GLSL 4.60 section 4.1.10); the
+                # value is passed through an explicit uint conversion.
                 continue
             raise ValueError(
                 f"DirectX GLSL buffer block atomic '{func_name}' {role} "
@@ -53192,6 +53304,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_texture_call(self, func_name, args, *, call_node=None):
         if not func_name:
             return None
+        if is_texture_lod_clamp_operation(func_name):
+            return hlsl_texture_lod_clamp_call(self, func_name, args, call_node)
 
         feedback_call = self.generate_hlsl_feedback_write_call(func_name, args)
         if feedback_call is not None:

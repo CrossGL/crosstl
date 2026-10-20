@@ -1,15 +1,57 @@
 #version 400
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 16) const int arraySize = 5;
+#else
+const int arraySize = 5;
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 17) const bool spBool = true;
+#else
+const bool spBool = true;
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 18) const float spFloat = 3.14;
+#else
+const float spFloat = 3.14;
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 19) const double spDouble = double(3.141592653589793);
+#else
+const double spDouble = double(3.141592653589793);
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 22) const uint scale = 2;
+#else
+const uint scale = 2;
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 116) const int dupArraySize = 12;
+#else
+const int dupArraySize = 12;
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 117) const bool spDupBool = true;
+#else
+const bool spDupBool = true;
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 118) const float spDupFloat = 3.14;
+#else
+const float spDupFloat = 3.14;
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 119) const double spDupDouble = double(3.141592653589793);
+#else
+const double spDupDouble = double(3.141592653589793);
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 122) const uint dupScale = 2;
+#else
+const uint dupScale = 2;
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 24) gl_MaxImageUnits;
+#endif
 
 in vec4 ucol[arraySize];
 in vec4 dupUcol[dupArraySize];

@@ -57,6 +57,8 @@ from ..math_namespaces import (
     METAL_PRECISE_MATH_FUNCTIONS,
 )
 from ..resource_identity import resource_identity_marker
+from ..semantics.array_layers import metal_sampled_array_layer
+from ..semantics.sampler_states import is_sampler_constructor
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..structure_conversions import (
@@ -83,6 +85,12 @@ from ..validation import (
     texture_offset_argument_indices,
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
+)
+from .metal_fragment_outputs import metal_fragment_output_color_semantic
+from .metal_array_copies import (
+    generate_metal_array_copy,
+    generate_metal_array_initializer,
+    render_metal_split_member_constructor_arguments,
 )
 from .array_utils import (
     collect_literal_int_constants,
@@ -262,6 +270,7 @@ from .image_access_contracts import (
     numeric_scalar_type_kind,
     operation_argument_type_error,
     operation_dimension_argument_error,
+    projected_texture_compare_reference,
     projected_texture_extra_argument_count_error,
     projected_texture_offset_capability_error,
     record_explicit_image_metadata,
@@ -349,6 +358,7 @@ from .pointer_reinterpret import (
 )
 from .relational_builtins import lower_relational_builtins, metal_logical_not_operand
 from .resource_arrays import collect_resource_array_size_hints
+from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -363,6 +373,10 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_layout_entry_value,
     stage_matches,
+)
+from .texture_lod_clamp import (
+    is_texture_lod_clamp_operation,
+    metal_texture_lod_clamp_call,
 )
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
@@ -883,6 +897,7 @@ class MetalCodeGen:
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
         self.metal_lowered_program_scope_groupshared_global_ids = set()
         self.metal_program_scope_value_global_types = {}
+        self.program_scope_sampler_constants = set()
         self.metal_type_aliases = {}
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
@@ -1885,6 +1900,7 @@ class MetalCodeGen:
 
     def render_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
+        ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
@@ -1907,6 +1923,7 @@ class MetalCodeGen:
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
         self.metal_lowered_program_scope_groupshared_global_ids = set()
         self.metal_program_scope_value_global_types = {}
+        self.program_scope_sampler_constants = set()
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -3162,6 +3179,10 @@ class MetalCodeGen:
                 )
                 mapped_type = "float"
             declaration = format_c_style_array_declaration(mapped_type, name)
+            if mapped_type == "sampler":
+                # Program-scope fixed sampler state; texture calls take it as
+                # their explicit sampler argument.
+                self.program_scope_sampler_constants.add(name)
             code += (
                 f"{self.metal_unused_declaration_qualifier('constant')} "
                 f"{declaration} = {value_code};\n"
@@ -4192,6 +4213,9 @@ class MetalCodeGen:
 
     def generate_struct_constructor_argument(self, expr, field_type):
         """Convert promoted narrow values back to the aggregate's physical field type."""
+        array_initializer = generate_metal_array_initializer(self, expr, field_type)
+        if array_initializer is not None:
+            return array_initializer
         raw_type = self.resolve_metal_type_alias(self.type_name_string(field_type))
         base_type, array_suffix = split_array_type_suffix(raw_type)
         native = self.metal_native_narrow_bitcast_storage_type(base_type)
@@ -4236,12 +4260,19 @@ class MetalCodeGen:
             return None
 
         fields = list(self.struct_member_types[constructor_name].items())
-        rendered_args = render_constructor_arguments(
+        rendered_args = render_metal_split_member_constructor_arguments(
             self,
-            constructor_name,
             expr,
             fields,
+            self.metal_stage_io_member_lowerings.get(constructor_name, {}),
         )
+        if rendered_args is None:
+            rendered_args = render_constructor_arguments(
+                self,
+                constructor_name,
+                expr,
+                fields,
+            )
         return format_struct_constructor_expression(
             self,
             self.map_type(constructor_name),
@@ -6917,7 +6948,10 @@ class MetalCodeGen:
                     f"'{metal_semantic}' and is not supported"
                 )
             actual_type = self.map_type(self.struct_member_raw_type(member))
-            if actual_type != expected_type:
+            # A half-precision color attachment value is the same four-component
+            # output; [[color(n)]] accepts half vectors (MSL 3.2 section 5.2.3.4).
+            half_color = metal_semantic.startswith("color(") and actual_type == "half4"
+            if actual_type != expected_type and not half_color:
                 struct_name = getattr(struct_node, "name", "<anonymous>")
                 member_name = getattr(member, "name", "<anonymous>")
                 raise ValueError(
@@ -7783,6 +7817,11 @@ class MetalCodeGen:
                     if address_space_mismatch is not None
                     else ""
                 )
+                if value_array_type is None:
+                    init_expr = (
+                        generate_metal_array_initializer(self, initial_value, var_type)
+                        or init_expr
+                    )
                 return f"{diagnostic_prefix}{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"
@@ -10211,6 +10250,9 @@ class MetalCodeGen:
             converted = self.metal_registered_structure_assignment(target, value)
             if converted is not None:
                 rhs = converted
+            array_copy = generate_metal_array_copy(self, target, value)
+            if array_copy is not None:
+                return array_copy
 
         reference_declaration = self.generate_local_reference_assignment_declaration(
             target, value, rhs
@@ -11242,11 +11284,8 @@ class MetalCodeGen:
             if mesh_output_call is not None:
                 return mesh_output_call
 
-            min_lod_clamp_call = self.generate_texture_min_lod_clamp_call(
-                func_name, expr.args
-            )
-            if min_lod_clamp_call is not None:
-                return min_lod_clamp_call
+            if is_texture_lod_clamp_operation(func_name):
+                return metal_texture_lod_clamp_call(self, func_name, expr.args, expr)
 
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
@@ -13749,6 +13788,15 @@ class MetalCodeGen:
             return
 
         members = self.metal_intersection_result_members(raw_return_type)
+        if members is None and mapped_return_type == "void":
+            # GL_EXT_ray_tracing and SPIR-V intersection shaders report hits
+            # through calls; a Metal intersection function returns its result.
+            self.refuse_lowering(
+                f"{primitive_type} intersection stage: a void entry that reports "
+                "hits with ReportHit has no lowering to a Metal intersection "
+                "function result yet"
+            )
+            return
         if members is None:
             if primitive_type == "triangle":
                 raise ValueError(
@@ -17894,6 +17942,10 @@ class MetalCodeGen:
     def metal_struct_member_effective_semantic(
         self, member, default_member_semantics, struct_name=None
     ):
+        if struct_name in self.metal_fragment_entry_output_struct_names:
+            color = metal_fragment_output_color_semantic(self, member)
+            if color is not None:
+                return color
         semantic = self.semantic_from_node(member)
         if (
             struct_name in self.metal_union_layouts
@@ -23373,6 +23425,10 @@ class MetalCodeGen:
         )
         if sampler_name in self.sampler_variable_names():
             return True
+        if sampler_name in self.program_scope_sampler_constants or (
+            is_sampler_constructor(args[1])
+        ):
+            return True
         arg_type = self.expression_result_type(args[1])
         return arg_type is not None and self.is_sampler_type(arg_type)
 
@@ -24331,19 +24387,19 @@ class MetalCodeGen:
 
     def array_texture_coordinate_parts(self, coord):
         coord_xy = self.vector_component(coord, "xy")
-        layer = f"uint({self.vector_component(coord, 'z')})"
+        layer = metal_sampled_array_layer(self.vector_component(coord, "z"))
         return coord_xy, layer
 
     def cube_array_texture_coordinate_parts(self, coord):
         coord_xyz = self.vector_component(coord, "xyz")
-        layer = f"uint({self.vector_component(coord, 'w')})"
+        layer = metal_sampled_array_layer(self.vector_component(coord, "w"))
         return coord_xyz, layer
 
     def texture_coordinate_parts(self, texture_type, coord):
         texture_type = self.resource_base_type(texture_type)
         if texture_type.startswith("texture1d_array<"):
             coord_x = self.vector_component(coord, "x")
-            layer = f"uint({self.vector_component(coord, 'y')})"
+            layer = metal_sampled_array_layer(self.vector_component(coord, "y"))
             return coord_x, layer
         if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
             return self.cube_array_texture_coordinate_parts(coord)
@@ -24404,6 +24460,9 @@ class MetalCodeGen:
         )
         is_depth2d = texture_type.startswith("depth2d<")
         is_depth2d_array = texture_type.startswith("depth2d_array<")
+        # MSL depth textures gather (one depth per texel) and sample with offsets like their colour
+        # counterparts (MSL specification 6.12.6-6.12.9).
+        is_depth = is_depth2d or is_depth2d_array
         return {
             "texture_type": texture_type,
             "gather": (
@@ -24411,9 +24470,13 @@ class MetalCodeGen:
                 or is_texture2d_array
                 or is_texturecube
                 or is_texturecube_array
+                or is_depth
+                or texture_type.startswith(("depthcube<", "depthcube_array<"))
             ),
-            "gather_offset": is_texture2d or is_texture2d_array,
-            "sample_offset": is_texture2d or is_texture2d_array or is_texture3d,
+            "gather_offset": is_texture2d or is_texture2d_array or is_depth,
+            "sample_offset": (
+                is_texture2d or is_texture2d_array or is_texture3d or is_depth
+            ),
             "projected_offset": is_texture2d or is_texture2d_array or is_texture3d,
             "compare_offset": is_depth2d or is_depth2d_array,
             "gather_compare_offset": is_depth2d or is_depth2d_array,
@@ -24577,7 +24640,8 @@ class MetalCodeGen:
             f"{self.vector_component(coord, divisor)}"
         )
         if texture_type == "texture2d_array<float>":
-            return f"{projected_coord}, uint({self.vector_component(coord, 'z')})"
+            layer = metal_sampled_array_layer(self.vector_component(coord, "z"))
+            return f"{projected_coord}, {layer}"
         return projected_coord
 
     def projected_texture_offset_supported(self, texture_type):
@@ -25011,14 +25075,65 @@ class MetalCodeGen:
             return False
         return self.is_depth_texture_resource(
             self.texture_argument_resource_type(args[0])
+        ) and not self.is_plain_depth_read(func_name, args)
+
+    # ``depthcube_array`` is absent: CrossGL's ``texture(t, P, ref)`` on it passes the reference after a full
+    # coordinate (GLSL's samplerCubeArrayShadow overload), so the coordinate size cannot tell a plain read.
+    DEPTH_SAMPLE_COORDINATE_SIZES = {
+        "depth2d<": 2,
+        "depth2d_array<": 3,
+        "depthcube<": 3,
+    }
+    PLAIN_DEPTH_READ_OPERATIONS = frozenset(
+        {
+            "texture",
+            "textureLod",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGrad",
+            "textureGradOffset",
+            "texelFetch",
+            "texelFetchOffset",
+        }
+    )
+
+    def is_plain_depth_read(self, func_name, args):
+        """Whether a sample or fetch reads a depth texture's value rather than comparing against it.
+
+        A coordinate with exactly the texture's sampling dimensions carries no packed reference (GLSL's
+        ``texture(sampler2DShadow, vec3)`` packs one in ``.z``), and fetches never compare. MSL returns the depth
+        as a scalar where HLSL and GLSL return ``(d, 0, 0, 1)``.
+        """
+        if func_name not in self.PLAIN_DEPTH_READ_OPERATIONS or len(args) < 2:
+            return False
+        texture_type = self.resource_base_type(
+            self.texture_argument_resource_type(args[0])
         )
+        if not self.is_depth_texture_resource(texture_type):
+            return False
+        if func_name.startswith("texelFetch"):
+            return True
+        size = next(
+            (
+                count
+                for prefix, count in self.DEPTH_SAMPLE_COORDINATE_SIZES.items()
+                if texture_type.startswith(prefix)
+            ),
+            None,
+        )
+        coord_index = 2 if self.texture_call_uses_explicit_sampler(args) else 1
+        if size is None or len(args) <= coord_index:
+            return False
+        if func_name.startswith("textureGrad"):
+            return True
+        return self.expression_component_count(args[coord_index]) == size
 
     def packed_shadow_compare_coord_args(self, texture_type, coord):
         texture_type = self.resource_base_type(texture_type)
         if texture_type.startswith("depth2d_array<"):
             return [
                 self.vector_component(coord, "xy"),
-                f"uint({self.vector_component(coord, 'z')})",
+                metal_sampled_array_layer(self.vector_component(coord, "z")),
             ], self.vector_component(coord, "w")
         if texture_type.startswith("depth2d<"):
             return [self.vector_component(coord, "xy")], self.vector_component(
@@ -25027,7 +25142,7 @@ class MetalCodeGen:
         if texture_type.startswith("depthcube_array<"):
             return [
                 self.vector_component(coord, "xyz"),
-                f"uint({self.vector_component(coord, 'w')})",
+                metal_sampled_array_layer(self.vector_component(coord, "w")),
             ], None
         if texture_type.startswith("depthcube<"):
             return [self.vector_component(coord, "xyz")], self.vector_component(
@@ -25128,7 +25243,10 @@ class MetalCodeGen:
         args = [sampler_arg] + coord_args + [compare] + sample_options + trailing_args
         return f"{texture_name}.sample_compare({', '.join(args)})"
 
-    def texture_compare_projected_coord_args(self, texture_type, coord_arg, coord):
+    def texture_compare_projected_coord_args(
+        self, texture_type, coord_arg, coord, compare
+    ):
+        """The ``sample_compare`` coordinate arguments then the reference, divided by ``q``; else ``None``."""
         texture_type = self.resource_base_type(texture_type)
         coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
 
@@ -25139,28 +25257,24 @@ class MetalCodeGen:
                 divisor = self.vector_component(coord, "w")
             else:
                 return None
-            return [f"{self.vector_component(coord, 'xy')} / {divisor}"]
-
-        if texture_type == "depthcube<float>":
+            coord_args = [f"{self.vector_component(coord, 'xy')} / {divisor}"]
+        elif texture_type == "depthcube<float>":
             if coord_type not in {"vec4", "float4"}:
                 return None
-            return [
-                f"{self.vector_component(coord, 'xyz')} / "
-                f"{self.vector_component(coord, 'w')}"
-            ]
-
-        if texture_type != "depth2d_array<float>" or coord_type not in {
+            divisor = self.vector_component(coord, "w")
+            coord_args = [f"{self.vector_component(coord, 'xyz')} / {divisor}"]
+        elif texture_type == "depth2d_array<float>" and coord_type in {
             "vec4",
             "float4",
         }:
+            divisor = self.vector_component(coord, "w")
+            coord_args = [
+                f"{self.vector_component(coord, 'xy')} / {divisor}",
+                metal_sampled_array_layer(self.vector_component(coord, "z")),
+            ]
+        else:
             return None
-
-        projected_coord = (
-            f"{self.vector_component(coord, 'xy')} / "
-            f"{self.vector_component(coord, 'w')}"
-        )
-        layer = f"uint({self.vector_component(coord, 'z')})"
-        return [projected_coord, layer]
+        return coord_args + [projected_texture_compare_reference(compare, divisor)]
 
     def generate_texture_compare_call(
         self,
@@ -25187,13 +25301,13 @@ class MetalCodeGen:
             coord_index = 2 if self.is_explicit_sampler_argument(args or []) else 1
             coord_arg = (args or [None, None])[coord_index]
             coord_args = self.texture_compare_projected_coord_args(
-                texture_type, coord_arg, coord
+                texture_type, coord_arg, coord, compare
             )
             if coord_args is None:
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_projected_coordinate_error("Metal")
                 )
-            projected_args = [sampler_arg] + coord_args + [compare]
+            projected_args = [sampler_arg] + coord_args
 
             if is_texture_compare_basic_operation(func_name):
                 count_error = texture_compare_extra_argument_count_error(
@@ -26249,6 +26363,13 @@ class MetalCodeGen:
         return None
 
     def generate_texture_call(self, func_name, args):
+        expression = self.generate_texture_call_value(func_name, args)
+        if expression is not None and self.is_plain_depth_read(func_name, args):
+            # An MSL depth read is a scalar; HLSL and GLSL read a depth texel as (d, 0, 0, 1).
+            return f"float4({expression}, 0.0, 0.0, 1.0)"
+        return expression
+
+    def generate_texture_call_value(self, func_name, args):
         if not func_name:
             return None
 
@@ -26299,13 +26420,17 @@ class MetalCodeGen:
         if storage_image_operation is not None:
             return storage_image_operation
 
-        packed_shadow_call = self.generate_packed_shadow_texture_sample_call(
-            func_name,
-            texture_name,
-            sampler_arg,
-            coord,
-            extra_args,
-            texture_type,
+        packed_shadow_call = (
+            self.generate_packed_shadow_texture_sample_call(
+                func_name,
+                texture_name,
+                sampler_arg,
+                coord,
+                extra_args,
+                texture_type,
+            )
+            if not self.is_plain_depth_read(func_name, args)
+            else None
         )
         if packed_shadow_call is not None:
             return packed_shadow_call
@@ -26444,7 +26569,7 @@ class MetalCodeGen:
                     )
                 offset = self.generate_expression(args[3])
                 if is_array_texture:
-                    texel_coord, layer = self.texture_coordinate_parts(
+                    texel_coord, layer, _ = self.texture_read_coordinate_components(
                         texture_type, coord
                     )
                     return (
@@ -26472,34 +26597,6 @@ class MetalCodeGen:
             return f"{texture_name}.read({offset_coord}, {lod})"
 
         return None
-
-    def generate_texture_min_lod_clamp_call(self, func_name, args):
-        if func_name not in {"textureMinLodClamp", "textureMinLodClampOffset"}:
-            return None
-
-        parts = self.texture_call_parts(args)
-        if parts is None:
-            return None
-
-        texture_name, sampler_arg, coord, extra_args = parts
-        expected_extra_args = 2 if func_name == "textureMinLodClampOffset" else 1
-        if len(extra_args) != expected_extra_args:
-            return None
-
-        texture_type = self.texture_argument_resource_type(args[0])
-        sample_args = [sampler_arg]
-        if self.is_array_texture_resource(texture_type):
-            coord_xy, layer = self.texture_coordinate_parts(texture_type, coord)
-            sample_args.extend([coord_xy, layer])
-        else:
-            sample_args.append(coord)
-
-        min_lod = self.generate_expression(extra_args[0])
-        sample_args.append(f"min_lod_clamp({min_lod})")
-        if expected_extra_args == 2:
-            sample_args.append(self.generate_expression(extra_args[1]))
-
-        return f"{texture_name}.sample({', '.join(sample_args)})"
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""

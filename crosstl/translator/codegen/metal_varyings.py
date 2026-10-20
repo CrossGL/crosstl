@@ -43,6 +43,8 @@ METAL_VARYING_BUILTINS = frozenset(
         "amplification_count",
         "amplification_id",
         "barycentric_coord",
+        "base_instance",
+        "base_vertex",
         "clip_distance",
         "front_facing",
         "instance_id",

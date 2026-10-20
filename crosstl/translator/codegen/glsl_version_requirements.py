@@ -83,6 +83,16 @@ _BUILTIN_FUNCTION_GROUPS = (
         (400, 310, ("GL_ARB_texture_gather",) + _GPU_SHADER5, ()),
     ),
     (("textureGatherOffsets",), (400, 320, _GPU_SHADER5, _ES_GPU_SHADER5)),
+    # Minimum-LOD clamped sampling exists only through GL_ARB_sparse_texture_clamp, which GLSL ES does not have.
+    (
+        (
+            "textureClampARB",
+            "textureOffsetClampARB",
+            "textureGradClampARB",
+            "textureGradOffsetClampARB",
+        ),
+        (None, None, ("GL_ARB_sparse_texture_clamp",), ()),
+    ),
     (("textureQueryLod",), (400, None, ("GL_ARB_texture_query_lod",), ())),
     (("textureQueryLevels",), (430, None, ("GL_ARB_texture_query_levels",), ())),
     (

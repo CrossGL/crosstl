@@ -23775,13 +23775,22 @@ def test_metal_array_texture_types_split_coordinates_and_layers():
         "float4 sampleArray(texture2d_array<float> tex, sampler s, float3 uvLayer, int3 pixelLayer)"
         in generated_code
     )
-    assert "tex.sample(s, uvLayer.xy, uint(uvLayer.z))" in generated_code
-    assert "tex.sample(s, uvLayer.xy, uint(uvLayer.z), level(1.0))" in generated_code
     assert (
-        "tex.sample(s, uvLayer.xy, uint(uvLayer.z), gradient2d(float2(0.1), float2(0.2)))"
+        "tex.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))))"
         in generated_code
     )
-    assert "tex.gather(s, uvLayer.xy, uint(uvLayer.z))" in generated_code
+    assert (
+        "tex.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), level(1.0))"
+        in generated_code
+    )
+    assert (
+        "tex.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), gradient2d(float2(0.1), float2(0.2)))"
+        in generated_code
+    )
+    assert (
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))))"
+        in generated_code
+    )
     assert (
         "tex.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(0))" in generated_code
     )
@@ -23789,7 +23798,10 @@ def test_metal_array_texture_types_split_coordinates_and_layers():
         "float sampleShadowArray(depth2d_array<float> tex, sampler s, float3 uvLayer, float depth)"
         in generated_code
     )
-    assert "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth)" in generated_code
+    assert (
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
+        in generated_code
+    )
     assert (
         "float sampleCubeShadow(depthcube<float> tex, sampler s, float3 direction, float depth)"
         in generated_code
@@ -23836,7 +23848,7 @@ def test_metal_integer_texture_lod_resources_register_as_sampled_textures():
         in generated_code
     )
     assert (
-        "unsignedLabels[0] = labelAtlas.sample(nearestSampler, uvLayer.xy, uint(uvLayer.z), level(1.0));"
+        "unsignedLabels[0] = labelAtlas.sample(nearestSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), level(1.0));"
         in generated_code
     )
     assert "textureLod(" not in generated_code
@@ -23894,16 +23906,20 @@ def test_metal_cube_array_and_multisample_texture_types():
         "float4 sampleCubeArray(texturecube_array<float> tex, sampler s, float4 cubeLayer)"
         in generated_code
     )
-    assert "tex.sample(s, cubeLayer.xyz, uint(cubeLayer.w))" in generated_code
     assert (
-        "tex.sample(s, cubeLayer.xyz, uint(cubeLayer.w), level(2.0))" in generated_code
+        "tex.sample(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))))"
+        in generated_code
+    )
+    assert (
+        "tex.sample(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), level(2.0))"
+        in generated_code
     )
     assert (
         "float sampleCubeArrayShadow(depthcube_array<float> tex, sampler s, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
@@ -23969,20 +23985,23 @@ def test_metal_cube_array_texture_grad_gather_uses_cube_gradients():
         in generated_code
     )
     assert (
-        "tex.sample(s, cubeLayer.xyz, uint(cubeLayer.w), gradientcube(ddx, ddy))"
+        "tex.sample(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), gradientcube(ddx, ddy))"
         in generated_code
     )
-    assert "tex.gather(s, cubeLayer.xyz, uint(cubeLayer.w))" in generated_code
+    assert (
+        "tex.gather(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))))"
+        in generated_code
+    )
     assert (
         "float4 sampleCubeArrayElements(array<texturecube_array<float>, 4> cubeArrays, array<sampler, 4> cubeSamplers, float4 cubeLayer, float3 ddx, float3 ddy)"
         in generated_code
     )
     assert (
-        "cubeArrays[2].sample(cubeSamplers[2], cubeLayer.xyz, uint(cubeLayer.w), gradientcube(ddx, ddy))"
+        "cubeArrays[2].sample(cubeSamplers[2], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), gradientcube(ddx, ddy))"
         in generated_code
     )
     assert (
-        "cubeArrays[3].gather(cubeSamplers[3], cubeLayer.xyz, uint(cubeLayer.w))"
+        "cubeArrays[3].gather(cubeSamplers[3], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))))"
         in generated_code
     )
     assert (
@@ -24086,10 +24105,11 @@ def test_metal_texture_sampling_capability_descriptors():
         "gather_compare_offset": False,
     }
     assert codegen.texture_sampling_capabilities("depth2d<float>") == {
+        # MSL 6.12.6: depth2d has sample(s, coord, int2 offset) and gather(s, coord, int2 offset).
         "texture_type": "depth2d<float>",
-        "gather": False,
-        "gather_offset": False,
-        "sample_offset": False,
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
         "projected_offset": False,
         "compare_offset": True,
         "gather_compare_offset": True,
@@ -24144,6 +24164,7 @@ def test_metal_texture_dimension_descriptors():
     expect(
         "depth2d<float>",
         coordinate_dimension=2,
+        gather_offset_dimension=2,
         compare_offset_dimension=2,
         compare_lod_offset_dimension=2,
         compare_grad_offset_dimension=2,
@@ -24300,10 +24321,10 @@ def test_metal_texture_gather_offset_variants_use_metal_overloads():
         "tex.gather(s, uv, offset, component::w)" in generated_code
     )
     assert (
-        "float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset0, component::x).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset1, component::x).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset2, component::x).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offset3, component::x).w)"
+        "float4(layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset0, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset1, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset2, component::x).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset3, component::x).w)"
         in generated_code
     )
     assert (
@@ -24311,22 +24332,22 @@ def test_metal_texture_gather_offset_variants_use_metal_overloads():
         in generated_code
     )
     assert (
-        "return float4(layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[0], component::z).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[1], component::z).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[2], component::z).w, "
-        "layers.gather(s, uvLayer.xy, uint(uvLayer.z), offsets[3], component::z).w);"
+        "return float4(layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offsets[0], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offsets[1], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offsets[2], component::z).w, "
+        "layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offsets[3], component::z).w);"
         in generated_code
     )
     assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
     assert "cubeMap.gather(s, direction, component::z)" in generated_code
     assert (
-        "cubeArray.gather(s, cubeLayer.xyz, uint(cubeLayer.w), component::w)"
+        "cubeArray.gather(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), component::w)"
         in generated_code
     )
     assert "cubeMap.gather(s, direction, int2(0)" not in generated_code
     assert (
-        "cubeArray.gather(s, cubeLayer.xyz, uint(cubeLayer.w), int2(0)"
+        "cubeArray.gather(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), int2(0)"
         not in generated_code
     )
 
@@ -24564,19 +24585,19 @@ def test_metal_texture_gather_offsets_mix_literal_and_dynamic_offsets():
     }
     for component, component_option in components.items():
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(-1, 0), {component_option}).w"
+            f"layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(-1, 0), {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), dynamic0, {component_option}).w"
+            f"layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), dynamic0, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, -1), {component_option}).w"
+            f"layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(1, -1), {component_option}).w"
             in generated_code
         )
         assert (
-            f"layers.gather(s, uvLayer.xy, uint(uvLayer.z), dynamic1, {component_option}).w"
+            f"layers.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), dynamic1, {component_option}).w"
             in generated_code
         )
         if component < 3:
@@ -24654,19 +24675,19 @@ def test_metal_direct_stage_gather_offsets_use_input_members():
         "component::w",
     ]:
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset0, {component_option}).w"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset0, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset1, {component_option}).w"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset1, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset2, {component_option}).w"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset2, {component_option}).w"
             in generated_code
         )
         assert (
-            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset3, {component_option}).w"
+            f"layerMap.gather(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset3, {component_option}).w"
             in generated_code
         )
     assert "textureGather(" not in generated_code
@@ -24763,15 +24784,15 @@ def test_metal_texture_sample_offset_variants_use_sample_offsets():
         in generated_code
     )
     assert (
-        "float4 arrayPlain = layers.sample(s, uvLayer.xy, uint(uvLayer.z), offset);"
+        "float4 arrayPlain = layers.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset);"
         in generated_code
     )
     assert (
-        "float4 arrayLod = layers.sample(s, uvLayer.xy, uint(uvLayer.z), level(lod), offset);"
+        "float4 arrayLod = layers.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), level(lod), offset);"
         in generated_code
     )
     assert (
-        "float4 arrayGrad = layers.sample(s, uvLayer.xy, uint(uvLayer.z), gradient2d(ddx, ddy), offset);"
+        "float4 arrayGrad = layers.sample(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
@@ -25124,15 +25145,15 @@ def test_metal_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_memb
         in generated_code
     )
     assert (
-        "float4 arrayPlain = layerMap.sample(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.offset);"
+        "float4 arrayPlain = layerMap.sample(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.offset);"
         in generated_code
     )
     assert (
-        "float4 arrayLod = layerMap.sample(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), level(input.lod), input.offset);"
+        "float4 arrayLod = layerMap.sample(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), level(input.lod), input.offset);"
         in generated_code
     )
     assert (
-        "float4 arrayGrad = layerMap.sample(linearSampler, input.uvLayer.xy, uint(input.uvLayer.z), gradient2d(input.ddx, input.ddy), input.offset);"
+        "float4 arrayGrad = layerMap.sample(linearSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), gradient2d(input.ddx, input.ddy), input.offset);"
         in generated_code
     )
     assert (
@@ -25429,7 +25450,7 @@ def test_metal_direct_projected_array_texture_stage_input_members():
         crosstl.translator.parse(shader), "fragment"
     )
 
-    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z)"
+    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0)))"
     assert "texture2d_array<float> layerMap [[texture(0)]]" in generated_code
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
     assert (
@@ -25497,7 +25518,7 @@ def test_metal_implicit_projected_array_texture_stage_input_members_use_default_
     )
 
     default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
-    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z)"
+    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0)))"
     assert "texture2d_array<float> layerMap [[texture(0)]]" in generated_code
     assert "[[sampler(" not in generated_code
     assert (
@@ -25583,7 +25604,9 @@ def test_metal_projected_array_texture_resource_arrays_forward_samplers():
         crosstl.translator.parse(shader), "fragment"
     )
 
-    projected_args = "uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z)"
+    projected_args = (
+        "uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0)))"
+    )
     assert "array<texture2d_array<float>, 4> layerMaps [[texture(0)]]" in generated_code
     assert "array<sampler, 4> linearSamplers [[sampler(0)]]" in generated_code
     assert (
@@ -25675,7 +25698,9 @@ def test_metal_implicit_projected_array_texture_resource_arrays_use_default_samp
     )
 
     default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
-    projected_args = "uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z)"
+    projected_args = (
+        "uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0)))"
+    )
     assert "array<texture2d_array<float>, 4> layerMaps [[texture(0)]]" in generated_code
     assert "[[sampler(" not in generated_code
     assert (
@@ -25770,11 +25795,11 @@ def test_metal_implicit_projected_stage_input_members_use_default_sampler():
         in generated_code
     )
     assert (
-        f"float shadow = shadowMap.sample_compare({default_sampler}, input.uvq.xy / input.uvq.z, input.depth);"
+        f"float shadow = shadowMap.sample_compare({default_sampler}, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
         in generated_code
     )
     assert (
-        f"float shadowGrad = shadowArray.sample_compare({default_sampler}, input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z), input.depth, gradient2d(input.ddx, input.ddy));"
+        f"float shadowGrad = shadowArray.sample_compare({default_sampler}, input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0))), input.depth / input.uvLayerQ.w, gradient2d(input.ddx, input.ddy));"
         in generated_code
     )
     assert "unsupported Metal projected texture" not in generated_code
@@ -25880,31 +25905,31 @@ def test_metal_projected_shadow_compare_variants_use_sample_compare_projection()
         in generated_code
     )
     assert (
-        "float projected = tex.sample_compare(s, uvq.xy / uvq.z, depth);"
+        "float projected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float projectedW = tex.sample_compare(s, uvqw.xy / uvqw.w, depth);"
+        "float projectedW = tex.sample_compare(s, uvqw.xy / uvqw.w, depth / uvqw.w);"
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, offset);"
+        "float offsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, offset);"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, level(lod));"
+        "float lodProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, level(lod));"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, level(lod), offset);"
+        "float lodOffsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, level(lod), offset);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, gradient2d(ddx, ddy));"
+        "float gradProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth, gradient2d(ddx, ddy), offset);"
+        "float gradOffsetProjected = tex.sample_compare(s, uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
@@ -25912,27 +25937,27 @@ def test_metal_projected_shadow_compare_variants_use_sample_compare_projection()
         in generated_code
     )
     assert (
-        "float projected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth);"
+        "float projected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, offset);"
+        "float offsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
         in generated_code
     )
     assert (
-        "float lodProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, level(lod));"
+        "float lodProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, level(lod));"
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, level(lod), offset);"
+        "float lodOffsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, level(lod), offset);"
         in generated_code
     )
     assert (
-        "float gradProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy));"
+        "float gradProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy), offset);"
+        "float gradOffsetProjected = tex.sample_compare(s, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert "textureCompareProj(" not in generated_code
@@ -25974,15 +25999,15 @@ def test_metal_direct_projected_shadow_compare_stage_input_members():
     assert "depth2d_array<float> shadowArray [[texture(1)]]" in generated_code
     assert "sampler compareSampler [[sampler(0)]]" in generated_code
     assert (
-        "float planar = shadowMap.sample_compare(compareSampler, input.uvq.xy / input.uvq.z, input.depth);"
+        "float planar = shadowMap.sample_compare(compareSampler, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMap.sample_compare(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth, input.offset);"
+        "float planarOffset = shadowMap.sample_compare(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth / input.uvqw.w, input.offset);"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArray.sample_compare(compareSampler, input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z), input.depth, gradient2d(input.ddx, input.ddy));"
+        "float arrayGrad = shadowArray.sample_compare(compareSampler, input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0))), input.depth / input.uvLayerQ.w, gradient2d(input.ddx, input.ddy));"
         in generated_code
     )
     assert "unsupported Metal texture compare" not in generated_code
@@ -26078,31 +26103,31 @@ def test_metal_projected_shadow_compare_resource_arrays_forward_samplers():
         in generated_code
     )
     assert (
-        "float planar = shadowMaps[layer].sample_compare(shadowSamplers[layer], uvq.xy / uvq.z, depth);"
+        "float planar = shadowMaps[layer].sample_compare(shadowSamplers[layer], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].sample_compare(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        "float planarOffset = shadowMaps[1].sample_compare(shadowSamplers[1], uvq.xy / uvq.z, depth / uvq.z, offset);"
         in generated_code
     )
     assert (
-        "float planarLod = shadowMaps[2].sample_compare(shadowSamplers[2], uvq.xy / uvq.z, depth, level(lod));"
+        "float planarLod = shadowMaps[2].sample_compare(shadowSamplers[2], uvq.xy / uvq.z, depth / uvq.z, level(lod));"
         in generated_code
     )
     assert (
-        "float planarGradOffset = shadowMaps[layer].sample_compare(shadowSamplers[layer], uvq.xy / uvq.z, depth, gradient2d(ddx, ddy), offset);"
+        "float planarGradOffset = shadowMaps[layer].sample_compare(shadowSamplers[layer], uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
-        "float arrayProjected = shadowArrays[2].sample_compare(shadowSamplers[2], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth);"
+        "float arrayProjected = shadowArrays[2].sample_compare(shadowSamplers[2], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].sample_compare(shadowSamplers[layer], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, offset);"
+        "float arrayOffset = shadowArrays[layer].sample_compare(shadowSamplers[layer], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArrays[1].sample_compare(shadowSamplers[1], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy));"
+        "float arrayGrad = shadowArrays[1].sample_compare(shadowSamplers[1], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
@@ -26206,31 +26231,31 @@ def test_metal_implicit_projected_shadow_compare_resource_arrays_use_default_sam
         in generated_code
     )
     assert (
-        f"float planar = shadowMaps[layer].sample_compare({default_sampler}, uvq.xy / uvq.z, depth);"
+        f"float planar = shadowMaps[layer].sample_compare({default_sampler}, uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        f"float planarOffset = shadowMaps[1].sample_compare({default_sampler}, uvq.xy / uvq.z, depth, offset);"
+        f"float planarOffset = shadowMaps[1].sample_compare({default_sampler}, uvq.xy / uvq.z, depth / uvq.z, offset);"
         in generated_code
     )
     assert (
-        f"float planarLod = shadowMaps[2].sample_compare({default_sampler}, uvq.xy / uvq.z, depth, level(lod));"
+        f"float planarLod = shadowMaps[2].sample_compare({default_sampler}, uvq.xy / uvq.z, depth / uvq.z, level(lod));"
         in generated_code
     )
     assert (
-        f"float planarGradOffset = shadowMaps[layer].sample_compare({default_sampler}, uvq.xy / uvq.z, depth, gradient2d(ddx, ddy), offset);"
+        f"float planarGradOffset = shadowMaps[layer].sample_compare({default_sampler}, uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
-        f"float arrayProjected = shadowArrays[2].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth);"
+        f"float arrayProjected = shadowArrays[2].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        f"float arrayOffset = shadowArrays[layer].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, offset);"
+        f"float arrayOffset = shadowArrays[layer].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
         in generated_code
     )
     assert (
-        f"float arrayGrad = shadowArrays[1].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy));"
+        f"float arrayGrad = shadowArrays[1].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
@@ -26337,19 +26362,19 @@ def test_metal_unsized_projected_shadow_compare_arrays_infer_transitive_constant
         in generated_code
     )
     assert (
-        "float planarHigh = shadowMaps[LAYER].sample_compare(shadowSamplers[LAYER], uvq.xy / uvq.z, depth);"
+        "float planarHigh = shadowMaps[LAYER].sample_compare(shadowSamplers[LAYER], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        "float planarLow = shadowMaps[1].sample_compare(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        "float planarLow = shadowMaps[1].sample_compare(shadowSamplers[1], uvq.xy / uvq.z, depth / uvq.z, offset);"
         in generated_code
     )
     assert (
-        "float arrayHigh = shadowArrays[2 * 2].sample_compare(shadowSamplers[2 * 2], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, gradient2d(ddx, ddy));"
+        "float arrayHigh = shadowArrays[2 * 2].sample_compare(shadowSamplers[2 * 2], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        "float arrayLow = shadowArrays[3].sample_compare(shadowSamplers[3], uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z), depth, offset);"
+        "float arrayLow = shadowArrays[3].sample_compare(shadowSamplers[3], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
         in generated_code
     )
     assert (
@@ -26465,7 +26490,7 @@ def test_metal_projected_cube_shadow_compare_lowers_supported_forms():
         in generated_code
     )
     assert (
-        "float projected = tex.sample_compare(s, cubeProj.xyz / cubeProj.w, depth);"
+        "float projected = tex.sample_compare(s, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     for func_name in {
@@ -26770,15 +26795,15 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
         )
     default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     assert (
-        f"float fixedProjected = maps[2].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth);"
+        f"float fixedProjected = maps[2].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     assert (
-        f"float dynamicLodProjected = maps[layer].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth, level(lod));"
+        f"float dynamicLodProjected = maps[layer].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth / cubeProj.w, level(lod));"
         in generated_code
     )
     assert (
-        f"float globalShadow = shadowCubes[input.layer].sample_compare({default_sampler}, input.cubeProj.xyz / input.cubeProj.w, input.depth);"
+        f"float globalShadow = shadowCubes[input.layer].sample_compare({default_sampler}, input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w);"
         in generated_code
     )
     assert (
@@ -26885,13 +26910,16 @@ def test_metal_shadow_gather_compare_offsets_use_depth_overloads():
         "float4 gatherShadowArray(depth2d_array<float> tex, sampler s, float3 uvLayer, float depth, int2 offset)"
         in generated_code
     )
-    assert "tex.gather_compare(s, uvLayer.xy, uint(uvLayer.z), depth)" in generated_code
     assert (
-        "tex.gather_compare(s, uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "tex.gather_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "tex.gather_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
+        in generated_code
+    )
+    assert (
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in generated_code
     )
     assert (
@@ -26899,7 +26927,7 @@ def test_metal_shadow_gather_compare_offsets_use_depth_overloads():
         in generated_code
     )
     assert (
-        "return tex.gather_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        "return tex.gather_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert "textureGatherCompare(" not in generated_code
@@ -26969,7 +26997,7 @@ def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
         in generated_code
     )
     assert (
-        "return tex.gather_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        "return tex.gather_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
@@ -26985,7 +27013,7 @@ def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
         in generated_code
     )
     assert (
-        f"return tex.gather_compare({default_sampler}, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        f"return tex.gather_compare({default_sampler}, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
@@ -26993,7 +27021,7 @@ def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
         in generated_code
     )
     assert (
-        "cubeShadowArray.gather_compare(compareSampler, input.cubeLayer.xyz, uint(input.cubeLayer.w), input.depth)"
+        "cubeShadowArray.gather_compare(compareSampler, input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), input.depth)"
         in generated_code
     )
     assert (
@@ -27047,15 +27075,15 @@ def test_metal_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_arra
         in generated_code
     )
     assert (
-        "tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(uvLayer.z), depth)"
+        "tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
-        "tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in generated_code
     )
     assert (
-        "tex.sample_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "tex.sample_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in generated_code
     )
     assert (
@@ -27063,7 +27091,7 @@ def test_metal_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_arra
         in generated_code
     )
     assert (
-        "return tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        "return tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
@@ -27155,15 +27183,15 @@ def test_metal_direct_shadow_gather_compare_stage_input_members():
         in explicit_code
     )
     assert (
-        "float4 arrayGather = shadowArray.gather_compare(compareSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.depth);"
+        "float4 arrayGather = shadowArray.gather_compare(compareSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth);"
         in explicit_code
     )
     assert (
-        "float4 arrayOffset = shadowArray.gather_compare(compareSampler, input.uvLayer.xy, uint(input.uvLayer.z), input.depth, input.offset);"
+        "float4 arrayOffset = shadowArray.gather_compare(compareSampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth, input.offset);"
         in explicit_code
     )
     assert (
-        "float4 cubeArrayGather = cubeShadowArray.gather_compare(compareSampler, input.cubeLayer.xyz, uint(input.cubeLayer.w), input.depth);"
+        "float4 cubeArrayGather = cubeShadowArray.gather_compare(compareSampler, input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), input.depth);"
         in explicit_code
     )
     assert "unsupported Metal texture gather compare" not in explicit_code
@@ -27182,15 +27210,15 @@ def test_metal_direct_shadow_gather_compare_stage_input_members():
         in implicit_code
     )
     assert (
-        f"float4 arrayGather = shadowArray.gather_compare({default_sampler}, input.uvLayer.xy, uint(input.uvLayer.z), input.depth);"
+        f"float4 arrayGather = shadowArray.gather_compare({default_sampler}, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth);"
         in implicit_code
     )
     assert (
-        f"float4 arrayOffset = shadowArray.gather_compare({default_sampler}, input.uvLayer.xy, uint(input.uvLayer.z), input.depth, input.offset);"
+        f"float4 arrayOffset = shadowArray.gather_compare({default_sampler}, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth, input.offset);"
         in implicit_code
     )
     assert (
-        f"float4 cubeArrayGather = cubeShadowArray.gather_compare({default_sampler}, input.cubeLayer.xyz, uint(input.cubeLayer.w), input.depth);"
+        f"float4 cubeArrayGather = cubeShadowArray.gather_compare({default_sampler}, input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), input.depth);"
         in implicit_code
     )
     assert "unsupported Metal texture gather compare" not in implicit_code
@@ -27328,19 +27356,19 @@ def test_metal_shadow_gather_compare_resource_arrays_forward_samplers():
         in explicit_code
     )
     assert (
-        "arrays[1].gather_compare(samplers[1], uvLayer.xy, uint(uvLayer.z), depth)"
+        "arrays[1].gather_compare(samplers[1], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in explicit_code
     )
     assert (
-        "arrays[layer].gather_compare(samplers[layer], uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        "arrays[layer].gather_compare(samplers[layer], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in explicit_code
     )
     assert (
-        "cubes[3].gather_compare(samplers[3], cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "cubes[3].gather_compare(samplers[3], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in explicit_code
     )
     assert (
-        "cubes[layer].gather_compare(samplers[layer], cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "cubes[layer].gather_compare(samplers[layer], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in explicit_code
     )
     assert (
@@ -27363,19 +27391,19 @@ def test_metal_shadow_gather_compare_resource_arrays_forward_samplers():
         in implicit_code
     )
     assert (
-        f"arrays[1].gather_compare({default_sampler}, uvLayer.xy, uint(uvLayer.z), depth)"
+        f"arrays[1].gather_compare({default_sampler}, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in implicit_code
     )
     assert (
-        f"arrays[layer].gather_compare({default_sampler}, uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        f"arrays[layer].gather_compare({default_sampler}, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in implicit_code
     )
     assert (
-        f"cubes[3].gather_compare({default_sampler}, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        f"cubes[3].gather_compare({default_sampler}, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in implicit_code
     )
     assert (
-        f"cubes[layer].gather_compare({default_sampler}, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        f"cubes[layer].gather_compare({default_sampler}, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in implicit_code
     )
     assert (
@@ -27595,19 +27623,19 @@ def test_metal_shadow_compare_lod_grad_use_depth_overloads():
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, level(lod))"
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, level(lod))"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, level(lod), offset)"
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, level(lod), offset)"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, gradient2d(ddx, ddy))"
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, gradient2d(ddx, ddy))"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, uvLayer.xy, uint(uvLayer.z), depth, gradient2d(ddx, ddy), offset)"
+        "tex.sample_compare(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, gradient2d(ddx, ddy), offset)"
         in generated_code
     )
     assert (
@@ -27615,11 +27643,11 @@ def test_metal_shadow_compare_lod_grad_use_depth_overloads():
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, level(lod))"
+        "tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, level(lod))"
         in generated_code
     )
     assert (
-        "tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, gradientcube(ddx, ddy))"
+        "tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, gradientcube(ddx, ddy))"
         in generated_code
     )
     assert "textureCompareLod(" not in generated_code
@@ -27873,16 +27901,17 @@ def test_metal_glsl_es_shadow_sampler_lod_overloads_lower_to_compare_sampling():
     assert "depthcube<float> sc [[texture(2)]]" in generated_code
     s2da_compare = (
         f"c = s2da.sample_compare({default_sampler}, input.tc.xy, "
-        "uint(input.tc.z), input.tc.w"
+        "uint(rint(clamp(float(input.tc.z), 0.0, 2047.0))), input.tc.w"
     )
     s2da_lod_compare = (
         f"c = s2da.sample_compare({default_sampler}, input.tc.xyz.xy, "
-        "uint(input.tc.xyz.z), input.tc.w"
+        "uint(rint(clamp(float(input.tc.xyz.z), 0.0, 2047.0))), input.tc.w"
     )
     assert f"{s2da_compare}, bias(0.0));" in generated_code
     assert (
         f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
-        "uint(input.tc.w), 0.0, bias(0.0));" in generated_code
+        "uint(rint(clamp(float(input.tc.w), 0.0, 2047.0))), 0.0, bias(0.0));"
+        in generated_code
     )
     assert f"{s2da_compare}, bias(0.0), int2(0.0));" in generated_code
     assert f"{s2da_lod_compare}, level(0.0));" in generated_code
@@ -27892,7 +27921,8 @@ def test_metal_glsl_es_shadow_sampler_lod_overloads_lower_to_compare_sampling():
     )
     assert (
         f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
-        "uint(input.tc.w), 0.0, level(0.0));" in generated_code
+        "uint(rint(clamp(float(input.tc.w), 0.0, 2047.0))), 0.0, level(0.0));"
+        in generated_code
     )
     assert f"{s2da_lod_compare}, level(0.0), int2(0.0));" in generated_code
     assert "texture(s2da" not in generated_code
@@ -27946,7 +27976,7 @@ def test_metal_array_shadow_texture_resource_arrays_keep_compare_coordinates():
         in generated_code
     )
     assert (
-        "shadowArrays[2].sample_compare(shadowSamplers[2], uvLayer.xy, uint(uvLayer.z), depth)"
+        "shadowArrays[2].sample_compare(shadowSamplers[2], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
@@ -27954,7 +27984,7 @@ def test_metal_array_shadow_texture_resource_arrays_keep_compare_coordinates():
         in generated_code
     )
     assert (
-        "cubeShadowArrays[3].sample_compare(shadowSamplers[3], cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        "cubeShadowArrays[3].sample_compare(shadowSamplers[3], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
@@ -28049,11 +28079,11 @@ def test_metal_array_shadow_compare_lod_grad_resource_arrays():
         in generated_code
     )
     assert (
-        "float arrayLod = shadowArrays[2].sample_compare(shadowSamplers[2], uvLayer.xy, uint(uvLayer.z), depth, level(lod));"
+        "float arrayLod = shadowArrays[2].sample_compare(shadowSamplers[2], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, level(lod));"
         in generated_code
     )
     assert (
-        "float arrayGrad = shadowArrays[layer].sample_compare(shadowSamplers[layer], uvLayer.xy, uint(uvLayer.z), depth, gradient2d(ddx, ddy), offset);"
+        "float arrayGrad = shadowArrays[layer].sample_compare(shadowSamplers[layer], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
@@ -28139,11 +28169,11 @@ def test_metal_cube_shadow_compare_lod_grad_resource_arrays():
         in generated_code
     )
     assert (
-        "float cubeArrayLod = cubeArrays[2].sample_compare(shadowSamplers[2], cubeLayer.xyz, uint(cubeLayer.w), depth, level(lod));"
+        "float cubeArrayLod = cubeArrays[2].sample_compare(shadowSamplers[2], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, level(lod));"
         in generated_code
     )
     assert (
-        "float cubeArrayGrad = cubeArrays[layer].sample_compare(shadowSamplers[layer], cubeLayer.xyz, uint(cubeLayer.w), depth, gradientcube(ddx, ddy));"
+        "float cubeArrayGrad = cubeArrays[layer].sample_compare(shadowSamplers[layer], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, gradientcube(ddx, ddy));"
         in generated_code
     )
     assert (
@@ -28645,7 +28675,7 @@ def test_metal_nested_resource_container_array_fields_forward_to_helpers():
         in generated_code
     )
     assert (
-        "float4 layered = pack.layers[LAYER].sample(samplers[LAYER], uvLayer.xy, uint(uvLayer.z));"
+        "float4 layered = pack.layers[LAYER].sample(samplers[LAYER], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))));"
         in generated_code
     )
     assert "return samplePack(bank.pack, bank.samplers, uv, uvLayer);" in generated_code
@@ -30163,15 +30193,15 @@ def test_metal_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes():
         in generated_code
     )
     assert (
-        "float cmp = tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        "float cmp = tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
-        "float cmpLod = tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, level(lod));"
+        "float cmpLod = tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, level(lod));"
         in generated_code
     )
     assert (
-        "float grad = tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, gradientcube(ddx, ddy));"
+        "float grad = tex.sample_compare(s, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth, gradientcube(ddx, ddy));"
         in generated_code
     )
     assert (
@@ -32168,7 +32198,10 @@ def test_metal_sampler_1d_array_sampling_and_queries():
         in generated_code
     )
     assert "int(tex.get_num_mip_levels())" in generated_code
-    assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y))" in generated_code
+    assert (
+        "tex.sample(samp, uvLayer.x, uint(rint(clamp(float(uvLayer.y), 0.0, 2047.0))))"
+        in generated_code
+    )
     assert (
         "texture sampling: textureLod on texture1d_array<float> supports "
         "only implicit sampling" in refusal
@@ -32183,7 +32216,8 @@ def test_metal_sampler_1d_array_sampling_and_queries():
     assert "tex.read((pixelLayer.xy" not in generated_code
     assert "calculate_unclamped_lod" not in generated_code
     assert (
-        "tex.sample(samp, uvLayer.x, uint(uvLayer.y), level(lod))" not in generated_code
+        "tex.sample(samp, uvLayer.x, uint(rint(clamp(float(uvLayer.y), 0.0, 2047.0))), level(lod))"
+        not in generated_code
     )
 
 
@@ -33525,11 +33559,11 @@ def test_metal_texture_gather_2d_array_splits_coord_and_layer():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert (
-        "colorMap.gather(linearSampler, uvLayer.xy, uint(uvLayer.z), int2(0), component::x)"
+        "colorMap.gather(linearSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(0), component::x)"
         in generated_code
     )
     assert (
-        "colorMap.gather(linearSampler, uvLayer.xy, uint(uvLayer.z), int2(0), component::w)"
+        "colorMap.gather(linearSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(0), component::w)"
         in generated_code
     )
     assert "textureGather(" not in generated_code
@@ -33555,15 +33589,15 @@ def test_metal_texture_gather_cube_array_with_component_selection():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert (
-        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(cubeLayer.w), component::x)"
+        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), component::x)"
         in generated_code
     )
     assert (
-        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(cubeLayer.w), component::y)"
+        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), component::y)"
         in generated_code
     )
     assert (
-        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(cubeLayer.w), component::z)"
+        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), component::z)"
         in generated_code
     )
     assert "textureGather(" not in generated_code
@@ -33587,7 +33621,7 @@ def test_metal_texture_gather_compare_with_2d_array_depth():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert (
-        "shadowArray.gather_compare(compareSampler, uvLayer.xy, uint(uvLayer.z), depth)"
+        "shadowArray.gather_compare(compareSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert "textureGatherCompare(" not in generated_code

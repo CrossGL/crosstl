@@ -1,6 +1,7 @@
 """Reverse code generator that emits CrossGL from Vulkan SPIR-V AST nodes."""
 
 from ..common_ast import InitializerListNode
+from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
 from .VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -38,6 +39,35 @@ class VulkanToCrossGLConverter:
         "hitattributeext": "hitAttributeEXT",
         "raypayloadext": "rayPayloadEXT",
         "raypayloadinext": "rayPayloadInEXT",
+    }
+    # SPV_KHR_ray_tracing and SPV_NV_ray_tracing execution models, as CrossGL stages.
+    SPIRV_RAY_EXECUTION_MODEL_STAGES = {
+        "RayGenerationKHR": "ray_generation",
+        "IntersectionKHR": "ray_intersection",
+        "AnyHitKHR": "ray_any_hit",
+        "ClosestHitKHR": "ray_closest_hit",
+        "MissKHR": "ray_miss",
+        "CallableKHR": "ray_callable",
+        "RayGenerationNV": "ray_generation",
+        "IntersectionNV": "ray_intersection",
+        "AnyHitNV": "ray_any_hit",
+        "ClosestHitNV": "ray_closest_hit",
+        "MissNV": "ray_miss",
+        "CallableNV": "ray_callable",
+    }
+    # SPV_EXT_mesh_shader and SPV_NV_mesh_shader execution models, as CrossGL stages.
+    SPIRV_MESH_EXECUTION_MODEL_STAGES = {
+        "MeshEXT": "mesh",
+        "TaskEXT": "task",
+        "MeshNV": "mesh",
+        "TaskNV": "task",
+    }
+    SPIRV_MESH_OUTPUT_PRIMITIVES = {
+        "OutputPoints": "points",
+        "OutputLinesEXT": "lines",
+        "OutputLinesNV": "lines",
+        "OutputTrianglesEXT": "triangles",
+        "OutputTrianglesNV": "triangles",
     }
     MESH_STORAGE_QUALIFIER_ATTRIBUTES = {
         "taskpayloadsharedext": "taskPayloadSharedEXT",
@@ -312,6 +342,24 @@ class VulkanToCrossGLConverter:
                             layout
                         ) in self.spirv_tessellation_evaluation_execution_layouts(node):
                             code += self.generate_stage_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
+                        code += self.generate_function(node)
+                        code += "    }\n\n"
+                    elif shader_stage in {"mesh", "task"}:
+                        code += f"    {shader_stage} {{\n"
+                        for layout in self.spirv_compute_execution_layouts(
+                            node
+                        ) + self.spirv_mesh_output_layouts(node, shader_stage):
+                            code += self.generate_stage_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
+                        code += self.generate_function(node)
+                        code += "    }\n\n"
+                    elif shader_stage in self.SPIRV_RAY_EXECUTION_MODEL_STAGES.values():
+                        code += f"    {shader_stage} {{\n"
                         code += self.generate_stage_interface_layouts(
                             node, stage_interface_layouts
                         )
@@ -614,6 +662,8 @@ class VulkanToCrossGLConverter:
             "TessellationControl": "tessellation_control",
             "TessellationEvaluation": "tessellation_evaluation",
             "GLCompute": "compute",
+            **self.SPIRV_RAY_EXECUTION_MODEL_STAGES,
+            **self.SPIRV_MESH_EXECUTION_MODEL_STAGES,
         }.get(execution_model)
 
     def infer_main_shader_stage(self, node, compute_layouts):
@@ -648,6 +698,26 @@ class VulkanToCrossGLConverter:
                 )
             )
         return layouts
+
+    def spirv_mesh_output_layouts(self, node, shader_stage):
+        """``layout(triangles, max_vertices = V, max_primitives = P) out;`` of a mesh entry."""
+        if shader_stage != "mesh":
+            return []
+        qualifiers = []
+        limits = {"OutputVertices": "max_vertices"}
+        limits.update(
+            OutputPrimitivesEXT="max_primitives", OutputPrimitivesNV="max_primitives"
+        )
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            mode_name = mode.get("mode")
+            operands = mode.get("operands", [])
+            if mode_name in self.SPIRV_MESH_OUTPUT_PRIMITIVES:
+                qualifiers.insert(
+                    0, (self.SPIRV_MESH_OUTPUT_PRIMITIVES[mode_name], None)
+                )
+            elif mode_name in limits and operands:
+                qualifiers.append((limits[mode_name], operands[0]))
+        return [LayoutNode(qualifiers, layout_type="out")] if qualifiers else []
 
     def spirv_execution_mode_id_operand(self, node, operand):
         names = getattr(node, "spirv_names", {}) or {}
@@ -959,6 +1029,8 @@ class VulkanToCrossGLConverter:
                     f"{attributes};\n\n"
                 )
                 self.reserve_global_declaration_name(variable_name)
+        elif layout_type == "shader_record":
+            code += self.generate_shader_record_layout(node)
         elif layout_type == "in" or layout_type == "out":
             if node.data_type and node.variable_name:
                 attributes = self.interface_layout_attribute_suffix(
@@ -982,6 +1054,39 @@ class VulkanToCrossGLConverter:
             )
             self.reserve_global_declaration_name(node.variable_name)
 
+        return code
+
+    def generate_shader_record_layout(self, node):
+        """``SBT sbt @glsl_buffer_block(shaderRecordEXT, std430);``: see :mod:`crosstl.translator.semantics.shader_records`.
+
+        SPIR-V gives the record explicit offsets; CrossGL declares it ``std430``, the layout GLSL ray tracing
+        shaders use for it.
+        """
+        block_name = node.block_name or "ShaderRecord"
+        variable_name = node.variable_name or block_name[0].lower() + block_name[1:]
+        code = ""
+        if block_name not in self.emitted_storage_buffer_type_names:
+            code += f"    struct {block_name} {{\n"
+            for field_type, field_name in node.struct_fields:
+                code += f"        {self.map_type(field_type)} {field_name};\n"
+            code += "    };\n\n"
+            self.emitted_storage_buffer_type_names.add(block_name)
+        qualifiers = [
+            f"@{qualifier}"
+            for qualifier in getattr(node, "declaration_qualifiers", None) or []
+            if qualifier in {
+                "readonly",
+                "writeonly",
+                "coherent",
+                "volatile",
+                "restrict",
+            }
+        ]
+        attributes = " ".join(
+            ["@glsl_buffer_block(shaderRecordEXT, std430)", *qualifiers]
+        )
+        code += f"    {block_name} {variable_name} {attributes};\n\n"
+        self.reserve_global_declaration_name(variable_name)
         return code
 
     def storage_buffer_block_type_name(self, node):
@@ -1320,6 +1425,7 @@ class VulkanToCrossGLConverter:
             "ViewIndex": "gl_ViewIndex",
             "WorkgroupId": "gl_WorkGroupID",
             "WorkgroupSize": "gl_WorkGroupSize",
+            **BUILTIN_VARIABLE_NAMES,
         }
         storage_mapped_name = storage_mapped_builtins.get(
             (str(builtin_name), storage_class)

@@ -14,7 +14,7 @@ from pathlib import Path
 from ..process import run
 from ..toolchains import tool
 from ..validators import dxil_is_signed
-from .manifest import GLSLANG_STAGE
+from .manifest import GLSLANG_STAGE, RAY_TRACING
 
 TIMEOUT = 120
 COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
@@ -60,7 +60,7 @@ GLSL_GUARDS = {
 ENTRY_PATTERNS = {
     "metal": re.compile(
         r"\b(?:kernel|vertex|fragment)\s+(?:(?:const|static|inline)\s+)*[\w:]+(?:\s*<[^;{}]*?>)?[\s*&]+\w+\s*\("
-        r"|\[\[\s*(?:kernel|vertex|fragment|mesh|object|visible)\s*\]\]|\[\[host_name\("
+        r"|\[\[\s*(?:kernel|vertex|fragment|mesh|object|visible)\s*(?:\]\]|,)|\[\[host_name\("
     ),
     "glsl": re.compile(r"\bvoid\s+main\s*\("),
     "essl": re.compile(r"\bvoid\s+main\s*\("),
@@ -187,8 +187,35 @@ def check_hlsl(path, scratch, stages):
     return _verdict(results, entries=[name for name, _, _ in jobs])
 
 
+def glsl_environment(stages):
+    """glslang options for the API a GLSL artifact's stages exist in.
+
+    Ray tracing stages exist only in Vulkan: GL_EXT_ray_tracing is defined for SPIR-V generation, and glslang
+    rejects the extension under OpenGL rules. They are checked with Vulkan 1.2 rules, the first Vulkan whose SPIR-V
+    (1.5) includes SPV_KHR_ray_tracing's 1.4 requirement. Every other stage is checked with the OpenGL or OpenGL ES
+    rules the artifact's ``#version`` selects.
+    """
+    if stages and set(stages) <= RAY_TRACING:
+        return ["--target-env", "vulkan1.2"]
+    return []
+
+
+def _glsl_command(path, stage, scratch):
+    environment = glsl_environment([stage])
+    # Vulkan rules make glslang write SPIR-V, by default to ``<stage>.spv`` in the working directory.
+    output = ["-o", str(Path(scratch) / f"{stage}.spv")] if environment else []
+    return [
+        *tool("glslangValidator").command,
+        *environment,
+        *output,
+        "-S",
+        GLSLANG_STAGE[stage],
+        path,
+    ]
+
+
 def check_glsl(path, stages):
-    """glslang with the OpenGL or OpenGL ES rules the artifact's ``#version`` selects."""
+    """glslang with the rules of the API the stages exist in (:func:`glsl_environment`)."""
     missing = _missing("glslangValidator")
     if missing:
         return missing
@@ -200,14 +227,12 @@ def check_glsl(path, stages):
     ]
     selected = guarded or list(stages)
     results = []
-    for stage in selected:
-        result = run(
-            [*tool("glslangValidator").command, "-S", GLSLANG_STAGE[stage], path],
-            timeout=TIMEOUT,
-        )
-        results.append(result)
-        if result.status != "accepted":
-            break
+    with tempfile.TemporaryDirectory(prefix="crosstl-glslang-") as scratch:
+        for stage in selected:
+            result = run(_glsl_command(path, stage, scratch), timeout=TIMEOUT)
+            results.append(result)
+            if result.status != "accepted":
+                break
     return _verdict(results, entries=selected)
 
 
@@ -245,6 +270,21 @@ def check_spirv(path, scratch):
     return _verdict(results, environment=environment)
 
 
+# GLSL ES requires #version before anything else, comments included (GLSL ES 3.00 section 3.4).
+ESSL_VERSION = re.compile(r"\A#[ \t]*version[ \t]+300[ \t]+es\b")
+
+
+def check_essl(path, stages):
+    """WebGL 2 compiles GLSL ES 3.00 only; glslang would judge a desktop ``#version`` by desktop rules instead."""
+    if not ESSL_VERSION.match(Path(path).read_text(errors="replace")):
+        return {
+            "verdict": "rejected",
+            "commands": [],
+            "log": "the WebGL 2 artifact does not begin with #version 300 es",
+        }
+    return check_glsl(path, stages)
+
+
 def check(path, target, stages):
     """Validate one artifact; returns verdict (accepted, rejected, timeout, unavailable, harness-error) and log."""
     with tempfile.TemporaryDirectory() as scratch:
@@ -252,7 +292,9 @@ def check(path, target, stages):
             return check_metal(path, scratch)
         if target == "hlsl":
             return check_hlsl(path, scratch, stages)
-        if target in ("glsl", "essl"):
+        if target == "essl":
+            return check_essl(path, stages)
+        if target == "glsl":
             return check_glsl(path, stages)
         if target == "spirv":
             return check_spirv(path, scratch)

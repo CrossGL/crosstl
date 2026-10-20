@@ -13,6 +13,7 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.glsl_refusals import OpenGLLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -3892,7 +3893,18 @@ def test_codegen_mixed_ssbo_unsupported_resource_indices_are_typed_diagnostics()
         match=r"GLSL buffer block declaration: UnsupportedResourceIndexBlock\b.*unsupported member flag",
     ):
         MetalCodeGen().generate(parse_crossgl(crossgl))
-    glsl = GLSLCodeGen().generate(shader_ast)
+    # samplers[readULayer(resourceBlock)] need not be the element paired with textures[resourceBlock.uLayer], and
+    # OpenGL binds one sampler state to each texture unit.
+    with pytest.raises(
+        OpenGLLoweringRefused,
+        match=r"texture 'textures' is sampled through a sampler selected at run time",
+    ):
+        GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    paired = crossgl.replace(
+        "samplers[readULayer(resourceBlock)]", "samplers[resourceBlock.uLayer]"
+    )
+    glsl = GLSLCodeGen().generate(parse_crossgl(paired))
     assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
     assert "layout(rgba32f, binding = 0) uniform image2D outputImage;" in glsl
     assert "layout(std430, binding = 101) buffer UnsupportedResourceIndexBlock" in glsl
@@ -14816,7 +14828,7 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
     )
     assert (
         "float4 arrayCall = shadowCubeArray.gather_compare(compareSampler, "
-        "(readCubeLayer(cubeBlock)).xyz, uint((readCubeLayer(cubeBlock)).w), "
+        "(readCubeLayer(cubeBlock)).xyz, uint(rint(clamp(float((readCubeLayer(cubeBlock)).w), 0.0, 2047.0))), "
         "readDepth(cubeBlock));" in metal
     )
     assert (

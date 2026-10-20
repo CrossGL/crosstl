@@ -226,6 +226,13 @@ def test_fallback_markers_and_entry_points():
     assert checks.count_entries("kernel void add(device float* a) {}", "metal") == 1
     assert (
         checks.count_entries(
+            "[[object, max_total_threads_per_threadgroup(1)]] void object_main() {}",
+            "metal",
+        )
+        == 1
+    )
+    assert (
+        checks.count_entries(
             '[shader("vertex")]\nfloat4 VSMain() : SV_Position', "hlsl"
         )
         == 2
@@ -248,6 +255,30 @@ def test_hlsl_entry_discovery():
         )
         == []
     )
+
+
+def test_glsl_environment_checks_ray_stages_with_vulkan_rules():
+    # GL_EXT_ray_tracing exists only for SPIR-V generation; every other stage keeps the OpenGL rules.
+    assert checks.glsl_environment(["ray_generation"]) == ["--target-env", "vulkan1.2"]
+    assert checks.glsl_environment(["ray_closest_hit", "ray_any_hit"]) == [
+        "--target-env",
+        "vulkan1.2",
+    ]
+    assert checks.glsl_environment(["fragment"]) == []
+    assert checks.glsl_environment(["mesh"]) == []
+
+
+def test_essl_artifacts_must_declare_glsl_es_300(tmp_path):
+    desktop = tmp_path / "desktop.essl.glsl"
+    desktop.write_text("#version 450\nvoid main() {}\n")
+    result = checks.check_essl(desktop, ["vertex"])
+    assert result["verdict"] == "rejected"
+    assert "#version 300 es" in result["log"]
+
+    es = tmp_path / "es.essl.glsl"
+    es.write_text("#version 300 es\nvoid main() { gl_Position = vec4(0.0); }\n")
+    if checks.tool("glslangValidator").available:
+        assert checks.check_essl(es, ["vertex"])["verdict"] == "accepted"
 
 
 def test_spirv_environment_follows_module_version():

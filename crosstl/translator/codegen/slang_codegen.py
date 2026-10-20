@@ -114,6 +114,11 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .relational_builtins import lower_relational_builtins
+from .slang_projected_compare import (
+    SLANG_PROJECTED_COMPARE_FORMS,
+    generate_slang_projected_compare,
+    is_slang_projected_compare,
+)
 from .stage_utils import (
     compute_local_size,
     is_fragment_output_parameter,
@@ -1316,6 +1321,7 @@ class SlangCodeGen:
             "textureCompareOffset",
             "textureGatherCompare",
             "textureGatherCompareOffset",
+            *SLANG_PROJECTED_COMPARE_FORMS,
         }
 
         for current in self.walk_ast(node):
@@ -13116,6 +13122,9 @@ class SlangCodeGen:
             "textureCompareOffset",
         }:
             return self.generate_texture_compare(func_name, args)
+
+        if is_slang_projected_compare(func_name):
+            return generate_slang_projected_compare(self, func_name, args)
 
         if func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
             return self.generate_texture_gather_compare(func_name, args)

@@ -24,6 +24,10 @@ structs outside any block. This pass rewrites the declaration, for every target,
 ``buffer S name[]`` with a struct ``S`` is left alone: the parser gives GLSL's array of buffer blocks,
 ``buffer S { ... } name[];``, the same form, and the emitters read it as that descriptor array.
 
+Stage interface arrays that GLSL sizes implicitly (geometry inputs, tessellation control outputs, mesh outputs,
+``pervertex`` inputs, ``gl_ClipDistance`` and ``gl_CullDistance``) first get the count their stage implies, and
+tessellation inputs, which the pipeline sizes, are kept unsized (:mod:`.stage_io_arrays`).
+
 Every other unsized array of values has no size any target can give it, and is refused with
 :class:`UnsizedArrayUnsupportedError`: a global, stage or local variable without an initializer, a parameter, an
 unsized struct member other than the last, and a struct ending in an unsized member that is used other than as a
@@ -41,6 +45,7 @@ from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name, iter_functions, iter_structs, type_from_node
 from .rewrite import call, clone
+from .stage_io_arrays import size_stage_io_arrays
 from .storage_blocks import _flat_element, _parents, _replace, _walk
 
 __all__ = ["UnsizedArrayUnsupportedError", "legalize_unsized_arrays"]
@@ -145,6 +150,7 @@ class _Legalizer:
         }
         self.parents = None
         self.taken = None
+        self.pipeline_sized = set()
 
     def is_value(self, type_node) -> bool:
         """Whether a type is a value (scalar, vector, matrix, struct or array of them), not a resource."""
@@ -184,6 +190,7 @@ class _Legalizer:
             yield stage, "local_variables"
 
     def run(self):
+        self.pipeline_sized = size_stage_io_arrays(self.program)
         buffers = [
             (owner, field, variable)
             for owner, field in self.scopes()
@@ -380,7 +387,7 @@ class _Legalizer:
         if getattr(variable, "initial_value", None) is not None:
             self.size_from_initializer(variable)
             return
-        if _is_storage(variable):
+        if _is_storage(variable) or id(variable) in self.pipeline_sized:
             return
         if isinstance(variable, A.ArrayNode) and variable.size is None:
             element = getattr(variable, "element_type", None)

@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 45,
-        "endOffset": 1267,
+        "endLine": 87,
+        "endOffset": 2175,
         "file": "crosstl-out/opengl/spv.specConstant.glsl",
-        "length": 1267,
+        "length": 2175,
         "line": 1,
         "offset": 0
       },

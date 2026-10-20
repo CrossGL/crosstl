@@ -6,6 +6,7 @@ from ..ast import (
     AssignmentNode,
     BinaryOpNode,
     FunctionCallNode,
+    PreprocessorNode,
     StageMap,
     TernaryOpNode,
 )
@@ -18,8 +19,10 @@ from .GLSL_codegen import (
     OpenGLIndexTypeError,
     OpenGLStructConstructionError,
 )
+from .glsl_es_varying_links import es300_linked_varying_name, program_identifier_names
 from .glsl_refusals import WebGLLoweringRefused
 from .index_range_contracts import WEBGL_INDEX_PROFILE
+from .stage_refusals import StageUnsupportedError
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
@@ -66,6 +69,9 @@ class WebGLCodeGen(GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
     GLSL_TARGET_DISPLAY_NAME = "WebGL"
+    webgl_program_identifier_names = frozenset()
+    # WebGL 2 exposes no GL_EXT_texture_shadow_lod.
+    GLSL_SHADOW_LOD_EXTENSION_SUPPORTED = False
     LOWERING_REFUSAL_TYPE = WebGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
@@ -207,6 +213,15 @@ class WebGLCodeGen(GLSLCodeGen):
     def glsl_version_line_is_fixed(self):
         # WebGL 2 compiles GLSL ES 3.00 only.
         return True
+
+    def should_emit_glsl_preprocessor_directive(self, directive):
+        # A source ``#version`` names the source's language; WebGL 2 output is always GLSL ES 3.00.
+        if isinstance(directive, PreprocessorNode):
+            if str(directive.directive).lstrip("#").strip() == "version":
+                return False
+        elif str(directive).strip().startswith("#version"):
+            return False
+        return super().should_emit_glsl_preprocessor_directive(directive)
 
     def generate_expression(self, expr, is_main=False):
         replacement = getattr(self, "_webgl_expression_replacements", {}).get(id(expr))
@@ -591,8 +606,47 @@ class WebGLCodeGen(GLSLCodeGen):
             return False
         return super().should_emit_stage_io_layout(stage_name, direction)
 
+    def stage_local_interface_linked_name(self, node, direction, stage_name):
+        return es300_linked_varying_name(
+            self,
+            node,
+            direction,
+            stage_name,
+            self.webgl_program_identifier_names,
+            self.resource_node_name(node, ""),
+        )
+
+    def vertex_output_member_name(self, member):
+        output_name = super().vertex_output_member_name(member)
+        if self.is_vertex_builtin_output(output_name):
+            return output_name
+        linked_name = es300_linked_varying_name(
+            self,
+            member,
+            "out",
+            "vertex",
+            self.webgl_program_identifier_names,
+            member.name,
+        )
+        return linked_name or output_name
+
+    def fragment_input_member_name(self, member, struct_name):
+        input_name = super().fragment_input_member_name(member, struct_name)
+        if input_name is None:
+            return None
+        linked_name = es300_linked_varying_name(
+            self,
+            member,
+            "in",
+            "fragment",
+            self.webgl_program_identifier_names,
+            member.name,
+        )
+        return linked_name or input_name
+
     def generate_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
+        self.webgl_program_identifier_names = program_identifier_names(ast)
         self.validate_webgl_stage_support(ast, target_stage)
         supported_ast = self.webgl_supported_stage_ast(ast, target_stage)
         self.validate_webgl_builtin_support(supported_ast)
@@ -738,9 +792,11 @@ class WebGLCodeGen(GLSLCodeGen):
             supported = stages & self.SUPPORTED_STAGE_NAMES
             if supported:
                 return
-            raise ValueError(
-                "WebGL target does not support shader stage(s): "
-                + ", ".join(unsupported)
+            raise StageUnsupportedError(
+                "webgl",
+                "WebGL",
+                unsupported,
+                "WebGL 2 (GLSL ES 3.00) has only vertex and fragment shaders",
             )
 
     def webgl_stage_names(self, ast):
