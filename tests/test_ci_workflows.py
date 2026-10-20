@@ -482,9 +482,9 @@ def test_metal_fence_jobs_require_a_compatible_toolchain_without_extra_jobs():
     translator = yaml.safe_load((WORKFLOW_DIR / "translator-tests.yml").read_text())[
         "jobs"
     ]["test"]
-    backend = yaml.safe_load((WORKFLOW_DIR / "backend-tests.yml").read_text())[
-        "jobs"
-    ]["test"]
+    backend = yaml.safe_load((WORKFLOW_DIR / "backend-tests.yml").read_text())["jobs"][
+        "test"
+    ]
     demo = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())[
         "jobs"
     ]["portable-host"]
