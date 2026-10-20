@@ -355,6 +355,8 @@ CUDA_SIGNATURES = [
     feature("atomicAdd", Type("int"), Param(Type("int"), "inout"), Type("int")),
     feature("__popc", Type("int"), Type("uint")),
     feature("__syncthreads", Type.other("void")),
+    feature("llabs", Type("int64"), Type("int64")),
+    feature("__popcll", Type("int"), Type("uint64")),
 ]
 
 
@@ -375,6 +377,23 @@ def test_cuda_has_no_matrices_or_boolean_vectors():
         )
     with pytest.raises(probes.ProbeError, match="bool vectors"):
         probes.build(feature("any", Type("bool"), Type("bool", (3,))), "cuda")
+
+
+def test_64_bit_integers_are_read_and_stored_through_32_bit_buffers():
+    llabs, popcll = CUDA_SIGNATURES[-2:]
+    source = probes.build(llabs, "cuda").source
+    assert 'extern "C" __global__ void probe(int* iin, int* outp) {' in source
+    assert "long long a0 = (long long)iin[i + 0u];" in source
+    assert "outp[i] = (int)r;" in source
+    assert "unsigned long long a0 = (unsigned long long)uin[i + 0u];" in (
+        probes.build(popcll, "cuda").source
+    )
+    crossgl = probes.build(llabs, "crossgl").source
+    assert "int64_t a0 = int64_t(iin[i + 0u]);" in crossgl
+    assert "outp[i] = int(r);" in crossgl
+    # A language whose 64-bit spelling has not been checked leaves the feature untested.
+    with pytest.raises(probes.ProbeError, match="64-bit integer"):
+        probes.build(llabs, "glsl")
 
 
 @pytest.mark.skipif(not validators.available("cuda"), reason="nvcc is not installed")

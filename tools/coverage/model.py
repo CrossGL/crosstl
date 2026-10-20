@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCALARS = ("bool", "int", "uint", "float", "double")
+SCALARS = ("bool", "int", "uint", "float", "double", "int64", "uint64")
 OUTCOMES = ("supported", "refused", "wrong", "untested")
 LANGUAGES = (
     "cuda",

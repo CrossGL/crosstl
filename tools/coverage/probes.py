@@ -41,8 +41,12 @@ def spell(kind: Type, language: str) -> str:
     return DIALECTS[language].type(kind)
 
 
+# Scalars no input or output buffer holds: they are read from, and stored as, a 32-bit buffer element.
+_STORAGE = {"bool": "float", "double": "float", "int64": "int", "uint64": "uint"}
+
+
 def _storage(scalar: str) -> str:
-    return "float" if scalar in ("bool", "double") else scalar
+    return _STORAGE.get(scalar, scalar)
 
 
 class _Builder:
@@ -67,8 +71,8 @@ class _Builder:
         read = self.dialect.read(_BUFFERS[storage], offset)
         if scalar == "bool":
             return self.dialect.positive(read)
-        if scalar == "double":
-            return self.dialect.cast(Type("double"), read)
+        if scalar != storage:
+            return self.dialect.cast(Type(scalar), read)
         return read
 
     def value(self, kind: Type) -> str:
@@ -145,8 +149,8 @@ class _Builder:
                 columns, rows = result.shape
                 output = Type(result.scalar, (columns if dialect.rows_first else rows,))
                 value = dialect.part("r")
-            if result.scalar == "double":
-                output = output.with_scalar("float")
+            if _storage(result.scalar) != result.scalar:
+                output = output.with_scalar(_storage(result.scalar))
                 value = dialect.cast(output, value)
             stores = [
                 dialect.declare(result, "r", call),

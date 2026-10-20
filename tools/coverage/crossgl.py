@@ -8,7 +8,7 @@ anywhere else.
 
 from __future__ import annotations
 
-from .dialect import Buffer, Dialect
+from .dialect import WIDE_INTEGERS, Buffer, Dialect, ProbeError
 from .templates import C_FAMILY, Template
 
 # Built-in functions CrossGL spells as GLSL does rather than as the backend does. A rename applies only when the GLSL
@@ -201,6 +201,15 @@ def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) ->
 class CrossGL(Dialect):
     language = "crossgl"
     suffix = ".cgl"
+    wide_integers = True
+
+    def scalar(self, scalar: str) -> str:
+        return {"int64": "int64_t", "uint64": "uint64_t"}.get(scalar, scalar)
+
+    def vector(self, scalar: str, size: int) -> str:
+        if scalar in WIDE_INTEGERS:
+            raise ProbeError("no 64-bit integer vector probe for CrossGL yet")
+        return super().vector(scalar, size)
 
     # CrossGL declares HLSL's resource object types and calls their methods under HLSL's names; the backend assigns
     # the registers.

@@ -394,7 +394,8 @@ def test_cuda_reads_device_functions_and_leaves_out_the_rest():
         "frexpf",
         "labs",
     ]
-    assert features["labs"].signature.params[0].type == Type.other("long")
+    # ``long`` is 64 bits wide on Linux, where nvcc validates the probes.
+    assert features["labs"].signature.params[0].type == Type("int64")
     assert features["__threadfence"].group == "intrinsics"
     assert features["fabsf"].group == "math"
 
@@ -486,7 +487,7 @@ def test_hip_reads_the_math_atomic_and_device_headers():
     assert features["min"].signature.result == Type("int")
     assert features["frexpf"].signature.params[1] == Param(Type("int"), "out")
     assert features["__isnanf"].signature.result == Type("bool")
-    assert features["__fns32"].signature.params[0].type == Type.other("uint64_t")
+    assert features["__fns32"].signature.params[0].type == Type("uint64")
     assert features["__fns32"].signature.params[1].type == Type("uint")
     assert features["erff"].crossgl == features["erf"].crossgl == "erf"
     assert features["__popc"].crossgl == "bitCount"

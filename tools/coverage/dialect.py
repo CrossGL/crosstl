@@ -12,6 +12,10 @@ from .model import Type
 Buffer = tuple[str, str]
 
 
+# Scalars a probe reads from and stores as 32-bit integers.
+WIDE_INTEGERS = frozenset({"int64", "uint64"})
+
+
 class ProbeError(ValueError):
     """The feature's signature cannot be expressed as a probe yet."""
 
@@ -29,12 +33,16 @@ class Dialect:
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
+    # Whether the dialect spells the scalars in WIDE_INTEGERS.
+    wide_integers = False
 
     def type(self, kind: Type) -> str:
         if kind.opaque:
             if kind.opaque == "void":
                 return "void"
             raise ProbeError(f"no probe for parameters of type {kind.opaque}")
+        if kind.scalar in WIDE_INTEGERS and not self.wide_integers:
+            raise ProbeError(f"no 64-bit integer probe for {self.language} yet")
         if not kind.shape:
             return self.scalar(kind.scalar)
         if len(kind.shape) == 1:
@@ -69,7 +77,8 @@ class Dialect:
         """A constant of ``kind``, for an argument the language requires to be a constant expression."""
         if kind.shape:
             raise ProbeError("no constant probe argument of a vector or matrix type")
-        return {"bool": "false", "int": "0", "uint": "0u"}.get(kind.scalar, "0.0")
+        constants = {"bool": "false", "int": "0", "int64": "0", "uint": "0u", "uint64": "0u"}
+        return constants.get(kind.scalar, "0.0")
 
     def buffer_element(self, kind: Type, atomic: bool) -> str:
         """The element type of the output buffer; ``atomic`` when the probe passes it to an atomic operation."""

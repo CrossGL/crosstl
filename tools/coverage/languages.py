@@ -236,14 +236,17 @@ class CUDA(Dialect):
     language = "cuda"
     suffix = ".cu"
     entry = "probe"
+    wide_integers = True
+    _SCALARS = {"uint": "unsigned int", "int64": "long long", "uint64": "unsigned long long"}
+    _VECTORS = {"int64": "longlong", "uint64": "ulonglong"}
 
     def scalar(self, scalar: str) -> str:
-        return "unsigned int" if scalar == "uint" else scalar
+        return self._SCALARS.get(scalar, scalar)
 
     def vector(self, scalar: str, size: int) -> str:
         if scalar == "bool":
             raise ProbeError("CUDA has no bool vectors")
-        return f"{scalar}{size}"
+        return f"{self._VECTORS.get(scalar, scalar)}{size}"
 
     def matrix(self, scalar: str, columns: int, rows: int) -> str:
         raise ProbeError("CUDA has no matrix types")
