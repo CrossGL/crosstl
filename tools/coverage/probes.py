@@ -205,13 +205,16 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         "flat" if feature.name in _FLAT else "smooth"
     )
     builder = _Builder(dialect, receiver, interpolant or "")
-    body, output = builder.body(name, feature.signature, baseline)
+    signature = feature.signature
+    if language == "crossgl" and feature.counterpart:
+        signature = feature.counterpart
+    body, output = builder.body(name, signature, baseline)
     buffers = [
         (dialect.type(Type(scalar)), _BUFFERS[scalar])
         for scalar in ("float", "int", "uint")
         if scalar in builder.offsets
     ]
-    atomic = any(p.direction == "inout" for p in feature.signature.params)
+    atomic = any(p.direction == "inout" for p in signature.params)
     buffers.append((dialect.buffer_element(output, atomic), "outp"))
     declarations = builder.declarations
     if feature.stage == "fragment":

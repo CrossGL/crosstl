@@ -87,7 +87,9 @@ class Feature:
     ``name`` is the upstream spelling and ``group`` the upstream section it comes from. ``signature`` is the overload
     the probe uses and ``crossgl`` the CrossGL spelling of the same operation, empty when CrossGL has none; ``note``
     then says why. ``stage`` is the shader stage the probe must run in. ``spelling`` is how the native probe calls
-    the feature when that differs from ``name``, as for WGSL's ``bitcast<u32>``.
+    the feature when that differs from ``name``, as for WGSL's ``bitcast<u32>``. ``counterpart`` is the overload the
+    CrossGL probe calls when CrossGL's operation takes other arguments than the feature, as a WGSL texture function
+    does: it takes a texture and a sampler where CrossGL takes one GLSL sampler.
     """
 
     language: str
@@ -99,6 +101,7 @@ class Feature:
     stage: str = "compute"
     note: str = ""
     spelling: str = ""
+    counterpart: Signature | None = None
 
     @property
     def key(self) -> str:

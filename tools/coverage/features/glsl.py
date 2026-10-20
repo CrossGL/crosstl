@@ -11,7 +11,7 @@ import re
 
 from ..model import Feature, Signature, Type
 from ..objects import UNIFORMS
-from .common import glsl_type, signature, slug
+from .common import glsl_type, pick, signature, slug
 
 LEFT_OUT = {
     "compatibility-profile-texture-functions": "compatibility profile only",
@@ -150,21 +150,6 @@ def overloads(text: str) -> dict[str, tuple[str, list[Signature]]]:
     return found
 
 
-def pick(overloads: list[Signature]) -> Signature:
-    """The overload a probe uses: the first one built from value types only, else the first one whose samplers and
-    images a probe can declare, else the first one."""
-    for signature in overloads:
-        if not signature.unsupported:
-            return signature
-    for signature in overloads:
-        kinds = (signature.result, *(p.type for p in signature.params))
-        if all(
-            not k.opaque or k.opaque in UNIFORMS or k.opaque == "void" for k in kinds
-        ):
-            return signature
-    return overloads[0]
-
-
 def _stage(name: str, group: str) -> str:
     return "fragment" if name in IMPLICIT_LOD else STAGES.get(group, "compute")
 
@@ -175,7 +160,7 @@ def parse(text: str) -> list[Feature]:
             "glsl",
             "function",
             name,
-            pick(signatures),
+            pick(signatures, UNIFORMS["glsl"]),
             group=group,
             crossgl=name,
             stage=_stage(name, group),

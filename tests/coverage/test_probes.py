@@ -541,3 +541,38 @@ def test_mojo_validation_type_checks_functions_nothing_calls():
     verdict = validators.validate("mojo", source)
     assert not verdict.accepted
     assert verdict.log.startswith("probe.mojo:2:12: error: use of unknown declaration")
+
+
+WGSL_SAMPLE_LEVEL = Feature(
+    "wgsl",
+    "function",
+    "textureSampleLevel",
+    Signature(
+        VEC4,
+        (
+            Param(Type.other("texture_2d<f32>")),
+            Param(Type.other("sampler")),
+            Param(Type("float", (2,))),
+            Param(Type("float")),
+        ),
+    ),
+    crossgl="textureLod",
+    counterpart=TEXTURE_LOD.signature,
+)
+
+
+def test_wgsl_probe_binds_a_texture_and_a_sampler_and_crossgl_calls_the_counterpart():
+    source = probes.build(WGSL_SAMPLE_LEVEL, "wgsl").source
+    assert "@group(0) @binding(8) var u0: texture_2d<f32>;" in source
+    assert "@group(0) @binding(9) var u1: sampler;" in source
+    assert "var r: vec4<f32> = textureSampleLevel(u0, u1, a2, a3);" in source
+    crossgl = probes.build(WGSL_SAMPLE_LEVEL, "crossgl").source
+    assert "uniform sampler2D u0;" in crossgl
+    assert "vec4 r = textureLod(u0, a1, a2);" in crossgl
+
+
+@pytest.mark.skipif(not validators.available("wgsl"), reason="naga is not installed")
+def test_wgsl_texture_probe_is_valid_wgsl():
+    probe = probes.build(WGSL_SAMPLE_LEVEL, "wgsl")
+    verdict = validators.validate("wgsl", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log

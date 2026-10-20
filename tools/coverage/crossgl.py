@@ -192,6 +192,31 @@ RENAMES["hip"] = RENAMES["cuda"]
 RENAMES["slang"] = RENAMES["hlsl"]
 
 
+# Functions CrossGL writes with other arguments than the backend, as GLSL prototypes. WGSL's texture functions take a
+# texture and a sampler, where CrossGL, like GLSL, takes one combined sampler; ``const`` marks an argument the probe
+# passes as the constant 0, for a WGSL function that always reads level 0.
+COUNTERPARTS = {
+    "wgsl": {
+        "textureDimensions": "ivec2 textureSize(sampler2D, const int)",
+        "textureGather": "vec4 textureGather(sampler2D, vec2)",
+        "textureGatherCompare": "vec4 textureGather(sampler2DShadow, vec2, float)",
+        "textureLoad": "vec4 texelFetch(sampler2D, ivec2, int)",
+        "textureNumLayers": "ivec3 textureSize(sampler2DArray, const int)",
+        "textureNumLevels": "int textureQueryLevels(sampler2D)",
+        "textureNumSamples": "int textureSamples(sampler2DMS)",
+        "textureSample": "vec4 texture(sampler2D, vec2)",
+        "textureSampleBias": "vec4 texture(sampler2D, vec2, float)",
+        "textureSampleCompare": "float texture(sampler2DShadow, vec3)",
+        "textureSampleCompareLevel": (
+            "float textureLod(sampler2DShadow, vec3, const float)"
+        ),
+        "textureSampleGrad": "vec4 textureGrad(sampler2D, vec2, vec2, vec2)",
+        "textureSampleLevel": "vec4 textureLod(sampler2D, vec2, float)",
+        "textureStore": "void imageStore(image2D, ivec2, vec4)",
+    },
+}
+
+
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:
     """The CrossGL name of ``language``'s built-in ``name``."""
     renamed = RENAMES.get(language, {}).get(name, name)

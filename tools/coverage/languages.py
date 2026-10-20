@@ -201,6 +201,9 @@ class WGSL(Dialect):
     def to_int(self, condition: str) -> str:
         return f"select(0, 1, {condition})"
 
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        return f"@group(0) @binding({binding}) var {name}: {spelling};"
+
     def buffer_element(self, kind: Type, atomic: bool) -> str:
         return f"atomic<{self.type(kind)}>" if atomic else self.type(kind)
 

@@ -84,36 +84,65 @@ SAMPLERS = {
 _REGISTERS = {"t": "t0", "u": "u8"}
 
 
-# GLSL's opaque uniform types that a function probe can pass, with the image format each is declared with. Probes
-# use the 2D forms; the others stay untested.
-UNIFORMS = {
-    "sampler2D": "",
-    "sampler2DMS": "",
-    "image2D": "rgba32f",
-    "image2DMS": "rgba32f",
-    "iimage2D": "r32i",
-    "uimage2D": "r32ui",
+@dataclass(frozen=True)
+class Uniform:
+    """A sampler, texture or image a function probe declares at module scope; ``image_format`` is GLSL's format
+    qualifier for an image."""
+
+    spelling: str
+    image_format: str = ""
+
+
+def _same(*names: str) -> dict[str, Uniform]:
+    return {name: Uniform(name) for name in names}
+
+
+_GLSL_UNIFORMS = {
+    **_same("sampler2D", "sampler2DMS"),
+    "image2D": Uniform("image2D", "rgba32f"),
+    "image2DMS": Uniform("image2DMS", "rgba32f"),
+    "iimage2D": Uniform("iimage2D", "r32i"),
+    "uimage2D": Uniform("uimage2D", "r32ui"),
+}
+# Tint's table writes a texture's texel type as ``T`` where any sampled type will do; a probe samples ``f32``.
+_WGSL_UNIFORMS = {
+    **_same("sampler", "sampler_comparison", "texture_depth_2d", "texture_2d<f32>"),
+    "texture_2d<T>": Uniform("texture_2d<f32>"),
+    "texture_2d_array<T>": Uniform("texture_2d_array<f32>"),
+    "texture_2d_array<f32>": Uniform("texture_2d_array<f32>"),
+    "texture_multisampled_2d<T>": Uniform("texture_multisampled_2d<f32>"),
+    "texture_storage_2d<F, W>": Uniform("texture_storage_2d<rgba32float, write>"),
+}
+# The opaque parameter types a function probe can pass, by language and as each feature list spells them. Probes use
+# the 2D forms; functions that only take the others stay untested. CrossGL calls texture functions as GLSL does.
+UNIFORMS: dict[str, dict[str, Uniform]] = {
+    "glsl": _GLSL_UNIFORMS,
+    # The CrossGL counterparts of WGSL's depth and array textures (:data:`.crossgl.COUNTERPARTS`) take two more.
+    "crossgl": {**_GLSL_UNIFORMS, **_same("sampler2DShadow", "sampler2DArray")},
+    "wgsl": _WGSL_UNIFORMS,
 }
 # Uniforms bind past the probe's buffers.
 _FIRST_UNIFORM = 8
 
 
 class Uniforms:
-    """The samplers and images a function probe passes, declared the first time each parameter needs one."""
+    """The samplers, textures and images a function probe passes, declared the first time each parameter needs
+    one."""
 
     def __init__(self, dialect: Dialect):
         self.dialect = dialect
+        self.table = UNIFORMS.get(dialect.language, {})
         self.declarations: list[str] = []
 
-    @staticmethod
-    def takes(kind: Type) -> bool:
-        return kind.opaque in UNIFORMS
+    def takes(self, kind: Type) -> bool:
+        return kind.opaque in self.table
 
     def argument(self, kind: Type) -> str:
+        uniform = self.table[kind.opaque]
         name = f"u{len(self.declarations)}"
         binding = _FIRST_UNIFORM + len(self.declarations)
         self.declarations.append(
-            self.dialect.uniform(kind.opaque, name, binding, UNIFORMS[kind.opaque])
+            self.dialect.uniform(uniform.spelling, name, binding, uniform.image_format)
         )
         return name
 
