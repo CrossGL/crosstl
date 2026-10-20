@@ -177,8 +177,8 @@ metal_simdgroup simd_all bool(bool)
 metal_simdgroup simd_and int(int)
 metal_simdgroup simd_any bool(bool)
 metal_simdgroup simd_ballot -
-metal_simdgroup simd_broadcast -
-metal_simdgroup simd_broadcast_first -
+metal_simdgroup simd_broadcast float(float, uint)
+metal_simdgroup simd_broadcast_first float(float)
 metal_simdgroup simd_is_first bool()
 metal_simdgroup simd_is_helper_thread bool()
 metal_simdgroup simd_max float(float)
@@ -189,14 +189,14 @@ metal_simdgroup simd_prefix_exclusive_sum float(float)
 metal_simdgroup simd_prefix_inclusive_product float(float)
 metal_simdgroup simd_prefix_inclusive_sum float(float)
 metal_simdgroup simd_product float(float)
-metal_simdgroup simd_shuffle -
-metal_simdgroup simd_shuffle_and_fill_down -
-metal_simdgroup simd_shuffle_and_fill_up -
-metal_simdgroup simd_shuffle_down -
-metal_simdgroup simd_shuffle_rotate_down -
-metal_simdgroup simd_shuffle_rotate_up -
-metal_simdgroup simd_shuffle_up -
-metal_simdgroup simd_shuffle_xor -
+metal_simdgroup simd_shuffle float(float, uint)
+metal_simdgroup simd_shuffle_and_fill_down float(float, float, uint, uint)
+metal_simdgroup simd_shuffle_and_fill_up float(float, float, uint, uint)
+metal_simdgroup simd_shuffle_down float(float, uint)
+metal_simdgroup simd_shuffle_rotate_down float(float, uint)
+metal_simdgroup simd_shuffle_rotate_up float(float, uint)
+metal_simdgroup simd_shuffle_up float(float, uint)
+metal_simdgroup simd_shuffle_xor float(float, uint)
 metal_simdgroup simd_sum float(float)
 metal_simdgroup simd_xor int(int)
 metal_quadgroup quad_active_threads_mask -
@@ -204,8 +204,8 @@ metal_quadgroup quad_all bool(bool)
 metal_quadgroup quad_and int(int)
 metal_quadgroup quad_any bool(bool)
 metal_quadgroup quad_ballot -
-metal_quadgroup quad_broadcast -
-metal_quadgroup quad_broadcast_first -
+metal_quadgroup quad_broadcast float(float, uint)
+metal_quadgroup quad_broadcast_first float(float)
 metal_quadgroup quad_is_first bool()
 metal_quadgroup quad_is_helper_thread bool()
 metal_quadgroup quad_max float(float)
@@ -216,13 +216,13 @@ metal_quadgroup quad_prefix_exclusive_sum float(float)
 metal_quadgroup quad_prefix_inclusive_product float(float)
 metal_quadgroup quad_prefix_inclusive_sum float(float)
 metal_quadgroup quad_product float(float)
-metal_quadgroup quad_shuffle -
-metal_quadgroup quad_shuffle_and_fill_down -
-metal_quadgroup quad_shuffle_and_fill_up -
-metal_quadgroup quad_shuffle_down -
-metal_quadgroup quad_shuffle_rotate_down -
-metal_quadgroup quad_shuffle_rotate_up -
-metal_quadgroup quad_shuffle_up -
-metal_quadgroup quad_shuffle_xor -
+metal_quadgroup quad_shuffle float(float, uint)
+metal_quadgroup quad_shuffle_and_fill_down float(float, float, uint, uint)
+metal_quadgroup quad_shuffle_and_fill_up float(float, float, uint, uint)
+metal_quadgroup quad_shuffle_down float(float, uint)
+metal_quadgroup quad_shuffle_rotate_down float(float, uint)
+metal_quadgroup quad_shuffle_rotate_up float(float, uint)
+metal_quadgroup quad_shuffle_up float(float, uint)
+metal_quadgroup quad_shuffle_xor float(float, uint)
 metal_quadgroup quad_sum float(float)
 metal_quadgroup quad_xor int(int)
