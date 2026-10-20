@@ -686,6 +686,15 @@ __DEVICE__
 float frexpf(float __x, int *__nptr) { return __builtin_frexpf(__x, __nptr); }
 __DEVICE__
 __RETURN_TYPE __isnanf(float __x) { return __builtin_isnan(__x); }
+#if defined OCML_BASIC_ROUNDED_OPERATIONS
+__DEVICE__
+float __fadd_rd(float __x, float __y) { return __ocml_add_rtn_f32(__x, __y); }
+__DEVICE__
+float __fadd_rn(float __x, float __y) { return __ocml_add_rte_f32(__x, __y); }
+#else
+__DEVICE__
+float __fadd_rn(float __x, float __y) { return __x + __y; }
+#endif
 template <class T> __DEVICE__ T min(T __arg1, T __arg2) { return __arg1 < __arg2 ? __arg1 : __arg2; }
 __DEVICE__ int min(int __arg1, int __arg2) { return __arg1 < __arg2 ? __arg1 : __arg2; }
 """
@@ -718,6 +727,7 @@ def test_hip_reads_the_math_atomic_and_device_headers():
     glsl_names = {"erf", "frexp", "isnan", "bitCount", "barrier", "min"}
     features = by_name(hip.parse(HIP_MATH, HIP_ATOMIC, HIP_DEVICE, glsl_names))
     assert sorted(features) == [
+        "__fadd_rn",
         "__fns32",
         "__isnanf",
         "__popc",
@@ -729,6 +739,8 @@ def test_hip_reads_the_math_atomic_and_device_headers():
         "min",
     ]
     assert {f.group for f in features.values()} == {"math", "atomic", "device"}
+    # Only the #else branch of OCML_BASIC_ROUNDED_OPERATIONS is compiled by default, so __fadd_rd is left out.
+    assert "__fadd_rd" not in features
     # The first definition is the one probed: the int overloads of atomicAdd and min.
     add = features["atomicAdd"].signature
     assert add.params == (Param(Type("int"), "inout"), Param(Type("int")))
@@ -740,6 +752,30 @@ def test_hip_reads_the_math_atomic_and_device_headers():
     assert features["erff"].crossgl == features["erf"].crossgl == "erf"
     assert features["__popc"].crossgl == "bitCount"
     assert features["__syncthreads"].crossgl == "barrier"
+
+
+def test_hip_default_compile_drops_opt_in_branches_with_their_nested_blocks():
+    header = "\n".join(
+        [
+            "int a();",
+            "#if defined(OCML_BASIC_ROUNDED_OPERATIONS)",
+            "#ifdef X",
+            "int b();",
+            "#endif",
+            "int c();",
+            "#endif",
+            "#if defined OCML_BASIC_ROUNDED_OPERATIONS",
+            "int d();",
+            "#else",
+            "int e();",
+            "#endif",
+            "#ifdef Y",
+            "int f();",
+            "#endif",
+        ]
+    )
+    kept = [line for line in hip.default_compile(header).splitlines() if "(" in line]
+    assert kept == ["int a();", "int e();", "int f();"]
 
 
 SLANG_HLSL = """
