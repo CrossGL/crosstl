@@ -74,12 +74,19 @@ class GLSLESExpressionFormsMixin:
         return None
 
     def glsl_es_builtin_name(self, expr):
+        """The GLSL built-in a call resolves to, for classifying its overloads; ``None`` for a user function.
+
+        The name is only compared with the built-in tables below and never emitted. A built-in without a
+        ``function_map`` entry has the same name in CrossGL and GLSL.
+        """
         name = self.function_call_name(expr)
         if not isinstance(name, str) or name in getattr(
             self, "function_return_types", {}
         ):
             return None
-        return self.function_map.get(name, name)
+        if name in self.function_map:
+            return self.function_map[name]
+        return name
 
     def glsl_es_converted_builtin_call(self, expr):
         """A float built-in called with integer arguments, with each one converted explicitly.

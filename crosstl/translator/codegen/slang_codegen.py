@@ -108,6 +108,7 @@ from .glsl_buffer_layout import (
     std430_layout_type_name,
     vector_component_offsets,
 )
+from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -121,6 +122,7 @@ from .slang_projected_compare import (
     generate_slang_projected_compare,
     is_slang_projected_compare,
 )
+from .slang_refusals import SlangLoweringRefused
 from .stage_utils import (
     compute_local_size,
     is_fragment_output_parameter,
@@ -128,8 +130,10 @@ from .stage_utils import (
 )
 
 
-class SlangCodeGen:
+class SlangCodeGen(LoweringRefusalMixin):
     """Emit Slang shader source from the shared CrossGL AST."""
+
+    LOWERING_REFUSAL_TYPE = SlangLoweringRefused
 
     BINARY_PRECEDENCE = {
         "||": 1,
@@ -355,7 +359,19 @@ class SlangCodeGen:
         return self.indent_str * self.indent_level
 
     def generate(self, ast):
-        """Generate Slang source for a CrossGL AST or AST fragment."""
+        """Generate Slang source for a CrossGL AST or AST fragment.
+
+        A construct with no Slang lowering is recorded as a refusal while generation continues, and the program is
+        then refused as a whole with every reason listed (:class:`SlangLoweringRefused`).
+        """
+        if self._generating:
+            return self.generate_program(ast)
+        try:
+            return self.refusals.run(self.generate_program, ast)
+        finally:
+            self._generating = False
+
+    def generate_program(self, ast):
         outermost = not self._generating
         if outermost:
             self._generating = True
@@ -7379,9 +7395,8 @@ class SlangCodeGen:
     def slang_ray_tracing_diagnostic_expression(self, operation, reason):
         expected_type = self.slang_ray_tracing_expected_target_type()
         fallback = self.zero_value_for_type(expected_type) if expected_type else "0"
-        return (
-            f"/* unsupported Slang ray tracing intrinsic: {operation} {reason} */ "
-            f"{fallback}"
+        return self.refuse_lowering(
+            f"Slang ray tracing intrinsic: {operation} {reason}", fallback
         )
 
     def slang_ray_query_method_return_type(self, operation):
@@ -7505,7 +7520,7 @@ class SlangCodeGen:
     def slang_ray_query_diagnostic_expression(self, operation, reason):
         expected_type = self.slang_ray_query_expected_target_type()
         fallback = self.zero_value_for_type(expected_type) if expected_type else "0"
-        return f"/* unsupported Slang RayQuery: {operation} {reason} */ {fallback}"
+        return self.refuse_lowering(f"Slang RayQuery: {operation} {reason}", fallback)
 
     def slang_ray_query_call_parts(self, node):
         if isinstance(node, RayQueryOpNode):
@@ -8540,14 +8555,14 @@ class SlangCodeGen:
         arg_expr = self.generate_expression(arg)
         if matrix_info is None:
             fallback_type = self.current_expression_expected_type or arg_type or "float"
-            return (
-                "/* unsupported Slang inverse: requires a matrix argument */ "
-                f"{self.zero_value_for_type(fallback_type)}"
+            return self.refuse_lowering(
+                "Slang inverse: requires a matrix argument",
+                self.zero_value_for_type(fallback_type),
             )
         if matrix_info["rows"] != matrix_info["columns"]:
-            return (
-                "/* unsupported Slang inverse: requires a square matrix */ "
-                f"{self.zero_value_for_type(matrix_info['type'])}"
+            return self.refuse_lowering(
+                "Slang inverse: requires a square matrix",
+                self.zero_value_for_type(matrix_info["type"]),
             )
         helper_name = self.require_slang_matrix_inverse_helper(matrix_info)
         return f"{helper_name}({arg_expr})"
@@ -9250,9 +9265,9 @@ class SlangCodeGen:
             if callee == "inverse" and callee not in self.user_function_names:
                 if len(node.args) != 1:
                     fallback_type = self.current_expression_expected_type or "float"
-                    return (
-                        "/* unsupported Slang inverse: requires one argument */ "
-                        f"{self.zero_value_for_type(fallback_type)}"
+                    return self.refuse_lowering(
+                        "Slang inverse: requires one argument",
+                        self.zero_value_for_type(fallback_type),
                     )
                 return self.generate_slang_matrix_inverse_call(node.args[0])
             if callee == "lambda":
@@ -9592,9 +9607,9 @@ class SlangCodeGen:
         }
 
     def unsupported_slang_wave_op_expression(self, operation, reason):
-        return (
-            f"/* unsupported Slang wave intrinsic: {operation} {reason} */ "
-            f"{self.slang_wave_fallback_value(operation)}"
+        return self.refuse_lowering(
+            f"Slang wave intrinsic: {operation} {reason}",
+            self.slang_wave_fallback_value(operation),
         )
 
     def slang_wave_fallback_value(self, operation):
@@ -9943,9 +9958,9 @@ class SlangCodeGen:
         return expected_type
 
     def unsupported_slang_mesh_op_expression(self, operation, reason):
-        return (
-            f"/* unsupported Slang mesh intrinsic: {operation} {reason} */ "
-            f"{self.slang_mesh_fallback_value()}"
+        return self.refuse_lowering(
+            f"Slang mesh intrinsic: {operation} {reason}",
+            self.slang_mesh_fallback_value(),
         )
 
     def slang_mesh_fallback_value(self):
@@ -10189,17 +10204,20 @@ class SlangCodeGen:
             try:
                 expected_type = infer_match_expression_result_type(self, node)
             except ValueError as error:
-                return (
-                    f"/* unsupported Slang match expression: "
-                    f"{self.slang_match_expression_error_reason(error)} */ 0"
+                return self.refuse_lowering(
+                    "Slang match expression: "
+                    f"{self.slang_match_expression_error_reason(error)}",
+                    "0",
                 )
         if not expected_type or expected_type in {"auto", "void"}:
-            return "/* unsupported Slang match expression: requires typed result context */ 0"
+            return self.refuse_lowering(
+                "Slang match expression: requires typed result context", "0"
+            )
 
         if not self.expression_prelude_active():
-            return (
-                "/* unsupported Slang match expression: requires statement "
-                f"prelude context */ {self.zero_value_for_type(expected_type)}"
+            return self.refuse_lowering(
+                "Slang match expression: requires statement prelude context",
+                self.zero_value_for_type(expected_type),
             )
 
         temp_name = self.unique_expression_temp_name("cgl_match_value")
@@ -10219,10 +10237,10 @@ class SlangCodeGen:
                     "Slang",
                 ).rstrip()
         except ValueError as error:
-            return (
-                f"/* unsupported Slang match expression: "
-                f"{self.slang_match_expression_error_reason(error)} */ "
-                f"{self.zero_value_for_type(expected_type)}"
+            return self.refuse_lowering(
+                "Slang match expression: "
+                f"{self.slang_match_expression_error_reason(error)}",
+                self.zero_value_for_type(expected_type),
             )
         lines = [f"{self.format_declaration(expected_type, temp_name)};"]
         if assignment:
@@ -10244,11 +10262,16 @@ class SlangCodeGen:
     def generate_match_expression_diagnostic_assignment(
         self, temp_name, expected_type, reason, indent, _target_name
     ):
+        """Assign the zero value on the path no arm takes; refuse an arm that produces no value.
+
+        The unmatched path is reached only by a subject the arms do not cover, which a well-formed value-position
+        match excludes; Slang still needs the variable assigned on that path. An arm without a value is a malformed
+        match, not an unreachable path.
+        """
         indent_str = self.indent_str * indent
-        return (
-            f"{indent_str}{temp_name} = /* unsupported Slang match expression: "
-            f"{reason} */ {self.zero_value_for_type(expected_type)};\n"
-        )
+        if reason != "no wildcard arm handles remaining cases":
+            self.refuse_lowering(f"Slang match expression: {reason}")
+        return f"{indent_str}{temp_name} = {self.zero_value_for_type(expected_type)};\n"
 
     def generate_switch_match_expression_assignment(
         self, node, temp_name, expected_type
@@ -10293,9 +10316,10 @@ class SlangCodeGen:
                 lines.append(f"{body_indent}break;")
         else:
             lines.append(f"{case_indent}default:")
+            # Only a subject no arm covers reaches this path; see
+            # generate_match_expression_diagnostic_assignment.
             lines.append(
-                f"{body_indent}{temp_name} = /* unsupported Slang match expression: "
-                "no wildcard arm handles remaining cases */ "
+                f"{body_indent}{temp_name} = "
                 f"{self.zero_value_for_type(expected_type)};"
             )
             lines.append(f"{body_indent}break;")
@@ -10313,9 +10337,9 @@ class SlangCodeGen:
                 self.indent_text(self.generate_statement(stmt), indent).splitlines()
             )
         if tail is None:
+            self.refuse_lowering("Slang match expression: arm does not produce a value")
             lines.append(
-                f"{self.indent_str * indent}{temp_name} = /* unsupported Slang "
-                "match expression: arm does not produce a value */ "
+                f"{self.indent_str * indent}{temp_name} = "
                 f"{self.zero_value_for_type(expected_type)};"
             )
             return lines
@@ -10350,10 +10374,9 @@ class SlangCodeGen:
     def generate_match_expression_diagnostic_assignment_lines(
         self, temp_name, expected_type, reason
     ):
+        self.refuse_lowering(f"Slang match expression: {reason}")
         return [
-            self.indent()
-            + f"{temp_name} = /* unsupported Slang match expression: {reason} */ "
-            f"{self.zero_value_for_type(expected_type)};"
+            self.indent() + f"{temp_name} = {self.zero_value_for_type(expected_type)};"
         ]
 
     def match_expression_tail(self, body):
@@ -11120,10 +11143,12 @@ class SlangCodeGen:
         return "0.0"
 
     def unsupported_image_access_call(self, operation, reason, result_type=None):
-        comment = f"/* unsupported Slang image access: {operation} {reason} */"
-        if result_type is None:
-            return comment
-        return f"{comment} {self.zero_value_for_type(result_type)}"
+        placeholder = (
+            "" if result_type is None else self.zero_value_for_type(result_type)
+        )
+        return self.refuse_lowering(
+            f"Slang image access: {operation} {reason}", placeholder
+        )
 
     def is_multisample_storage_image_type(self, type_name):
         return self.resource_base_type(type_name) in {
@@ -11544,19 +11569,19 @@ class SlangCodeGen:
         return f"{intrinsic}({', '.join([target_expr, *value_exprs, original_expr])})"
 
     def unsupported_structured_buffer_call(self, operation, reason, result_type=None):
-        if result_type is None:
-            return f"/* unsupported Slang structured buffer: {operation} {reason} */"
-        return (
-            f"/* unsupported Slang structured buffer: {operation} {reason} */ "
-            f"{self.zero_value_for_type(result_type)}"
+        placeholder = (
+            "" if result_type is None else self.zero_value_for_type(result_type)
+        )
+        return self.refuse_lowering(
+            f"Slang structured buffer: {operation} {reason}", placeholder
         )
 
     def unsupported_byte_address_buffer_call(self, operation, reason, result_type=None):
-        if result_type is None:
-            return f"/* unsupported Slang byte-address buffer: {operation} {reason} */"
-        return (
-            f"/* unsupported Slang byte-address buffer: {operation} {reason} */ "
-            f"{self.zero_value_for_type(result_type)}"
+        placeholder = (
+            "" if result_type is None else self.zero_value_for_type(result_type)
+        )
+        return self.refuse_lowering(
+            f"Slang byte-address buffer: {operation} {reason}", placeholder
         )
 
     def glsl_buffer_block_lowering_failure_detail(self, type_name, var_name=None):
@@ -11960,9 +11985,9 @@ class SlangCodeGen:
             buffer_name, offset, temp_name, access
         )
         if stores is None:
-            return (
-                "/* unsupported Slang GLSL buffer block aggregate store: "
-                "array fields require element-wise stores */"
+            return self.refuse_lowering(
+                "Slang GLSL buffer block aggregate store: "
+                "array fields require element-wise stores"
             )
         return "\n".join([f"{access['slang_type']} {temp_name} = {value}", *stores])
 
@@ -11977,9 +12002,9 @@ class SlangCodeGen:
         }
         binary_op = compound_ops.get(op)
         if binary_op is None:
-            return (
-                "/* unsupported Slang GLSL buffer block matrix compound store: "
-                "requires explicit matrix operation lowering */"
+            return self.refuse_lowering(
+                "Slang GLSL buffer block matrix compound store: "
+                "requires explicit matrix operation lowering"
             )
         temp_name = self.next_slang_byteaddress_temp_variable("matrix_store")
         current = self.slang_byteaddress_load(buffer_name, offset, access)
@@ -11990,10 +12015,10 @@ class SlangCodeGen:
         return f"{temp}\n{stores}"
 
     def slang_byteaddress_compound_store_diagnostic(self, op, access):
-        return (
-            "/* unsupported Slang GLSL buffer block compound store: "
+        return self.refuse_lowering(
+            "Slang GLSL buffer block compound store: "
             f"operator {op} is not supported for "
-            f"{access['component_type']} buffer members */"
+            f"{access['component_type']} buffer members"
         )
 
     def terminate_slang_statement_lines(self, text):
@@ -12011,10 +12036,12 @@ class SlangCodeGen:
         return "\n".join(lines)
 
     def unsupported_glsl_buffer_block_call(self, operation, reason, result_type=None):
-        comment = f"/* unsupported Slang GLSL buffer block: {operation} {reason} */"
-        if result_type is None:
-            return comment
-        return f"{comment} {self.zero_value_for_type(result_type)}"
+        placeholder = (
+            "" if result_type is None else self.zero_value_for_type(result_type)
+        )
+        return self.refuse_lowering(
+            f"Slang GLSL buffer block: {operation} {reason}", placeholder
+        )
 
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
@@ -12057,15 +12084,17 @@ class SlangCodeGen:
             offset = access["offset_expr"]
 
         if access.get("readonly"):
-            return (
-                "/* unsupported Slang GLSL buffer block store: "
-                "readonly ByteAddressBuffer cannot be written */;"
+            return self.refuse_lowering(
+                "Slang GLSL buffer block store: "
+                "readonly ByteAddressBuffer cannot be written",
+                ";",
             )
         if access.get("members"):
             if op != "=":
-                return (
-                    "/* unsupported Slang GLSL buffer block aggregate compound "
-                    "store: assign a full aggregate value explicitly */;"
+                return self.refuse_lowering(
+                    "Slang GLSL buffer block aggregate compound "
+                    "store: assign a full aggregate value explicitly",
+                    ";",
                 )
             rhs = self.generate_expression_with_expected(value, access["type"])
             store = self.slang_byteaddress_aggregate_store(
@@ -12188,9 +12217,8 @@ class SlangCodeGen:
             zero_value = "0u" if component_type == "uint" else "0"
         else:
             zero_value = "0u" if self.type_name_string(result_type) == "uint" else "0"
-        return (
-            "/* unsupported Slang GLSL buffer block atomic: "
-            f"{operation} {reason} */ {zero_value}"
+        return self.refuse_lowering(
+            f"Slang GLSL buffer block atomic: {operation} {reason}", zero_value
         )
 
     def generate_glsl_buffer_block_atomic_call(self, func_name, args):
@@ -12810,9 +12838,9 @@ class SlangCodeGen:
     def unsupported_image_atomic_call(
         self, operation, reason, image_type=None, result_type=None
     ):
-        return (
-            f"/* unsupported Slang image atomic: {operation} {reason} */ "
-            f"{self.image_atomic_zero_value(image_type, result_type)}"
+        return self.refuse_lowering(
+            f"Slang image atomic: {operation} {reason}",
+            self.image_atomic_zero_value(image_type, result_type),
         )
 
     def image_atomic_required_args_reason(self, operation):
@@ -13490,8 +13518,8 @@ class SlangCodeGen:
 
     def unsupported_sampled_texture_call(self, func_name, reason):
         fallback = self.texture_result_diagnostic_fallback("float4")
-        return (
-            f"/* unsupported Slang sampled texture: {func_name} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"Slang sampled texture: {func_name} {reason}", fallback
         )
 
     def generate_texture_offset(self, func_name, args):
@@ -13596,8 +13624,8 @@ class SlangCodeGen:
 
     def unsupported_texture_offset_call(self, func_name, reason):
         fallback = self.texture_result_diagnostic_fallback("float4")
-        return (
-            f"/* unsupported Slang texture offset: {func_name} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"Slang texture offset: {func_name} {reason}", fallback
         )
 
     def texture_result_expected_type_unsupported_reason(self, func_name, result_type):
@@ -13862,9 +13890,8 @@ class SlangCodeGen:
 
     def unsupported_texture_projected_call(self, func_name, reason):
         fallback = self.texture_result_diagnostic_fallback("float4")
-        return (
-            f"/* unsupported Slang projected texture: "
-            f"{func_name} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"Slang projected texture: {func_name} {reason}", fallback
         )
 
     def generate_texture_gather(self, func_name, args):
@@ -14017,8 +14044,8 @@ class SlangCodeGen:
 
     def unsupported_texture_gather_call(self, func_name, reason):
         fallback = self.texture_result_diagnostic_fallback("float4")
-        return (
-            f"/* unsupported Slang texture gather: {func_name} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"Slang texture gather: {func_name} {reason}", fallback
         )
 
     def generate_texture_compare(self, func_name, args):
@@ -14542,16 +14569,15 @@ class SlangCodeGen:
         }
 
     def unsupported_texture_compare_call(self, func_name, reason, fallback="0.0"):
-        return (
-            f"/* unsupported Slang shadow compare: {func_name} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"Slang shadow compare: {func_name} {reason}", fallback
         )
 
     def unsupported_texture_gather_compare_call(
         self, func_name, reason, fallback="float4(0.0)"
     ):
-        return (
-            f"/* unsupported Slang shadow gather compare: "
-            f"{func_name} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"Slang shadow gather compare: {func_name} {reason}", fallback
         )
 
     def literal_int_value(self, node):
@@ -14617,8 +14643,8 @@ class SlangCodeGen:
         return "requires a multisampled resource"
 
     def unsupported_resource_query_call(self, func_name, reason, fallback="0"):
-        return (
-            f"/* unsupported Slang resource query: {func_name} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"Slang resource query: {func_name} {reason}", fallback
         )
 
     def generate_texture_query_lod(self, args):

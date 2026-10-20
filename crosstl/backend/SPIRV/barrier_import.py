@@ -102,7 +102,7 @@ def _memory_fence(scope: int, storage: int, opcode: str):
             return "deviceMemoryBarrier"
         return "memoryBarrierBuffer" if buffer else "memoryBarrierImage"
     raise SpirvBarrierUnsupportedError(
-        f"{opcode} memory scope {_SCOPE_NAMES.get(scope, scope)} is wider than any CrossGL barrier "
+        f"{opcode} memory scope {_SCOPE_NAMES.get(scope, f'<scope id {scope}>')} is wider than any CrossGL barrier "
         "(the widest is Device)"
     )
 
@@ -134,7 +134,7 @@ def spirv_barrier_statements(opcode: str, operand_values, execution_models):
         return _subgroup_control_barrier(scope, semantics & _STORAGE_BITS, opcode)
     if execution != WORKGROUP:
         raise SpirvBarrierUnsupportedError(
-            f"OpControlBarrier execution scope {_SCOPE_NAMES.get(execution, execution)}: CrossGL control "
+            f"OpControlBarrier execution scope {_SCOPE_NAMES.get(execution, f'<scope id {execution}>')}: CrossGL control "
             "barriers synchronize a workgroup"
         )
     storage = semantics & _STORAGE_BITS
