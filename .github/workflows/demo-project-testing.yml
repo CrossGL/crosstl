@@ -52,8 +52,9 @@ jobs:
       - name: Select validation tier
         id: plan
         env:
-          MLX_CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-          MLX_CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          # A merge-queue group compares its commit with the queue entry it builds on.
+          MLX_CI_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          MLX_CI_HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           # Pull requests run the full tier only with the ci:full label; use
           # `gh workflow run demo-project-testing.yml --ref <branch>` for a single full run.
           MLX_CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
