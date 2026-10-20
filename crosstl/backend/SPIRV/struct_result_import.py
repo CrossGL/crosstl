@@ -9,13 +9,25 @@ The instruction now becomes two locals: the out operand, declared first, and the
 ``OpCompositeExtract`` of the struct reads one of them, so later indices into a vector member still apply. The
 struct value itself stays the one-operand call, which every emitter refuses, so any other use of the struct (a
 store, a function argument, ``OpCopyObject``) fails closed instead of being mistranslated.
+
+The core instructions ``OpIAddCarry``, ``OpISubBorrow``, ``OpUMulExtended`` and ``OpSMulExtended`` (SPIR-V 1.6
+section 3.52.13) return the same kind of two-member struct and import the same way, as GLSL's ``uaddCarry``,
+``usubBorrow``, ``umulExtended`` and ``imulExtended`` (GLSL 4.60 section 8.8). The multiplications return nothing
+and write the high word (struct member 1) and then the low word (member 0) to out operands; their struct value is
+the two-operand call, which every emitter refuses.
 """
 
 from __future__ import annotations
 
+from .integer_signedness_import import spirv_integer_type_name
 from .VulkanAst import AssignmentNode, FunctionCallNode, VariableNode
 
-__all__ = ["spirv_struct_result_call", "spirv_struct_result_member"]
+__all__ = [
+    "EXTENDED_ARITHMETIC_INSTRUCTIONS",
+    "spirv_extended_arithmetic_call",
+    "spirv_struct_result_call",
+    "spirv_struct_result_member",
+]
 
 GLSL_STD_450 = "GLSL.std.450"
 
@@ -25,6 +37,15 @@ STRUCT_RESULT_INSTRUCTIONS = {
     "FrexpStruct": ("frexp", "significand", "exponent"),
 }
 STRUCT_RESULT_INSTRUCTION_IDS = {"36": "ModfStruct", "52": "FrexpStruct"}
+
+# Core opcode -> (CrossGL function, suffix of member 0's local, suffix of member 1's local, signedness GLSL needs).
+EXTENDED_ARITHMETIC_INSTRUCTIONS = {
+    "IAddCarry": ("uaddCarry", "sum", "carry", False),
+    "ISubBorrow": ("usubBorrow", "difference", "borrow", False),
+    "UMulExtended": ("umulExtended", "lsb", "msb", False),
+    "SMulExtended": ("imulExtended", "lsb", "msb", True),
+}
+_MULTIPLICATIONS = {"UMulExtended", "SMulExtended"}
 
 
 def _instruction_name(instruction_set, instruction):
@@ -109,3 +130,71 @@ def spirv_struct_result_member(expression, member_index):
     if members is None or not 0 <= member_index < len(members):
         return None
     return members[member_index]
+
+
+def _reinterpreted(expression, type_name, wanted_name):
+    if type_name == wanted_name:
+        return expression
+    return FunctionCallNode(wanted_name, [expression])
+
+
+def spirv_extended_arithmetic_call(
+    parser,
+    result_id,
+    result_type_id,
+    operation,
+    arguments,
+    statements,
+    names,
+    decorations,
+    types,
+):
+    """The struct value of an extended-arithmetic instruction, or ``None`` for any other opcode.
+
+    Appends the member locals and the call that writes them to ``statements``. ``OpSMulExtended`` may have unsigned
+    members (its operands are read as signed whatever their type); ``imulExtended`` takes ``int`` operands, so the
+    operands, the locals and the members read back are reinterpreted with same-width constructors.
+    """
+    entry = EXTENDED_ARITHMETIC_INSTRUCTIONS.get(operation)
+    if entry is None or len(arguments) != 2:
+        return None
+    function, first_suffix, second_suffix, signed = entry
+    struct_value = FunctionCallNode(function, list(arguments))
+    member_types = types.get(result_type_id, {}).get("member_types", [])
+    if len(member_types) != 2 or member_types[0] != member_types[1]:
+        return struct_value
+    member_type_id = member_types[0]
+    member_name = parser.spirv_type_name(member_type_id, types)
+    local_type = spirv_integer_type_name(
+        member_type_id, types, signed, parser.spirv_vector_type_name
+    )
+    if member_name is None or local_type is None:
+        return struct_value
+    base = parser.spirv_assembly_value_name(
+        result_id, names, decorations, prefix="value"
+    )
+    first = _unique_name(f"{base}_{first_suffix}", names, set())
+    second = _unique_name(f"{base}_{second_suffix}", names, {first})
+    operands = [
+        _reinterpreted(argument, member_name, local_type) for argument in arguments
+    ]
+    statements.append(VariableNode(local_type, second))
+    if operation in _MULTIPLICATIONS:
+        statements.append(VariableNode(local_type, first))
+        statements.append(
+            FunctionCallNode(
+                function, operands + [VariableNode("", second), VariableNode("", first)]
+            )
+        )
+    else:
+        statements.append(
+            AssignmentNode(
+                VariableNode(local_type, first),
+                FunctionCallNode(function, operands + [VariableNode("", second)]),
+            )
+        )
+    struct_value.spirv_struct_members = tuple(
+        _reinterpreted(VariableNode("", name), local_type, member_name)
+        for name in (first, second)
+    )
+    return struct_value

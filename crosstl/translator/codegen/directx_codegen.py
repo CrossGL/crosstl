@@ -167,6 +167,10 @@ from .enum_utils import (
     sanitize_type_name,
 )
 from .exponent_builtins import hlsl_exponent_call
+from .extended_arithmetic_builtins import (
+    emit_hlsl_extended_arithmetic_helpers,
+    hlsl_extended_arithmetic_call,
+)
 from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
@@ -5099,6 +5103,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         code += emit_hlsl_wave_extension_helpers(self)
         code += emit_hlsl_pack_helpers(self)
         code += emit_hlsl_bitfield_helpers(self)
+        code += emit_hlsl_extended_arithmetic_helpers(self)
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_wide_integer_compound_helpers()
         code += self.generate_hlsl_inverse_hyperbolic_helpers()
@@ -26941,6 +26946,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             exponent_refusal = hlsl_exponent_call(self, func_name, args)
             if exponent_refusal is not None:
                 return exponent_refusal
+            extended_arithmetic = hlsl_extended_arithmetic_call(self, func_name, args)
+            if extended_arithmetic is not None:
+                return extended_arithmetic
             boolean_mix = boolean_mix_selector(
                 self, func_name, args, getattr(self, "function_return_types", {})
             )

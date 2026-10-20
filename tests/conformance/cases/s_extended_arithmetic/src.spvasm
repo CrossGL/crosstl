@@ -1,0 +1,289 @@
+; SPIR-V
+; OpIAddCarry, OpISubBorrow, OpUMulExtended and OpSMulExtended with struct results read by OpCompositeExtract;
+; the scalar OpSMulExtended has uint members and operands, which it reads as signed. Generated from
+; g_extended_arithmetic by glslang, then that instruction edited by hand.
+; Version: 1.3
+; Generator: Khronos Glslang Reference Front End; 11
+; Bound: 201
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
+               OpExecutionMode %main LocalSize 64 1 1
+               OpSource GLSL 450
+               OpName %main "main"
+               OpName %i "i"
+               OpName %gl_GlobalInvocationID "gl_GlobalInvocationID"
+               OpName %x "x"
+               OpName %Inp "Inp"
+               OpMemberName %Inp 0 "a"
+               OpName %_ ""
+               OpName %y "y"
+               OpName %sum "sum"
+               OpName %carry "carry"
+               OpName %ResType "ResType"
+               OpName %difference "difference"
+               OpName %borrow "borrow"
+               OpName %high "high"
+               OpName %low "low"
+               OpName %signedHigh "signedHigh"
+               OpName %signedLow "signedLow"
+               OpName %ResType_0 "ResType"
+               OpName %sums "sums"
+               OpName %carries "carries"
+               OpName %ResType_1 "ResType"
+               OpName %highs "highs"
+               OpName %lows "lows"
+               OpName %ResType_2 "ResType"
+               OpName %base "base"
+               OpName %Outp "Outp"
+               OpMemberName %Outp 0 "o"
+               OpName %__0 ""
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %Inp Block
+               OpMemberDecorate %Inp 0 Offset 0
+               OpDecorate %_ Binding 0
+               OpDecorate %_ DescriptorSet 0
+               OpDecorate %_runtimearr_uint_0 ArrayStride 4
+               OpDecorate %Outp Block
+               OpMemberDecorate %Outp 0 Offset 0
+               OpDecorate %__0 Binding 1
+               OpDecorate %__0 DescriptorSet 0
+               OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+%_ptr_Function_uint = OpTypePointer Function %uint
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+     %uint_0 = OpConstant %uint 0
+%_ptr_Input_uint = OpTypePointer Input %uint
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+        %Inp = OpTypeStruct %_runtimearr_uint
+%_ptr_StorageBuffer_Inp = OpTypePointer StorageBuffer %Inp
+          %_ = OpVariable %_ptr_StorageBuffer_Inp StorageBuffer
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+%_ptr_StorageBuffer_uint = OpTypePointer StorageBuffer %uint
+    %uint_64 = OpConstant %uint 64
+    %ResType = OpTypeStruct %uint %uint
+%_ptr_Function_int = OpTypePointer Function %int
+  %ResType_0 = OpTypeStruct %int %int
+     %v2uint = OpTypeVector %uint 2
+%_ptr_Function_v2uint = OpTypePointer Function %v2uint
+  %ResType_1 = OpTypeStruct %v2uint %v2uint
+      %v2int = OpTypeVector %int 2
+%_ptr_Function_v2int = OpTypePointer Function %v2int
+  %ResType_2 = OpTypeStruct %v2int %v2int
+    %uint_16 = OpConstant %uint 16
+%_runtimearr_uint_0 = OpTypeRuntimeArray %uint
+       %Outp = OpTypeStruct %_runtimearr_uint_0
+%_ptr_StorageBuffer_Outp = OpTypePointer StorageBuffer %Outp
+        %__0 = OpVariable %_ptr_StorageBuffer_Outp StorageBuffer
+     %uint_1 = OpConstant %uint 1
+     %uint_2 = OpConstant %uint 2
+     %uint_3 = OpConstant %uint 3
+     %uint_4 = OpConstant %uint 4
+     %uint_5 = OpConstant %uint 5
+     %uint_6 = OpConstant %uint 6
+     %uint_7 = OpConstant %uint 7
+     %uint_8 = OpConstant %uint 8
+     %uint_9 = OpConstant %uint 9
+    %uint_10 = OpConstant %uint 10
+    %uint_11 = OpConstant %uint 11
+    %uint_12 = OpConstant %uint 12
+    %uint_13 = OpConstant %uint 13
+    %uint_14 = OpConstant %uint 14
+    %uint_15 = OpConstant %uint 15
+%gl_WorkGroupSize = OpConstantComposite %v3uint %uint_64 %uint_1 %uint_1
+       %main = OpFunction %void None %3
+          %5 = OpLabel
+          %i = OpVariable %_ptr_Function_uint Function
+          %x = OpVariable %_ptr_Function_uint Function
+          %y = OpVariable %_ptr_Function_uint Function
+        %sum = OpVariable %_ptr_Function_uint Function
+      %carry = OpVariable %_ptr_Function_uint Function
+ %difference = OpVariable %_ptr_Function_uint Function
+     %borrow = OpVariable %_ptr_Function_uint Function
+       %high = OpVariable %_ptr_Function_uint Function
+        %low = OpVariable %_ptr_Function_uint Function
+ %signedHigh = OpVariable %_ptr_Function_int Function
+  %signedLow = OpVariable %_ptr_Function_int Function
+       %sums = OpVariable %_ptr_Function_v2uint Function
+    %carries = OpVariable %_ptr_Function_v2uint Function
+      %highs = OpVariable %_ptr_Function_v2int Function
+       %lows = OpVariable %_ptr_Function_v2int Function
+       %base = OpVariable %_ptr_Function_uint Function
+         %14 = OpAccessChain %_ptr_Input_uint %gl_GlobalInvocationID %uint_0
+         %15 = OpLoad %uint %14
+               OpStore %i %15
+         %23 = OpLoad %uint %i
+         %25 = OpAccessChain %_ptr_StorageBuffer_uint %_ %int_0 %23
+         %26 = OpLoad %uint %25
+               OpStore %x %26
+         %28 = OpLoad %uint %i
+         %30 = OpIAdd %uint %28 %uint_64
+         %31 = OpAccessChain %_ptr_StorageBuffer_uint %_ %int_0 %30
+         %32 = OpLoad %uint %31
+               OpStore %y %32
+         %34 = OpLoad %uint %x
+         %35 = OpLoad %uint %y
+         %38 = OpIAddCarry %ResType %34 %35
+         %39 = OpCompositeExtract %uint %38 1
+               OpStore %carry %39
+         %40 = OpCompositeExtract %uint %38 0
+               OpStore %sum %40
+         %42 = OpLoad %uint %x
+         %43 = OpLoad %uint %y
+         %45 = OpISubBorrow %ResType %42 %43
+         %46 = OpCompositeExtract %uint %45 1
+               OpStore %borrow %46
+         %47 = OpCompositeExtract %uint %45 0
+               OpStore %difference %47
+         %48 = OpLoad %uint %x
+         %49 = OpLoad %uint %y
+         %52 = OpUMulExtended %ResType %48 %49
+         %53 = OpCompositeExtract %uint %52 0
+               OpStore %low %53
+         %54 = OpCompositeExtract %uint %52 1
+               OpStore %high %54
+         %55 = OpLoad %uint %x
+         %56 = OpBitcast %int %55
+         %57 = OpLoad %uint %y
+         %58 = OpBitcast %int %57
+         %63 = OpSMulExtended %ResType %55 %57
+ %low_bits = OpCompositeExtract %uint %63 0
+         %64 = OpBitcast %int %low_bits
+               OpStore %signedLow %64
+%high_bits = OpCompositeExtract %uint %63 1
+         %65 = OpBitcast %int %high_bits
+               OpStore %signedHigh %65
+         %69 = OpLoad %uint %x
+         %70 = OpLoad %uint %y
+         %71 = OpCompositeConstruct %v2uint %69 %70
+         %72 = OpLoad %uint %y
+         %73 = OpLoad %uint %x
+         %74 = OpLoad %uint %y
+         %75 = OpBitwiseXor %uint %73 %74
+         %76 = OpCompositeConstruct %v2uint %72 %75
+         %79 = OpIAddCarry %ResType_1 %71 %76
+         %80 = OpCompositeExtract %v2uint %79 1
+               OpStore %carries %80
+         %81 = OpCompositeExtract %v2uint %79 0
+               OpStore %sums %81
+         %82 = OpLoad %uint %x
+         %83 = OpBitcast %int %82
+         %84 = OpLoad %uint %y
+         %85 = OpBitcast %int %84
+         %87 = OpCompositeConstruct %v2int %83 %85
+         %88 = OpLoad %uint %y
+         %89 = OpBitcast %int %88
+         %90 = OpLoad %uint %x
+         %91 = OpBitcast %int %90
+         %92 = OpCompositeConstruct %v2int %89 %91
+         %97 = OpSMulExtended %ResType_2 %87 %92
+         %98 = OpCompositeExtract %v2int %97 0
+               OpStore %lows %98
+         %99 = OpCompositeExtract %v2int %97 1
+               OpStore %highs %99
+        %102 = OpLoad %uint %i
+        %103 = OpIMul %uint %uint_16 %102
+               OpStore %base %103
+        %108 = OpLoad %uint %base
+        %109 = OpLoad %uint %sum
+        %110 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %108
+               OpStore %110 %109
+        %111 = OpLoad %uint %base
+        %113 = OpIAdd %uint %111 %uint_1
+        %114 = OpLoad %uint %carry
+        %115 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %113
+               OpStore %115 %114
+        %116 = OpLoad %uint %base
+        %118 = OpIAdd %uint %116 %uint_2
+        %119 = OpLoad %uint %difference
+        %120 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %118
+               OpStore %120 %119
+        %121 = OpLoad %uint %base
+        %123 = OpIAdd %uint %121 %uint_3
+        %124 = OpLoad %uint %borrow
+        %125 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %123
+               OpStore %125 %124
+        %126 = OpLoad %uint %base
+        %128 = OpIAdd %uint %126 %uint_4
+        %129 = OpLoad %uint %high
+        %130 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %128
+               OpStore %130 %129
+        %131 = OpLoad %uint %base
+        %133 = OpIAdd %uint %131 %uint_5
+        %134 = OpLoad %uint %low
+        %135 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %133
+               OpStore %135 %134
+        %136 = OpLoad %uint %base
+        %138 = OpIAdd %uint %136 %uint_6
+        %139 = OpLoad %int %signedHigh
+        %140 = OpBitcast %uint %139
+        %141 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %138
+               OpStore %141 %140
+        %142 = OpLoad %uint %base
+        %144 = OpIAdd %uint %142 %uint_7
+        %145 = OpLoad %int %signedLow
+        %146 = OpBitcast %uint %145
+        %147 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %144
+               OpStore %147 %146
+        %148 = OpLoad %uint %base
+        %150 = OpIAdd %uint %148 %uint_8
+        %151 = OpAccessChain %_ptr_Function_uint %sums %uint_0
+        %152 = OpLoad %uint %151
+        %153 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %150
+               OpStore %153 %152
+        %154 = OpLoad %uint %base
+        %156 = OpIAdd %uint %154 %uint_9
+        %157 = OpAccessChain %_ptr_Function_uint %sums %uint_1
+        %158 = OpLoad %uint %157
+        %159 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %156
+               OpStore %159 %158
+        %160 = OpLoad %uint %base
+        %162 = OpIAdd %uint %160 %uint_10
+        %163 = OpAccessChain %_ptr_Function_uint %carries %uint_0
+        %164 = OpLoad %uint %163
+        %165 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %162
+               OpStore %165 %164
+        %166 = OpLoad %uint %base
+        %168 = OpIAdd %uint %166 %uint_11
+        %169 = OpAccessChain %_ptr_Function_uint %carries %uint_1
+        %170 = OpLoad %uint %169
+        %171 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %168
+               OpStore %171 %170
+        %172 = OpLoad %uint %base
+        %174 = OpIAdd %uint %172 %uint_12
+        %175 = OpAccessChain %_ptr_Function_int %highs %uint_0
+        %176 = OpLoad %int %175
+        %177 = OpBitcast %uint %176
+        %178 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %174
+               OpStore %178 %177
+        %179 = OpLoad %uint %base
+        %181 = OpIAdd %uint %179 %uint_13
+        %182 = OpAccessChain %_ptr_Function_int %highs %uint_1
+        %183 = OpLoad %int %182
+        %184 = OpBitcast %uint %183
+        %185 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %181
+               OpStore %185 %184
+        %186 = OpLoad %uint %base
+        %188 = OpIAdd %uint %186 %uint_14
+        %189 = OpAccessChain %_ptr_Function_int %lows %uint_0
+        %190 = OpLoad %int %189
+        %191 = OpBitcast %uint %190
+        %192 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %188
+               OpStore %192 %191
+        %193 = OpLoad %uint %base
+        %195 = OpIAdd %uint %193 %uint_15
+        %196 = OpAccessChain %_ptr_Function_int %lows %uint_1
+        %197 = OpLoad %int %196
+        %198 = OpBitcast %uint %197
+        %199 = OpAccessChain %_ptr_StorageBuffer_uint %__0 %int_0 %195
+               OpStore %199 %198
+               OpReturn
+               OpFunctionEnd
