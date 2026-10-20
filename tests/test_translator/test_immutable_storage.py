@@ -10,7 +10,9 @@ contract, reflection marks the binding, C wrappers refuse it, and every native
 dispatch path rejects a writable view that overlaps the named storage.
 
 Immutable storage may also move its view in place, as ``flags += group.y *
-stride``. Offsets by uniform amounts outside loops keep the view uniform.
+stride``. Offsets by uniform amounts outside loops keep the view uniform. A
+kernel may pass the whole view to helpers that receive it as read-only storage
+and themselves only read, offset or forward it.
 """
 
 import copy
@@ -65,7 +67,7 @@ OFFSET = "  flags += group.y * uint(stride);\n"
 
 TEMPLATE = """#include <metal_stdlib>
 using namespace metal;
-
+%(helpers)s
 [[kernel]] void masked_sums(
     const device uint* flags [[buffer(0)]],
     const device uint* values [[buffer(1)]],
@@ -86,8 +88,25 @@ using namespace metal;
 """
 
 
-def _source(prefix=OFFSET, read="flags[group.x]"):
-    return TEMPLATE % {"prefix": prefix, "read": read}
+def _source(prefix=OFFSET, read="flags[group.x]", helpers=""):
+    return TEMPLATE % {"prefix": prefix, "read": read, "helpers": helpers}
+
+
+READ_HELPER = """
+uint flag_at(const device uint* view, uint index) {
+  return view[index];
+}
+"""
+# The view reaches the read through two helpers.
+FORWARDING_HELPERS = READ_HELPER + """
+uint forwarded_flag(const device uint* view, uint index) {
+  return flag_at(view, index);
+}
+"""
+HELPERS = {
+    "read": (READ_HELPER, "flag_at(flags, group.x)"),
+    "forwarded": (FORWARDING_HELPERS, "forwarded_flag(flags, group.x)"),
+}
 
 
 SOURCE = _source()
@@ -273,6 +292,23 @@ def test_contract_proves_masked_returns_and_compiles(tmp_path, target, prefix):
     _compile(generated, target, tmp_path)
 
 
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("helper", sorted(HELPERS))
+def test_contract_follows_views_into_read_only_helpers(tmp_path, target, helper):
+    helpers, read = HELPERS[helper]
+    source = _source("", read, helpers)
+    report, errors = _translate(tmp_path / "plain", target, source, contract=())
+    assert report.to_json()["summary"]["translatedCount"] == 0
+    assert SUBGROUP_REFUSAL in errors[0]["code"], errors
+    report, errors = _translate(tmp_path / "contract", target, source)
+    assert not errors, errors
+    (artifact,) = report.to_json()["artifacts"]
+    generated = (tmp_path / "contract" / artifact["path"]).read_text()
+    (record,) = parse_immutable_storage_header(generated)
+    assert record["sourceResource"]["parameter"] == "flags"
+    _compile(generated, target, tmp_path)
+
+
 def test_metal_artifact_records_the_contract(tmp_path):
     report, errors = _translate(tmp_path, "metal", SOURCE)
     assert not errors, errors
@@ -324,6 +360,23 @@ def test_contract_covers_16_bit_floating_storage(tmp_path, target, element):
     _compile(generated, target, tmp_path)
 
 
+UNSAFE_HELPERS = """
+uint aliased_flag(const device uint* view, uint index) {
+  const device uint* alias = view;
+  return alias[index];
+}
+
+uint cleared_flag(const device uint* view, uint index) {
+  ((device uint*)view)[index + 1u] = 0u;
+  return view[index];
+}
+
+uint writable_flag(device uint* view, uint index) {
+  return view[index];
+}
+"""
+
+
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize(
     "prefix,read,contract,expected",
@@ -346,10 +399,30 @@ def test_contract_covers_16_bit_floating_storage(tmp_path, target, element):
             CONTRACT,
             SUBGROUP_REFUSAL,
         ),
-        # Copies, casts and helper arguments could become writable aliases.
+        # Copies and casts could become writable aliases, in the entry or in
+        # a helper that receives the view.
         (
             "  const device uint* alias = flags;\n",
             "alias[group.x]",
+            CONTRACT,
+            CONTRACT_REFUSAL,
+        ),
+        (
+            "",
+            "aliased_flag(flags, group.x)",
+            CONTRACT,
+            CONTRACT_REFUSAL,
+        ),
+        (
+            "",
+            "cleared_flag(flags, group.x)",
+            CONTRACT,
+            CONTRACT_REFUSAL,
+        ),
+        # A helper parameter that is not read-only storage could write it.
+        (
+            "",
+            "writable_flag(flags, group.x)",
             CONTRACT,
             CONTRACT_REFUSAL,
         ),
@@ -386,6 +459,9 @@ def test_contract_covers_16_bit_floating_storage(tmp_path, target, element):
         "loop-offset",
         "unnamed-parameter",
         "copied-alias",
+        "helper-alias",
+        "helper-cast-write",
+        "helper-writable-parameter",
         "cast-write",
         "writable-parameter",
         "missing-parameter",
@@ -395,7 +471,8 @@ def test_contract_covers_16_bit_floating_storage(tmp_path, target, element):
 def test_contract_keeps_unsafe_reads_refused(
     tmp_path, target, prefix, read, contract, expected
 ):
-    report, errors = _translate(tmp_path, target, _source(prefix, read), contract)
+    source = _source(prefix, read, UNSAFE_HELPERS)
+    report, errors = _translate(tmp_path, target, source, contract)
     assert report.to_json()["summary"]["translatedCount"] == 0
     assert errors and expected in errors[0]["code"], errors
 

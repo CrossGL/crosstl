@@ -140,7 +140,7 @@ from crosstl.translator.immutable_storage import (
     ImmutableStorageContract,
     ImmutableStorageError,
     parse_immutable_storage,
-    program_function_names,
+    program_functions,
     resolve_immutable_storage,
     with_immutable_storage_header,
 )
@@ -28090,7 +28090,7 @@ def _entry_immutable_storage(function, contracts, ast, entry_point):
         function,
         [item for item in contracts if item.entry_point in entries],
         getattr(ast, "structs", ()),
-        program_function_names(ast),
+        program_functions(ast),
     )
 
 

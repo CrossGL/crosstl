@@ -245,18 +245,21 @@ def _write_roots(body):
     return roots
 
 
-def _check_parameter_uses(function, name, user_functions):
-    """Admit only element reads and in-place offsets of the named parameter.
+def _check_parameter_uses(function, name, user_functions, structs, visiting=()):
+    """Admit only element reads, in-place offsets and checked helper arguments.
 
-    Any other use, such as a cast, a copy into a local, a helper argument or a
-    write through an element, could produce a writable alias inside the kernel
-    that the dispatch-time check cannot see, so it rejects the contract.
+    Any other use, such as a cast, a copy into a local or a write through an
+    element, could produce a writable alias inside the kernel that the
+    dispatch-time check cannot see, so it rejects the contract. Passing the
+    whole view to a user function is admitted only when every same-arity
+    candidate receives it as read-only storage and itself obeys these rules.
     """
     body = getattr(function, "body", None)
     if body is None:
         raise ImmutableStorageError("Immutable storage requires an entry body.")
     written = _write_roots(body)
     allowed = set()
+    forwarded = []
     for node in body.walk():
         if isinstance(node, VariableNode) and node.name == name:
             raise ImmutableStorageError(
@@ -278,6 +281,14 @@ def _check_parameter_uses(function, name, user_functions):
             and node.arguments[0].name == name
         ):
             allowed.add(id(node.arguments[0]))
+        elif isinstance(node, FunctionCallNode) and _call_name(node) in user_functions:
+            forwarded.extend(
+                (node, position, argument)
+                for position, argument in enumerate(node.arguments or ())
+                if isinstance(argument, IdentifierNode)
+                and argument.name == name
+                and id(argument) not in written
+            )
         elif (
             isinstance(node, AssignmentNode)
             and node.operator in _OFFSET_OPERATORS
@@ -285,6 +296,11 @@ def _check_parameter_uses(function, name, user_functions):
             and node.target.name == name
         ):
             allowed.add(id(node.target))
+    for call, position, argument in forwarded:
+        _check_helper_argument(
+            call, position, name, user_functions, structs, (*visiting, function)
+        )
+        allowed.add(id(argument))
     for node in body.walk():
         if (
             isinstance(node, IdentifierNode)
@@ -297,6 +313,32 @@ def _check_parameter_uses(function, name, user_functions):
             )
 
 
+def _check_helper_argument(call, position, name, user_functions, structs, visiting):
+    """Follow one immutable view into every helper the call may select."""
+    arity = len(call.arguments or ())
+    callees = [
+        callee
+        for callee in user_functions.get(_call_name(call), ())
+        if len(getattr(callee, "parameters", None) or ()) == arity
+    ]
+    if not callees:
+        raise ImmutableStorageError(
+            f"Immutable storage parameter '{name}' is passed to an unresolved helper."
+        )
+    for callee in callees:
+        if any(callee is item for item in visiting):
+            raise ImmutableStorageError(
+                f"Immutable storage parameter '{name}' reaches a recursive helper."
+            )
+        parameter = callee.parameters[position]
+        if not _read_only_storage(parameter, structs):
+            raise ImmutableStorageError(
+                f"Immutable storage parameter '{name}' is passed to helper "
+                f"parameter '{parameter.name}', which is not read-only storage."
+            )
+        _check_parameter_uses(callee, parameter.name, user_functions, structs, visiting)
+
+
 def _read_only_storage(parameter, structs):
     from .codegen.uniform_returns import UniformReturnAnalysis
 
@@ -304,11 +346,14 @@ def _read_only_storage(parameter, structs):
     return analysis.resource_type(parameter.param_type, parameter, read_only=True)
 
 
-def resolve_immutable_storage(
-    function, contracts, structs=None, user_functions=frozenset()
-):
-    """Bind contracts to one selected entry's read-only storage parameters."""
+def resolve_immutable_storage(function, contracts, structs=None, user_functions=None):
+    """Bind contracts to one selected entry's read-only storage parameters.
+
+    ``user_functions`` maps each user function name to its definitions, as
+    ``program_functions`` returns; helpers absent from it are not followed.
+    """
     structs = structs if isinstance(structs, Mapping) else _struct_map(structs)
+    user_functions = dict(user_functions or {})
     result = []
     for contract in contracts:
         matches = []
@@ -331,7 +376,7 @@ def resolve_immutable_storage(
                 f"{contract.parameter} requires read-only, non-volatile, "
                 "non-coherent storage of value elements."
             )
-        _check_parameter_uses(function, parameter.name, frozenset(user_functions))
+        _check_parameter_uses(function, parameter.name, user_functions, structs)
         result.append({"sourceResource": {"schemaVersion": 1, **origin}})
     try:
         return checked_immutable_storage(result)
@@ -347,13 +392,17 @@ def _struct_map(structs):
     }
 
 
-def program_function_names(ast):
-    """Names of user functions, so a user ``buffer_load`` is not the builtin."""
-    names = set()
+def program_functions(ast):
+    """User functions by name, in source order.
+
+    A user ``buffer_load`` is then not the builtin, and immutable views passed
+    to helpers can be followed into every same-named definition.
+    """
+    functions = {}
     for node in ast.walk() if hasattr(ast, "walk") else ():
         if type(node).__name__ == "FunctionNode" and getattr(node, "name", None):
-            names.add(node.name)
-    return frozenset(names)
+            functions.setdefault(node.name, []).append(node)
+    return {name: tuple(items) for name, items in functions.items()}
 
 
 def codegen_immutable_storage_names(entries, records, ast=None):
@@ -380,7 +429,7 @@ def codegen_immutable_storage_names(entries, records, ast=None):
             for item in records
         ],
         getattr(ast, "structs", ()),
-        program_function_names(ast),
+        program_functions(ast),
     )
     if resolved != records:
         raise ImmutableStorageError(
