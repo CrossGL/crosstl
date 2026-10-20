@@ -10256,8 +10256,8 @@ def test_generated_metal_threadgroup_helper_barriers_compile_with_metal(tmp_path
     assert "void writeScratch(threadgroup float scratch[64]" in code
     assert "float readScratch(threadgroup float scratch[64]" in code
     assert "threadgroup float scratch[64];" in code
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 4
-    assert code.count("threadgroup_barrier(mem_flags::mem_device);") == 2
+    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 3
+    assert code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
     assert "threadgroup_barrier(mem_flags::mem_texture);" in code
     assert (
         "threadgroup_barrier(mem_flags::mem_device | "
@@ -10289,7 +10289,7 @@ def test_generated_metal_helper_control_flow_barriers_compile_with_metal(tmp_pat
     )
     assert "void syncScratch(uint mode)" in code
     assert "threadgroup float scratch[16];" in code
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
     assert code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
     assert "threadgroup_barrier(mem_flags::mem_texture);" in code
     assert (
@@ -10329,7 +10329,7 @@ def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal(tmp_path
         in code
     )
     assert "atomic_exchange_explicit(&counters[index]," in code
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
     source.write_text(code, encoding="utf-8")
 
     run_validator(

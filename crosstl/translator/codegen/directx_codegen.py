@@ -1826,7 +1826,9 @@ class HLSLCodeGen(LoweringRefusalMixin):
         "barrier": "GroupMemoryBarrierWithGroupSync",
         "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
         "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
-        "groupMemoryBarrier": "GroupMemoryBarrier",
+        # CrossGL's groupMemoryBarrier orders buffer and image accesses as well as shared memory (GLSL 4.60
+        # section 8.16); GroupMemoryBarrier orders groupshared memory only, so the device-scope fence covers it.
+        "groupMemoryBarrier": "AllMemoryBarrier",
         "memoryBarrierShared": "GroupMemoryBarrier",
         "deviceMemoryBarrier": "DeviceMemoryBarrier",
         "memoryBarrierBuffer": "DeviceMemoryBarrier",

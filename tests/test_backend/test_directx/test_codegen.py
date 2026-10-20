@@ -3566,7 +3566,7 @@ def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
 
     output = generate_crossgl(hlsl)
 
-    assert "@ vk_push_constant" in output
+    assert "@ push_constant" in output
     assert "@ register(b0, space1)" in output
     assert "cbuffer PushConstants" in output
     assert "vec4 tint;" in output
@@ -4122,7 +4122,9 @@ def test_codegen_barrier_intrinsics_import_to_crossgl_builtins():
     crossgl = generate_crossgl(code)
 
     assert crossgl.count("workgroupBarrier();") == 3
-    assert crossgl.count("groupMemoryBarrier();") == 1
+    # GroupMemoryBarrier orders groupshared memory only: CrossGL's memoryBarrierShared.
+    assert crossgl.count("memoryBarrierShared();") == 1
+    assert "groupMemoryBarrier();" not in crossgl
     assert crossgl.count("deviceMemoryBarrier();") == 2
     assert crossgl.count("allMemoryBarrier();") == 2
     assert "GroupMemoryBarrierWithGroupSync();" not in crossgl

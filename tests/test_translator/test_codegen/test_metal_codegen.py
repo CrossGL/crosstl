@@ -2443,8 +2443,21 @@ def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 4
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 3
+    # groupMemoryBarrier and memoryBarrier order buffer, image and shared memory; deviceMemoryBarrier orders
+    # buffers and textures (GLSL 4.60 section 8.16, HLSL DeviceMemoryBarrier).
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 3
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_texture);"
+        in generated_code
+    )
+    assert (
+        generated_code.count(
+            "threadgroup_barrier(mem_flags::mem_device | "
+            "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+        )
+        == 3
+    )
     assert "threadgroup_barrier(mem_flags::mem_texture);" in generated_code
     assert (
         "threadgroup_barrier(mem_flags::mem_device | "
@@ -4385,7 +4398,7 @@ def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers():
     )
     assert "uint index = thread_index_in_threadgroup;" in generated_code
     assert "gl_LocalInvocationIndex" not in generated_code
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
     assert "groupMemoryBarrier();" not in generated_code
     assert "memoryBarrierShared();" not in generated_code
     assert "writeScratch(scratch, index, float(index));" in generated_code
@@ -4436,7 +4449,7 @@ def test_metal_helper_control_flow_barriers_lower_in_nested_blocks():
     assert "if (mode != 0u)" in generated_code
     assert "for (int i = 0; i < 2; i = i + 1)" in generated_code
     assert "switch (mode)" in generated_code
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
     assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
     assert "threadgroup_barrier(mem_flags::mem_texture);" in generated_code
     assert (
@@ -14720,7 +14733,12 @@ def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
         "atomic_exchange_explicit(&counters[index], oldValue + currentValue, memory_order_relaxed);"
         in generated
     )
-    assert generated.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert generated.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
+    # groupMemoryBarrier orders buffer, image and shared memory (GLSL 4.60 section 8.16).
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup | "
+        "mem_flags::mem_texture);" in generated
+    )
     assert "atomic_fetch_add_explicit(counters[index]" not in generated
     assert "atomic_store_explicit(counters[index]" not in generated
     assert "atomic_load_explicit(counters[index]" not in generated

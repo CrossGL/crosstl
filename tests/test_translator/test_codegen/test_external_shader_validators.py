@@ -4505,7 +4505,10 @@ def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal(tmp_p
         crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
     )
     assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
-    assert "threadgroup_barrier(mem_flags::mem_device);" in code
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | "
+        "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+    ) in code
     assert "workgroupBarrier();" not in code
     shader_path.write_text(code, encoding="utf-8")
 

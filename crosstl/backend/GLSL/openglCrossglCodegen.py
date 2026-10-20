@@ -1266,6 +1266,13 @@ class GLSLToCrossGLConverter:
             member = members[0]
             if not getattr(member, "is_array", False):
                 return None
+            # Only a block whose sole member is one runtime-sized dimension is an
+            # element buffer.  A sized member ('float d[4]') is a fixed array that
+            # whole-array reads and '.length()' observe, and 'float d[][4]' has
+            # 'float[4]' elements; both keep the block form.
+            array_sizes = getattr(member, "array_sizes", None)
+            if array_sizes is not None and list(array_sizes) != [None]:
+                return None
             return member
 
         if getattr(var, "is_array", False):
