@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
@@ -76,10 +77,41 @@ def translate(source: str, suffix: str, backend: str, source_backend: str) -> st
             raise Broken(_first_line(error, scratch)) from error
 
 
+# A feature's output and input probes both validate its native probe, and a round trip often reproduces a source
+# already checked, so a run validates each distinct source once. The directory lives for one run and is shared by its
+# worker processes; a verdict is never reused across runs, where the tool might differ.
+_verdicts: str | None = None
+
+
+def _remember(directory: str | None) -> None:
+    global _verdicts
+    _verdicts = directory
+
+
+def _verdict(language: str, source: str, stage: str, entry: str) -> validators.Verdict:
+    if not _verdicts:
+        return validators.validate(language, source, stage, entry)
+    digest = hashlib.sha256(
+        "\0".join((language, stage, entry, source)).encode()
+    ).hexdigest()
+    path = Path(_verdicts, digest)
+    try:
+        accepted, _, log = path.read_text().partition("\n")
+        return validators.Verdict(accepted == "1", log)
+    except FileNotFoundError:
+        pass
+    verdict = validators.validate(language, source, stage, entry)
+    # Written aside and renamed, so a worker validating the same source at the same time never reads half a file.
+    partial = path.with_suffix(f".{os.getpid()}")
+    partial.write_text(("1" if verdict.accepted else "0") + "\n" + verdict.log)
+    partial.replace(path)
+    return verdict
+
+
 def _validated(
     language: str, source: str, stage: str, entry: str = ""
 ) -> validators.Verdict:
-    verdict = validators.validate(language, source, stage, entry)
+    verdict = _verdict(language, source, stage, entry)
     if verdict.accepted:
         return verdict
     errors = [line for line in verdict.log.splitlines() if "error" in line.lower()]
@@ -193,7 +225,14 @@ def run(
 ) -> list[Result]:
     """Run every ``(feature, direction, language)`` job; results come back in job order."""
     workers = workers or min(8, os.cpu_count() or 1)
-    if workers == 1 or len(jobs) < 2:
-        return [_job(job) for job in jobs]
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(_job, jobs, chunksize=4))
+    with tempfile.TemporaryDirectory(prefix="crosstl-coverage-verdicts-") as verdicts:
+        if workers == 1 or len(jobs) < 2:
+            _remember(verdicts)
+            try:
+                return [_job(job) for job in jobs]
+            finally:
+                _remember(None)
+        with ProcessPoolExecutor(
+            max_workers=workers, initializer=_remember, initargs=(verdicts,)
+        ) as pool:
+            return list(pool.map(_job, jobs, chunksize=4))

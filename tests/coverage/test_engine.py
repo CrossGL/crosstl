@@ -85,6 +85,27 @@ def test_output_probe_end_to_end():
     ), result.detail
 
 
+def test_a_run_validates_each_distinct_source_once(monkeypatch):
+    calls = []
+
+    def validate(language, source, stage="compute", entry=""):
+        calls.append(source)
+        return validators.Verdict("bad" not in source, "error: bad probe")
+
+    monkeypatch.setattr(validators, "validate", validate)
+    monkeypatch.setattr(
+        runner, "_job", lambda job: runner._validated("glsl", job, "compute")
+    )
+    verdicts = runner.run(["good", "bad", "good", "bad"], workers=1)
+    assert [v.accepted for v in verdicts] == [True, False, True, False]
+    assert verdicts[3].log == "error: bad probe"
+    assert calls == ["good", "bad"]
+    # Nothing carries over into the next run, which may use another tool.
+    runner.run(["good"], workers=1)
+    assert calls == ["good", "bad", "good"]
+    assert runner._verdicts is None
+
+
 def test_fetch_rejects_a_changed_upstream_file(monkeypatch, tmp_path):
     monkeypatch.setenv("CROSSTL_COVERAGE_CACHE", str(tmp_path))
     source = upstream.SOURCES["glsl"]

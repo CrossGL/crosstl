@@ -2,16 +2,17 @@ name: Coverage
 
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The
-# Linux job measures GLSL, HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc, a second Linux
-# job measures CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, a third measures Rust with rust-gpu, and the
-# macOS job measures Metal with xcrun metal. The report job merges the reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job
-# replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart), COVERAGE.md and a bounded
-# history.csv; main itself never receives generated files. The issues job then reconciles the tracking and bug issues
-# (tools/coverage/issues.py); pull requests only print its plan.
+# Linux job measures GLSL, HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc. Three more
+# Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, one measures Rust with rust-gpu, and
+# the macOS job measures Metal with xcrun metal. The report job merges the reports and adds the CrossGL IR row. On
+# pushes to main and nightly, the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg
+# (the README chart), COVERAGE.md and a bounded history.csv; main itself never receives generated files. The issues
+# job then reconciles the tracking and bug issues (tools/coverage/issues.py); pull requests only print its plan.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
-# only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the
-# macOS job only when they change the coverage engine or the Metal translator.
+# only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
+# CUDA/HIP/Mojo and Rust jobs only when they change the coverage engine or that backend's translator; the job summary
+# names the rows a run left out. Pushes to main and the nightly run measure everything.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -48,31 +49,41 @@ jobs:
     timeout-minutes: 5
     outputs:
       metal: ${{ steps.plan.outputs.metal }}
+      compute: ${{ steps.plan.outputs.compute }}
+      rust: ${{ steps.plan.outputs.rust }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 2
 
-      - name: Decide whether the Metal leg runs
+      - name: Decide which optional legs run
         id: plan
         env:
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          legs=(metal compute rust)
           if [ "$EVENT" != pull_request ] && [ "$EVENT" != merge_group ]; then
-            echo "metal=true" >> "$GITHUB_OUTPUT"
+            for leg in "${legs[@]}"; do echo "$leg=true" >> "$GITHUB_OUTPUT"; done
             exit 0
           fi
           # A pull request checks out its merge commit and a merge group its queued commit; the first parent is the
           # base, so this lists exactly the files the change touches.
           changed="$(git diff --name-only HEAD^1 HEAD)"
-          pattern='^(tools/coverage/|tests/coverage/|\.github/workflows/coverage\.yml$|crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$)'
-          if grep -Eq "$pattern" <<<"$changed"; then
-            echo "metal=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "metal=false" >> "$GITHUB_OUTPUT"
-          fi
+          engine='tools/coverage/|tests/coverage/|\.github/workflows/coverage\.yml$'
+          declare -A paths=(
+            [metal]='crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$'
+            [compute]='crosstl/translator/codegen/(cuda|hip|mojo)_|crosstl/backend/(CUDA|HIP|Mojo)/'
+            [rust]='crosstl/translator/codegen/rust_|crosstl/backend/Rust/'
+          )
+          for leg in "${legs[@]}"; do
+            if grep -Eq "^($engine|${paths[$leg]})" <<<"$changed"; then
+              echo "$leg=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$leg=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
 
   linux:
     name: Coverage (GLSL, HLSL, SPIR-V, WGSL, Slang)
@@ -150,10 +161,23 @@ jobs:
           path: coverage-linux.json
           retention-days: 14
 
+  # One leg per language: each compiles four probes per feature, and together they would outlast a job's timeout.
   compute:
-    name: Coverage (CUDA, HIP, Mojo)
+    name: Coverage (${{ matrix.name }})
+    needs: plan
+    if: needs.plan.outputs.compute == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: cuda
+            name: CUDA
+          - backend: hip
+            name: HIP
+          - backend: mojo
+            name: Mojo
     env:
       CROSSTL_COVERAGE_CACHE: ${{ github.workspace }}/../coverage-cache
     steps:
@@ -173,6 +197,7 @@ jobs:
 
       # nvcc compiles without a GPU, so the CUDA compiler and runtime headers are all the probes need.
       - name: Install nvcc 13.0
+        if: matrix.backend == 'cuda'
         run: |
           set -euo pipefail
           keyring="$RUNNER_TEMP/cuda-keyring.deb"
@@ -189,6 +214,7 @@ jobs:
       # hipcc 5.7.1 and its clang 17 come from Ubuntu's archive, the versions tools/coverage/upstream.py pins the HIP
       # headers to. It compiles for a named AMD target, so no GPU is needed either.
       - name: Install hipcc 5.7.1
+        if: matrix.backend == 'hip'
         run: |
           set -euo pipefail
           sudo apt-get install -y -qq --no-install-recommends hipcc=5.7.1-3 libamdhip64-dev=5.7.1-3
@@ -197,6 +223,7 @@ jobs:
       # The Mojo compiler and MAX's GPU package, at the release tools/coverage/upstream.py reads Mojo's standard library
       # from. They live in their own environment, and the wheels are pinned by digest.
       - name: Install mojo 1.1.0
+        if: matrix.backend == 'mojo'
         run: |
           set -euo pipefail
           python -m venv "$RUNNER_TEMP/mojo"
@@ -216,16 +243,20 @@ jobs:
           key: coverage-upstream-${{ hashFiles('tools/coverage/upstream.py') }}
 
       - name: Measure coverage
-        run: python -m tools.coverage run --strict --jobs 4 --backend cuda --backend hip --backend mojo --output coverage-compute.json
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: python -m tools.coverage run --strict --jobs 4 --backend "$BACKEND" --output "coverage-$BACKEND.json"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: coverage-compute
-          path: coverage-compute.json
+          name: coverage-${{ matrix.backend }}
+          path: coverage-${{ matrix.backend }}.json
           retention-days: 14
 
   rust:
     name: Coverage (Rust)
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -336,8 +367,11 @@ jobs:
 
   report:
     name: Coverage report
-    needs: [linux, compute, rust, metal]
-    if: always() && needs.linux.result == 'success' && needs.compute.result == 'success' && needs.rust.result == 'success' && needs.metal.result != 'failure' && needs.metal.result != 'cancelled'
+    needs: [plan, linux, compute, rust, metal]
+    # Every leg ran or was planned out; a leg is skipped only on pull requests and in the merge queue.
+    if: >-
+      always() && needs.plan.result == 'success' && needs.linux.result == 'success'
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
