@@ -31,7 +31,15 @@ import re
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import HubType, TypeScope, call_name, iter_structs
-from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
+from .rewrite import (
+    call,
+    child_slots,
+    clone,
+    field_slots,
+    get_child,
+    is_pure,
+    set_child,
+)
 
 __all__ = [
     "NARROW_TARGETS",
@@ -412,8 +420,8 @@ class NarrowLegalizer:
                 child = getattr(node, field)
                 if child is not None:
                     set_child(node, field, None, self.visit(child))
-            if node.update is not None:
-                set_child(node, "update", None, self.statement(node.update))
+            for slot in field_slots(node, "update"):
+                set_child(node, *slot, self.statement(get_child(node, *slot)))
             self.scope.pop()
             return node
         self.visit_children(node)

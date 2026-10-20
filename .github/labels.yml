@@ -1,0 +1,97 @@
+# Repository labels. The Labels workflow makes GitHub match this file on every
+# push to main: it creates and updates the labels listed here and deletes all
+# others. `renamed-from` keeps a label on its issues when its name changes.
+
+- name: bug
+  color: d73a4a
+  description: Wrong output, a crash or a regression
+- name: enhancement
+  color: a2eeef
+  description: New feature or improvement
+- name: documentation
+  color: 0075ca
+  description: Documentation changes
+- name: question
+  color: d876e3
+  description: Usage question; prefer Discussions
+- name: good first issue
+  color: 7057ff
+  description: Small, well-scoped task for a new contributor
+- name: help wanted
+  color: 008672
+  description: Maintainers would welcome a contribution
+
+- name: backend:glsl
+  color: c5def5
+  description: OpenGL and WebGL GLSL
+  renamed-from: [opengl backend]
+- name: backend:hlsl
+  color: c5def5
+  description: DirectX HLSL
+  renamed-from: [Directx backend]
+- name: backend:metal
+  color: c5def5
+  description: Metal Shading Language
+  renamed-from: [Metal backend]
+- name: backend:spirv
+  color: c5def5
+  description: Vulkan SPIR-V
+  renamed-from: [vulkan backend]
+- name: backend:wgsl
+  color: c5def5
+  description: WebGPU WGSL
+- name: backend:cuda
+  color: c5def5
+  description: CUDA
+- name: backend:hip
+  color: c5def5
+  description: HIP
+- name: backend:slang
+  color: c5def5
+  description: Slang
+- name: backend:rust
+  color: c5def5
+  description: Rust GPU
+- name: backend:mojo
+  color: c5def5
+  description: Mojo
+- name: backend:crossgl
+  color: 5319e7
+  description: The CrossGL IR itself
+
+- name: direction:input
+  color: fef2c0
+  description: Importing a native language into CrossGL
+- name: direction:output
+  color: fef2c0
+  description: Generating a native language from CrossGL
+
+- name: area:frontend
+  color: 1d76db
+  description: Parsers, importers and the CrossGL IR
+  renamed-from: [Translator Frontend]
+- name: area:codegen
+  color: 1d76db
+  description: Code generators
+- name: area:runtime
+  color: 1d76db
+  description: Native loaders, runtimes and execution checks
+- name: area:ci
+  color: 1d76db
+  description: Workflows, tests and coverage tooling
+- name: area:docs
+  color: 1d76db
+  description: Documentation site and guides
+
+- name: coverage
+  color: 0e8a16
+  description: Managed by the coverage workflow; edits are overwritten
+- name: stale
+  color: 808080
+  description: No activity for a long time
+- name: dependencies
+  color: 0366d6
+  description: Dependency updates
+- name: ci:full
+  color: b60205
+  description: Run the full CI tier on this pull request
