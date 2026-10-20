@@ -161,8 +161,10 @@ def any_start_counter_loop_terminates(type_name, offset, stops, step, operator):
     """
     if not isinstance(type_name, str) or not type_name.isidentifier():
         return False
+    # HLSL's minimum-precision integers hold at least 16 bits.
+    widened = {"min16int": "short", "min16uint": "ushort"}
     shape = source_integer_shape(
-        {"min16int": "short", "min16uint": "ushort"}.get(type_name, type_name)
+        widened[type_name] if type_name in widened else type_name
     )
     if shape is None or shape[2] != 1 or shape[1] > 32:
         return False

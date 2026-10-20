@@ -8,6 +8,7 @@ from ..arithmetic_conversions import ArithmeticScalarKind, source_integer_shape
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayType,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
@@ -37,6 +38,7 @@ from ..ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    VectorType,
     WaveOpNode,
     WhileNode,
 )
@@ -46,6 +48,7 @@ from .loop_induction import (
     geometric_loop_terminates,
     walk_control_scopes,
 )
+from .subgroup_uniformity import subgroup_uniformity
 
 _FLOATS = {
     "float",
@@ -2147,29 +2150,55 @@ _RELATIVE_SHUFFLES = frozenset(
 )
 
 
-def _collective_call(node, functions, wrappers=frozenset()):
-    """Whether ``node`` is a shuffle that invocations that left may run.
+# Collectives whose result depends on which lanes take part. Invocations
+# that left may run them only where every subgroup agrees on the predicate.
+_UNIFORM_COLLECTIVES = (
+    _RELATIVE_SHUFFLES
+    | _REDUCTIONS
+    | _VOTES
+    | frozenset(
+        {
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WaveReadLaneAt",
+            "WaveReadLaneFirst",
+            "WavePrefixSum",
+            "WavePrefixProduct",
+        }
+    )
+)
+
+
+def _collective_call(
+    node, functions, wrappers=frozenset(), operations=_RELATIVE_SHUFFLES
+):
+    """Whether ``node`` is a collective that invocations that left may run.
 
     A relative shuffle returns another lane's value, and a source lane that
     left gives an undefined value in Metal and HLSL alike, so the value it
     supplies after convergence refines the source. Sums, scans, votes,
     broadcasts and lane reads by index depend on which invocations are
-    active, or are not needed by MLX's kernels; they stay unproven.
+    active; callers pass them in ``operations`` only where every subgroup
+    agrees on the predicate (``_UNIFORM_COLLECTIVES``).
     """
     if isinstance(node, WaveOpNode):
-        return node.operation in _RELATIVE_SHUFFLES
+        return node.operation in operations
     name = _call_name(node) if isinstance(node, FunctionCallNode) else None
     if isinstance(name, str) and name in wrappers:
         # A user overload set that only applies relative shuffles to its
         # arguments, as complex ``simd_shuffle_down`` shuffles both halves.
         return True
-    return (
-        isinstance(name, str) and name not in functions and name in _RELATIVE_SHUFFLES
-    )
+    return isinstance(name, str) and name not in functions and name in operations
 
 
 def _inactive_collective_statement(
-    statement, constants, private, functions, map_operator
+    statement,
+    constants,
+    private,
+    functions,
+    map_operator,
+    operations=_RELATIVE_SHUFFLES,
 ):
     """``x op= collective(...)`` writing only private ``x`` from private values."""
     node = statement
@@ -2190,7 +2219,10 @@ def _inactive_collective_statement(
 
     def safe(expression):
         if _collective_call(
-            expression, functions, constants.get("__collective__", frozenset())
+            expression,
+            functions,
+            constants.get("__collective__", frozenset()),
+            operations,
         ):
             arguments = (
                 expression.arguments
@@ -2762,6 +2794,8 @@ def _early_exit_statements(statements, active, context):
             # run its statements and leave, which clears their ``active``.
             if not flush(statements[index:]):
                 return None
+            if not _subgroup_uniform(statement.condition, context):
+                context["uniform_state"]["active"] = False
             result.extend(_predicated_exit(statement, active, context))
             continue
         if _escapes(statement, walk_ast):
@@ -2838,32 +2872,35 @@ def _early_exit_statements(statements, active, context):
             if block is None:
                 return None
             result.append(block)
+        elif isinstance(statement, IfNode) and not getattr(
+            statement, "else_if_conditions", None
+        ):
+            block = _predicated_if_else(statement, active, context)
+            if block is None:
+                return None
+            result.append(block)
         elif isinstance(statement, ForNode):
-            counter = getattr(statement.init, "name", None)
-            if not _inactive_loop_header(
-                statement, constants, map_operator
-            ) or counter in _written_roots(statement.body, walk_ast):
+            loop = _predicated_loop(statement, active, context)
+            if loop is None:
                 return None
-            body = _early_exit_statements(
-                _statements(statement.body),
-                active,
-                dict(context, constants=dict(constants)),
-            )
-            if body is None:
-                return None
-            result.append(
-                ForNode(
-                    statement.init,
-                    statement.condition,
-                    statement.update,
-                    BlockNode(body),
-                    source_location=getattr(statement, "source_location", None),
-                )
-            )
+            result.extend(loop)
         elif _inactive_collective_statement(
             statement, constants, private, functions, map_operator
+        ) or (
+            context.get("uniform_state", {}).get("active")
+            and _inactive_collective_statement(
+                statement,
+                constants,
+                private,
+                functions,
+                map_operator,
+                _UNIFORM_COLLECTIVES,
+            )
         ):
-            result.append(statement)
+            guarded = _guarded_collective(statement, active, context)
+            if guarded is None:
+                return None
+            result.extend(guarded)
         else:
             return None
     if not flush([]):
@@ -2928,21 +2965,268 @@ def _predicated_if(statement, active, context):
             ]
     elif active is None:
         return None
-    body = _early_exit_statements(
-        _statements(statement.then_branch),
-        inner,
-        dict(context, constants=dict(constants)),
-    )
+    nested = dict(context, constants=dict(constants))
+    if inner != active:
+        nested["uniform_state"] = {
+            "active": (
+                active is not None
+                and context.get("uniform_state", {}).get("active", False)
+                and _subgroup_uniform(condition, context)
+            )
+        }
+    body = _early_exit_statements(_statements(statement.then_branch), inner, nested)
     if body is None:
         return None
     return BlockNode(prefix + body, source_location=location)
 
 
+def _guarded_collective(statement, active, context):
+    """Keep a collective's update of a private value to ``active`` invocations.
+
+    Every invocation runs the collective. Where ``active`` only marks the
+    invocations that have not left, the others never read their private
+    values again. A nested predicate, such as a branch's or a loop's
+    ``running``, also clears in invocations that continue past it, so
+    ``x op= value`` becomes ``T tmp = value; if (active) { x op= tmp; }``
+    with ``T`` the declared type of ``x``. A declaration names a value
+    only later predicated statements and collectives read; it stays.
+    """
+    node = statement
+    if isinstance(node, ExpressionStatementNode):
+        node = node.expression
+    if active == context.get("exit_active") or isinstance(node, VariableNode):
+        return [statement]
+    value_type = _declared_type(node.target, context)
+    if value_type is None:
+        return None
+    location = getattr(statement, "source_location", None)
+    value = context["fresh"]("__crossgl_subgroup_value")
+    return [
+        VariableNode(value, deepcopy(value_type), node.value, source_location=location),
+        IfNode(
+            IdentifierNode(active),
+            BlockNode(
+                [
+                    ExpressionStatementNode(
+                        AssignmentNode(
+                            deepcopy(node.target), IdentifierNode(value), node.operator
+                        ),
+                        source_location=location,
+                    )
+                ]
+            ),
+        ),
+    ]
+
+
+def _declared_type(target, context):
+    """The scalar or vector type of a private name or of its array elements."""
+    depth = 0
+    while isinstance(target, ArrayAccessNode):
+        target, depth = target.array_expr, depth + 1
+    if not isinstance(target, IdentifierNode):
+        return None
+    declared = context.get("declared_types", {}).get(target.name)
+    for _ in range(depth):
+        if not isinstance(declared, ArrayType):
+            return None
+        declared = declared.element_type
+    if isinstance(declared, ArrayType) or not isinstance(
+        declared, (PrimitiveType, NamedType, VectorType)
+    ):
+        return None
+    return declared
+
+
+def _subgroup_uniform(expression, context):
+    """Whether every invocation of a subgroup agrees on ``expression``."""
+    uniformity = context.get("uniformity")
+    return uniformity is not None and uniformity.expression(expression)
+
+
+def _predicated_if_else(statement, active, context):
+    """Keep ``if (c) { A } else { B }`` whose branches synchronize.
+
+    Invocations that left evaluate ``c`` too, so it must be inactive-safe,
+    and take one branch, where they run only its collectives and barriers;
+    every other statement of ``A`` and ``B`` runs under ``active``. The code
+    generators still prove ``c`` uniform before accepting the collectives.
+    Nothing proves it uniform across the workgroup for a workgroup barrier,
+    so a branch that synchronizes the workgroup stays unproven.
+    """
+    constants, map_operator = context["constants"], context["map_operator"]
+    condition = statement.condition
+    if "barrier" in context["effects"](statement):
+        return None
+    if not _inactive_safe(condition, constants, map_operator, context["private"]):
+        return None
+    uniform = context.get("uniform_state", {}).get(
+        "active", False
+    ) and _subgroup_uniform(condition, context)
+    branches = []
+    for branch in (statement.then_branch, statement.else_branch):
+        nested = dict(
+            context, constants=dict(constants), uniform_state={"active": uniform}
+        )
+        body = _early_exit_statements(_statements(branch), active, nested)
+        if body is None:
+            return None
+        branches.append(BlockNode(body))
+    return IfNode(
+        condition,
+        branches[0],
+        branches[1],
+        source_location=getattr(statement, "source_location", None),
+    )
+
+
+def _conjuncts(expression, map_operator):
+    if (
+        isinstance(expression, BinaryOpNode)
+        and map_operator(expression.operator) == "&&"
+    ):
+        return _conjuncts(expression.left, map_operator) + _conjuncts(
+            expression.right, map_operator
+        )
+    return [expression]
+
+
+def _predicated_loop(statement, active, context):
+    """Lower a counted loop around collectives or barriers; ``None`` if unproven.
+
+    The loop's header must be one every invocation may run. A header
+    ``i < n && p``, as MLX's quantized ``row < results && out_row + row <
+    out_size``, leaves early only for some subgroups; it becomes::
+
+        bool running = active;
+        for (int i = 0; i < n; i++) {
+            running = running && p;
+            ...  // as for any statement list, predicated by ``running``
+        }
+
+    ``running`` holds exactly in the source's iterations: the counter is
+    fresh and the body writes neither it nor anything ``p`` reads, and ``p``
+    is inactive-safe. Only ``i < n`` then decides the trip count.
+    """
+    constants, map_operator, walk_ast = (
+        context["constants"],
+        context["map_operator"],
+        context["walk_ast"],
+    )
+    counter = getattr(statement.init, "name", None)
+    written = _written_roots(statement.body, walk_ast)
+    location = getattr(statement, "source_location", None)
+    if counter is None or counter in written:
+        return None
+    conjuncts = (
+        _conjuncts(statement.condition, map_operator)
+        if statement.condition is not None
+        else [None]
+    )
+    head = ForNode(statement.init, conjuncts[0], statement.update, statement.body)
+    if not _inactive_loop_header(head, constants, map_operator):
+        return None
+    nested = dict(context, constants=dict(constants))
+    if len(conjuncts) == 1:
+        body = _early_exit_statements(_statements(statement.body), active, nested)
+        if body is None:
+            return None
+        return [
+            ForNode(
+                statement.init,
+                statement.condition,
+                statement.update,
+                BlockNode(body),
+                source_location=location,
+            )
+        ]
+    rest = conjuncts[1]
+    for conjunct in conjuncts[2:]:
+        rest = BinaryOpNode(rest, "&&", conjunct)
+    if not _inactive_safe(
+        rest, constants, map_operator, context["private"]
+    ) or _read_names(rest, walk_ast) & (written | {active}):
+        return None
+    running = context["fresh"]("__crossgl_subgroup_running")
+    uniformity = context.get("uniformity")
+    update = statement.update
+    if isinstance(update, ExpressionStatementNode):
+        update = update.expression
+    step = update.value if isinstance(update, AssignmentNode) else None
+    if uniformity is not None and all(
+        uniformity.expression(part)
+        for part in (statement.init.initial_value, step)
+        if part is not None
+    ):
+        # Every invocation steps the counter through the same values.
+        uniformity = uniformity.with_names({counter})
+        nested["uniformity"] = uniformity
+    nested["uniform_state"] = {
+        "active": (
+            context.get("uniform_state", {}).get("active", False)
+            and uniformity is not None
+            and uniformity.expression(rest)
+        )
+    }
+    body = _early_exit_statements(_statements(statement.body), running, nested)
+    if body is None:
+        return None
+    return [
+        VariableNode(
+            running,
+            PrimitiveType("bool"),
+            IdentifierNode(active),
+            source_location=location,
+        ),
+        ForNode(
+            statement.init,
+            conjuncts[0],
+            statement.update,
+            BlockNode(
+                [
+                    ExpressionStatementNode(
+                        AssignmentNode(
+                            IdentifierNode(running),
+                            BinaryOpNode(IdentifierNode(running), "&&", rest),
+                            "=",
+                        ),
+                        source_location=location,
+                    ),
+                    *body,
+                ]
+            ),
+            source_location=location,
+        ),
+    ]
+
+
 def _early_exit_context(
-    function, effects, walk_ast, map_operator, functions, kinds=None, fresh=None
+    function,
+    effects,
+    walk_ast,
+    map_operator,
+    functions,
+    kinds=None,
+    fresh=None,
+    uniformity=None,
 ):
     kinds = kinds or {}
+    declared = {}
+    for node in walk_ast(function.body):
+        if isinstance(node, VariableNode):
+            declared.setdefault(node.name, []).append(node.var_type)
     return {
+        # Subgroup-uniform names of ``function``, and whether every subgroup
+        # agrees on the current predicate (see ``subgroup_uniformity``).
+        "uniformity": uniformity,
+        "uniform_state": {"active": False},
+        # The predicate of invocations that have not left; set by callers.
+        "exit_active": None,
+        "declared_types": {
+            name: types[0]
+            for name, types in declared.items()
+            if all(repr(item) == repr(types[0]) for item in types)
+        },
         "effects": effects,
         "walk_ast": walk_ast,
         "map_operator": map_operator,
@@ -3020,6 +3304,13 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
             functions.setdefault(node.name, []).append(node)
     effects = _effect_checker(nodes, walk_ast)
     kinds = _value_function_kinds(functions, walk_ast, map_operator)
+    uniformities = subgroup_uniformity(
+        ast,
+        entries,
+        walk_ast,
+        map_operator,
+        frozenset(name for name, kind in kinds.items() if kind == "pure"),
+    )
     reachable = set()
     pending = [entry for stage, entry, _config in entries if stage == "compute"]
     while pending:
@@ -3040,13 +3331,23 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
             ):
                 continue
             context = _early_exit_context(
-                function, effects, walk_ast, map_operator, functions, kinds
+                function,
+                effects,
+                walk_ast,
+                map_operator,
+                functions,
+                kinds,
+                uniformity=uniformities.get(id(function)),
             )
             plan = _early_exit_plan(function, context)
             if plan is None:
                 continue
             index, simple = plan
             statements = _statements(function.body)
+            context["uniform_state"]["active"] = not simple or _subgroup_uniform(
+                statements[index].condition, context
+            )
+            context["exit_active"] = "__crossgl_subgroup_active"
             context["constants"].update(_const_literals(statements[:index]))
             rest = _early_exit_statements(
                 statements[index + int(simple) :], "__crossgl_subgroup_active", context
@@ -3075,8 +3376,19 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
         exit_branch = statements[index]
         active = fresh("__crossgl_subgroup_active")
         context = _early_exit_context(
-            function, copied_effects, walk_ast, map_operator, functions, kinds, fresh
+            function,
+            copied_effects,
+            walk_ast,
+            map_operator,
+            functions,
+            kinds,
+            fresh,
+            uniformity=uniformities.get(id(original)),
         )
+        context["uniform_state"]["active"] = not simple or _subgroup_uniform(
+            exit_branch.condition, context
+        )
+        context["exit_active"] = active
         context["constants"].update(_const_literals(statements[:index]))
         rest = _early_exit_statements(
             statements[index + int(simple) :], active, context
