@@ -42,6 +42,12 @@ from ..ast import (
     VariableNode,
     WhileNode,
 )
+from .subgroup_loop_carried import (
+    carried_fixpoint,
+    follow_carried_write,
+    leaves_trip_early,
+    loop_carried_names,
+)
 
 _LOOPS = (ForNode, WhileNode, DoWhileNode, LoopNode, ForInNode)
 _STEPS = {"++", "--", "PRE_INCREMENT", "POST_INCREMENT", "PRE_DECREMENT"}
@@ -305,6 +311,11 @@ class ReassignmentFlow:
     test, ``declares_uniform(declaration, names, components)`` decides a
     local declared inside a followed branch and ``constant_condition``
     optionally folds a guard to ``True`` or ``False``.
+
+    ``carried`` names locals that loops advance on every trip (see
+    ``subgroup_loop_carried``). ``trip_uniform(loop, names, components)``
+    proves that every invocation runs the same trips of ``loop``; without it
+    a loop carries nothing.
     """
 
     def __init__(
@@ -317,9 +328,13 @@ class ReassignmentFlow:
         declares_uniform,
         constant_condition=None,
         offsets=(),
+        carried=(),
+        trip_uniform=None,
     ):
         self.followed = set(followed)
         self.offsets = set(offsets)
+        self.carried = set(carried)
+        self.trip_uniform = trip_uniform
         self.walk = walk
         self.map_operator = map_operator
         self.uniform_expression = uniform_expression
@@ -344,12 +359,56 @@ class ReassignmentFlow:
                     names.add(node.operand.name)
         return names
 
+    def carried_trip(self, loop, names, components):
+        """Return the facts at each trip's start and the carried names kept.
+
+        A loop whose trips may differ between invocations, or that may end a
+        trip early, keeps none of the locals it carries.
+        """
+        carried = loop_carried_names(loop, self.carried, self.walk, self.map_operator)
+        if not carried:
+            return set(names), frozenset()
+        if (
+            not isinstance(loop, ForNode)
+            or self.trip_uniform is None
+            or leaves_trip_early(loop, self.walk)
+            or not self.trip_uniform(loop, names, components)
+        ):
+            return set(names) - carried, frozenset()
+
+        def follow_trip(trial):
+            self.follow_branch(getattr(loop, "body", None), trial, components)
+            update = getattr(loop, "update", None)
+            if update is not None:
+                self.follow(update, trial, components)
+
+        kept = carried_fixpoint(carried, names, follow_trip)
+        return (set(names) - carried) | kept, kept
+
     def follow(self, statement, names, components):
         """Update ``names`` for the followed writes ``statement`` performs."""
-        written = (self.followed | self.offsets) & self.written(statement)
+        written = (self.followed | self.offsets | self.carried) & self.written(
+            statement
+        )
         if not written:
             return
         node = _expression(statement)
+        if (
+            follow_carried_write(
+                node,
+                self.carried,
+                names,
+                lambda value: self.uniform_expression(value, names, components),
+                self.map_operator,
+            )
+            is not None
+        ):
+            return
+        if isinstance(node, ForNode) and written & self.carried:
+            # Every invocation ran the same trips, each keeping ``kept``.
+            _trip, kept = self.carried_trip(node, names, components)
+            names.difference_update(written - kept)
+            return
         kept = follow_offset(
             node,
             self.offsets,

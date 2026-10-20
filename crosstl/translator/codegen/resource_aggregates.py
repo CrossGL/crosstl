@@ -248,8 +248,7 @@ def _pointer_type(value, owner=None):
 
     if (
         isinstance(value, NamedType)
-        and value.name
-        in {
+        and value.name in {
             "StructuredBuffer",
             "RWStructuredBuffer",
         }
@@ -338,8 +337,7 @@ def _remove_pointee_qualifiers(node):
 def _contains_storage_pointer(node):
     return any(
         isinstance(child, PointerType)
-        and child.address_space
-        in {
+        and child.address_space in {
             "constant",
             "device",
             "global",
@@ -367,8 +365,7 @@ def _literal_constant(node):
         return node.operator in {"+", "-", "!", "~"} and _literal_constant(node.operand)
     if isinstance(node, BinaryOpNode):
         return (
-            node.operator
-            in {
+            node.operator in {
                 "+",
                 "-",
                 "*",
@@ -425,6 +422,7 @@ class _Lowering:
         self.workgroup_roots = {}
         self.workgroup_declarations = []
         self.resource_origins = {}
+        self.storage_origins = {}
         self.structs = {}
         for node in ast.walk():
             if isinstance(node, StructNode):
@@ -658,6 +656,34 @@ class _Lowering:
                 *([] if pointer.readable else ["writeonly"]),
             ],
         }
+
+    def storage_read(self, pointer, owner, call):
+        """Record the bindings a storage load can read when origins are proven.
+
+        A load helper selects its binding by the handle's identity, so a handle
+        whose origins are proven reads only those bindings. Uniformity proofs
+        then need only those bindings to be immutable, not every binding of
+        the element type. ``call.storage_reads`` names them in the call's
+        argument spelling; the helper body itself is unchanged.
+        """
+        origins = self.storage_origins.get(id(owner))
+        if pointer.space == "threadgroup" or not origins:
+            return call
+        names = []
+        for identity in sorted(origins):
+            if not 0 <= identity < len(self.resources):
+                return call
+            _param, resource, name = self.resources[identity]
+            if (
+                resource.space == "threadgroup"
+                or resource.element != pointer.element
+                or resource.space != pointer.space
+                or not resource.readable
+            ):
+                return call
+            names.append(name)
+        call.storage_reads = tuple(names)
+        return call
 
     def resource_arguments(self):
         return [
@@ -1279,8 +1305,7 @@ class _Lowering:
             element = self.fields.get(_name(element), {}).get(member)
         if _name(element) not in {"int", "uint"} and not (
             _name(element) == "float"
-            and operation
-            in {
+            and operation in {
                 "atomicLoad",
                 "atomicStore",
                 "atomicAdd",
@@ -1780,13 +1805,17 @@ class _Lowering:
         access = self.access(node, env)
         if access is not None:
             pointer, owner, index = access
-            return _call(
-                self.helper(pointer, "load", self.resource_origins.get(id(owner))),
-                [
-                    self.expression(owner, env),
-                    _call("int64_t", [self.expression(index, env)]),
-                    *self.resource_arguments(),
-                ],
+            return self.storage_read(
+                pointer,
+                owner,
+                _call(
+                    self.helper(pointer, "load", self.resource_origins.get(id(owner))),
+                    [
+                        self.expression(owner, env),
+                        _call("int64_t", [self.expression(index, env)]),
+                        *self.resource_arguments(),
+                    ],
+                ),
             )
         if isinstance(node, BinaryOpNode):
             left_type, right_type = self.infer(node.left, env), self.infer(
@@ -2110,8 +2139,12 @@ class _Lowering:
     def run(self):
         self.discover(self.entry)
         self.elide_unused_null_parameters()
+        origins = ResourceOriginAnalysis(self, _Pointer).analyze()
+        # Device helpers keep every compatible binding; proven origins only
+        # annotate their reads (see ``storage_read``).
+        self.storage_origins = origins
         if any(isinstance(node, PointerReinterpretNode) for node in self.ast.walk()):
-            self.resource_origins = ResourceOriginAnalysis(self, _Pointer).analyze()
+            self.resource_origins = origins
         # Bind calls to distinct symbols before pointer handles erase access and
         # address-space differences between source overloads.
         for name, overloads in self.functions.items():

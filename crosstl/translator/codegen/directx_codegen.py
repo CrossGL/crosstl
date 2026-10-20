@@ -158,8 +158,8 @@ from .builtin_result_types import (
 from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
 from .constant_guards import (
-    constant_branch_guards,
     constant_bool_locals,
+    constant_branch_guards,
     guard_bool_value,
 )
 from .constant_ordering import partition_constants_by_struct_dependency
@@ -500,6 +500,13 @@ from .subgroup_control_flow import (
     converge_subgroup_early_exits,
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
+)
+from .subgroup_loop_carried import (
+    carried_fixpoint,
+    follow_carried_write,
+    leaves_trip_early,
+    loop_carried_candidates,
+    loop_carried_names,
 )
 from .subgroup_reassignments import (
     follow_member_write,
@@ -7127,7 +7134,51 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         # Only followed locals may be records written member by member.
         record_names = set(reassigned_names)
         reassigned_names = set(reassigned_names) | counter_names | set(offset_names)
+        uniform_returns = self.hlsl_software_subgroup_uniform_returns
+        # Locals a uniform loop advances on every trip, as a block-mask offset.
+        carried_candidates = loop_carried_candidates(
+            function,
+            mutable_names,
+            call_mutations,
+            walk=self.walk_ast,
+            map_operator=self.map_operator,
+            identifier_names=self.hlsl_software_subgroup_expression_identifier_names,
+            value_type=uniform_returns.value_type,
+            volatile=lambda node: uniform_returns._qualified(node, {"volatile"}),
+            excluded=reassigned_names,
+        )
+        reassigned_names |= carried_candidates
         masked_if_plans = getattr(self, "hlsl_software_subgroup_masked_if_plans", {})
+
+        def carried_trip_names(loop, names, components):
+            """The facts at each trip's start of a loop that carries locals."""
+            carried = loop_carried_names(
+                loop, carried_candidates, self.walk_ast, self.map_operator
+            )
+            if not carried:
+                return set(names), frozenset()
+            if (
+                not isinstance(loop, ForNode)
+                or leaves_trip_early(loop, self.walk_ast)
+                or not self.hlsl_software_subgroup_uniform_for(
+                    loop,
+                    names,
+                    call_mutations,
+                    components,
+                    loop_constants.get(id(loop), {}),
+                    metadata_bounds,
+                )
+            ):
+                return set(names) - carried, frozenset()
+
+            def follow_trip(trial):
+                follow_branch(getattr(loop, "body", None), trial, components)
+                update = getattr(loop, "update", None)
+                if update is not None:
+                    apply_reassignments(update, trial, components)
+
+            kept = carried_fixpoint(carried, names, follow_trip)
+            return (set(names) - carried) | kept, kept
 
         def declares_uniform(statement, names, components):
             # Facts are lexical and apply only to locals never written or
@@ -7214,6 +7265,34 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             if kept is not None:
                 if not kept:
                     names.difference_update(written)
+                return
+            if (
+                follow_carried_write(
+                    node,
+                    carried_candidates,
+                    names,
+                    lambda value: self.hlsl_software_subgroup_uniform_expression(
+                        value, names, components
+                    ),
+                    self.map_operator,
+                )
+                is not None
+            ):
+                return
+            if isinstance(node, ForNode) and written & carried_candidates:
+                # Every invocation ran the same trips, each keeping ``kept``.
+                _trip, kept = carried_trip_names(node, names, components)
+                dropped = written - kept
+                if counter is not None and self.hlsl_software_subgroup_uniform_for(
+                    node,
+                    names,
+                    call_mutations,
+                    components,
+                    loop_constants.get(id(node), {}),
+                    metadata_bounds,
+                ):
+                    dropped.discard(counter[0])
+                names.difference_update(dropped)
                 return
             if isinstance(node, AssignmentNode):
                 name = self.hlsl_software_subgroup_assignment_target_name(node)
@@ -7460,7 +7539,9 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                         )[strided_plan["operationIfIndex"]]
                         masked_if_plans[id(operation_if)] = strided_plan["maskedIfPlan"]
                     initializer = getattr(statement, "init", None)
-                    nested_names = set(names)
+                    nested_names, _kept = carried_trip_names(
+                        statement, names, components
+                    )
                     nested_components = dict(components)
                     if isinstance(initializer, VariableNode) and initializer.name:
                         if strided_plan is None and not trip_uniform:

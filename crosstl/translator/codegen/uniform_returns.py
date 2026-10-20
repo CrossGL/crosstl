@@ -302,8 +302,37 @@ class UniformReturnAnalysis:
         ]
         return any(str(getattr(q, "name", q)).lower() in excluded for q in qualifiers)
 
+    @staticmethod
+    def storage_read_dependencies(call):
+        """Dependencies of a resource-aggregate load with proven origins.
+
+        The lowering emits ``load(reference, index, bindings...)``, which
+        returns ``binding[reference.offset + index]`` for the binding the
+        reference's identity selects. ``call.storage_reads`` names the bindings
+        the proven origins allow, so the result depends on the reference, the
+        index and only those bindings. Any other spelling fails closed.
+        """
+        reads = getattr(call, "storage_reads", None)
+        if reads is None:
+            return None
+        positions = [
+            index
+            for index, argument in enumerate(call.arguments)
+            if isinstance(argument, IdentifierNode) and argument.name in reads
+        ]
+        if (
+            not reads
+            or len(positions) != len(reads)
+            or len(set(reads)) != len(reads)
+            or min(positions) < 2
+        ):
+            return None
+        return frozenset({0, 1, *(_StorageDependency(index) for index in positions)})
+
     def dependencies(self, call):
         """Return the required argument positions, or None without a proof."""
+        if getattr(call, "storage_reads", None) is not None:
+            return self.storage_read_dependencies(call)
         if id(call) in self.pure_builtin_calls:
             return frozenset(range(len(call.arguments)))
         function = self.resolved_calls.get(id(call))
@@ -365,8 +394,7 @@ class UniformReturnAnalysis:
             )
         return (
             isinstance(type_, NamedType)
-            and type_.name
-            in (
+            and type_.name in (
                 {"StructuredBuffer"}
                 if read_only
                 else {"StructuredBuffer", "RWStructuredBuffer"}

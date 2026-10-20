@@ -510,6 +510,7 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
+from .subgroup_loop_carried import loop_carried_candidates, loop_carried_names
 from .subgroup_reassignments import (
     ReassignmentFlow,
     followed_locals,
@@ -6377,6 +6378,14 @@ class GLSLCodeGen(
                 mutable.update(
                     self.glsl_software_subgroup_expression_identifier_names(invalidated)
                 )
+        # Locals declared in several scopes but never written hold one value per
+        # declaration; the flows scope each declaration's fact.
+        parameters = {parameter.name for parameter in function.parameters or []}
+        redeclared = {
+            name
+            for name, count in declarations.items()
+            if count > 1 and name not in mutable and name not in parameters
+        }
         mutable.update(name for name, count in declarations.items() if count > 1)
         # Immutable entry storage moved only by uniform-trackable offsets stays a
         # resource; the exit and argument flows follow its view.
@@ -6451,12 +6460,27 @@ class GLSLCodeGen(
                     self, "glsl_software_subgroup_counter_loops", {}
                 ).values()
             }
+        # Locals a uniform loop advances on every trip, as a block-mask offset.
+        carried = loop_carried_candidates(
+            function,
+            mutable,
+            self.glsl_software_subgroup_call_mutations,
+            walk=self.walk_ast,
+            map_operator=self.map_operator,
+            identifier_names=self.glsl_software_subgroup_expression_identifier_names,
+            value_type=analysis.value_type,
+            volatile=lambda node: analysis._qualified(node, {"volatile"}),
+            write_roots=self.glsl_mutation_target_names,
+            excluded=set(followed) | set(offsets),
+        )
         return {
             "uniform_names": names,
             "uniform_components": components,
             "mutable_names": mutable,
             "offset_names": offsets,
-            "followed_names": set(followed),
+            "followed_names": set(followed) | carried,
+            "carried_names": carried,
+            "redeclared_names": redeclared,
         }
 
     def glsl_software_subgroup_uniform_arguments(self, function, seeds, *, entry):
@@ -6490,6 +6514,7 @@ class GLSLCodeGen(
                 (
                     statement.name not in facts["mutable_names"]
                     or statement.name in followed
+                    or statement.name in facts["redeclared_names"]
                 )
                 and (
                     analysis.value_type(statement.var_type)
@@ -6507,6 +6532,10 @@ class GLSLCodeGen(
             uniform_expression=self.glsl_software_subgroup_exit_uniform_expression,
             declares_uniform=declares_uniform,
             offsets=facts["offset_names"],
+            carried=facts["carried_names"],
+            trip_uniform=lambda loop, names, components: (
+                self.glsl_software_subgroup_uniform_for(loop, names)
+            ),
         )
 
         def visit(body, names, components):
@@ -6563,7 +6592,10 @@ class GLSLCodeGen(
                         )
                         # A proven initializer-free counter loop has no init.
                         loop_name = getattr(statement.init, "name", None)
-                        nested_names = set(names) | ({loop_name} - {None})
+                        trip_names, _kept = flow.carried_trip(
+                            statement, names, components
+                        )
+                        nested_names = trip_names | ({loop_name} - {None})
                         nested_components = dict(components)
                         nested_components.pop(loop_name, None)
                         visit(statement.body, nested_names, nested_components)
@@ -6584,7 +6616,14 @@ class GLSLCodeGen(
                         nested_components.pop(statement.init.name, None)
                         visit(
                             statement.body,
-                            set(names) - {statement.init.name},
+                            set(names)
+                            - {statement.init.name}
+                            - loop_carried_names(
+                                statement,
+                                facts["carried_names"],
+                                self.walk_ast,
+                                self.map_operator,
+                            ),
                             nested_components,
                         )
                     continue
@@ -6637,6 +6676,8 @@ class GLSLCodeGen(
         mutable_names=None,
         offset_names=None,
         followed_names=None,
+        carried_names=None,
+        redeclared_names=None,
     ):
         # Branches a constant guard rules out never run.
         dead_ids = getattr(self, "glsl_software_subgroup_dead_node_ids", set())
@@ -6665,6 +6706,7 @@ class GLSLCodeGen(
                 (
                     statement.name not in mutable_names
                     or statement.name in followed_names
+                    or statement.name in (redeclared_names or ())
                 )
                 and (
                     self.glsl_software_subgroup_uniform_returns.value_type(
@@ -6685,6 +6727,10 @@ class GLSLCodeGen(
             uniform_expression=self.glsl_software_subgroup_exit_uniform_expression,
             declares_uniform=declares_uniform,
             offsets=offset_names,
+            carried=carried_names or (),
+            trip_uniform=lambda loop, names, components: (
+                self.glsl_software_subgroup_uniform_for(loop, names)
+            ),
         )
         for index, statement in enumerate(statements):
             if index and (offset_names or followed_names):
@@ -6715,6 +6761,8 @@ class GLSLCodeGen(
                     mutable_names=mutable_names,
                     offset_names=offset_names,
                     followed_names=followed_names,
+                    carried_names=carried_names,
+                    redeclared_names=redeclared_names,
                 )
             elif isinstance(statement, IfNode):
                 conditions = [
@@ -6752,6 +6800,8 @@ class GLSLCodeGen(
                         mutable_names=mutable_names,
                         offset_names=offset_names,
                         followed_names=followed_names,
+                        carried_names=carried_names,
+                        redeclared_names=redeclared_names,
                     )
             elif isinstance(
                 statement,
@@ -6783,6 +6833,8 @@ class GLSLCodeGen(
                     mutable_names=mutable_names,
                     offset_names=offset_names,
                     followed_names=followed_names,
+                    carried_names=carried_names,
+                    redeclared_names=redeclared_names,
                 )
 
     def glsl_software_subgroup_uniform_seed_names(
