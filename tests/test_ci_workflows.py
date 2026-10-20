@@ -143,6 +143,7 @@ def test_test_workflows_replace_only_superseded_pull_request_runs(filename):
         ("examples-test.yml", "Examples Test result"),
         ("support-matrix.yml", "Support Matrix result"),
         ("demo-project-testing.yml", "MLX validation result"),
+        ("coverage.yml", "Coverage result"),
     ],
 )
 def test_gating_workflows_report_one_result_for_pull_requests_and_the_merge_queue(

@@ -54,6 +54,12 @@
 
 CrossTL is a shader and compute program translator built around **CrossGL** — an intermediate representation (IR) language that bridges graphics APIs, GPU-compute platforms, and systems-language targets.
 
+![CrossTL coverage per language and direction](https://raw.githubusercontent.com/CrossGL/crosstl/coverage/coverage.svg)
+
+CI measures this chart on every push to `main` and nightly: every feature in a pinned upstream feature list gets a
+generated probe, CrossTL translates it, and the language's reference tool validates the result. The gaps behind
+each bar are listed in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md).
+
 ## Supported Translation Targets
 
 CrossTL provides translation from CrossGL to:
