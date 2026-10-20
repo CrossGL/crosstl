@@ -211,6 +211,20 @@ def test_tools_lists_every_language_and_how_to_provide_a_missing_tool(
     assert "glsl yes, hlsl no" in lines[-2]
 
 
+def test_strict_run_names_exactly_the_missing_lowering_tool(monkeypatch, capsys):
+    from tools.coverage import __main__ as cli
+
+    monkeypatch.setattr(validators, "available", lambda language: True)
+    monkeypatch.setattr(validators, "can_lower", lambda language: False)
+    monkeypatch.setattr(
+        validators, "command", lambda tool: () if tool == "spirv-dis" else (tool,)
+    )
+    assert cli.main(["run", "--strict", "--backend", "rust"]) == 2
+    assert capsys.readouterr().err.strip() == (
+        "error: missing tools for rust lowering to SPIR-V (spirv-dis)"
+    )
+
+
 @pytest.mark.parametrize(
     ("banner", "found"),
     [("Mojo 1.1.0 (8189361e)", True), ("mojo 24.4.0 (59977802)", False)],

@@ -246,6 +246,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
+      # spirv-dis disassembles the module rust-gpu emits, which places each Rust feature in the SPIR-V semantic
+      # universe the CrossGL IR row is measured against.
+      - name: Install pinned glslang and SPIRV-Tools
+        uses: ./.github/actions/install-shader-validators
+
       # rust-gpu is a rustc backend built from source. The cache keeps the backend and the core and spirv-std
       # libraries rust-gpu's compile tests build for the SPIR-V target; tools/coverage/rustgpu.py compiles each probe
       # against them.

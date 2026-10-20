@@ -96,6 +96,12 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _lowering_gaps(language: str) -> list[str]:
+    """The tools a language's SPIR-V lowering needs that are not installed."""
+    tools = (validators.SPIRV_COMPILERS[language][0], "spirv-dis")
+    return [tool for tool in tools if not validators.command(tool)]
+
+
 def _run(args: argparse.Namespace) -> int:
     languages = args.backend or LANGUAGES
     directions = [args.direction] if args.direction else list(DIRECTIONS)
@@ -104,7 +110,7 @@ def _run(args: argparse.Namespace) -> int:
         for language in languages
         if not validators.available(language)
     ] + [
-        f"{language} lowering to SPIR-V ({validators.SPIRV_COMPILERS[language][0]}, spirv-dis)"
+        f"{language} lowering to SPIR-V ({', '.join(_lowering_gaps(language))})"
         for language in languages
         if language in validators.SPIRV_COMPILERS and not validators.can_lower(language)
     ]
