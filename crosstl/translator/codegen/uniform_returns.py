@@ -38,6 +38,9 @@ _OWNED_WRITES = frozenset(
 _OWNED_STEPS = frozenset(
     {"++", "--", "PRE_INCREMENT", "POST_INCREMENT", "PRE_DECREMENT", "POST_DECREMENT"}
 )
+# CrossGL spellings of the 16-bit floating scalars. They hold plain values
+# like the 32-bit types ``target_arithmetic_type`` names.
+_NARROW_FLOAT_VALUES = frozenset({"half", "f16", "float16", "bfloat16"})
 
 
 @dataclass(frozen=True)
@@ -417,6 +420,7 @@ class UniformReturnAnalysis:
         if (
             target_arithmetic_type(name) is not None
             or name in {"min16int", "min16uint"}
+            or name in _NARROW_FLOAT_VALUES
             or (
                 isinstance(name, str)
                 and name.isidentifier()

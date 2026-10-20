@@ -286,6 +286,44 @@ SUBGROUP_REFUSAL = "software-subgroup-invalid"
 CONTRACT_REFUSAL = "project.translate.immutable-storage-unsupported"
 
 
+NARROW_TEMPLATE = """#include <metal_stdlib>
+using namespace metal;
+
+[[kernel]] void masked_sums(
+    const device %(element)s* flags [[buffer(0)]],
+    const device uint* values [[buffer(1)]],
+    device uint* results [[buffer(2)]],
+    uint lid [[thread_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+  %(element)s flag = flags[group.x];
+  uint base = group.x * 128u;
+  if (flag == %(element)s(0)) {
+    results[base + lid] = 0u;
+    return;
+  }
+  threadgroup_barrier(mem_flags::mem_none);
+  results[base + lid] = simd_sum(values[base + lid]) + uint(flag);
+}
+"""
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+@pytest.mark.parametrize("element", ("half", "bfloat"))
+def test_contract_covers_16_bit_floating_storage(tmp_path, target, element):
+    """16-bit floating elements are values, so their storage can be immutable."""
+    source = NARROW_TEMPLATE % {"element": element}
+    report, errors = _translate(tmp_path / "plain", target, source, contract=())
+    assert report.to_json()["summary"]["translatedCount"] == 0
+    assert SUBGROUP_REFUSAL in errors[0]["code"], errors
+    report, errors = _translate(tmp_path / "contract", target, source)
+    assert not errors, errors
+    (artifact,) = report.to_json()["artifacts"]
+    generated = (tmp_path / "contract" / artifact["path"]).read_text()
+    (record,) = parse_immutable_storage_header(generated)
+    assert record["sourceResource"]["parameter"] == "flags"
+    _compile(generated, target, tmp_path)
+
+
 @pytest.mark.parametrize("target", ("directx", "opengl"))
 @pytest.mark.parametrize(
     "prefix,read,contract,expected",
