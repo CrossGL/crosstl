@@ -184,3 +184,104 @@ def mix_select_reference(inputs):
         out += [y if index & 1 else x, y if first else x, x if second else y]
     return np.array(out, np.float32)
 
+
+def exponent_inputs():
+    """Zero, powers of two, and normal values whose magnitude stays within [2^-60, 2^60].
+
+    The values are normal, so no device flushes them, and ``ldexp`` by at most 2^20 stays normal, so every result is
+    exact. Negative values are never integral: ``modf`` of a negative integer has a zero fraction whose sign C, MSL
+    and HLSL fix as negative while ``x - trunc(x)`` gives positive zero, and GLSL does not pin the sign of zero.
+    """
+    edges = [
+        0.0,
+        1.0,
+        0.5,
+        2.0,
+        0.75,
+        3.0,
+        -0.75,
+        -1.5,
+        1024.5,
+        -3.25,
+        2.0**-60,
+        2.0**60,
+        -(2.0**-30) * 1.5,
+    ]
+    rng = np.random.default_rng(20261022)
+    values = [np.float32(value) for value in edges]
+    while len(values) < THREADS:
+        magnitude = np.float32(2.0 ** rng.uniform(-60.0, 60.0))
+        if rng.integers(0, 2):
+            if np.trunc(magnitude) == magnitude:
+                continue
+            magnitude = -magnitude
+        values.append(magnitude)
+    return np.array(values, np.float32)
+
+
+def exponent_reference(inputs):
+    significands, exponents = np.frexp(inputs)
+    indices = np.arange(inputs.shape[0])
+    scaled = np.ldexp(inputs, (indices % 41) - 20).astype(np.float32)
+    fractions, wholes = np.modf(inputs)
+    columns = (
+        significands.astype(np.float32).view(np.uint32),
+        exponents.astype(np.int64).astype(np.uint32),
+        scaled.view(np.uint32),
+        fractions.astype(np.float32).view(np.uint32),
+        wholes.astype(np.float32).view(np.uint32),
+    )
+    return np.stack(columns, axis=1).reshape(-1).astype(np.uint32)
+
+
+def hlsl_exponent_inputs():
+    """Zero, powers of two and normal values in [2^-30, 2^30], so ``modf``'s whole part fits an int."""
+    edges = [
+        0.0,
+        1.0,
+        0.5,
+        2.0,
+        0.75,
+        3.0,
+        -0.75,
+        -1.5,
+        1024.5,
+        -3.25,
+        2.0**-30,
+        2.0**30,
+        -12345.678,
+    ]
+    rng = np.random.default_rng(20261023)
+    values = [np.float32(value) for value in edges]
+    while len(values) < THREADS:
+        magnitude = np.float32(2.0 ** rng.uniform(-30.0, 30.0))
+        if rng.integers(0, 2):
+            if np.trunc(magnitude) == magnitude:
+                continue
+            magnitude = -magnitude
+        values.append(magnitude)
+    return np.array(values, np.float32)
+
+
+def hlsl_exponent_reference(inputs):
+    significands, exponents = np.frexp(inputs)
+    fractions, wholes = np.modf(inputs)
+    doubled, doubled_exponents = np.frexp(inputs * np.float32(2.0))
+    indices = np.arange(inputs.shape[0])
+    scales = np.exp2((indices % 9) * 0.5 - 2.0)
+    columns = (
+        significands,
+        exponents.astype(np.float64),
+        fractions,
+        wholes,
+        # frexp(0.5) has exponent 0, so the third lane subtracts nothing.
+        (doubled.astype(np.float32) + doubled_exponents.astype(np.float32)).astype(
+            np.float32
+        ),
+        inputs.astype(np.float64) * scales,
+    )
+    return (
+        np.stack([np.asarray(c, np.float64) for c in columns], axis=1)
+        .reshape(-1)
+        .astype(np.float32)
+    )
