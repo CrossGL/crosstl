@@ -60,6 +60,48 @@ def _table(report: dict) -> list[str]:
     return lines
 
 
+def _categories(report: dict) -> list[str]:
+    """Supported over measured features per category, one line per offered language and direction.
+
+    Categories with no measured feature in any line are left out.
+    """
+    rows = [r for r in report["backends"] if r["offered"]]
+    categories = sorted(
+        {
+            f["category"]
+            for r in rows
+            for f in r["features"]
+            if f["outcome"] in ("supported", "refused", "wrong")
+        }
+    )
+    if not categories:
+        return []
+    lines = [
+        "## By category",
+        "",
+        "Each cell counts the supported features of a category over its supported, refused and wrong ones. Untested "
+        "features are left out, and a blank cell means none of the category's features could be measured.",
+        "",
+        "| Language | Direction | " + " | ".join(categories) + " |",
+        "|---|---|" + "---:|" * len(categories),
+    ]
+    for row in rows:
+        language, direction = label(row)
+        cells = []
+        for category in categories:
+            outcomes = Counter(
+                f["outcome"] for f in row["features"] if f["category"] == category
+            )
+            measured = sum(outcomes[o] for o in ("supported", "refused", "wrong"))
+            cells.append(f"{outcomes['supported']}/{measured}" if measured else "")
+        lines.append(
+            "|"
+            + "|".join(f" {c} " if c else " " for c in (language, direction, *cells))
+            + "|"
+        )
+    return [*lines, ""]
+
+
 def _sources(report: dict, repository: str) -> list[str]:
     lines = ["| Language | Feature list | Pinned at |", "|---|---|---|"]
     for language, source in report["sources"].items():
@@ -150,6 +192,7 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "",
         "![CrossTL coverage over time per language and direction](trend.svg)",
         "",
+        *_categories(report),
         "## Feature lists",
         "",
         *_sources(report, repository),

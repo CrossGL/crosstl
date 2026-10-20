@@ -121,6 +121,22 @@ def test_markdown_lists_scores_sources_and_gaps():
     assert "](trend.svg)" in text
 
 
+def test_markdown_counts_measured_features_per_category():
+    data = _report()
+    data["backends"][0]["features"][4]["category"] = "stage"
+    data["backends"][1]["features"][0]["category"] = "stage"
+    data["backends"][3]["features"][3]["category"] = "method"
+    lines = publish.markdown(data).splitlines()
+    # "method" has only an untested feature, so it gets no column.
+    assert "| Language | Direction | function | stage |" in lines
+    # A category whose features are all untested gets a blank cell rather than 0/0.
+    assert "| GLSL | output | 3/4 | |" in lines
+    assert "| GLSL | input | 3/3 | 1/1 |" in lines
+    assert "| CrossGL IR | expressiveness | 2/2 | |" in lines
+    # Rows that are not offered have no features and stay out of this table.
+    assert sum(line.startswith("| WGSL | input |") for line in lines) == 1
+
+
 def test_markdown_truncates_long_details():
     data = _report()
     data["backends"][0]["features"][3]["detail"] = "x" * 500
