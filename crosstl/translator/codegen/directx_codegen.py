@@ -42837,6 +42837,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 constants,
                 local_types,
             )
+            if binding is None:
+                return None
             delta_expression = operand.index
         elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
             binding = self.hlsl_private_pointer_static_binding(

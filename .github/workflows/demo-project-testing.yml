@@ -1561,6 +1561,8 @@ jobs:
           CROSTL_REQUIRE_SELF_TAIL_CALLS: ${{ runner.os == 'macOS' && '1' || '0' }}
           CROSTL_REQUIRE_TRAILING_RETURNS: "1"
           CROSTL_REQUIRE_METAL_LOCAL_DECLTYPES: "1"
+          CROSTL_REQUIRE_CONSTEXPR_BRANCH_ASSERTIONS: "1"
+          CROSTL_REQUIRE_METAL_MEMBER_CALL_ARGUMENTS: "1"
           CROSTL_REQUIRE_FORWARDED_LOOP_BOUNDS: "1"
           CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
           CROSTL_REQUIRE_PARAMETER_USAGE: "1"
@@ -1622,6 +1624,8 @@ jobs:
               tests/test_translator/test_self_tail_calls.py \
               tests/test_translator/test_trailing_divergent_returns.py \
               tests/test_translator/test_metal_local_decltypes.py \
+              tests/test_translator/test_metal_constexpr_branch_assertions.py \
+              tests/test_translator/test_metal_member_call_arguments.py \
               tests/test_translator/test_forwarded_resource_loop_bounds.py \
               tests/test_translator/test_reference_aliases.py \
               tests/test_translator/test_parameter_usage.py \
