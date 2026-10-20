@@ -157,7 +157,11 @@ from .builtin_result_types import (
 )
 from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
-from .constant_guards import constant_bool_locals
+from .constant_guards import (
+    constant_branch_guards,
+    constant_bool_locals,
+    guard_bool_value,
+)
 from .constant_ordering import partition_constants_by_struct_dependency
 from .counter_loops import (
     any_start_counter_loop_terminates,
@@ -497,7 +501,12 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
-from .subgroup_reassignments import follow_offset, followed_offsets
+from .subgroup_reassignments import (
+    follow_member_write,
+    follow_offset,
+    followed_offsets,
+    member_write_root,
+)
 from .texture_lod_clamp import (
     hlsl_texture_lod_clamp_call,
     is_texture_lod_clamp_operation,
@@ -6104,8 +6113,10 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
 
         Each is a value declared once with an initializer and written only by
         plain ``name = value;`` statements outside loops, as MLX's RMS VJP
-        clamps ``row_end`` to ``n_rows``. Address-taking, increments, other
-        writes, reference views and possibly mutating calls disqualify a name.
+        clamps ``row_end`` to ``n_rows``, or by member writes such as a
+        resource view's ``view.offset += stride;`` outside loops.
+        Address-taking, increments, other writes, reference views and possibly
+        mutating calls disqualify a name.
         """
         body = getattr(function, "body", None)
         parameters = {
@@ -6141,16 +6152,18 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 if isinstance(node, ExpressionStatementNode):
                     node = getattr(node, "expression", None)
                 if isinstance(node, AssignmentNode):
-                    if (
-                        not in_loop
-                        and isinstance(
-                            getattr(node, "target", getattr(node, "left", None)),
-                            IdentifierNode,
+                    if not in_loop and (
+                        (
+                            isinstance(
+                                getattr(node, "target", getattr(node, "left", None)),
+                                IdentifierNode,
+                            )
+                            and self.map_operator(
+                                getattr(node, "operator", getattr(node, "op", "="))
+                            )
+                            == "="
                         )
-                        and self.map_operator(
-                            getattr(node, "operator", getattr(node, "op", "="))
-                        )
-                        == "="
+                        or member_write_root(node, self.map_operator)
                     ):
                         followed_writes.add(id(node))
                 elif isinstance(node, IfNode):
@@ -7111,6 +7124,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         counter_names = {
             record[0] for record in self.hlsl_software_subgroup_counter_loops.values()
         }
+        # Only followed locals may be records written member by member.
+        record_names = set(reassigned_names)
         reassigned_names = set(reassigned_names) | counter_names | set(offset_names)
         masked_if_plans = getattr(self, "hlsl_software_subgroup_masked_if_plans", {})
 
@@ -7186,6 +7201,16 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 ),
                 self.map_operator,
             )
+            if kept is None:
+                kept = follow_member_write(
+                    node,
+                    record_names,
+                    names,
+                    lambda value: self.hlsl_software_subgroup_uniform_expression(
+                        value, names, components
+                    ),
+                    self.map_operator,
+                )
             if kept is not None:
                 if not kept:
                     names.difference_update(written)
@@ -7209,7 +7234,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             if isinstance(node, IfNode) and not getattr(
                 node, "else_if_conditions", None
             ):
-                fixed = self.hlsl_bool_constant_value(node.condition, fixed_bools)
+                fixed = guard_bool_value(self, node.condition, fixed_bools)
                 if fixed is not None:
                     # A constant guard selects one branch for every invocation.
                     taken = node.then_branch if fixed else node.else_branch
@@ -7282,9 +7307,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                     fixed = (
                         None
                         if getattr(statement, "else_if_conditions", None)
-                        else self.hlsl_bool_constant_value(
-                            statement.condition, fixed_bools
-                        )
+                        else guard_bool_value(self, statement.condition, fixed_bools)
                     )
                     if fixed is not None:
                         # Every invocation takes the branch the constant guard
@@ -14300,6 +14323,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.hlsl_wide_integer_compound_indices = []
         previous_parameter_epilogue = self.current_hlsl_parameter_epilogue
         self.current_hlsl_parameter_epilogue = tuple(parameter_epilogue_statements)
+        previous_constant_guards = getattr(
+            self, "current_hlsl_constant_branch_guards", ({}, set())
+        )
+        # Branches that compile-time constants rule out are not emitted: HLSL
+        # type-checks them where the source's implicit conversions do not apply.
+        self.current_hlsl_constant_branch_guards = constant_branch_guards(
+            self, func, self.hlsl_initial_bool_constants(func)
+        )
         try:
             if stage_output_lowering is not None:
                 output_name = stage_output_lowering.get("local_name")
@@ -14341,6 +14372,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 + code[compound_declaration_offset:]
             )
         finally:
+            self.current_hlsl_constant_branch_guards = previous_constant_guards
             self.current_hlsl_parameter_epilogue = previous_parameter_epilogue
             self.hlsl_wide_integer_compound_indices = previous_compound_indices
             self.current_hlsl_visible_int_constants = (
@@ -25137,6 +25169,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else_body = getattr(node, "else_branch", getattr(node, "else_body", []))
 
         literal_condition = self.literal_int_value(condition, {})
+        guards, short_circuited = getattr(
+            self, "current_hlsl_constant_branch_guards", ({}, set())
+        )
+        fixed = None if literal_condition is not None else guards.get(id(node))
+        if fixed is not None:
+            if id(node) in short_circuited:
+                # The undecided operands may not type-check in HLSL.
+                literal_condition = int(fixed)
+            elif fixed:
+                else_body = []
+            else:
+                then_body = []
+            if literal_condition is None and not (then_body or else_body):
+                return ""
         if literal_condition is not None and (
             literal_condition != 0 or not getattr(node, "else_if_conditions", None)
         ):

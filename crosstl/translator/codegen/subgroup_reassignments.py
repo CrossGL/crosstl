@@ -18,6 +18,10 @@ a checked immutable-storage contract) may also move their view in place, as
 ``mask += tid.z * strides[0];``. ``followed_offsets`` selects those whose only
 writes are such offsets outside loops. The view stays uniform after an offset
 by a uniform amount, and the flow follows it like a reassigned local.
+
+A followed local may also be a record written member by member, as
+``view.offset += stride;``. Its other members keep their values, so the
+record stays uniform after a write of a uniform value while it was uniform.
 """
 
 from ..ast import (
@@ -31,6 +35,7 @@ from ..ast import (
     IdentifierNode,
     IfNode,
     LoopNode,
+    MemberAccessNode,
     PointerType,
     ReferenceType,
     UnaryOpNode,
@@ -42,6 +47,9 @@ _LOOPS = (ForNode, WhileNode, DoWhileNode, LoopNode, ForInNode)
 _STEPS = {"++", "--", "PRE_INCREMENT", "POST_INCREMENT", "PRE_DECREMENT"}
 _STEPS |= {"POST_DECREMENT"}
 _UNARY_WRITES = _STEPS | {"&", "ADDRESS_OF"}
+_MEMBER_WRITES = frozenset(
+    {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="}
+)
 
 
 def statement_list(body):
@@ -160,6 +168,39 @@ def follow_offset(node, offsets, names, uniform_value, map_operator):
     return name in names and uniform_value(value)
 
 
+def member_write_root(node, map_operator):
+    """The local that ``local.member = value;`` or ``local.member op= value;`` writes.
+
+    Only ``.`` member chains rooted at an identifier qualify. Writes through
+    a pointer, to an element or to a swizzle are not member writes.
+    """
+    if not isinstance(node, AssignmentNode):
+        return None
+    target = getattr(node, "target", getattr(node, "left", None))
+    if not isinstance(target, MemberAccessNode):
+        return None
+    while isinstance(target, MemberAccessNode):
+        target = target.object_expr
+    operator = getattr(node, "operator", getattr(node, "op", "="))
+    if isinstance(target, IdentifierNode) and (
+        operator in _MEMBER_WRITES or map_operator(operator) in _MEMBER_WRITES
+    ):
+        return target.name
+    return None
+
+
+def follow_member_write(node, followed, names, uniform_value, map_operator):
+    """Whether a member write keeps a followed record uniform; ``None`` if none.
+
+    The record stays uniform when it was uniform and the value is uniform.
+    """
+    name = member_write_root(node, map_operator)
+    if name is None or name not in followed:
+        return None
+    value = getattr(node, "value", getattr(node, "right", None))
+    return name in names and uniform_value(value)
+
+
 def _plain_write(node, map_operator):
     target = getattr(node, "target", getattr(node, "left", None))
     operator = getattr(node, "operator", getattr(node, "op", "="))
@@ -183,9 +224,10 @@ def followed_locals(
     """Return the written locals whose writes a flow analysis can follow.
 
     Each is a value declared once with an initializer, and every write to it
-    is a plain ``name = value;`` statement outside loops. Increments, compound
-    and member writes, address-taking, pointer or reference views and calls
-    that may write it disqualify a name. ``walk`` yields every node below a
+    is a plain ``name = value;`` or member ``name.member op= value;`` statement
+    outside loops. Increments, compound writes of the whole value, element
+    writes, address-taking, pointer or reference views and calls that may
+    write it disqualify a name. ``walk`` yields every node below a
     root, ``identifier_names`` the names an expression reads, ``write_roots``
     the names an assignment target writes, ``value_type``
     whether a declared type holds a plain value and ``volatile`` whether a
@@ -222,7 +264,10 @@ def followed_locals(
         for statement in statement_list(statements):
             node = _expression(statement)
             if isinstance(node, AssignmentNode):
-                if not in_loop and _plain_write(node, map_operator):
+                if not in_loop and (
+                    _plain_write(node, map_operator)
+                    or member_write_root(node, map_operator)
+                ):
                     followed.add(id(node))
             elif isinstance(node, IfNode):
                 visit(getattr(node, "then_branch", None), in_loop)
@@ -288,6 +333,9 @@ class ReassignmentFlow:
                 target = getattr(node, "target", getattr(node, "left", None))
                 if isinstance(target, IdentifierNode):
                     names.add(target.name)
+                root = member_write_root(node, self.map_operator)
+                if root is not None:
+                    names.add(root)
             elif isinstance(node, UnaryOpNode) and isinstance(
                 getattr(node, "operand", None), IdentifierNode
             ):
@@ -309,6 +357,14 @@ class ReassignmentFlow:
             lambda value: self.uniform_expression(value, names, components),
             self.map_operator,
         )
+        if kept is None:
+            kept = follow_member_write(
+                node,
+                self.followed,
+                names,
+                lambda value: self.uniform_expression(value, names, components),
+                self.map_operator,
+            )
         if kept is not None:
             if not kept:
                 names.difference_update(written)

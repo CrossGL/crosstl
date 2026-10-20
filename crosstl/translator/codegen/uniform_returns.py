@@ -12,6 +12,7 @@ from ..ast import (
     CastNode,
     ConstructorNode,
     ExpressionStatementNode,
+    ForNode,
     FunctionCallNode,
     IdentifierNode,
     IfNode,
@@ -27,6 +28,15 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
     VectorType,
+    WhileNode,
+)
+
+# Writes a summary follows on values and records the function owns.
+_OWNED_WRITES = frozenset(
+    {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="}
+)
+_OWNED_STEPS = frozenset(
+    {"++", "--", "PRE_INCREMENT", "POST_INCREMENT", "PRE_DECREMENT", "POST_DECREMENT"}
 )
 
 
@@ -355,7 +365,8 @@ class UniformReturnAnalysis:
             )
         return (
             isinstance(type_, NamedType)
-            and type_.name in (
+            and type_.name
+            in (
                 {"StructuredBuffer"}
                 if read_only
                 else {"StructuredBuffer", "RWStructuredBuffer"}
@@ -420,15 +431,88 @@ class UniformReturnAnalysis:
                 if self.resource_type(parameter.param_type, parameter):
                     resources.add(parameter.name)
                 names[parameter.name] = frozenset({_StorageDependency(index)})
-        result = self._block(function.body, names, resources)
+        # By-value parameters the body may update in place.
+        owned = {
+            parameter.name
+            for parameter in function.parameters
+            if not isinstance(parameter.param_type, ReferenceType)
+            and parameter.name in names
+            and not self.resource_type(parameter.param_type, parameter, read_only=False)
+        }
+        result = self._block(function.body, names, resources, owned)
         return result[0] if result is not None and result[1] else None
 
-    def _block(self, body, names, resources):
+    @staticmethod
+    def _write_root(target):
+        """The identifier ``name`` or a ``.`` member chain like ``view.offset`` writes."""
+        while isinstance(target, MemberAccessNode):
+            target = target.object_expr
+        return target.name if isinstance(target, IdentifierNode) else None
+
+    def _loop(self, loop, names, resources, owned):
+        """Dependencies of a ``for`` or ``while`` loop over owned values.
+
+        Every invocation given the same values runs the same trips, so the
+        loop's values depend only on what its header and body read. Summaries
+        are unions over every expression, so one pass covers each trip.
+        """
+        names = dict(names)
+        owned = set(owned)
+        used = frozenset()
+        init = getattr(loop, "init", None)
+        if isinstance(init, ExpressionStatementNode):
+            init = init.expression
+        if isinstance(init, VariableNode):
+            if (
+                init.name in names
+                or init.initial_value is None
+                or not self.value_type(init.var_type)
+                or self._qualified(
+                    init, {"volatile", "static", "shared", "groupshared"}
+                )
+            ):
+                return None
+            used = self._expression(init.initial_value, names, resources)
+            if used is None:
+                return None
+            names[init.name] = used
+            owned.add(init.name)
+        elif init is not None:
+            result = self._block([init], names, resources, owned)
+            if result is None:
+                return None
+            used = result[0]
+        condition = (
+            frozenset()
+            if loop.condition is None
+            else self._expression(loop.condition, names, resources)
+        )
+        update = getattr(loop, "update", None)
+        parts = [
+            self._block(loop.body, names, resources, owned),
+            (
+                (frozenset(), False)
+                if update is None
+                else self._block([update], names, resources, owned)
+            ),
+        ]
+        if condition is None or any(part is None for part in parts):
+            return None
+        return used | condition | parts[0][0] | parts[1][0]
+
+    def _block(self, body, names, resources, owned=frozenset()):
+        """Summarize ``body``; ``owned`` names the values it may update.
+
+        Owned values are by-value parameters and initialized locals. Every
+        expression's dependencies join the summary, so a write in a nested
+        block or a loop needs no flow back into the enclosing scope.
+        """
         statements = body.statements if isinstance(body, BlockNode) else body
         if not isinstance(statements, list):
             statements = [] if statements is None else [statements]
         names = dict(names)
         resources = set(resources)
+        owned = set(owned)
         pending = {}
         dependencies = frozenset()
         returned = False
@@ -470,6 +554,34 @@ class UniformReturnAnalysis:
                 if used is None:
                     return None
                 names[statement.name] = used
+                if not resource:
+                    owned.add(statement.name)
+            elif (
+                isinstance(statement, AssignmentNode)
+                and isinstance(statement.target, (IdentifierNode, MemberAccessNode))
+                and self._write_root(statement.target) in owned
+                and self._write_root(statement.target) in names
+                and statement.operator in _OWNED_WRITES
+            ):
+                # ``loc += step;`` or ``view.offset += index;``: the value now
+                # also depends on what the write reads.
+                name = self._write_root(statement.target)
+                used = self._expression(statement.value, names, resources)
+                if used is None:
+                    return None
+                names[name] = names[name] | used
+            elif (
+                isinstance(statement, UnaryOpNode)
+                and statement.operator in _OWNED_STEPS
+                and isinstance(statement.operand, IdentifierNode)
+                and statement.operand.name in owned
+                and statement.operand.name in names
+            ):
+                used = names[statement.operand.name]
+            elif isinstance(statement, (ForNode, WhileNode)):
+                if pending:
+                    return None
+                used = self._loop(statement, names, resources, owned)
             elif isinstance(statement, AssignmentNode):
                 target = statement.target
                 if (
@@ -491,6 +603,7 @@ class UniformReturnAnalysis:
                 pending[name] = fields, initialized, prior
                 if initialized == fields:
                     names[name] = prior
+                    owned.add(name)
                     del pending[name]
             elif isinstance(statement, ReturnNode):
                 used = self._expression(statement.value, names, resources)
@@ -498,7 +611,7 @@ class UniformReturnAnalysis:
             elif isinstance(statement, BlockNode):
                 if pending:
                     return None
-                result = self._block(statement, names, resources)
+                result = self._block(statement, names, resources, owned)
                 if result is None:
                     return None
                 used, returned = result
@@ -514,7 +627,9 @@ class UniformReturnAnalysis:
                 condition_deps = [
                     self._expression(value, names, resources) for value in conditions
                 ]
-                results = [self._block(branch, names, resources) for branch in branches]
+                results = [
+                    self._block(branch, names, resources, owned) for branch in branches
+                ]
                 if any(value is None for value in [*condition_deps, *results]):
                     return None
                 used = frozenset().union(

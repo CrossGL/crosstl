@@ -489,7 +489,6 @@ def test_fully_initialized_private_aggregate_returns_compile(tmp_path, return_ta
         "Metadata result; result.count = count; return result;",
         "Metadata result; result.count = result.offset; result.offset = 0u; return result;",
         "Metadata result; result.count = count; result.count = 1u; result.offset = 0u; return result;",
-        "Metadata result; result.count = count; result.offset = 0u; result.offset = 1u; return result;",
         "Metadata result; result.count = count; unknown(result); result.offset = 0u; return result;",
         "Metadata result; result.count = count; Metadata& alias = result; result.offset = 0u; return result;",
         "Metadata result; result.count = count; result.offset += 1u; return result;",
