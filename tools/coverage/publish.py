@@ -1,7 +1,7 @@
-"""What the coverage workflow publishes to the ``coverage`` branch: the report, the chart, ``COVERAGE.md`` and a
-bounded ``history.csv``.
+"""What the coverage workflow publishes to the ``coverage`` branch: the report, the chart, ``COVERAGE.md``, a
+bounded ``history.csv`` and the trend chart drawn from it.
 
-``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes all four files. Only CI
+``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes all five files. Only CI
 runs it; contributors never regenerate anything.
 """
 
@@ -13,7 +13,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from . import chart, ir
+from . import chart, ir, trend
 from .model import OUTCOMES
 
 # One row per language and direction per run; 400 runs is more than a year of nightly runs plus pushes to main.
@@ -146,6 +146,10 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "",
         *_table(report),
         "",
+        "## Trend",
+        "",
+        "![CrossTL coverage over time per language and direction](trend.svg)",
+        "",
         "## Feature lists",
         "",
         *_sources(report, repository),
@@ -197,13 +201,15 @@ def write_site(
     previous_history: str = "",
     repository: str = "CrossGL/crosstl",
 ) -> list[Path]:
-    """Write the four published files into ``directory`` and return their paths."""
+    """Write the five published files into ``directory`` and return their paths."""
     directory.mkdir(parents=True, exist_ok=True)
+    runs = history(report, previous_history)
     files = {
         "coverage.json": json.dumps(report, indent=1, sort_keys=True) + "\n",
         "coverage.svg": chart.render(report),
         "COVERAGE.md": markdown(report, repository),
-        "history.csv": history(report, previous_history),
+        "history.csv": runs,
+        "trend.svg": trend.render(runs),
     }
     paths = []
     for filename, text in files.items():

@@ -56,7 +56,7 @@ def percent(row: dict) -> str:
     return "n/a" if row["score"] is None else f"{row['score']:.1f} %"
 
 
-def _text(x: float, y: float, value: str, css: str, anchor: str = "") -> str:
+def svg_text(x: float, y: float, value: str, css: str, anchor: str = "") -> str:
     extra = f' text-anchor="{anchor}"' if anchor else ""
     return f'<text x="{x:g}" y="{y:g}" class="{css}"{extra}>{escape(value)}</text>'
 
@@ -73,15 +73,15 @@ def _bar(row: dict, y: float) -> list[str]:
         f'<rect x="{BAR_X}" y="{top:g}" width="{BAR_WIDTH}" height="{BAR_HEIGHT}" rx="2" class="track"/>'
     ]
     if not row.get("offered"):
-        return [_text(BAR_X, y, "not offered: " + row.get("reason", ""), "m")]
+        return [svg_text(BAR_X, y, "not offered: " + row.get("reason", ""), "m")]
     if row["score"]:
         width = round(BAR_WIDTH * row["score"] / 100, 1)
         css = "ir" if row["language"] == ir.LANGUAGE else row["direction"]
         parts.append(
             f'<rect x="{BAR_X}" y="{top:g}" width="{width:g}" height="{BAR_HEIGHT}" rx="2" class="{css}"/>'
         )
-    parts.append(_text(BAR_X + BAR_WIDTH + 10, y, percent(row), "t"))
-    parts.append(_text(BAR_X + BAR_WIDTH + 70, y, _counts(row), "m"))
+    parts.append(svg_text(BAR_X + BAR_WIDTH + 10, y, percent(row), "t"))
+    parts.append(svg_text(BAR_X + BAR_WIDTH + 70, y, _counts(row), "m"))
     return parts
 
 
@@ -105,16 +105,16 @@ def render(report: dict) -> str:
     stamp = f"{report['commit'][:7] or 'uncommitted'} · {report['date'][:10]}"
     body = [
         f'<rect x="0.5" y="0.5" width="{WIDTH - 1}" height="{height - 1}" rx="6" class="bg"/>',
-        _text(20, 30, "CrossTL coverage", "t"),
-        _text(WIDTH - 20, 30, stamp, "m", "end"),
+        svg_text(20, 30, "CrossTL coverage", "t"),
+        svg_text(WIDTH - 20, 30, stamp, "m", "end"),
     ]
     y = TOP
     previous = ""
     for row in rows:
         if row["language"] != previous:
-            body.append(_text(20, y, name(row["language"]), "t"))
+            body.append(svg_text(20, y, name(row["language"]), "t"))
             previous = row["language"]
-        body.append(_text(100, y, row["direction"], "m"))
+        body.append(svg_text(100, y, row["direction"], "m"))
         body += _bar(row, y)
         y += ROW
     if expressiveness:
@@ -123,12 +123,12 @@ def render(report: dict) -> str:
         )
         y += 14
         for row in expressiveness:
-            body.append(_text(20, y, "CrossGL IR", "t"))
-            body.append(_text(100, y, "expressive", "m"))
+            body.append(svg_text(20, y, "CrossGL IR", "t"))
+            body.append(svg_text(100, y, "expressive", "m"))
             body += _bar(row, y)
             y += ROW
     body.append(
-        _text(
+        svg_text(
             20,
             height - 14,
             "Score = supported / (supported + refused + wrong), per generated probe "
