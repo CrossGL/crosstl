@@ -1,6 +1,7 @@
 import json
 import re
 import subprocess
+from fnmatch import fnmatch
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,31 @@ def test_labels_that_workflows_and_dependabot_apply_are_defined():
         used |= set(update["labels"])
     assert {"ci:full", "stale", "dependencies"} <= used
     assert used <= names
+
+
+def test_every_dependency_manifest_has_a_dependabot_entry():
+    # Dependabot labels a pull request for an unlisted manifest with its own defaults,
+    # such as ".NET", which the label sync then deletes again.
+    ecosystems = {"pyproject.toml": "pip", ".csproj": "nuget", "Cargo.toml": "cargo"}
+    ecosystems |= {"package.json": "npm", "go.mod": "gomod"}
+    entries = yaml.safe_load(
+        (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    )["updates"]
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    for path in map(Path, tracked):
+        ecosystem = ecosystems.get(path.name) or ecosystems.get(path.suffix)
+        if ecosystem is None:
+            continue
+        directory = "/" + path.parent.as_posix() if path.parent.parts else "/"
+        patterns = [
+            pattern.rstrip("/") or "/"
+            for entry in entries
+            if entry["package-ecosystem"] == ecosystem
+            for pattern in entry.get("directories", [entry.get("directory")])
+        ]
+        assert any(fnmatch(directory, pattern) for pattern in patterns), path
 
 
 def test_load_rejects_a_bad_color_a_duplicate_name_and_a_short_file(tmp_path):

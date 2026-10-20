@@ -16,3 +16,11 @@ updates:
       interval: weekly
     open-pull-requests-limit: 0
     labels: [dependencies]
+  # Likewise for the NuGet packages of the ComputeSharp demo.
+  - package-ecosystem: nuget
+    directories:
+      - /demos/integrations/computesharp/**
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels: [dependencies]
