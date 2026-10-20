@@ -397,6 +397,7 @@ from .resource_arrays import (
     is_private_pointer_parameter,
 )
 from .sampler_pairs import canonicalize_separate_textures
+from .stage_distance_layout import distance_semantic
 from .stage_refusals import RayStageInterfaceUnsupportedError
 from .stage_utils import (
     assign_stage_entry_names,
@@ -34877,6 +34878,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             index = semantic_text[len(prefix) : -1]
             if index.isdigit():
                 return f"SV_TARGET{index}"
+        distance = distance_semantic(semantic_text)
+        if distance is not None and distance[1] > 0:
+            return f"{self.semantic_map[distance[0]]}{distance[1]}"
         return self.semantic_map.get(semantic_text, semantic_text)
 
     def validate_hlsl_stage_parameter_requirements(self, func, shader_type):
@@ -49278,7 +49282,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         )
                     )
                 else:
-                    rendered_args.append(default_value_expression(self, field_type))
+                    # ``float3(0)`` is no HLSL constructor; the default spells every component.
+                    rendered_args.append(self.hlsl_default_value_expression(field_type))
                 continue
             field_exprs.append(field_expr)
             rendered_args.append(

@@ -159,11 +159,12 @@ def test_splat_writes_every_component_of_nested_arrays_and_structures():
     assert _spelled(_local(program, "single")) == "Single(0)"
 
 
-def test_splat_is_left_to_targets_that_splat_natively_and_to_other_sources():
-    for target in ("directx", "dx12", "slang"):
+def test_splat_is_written_for_every_target_and_left_to_other_sources():
+    # The HLSL and Slang generators take a structure constructor's arguments as its members too.
+    for target in ("directx", "dx12", "slang", "opengl"):
         program = parse(SPLAT_CGL)
-        assert expand_struct_scalar_splats(program, "directx", target) == 0
-        assert _spelled(_local(program, "zero")) == "Outer(0)"
+        assert expand_struct_scalar_splats(program, "directx", target) == 2
+        assert _spelled(_local(program, "flat")) == "Flat(vec2(k), int(k))"
     # Metal's S{x} imports as the same call and initializes the first member only.
     for source in ("metal", "opengl", "cgl"):
         program = parse(SPLAT_CGL)
@@ -217,10 +218,32 @@ def test_zero_cast_vertex_output_reaches_spirv_and_metal(tmp_path):
     _validate_metal(tmp_path, metal)
 
 
+def _validate_hlsl(tmp_path, code, profile, entry):
+    compiler = shutil.which("dxc")
+    if compiler is None:
+        return
+    source = tmp_path / "out.hlsl"
+    source.write_text(code)
+    _run([compiler, "-T", profile, "-E", entry, str(source)])
+
+
 def test_zero_cast_vertex_output_stays_a_splat_in_hlsl(tmp_path):
     hlsl = _translate(tmp_path, ZERO_CAST_VERTEX_HLSL, ".hlsl", "directx")
     assert "VSOutput VSMain" in hlsl or "VSOutput main" in hlsl
-    assert "output.Normal = float3(0" in hlsl
+    # HLSL has no one-argument vector constructor: ``float3(0)`` does not compile.
+    assert "output.Normal = float3(0, 0, 0);" in hlsl
+    assert not re.search(r"float[234]\(0\)", hlsl)
+    _validate_hlsl(tmp_path, hlsl, "vs_6_0", "VSMain")
+
+
+def test_non_zero_cast_sets_every_hlsl_member(tmp_path):
+    source = ZERO_CAST_VERTEX_HLSL.replace("(VSOutput)0", "(VSOutput)1")
+    hlsl = _translate(tmp_path, source, ".hlsl", "directx")
+
+    assert "output.Pos = float4(1, 1, 1, 1);" in hlsl
+    assert "output.Normal = float3(1, 1, 1);" in hlsl
+    assert "output.Id = int(1);" in hlsl
+    _validate_hlsl(tmp_path, hlsl, "vs_6_0", "VSMain")
 
 
 def _stage_output_cgl(body):

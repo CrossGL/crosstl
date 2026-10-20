@@ -2,9 +2,9 @@
 
 HLSL converts a scalar to a structure by converting it to every scalar component of the structure: ``(VSOutput)0``
 sets each member, element and nested member to zero of its own type (HLSL specification, "Conversions", scalar to
-aggregate). The HLSL importer carries the cast as ``VSOutput(0)``, a structure constructor with one argument. The
-HLSL and Slang generators read that call as a splat; GLSL, SPIR-V and Metal take a structure constructor's
-arguments as its members in order, so they refused the call or lost the members after the first.
+aggregate). The HLSL importer carries the cast as ``VSOutput(0)``, a structure constructor with one argument. Every
+generator, HLSL's included, takes a structure constructor's arguments as its members in order, so they refused the
+call or lost the members after the first.
 
 :func:`expand_struct_scalar_splats` rewrites ``S(x)``, for a structure ``S`` of the program whose members are not
 all filled by ``x`` alone, into ``S(m1(x), m2(x), ...)``: a scalar or vector member converts ``x`` to its type, an
@@ -39,23 +39,19 @@ _VECTOR_PREFIXES = {
 _MATRIX_PREFIXES = {"float": "mat", "double": "dmat"}
 # Source languages whose one-scalar structure conversion is a splat.
 _SPLATTING_SOURCES = frozenset({"directx", "hlsl", "slang"})
-# Targets whose generators give a one-scalar structure constructor HLSL's splat meaning.
-_SPLATTING_TARGETS = frozenset(
-    {"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "slang"}
-)
 
 
 def expand_struct_scalar_splats(program, source, target) -> int:
     """Rewrite one-scalar structure constructors member by member in place; returns how many were rewritten.
 
     Only a program imported from HLSL or Slang carries the splat; a Metal ``S{x}`` imports as the same call but
-    sets the first member alone. The HLSL and Slang generators read the call as a splat themselves.
+    sets the first member alone. The rewrite applies for every target, HLSL and Slang included: their generators
+    take a structure constructor's arguments as its members too, so ``(VSOutput)1`` used to set the first member
+    alone there as well.
     """
     if not isinstance(program, A.ShaderNode):
         return 0
     if str(source or "").lower() not in _SPLATTING_SOURCES:
-        return 0
-    if str(target or "").lower() in _SPLATTING_TARGETS:
         return 0
     structs = struct_member_types(program)
     if not structs:

@@ -16,7 +16,11 @@ from __future__ import annotations
 
 from ..ast import AssignmentNode, IdentifierNode
 
-__all__ = ["flattened_stage_output_assignment", "render_flattened_stage_output_store"]
+__all__ = [
+    "flattened_stage_output_assignment",
+    "render_flattened_stage_output_store",
+    "render_stage_struct_value_return",
+]
 
 
 def flattened_stage_output_assignment(codegen, expression):
@@ -79,6 +83,32 @@ def render_flattened_stage_output_store(codegen, variable_name, value, indent):
             argument, codegen.member_type_name(member)
         )
         code += f"{indent_str}{output_name} = {rendered};\n"
+    return code
+
+
+def render_stage_struct_value_return(codegen, value, indent):
+    """GLSL statements returning ``value``, any expression of the entry's output structure, or ``None``.
+
+    An entry such as ``return make(p);`` returns its outputs through a call, which GLSL cannot return from
+    ``void main()``. The value is kept in a local of the structure and each member copied to its output.
+    """
+    type_name = codegen.current_stage_return_type
+    member_map = codegen.current_stage_output_member_map
+    struct = codegen.structs_by_name.get(type_name)
+    if not member_map or struct is None:
+        return None
+    members = list(getattr(struct, "members", None) or [])
+    if any(member.name not in member_map for member in members):
+        return None
+    indent_str = "    " * indent
+    local = codegen.glsl_generated_module_identifier(
+        ("stage-io", "stage-return-value", type_name), "crossgl_stage_return"
+    )
+    rendered = codegen.generate_expression_with_expected(value, type_name)
+    code = f"{indent_str}{codegen.map_type(type_name)} {local} = {rendered};\n"
+    for member in members:
+        member_name = codegen.glsl_struct_member_name(type_name, member.name)
+        code += f"{indent_str}{member_map[member.name]} = {local}.{member_name};\n"
     return code
 
 

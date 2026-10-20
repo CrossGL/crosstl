@@ -1393,7 +1393,8 @@ def test_codegen_clip_identifier_from_vkd3d_clip_distance_sample():
     """)
 
     assert "float clip @ gl_ClipDistance;" in crossgl
-    assert "float cull @ gl_CullDistance;" in crossgl
+    # The semantic index orders the value in the cull distance array.
+    assert "float cull @ gl_CullDistance1;" in crossgl
     assert "outputVertex.clip = position.y;" in crossgl
     assert "outputVertex.cull = position.x;" in crossgl
     assert "if ((outputVertex.clip - 0.5) < 0.0) {" in crossgl
@@ -7015,8 +7016,8 @@ def test_codegen_case_insensitive_raster_system_semantics_reparse():
         "uint view @ gl_ViewIndex;",
         "uint layer @ gl_Layer;",
         "uint viewport @ gl_ViewportIndex;",
-        "float clip @ gl_ClipDistance;",
-        "float cull @ gl_CullDistance;",
+        "float clip @ gl_ClipDistance3;",
+        "float cull @ gl_CullDistance2;",
     ]:
         assert expected in output
     for raw_semantic in [

@@ -7,6 +7,7 @@ from crosstl.translator.arithmetic_conversions import (
     ArithmeticScalarKind,
     source_integer_shape,
 )
+from crosstl.translator.codegen.stage_distance_layout import distance_semantic_spelling
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 
 from ..common_ast import (
@@ -5534,7 +5535,10 @@ class HLSLToCrossGLConverter(HLSLMatrixImportMixin, ImportRefusalMixin):
                         continue
                     suffix = semantic_upper[len(hlsl_prefix) :]
                     if not suffix or suffix.isdigit():
-                        mapped = crossgl_semantic
+                        # The semantic index orders the value in the target's distance array.
+                        mapped = distance_semantic_spelling(
+                            crossgl_semantic, int(suffix or 0)
+                        )
                         break
         mapped = mapped or semantic
         return f"@ {mapped}"

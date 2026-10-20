@@ -215,12 +215,15 @@ def test_scalar_hlsl_clip_distance_writes_element_zero(tmp_path):
     _validate(tmp_path, code, "vert")
 
 
-def test_vector_hlsl_clip_distance_is_refused_for_glsl(tmp_path):
+def test_vector_hlsl_clip_distance_fills_consecutive_elements(tmp_path):
     source = SCALAR_CLIP_HLSL.replace("float Clip :", "float2 Clip :").replace(
         "dot(pos, plane)", "pos.xy"
     )
-    with pytest.raises(OpenGLLoweringRefused, match="gl_ClipDistance output 'Clip'"):
-        _translate(tmp_path, source, ".hlsl", "opengl")
+    code = _translate(tmp_path, source, ".hlsl", "opengl")
+
+    assert re.search(r"gl_ClipDistance\[0\] = \w+\[0\];", code)
+    assert re.search(r"gl_ClipDistance\[1\] = \w+\[1\];", code)
+    _validate(tmp_path, code, "vert")
 
 
 VIEW_INDEX_GLSL = """#version 450

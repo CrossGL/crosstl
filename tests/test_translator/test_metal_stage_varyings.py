@@ -113,7 +113,9 @@ def struct_body(code, name):
 
 
 def entry_parameters(code, qualifier, name):
-    match = re.search(rf"\b{qualifier}\s+\w+\s+{re.escape(name)}\((.*?)\)\s*\{{", code, re.S)
+    match = re.search(
+        rf"\b{qualifier}\s+\w+\s+{re.escape(name)}\((.*?)\)\s*\{{", code, re.S
+    )
     assert match, f"{qualifier} {name} not emitted"
     return match.group(1)
 
@@ -191,7 +193,7 @@ def test_system_values_keep_their_metal_builtins(tmp_path):
 
 
 def test_system_value_without_a_metal_builtin_is_refused(tmp_path):
-    with pytest.raises(MetalVaryingLinkError, match="CullDistance"):
+    with pytest.raises(MetalVaryingLinkError, match="no cull distance attribute"):
         translate(tmp_path, "cull.hlsl", HLSL_CULL_DISTANCE)
 
 
@@ -269,7 +271,7 @@ def link_render_pipeline(source, vertex_name, fragment_name):
         Metal.MTLDataTypeFloat3: Metal.MTLVertexFormatFloat3,
         Metal.MTLDataTypeFloat4: Metal.MTLVertexFormatFloat4,
     }
-    attributes = [a for a in (vertex.vertexAttributes() or []) if a.isActive()]
+    attributes = [a for a in vertex.vertexAttributes() or [] if a.isActive()]
     if attributes:
         layout = Metal.MTLVertexDescriptor.vertexDescriptor()
         for slot, attribute in enumerate(attributes):

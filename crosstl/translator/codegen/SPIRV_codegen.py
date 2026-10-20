@@ -112,6 +112,12 @@ from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
 from .spirv_refusals import SpirvRefusals
+from .spirv_stage_distances import (
+    entry_point_distance_layout,
+    entry_point_distance_variable,
+    load_entry_point_distance,
+    store_entry_point_distance,
+)
 from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
     is_texture_lod_clamp_operation,
@@ -14299,6 +14305,7 @@ class VulkanSPIRVCodeGen(
             metadata = self.struct_member_metadata.get(
                 param_value_type.type.base_type, {}
             )
+            distances = entry_point_distance_layout(self, members, metadata)
             # A member that occupies several locations (an array or matrix) moves the later members along.
             member_location = 0
             for member_type, member_name in members:
@@ -14308,6 +14315,18 @@ class VulkanSPIRVCodeGen(
                 member_location += self.struct_member_interface_location_span(
                     member_node
                 )
+                distance = distances.slot(member_name)
+                if distance is not None:
+                    array = entry_point_distance_variable(
+                        self,
+                        distance.builtin,
+                        distances.size(distance.builtin),
+                        "Input",
+                    )
+                    components.append(
+                        load_entry_point_distance(self, array, distance, member_type)
+                    )
+                    continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Input",
@@ -14347,7 +14366,9 @@ class VulkanSPIRVCodeGen(
         members = self.current_struct_members.get(return_type.type.base_type)
         if members:
             outputs = []
+            distance_outputs = []
             metadata = self.struct_member_metadata.get(return_type.type.base_type, {})
+            distances = entry_point_distance_layout(self, members, metadata)
             member_location = 0
             for member_index, (member_type, member_name) in enumerate(members):
                 member_info = metadata.get(member_name, {})
@@ -14356,6 +14377,18 @@ class VulkanSPIRVCodeGen(
                 member_location += self.struct_member_interface_location_span(
                     member_node
                 )
+                distance = distances.slot(member_name)
+                if distance is not None:
+                    array = entry_point_distance_variable(
+                        self,
+                        distance.builtin,
+                        distances.size(distance.builtin),
+                        "Output",
+                    )
+                    distance_outputs.append(
+                        (member_index, array, member_type, distance)
+                    )
+                    continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Output",
@@ -14371,7 +14404,12 @@ class VulkanSPIRVCodeGen(
                     member_index=location_index,
                 )
                 outputs.append((member_index, variable, member_type))
-            return {"kind": "struct", "type": return_type, "outputs": outputs}
+            return {
+                "kind": "struct",
+                "type": return_type,
+                "outputs": outputs,
+                "distances": distance_outputs,
+            }
 
         variable = self.register_entry_point_interface_variable(
             execution_model,
@@ -14647,6 +14685,9 @@ class VulkanSPIRVCodeGen(
         for member_index, target, member_type in outputs["outputs"]:
             member_value = self.composite_extract(value, member_type, member_index)
             self.store_to_variable(target, member_value)
+        for member_index, target, member_type, slot in outputs.get("distances", ()):
+            member_value = self.composite_extract(value, member_type, member_index)
+            store_entry_point_distance(self, target, slot, member_value, member_type)
         self.create_return()
         return True
 

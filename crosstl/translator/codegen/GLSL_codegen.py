@@ -204,9 +204,16 @@ from .glsl_shadow_lod import (
     require_shadow_lod_extension,
     zero_lod_compare_gradient_call,
 )
+from .glsl_stage_distances import (
+    distance_input_alias,
+    distance_output_epilogue,
+    distance_output_name,
+    distance_private_output_declaration,
+)
 from .glsl_stage_output_values import (
     flattened_stage_output_assignment,
     render_flattened_stage_output_store,
+    render_stage_struct_value_return,
 )
 from .glsl_target_builtins import (
     OPENGL_UNAVAILABLE_BUILTINS,
@@ -427,6 +434,7 @@ from .scalar_return_bounds import (
     scalar_return_interval,
     vector_return_intervals,
 )
+from .stage_distance_layout import distance_semantic
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -22297,7 +22305,9 @@ class GLSLCodeGen(GLSLDescriptorSetBindingsMixin, LoweringRefusalMixin):
             struct = self.structs_by_name.get(struct_name)
             for member in getattr(struct, "members", []) or []:
                 output_name = self.vertex_output_member_name(member)
-                if not self.is_vertex_builtin_output(output_name):
+                if self.is_vertex_builtin_output(output_name):
+                    continue
+                if distance_private_output_declaration(self, member) is None:
                     names.add(output_name)
         return names
 
@@ -22562,6 +22572,10 @@ class GLSLCodeGen(GLSLDescriptorSetBindingsMixin, LoweringRefusalMixin):
             output_name = self.vertex_output_member_name(member)
             if self.is_vertex_builtin_output(output_name):
                 continue
+            private_distance = distance_private_output_declaration(self, member)
+            if private_distance is not None:
+                code += private_distance
+                continue
 
             layout = self.stage_io_layout_for_node(member)
             self.reserve_stage_io_layout(
@@ -22694,8 +22708,8 @@ class GLSLCodeGen(GLSLDescriptorSetBindingsMixin, LoweringRefusalMixin):
     def vertex_output_member_name(self, member):
         semantic = self.stage_io_semantic_from_node(member)
         mapped_semantic = self.map_semantic(semantic)
-        if mapped_semantic in {"gl_ClipDistance", "gl_CullDistance"}:
-            return self.glsl_distance_output_member_name(member, mapped_semantic)
+        if distance_semantic(mapped_semantic) is not None:
+            return distance_output_name(self, member, mapped_semantic)
         if self.is_vertex_builtin_output(mapped_semantic):
             return mapped_semantic
         if member.name in self.vertex_input_member_names:
@@ -22704,21 +22718,6 @@ class GLSLCodeGen(GLSLDescriptorSetBindingsMixin, LoweringRefusalMixin):
                 f"out_{member.name}",
             )
         return self.glsl_module_identifier_name(member.name)
-
-    def glsl_distance_output_member_name(self, member, builtin):
-        """A scalar clip or cull distance (HLSL ``SV_ClipDistance0``) is element 0 of the GLSL array."""
-        member_type = self.type_name_string(
-            getattr(member, "member_type", None) or getattr(member, "vtype", None)
-        )
-        if isinstance(member, ArrayNode) or "[" in str(member_type or ""):
-            return builtin
-        if self.map_type(member_type) == "float":
-            return f"{builtin}[0]"
-        return self.refuse_lowering(
-            f"{builtin} output '{member.name}' of type '{member_type}': only a float array "
-            "or one float maps onto the GLSL distance array",
-            builtin,
-        )
 
     def fragment_output_member_name(
         self, member, struct_name=None, reserved_names=None
@@ -22762,6 +22761,9 @@ class GLSLCodeGen(GLSLDescriptorSetBindingsMixin, LoweringRefusalMixin):
         semantic = self.stage_io_semantic_from_node(member)
         if semantic is None:
             return None
+        distance = distance_input_alias(self, member)
+        if distance is not None:
+            return distance
         mapped_semantic = self.map_stage_input_semantic(semantic, "fragment")
         if mapped_semantic not in {
             "gl_PrimitiveID",
@@ -23224,6 +23226,7 @@ class GLSLCodeGen(GLSLDescriptorSetBindingsMixin, LoweringRefusalMixin):
                 value_expr, self.member_type_name(member)
             )
             code += f"{indent_str}{output_name} = {value};\n"
+        code += distance_output_epilogue(self, indent_str)
         code += f"{indent_str}return;\n"
         return code
 
@@ -24540,7 +24543,10 @@ class GLSLCodeGen(GLSLDescriptorSetBindingsMixin, LoweringRefusalMixin):
                 return dynamic_resource_return
             return_value_name = self.expression_name(stmt.value)
             if return_value_name in self.flattened_stage_variables:
-                return f"{indent_str}return;\n"
+                return (
+                    distance_output_epilogue(self, indent_str)
+                    + f"{indent_str}return;\n"
+                )
             if (
                 self.current_stage_output is not None
                 and return_value_name == self.current_stage_output["name"]
@@ -24572,6 +24578,15 @@ class GLSLCodeGen(GLSLDescriptorSetBindingsMixin, LoweringRefusalMixin):
                     f"{indent_str}return;\n"
                 )
             if self.current_function_return_type == "void":
+                struct_value_return = render_stage_struct_value_return(
+                    self, stmt.value, indent
+                )
+                if struct_value_return is not None:
+                    return (
+                        struct_value_return
+                        + distance_output_epilogue(self, indent_str)
+                        + f"{indent_str}return;\n"
+                    )
                 value = self.generate_expression_with_expected(stmt.value, None)
                 return (
                     self.generate_glsl_statement_code(value, indent)
