@@ -236,8 +236,8 @@ def test_public_matrix_executes(tmp_path, shape, rounding):
 def test_matrix_execution_uses_existing_native_gate():
     import yaml
 
+    from tests import workflow_text
     from tests.ci_helpers import assert_paths_covered
-    from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
@@ -251,7 +251,7 @@ def test_matrix_execution_uses_existing_native_gate():
     assert not required.get("continue-on-error")
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_opengl_cooperative_matrix.py",
         )
 

@@ -45,15 +45,6 @@ COMPILER_VALIDATION_TEST_FILES = {
     "tests/test_translator/test_codegen/test_external_shader_validators.py",
     "tests/test_translator/test_codegen/test_shader_validation.py",
 }
-SUPPORT_TOOL_FILES = {
-    "tools/ci_coverage.py",
-    "tools/pytest_failure_summary.py",
-    "tools/support_ci_summary.py",
-    "tools/support_matrix.py",
-    "tools/support_signals.py",
-    "tools/sync_pr_issue_links.py",
-    "tools/sync_support_issues.py",
-}
 
 
 def stable_json(data: Any) -> str:
@@ -98,16 +89,12 @@ def infer_backend(test_file: str, nodeid: str, message: str) -> str:
 
 def infer_category(test_file: str, nodeid: str, message: str) -> str:
     haystack = " ".join((test_file, nodeid, message)).lower()
-    if (
-        test_file.startswith("tests/test_support")
-        or test_file in {
-            "tests/test_ci_workflows.py",
-            "tests/test_tool_cli.py",
-            "tests/test_pr_issue_links.py",
-        }
-        or test_file in SUPPORT_TOOL_FILES
-    ):
-        return "support_automation"
+    if test_file.startswith(("tests/coverage/", "tools/")) or test_file in {
+        "tests/test_ci_workflows.py",
+        "tests/test_tool_cli.py",
+        "tests/test_workflow_text.py",
+    }:
+        return "ci_tooling"
     if test_file.startswith("tests/test_examples") or test_file.startswith("examples/"):
         return "examples"
     if test_file.startswith("tests/test_translator/test_codegen/"):

@@ -254,8 +254,8 @@ def test_software_matrix_helpers_avoid_user_identifiers(tmp_path):
 
 
 def test_matrix_native_gates_are_required_without_extra_jobs():
+    from tests import workflow_text
     from tests.ci_helpers import assert_paths_covered
-    from tools import ci_coverage
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
@@ -282,7 +282,7 @@ def test_matrix_native_gates_are_required_without_extra_jobs():
     )
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_directx_cooperative_matrix.py",
         )
 

@@ -31,13 +31,13 @@ CASES = tuple(
 
 
 def test_shuffle_fill_gate_is_required_on_native_demo_platforms():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate software subgroup products"
     )
     assert "tests/test_translator/test_software_subgroup_shuffle_fill.py" in step

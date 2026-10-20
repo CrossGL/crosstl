@@ -121,13 +121,13 @@ def test_member_array_deduction_executes_natively(
 
 
 def test_member_array_native_gate_is_required():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate member array deduction"
     )
     assert (
@@ -138,7 +138,7 @@ def test_member_array_native_gate_is_required():
     assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_metal_member_array_inference.py",
         )
 
