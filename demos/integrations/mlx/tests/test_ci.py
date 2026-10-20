@@ -499,7 +499,8 @@ def test_host_runtime_recheck_rejects_missing_or_changed_libraries(
         env=env,
         capture_output=True,
         text=True,
-        timeout=15,
+        # PowerShell cold starts on shared runners have exceeded 15 s.
+        timeout=120,
     )
     receipt = evidence / "host-runtime-identity.json"
     if failure:
