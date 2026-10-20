@@ -1,15 +1,17 @@
 """Command line: ``python -m tools.coverage run [--backend B] [--direction input|output]``.
 
 ``merge`` combines the reports of runners that measured different backends, such as the Linux and macOS CI jobs, and
-rebuilds the CrossGL IR row from all of them. ``publish`` writes what CI publishes to the ``coverage`` branch, and
+rebuilds the CrossGL IR row from all of them. ``publish`` writes what CI publishes to the ``coverage`` branch,
 ``issues`` reconciles the tracking and bug issues with a report, and ``compare`` shows how a pull request's report
-differs from the published one.
+differs from the published one. ``tools`` lists the reference tool of every language and whether it is installed, so
+you can tell before a local run which rows it will report as untested.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -83,6 +85,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     comparing.add_argument("published", type=Path)
     comparing.add_argument("report", type=Path)
+    commands.add_parser(
+        "tools", help="list each language's reference tool and the version found"
+    )
     listing = commands.add_parser(
         "features", help="print the feature list of one language"
     )
@@ -167,6 +172,43 @@ def _issues(args: argparse.Namespace) -> int:
     return 0
 
 
+def _how_to_install(tool: str) -> str:
+    if tool == "metal":
+        return "needs macOS with Xcode's Metal toolchain: xcodebuild -downloadComponent MetalToolchain"
+    variable = "CROSSTL_COVERAGE_" + re.sub(r"\W", "_", tool).upper()
+    if tool == "rust-gpu":
+        return f"set {variable} to a built rust-gpu checkout, see tools/coverage/rustgpu.py"
+    return f"put {tool} on PATH or set {variable}"
+
+
+def _tools() -> int:
+    rows = [("language", "directions", "tool", "found")]
+    for language in LANGUAGES:
+        tool = validators.TOOLS[language]
+        directions = "output, input" if language in runner.INPUT_BACKENDS else "output"
+        if validators.available(language):
+            found = validators.version(tool) or "yes, no version reported"
+        else:
+            found = "no: " + _how_to_install(tool)
+        rows.append((language, directions, tool, found))
+    widths = [max(len(row[column]) for row in rows) for column in range(3)]
+    for row in rows:
+        print(
+            "  ".join(cell.ljust(width) for cell, width in zip(row, widths))
+            + "  "
+            + row[3]
+        )
+    lowering = ", ".join(
+        f"{language} {'yes' if validators.can_lower(language) else 'no'}"
+        for language in sorted(validators.SPIRV_COMPILERS)
+    )
+    print(
+        f"\nLowering to SPIR-V for the CrossGL IR row (also needs spirv-dis): {lowering}"
+    )
+    print("CI uses the versions pinned in .github/workflows/coverage.yml.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -178,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
             return _publish(args)
         if args.command == "issues":
             return _issues(args)
+        if args.command == "tools":
+            return _tools()
         if args.command == "compare":
             published, current = (
                 json.loads(path.read_text(encoding="utf-8"))

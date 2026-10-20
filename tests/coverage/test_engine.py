@@ -189,3 +189,23 @@ def test_run_measures_only_the_requested_features(monkeypatch, tmp_path, capsys)
     assert cli.main(argv) == 0
     assert measured == [("abs", "output"), ("abs", "input")]
     capsys.readouterr()
+
+
+def test_tools_lists_every_language_and_how_to_provide_a_missing_tool(
+    monkeypatch, capsys
+):
+    from tools.coverage import __main__ as cli
+
+    monkeypatch.setattr(validators, "available", lambda language: language == "glsl")
+    monkeypatch.setattr(validators, "can_lower", lambda language: language == "glsl")
+    monkeypatch.setattr(validators, "version", lambda tool: "Glslang Version: 11")
+    assert cli.main(["tools"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    rows = {line.split()[0]: line for line in lines[1 : len(cli.LANGUAGES) + 1]}
+    assert sorted(rows) == cli.LANGUAGES
+    assert rows["glsl"].endswith("Glslang Version: 11")
+    assert "output, input" in rows["glsl"]
+    assert rows["wgsl"].endswith("no: put naga on PATH or set CROSSTL_COVERAGE_NAGA")
+    assert "CROSSTL_COVERAGE_RUST_GPU" in rows["rust"]
+    assert "MetalToolchain" in rows["metal"]
+    assert "glsl yes, hlsl no" in lines[-2]

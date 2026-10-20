@@ -62,7 +62,8 @@ raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` 
 for a backend and direction is `supported / (supported + refused + wrong)`; `untested` is reported separately.
 
 `python -m tools.coverage run [--backend B] [--direction input|output]` runs the probes locally and writes
-`coverage.json`.
+`coverage.json`. A language whose reference tool is missing comes out untested; `python -m tools.coverage tools`
+shows which tools a local run will find.
 
 ### 4. The CrossGL IR is measured as its own row
 
