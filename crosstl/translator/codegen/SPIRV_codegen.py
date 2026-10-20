@@ -56,6 +56,7 @@ from ..matrix_shape import (
     length_method_object,
     matrix_type_spelling,
 )
+from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
@@ -30959,6 +30960,13 @@ class VulkanSPIRVCodeGen(
         lower_relational_builtins(ast)
         lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
+        ast = lower_constant_buffer_resources(
+            ast,
+            lambda name: self.refuse_lowering(
+                f"array of constant buffers '{name}': the SPIR-V emitter does not declare descriptor arrays "
+                "of uniform blocks yet"
+            ),
+        )
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(
             (getattr(ast, "stages", None) or {}).items()
