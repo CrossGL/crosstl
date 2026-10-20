@@ -234,11 +234,11 @@ def test_declared_intrinsics_and_unsafe_parameter_types_are_not_speculated():
 
 
 def test_guarded_return_gate_is_required_on_every_native_target():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate subgroup-guarded returns"
     )
     assert "test_subgroup_guarded_returns.py" in step
@@ -251,7 +251,7 @@ def test_guarded_return_gate_is_required_on_every_native_target():
     )
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_subgroup_guarded_returns.py",
         )
 

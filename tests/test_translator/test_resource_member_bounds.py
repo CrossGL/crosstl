@@ -410,13 +410,13 @@ def test_member_summary_rejects_overflow_inside_argument():
 
 
 def test_resource_member_bounds_ci_contract():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate collective helper arguments"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

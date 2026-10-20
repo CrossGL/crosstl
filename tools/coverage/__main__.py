@@ -57,7 +57,7 @@ def _parser() -> argparse.ArgumentParser:
     merging.add_argument("--output", type=Path, default=Path("coverage.json"))
     publishing = commands.add_parser(
         "publish",
-        help="write coverage.json, coverage.svg, COVERAGE.md and history.csv for the coverage branch",
+        help="write coverage.json, coverage.svg, COVERAGE.md, history.csv and trend.svg for the coverage branch",
     )
     publishing.add_argument("report", type=Path)
     publishing.add_argument("--output-dir", type=Path, required=True)

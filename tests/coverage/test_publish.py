@@ -117,6 +117,24 @@ def test_markdown_lists_scores_sources_and_gaps():
     # A gap's detail stays on one line and cannot break the list or a table.
     assert "- `fwrong0` wrong: wrong \\| detail second line" in text
     assert "Untested, by category: function 2." in text
+    # The trend chart is published next to COVERAGE.md and embedded with a relative link.
+    assert "](trend.svg)" in text
+
+
+def test_markdown_counts_measured_features_per_category():
+    data = _report()
+    data["backends"][0]["features"][4]["category"] = "stage"
+    data["backends"][1]["features"][0]["category"] = "stage"
+    data["backends"][3]["features"][3]["category"] = "method"
+    lines = publish.markdown(data).splitlines()
+    # "method" has only an untested feature, so it gets no column.
+    assert "| Language | Direction | function | stage |" in lines
+    # A category whose features are all untested gets a blank cell rather than 0/0.
+    assert "| GLSL | output | 3/4 | |" in lines
+    assert "| GLSL | input | 3/3 | 1/1 |" in lines
+    assert "| CrossGL IR | expressiveness | 2/2 | |" in lines
+    # Rows that are not offered have no features and stay out of this table.
+    assert sum(line.startswith("| WGSL | input |") for line in lines) == 1
 
 
 def test_markdown_truncates_long_details():
@@ -147,7 +165,7 @@ def test_history_appends_runs_replaces_reruns_and_stays_bounded(monkeypatch):
     assert {r["commit"] for r in _history_rows(third)} == {"aaaa"}
 
 
-def test_publish_command_writes_the_four_files(tmp_path):
+def test_publish_command_writes_the_five_files(tmp_path):
     report_path = tmp_path / "coverage.json"
     report_path.write_text(json.dumps(_report()))
     old = tmp_path / "old.csv"
@@ -171,11 +189,14 @@ def test_publish_command_writes_the_four_files(tmp_path):
         "coverage.json",
         "coverage.svg",
         "history.csv",
+        "trend.svg",
     ]
     assert {r["commit"] for r in _history_rows((site / "history.csv").read_text())} == {
         "old",
         "0123456789abcdef",
     }
+    # The trend is drawn from the history just written, so it includes this run.
+    assert ">2 runs<" in (site / "trend.svg").read_text()
     # A missing history file is a first publication, not an error.
     assert (
         cli.main(

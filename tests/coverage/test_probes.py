@@ -132,6 +132,100 @@ def test_hlsl_probes_are_valid_hlsl(probe_feature, baseline):
     assert verdict.accepted, verdict.log
 
 
+def method(owner, name, result, *params):
+    return Feature(
+        "hlsl",
+        "method",
+        f"{owner}.{name}",
+        Signature(result, tuple(Param(p) for p in params)),
+        group=owner,
+        crossgl=name,
+        spelling=name,
+    )
+
+
+SAMPLE_LEVEL = method(
+    "Texture2D",
+    "SampleLevel",
+    Type("float", (4,)),
+    Type.other("sampler"),
+    Type("float", (2,)),
+    Type("float"),
+)
+
+
+def test_method_probe_declares_its_object_and_sampler():
+    source = probes.build(SAMPLE_LEVEL, "hlsl").source
+    assert "Texture2D<float4> obj : register(t0);" in source
+    assert "SamplerState smp : register(s0);" in source
+    assert "float4 r = obj.SampleLevel(smp, a1, a2);" in source
+    crossgl = probes.build(SAMPLE_LEVEL, "crossgl").source
+    assert "        Texture2D<vec4> obj;" in crossgl
+    assert "        SamplerState smp;" in crossgl
+    assert "vec4 r = obj.SampleLevel(smp, a1, a2);" in crossgl
+
+
+def test_ray_query_is_a_local_variable():
+    probe = method("RayQuery", "CommittedRayT", Type("float"))
+    source = probes.build(probe, "hlsl").source
+    assert (
+        "    RayQuery<RAY_FLAG_NONE> obj;\n    float r = obj.CommittedRayT();" in source
+    )
+
+
+def test_method_probe_needs_an_object_it_can_declare():
+    with pytest.raises(probes.ProbeError, match="no probe for NodeOutput objects"):
+        probes.build(method("NodeOutput", "IsValid", Type("bool")), "hlsl")
+    with pytest.raises(probes.ProbeError, match="no probe for metal Texture2D"):
+        probes.build(SAMPLE_LEVEL, "metal")
+
+
+HLSL_METHODS = [
+    SAMPLE_LEVEL,
+    method(
+        "TextureCUBE",
+        "GatherCmp",
+        Type("float", (4,)),
+        Type.other("sampler_cmp"),
+        Type("float", (3,)),
+        Type("float"),
+    ),
+    method(
+        "RWByteAddressBuffer",
+        "Store2",
+        Type.other("void"),
+        Type("uint"),
+        Type("uint", (2,)),
+    ),
+    method("StructuredBuffer", "Load", Type("float"), Type("int")),
+    # DXC's table names this type Texture2DArrayMS; HLSL spells it Texture2DMSArray.
+    method(
+        "Texture2DArrayMS", "Load", Type("float", (4,)), Type("int", (3,)), Type("int")
+    ),
+    method("RayQuery", "CommittedRayT", Type("float")),
+]
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+@pytest.mark.parametrize("probe_feature", HLSL_METHODS, ids=lambda f: f.name)
+def test_hlsl_method_probes_are_valid_hlsl(probe_feature):
+    probe = probes.build(probe_feature, "hlsl")
+    verdict = validators.validate("hlsl", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
+# A baseline only has to lower to SPIR-V, which is all the semantic layer does with it. The DXIL validator rejects a
+# ray query baseline because it declares the query without using it.
+@pytest.mark.skipif(
+    not validators.can_lower("hlsl"), reason="dxc or spirv-dis is not installed"
+)
+@pytest.mark.parametrize("probe_feature", HLSL_METHODS, ids=lambda f: f.name)
+def test_hlsl_method_baselines_lower_to_spirv(probe_feature):
+    probe = probes.build(probe_feature, "hlsl", baseline=True)
+    assembly, log = validators.lower("hlsl", probe.source, probe.entry)
+    assert assembly, log
+
+
 WGSL_SIGNATURES = [
     feature("mix", VEC3, VEC3, VEC3, VEC3),
     feature("select", VEC3, VEC3, VEC3, Type("bool")),

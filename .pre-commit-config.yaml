@@ -6,9 +6,7 @@ fail_fast: false
 ci:
   skip:
     - black
-    - crosstl-support-automation-tests
     - crosstl-ci-workflow-tests
-    - crosstl-pr-issue-link-tests
     - crosstl-pytest-failure-summary-tests
     - crosstl-examples-script-tests
 
@@ -106,52 +104,20 @@ repos:
           - --remove-unused-variables
           - --ignore-init-module-imports
 
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
   - repo: local
     hooks:
-      - id: crosstl-support-matrix-current
-        name: CrossTL support matrix artifacts
-        entry: python tools/support_matrix.py check --output support/generated/support-matrix-check.json
-        language: python
-        pass_filenames: false
-        files: ^(support/(backends|features)\.json|support/generated/(graphics-backend-roadmap|support-matrix)\.json|docs/source/support-matrix\.rst|tools/support_matrix\.py|tests/test_support_matrix\.py)$
-
-      - id: crosstl-support-signals-extract
-        name: CrossTL support signal extraction
-        entry: python tools/support_signals.py extract --docs-report support/generated/backend-docs-report.json --output support/generated/support-signals.json
-        language: python
-        pass_filenames: false
-        files: ^(support/(backends|features)\.json|support/generated/backend-docs-report\.json|tools/(pytest_failure_summary|support_signals)\.py|tests/(test_pytest_failure_summary|test_support_signals)\.py)$
-
-      - id: crosstl-support-automation-tests
-        name: CrossTL support automation tests
-        entry: python -m pytest -q tests/test_support_matrix.py tests/test_support_signals.py tests/test_support_ci_summary.py tests/test_support_issue_sync.py
-        language: python
-        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
-        pass_filenames: false
-        files: ^(support/|tools/(support_matrix|support_signals|support_ci_summary|sync_support_issues)\.py|tests/test_support_(matrix|signals|ci_summary|issue_sync)\.py|\.github/workflows/support-(matrix|issue-sync)\.yml)$
-
-      - id: crosstl-ci-coverage-check
-        name: CrossTL CI coverage contract
-        entry: python tools/ci_coverage.py check
-        language: python
-        pass_filenames: false
-        files: ^(\.github/(workflows/.*\.ya?ml|ci-coverage-migrations\.json)|tools/ci_coverage\.py|tests/test_ci_workflows\.py)$
-
       - id: crosstl-ci-workflow-tests
         name: CrossTL CI workflow tests
-        entry: python -m pytest -q tests/test_ci_workflows.py tests/test_metal_toolchain_setup.py tests/test_tool_cli.py tests/test_demo_layout.py tests/test_compile_artifact_bundle.py demos/integrations/mlx/tests/test_ci.py
+        entry: python -m pytest -q tests/test_ci_workflows.py tests/test_workflow_text.py tests/test_metal_toolchain_setup.py tests/test_tool_cli.py tests/test_demo_layout.py tests/test_compile_artifact_bundle.py tests/test_ci_helpers.py tests/test_ci_native_selection.py demos/integrations/mlx/tests/test_ci.py
         language: python
         additional_dependencies: [pytest, hypothesis, numpy, jinja2, "PyYAML>=6,<7"]
         pass_filenames: false
-        files: ^(\.github/(workflows/.*\.ya?ml|actions/.*/action\.ya?ml|actionlint\.yaml|ci-coverage-migrations\.json)|tools/(compile_artifact_bundle|ensure_metal_toolchain|refresh_artifact_contract|ci_coverage|pytest_failure_summary|support_ci_summary|support_matrix|support_signals|sync_pr_issue_links|sync_support_issues)\.py|tests/(ci_helpers|test_compile_artifact_bundle|test_metal_toolchain_setup|test_ci_workflows|test_tool_cli|test_demo_layout)\.py|demos/integrations/.*/tests/test_ci\.py|setup\.cfg)$
-
-      - id: crosstl-pr-issue-link-tests
-        name: CrossTL PR issue link tests
-        entry: python -m pytest -q tests/test_pr_issue_links.py
-        language: python
-        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
-        pass_filenames: false
-        files: ^(\.github/workflows/pr-issue-links\.yml|tools/sync_pr_issue_links\.py|tests/test_pr_issue_links\.py)$
+        files: ^(\.github/(workflows/.*\.ya?ml|actions/.*/action\.ya?ml|actionlint\.yaml)|tools/(ci_coverage|compile_artifact_bundle|ensure_metal_toolchain|refresh_artifact_contract|pytest_failure_summary)\.py|tests/(ci_helpers|workflow_text|test_ci_helpers|test_compile_artifact_bundle|test_metal_toolchain_setup|test_ci_workflows|test_ci_native_selection|test_workflow_text|test_tool_cli|test_demo_layout)\.py|demos/integrations/.*/tests/test_ci\.py)$
 
       - id: crosstl-pytest-failure-summary-tests
         name: CrossTL pytest failure summary tests
