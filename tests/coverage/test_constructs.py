@@ -15,6 +15,7 @@ _MODELS = [
     ("GLCompute", ["Shader"]),
     ("Kernel", ["Kernel"]),
     ("TaskNV", ["MeshShadingNV"]),
+    ("TaskEXT", ["MeshShadingEXT"]),
     ("MeshEXT", ["MeshShadingEXT"]),
     ("RayGenerationKHR", ["RayTracingNV", "RayTracingKHR"]),
     ("IntersectionKHR", ["RayTracingNV", "RayTracingKHR"]),
@@ -73,6 +74,7 @@ def test_stages_are_the_shader_execution_models():
         "geometry",
         "fragment",
         "compute",
+        "task",
         "mesh",
         "ray-generation",
         "intersection",
@@ -142,11 +144,15 @@ def test_stage_programs_take_the_stage_suffix():
     assert probes.build(_feature("glsl", "closest-hit"), "glsl").suffix == ".rchit"
     tese = probes.build(_feature("glsl", "tessellation-evaluation"), "glsl")
     assert tese.suffix == ".tese"
+    assert probes.build(_feature("glsl", "task"), "glsl").suffix == ".task"
+    assert probes.build(_feature("glsl", "mesh"), "glsl").suffix == ".mesh"
 
 
 def test_slang_names_the_hull_stage_on_its_entry_point():
     hull = probes.build(_feature("slang", "tessellation-control"), "slang").source
     assert '[shader("hull")]\n[domain("tri")]' in hull
+    task = probes.build(_feature("slang", "task"), "slang").source
+    assert '[shader("amplification")]\n[numthreads(1, 1, 1)]' in task
 
 
 @pytest.mark.parametrize(
@@ -161,6 +167,9 @@ def test_slang_names_the_hull_stage_on_its_entry_point():
             '!air.vertex = !{!9}\n!17 = !{!"air.patch", !"triangle"}\n',
             True,
         ),
+        ("mesh", "!air.mesh = !{!9}\n", True),
+        ("task", "!air.mesh = !{!9}\n", False),
+        ("task", "!air.object = !{!9}\n", True),
     ],
 )
 def test_a_metal_probe_needs_an_entry_point_of_its_stage(
@@ -177,7 +186,7 @@ def test_a_metal_probe_needs_an_entry_point_of_its_stage(
     assert accepted or f"no {stage} entry point" in verdict.log
 
 
-def test_ray_tracing_stages_are_checked_for_vulkan(monkeypatch):
+def test_ray_tracing_and_mesh_stages_are_checked_for_vulkan(monkeypatch):
     commands = []
 
     def run(arguments, cwd):
@@ -187,9 +196,11 @@ def test_ray_tracing_stages_are_checked_for_vulkan(monkeypatch):
     monkeypatch.setattr(validators, "command", lambda name: (name,))
     monkeypatch.setattr(validators, "_run", run)
     validators.validate("glsl", "", "miss")
+    validators.validate("glsl", "", "mesh")
     validators.validate("glsl", "", "fragment")
     assert commands == [
         ["glslangValidator", "--target-env", "vulkan1.2", "probe.rmiss"],
+        ["glslangValidator", "--target-env", "vulkan1.2", "probe.mesh"],
         ["glslangValidator", "probe.frag"],
     ]
 

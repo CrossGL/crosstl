@@ -12,6 +12,8 @@ def _glsl_extension(name: str) -> str:
     return f"#extension GL_EXT_shader_explicit_arithmetic_types_{name} : require"
 
 
+_GLSL_MESH = "#version 460\n#extension GL_EXT_mesh_shader : require\n"
+
 # Ray-tracing stage programs. Each stage writes a buffer or the ray data it is handed, which is all a stage needs to
 # exist; the hit stages also read the triangle's barycentrics.
 _GLSL_RAYTRACING = "#version 460\n#extension GL_EXT_ray_tracing : require\n"
@@ -110,6 +112,22 @@ GLSL = {
         "void main() {\n    gl_Position = position[0] * gl_TessCoord.x + position[1] * gl_TessCoord.y"
         " + position[2] * gl_TessCoord.z;\n}\n"
     ),
+    # A mesh shader that writes one triangle, and a task shader that launches one mesh workgroup with a payload.
+    "mesh": Template(
+        program=_GLSL_MESH
+        + "layout(local_size_x = 1) in;\nlayout(triangles, max_vertices = 3, max_primitives = 1) out;\n"
+        "void main() {\n    SetMeshOutputsEXT(3, 1);\n"
+        "    gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n"
+        "    gl_MeshVerticesEXT[1].gl_Position = vec4(1.0, 0.0, 0.0, 1.0);\n"
+        "    gl_MeshVerticesEXT[2].gl_Position = vec4(0.0, 1.0, 0.0, 1.0);\n"
+        "    gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0, 1, 2);\n}\n"
+    ),
+    "task": Template(
+        program=_GLSL_MESH
+        + "layout(local_size_x = 1) in;\nstruct Payload {\n    uint value;\n};\n"
+        "taskPayloadSharedEXT Payload payload;\nvoid main() {\n    payload.value = 1u;\n"
+        "    EmitMeshTasksEXT(1, 1, 1);\n}\n"
+    ),
 }
 
 _HLSL_PATCH = (
@@ -203,6 +221,20 @@ HLSL = {
         + '[domain("tri")]\nfloat4 main(PatchConstants constants, float3 coord : SV_DomainLocation,\n'
         "            const OutputPatch<ControlPoint, 3> patch) : SV_Position {\n"
         "    return patch[0].position * coord.x + patch[1].position * coord.y + patch[2].position * coord.z;\n}\n",
+        entry="main",
+    ),
+    "mesh": Template(
+        program="struct Vertex {\n    float4 position : SV_Position;\n};\n\n"
+        '[numthreads(1, 1, 1)]\n[outputtopology("triangle")]\n'
+        "void main(out vertices Vertex verts[3], out indices uint3 tris[1]) {\n"
+        "    SetMeshOutputCounts(3, 1);\n    verts[0].position = float4(0.0, 0.0, 0.0, 1.0);\n"
+        "    verts[1].position = float4(1.0, 0.0, 0.0, 1.0);\n    verts[2].position = float4(0.0, 1.0, 0.0, 1.0);\n"
+        "    tris[0] = uint3(0, 1, 2);\n}\n",
+        entry="main",
+    ),
+    "task": Template(
+        program="struct Payload {\n    uint value;\n};\n\ngroupshared Payload payload;\n\n"
+        "[numthreads(1, 1, 1)]\nvoid main() {\n    payload.value = 1;\n    DispatchMesh(1, 1, 1, payload);\n}\n",
         entry="main",
     ),
 }
@@ -330,6 +362,23 @@ METAL = {
         "float3 coord [[position_in_patch]]) {\n"
         "    return patch.points[0].position * coord.x + patch.points[1].position * coord.y"
         " + patch.points[2].position * coord.z;\n}\n"
+    ),
+    # A mesh function that writes one triangle, and an object function, Metal's task stage, that launches one mesh
+    # threadgroup with a payload.
+    "mesh": Template(
+        program=_METAL_HEADER
+        + "struct Vertex {\n    float4 position [[position]];\n};\n\n"
+        "[[mesh]] void probe(mesh<Vertex, void, 3, 1, topology::triangle> output) {\n"
+        "    output.set_primitive_count(1);\n"
+        "    output.set_vertex(0, Vertex{float4(0.0, 0.0, 0.0, 1.0)});\n"
+        "    output.set_vertex(1, Vertex{float4(1.0, 0.0, 0.0, 1.0)});\n"
+        "    output.set_vertex(2, Vertex{float4(0.0, 1.0, 0.0, 1.0)});\n"
+        "    output.set_index(0, 0);\n    output.set_index(1, 1);\n    output.set_index(2, 2);\n}\n"
+    ),
+    "task": Template(
+        program=_METAL_HEADER + "struct Payload {\n    uint value;\n};\n\n"
+        "[[object]] void probe(object_data Payload& payload [[payload]], mesh_grid_properties grid) {\n"
+        "    payload.value = 1;\n    grid.set_threadgroups_per_grid(uint3(1, 1, 1));\n}\n"
     ),
     # Metal has no geometry stage, runs tessellation factors in a compute kernel, and traces rays from kernels
     # with intersection functions rather than dedicated ray stages.
@@ -503,16 +552,19 @@ SLANG = {
         ),
     ),
     "discard": _slang(HLSL["discard"], "fragment"),
+    # The stage attribute goes on the entry point, ahead of its other attributes.
     **{
         name: replace(
             HLSL[name],
             program=HLSL[name].program.replace(
-                "[domain(", f'[shader("{stage}")]\n[domain('
+                attribute, f'[shader("{stage}")]\n{attribute}', 1
             ),
         )
-        for name, stage in (
-            ("tessellation-control", "hull"),
-            ("tessellation-evaluation", "domain"),
+        for name, stage, attribute in (
+            ("tessellation-control", "hull", "[domain("),
+            ("tessellation-evaluation", "domain", "[domain("),
+            ("mesh", "mesh", "[numthreads("),
+            ("task", "amplification", "[numthreads("),
         )
     },
     # slangc takes no payload access qualifiers.

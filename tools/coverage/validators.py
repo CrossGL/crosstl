@@ -54,6 +54,8 @@ GLSL_STAGES = {
     "geometry": "geom",
     "tessellation-control": "tesc",
     "tessellation-evaluation": "tese",
+    "task": "task",
+    "mesh": "mesh",
     # glslang's stage suffixes for GL_EXT_ray_tracing shaders.
     "ray-generation": "rgen",
     "intersection": "rint",
@@ -74,6 +76,8 @@ HLSL_PROFILES = {
         "geometry": "gs",
         "tessellation-control": "hs",
         "tessellation-evaluation": "ds",
+        "task": "as",
+        "mesh": "ms",
         **dict.fromkeys(RAYTRACING_STAGES, "lib"),
     }.items()
 }
@@ -82,10 +86,13 @@ SLANG_STAGES = {
     **RAYTRACING_STAGES,
     "tessellation-control": "hull",
     "tessellation-evaluation": "domain",
+    "task": "amplification",
 }
 SPIRV_ENVIRONMENT = "vulkan1.1"
-# Ray tracing needs SPIR-V 1.4, which Vulkan 1.1 allows only as an extension; DXC lowers it for Vulkan 1.2.
-RAYTRACING_ENVIRONMENT = "vulkan1.2"
+# Ray tracing and mesh shading need SPIR-V 1.4, which Vulkan 1.1 allows only as an extension; DXC lowers them for
+# Vulkan 1.2.
+SPIRV_1_4_ENVIRONMENT = "vulkan1.2"
+SPIRV_1_4_STAGES = frozenset({*RAYTRACING_STAGES, "task", "mesh"})
 # The language version of the Metal feature list (features/metal.txt); probes compile against the same version.
 METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
@@ -203,6 +210,8 @@ HLSL_STAGE_ENTRIES = {
     "geometry": "GSMain",
     "tessellation-control": "HSMain",
     "tessellation-evaluation": "DSMain",
+    "task": "ASMain",
+    "mesh": "MSMain",
 }
 
 
@@ -230,6 +239,8 @@ METAL_ENTRIES = {
     "vertex": (r"^!air\.vertex = ",),
     "fragment": (r"^!air\.fragment = ",),
     "tessellation-evaluation": (r"^!air\.vertex = ", r'!"air\.patch"'),
+    "task": (r"^!air\.object = ",),
+    "mesh": (r"^!air\.mesh = ",),
 }
 
 
@@ -267,10 +278,11 @@ def validate(
         )
         Path(scratch, name).write_text(source)
         if language == "glsl":
-            # GL_EXT_ray_tracing exists only for SPIR-V 1.4 and later, so ray-tracing shaders are checked for Vulkan.
+            # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V 1.4 and later, so those shaders are
+            # checked for Vulkan.
             environment = (
-                ["--target-env", RAYTRACING_ENVIRONMENT]
-                if stage in RAYTRACING_STAGES
+                ["--target-env", SPIRV_1_4_ENVIRONMENT]
+                if stage in SPIRV_1_4_STAGES
                 else []
             )
             return _run([*command("glslangValidator"), *environment, name], scratch)
@@ -364,11 +376,7 @@ def validate(
             )
         environment = [
             "--target-env",
-            (
-                RAYTRACING_ENVIRONMENT
-                if stage in RAYTRACING_STAGES
-                else SPIRV_ENVIRONMENT
-            ),
+            (SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT),
         ]
         assembled = _run(
             [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch
@@ -449,7 +457,7 @@ def lower(
         "stage": SLANG_STAGES.get(stage, stage),
         "profile": HLSL_PROFILES.get(stage, ""),
         "environment": (
-            RAYTRACING_ENVIRONMENT if stage in RAYTRACING_STAGES else SPIRV_ENVIRONMENT
+            SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT
         ),
     }
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:

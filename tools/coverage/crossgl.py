@@ -495,6 +495,27 @@ _TESSELLATION_STAGES = {
     ),
 }
 
+# A mesh shader that writes one triangle, and a task shader that hands a payload to one mesh workgroup. The task
+# payload lives in task-payload storage, which CrossGL names by the GLSL qualifier.
+_MESH_STAGES = {
+    "mesh": Template(
+        program="shader Probe {\n    struct Vertex {\n        vec4 position @ gl_Position;\n    }\n    mesh {\n"
+        "        void main(@ vertices out Vertex verts[3], @ indices out uvec3 tris[1])\n"
+        "            @numthreads(1, 1, 1)\n            @outputtopology(triangle) {\n"
+        "            SetMeshOutputCounts(3, 1);\n"
+        "            verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);\n"
+        "            verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);\n"
+        "            verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);\n"
+        "            tris[0] = uvec3(0, 1, 2);\n        }\n    }\n}\n"
+    ),
+    "task": Template(
+        program="shader Probe {\n    struct Payload {\n        uint value;\n    }\n"
+        "    groupshared Payload payload @ taskPayloadSharedEXT;\n    task {\n"
+        "        void main() @numthreads(1, 1, 1) {\n            payload.value = 1u;\n"
+        "            DispatchMesh(1u, 1u, 1u, payload);\n        }\n    }\n}\n"
+    ),
+}
+
 # Language-level probes (:mod:`.constructs`). Kernel templates use the CrossGL kernel above: ``prelude`` lines are
 # shader-level declarations, ``declarations`` go inside the compute block.
 CONSTRUCTS: dict[str, Template] = {
@@ -546,6 +567,7 @@ CONSTRUCTS: dict[str, Template] = {
     ),
     "fragment": Template(program=_FRAGMENT.replace("{body}", "")),
     **_TESSELLATION_STAGES,
+    **_MESH_STAGES,
     **_RAYTRACING_STAGES,
     "discard": Template(
         program=_FRAGMENT.replace(
