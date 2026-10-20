@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.coverage-contract",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "categories": {
+    "required-gpu": "Fixture device test.",
+    "cpu-only": "Fixture host test.",
+    "windows-specific": "Fixture platform test."
+  },
+  "profiles": {
+    "directx-warp": {
+      "role": "original-baseline",
+      "target": "directx",
+      "os": "windows",
+      "device": "fixture baseline",
+      "execution": "software",
+      "deviceRows": {
+        "Warp": "execute",
+        "Discrete": "optional-hardware"
+      },
+      "capabilities": {}
+    }
+  },
+  "capabilities": {},
+  "classes": {
+    "HostFixture.Cases": {
+      "category": "cpu-only",
+      "reason": "Host fixture cases."
+    }
+  },
+  "methods": {}
+}

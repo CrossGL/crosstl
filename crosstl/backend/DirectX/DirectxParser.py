@@ -2,6 +2,7 @@
 
 import re
 
+from ...translator.integer_literals import integer_literal_parts
 from ..common_ast import (
     ArrayAccessNode,
     AttributeNode,
@@ -756,8 +757,12 @@ class HLSLParser:
         self.skip_template_argument_list()
 
     def parse_template_declaration_prefixes(self):
+        """Consume template prefixes; return whether any were present."""
+        parsed = False
         while self.is_template_declaration_prefix():
             self.parse_template_declaration_prefix()
+            parsed = True
+        return parsed
 
     def skip_template_argument_list(self):
         self.eat("LESS_THAN")
@@ -1491,9 +1496,9 @@ class HLSLParser:
         members = []
         methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            self.parse_template_declaration_prefixes()
+            templated = self.parse_template_declaration_prefixes()
             attributes = self.parse_attribute_list()
-            self.parse_template_declaration_prefixes()
+            templated = self.parse_template_declaration_prefixes() or templated
             qualifiers = self.parse_qualifiers()
             if self.skip_unexpanded_member_macro():
                 continue
@@ -1527,14 +1532,14 @@ class HLSLParser:
             qualifiers.extend(self.parse_post_type_qualifiers())
             member_name = self.parse_member_declarator_name()
             if self.current_token[0] == "LPAREN":
-                methods.append(
-                    self.parse_function(
-                        return_type,
-                        member_name,
-                        qualifiers=qualifiers,
-                        attributes=attributes,
-                    )
+                method = self.parse_function(
+                    return_type,
+                    member_name,
+                    qualifiers=qualifiers,
+                    attributes=attributes,
                 )
+                method.is_template = templated
+                methods.append(method)
             else:
                 declarations = self.parse_variable_declaration_list_rest(
                     return_type,
@@ -4112,16 +4117,32 @@ class HLSLParser:
             )
             if base != 10 or not any(c in stripped for c in ".eE"):
                 return IntegerLiteral(int(stripped, base), integer_suffix.group())
-        if token_type == "HEX_NUMBER":
-            stripped = re.sub(r"[uUlL]+$", "", value)
-            return int(stripped, 16)
-        if token_type == "BINARY_NUMBER":
-            stripped = re.sub(r"[uUlL]+$", "", value)
-            return int(stripped, 2)
-        if token_type == "OCT_NUMBER":
-            stripped = re.sub(r"[uUlL]+$", "", value)
-            return int(stripped, 8)
+        if token_type in {"HEX_NUMBER", "BINARY_NUMBER", "OCT_NUMBER"}:
+            return self.unsuffixed_nondecimal_literal(token_type, value)
         stripped = re.sub(r"[fFhHuUlL]+$", "", value)
         if "." in stripped or "e" in stripped or "E" in stripped:
             return float(stripped)
         return int(stripped)
+
+    # Suffixes that spell the C type of an unsuffixed non-decimal literal.
+    NONDECIMAL_LITERAL_SUFFIXES = {
+        "int": "",
+        "uint": "u",
+        "int64_t": "l",
+        "uint64_t": "ul",
+    }
+
+    def unsuffixed_nondecimal_literal(self, token_type, value):
+        """Type an unsuffixed hex, binary or octal literal as C does.
+
+        Such a literal takes the first of int, uint, int64_t and uint64_t that
+        holds its value, so ``0xFFC00000`` is a uint rather than a wider
+        signed integer.
+        """
+        spelling = value
+        if token_type == "OCT_NUMBER":
+            spelling = "0o" + value[1:]
+        _, type_name = integer_literal_parts(spelling)
+        number = int(spelling, 0)
+        suffix = self.NONDECIMAL_LITERAL_SUFFIXES[type_name]
+        return IntegerLiteral(number, suffix) if suffix else number

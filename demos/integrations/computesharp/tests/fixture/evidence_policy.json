@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.evidence-policy",
+  "capabilityQueries": {
+    "fixture-feature": {
+      "capability": "fixture-feature"
+    }
+  },
+  "hostOnlyMethods": {
+    "DiscoveryFixture.Cases.Expanded": "Fixture case that validates its argument on the host before any device work."
+  }
+}
