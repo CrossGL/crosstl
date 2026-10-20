@@ -3798,12 +3798,11 @@ class GLSLToCrossGLConverter:
 
         object_name = ""
         if isinstance(node.object, VariableNode):
+            # Geometry and tessellation inputs stay module-scope declarations, as
+            # in the variable path above, so their member reads keep the name.
             if self.shader_type in (
                 "vertex",
                 "fragment",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
             ) and any(var.name == node.object.name for var in self.inputs):
                 object_name = f"input.{node.object.name}"
             elif self.shader_type in ("vertex",) and any(

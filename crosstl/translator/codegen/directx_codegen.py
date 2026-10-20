@@ -2738,6 +2738,9 @@ class HLSLCodeGen(LoweringRefusalMixin):
             "gl_PointSize": "PSIZE",
             "gl_ClipDistance": "SV_ClipDistance",
             "gl_CullDistance": "SV_CullDistance",
+            "gl_TessLevelOuter": "SV_TessFactor",
+            "gl_TessLevelInner": "SV_InsideTessFactor",
+            "gl_TessCoord": "SV_DomainLocation",
             "gl_FragColor": "SV_TARGET",
             "gl_FragColor0": "SV_TARGET0",
             "gl_FragColor1": "SV_TARGET1",
@@ -3685,6 +3688,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         self.hlsl_texture_offset_parameter_constants = {}
         self.current_hlsl_texture_offset_constants = None
         self.current_hlsl_stage_output_lowering = None
+        self.current_hlsl_semantic_stage = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
         self.local_variable_types = {}
         self.local_variable_source_types = {}
@@ -12845,6 +12849,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         previous_identifier_aliases = self.current_identifier_aliases
         previous_identifier_reserved_names = self.current_identifier_reserved_names
         previous_stage_output_lowering = self.current_hlsl_stage_output_lowering
+        previous_semantic_stage = self.current_hlsl_semantic_stage
         previous_function_name = self.current_function_name
         previous_tail_recursive_call_ids = self.current_hlsl_tail_recursive_call_ids
         previous_tail_recursive_function = self.current_hlsl_tail_recursive_function
@@ -12914,6 +12919,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             qualifier = getattr(func, "qualifier", None)
         effective_shader_type = shader_type or qualifier
+        self.current_hlsl_semantic_stage = effective_shader_type
         promoted_entry_resource_parameter_ids = set()
         if normalize_stage_name(effective_shader_type) in self.stage_entry_types():
             promoted_entry_resource_parameter_ids = {
@@ -13512,6 +13518,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
             self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
+            self.current_hlsl_semantic_stage = previous_semantic_stage
             self.current_hlsl_resource_pointer_offsets = (
                 previous_resource_pointer_offsets
             )
@@ -13588,6 +13595,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
             self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
+            self.current_hlsl_semantic_stage = previous_semantic_stage
             self.current_hlsl_resource_pointer_offsets = (
                 previous_resource_pointer_offsets
             )
@@ -13824,6 +13832,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_identifier_aliases = previous_identifier_aliases
         self.current_identifier_reserved_names = previous_identifier_reserved_names
         self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
+        self.current_hlsl_semantic_stage = previous_semantic_stage
         self.current_hlsl_resource_pointer_offsets = previous_resource_pointer_offsets
         self.current_hlsl_resource_pointer_aliases = previous_resource_pointer_aliases
         self.current_generic_function_substitutions = (
@@ -32705,6 +32714,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "compute",
             "domain",
             "fragment",
+            "instance",
             "max_total_threads_per_threadgroup",
             "maxvertexcount",
             "maxtessfactor",
@@ -33263,7 +33273,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         semantic = self.semantic_from_node(parameter)
         if semantic is None:
             return False
-        mapped_semantic = self.semantic_map.get(semantic, semantic)
+        mapped_semantic = self.hlsl_semantic_name(semantic)
         return str(mapped_semantic).lower() == expected_semantic.lower()
 
     def hlsl_parameter_qualifiers(self, parameter):
@@ -34881,6 +34891,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         distance = distance_semantic(semantic_text)
         if distance is not None and distance[1] > 0:
             return f"{self.semantic_map[distance[0]]}{distance[1]}"
+        if semantic_text == "gl_InvocationID":
+            # GLSL's invocation index is the hull control point in a
+            # tessellation control stage and the instance in a geometry stage.
+            stage = normalize_stage_name(self.current_hlsl_semantic_stage)
+            stage_semantic = {
+                "tessellation_control": "SV_OutputControlPointID",
+                "geometry": "SV_GSInstanceID",
+            }.get(stage)
+            if stage_semantic is not None:
+                return stage_semantic
         return self.semantic_map.get(semantic_text, semantic_text)
 
     def validate_hlsl_stage_parameter_requirements(self, func, shader_type):
@@ -38040,7 +38060,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             semantic = self.semantic_from_node(member)
             if semantic is None:
                 continue
-            mapped_semantic = self.semantic_map.get(semantic, semantic)
+            mapped_semantic = self.hlsl_semantic_name(semantic)
             semantics.add(str(mapped_semantic).lower())
         return semantics
 
@@ -38050,7 +38070,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             semantic = self.semantic_from_node(member)
             if semantic is None:
                 continue
-            mapped_semantic = self.semantic_map.get(semantic, semantic)
+            mapped_semantic = self.hlsl_semantic_name(semantic)
             semantic_key = str(mapped_semantic).lower()
             member_type = getattr(member, "member_type", getattr(member, "vtype", None))
             if member_type is None and hasattr(member, "element_type"):
@@ -54135,7 +54155,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return mapped_type
 
     def hlsl_tess_factor_member_declaration(self, member_type, member_name, semantic):
-        mapped_semantic = self.semantic_map.get(semantic, semantic)
+        mapped_semantic = self.hlsl_semantic_name(semantic)
         if str(mapped_semantic).lower() not in {
             "sv_tessfactor",
             "sv_insidetessfactor",

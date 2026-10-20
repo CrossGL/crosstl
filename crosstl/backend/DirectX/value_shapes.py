@@ -599,6 +599,17 @@ class HLSLValueShapeMixin:
             sampled_texture_type = self.map_sampled_texture_type(base, generic_type)
             if sampled_texture_type:
                 return sampled_texture_type
+            if base in ("PointStream", "LineStream", "TriangleStream"):
+                stream_args = self.split_generic_arguments(generic_type)
+                if len(stream_args) == 1:
+                    return f"{base}<{self.map_type(stream_args[0])}>"
+            if base in ("InputPatch", "OutputPatch"):
+                patch_args = self.split_generic_arguments(generic_type)
+                if len(patch_args) == 2:
+                    patch_count = self.parse_template_dimension(patch_args[1])
+                    if patch_count is not None:
+                        element_type = self.map_type(patch_args[0])
+                        return f"{base}<{element_type}, {patch_count}>"
             if base in self.generic_passthrough_types:
                 mapped_args = ", ".join(
                     self.sanitize_type_name(self.canonical_composite_type(arg))

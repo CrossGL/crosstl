@@ -2813,7 +2813,8 @@ def test_codegen_geometry_primitive_before_direction_from_dxc_spirv():
     assert "geometry {" in output
     assert "@ maxvertexcount(3)" in output
     assert (
-        "void main(in point uint id[1] @ VertexID, inout lineStream outData)" in output
+        "void main(in point uint id[1] @ VertexID, inout LineStream<S> outData)"
+        in output
     )
     parse_crossgl(output)
 

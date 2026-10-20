@@ -111,6 +111,11 @@ from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
+from .spirv_per_vertex_builtins import (
+    lower_per_vertex_builtin_arrays,
+    per_vertex_builtin_info,
+    sized_per_vertex_interface_type,
+)
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -10498,6 +10503,22 @@ class VulkanSPIRVCodeGen(
             "workgroupExecutionBarrier",
         }
         if (
+            function_name == "barrier"
+            and self.current_synchronization_execution_models()
+            == {"TessellationControl"}
+        ):
+            # GLSL 4.60 section 8.16: a tessellation control barrier() orders the patch's
+            # invocations; glslang lowers it to a workgroup control barrier without memory semantics.
+            workgroup_scope = self.spirv_scope_constant("Workgroup")
+            invocation_scope = self.spirv_scope_constant("Invocation")
+            no_memory_semantics = self.spirv_memory_semantics_constant()
+            self.emit(
+                f"OpControlBarrier %{workgroup_scope.id} %{invocation_scope.id} "
+                f"%{no_memory_semantics.id}"
+            )
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        if (
             function_name in workgroup_synchronization_functions
             and not self.can_emit_workgroup_synchronization()
         ):
@@ -13809,6 +13830,7 @@ class VulkanSPIRVCodeGen(
             "input",
             "input_primitive",
             "inputprimitive",
+            "instance",
             "invocations",
             "location",
             "local_size",
@@ -13822,6 +13844,8 @@ class VulkanSPIRVCodeGen(
             "max_total_threads_per_threadgroup",
             "max_vertices",
             "maxprimitives",
+            "maxtessfactor",
+            "maxvertexcount",
             "maxvertices",
             "maybe_unused",
             "numthreads",
@@ -19889,6 +19913,8 @@ class VulkanSPIRVCodeGen(
                 self.precise_global_variables.add(node.name)
             return initializer
 
+        if storage_class in {"Input", "Output"}:
+            var_type = sized_per_vertex_interface_type(self, var_type, storage_class)
         if storage_class == "Input":
             var_id = self.global_interface_builtin_variable(node, "Input", var_type)
             if var_id is None:
@@ -20318,6 +20344,11 @@ class VulkanSPIRVCodeGen(
                 if attribute_name == "sample":
                     self.require_capability("SampleRateShading")
                 self.decorations.append(f"OpDecorate %{var_id.id} {decoration_name}")
+        if "patch" in {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", ())
+        }:
+            # GLSL `patch in`/`patch out`: one value per patch, not per control point.
+            self.decorations.append(f"OpDecorate %{var_id.id} Patch")
         if self.declaration_metadata_names(node) & {
             "pervertex",
             "pervertexext",
@@ -29327,6 +29358,9 @@ class VulkanSPIRVCodeGen(
 
     def stage_builtin_info(self, name: str):
         name = self.spirv_builtin_alias(name)
+        per_vertex = per_vertex_builtin_info(self, name)
+        if per_vertex is not None:
+            return per_vertex
         builtins = {
             "gl_VertexID": (
                 "uint",
@@ -29398,13 +29432,13 @@ class VulkanSPIRVCodeGen(
                 "vec4",
                 "Position",
                 "Output",
-                {"Vertex", "TessellationEvaluation"},
+                {"Vertex", "TessellationEvaluation", "Geometry"},
             ),
             "gl_PointSize": (
                 "float",
                 "PointSize",
                 "Output",
-                {"Vertex", "TessellationEvaluation"},
+                {"Vertex", "TessellationEvaluation", "Geometry"},
             ),
             "gl_FragDepth": (
                 "float",
@@ -29452,6 +29486,12 @@ class VulkanSPIRVCodeGen(
                 "TessCoord",
                 "Input",
                 {"TessellationEvaluation"},
+            ),
+            "gl_PatchVerticesIn": (
+                "int",
+                "PatchVertices",
+                "Input",
+                {"TessellationControl", "TessellationEvaluation"},
             ),
             "gl_TessLevelOuter": (
                 "float[4]",
@@ -29719,6 +29759,13 @@ class VulkanSPIRVCodeGen(
             # SPV_KHR_multiview: core in SPIR-V 1.3, an extension before it.
             self.require_capability("MultiView")
             self.require_extension("SPV_KHR_multiview")
+        elif builtin_name == "ViewportIndex":
+            self.require_capability("MultiViewport")
+        elif (
+            builtin_name == "Layer"
+            and self.current_stage_builtin_execution_model() == "Fragment"
+        ):
+            self.require_capability("Geometry")
 
     def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:
         builtin = self.ensure_compute_builtin(name)
@@ -29806,6 +29853,8 @@ class VulkanSPIRVCodeGen(
         self.emit(f"%{id_value} = OpVariable %{ptr_type.id} {storage_class}")
         self.emit(f'OpName %{id_value} "{name}"')
         self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
+        if builtin_name in {"TessLevelOuter", "TessLevelInner"}:
+            self.decorations.append(f"OpDecorate %{id_value} Patch")
         self.mark_fragment_builtin_execution_mode_if_needed(builtin_name, storage_class)
 
         spirv_id = SpirvId(id_value, ptr_type.type, name)
@@ -30872,7 +30921,11 @@ class VulkanSPIRVCodeGen(
 
         validate_recursion_free(ast, "vulkan")
         lower_relational_builtins(ast)
+        lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
+        self.per_vertex_program_stages = list(
+            (getattr(ast, "stages", None) or {}).items()
+        )
         self.program_execution_models = {
             self.spirv_execution_model(self.stage_key(stage_type))
             for stage_type in getattr(ast, "stages", None) or {}
