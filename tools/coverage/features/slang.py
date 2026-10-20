@@ -417,8 +417,11 @@ def stage(declaration: Declaration) -> str:
 
 
 def _stage(name: str, declaration: Declaration) -> str:
-    """:func:`stage`, with a ray-tracing function probed in the ray-tracing stage that has it."""
+    """:func:`stage`, with a ray-tracing function probed in the ray-tracing stage that has it, and DispatchMesh, which
+    launches mesh workgroups, in the task stage."""
     found = stage(declaration)
+    if found == "mesh" and name == "DispatchMesh":
+        return "task"
     return raytracing_stage(name) if found == "raytracing" else found
 
 

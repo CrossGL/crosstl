@@ -74,7 +74,8 @@ SCALAR = {
     "p32i8": "int8x4_packed",
     "p32u8": "uint8x4_packed",
 }
-# Intrinsics that only exist in one kind of shader stage (Direct3D 12 functional specification).
+# Intrinsics that only exist in one kind of shader stage (Direct3D 12 functional specification), under the report's
+# stage names: Direct3D's amplification stage is the task stage, and its hull stage the tessellation-control stage.
 STAGES = {
     "fragment": (
         "clip ddx ddx_coarse ddx_fine ddy ddy_coarse ddy_fine fwidth EvaluateAttributeAtSample "
@@ -89,8 +90,8 @@ STAGES = {
         "TriangleObjectPositions dx::MaybeReorderThread"
     ),
     "mesh": "SetMeshOutputCounts",
-    "amplification": "DispatchMesh",
-    "hull": (
+    "task": "DispatchMesh",
+    "tessellation-control": (
         "Process2DQuadTessFactorsAvg Process2DQuadTessFactorsMax Process2DQuadTessFactorsMin "
         "ProcessIsolineTessFactors ProcessQuadTessFactorsAvg ProcessQuadTessFactorsMax ProcessQuadTessFactorsMin "
         "ProcessTriTessFactorsAvg ProcessTriTessFactorsMax ProcessTriTessFactorsMin"

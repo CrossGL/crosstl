@@ -170,6 +170,84 @@ class HLSL(Dialect):
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["}"]) + "\n"
 
+    # Entry-point attributes that name a graphics stage, which Slang needs and HLSL takes from the profile instead.
+    stage_attributes: dict[str, tuple[str, ...]] = {}
+    _PATCH = (
+        "struct ControlPoint {",
+        "    float4 position : POSITION;",
+        "};",
+        "struct PatchConstants {",
+        "    float edges[3] : SV_TessFactor;",
+        "    float inside : SV_InsideTessFactor;",
+        "};",
+    )
+
+    def tessellation_control(
+        self, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        lines = [
+            *self._PATCH,
+            *self._globals(buffers, parts),
+            "PatchConstants constants(InputPatch<ControlPoint, 3> patch) {",
+            "    PatchConstants output;",
+            "    output.edges[0] = 1.0;",
+            "    output.edges[1] = 1.0;",
+            "    output.edges[2] = 1.0;",
+            "    output.inside = 1.0;",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "    return output;",
+            "}",
+            *self.stage_attributes.get("tessellation-control", ()),
+            '[domain("tri")]',
+            '[partitioning("integer")]',
+            '[outputtopology("triangle_cw")]',
+            "[outputcontrolpoints(3)]",
+            '[patchconstantfunc("constants")]',
+            "ControlPoint main(InputPatch<ControlPoint, 3> patch, uint id : SV_OutputControlPointID) {",
+            "    ControlPoint output;",
+            "    output.position = patch[id].position * 2.0;",
+            "    return output;",
+            "}",
+        ]
+        return "\n".join(lines) + "\n"
+
+    def mesh(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            "struct Vertex {",
+            "    float4 position : SV_Position;",
+            "};",
+            *self._globals(buffers, parts),
+            *self.stage_attributes.get("mesh", ()),
+            "[numthreads(1, 1, 1)]",
+            '[outputtopology("triangle")]',
+            "void main(out vertices Vertex verts[3], out indices uint3 tris[1]) {",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "    verts[0].position = float4(0.0, 0.0, 0.0, 1.0);",
+            "    verts[1].position = float4(1.0, 0.0, 0.0, 1.0);",
+            "    verts[2].position = float4(0.0, 1.0, 0.0, 1.0);",
+            "    tris[0] = uint3(0, 1, 2);",
+            "}",
+        ]
+        return "\n".join(lines) + "\n"
+
+    def task(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            "struct Payload {",
+            "    uint value;",
+            "};",
+            f"groupshared Payload {self.payload};",
+            *self._globals(buffers, parts),
+            *self.stage_attributes.get("task", ()),
+            "[numthreads(1, 1, 1)]",
+            "void main() {",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+        return "\n".join(lines) + "\n"
+
 
 class Metal(Dialect):
     language = "metal"
@@ -341,6 +419,11 @@ class Slang(HLSL):
     suffix = ".slang"
     entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
     fragment_attributes = ('[shader("fragment")]',)
+    stage_attributes = {
+        "tessellation-control": ('[shader("hull")]',),
+        "mesh": ('[shader("mesh")]',),
+        "task": ('[shader("amplification")]',),
+    }
     # Slang declares a ray payload as a plain struct; payload access qualifiers are an HLSL shader model 6.7 rule.
     _PAYLOAD = ("struct Payload", "{", "    float4 color;", "};")
 

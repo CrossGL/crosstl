@@ -400,6 +400,92 @@ class CrossGL(Dialect):
         lines += ["        }", "    }", "}"]
         return "\n".join(lines) + "\n"
 
+    def _program(
+        self,
+        block: str,
+        shared: tuple[str, ...],
+        buffers: list[Buffer],
+        functions: list[str],
+        parts: dict,
+    ) -> str:
+        """A probe whose ``block`` stage declares the buffers and then ``functions``, after the shader-level
+        ``shared`` declarations."""
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in (*parts.get("prelude", ()), *shared)]
+        lines += [f"    {block} {{"]
+        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += [f"        {line}" for line in functions]
+        lines += ["    }", "}"]
+        return "\n".join(lines) + "\n"
+
+    def tessellation_control(
+        self, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        functions = [
+            "PatchConstants constants(InputPatch<ControlPoint, 3> patch) {",
+            "    PatchConstants output;",
+            "    output.edges[0] = 1.0;",
+            "    output.edges[1] = 1.0;",
+            "    output.edges[2] = 1.0;",
+            "    output.inside = 1.0;",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "    return output;",
+            "}",
+            "ControlPoint main(InputPatch<ControlPoint, 3> patch, uint id @ SV_OutputControlPointID)",
+            "    @domain(tri)",
+            "    @partitioning(integer)",
+            "    @outputtopology(triangle_cw)",
+            "    @outputcontrolpoints(3)",
+            "    @patchconstantfunc(constants) {",
+            "    ControlPoint output;",
+            "    output.position = patch[id].position * 2.0;",
+            "    return output;",
+            "}",
+        ]
+        shared = (
+            "struct ControlPoint {",
+            "    vec4 position @ POSITION;",
+            "}",
+            "struct PatchConstants {",
+            "    float edges[3] @ SV_TessFactor;",
+            "    float inside @ SV_InsideTessFactor;",
+            "}",
+        )
+        return self._program("tessellation_control", shared, buffers, functions, parts)
+
+    def mesh(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        functions = [
+            "void main(@ vertices out Vertex verts[3], @ indices out uvec3 tris[1])",
+            "    @numthreads(1, 1, 1)",
+            "    @outputtopology(triangle) {",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);",
+            "    verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);",
+            "    verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);",
+            "    tris[0] = uvec3(0, 1, 2);",
+            "}",
+        ]
+        shared = ("struct Vertex {", "    vec4 position @ gl_Position;", "}")
+        return self._program("mesh", shared, buffers, functions, parts)
+
+    def task(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        functions = [
+            "void main() @numthreads(1, 1, 1) {",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+        shared = (
+            "struct Payload {",
+            "    uint value;",
+            "}",
+            f"groupshared Payload {self.payload} @ taskPayloadSharedEXT;",
+        )
+        return self._program("task", shared, buffers, functions, parts)
+
 
 # A geometry stage's input and output primitives, as the CrossGL importers write them.
 _POINTS_IN_AND_OUT = ("layout(points) in;", "layout(points, max_vertices = 1) out;")

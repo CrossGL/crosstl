@@ -1,5 +1,5 @@
-"""Minimal probe programs: one call of one feature inside a compute kernel, or a fragment, geometry or ray-tracing
-shader for a feature only that stage has.
+"""Minimal probe programs: one call of one feature inside a compute kernel, or a shader of the one stage that has the
+feature.
 
 Arguments are read from input buffers, so no call folds to a constant, and the result is written to an output
 buffer, so no call is dead code. Output probes are CrossGL (:mod:`.crossgl`); input probes are written in the source
@@ -27,6 +27,13 @@ _INTERPOLANTS = frozenset(
 )
 # Those whose input must not be interpolated, because the function reads one vertex's value.
 _FLAT = frozenset({"GetAttributeAtVertex"})
+# Stages whose probe is one dialect method, which takes the buffers, the body and the declarations.
+_STAGE_PROGRAMS = {
+    "geometry": "geometry",
+    "tessellation-control": "tessellation_control",
+    "mesh": "mesh",
+    "task": "task",
+}
 
 
 @dataclass(frozen=True)
@@ -65,10 +72,13 @@ class _Builder:
         dialect: Dialect,
         receiver: Receiver | None = None,
         interpolant: str = "",
+        payload: bool = False,
     ):
         self.dialect = dialect
         self.receiver = receiver
         self.interpolant = interpolant
+        # Whether the probe declares a task payload, which a parameter of a user-defined or by-reference type takes.
+        self.payload = payload
         self.uniforms = Uniforms(dialect)
         self.offsets: dict[str, int] = {}
         self.lines: list[str] = list(receiver.locals) if receiver else []
@@ -104,6 +114,8 @@ class _Builder:
         return objects + self.uniforms.declarations
 
     def _resource(self, kind: Type) -> bool:
+        if self.payload and kind.opaque == "udt":
+            return True
         return bool(self.receiver and self.receiver.takes(kind)) or self.uniforms.takes(
             kind
         )
@@ -118,7 +130,11 @@ class _Builder:
                 )  # raises ProbeError for what the language cannot spell
         for index, param in enumerate(signature.params):
             local = f"a{index}"
-            if receiver and receiver.takes(param.type):
+            if self.payload and (
+                param.type.opaque == "udt" or param.direction == "inout"
+            ):
+                arguments.append(dialect.payload)
+            elif receiver and receiver.takes(param.type):
                 arguments.append(receiver.argument(param.type))
             elif self.uniforms.takes(param.type):
                 arguments.append(self.uniforms.argument(param.type))
@@ -199,7 +215,12 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         language == "crossgl" and feature.counterpart
     ):
         raise ProbeError(feature.note or "the feature list gives no signature")
-    if feature.stage not in ("compute", "fragment", "geometry", *RAYTRACING_STAGES):
+    if feature.stage not in (
+        "compute",
+        "fragment",
+        *_STAGE_PROGRAMS,
+        *RAYTRACING_STAGES,
+    ):
         raise ProbeError(f"no {feature.stage}-stage probe yet")
     name = (
         feature.crossgl if language == "crossgl" else feature.spelling or feature.name
@@ -217,7 +238,7 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     interpolant = feature.name in _INTERPOLANTS and (
         "flat" if feature.name in _FLAT else "smooth"
     )
-    builder = _Builder(dialect, receiver, interpolant or "")
+    builder = _Builder(dialect, receiver, interpolant or "", feature.stage == "task")
     signature = feature.signature
     if language == "crossgl" and feature.counterpart:
         signature = feature.counterpart
@@ -237,11 +258,11 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         return Probe(
             language, source, dialect.entry, dialect.fragment_suffix or dialect.suffix
         )
-    if feature.stage == "geometry":
-        source = dialect.geometry(buffers, body, declarations=declarations)
-        return Probe(
-            language, source, dialect.entry, dialect.geometry_suffix or dialect.suffix
-        )
+    if feature.stage in _STAGE_PROGRAMS:
+        program = getattr(dialect, _STAGE_PROGRAMS[feature.stage])
+        source = program(buffers, body, declarations=declarations)
+        suffix = dialect.geometry_suffix if feature.stage == "geometry" else ""
+        return Probe(language, source, dialect.entry, suffix or dialect.suffix)
     if feature.stage in RAYTRACING_STAGES:
         source = dialect.raytracing(
             feature.stage, buffers, body, declarations=declarations

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from tools.coverage import probes, validators
@@ -204,6 +206,105 @@ def test_geometry_probes_are_valid():
             probe = probes.build(spelled, "glsl", baseline=baseline)
             verdict = validators.validate("glsl", probe.source, "geometry", probe.entry)
             assert verdict.accepted, verdict.log
+
+
+UINT = Type("uint")
+VEC4 = Type("float", (4,))
+VEC2 = Type("float", (2,))
+STAGE_FUNCTIONS = {
+    "tessellation-control": (
+        "Process2DQuadTessFactorsAvg",
+        VOID,
+        VEC4,
+        VEC2,
+        Param(VEC4, "out"),
+        Param(VEC2, "out"),
+        Param(VEC2, "out"),
+    ),
+    "mesh": ("SetMeshOutputCounts", VOID, UINT, UINT),
+    "task": ("DispatchMesh", VOID, UINT, UINT, UINT, Type("", (), "udt")),
+}
+
+
+def stage_function(language, stage):
+    name, result, *params = STAGE_FUNCTIONS[stage]
+    signature = Signature(
+        result, tuple(p if isinstance(p, Param) else Param(p) for p in params)
+    )
+    return Feature(language, "function", name, signature, crossgl=name, stage=stage)
+
+
+def test_tessellation_factor_functions_run_in_the_patch_constant_function():
+    feature = stage_function("hlsl", "tessellation-control")
+    hlsl = probes.build(feature, "hlsl").source
+    constants, entry = hlsl.split("[domain(")
+    assert "PatchConstants constants(InputPatch<ControlPoint, 3> patch) {" in constants
+    assert "    Process2DQuadTessFactorsAvg(a0, a1, a2, a3, a4);" in constants
+    assert '[patchconstantfunc("constants")]' in entry
+    assert "numthreads" not in hlsl
+    slang = probes.build(replace(feature, language="slang"), "slang").source
+    assert '[shader("hull")]\n[domain("tri")]' in slang
+    crossgl = probes.build(feature, "crossgl").source
+    assert "    tessellation_control {\n        buffer float* fin;" in crossgl
+    assert "            Process2DQuadTessFactorsAvg(a0, a1, a2, a3, a4);" in crossgl
+    assert "            @patchconstantfunc(constants) {" in crossgl
+
+
+def test_mesh_functions_run_before_the_mesh_shader_writes_its_triangle():
+    hlsl = probes.build(stage_function("hlsl", "mesh"), "hlsl").source
+    call = hlsl.index("    SetMeshOutputCounts(a0, a1);")
+    assert hlsl.index("    tris[0] = uint3(0, 1, 2);") > call
+    assert '[numthreads(1, 1, 1)]\n[outputtopology("triangle")]' in hlsl
+    crossgl = probes.build(stage_function("hlsl", "mesh"), "crossgl").source
+    assert "    mesh {\n        buffer uint* uin;" in crossgl
+    assert "            SetMeshOutputCounts(a0, a1);" in crossgl
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang", "crossgl"])
+def test_a_task_shader_hands_its_payload_to_dispatch_mesh(language):
+    source = probes.build(stage_function("hlsl", "task"), language).source
+    assert "DispatchMesh(a0, a1, a2, payload);" in source
+    declaration = {
+        "crossgl": "groupshared Payload payload @ taskPayloadSharedEXT;",
+        "hlsl": "groupshared Payload payload;",
+        "slang": "groupshared Payload payload;",
+    }
+    assert declaration[language] in source
+    # Slang's DispatchMesh takes the payload by reference.
+    by_reference = stage_function("slang", "task")
+    *values, _ = by_reference.signature.params
+    by_reference = replace(
+        by_reference,
+        signature=Signature(VOID, (*values, Param(Type("int"), "inout"))),
+    )
+    assert (
+        "DispatchMesh(a0, a1, a2, payload);" in probes.build(
+            by_reference, language
+        ).source
+    )
+
+
+def test_stages_without_a_function_probe_say_so():
+    for stage in STAGE_FUNCTIONS:
+        with pytest.raises(probes.ProbeError, match=f"no {stage}-stage probe for glsl"):
+            probes.build(stage_function("glsl", stage), "glsl")
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang"])
+@pytest.mark.parametrize("stage", list(STAGE_FUNCTIONS))
+def test_stage_function_probes_are_valid(language, stage):
+    if not validators.available(language):
+        pytest.skip(f"no {language} validator")
+    feature = stage_function(language, stage)
+    if (language, stage) == ("slang", "tessellation-control"):
+        # Slang has the tessellation-factor functions only for HLSL targets; any function checks the hull shader.
+        scalar = Type("float")
+        feature = replace(
+            feature, name="abs", signature=Signature(scalar, (Param(scalar),))
+        )
+    probe = probes.build(feature, language)
+    verdict = validators.validate(language, probe.source, stage, probe.entry)
+    assert verdict.accepted, verdict.log
 
 
 def test_an_interpolant_is_read_straight_from_a_shader_input():

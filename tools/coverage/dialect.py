@@ -27,6 +27,8 @@ class Dialect:
     # The file suffix of a fragment or geometry probe, where the language's tools tell the stage from it.
     fragment_suffix = ""
     geometry_suffix = ""
+    # The task payload a task-stage probe declares and hands to the mesh workgroups it launches.
+    payload = "payload"
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
@@ -181,3 +183,21 @@ class Dialect:
         """A shader of the ray-tracing ``stage`` that runs ``body`` with ``i`` set to 0, for a feature only that stage
         has; the buffers and ``parts`` are :meth:`kernel`'s."""
         raise ProbeError(f"no {stage}-stage probe for {self.language} yet")
+
+    def tessellation_control(
+        self, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        """A tessellation-control shader for a triangle patch whose patch-constant code runs ``body`` with ``i`` set
+        to 0; the buffers and ``parts`` are :meth:`kernel`'s."""
+        raise ProbeError(f"no tessellation-control-stage probe for {self.language} yet")
+
+    def mesh(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A mesh shader that runs ``body`` with ``i`` set to 0 and then writes one triangle; the buffers and ``parts``
+        are :meth:`kernel`'s."""
+        raise ProbeError(f"no mesh-stage probe for {self.language} yet")
+
+    def task(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A task shader that runs ``body`` with ``i`` set to 0. It declares the task payload :attr:`payload`, which
+        ``body`` hands to the mesh workgroups it launches; the buffers and ``parts`` are :meth:`kernel`'s.
+        """
+        raise ProbeError(f"no task-stage probe for {self.language} yet")

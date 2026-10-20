@@ -360,7 +360,12 @@ def validate(
             entry_point = (
                 []
                 if "[shader(" in source
-                else ["-entry", entry or "main", "-stage", stage]
+                else [
+                    "-entry",
+                    entry or "main",
+                    "-stage",
+                    SLANG_STAGES.get(stage, stage),
+                ]
             )
             return _run(
                 [
