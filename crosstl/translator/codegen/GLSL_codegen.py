@@ -124,6 +124,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..wave_operations import WAVE_BALLOT_BIT_OPERATIONS, wave_extended_result_type
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -239,6 +240,13 @@ from .glsl_version_requirements import (
     program_extensions,
     resolve_version_line,
     with_es_default_precisions,
+)
+from .glsl_wave_extended import (
+    GLSL_CLUSTERED_BITWISE_OPERATIONS,
+    GLSL_CLUSTERED_NUMERIC_OPERATIONS,
+    GLSL_EXTENDED_WAVE_ARITIES,
+    GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
+    GLSL_EXTENDED_WAVE_EXTENSIONS,
 )
 from .image_access_contracts import (
     collect_function_image_access_requirements,
@@ -2200,6 +2208,7 @@ class GLSLCodeGen(
         "WaveMultiPrefixBitAnd": 2,
         "WaveMultiPrefixBitOr": 2,
         "WaveMultiPrefixBitXor": 2,
+        **GLSL_EXTENDED_WAVE_ARITIES,
     }
     GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES = {
         "WaveShuffleAndFillUp": (3, 4),
@@ -2239,6 +2248,7 @@ class GLSLCodeGen(
         "QuadReadAcrossY": "subgroupQuadSwapVertical",
         "QuadReadAcrossDiagonal": "subgroupQuadSwapDiagonal",
         "QuadReadLaneAt": "subgroupQuadBroadcast",
+        **GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
     }
     GLSL_WAVE_BITWISE_VALUE_OPERATIONS = {
         "WaveActiveBitAnd",
@@ -2394,6 +2404,7 @@ class GLSLCodeGen(
         "WaveMultiPrefixBitAnd": "#extension GL_KHR_shader_subgroup_ballot : require",
         "WaveMultiPrefixBitOr": "#extension GL_KHR_shader_subgroup_ballot : require",
         "WaveMultiPrefixBitXor": "#extension GL_KHR_shader_subgroup_ballot : require",
+        **GLSL_EXTENDED_WAVE_EXTENSIONS,
     }
     GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS = {
         "WaveMatch",
@@ -2462,6 +2473,7 @@ class GLSLCodeGen(
         "WavePrefixInclusiveMin",
         "WavePrefixExclusiveMax",
         "WavePrefixInclusiveMax",
+        *GLSL_CLUSTERED_NUMERIC_OPERATIONS,
     }
     GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS = {
         "WaveActiveBitAnd",
@@ -2473,6 +2485,7 @@ class GLSLCodeGen(
         "WavePrefixInclusiveBitOr",
         "WavePrefixExclusiveBitXor",
         "WavePrefixInclusiveBitXor",
+        *GLSL_CLUSTERED_BITWISE_OPERATIONS,
     }
     GLSL_WAVE_BOOLEAN_OPERATIONS = {
         "WaveActiveAllTrue",
@@ -42866,6 +42879,8 @@ complex64_t crossgl_complex64_mod_assign(
         return self.generate_glsl_explicit_bitcast(integer_type, value_type, reduced)
 
     def glsl_wave_result_type(self, operation, arguments):
+        if operation in WAVE_BALLOT_BIT_OPERATIONS:
+            return wave_extended_result_type(operation, None)
         if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:
             return "uint"
         if operation in {

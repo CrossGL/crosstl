@@ -132,6 +132,7 @@ from .spirv_stage_distances import (
 )
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
+from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import spirv_semantic_location
 from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
@@ -10629,6 +10630,10 @@ class VulkanSPIRVCodeGen(
                     self.register_primitive_type("uint")
                 )
             args.append(value)
+
+        extended = lower_spirv_wave_extension(self, operation, argument_exprs, args)
+        if extended is not None:
+            return extended
 
         if operation == "WaveGetLaneCount":
             if args:
@@ -29329,6 +29334,7 @@ class VulkanSPIRVCodeGen(
                 "SubgroupLocalInvocationId",
                 "Input",
             ),
+            **SPIRV_SUBGROUP_BUILTINS,
         }
         return builtins.get(name)
 
@@ -29846,8 +29852,10 @@ class VulkanSPIRVCodeGen(
             return builtin_id
 
         type_name, builtin_name, storage_class = info
-        if builtin_name.startswith("Subgroup"):
-            self.require_group_non_uniform()
+        if builtin_name.startswith("Subgroup") or builtin_name == "NumSubgroups":
+            self.require_group_non_uniform(
+                "GroupNonUniformBallot" if builtin_name.endswith("Mask") else None
+            )
         type_id = self.map_crossgl_type(type_name)
         if storage_class == "Constant":
             builtin_id = self.register_workgroup_size_builtin(
