@@ -4,7 +4,8 @@ Before:
 * ``var name = expr;`` (the Mojo and Slang importers emit it) did not parse, so the function lost its body;
 * the HLSL emitter typed ``let i = gl_GlobalInvocationID.x;`` as ``float`` and
   ``let c = gl_GlobalInvocationID;`` as ``float`` (dropping two components), because it fell back on ``float``
-  whenever it could not infer an initializer's type.
+  whenever it could not infer an initializer's type;
+* ``var i;``, with nothing to infer a type from, failed with ``Expected SEMICOLON, got IDENTIFIER 'i'``.
 """
 
 import re
@@ -124,3 +125,22 @@ def test_hlsl_refuses_a_local_whose_type_cannot_be_inferred(tmp_path):
     with pytest.raises(DirectXLoweringRefused) as raised:
         translate(tmp_path, program, "directx")
     assert "the type of 't' is not written" in str(raised.value)
+
+
+def test_a_var_with_neither_a_type_nor_an_initializer_is_refused(tmp_path):
+    program = textwrap.dedent("""
+        shader S {
+            compute {
+                buffer float data[];
+                void main() {
+                    var i;
+                    data[0] = 2.0;
+                }
+            }
+        }
+        """)
+    expected = re.escape("'var i;' has no type and no initializer to infer one from")
+    with pytest.raises(SyntaxError, match=expected):
+        function_body(program)
+    with pytest.raises(SyntaxError, match=expected):
+        translate(tmp_path, program, "opengl")

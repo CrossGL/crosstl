@@ -2881,5 +2881,24 @@ def test_codegen_inserts_default_version_when_missing():
     assert glsl_code.lstrip().startswith("#version 450 core")
 
 
+def test_codegen_untyped_var_keeps_the_function_body():
+    source = textwrap.dedent("""
+        shader main {
+            compute {
+                buffer float data[];
+                void main() {
+                    var i = 1;
+                    data[0] = 2.0;
+                }
+            }
+        }
+    """).strip()
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(source))
+
+    assert "int i = 1;" in glsl
+    assert "data[0] = 2.0;" in glsl
+
+
 if __name__ == "__main__":
     pytest.main()
