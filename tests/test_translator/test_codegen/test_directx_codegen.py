@@ -48270,7 +48270,8 @@ def test_hlsl_private_pointer_rejects_unprovable_rebase(body, detail):
 
             void main() {{
                 float backing[8];
-                write_values(backing, 2);
+                // A count no call bounds: a bounded one seeds the analysis.
+                write_values(backing, next_offset());
             }}
         }}
     }}

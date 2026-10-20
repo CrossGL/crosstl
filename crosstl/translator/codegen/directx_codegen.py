@@ -117,7 +117,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
-from . import hlsl_byte_records
+from . import hlsl_byte_records, hlsl_private_pointer_call_intervals
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -2414,6 +2414,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.hlsl_private_pointer_rebase_ids = set()
         self.hlsl_private_pointer_nonzero_rebase_ids = set()
         self.hlsl_private_pointer_rejected_rebases = {}
+        self.hlsl_private_pointer_parameter_seeds = {}
         self.current_hlsl_private_pointer_variant = {}
         self.current_hlsl_private_pointer_base_names = {}
         self.function_hlsl_workgroup_pointer_parameters = {}
@@ -3806,6 +3807,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.hlsl_private_pointer_rebase_ids = set()
         self.hlsl_private_pointer_nonzero_rebase_ids = set()
         self.hlsl_private_pointer_rejected_rebases = {}
+        self.hlsl_private_pointer_parameter_seeds = {}
         self.current_hlsl_private_pointer_variant = {}
         self.current_hlsl_private_pointer_base_names = {}
         self.function_hlsl_workgroup_pointer_parameters = {}
@@ -42488,21 +42490,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             for function_name, function in functions_by_name.items()
         }
 
-        direct_spans = {
-            function_name: {parameter.name: 0 for parameter in parameters}
-            for function_name, parameters in pointer_parameters.items()
-        }
-        self.function_private_pointer_full_span_parameters = {
-            function_name: set() for function_name in pointer_parameters
-        }
-        view_calls = {function_name: [] for function_name in functions_by_name}
-        for function_name, function in functions_by_name.items():
-            self.hlsl_analyze_private_pointer_function(
-                function,
-                functions_by_name,
-                direct_spans.get(function_name, {}),
-                view_calls[function_name],
-            )
+        direct_spans, view_calls = self.hlsl_analyze_private_pointer_functions(
+            functions_by_name, pointer_parameters
+        )
 
         scalar_parameters = {
             function_name: set() for function_name in pointer_parameters
@@ -43080,6 +43070,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.hlsl_private_pointer_interval(
                     arguments[0], intervals, constants
                 )
+            return hlsl_private_pointer_call_intervals.builtin_interval(
+                function_name,
+                arguments,
+                lambda argument: self.hlsl_private_pointer_interval(
+                    argument, intervals, constants
+                ),
+                lambda argument: (
+                    (
+                        self.function_call_name(argument),
+                        list(getattr(argument, "arguments", []) or []),
+                    )
+                    if isinstance(argument, FunctionCallNode)
+                    else None
+                ),
+            )
         return None
 
     def hlsl_private_pointer_static_binding(
@@ -43528,6 +43533,111 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         return values
 
+    def hlsl_private_pointer_call_callee(self, call):
+        """The function a call reaches, as the private pointer analysis names it."""
+        callee_name = self.function_call_name(call)
+        arguments = list(getattr(call, "arguments", []) or [])
+        specialized_name = generic_function_call_name(self, callee_name, arguments)
+        if specialized_name in self.function_private_pointer_parameters:
+            return specialized_name
+        return self.hlsl_materialized_function_name(callee_name)
+
+    def hlsl_private_pointer_signed_slots(self, function, parameter_indices):
+        if function is None:
+            return ()
+        return hlsl_private_pointer_call_intervals.signed_parameter_slots(
+            function,
+            set(parameter_indices),
+            lambda parameter: self.map_type(
+                self.type_name_string(
+                    getattr(
+                        parameter,
+                        "param_type",
+                        getattr(parameter, "vtype", None),
+                    )
+                )
+                or ""
+            ),
+        )
+
+    def hlsl_analyze_private_pointer_functions(
+        self, functions_by_name, pointer_parameters
+    ):
+        """Analyze every function, seeding helper parameters from their calls.
+
+        Returns the direct spans and the recorded view calls; see
+        hlsl_private_pointer_call_intervals.
+        """
+        # Helpers that move a private pointer parameter, with every call of
+        # each in the program.
+        call_sites = {}
+        for function_name, parameters in pointer_parameters.items():
+            names = {parameter.name for parameter in parameters}
+            function = functions_by_name.get(function_name)
+            if function is not None and any(
+                self.hlsl_private_pointer_rebase_target(node, names) is not None
+                for node in self.walk_ast(getattr(function, "body", []))
+            ):
+                call_sites[function_name] = set()
+        for function in functions_by_name.values() if call_sites else ():
+            for node in self.walk_ast(getattr(function, "body", [])):
+                if isinstance(node, FunctionCallNode):
+                    callee = self.hlsl_private_pointer_call_callee(node)
+                    if callee in call_sites:
+                        call_sites[callee].add(id(node))
+
+        def run_pass(seeds):
+            self.hlsl_private_pointer_parameter_seeds = seeds
+            direct_spans = {
+                function_name: {parameter.name: 0 for parameter in parameters}
+                for function_name, parameters in pointer_parameters.items()
+            }
+            self.function_private_pointer_full_span_parameters = {
+                function_name: set() for function_name in pointer_parameters
+            }
+            view_calls = {function_name: [] for function_name in functions_by_name}
+            try:
+                for function_name, function in functions_by_name.items():
+                    self.hlsl_analyze_private_pointer_function(
+                        function,
+                        functions_by_name,
+                        direct_spans.get(function_name, {}),
+                        view_calls[function_name],
+                    )
+            finally:
+                self.hlsl_private_pointer_parameter_seeds = {}
+            return direct_spans, view_calls
+
+        names = (
+            "hlsl_private_pointer_zero_index_access_ids",
+            "hlsl_private_pointer_rebase_ids",
+            "hlsl_private_pointer_nonzero_rebase_ids",
+            "hlsl_private_pointer_rejected_rebases",
+        )
+
+        class State:
+            @staticmethod
+            def snapshot():
+                return {
+                    name: type(getattr(self, name))(getattr(self, name))
+                    for name in names
+                }
+
+            @staticmethod
+            def restore(snapshot):
+                for name, value in snapshot.items():
+                    setattr(self, name, type(value)(value))
+
+        return hlsl_private_pointer_call_intervals.analyze_with_call_seeds(
+            run_pass,
+            lambda result: hlsl_private_pointer_call_intervals.joined_parameter_seeds(
+                result[1], call_sites
+            ),
+            State,
+            len(functions_by_name) + 1,
+            (DirectXPrivatePointerParameterError,),
+        )
+
     def hlsl_analyze_private_pointer_function(
         self, function, functions_by_name, direct_spans, calls
     ):
@@ -43594,6 +43704,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             literal = self.literal_int_value(value, constants)
             if literal is not None:
                 intervals[name] = (literal, literal)
+        # Integer parameters every call bounds; see
+        # hlsl_private_pointer_call_intervals.
+        intervals.update(
+            self.hlsl_private_pointer_parameter_seeds.get(function_name, {})
+        )
         offset_keys = tuple(
             (HLSL_PRIVATE_POINTER_OFFSET_KEY, name) for name in sorted(parameter_names)
         )
@@ -43838,15 +43953,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 visit(value.operand, active_intervals)
                 return
             if isinstance(value, FunctionCallNode):
-                callee_name = self.function_call_name(value)
+                callee_name = self.hlsl_private_pointer_call_callee(value)
                 arguments = list(getattr(value, "arguments", []) or [])
-                specialized_name = generic_function_call_name(
-                    self, callee_name, arguments
-                )
-                if specialized_name in self.function_private_pointer_parameters:
-                    callee_name = specialized_name
-                else:
-                    callee_name = self.hlsl_materialized_function_name(callee_name)
                 parameter_indices = self.function_private_pointer_parameter_indices.get(
                     callee_name, {}
                 )
@@ -43878,6 +43986,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             "callee": callee_name,
                             "node": value,
                             "bindings": bindings,
+                            "argumentIntervals": hlsl_private_pointer_call_intervals.call_argument_intervals(
+                                self.hlsl_private_pointer_signed_slots(
+                                    functions_by_name.get(callee_name),
+                                    parameter_indices,
+                                ),
+                                arguments,
+                                lambda argument: self.hlsl_private_pointer_interval(
+                                    argument, active_intervals, constants
+                                ),
+                            ),
                         }
                     )
                 for argument in arguments:

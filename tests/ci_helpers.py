@@ -133,8 +133,8 @@ def current_parity_shard_step(workflow, name, *, family, count):
     index through the matrix ``include`` list. The one step selects on the family and
     reads the index from ``matrix.shard``.
     """
-    job = ci_coverage.workflow_job_text(workflow, CURRENT_PARITY_JOB)
-    step = ci_coverage.workflow_step_section(job, name)
+    job = workflow_text.workflow_job_text(workflow, CURRENT_PARITY_JOB)
+    step = workflow_text.workflow_step_section(job, name)
     assert step, name
     assert_native_step_prerequisites(step, job=CURRENT_PARITY_JOB, family=family)
     matrix = yaml.safe_load(workflow)["jobs"][CURRENT_PARITY_JOB]["strategy"]["matrix"]
