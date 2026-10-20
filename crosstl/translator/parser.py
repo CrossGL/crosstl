@@ -2118,34 +2118,6 @@ class Parser:
             and self.peek()[0] != "LESS_THAN"
             and self.peek(2)[0] == "COLON"
         )
-        # Mojo and GLSL-style ``var name = expr`` leave the type to the
-        # initializer. Leaving it out must not discard the enclosing body.
-        is_untyped_var = (
-            self.current_token[0] == "VAR"
-            and self.peek()[0] != "LESS_THAN"
-            and self.peek(2)[0] in {"EQUALS", "SEMICOLON"}
-        )
-
-        if is_untyped_var:
-            self.eat("VAR")
-            name = self.parse_binding_identifier()
-            attributes.extend(self.parse_post_declaration_attributes())
-
-            initial_value = None
-            if self.current_token[0] == "EQUALS":
-                self.eat("EQUALS")
-                initial_value = self.parse_expression()
-
-            self.eat("SEMICOLON")
-
-            return self.finish_variable_contract(
-                VariableNode(
-                    name=name,
-                    var_type=None,
-                    initial_value=initial_value,
-                    attributes=attributes,
-                )
-            )
 
         parsed_qualifiers = (
             [] if is_colon_style_var else self.parse_variable_qualifiers()
@@ -2324,7 +2296,7 @@ class Parser:
             if (
                 self.current_token[0] == "VAR"
                 and self.peek()[0] != "LESS_THAN"
-                and self.peek(2)[0] in {"COLON", "EQUALS", "SEMICOLON"}
+                and self.peek(2)[0] == "COLON"
             ):
                 return True
 
@@ -4186,24 +4158,30 @@ class Parser:
         return self.finish_variable_contract(var_node)
 
     def current_token_starts_inferred_var_declaration(self):
-        """Return whether ``var name = expr;`` starts here."""
+        """Return whether ``var name = expr;``, or the refused ``var name;``, starts here."""
         if self.current_token[0] != "VAR":
             return False
         name_value = self.peek()[1]
         return (
             isinstance(name_value, str)
             and name_value.isidentifier()
-            and self.peek(2)[0] == "EQUALS"
+            and self.peek(2)[0] in {"EQUALS", "SEMICOLON"}
         )
 
     def parse_inferred_var_declaration(self):
         """Parse ``var name = expr;``: a mutable local typed by its initializer.
 
         It declares the same variable as ``let mut name = expr;`` (WGSL 7.3 ``var`` declarations and Mojo ``var``
-        locals both take the initializer's type when none is written).
+        locals both take the initializer's type when none is written). ``var name;`` writes neither a type nor an
+        initializer to take one from, so it is refused rather than given a guessed type.
         """
         self.eat("VAR")
         name = self.parse_binding_identifier()
+        if self.current_token[0] != "EQUALS":
+            raise SyntaxError(
+                f"'var {name};' has no type and no initializer to infer one from; "
+                f"write 'var {name}: <type>;' or 'var {name} = <value>;'"
+            )
         self.eat("EQUALS")
         initial_value = self.parse_expression()
         self.eat("SEMICOLON")
