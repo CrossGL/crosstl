@@ -387,6 +387,7 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
+from .sampler_pairs import canonicalize_separate_textures
 from .stage_refusals import RayStageInterfaceUnsupportedError
 from .stage_utils import (
     assign_stage_entry_names,
@@ -3530,6 +3531,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "directx")
+        ast = canonicalize_separate_textures(ast)
         # HLSL resource parameters cannot carry a caller's pointer rebase, so
         # Metal helpers whose pointer parameters merely carry [[buffer(n)]]
         # attributes take the storage-pointer offset ABI instead.

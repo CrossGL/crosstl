@@ -1603,7 +1603,9 @@ def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     assert "cbuffer Uniforms" not in crossgl
 
 
-def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign():
+def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign(
+    tmp_path,
+):
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/spv.glsl.register.autoassign.frag, which samples separate texture and
     # sampler resources through sampler1D(g_tTex1, g_sSamp1).
@@ -1627,8 +1629,14 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign()
     assert "texture(g_tTex1, g_sSamp1, 0.1)" in crossgl
     assert "sampler1D(g_tTex1, g_sSamp1)" not in crossgl
 
+    # OpenGL GLSL has neither separate textures nor sampler objects in the language: the pair becomes one combined
+    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit.
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "texture(sampler1D(g_tTex1, g_sSamp1), 0.1)" in glsl
+    assert "layout(binding = 1) uniform sampler1D g_tTex1;" in glsl
+    assert "texture(g_tTex1, 0.1)" in glsl
+    assert "g_sSamp1" not in glsl
+    assert "texture1D" not in glsl
+    validate_glsl_with_glslang(tmp_path, glsl, "frag")
 
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/spv.sampledImageBlock.frag, which fetches from sampler2D(tex0, samp0).
@@ -1654,6 +1662,8 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign()
 
     fetch_glsl = GLSLCodeGen().generate(parse_crossgl(fetch_crossgl))
     assert "texelFetch(tex0, ivec2(0), 0)" in fetch_glsl
+    assert "layout(binding = 0) uniform sampler2D tex0;" in fetch_glsl
+    validate_glsl_with_glslang(tmp_path, fetch_glsl, "frag")
 
 
 def test_codegen_vulkan_descriptor_sets_preserved_on_resources():

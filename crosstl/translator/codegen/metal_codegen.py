@@ -344,6 +344,7 @@ from .pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -1882,6 +1883,7 @@ class MetalCodeGen:
 
     def render_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
+        ast = canonicalize_separate_textures(ast)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)

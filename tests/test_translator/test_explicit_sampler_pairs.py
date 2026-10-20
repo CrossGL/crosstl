@@ -1,0 +1,381 @@
+"""Explicit samplers reach every target: one sampler state per (texture, sampler) pair.
+
+HLSL, MSL and Vulkan GLSL sample a texture through a sampler object named at each call. A texture filtered by two
+samplers must keep two sampler states: SPIR-V pairs the image with the operation's sampler (``OpSampledImage``),
+and OpenGL GLSL, which has no sampler objects in the language, gives each pair its own combined uniform.
+"""
+
+import json
+import re
+import shutil
+import subprocess
+
+import pytest
+
+import crosstl
+from crosstl.translator.artifact_contracts import (
+    COMBINED_SAMPLER_PREFIX,
+    artifact_contract_headers,
+)
+from crosstl.translator.codegen.glsl_refusals import OpenGLLoweringRefused
+
+TWO_SAMPLERS_HLSL = """
+Texture2D albedo : register(t0);
+SamplerState pointSampler : register(s0);
+SamplerState linearSampler : register(s1);
+float4 main(float2 uv : TEXCOORD0) : SV_Target {
+    return albedo.Sample(pointSampler, uv) + albedo.Sample(linearSampler, uv);
+}
+"""
+
+COMPARE_AND_SAMPLE_HLSL = """
+Texture2D shadowMap : register(t0);
+SamplerComparisonState lessCompare : register(s0);
+SamplerState pointSampler : register(s1);
+float4 main(float2 uv : TEXCOORD0) : SV_Target {
+    float lit = shadowMap.SampleCmp(lessCompare, uv, 0.5);
+    float level0 = shadowMap.SampleCmpLevelZero(lessCompare, uv, 0.25);
+    return float4(lit, level0, shadowMap.Sample(pointSampler, uv).r, 1.0);
+}
+"""
+
+HELPERS_HLSL = """
+Texture2D albedo : register(t0);
+Texture2D<float> depthTex : register(t1);
+SamplerState pointSampler : register(s0);
+SamplerState linearSampler : register(s1);
+SamplerComparisonState compareSampler : register(s2);
+float4 fetch(Texture2D t, SamplerState s, float2 uv) { return t.Sample(s, uv); }
+float4 nested(Texture2D t, SamplerState s, float2 uv) { return fetch(t, s, uv) * 2.0; }
+float4 viaGlobal(SamplerState s, float2 uv) { return albedo.Sample(s, uv); }
+float4 main(float2 uv : TEXCOORD0) : SV_Target {
+    float lit = depthTex.SampleCmp(compareSampler, uv, 0.5);
+    float raw = depthTex.Load(int3(0, 0, 0)).x;
+    return fetch(albedo, pointSampler, uv) + nested(albedo, linearSampler, uv)
+        + viaGlobal(pointSampler, uv) + float4(lit, raw, 0.0, 0.0);
+}
+"""
+
+VULKAN_SEPARATE_GLSL = """#version 450
+layout(set = 0, binding = 0) uniform texture2D depthTex;
+layout(set = 0, binding = 1) uniform sampler compareSampler;
+layout(set = 0, binding = 2) uniform sampler pointSampler;
+layout(location = 0) in vec2 uv;
+layout(location = 0) out vec4 outColor;
+void main() {
+    float lit = texture(sampler2DShadow(depthTex, compareSampler), vec3(uv, 0.5));
+    outColor = vec4(lit) + texture(sampler2D(depthTex, pointSampler), uv);
+}
+"""
+
+VULKAN_ONE_SAMPLER_GLSL = """#version 450
+layout(set = 0, binding = 0) uniform texture2D albedo;
+layout(set = 0, binding = 1) uniform sampler linearSampler;
+layout(location = 0) in vec2 uv;
+layout(location = 0) out vec4 outColor;
+void main() {
+    outColor = texture(sampler2D(albedo, linearSampler), uv);
+}
+"""
+
+METAL_ENTRY_RESOURCES = """
+#include <metal_stdlib>
+using namespace metal;
+fragment float4 fragment_main(float2 uv [[user(locn0)]],
+                              texture2d<float> albedo [[texture(0)]],
+                              sampler pointSampler [[sampler(0)]],
+                              sampler linearSampler [[sampler(1)]]) {
+  return albedo.sample(pointSampler, uv) + albedo.sample(linearSampler, uv);
+}
+"""
+
+
+def _translate(tmp_path, source, suffix, backend):
+    path = tmp_path / f"shader{suffix}"
+    path.write_text(source)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
+
+
+def _run(command, **kwargs):
+    result = subprocess.run(command, capture_output=True, text=True, **kwargs)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _validate_glsl(code, stage="frag"):
+    if shutil.which("glslangValidator") is None:
+        return
+    _run(["glslangValidator", "--stdin", "-S", stage], input=code)
+
+
+def _validate_spirv(tmp_path, code):
+    if not (shutil.which("spirv-as") and shutil.which("spirv-val")):
+        return
+    asm, binary = tmp_path / "out.spvasm", tmp_path / "out.spv"
+    asm.write_text(code)
+    _run(["spirv-as", "--target-env", "vulkan1.0", str(asm), "-o", str(binary)])
+    _run(["spirv-val", "--target-env", "vulkan1.0", str(binary)])
+
+
+def _validate_metal(tmp_path, code):
+    if shutil.which("xcrun") is None:
+        return
+    found = subprocess.run(
+        ["xcrun", "-sdk", "macosx", "--find", "metal"], capture_output=True
+    )
+    if found.returncode != 0:
+        return
+    source = tmp_path / "out.metal"
+    source.write_text(code)
+    _run(
+        ["xcrun", "-sdk", "macosx", "metal", "-c", str(source)]
+        + ["-o", str(tmp_path / "out.air")]
+    )
+
+
+def _pairs(glsl):
+    header = artifact_contract_headers(glsl)[COMBINED_SAMPLER_PREFIX]
+    return json.loads(header[len(COMBINED_SAMPLER_PREFIX) :])["pairs"]
+
+
+def _spirv_names(spirv):
+    names = dict(re.findall(r'OpName %(\w+) "(\w+)"', spirv))
+    return lambda value: names.get(value, value)
+
+
+def _sampled_image_samplers(spirv):
+    """The variable each ``OpSampledImage`` loaded its sampler from, by name."""
+    name = _spirv_names(spirv)
+    loads = dict(re.findall(r"%(\w+) = OpLoad %\w+ %(\w+)", spirv))
+    return [
+        name(loads.get(sampler))
+        for sampler in re.findall(r"= OpSampledImage %\w+ %\w+ %(\w+)", spirv)
+    ]
+
+
+def test_spirv_samples_through_each_explicit_sampler(tmp_path):
+    spirv = _translate(tmp_path, TWO_SAMPLERS_HLSL, ".hlsl", "vulkan")
+
+    assert _sampled_image_samplers(spirv) == ["pointSampler", "linearSampler"]
+    assert spirv.count("OpImageSampleImplicitLod") == 2
+    _validate_spirv(tmp_path, spirv)
+
+
+def test_spirv_depth_compares_through_the_comparison_sampler(tmp_path):
+    spirv = _translate(tmp_path, COMPARE_AND_SAMPLE_HLSL, ".hlsl", "vulkan")
+
+    assert _sampled_image_samplers(spirv) == [
+        "lessCompare",
+        "lessCompare",
+        "pointSampler",
+    ]
+    assert "OpImageSampleDrefImplicitLod" in spirv
+    assert "OpImageSampleDrefExplicitLod" in spirv
+    _validate_spirv(tmp_path, spirv)
+
+
+def test_spirv_texel_fetch_reads_the_image_without_a_sampler(tmp_path):
+    spirv = _translate(tmp_path, HELPERS_HLSL, ".hlsl", "vulkan")
+
+    fetch = next(line for line in spirv.splitlines() if "OpImageFetch" in line)
+    assert "OpSampledImage" not in fetch
+    _validate_spirv(tmp_path, spirv)
+
+
+def test_opengl_gives_each_sampler_of_a_texture_its_own_unit(tmp_path):
+    glsl = _translate(tmp_path, TWO_SAMPLERS_HLSL, ".hlsl", "opengl")
+
+    assert "layout(binding = 0) uniform sampler2D albedo;" in glsl
+    assert "uniform sampler2D albedo_linearSampler;" in glsl
+    assert "texture(albedo, uv) + texture(albedo_linearSampler, uv)" in glsl
+    assert _pairs(glsl) == [
+        {
+            "sampler": "pointSampler",
+            "shadow": False,
+            "texture": "albedo",
+            "uniform": "albedo",
+        },
+        {
+            "sampler": "linearSampler",
+            "shadow": False,
+            "texture": "albedo",
+            "uniform": "albedo_linearSampler",
+        },
+    ]
+    _validate_glsl(glsl)
+
+
+def test_opengl_splits_compare_and_plain_samples_by_sampler_type(tmp_path):
+    glsl = _translate(tmp_path, COMPARE_AND_SAMPLE_HLSL, ".hlsl", "opengl")
+
+    assert "layout(binding = 0) uniform sampler2D shadowMap;" in glsl
+    assert "uniform sampler2DShadow shadowMap_lessCompare;" in glsl
+    assert "texture(shadowMap_lessCompare, vec3(uv, 0.5))" in glsl
+    assert "textureLod(shadowMap_lessCompare, vec3(uv, 0.25), 0.0)" in glsl
+    assert "texture(shadowMap, uv).r" in glsl
+    _validate_glsl(glsl)
+
+
+def test_opengl_pairs_reach_helpers_through_their_call_sites(tmp_path):
+    glsl = _translate(tmp_path, HELPERS_HLSL, ".hlsl", "opengl")
+
+    assert "vec4 fetch(sampler2D t, vec2 uv)" in glsl
+    assert "fetch(albedo, uv)" in glsl
+    assert "nested(albedo_linearSampler, uv)" in glsl
+    assert re.search(
+        r"vec4 viaGlobal\(vec2 uv\) \{\s*return texture\(albedo, uv\);", glsl
+    )
+    # The depth texture is texel-fetched and depth-compared: a plain and a shadow uniform.
+    assert "layout(binding = 1) uniform sampler2D depthTex;" in glsl
+    assert "uniform sampler2DShadow depthTex_compareSampler;" in glsl
+    assert "texelFetch(depthTex, ivec2(0, 0), 0)" in glsl
+    assert {pair["uniform"] for pair in _pairs(glsl)} == {
+        "albedo",
+        "albedo_linearSampler",
+        "depthTex",
+        "depthTex_compareSampler",
+    }
+    _validate_glsl(glsl)
+
+
+def test_webgl_splits_pairs_without_a_leading_header(tmp_path):
+    glsl = _translate(tmp_path, COMPARE_AND_SAMPLE_HLSL, ".hlsl", "webgl")
+
+    assert glsl.startswith("#version 300 es")
+    assert COMBINED_SAMPLER_PREFIX.strip() not in glsl
+    assert "uniform sampler2DShadow shadowMap_lessCompare;" in glsl
+    _validate_glsl(glsl)
+
+
+@pytest.mark.parametrize(
+    "source, reason",
+    [
+        (
+            """
+            Texture2D albedo : register(t0);
+            SamplerState pointSampler : register(s0);
+            SamplerState linearSampler : register(s1);
+            float4 both(Texture2D t, float2 uv) {
+                return t.Sample(pointSampler, uv) + t.Sample(linearSampler, uv);
+            }
+            float4 main(float2 uv : TEXCOORD0) : SV_Target { return both(albedo, uv); }
+            """,
+            "texture parameter 't' of 'both' is sampled through 2 sampler states",
+        ),
+        (
+            """
+            Texture2D albedo : register(t0);
+            SamplerState pointSampler : register(s0);
+            SamplerState linearSampler : register(s1);
+            float4 viaGlobal(SamplerState s, float2 uv) { return albedo.Sample(s, uv); }
+            float4 main(float2 uv : TEXCOORD0) : SV_Target {
+                return viaGlobal(pointSampler, uv) + viaGlobal(linearSampler, uv);
+            }
+            """,
+            "sampler parameter 's' of 'viaGlobal', which its callers bind to several samplers",
+        ),
+        (
+            """
+            Texture2D albedo : register(t0);
+            SamplerState samplers[2] : register(s0);
+            int index;
+            float4 main(float2 uv : TEXCOORD0) : SV_Target {
+                return albedo.Sample(samplers[index], uv);
+            }
+            """,
+            "texture 'albedo' is sampled through a sampler selected at run time",
+        ),
+    ],
+)
+def test_opengl_refuses_pairs_it_cannot_bind_statically(tmp_path, source, reason):
+    with pytest.raises(OpenGLLoweringRefused, match=re.escape(reason)):
+        _translate(tmp_path, source, ".hlsl", "opengl")
+
+
+def test_opengl_keeps_elementwise_texture_and_sampler_arrays(tmp_path):
+    source = """
+    shader ElementwisePairs {
+        sampler2D textures[4];
+        sampler samplers[4];
+        uniform int layer;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(textures[layer], samplers[layer], uv);
+            }
+        }
+    }
+    """
+    glsl = _translate(tmp_path, source, ".cgl", "opengl")
+
+    assert "uniform sampler2D textures[4];" in glsl
+    assert "texture(textures[layer], uv)" in glsl
+    assert COMBINED_SAMPLER_PREFIX.strip() not in glsl
+
+
+def test_vulkan_glsl_separate_texture_lowers_to_combined_opengl(tmp_path):
+    glsl = _translate(tmp_path, VULKAN_ONE_SAMPLER_GLSL, ".frag", "opengl")
+
+    assert "layout(binding = 0) uniform sampler2D albedo;" in glsl
+    assert "texture2D" not in glsl
+    assert "linearSampler" not in glsl
+    assert "texture(albedo, uv)" in glsl
+    _validate_glsl(glsl)
+
+
+def test_vulkan_glsl_shadow_constructor_imports_as_a_depth_compare(tmp_path):
+    crossgl = _translate(tmp_path, VULKAN_SEPARATE_GLSL, ".frag", "cgl")
+    assert "textureCompare(depthTex, compareSampler, input.uv, 0.5)" in crossgl
+    assert "texture(depthTex, pointSampler, input.uv)" in crossgl
+
+    glsl = _translate(tmp_path, VULKAN_SEPARATE_GLSL, ".frag", "opengl")
+    assert "uniform sampler2DShadow depthTex_compareSampler;" in glsl
+    assert "texture(depthTex_compareSampler, vec3(uv, 0.5))" in glsl
+    _validate_glsl(glsl)
+
+    spirv = _translate(tmp_path, VULKAN_SEPARATE_GLSL, ".frag", "vulkan")
+    assert _sampled_image_samplers(spirv) == ["compareSampler", "pointSampler"]
+    assert "OpImageSampleDrefImplicitLod" in spirv
+    _validate_spirv(tmp_path, spirv)
+
+
+@pytest.mark.parametrize("backend", ["metal", "directx"])
+def test_separate_textures_emit_native_textures(tmp_path, backend):
+    code = _translate(tmp_path, VULKAN_ONE_SAMPLER_GLSL, ".frag", backend)
+
+    if backend == "metal":
+        assert "texture2d<float> albedo [[texture(0)]]" in code
+        assert "albedo.sample(linearSampler, " in code
+        _validate_metal(tmp_path, code)
+    else:
+        assert "Texture2D albedo : register(t0);" in code
+        assert "albedo.Sample(linearSampler, " in code
+
+
+def test_metal_entry_textures_become_spirv_descriptors(tmp_path):
+    spirv = _translate(tmp_path, METAL_ENTRY_RESOURCES, ".metal", "vulkan")
+
+    name = _spirv_names(spirv)
+    storage = {
+        name(variable): storage_class
+        for variable, storage_class in re.findall(
+            r"%(\w+) = OpVariable %\w+ (\w+)", spirv
+        )
+    }
+    for resource in ("albedo", "pointSampler", "linearSampler"):
+        assert storage[resource] == "UniformConstant"
+    # MSL's texture and sampler namespaces both start at 0; one Vulkan set takes them in order.
+    bindings = {
+        name(variable): int(binding)
+        for variable, binding in re.findall(r"OpDecorate %(\w+) Binding (\d+)", spirv)
+    }
+    assert bindings == {"albedo": 0, "pointSampler": 1, "linearSampler": 2}
+    assert _sampled_image_samplers(spirv) == ["pointSampler", "linearSampler"]
+    _validate_spirv(tmp_path, spirv)
+
+
+def test_metal_entry_textures_split_into_opengl_pairs(tmp_path):
+    glsl = _translate(tmp_path, METAL_ENTRY_RESOURCES, ".metal", "opengl")
+
+    assert "uniform sampler2D albedo;" in glsl
+    assert "uniform sampler2D albedo_linearSampler;" in glsl
+    assert "texture(albedo_linearSampler, uv)" in glsl
+    _validate_glsl(glsl)

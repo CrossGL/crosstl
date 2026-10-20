@@ -5032,10 +5032,12 @@ class VulkanSPIRVCodeGen(
         self, function_name: str, args: List[SpirvId], extra_arg_count: int
     ):
         coord_index = 1
+        sampler_id = None
         if len(args) > 1:
             sampler_metadata = self.resource_metadata_for_value(args[1])
             if sampler_metadata and sampler_metadata.get("kind") == "sampler":
                 coord_index = 2
+                sampler_id = args[1]
 
         required_arg_count = coord_index + 2 + extra_arg_count
         if len(args) < required_arg_count:
@@ -5050,6 +5052,13 @@ class VulkanSPIRVCodeGen(
         depth_id = args[coord_index + 1]
         extra_args = args[coord_index + 2 : required_arg_count]
         metadata = self.resource_metadata_for_value(sampled_image_id)
+        if sampler_id is not None:
+            sampled_image_id = self.pair_resource_with_explicit_sampler(
+                function_name, sampled_image_id, sampler_id, metadata
+            )
+            if sampled_image_id is None:
+                return None
+            metadata = self.resource_metadata_for_value(sampled_image_id)
         if not metadata or metadata.get("kind") != "sampled_image":
             self.refuse_lowering(
                 f"{function_name} requires a shadow sampled image operand"
@@ -5057,7 +5066,9 @@ class VulkanSPIRVCodeGen(
             return None
         if not self.validate_non_multisample_sampled_image(function_name, metadata):
             return None
-        if int(metadata.get("depth", 0)) != 1:
+        # An explicit sampler carries the comparison (HLSL SampleCmp with a SamplerComparisonState), so the image
+        # need not be declared as a depth image: the Vulkan environment ignores the Depth operand of OpTypeImage.
+        if sampler_id is None and int(metadata.get("depth", 0)) != 1:
             self.refuse_lowering(
                 f"{function_name} requires a shadow sampled image operand"
             )
@@ -5099,7 +5110,12 @@ class VulkanSPIRVCodeGen(
         )
 
     def sampled_texture_operands(
-        self, function_name: str, args: List[SpirvId], extra_arg_count: int = 0
+        self,
+        function_name: str,
+        args: List[SpirvId],
+        extra_arg_count: int = 0,
+        *,
+        pair_explicit_sampler: bool = True,
     ):
         coord_index = 1
         sampler_id = None
@@ -5121,14 +5137,15 @@ class VulkanSPIRVCodeGen(
         coord_id = args[coord_index]
         extra_args = args[coord_index + 1 :]
         metadata = self.resource_metadata_for_value(sampled_image_id)
-        if metadata and metadata.get("kind") == "texture":
-            if sampler_id is None:
-                self.refuse_lowering(
-                    f"{function_name} requires a sampler for separate "
-                    "texture operands"
-                )
-                return None
-            sampled_image_id = self.combine_texture_and_sampler(
+        if metadata and metadata.get("kind") == "texture" and sampler_id is None:
+            self.refuse_lowering(
+                f"{function_name} requires a sampler for separate texture operands"
+            )
+            return None
+        if sampler_id is not None and (
+            pair_explicit_sampler or metadata and metadata.get("kind") == "texture"
+        ):
+            sampled_image_id = self.pair_resource_with_explicit_sampler(
                 function_name, sampled_image_id, sampler_id, metadata
             )
             if sampled_image_id is None:
@@ -5140,6 +5157,32 @@ class VulkanSPIRVCodeGen(
             return None
 
         return sampled_image_id, coord_id, extra_args, metadata
+
+    def pair_resource_with_explicit_sampler(
+        self, function_name: str, resource_id: SpirvId, sampler_id: SpirvId, metadata
+    ) -> Optional[SpirvId]:
+        """Return the sampled image an operation with an explicit sampler reads.
+
+        A separate texture is combined with the sampler. A combined resource is sampled through the explicit
+        sampler too: its image is extracted and re-paired, because the sampler it was declared with is not the
+        one the operation names (two samplers on one HLSL Texture2D must not collapse into one sample).
+        """
+        if metadata and metadata.get("kind") == "texture":
+            return self.combine_texture_and_sampler(
+                function_name, resource_id, sampler_id, metadata
+            )
+        if not metadata or metadata.get("kind") != "sampled_image":
+            return resource_id
+        image_id = self.extract_image_from_sampled_image(resource_id, metadata)
+        if image_id is None:
+            return None
+        if self.is_non_uniform_value(resource_id):
+            self.mark_non_uniform_result(image_id)
+        texture_metadata = dict(metadata)
+        texture_metadata["kind"] = "texture"
+        return self.combine_texture_and_sampler(
+            function_name, image_id, sampler_id, texture_metadata
+        )
 
     def call_resource_constructor(
         self, type_name: str, args: List[SpirvId]
@@ -6718,8 +6761,9 @@ class VulkanSPIRVCodeGen(
 
         if function_name in {"texelFetch", "texelFetchOffset"}:
             required_extra_count = 1 if function_name == "texelFetch" else 2
+            # A texel fetch reads the image without filtering, so the sampler it names is irrelevant.
             sample_args = self.sampled_texture_operands(
-                function_name, args, required_extra_count
+                function_name, args, required_extra_count, pair_explicit_sampler=False
             )
             if sample_args is None:
                 return self.register_constant(
@@ -6959,14 +7003,14 @@ class VulkanSPIRVCodeGen(
                 return self.resource_query_lod_default_value()
 
             metadata = self.resource_metadata_for_value(sampled_image_id)
-            if metadata and metadata.get("kind") == "texture":
-                if sampler_id is None:
-                    self.refuse_lowering(
-                        "textureQueryLod requires a sampler for separate "
-                        "texture operands"
-                    )
-                    return self.resource_query_lod_default_value()
-                sampled_image_id = self.combine_texture_and_sampler(
+            if metadata and metadata.get("kind") == "texture" and sampler_id is None:
+                self.refuse_lowering(
+                    "textureQueryLod requires a sampler for separate texture operands"
+                )
+                return self.resource_query_lod_default_value()
+            if sampler_id is not None:
+                # The computed level depends on the sampler's filters and LOD clamps.
+                sampled_image_id = self.pair_resource_with_explicit_sampler(
                     function_name, sampled_image_id, sampler_id, metadata
                 )
                 if sampled_image_id is None:
@@ -14076,6 +14120,10 @@ class VulkanSPIRVCodeGen(
                 variable = self.process_entry_point_storage_buffer_parameter(param)
                 self.local_variables[param_name] = variable
                 continue
+            if self.is_entry_point_descriptor_parameter(param):
+                variable = self.process_entry_point_descriptor_parameter(param)
+                self.local_variables[param_name] = variable
+                continue
 
             if self.is_bound_uniform_value_parameter(param, execution_model):
                 initial_value = self.entry_point_uniform_parameter_value(
@@ -14140,6 +14188,46 @@ class VulkanSPIRVCodeGen(
             return False
         param_type_id = self.map_crossgl_type(param_type)
         return self.array_type_info_from_type(param_type_id) is not None
+
+    def is_entry_point_descriptor_parameter(self, param) -> bool:
+        """Whether an entry parameter is an opaque descriptor (MSL ``texture2d t [[texture(0)]]``, ``sampler s``)."""
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        type_name = self.normalize_reference_type_name(
+            self.type_name_from_value(param_type)
+        )
+        if not type_name:
+            return False
+        base_type = self.array_base_type_name(type_name)
+        return self.is_resource_type_name(
+            base_type
+        ) or self.is_acceleration_structure_type_name(base_type)
+
+    def process_entry_point_descriptor_parameter(self, param) -> SpirvId:
+        """Declare an opaque entry parameter as the ``UniformConstant`` descriptor it is bound to.
+
+        The host binds such a parameter like a module-scope resource; a stage ``Input`` variable cannot hold an
+        image, sampler or acceleration structure (``VUID-StandaloneSpirv-OpTypeImage-06924`` forbids storing one into
+        the Function-scope copy). MSL keeps textures, samplers and buffers in separate binding namespaces, so a slot
+        an earlier resource already holds moves to the next free binding of the set.
+        """
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        node = VariableNode(
+            getattr(param, "name", "param"),
+            param_type,
+            attributes=list(getattr(param, "attributes", []) or []),
+            qualifiers=list(getattr(param, "qualifiers", []) or []),
+        )
+        var_type = self.map_resource_type_with_format(param_type, node)
+        var_id = self.create_variable(var_type, "UniformConstant", node.name)
+        descriptor_set, binding = self.resource_descriptor_slot(
+            node, allow_binding_reassignment=True
+        )
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+        self.register_declared_resource_metadata(node, var_id, var_type)
+        return var_id
 
     def process_entry_point_storage_buffer_parameter(self, param) -> SpirvId:
         variable = VariableNode(

@@ -401,6 +401,10 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
+from .sampler_pairs import (
+    lower_combined_sampler_pairs,
+    with_combined_sampler_header,
+)
 from .scalar_return_bounds import (
     aggregate_call_intervals,
     scalar_return_interval,
@@ -8108,6 +8112,9 @@ class GLSLCodeGen(LoweringRefusalMixin):
             self.float_atomic_storage.verify()
         if records:
             code = with_metadata_precondition_header(code, records)
+        code = with_combined_sampler_header(
+            code, getattr(self, "combined_sampler_records", ())
+        )
         return with_dispatch_region_header(code, region)
 
     GLSL_EARLY_EXIT_RETRY_REASONS = frozenset(
@@ -8145,6 +8152,9 @@ class GLSLCodeGen(LoweringRefusalMixin):
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "opengl")
+        ast, self.combined_sampler_records = lower_combined_sampler_pairs(
+            ast, self.LOWERING_REFUSAL_TYPE.label
+        )
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_divergent_barriers(

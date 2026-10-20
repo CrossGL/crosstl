@@ -888,7 +888,17 @@ class GLSLToCrossGLConverter:
             return self.lookup_variable_type(expr.name)
         if isinstance(expr, ArrayAccessNode):
             return self.expression_resource_type(expr.array)
+        if self.combined_sampler_constructor_parts(expr) is not None:
+            # Vulkan GLSL ``sampler2DShadow(t, s)``: the constructor names the sampled type.
+            return self.function_call_name(expr)
         return None
+
+    def texture_operand_expressions(self, expr):
+        """CrossGL operands of a sampled texture: ``t``, or ``t, s`` for a Vulkan GLSL ``samplerX(t, s)``."""
+        parts = self.combined_sampler_constructor_parts(expr)
+        if parts is None:
+            return [self.generate_expression(expr)]
+        return [self.generate_expression(part) for part in parts]
 
     def expression_is_shadow_sampler(self, expr):
         return self.expression_shadow_sampler_type(expr) is not None
@@ -921,7 +931,8 @@ class GLSLToCrossGLConverter:
         if sampler_type in self.SHADOW_SAMPLER_SEPARATE_COMPARE_TYPES:
             if name == "texture" and len(args) == 3:
                 return self.SHADOW_TEXTURE_COMPARE_FUNCTIONS[name], [
-                    self.generate_expression(arg) for arg in args
+                    *self.texture_operand_expressions(args[0]),
+                    *[self.generate_expression(arg) for arg in args[1:]],
                 ]
             return None
 
@@ -935,7 +946,7 @@ class GLSLToCrossGLConverter:
             args[1], sampler_type
         )
         call_args = [
-            self.generate_expression(args[0]),
+            *self.texture_operand_expressions(args[0]),
             coord_expr,
             compare_expr,
             *[self.generate_expression(arg) for arg in args[2:]],
@@ -946,6 +957,9 @@ class GLSLToCrossGLConverter:
         """CrossGL for a GL_ARB_sparse_texture_clamp call; shadow samplers split the reference out of ``P``."""
         sample_name, compare_name, operands = self.ARB_LOD_CLAMP_FUNCTIONS[name]
         rendered = [self.generate_expression(arg) for arg in args]
+        if args:
+            # A Vulkan GLSL ``samplerX(t, s)`` operand becomes the ``t, s`` pair.
+            rendered[0] = ", ".join(self.texture_operand_expressions(args[0]))
         sampler_type = self.expression_shadow_sampler_type(args[0]) if args else None
         if sampler_type is None:
             return f"{sample_name}({', '.join(rendered)})"
@@ -995,7 +1009,7 @@ class GLSLToCrossGLConverter:
             args[1], sampler_type
         )
         call_args = [
-            self.generate_expression(args[0]),
+            *self.texture_operand_expressions(args[0]),
             coord_expr,
             compare_expr,
         ]
@@ -1015,7 +1029,7 @@ class GLSLToCrossGLConverter:
 
         projected_coord, compare_ref = self.shadow_projected_texture_coord_ref(args[1])
         call_args = [
-            self.generate_expression(args[0]),
+            *self.texture_operand_expressions(args[0]),
             projected_coord,
             compare_ref,
         ]
