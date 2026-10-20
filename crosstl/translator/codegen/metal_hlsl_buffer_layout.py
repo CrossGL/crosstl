@@ -53,6 +53,11 @@ METAL_SCALAR_STORAGE = {
 
 METAL_ELEMENT_SUFFIXES = {1: ".x", 2: ".xy", 3: ".xyz", 4: ""}
 
+# The Metal type map spells 64-bit integer scalars with their fixed-width
+# names; the layout tables use the Metal ``long``/``ulong`` keywords, which
+# name the same types.
+METAL_SCALAR_ALIASES = {"int64_t": "long", "uint64_t": "ulong"}
+
 
 @dataclass
 class MetalLayoutMember:
@@ -164,6 +169,7 @@ class MetalHlslBufferLayouts:
             )
 
         metal_type = str(resolved)
+        metal_type = METAL_SCALAR_ALIASES.get(metal_type, metal_type)
         scalar_match = re.fullmatch(
             r"(bool|int|uint|float|double|long|ulong)([234])?", metal_type
         )
