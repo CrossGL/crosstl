@@ -2469,6 +2469,23 @@ exactly, guards and inputs must be unchanged, and Metal also runs the
 unchanged upstream kernels. This is a 432/17,832 increment; it does not run
 the upstream MLX test suite or redirect the MLX host runtime.
 
+``quantized_qvm.current-tree.translation.json`` pins a further 162 entries of
+``quantized.metal``: ``affine_qvm`` with and without batching and
+``affine_gather_qvm``, which ``quantized.cpp`` picks for weights that are not
+transposed. ``qvm_impl`` gives each lane one input row per block of 32 and
+reads that row's 32 codes through a private byte view of its ``vec_w``
+record; ``simd_sum`` runs on 32-lane software subgroups on OpenGL and
+DirectX. DirectX emits a private pointer helper only for the backings its
+calls reach, so the byte view of ``qouter`` is not shadowed by an identical
+default overload. Each target executes 432 dispatches on ``(32, 2, 1)`` threadgroups
+and ``(M, ceil(N / 64), B)`` grids that reach a ``K`` below one block, whole
+blocks, a last pass on some lanes and the early return of a simdgroup past
+``N``. A lane-level model must reach direct dequantized dot products and
+store each column once; every word is compared exactly, guards and inputs
+must be unchanged, and Metal also runs the unchanged upstream kernels. This
+is a 162/17,832 increment; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,

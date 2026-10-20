@@ -2246,11 +2246,10 @@
     "quantizeGateEntryCount": 108,
     "qmvUnalignedGateEntryCount": 162,
     "qmvWideGateEntryCount": 432,
+    "qvmGateEntryCount": 162,
     "excludedEntries": {
       "kernels": [
-        "affine_gather_qvm",
         "affine_gather_qmm_n",
-        "affine_qvm",
         "affine_qmm_n",
         "affine_gather_qmm_t",
         "affine_qmm_t",
@@ -2260,7 +2259,7 @@
         "affine_gather_qmm_rhs_nt",
         "affine_gather_qmm_rhs_nn"
       ],
-      "count": 1188,
+      "count": 1026,
       "reason": "the other matrix-vector and matrix-matrix kernels are not gated yet"
     },
     "runtimeCoveredEntryCount": 162,

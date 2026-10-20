@@ -106,16 +106,16 @@ KERNELS = {
 }
 # The 108 quantize and dequantize entries have their own gate,
 # test_current_quantized.py, the 162 affine_qmv and affine_gather_qmv entries
-# theirs, test_current_quantized_qmv_unaligned.py, and the 432
-# affine_qmv_wide entries theirs, test_current_quantized_qmv_wide.py.
+# theirs, test_current_quantized_qmv_unaligned.py, the 432 affine_qmv_wide
+# entries theirs, test_current_quantized_qmv_wide.py, and the 162 affine_qvm
+# and affine_gather_qvm entries theirs, test_current_quantized_qvm.py.
 QUANTIZE_ENTRY_COUNT = 108
 QMV_UNALIGNED_ENTRY_COUNT = 162
 QMV_WIDE_ENTRY_COUNT = 432
+QVM_ENTRY_COUNT = 162
 # Kernels of quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
-    "affine_gather_qvm",
     "affine_gather_qmm_n",
-    "affine_qvm",
     "affine_qmm_n",
     "affine_gather_qmm_t",
     "affine_qmm_t",
@@ -363,18 +363,30 @@ def _layout(entry, case):
     return layout_for(info, LAYOUTS[case], m, n, k)
 
 
-def layout_for(info, kind, m, n, k):
+def layout_for(info, kind, m, n, k, transposed=False):
     """quantized.cpp's shapes, strides and index buffers for one case.
 
     ``kind`` is one of LAYOUTS' values. ``batches`` gives, per ``tid.z``, the
     x element offset, the physical weight matrix and the output offset the
     arrays are built for; the kernel model derives the same from the bound
-    parameters.
+    parameters. qmv's weights are ``N`` rows of ``K`` codes; ``transposed``
+    lays them out as qvm reads them, ``K`` rows of ``N`` codes, over qvm's
+    ``(M, ceil(N / 64), B)`` grid.
     """
     variant, bits, group_size = info["variant"], info["bits"], info["groupSize"]
-    groups, words = k // group_size, k * bits // 32
+    rows, codes = (k, n) if transposed else (n, k)
+    groups, words = codes // group_size, codes * bits // 32
+    tile = 2 * SIMD_SIZE if transposed else ROWS_PER_GROUP
     matrix = m * k
-    layout = {"M": m, "N": n, "K": k, "groups": groups, "words": words}
+    layout = {
+        "M": m,
+        "N": n,
+        "K": k,
+        "rows": rows,
+        "groups": groups,
+        "words": words,
+        "transposed": transposed,
+    }
     params = {}
     if kind == "unbatched":
         # add_strides_and_shapes would bind these unbatched shapes; with
@@ -384,7 +396,7 @@ def layout_for(info, kind, m, n, k):
             "x_shape": [m, k],
             "x_strides": [k, 1],
             "w_batch_ndims": 0,
-            "w_shape": [n, words],
+            "w_shape": [rows, words],
             "w_strides": [words, 1],
             "s_strides": [groups, 1],
             "b_strides": [groups, 1],
@@ -397,10 +409,10 @@ def layout_for(info, kind, m, n, k):
             "x_shape": [2, m, k],
             "x_strides": [matrix, k, 1],
             "w_batch_ndims": 1,
-            "w_shape": [2, n, words],
-            "w_strides": [n * words, words, 1],
-            "s_strides": [n * groups, groups, 1],
-            "b_strides": [n * groups, groups, 1],
+            "w_shape": [2, rows, words],
+            "w_strides": [rows * words, words, 1],
+            "s_strides": [rows * groups, groups, 1],
+            "b_strides": [rows * groups, groups, 1],
         }
         batches = [{"x": z * matrix, "w": z} for z in range(2)]
         x_rows, matrices = 2 * m, 2
@@ -412,7 +424,7 @@ def layout_for(info, kind, m, n, k):
             "x_shape": [3, m, k],
             "x_strides": [2 * matrix, k, 1],
             "w_batch_ndims": 0,
-            "w_shape": [n, words],
+            "w_shape": [rows, words],
             "w_strides": [words, 1],
             "s_strides": [groups, 1],
             "b_strides": [groups, 1],
@@ -428,10 +440,10 @@ def layout_for(info, kind, m, n, k):
             "x_strides": [matrix, 2 * matrix, k, 1],
         }
         w_params = {
-            "w_shape": [2, 2, n, words],
-            "w_strides": [n * words, 0, words, 1],
-            "s_strides": [n * groups, 0, groups, 1],
-            "b_strides": [n * groups, 0, groups, 1],
+            "w_shape": [2, 2, rows, words],
+            "w_strides": [rows * words, 0, words, 1],
+            "s_strides": [rows * groups, 0, groups, 1],
+            "b_strides": [rows * groups, 0, groups, 1],
         }
         x_rows, matrices = 4 * m, 2
 
@@ -444,10 +456,10 @@ def layout_for(info, kind, m, n, k):
                 "x_shape": [2, m, k],
                 "x_strides": [matrix, k, 1],
                 "w_batch_ndims": 1,
-                "w_shape": [3, n, words],
-                "w_strides": [n * words, words, 1],
-                "s_strides": [n * groups, groups, 1],
-                "b_strides": [n * groups, groups, 1],
+                "w_shape": [3, rows, words],
+                "w_strides": [rows * words, words, 1],
+                "s_strides": [rows * groups, groups, 1],
+                "b_strides": [rows * groups, groups, 1],
                 "batch_ndims": 1,
                 "batch_shape": [len(EXPERT_LHS)],
                 "lhs_strides": [2],
@@ -488,7 +500,7 @@ def layout_for(info, kind, m, n, k):
         batches=batches,
         xRows=x_rows,
         matrices=matrices,
-        grid=(m, -(-n // ROWS_PER_GROUP), len(batches)),
+        grid=(m, -(-n // tile), len(batches)),
     )
     return layout
 
@@ -522,7 +534,7 @@ def case_data_for(info, entry, case, layout):
         x[start : start + k] = [_signed(draws, 4) / 4 for _ in range(k)]
         inputs += x[start : start + k]
     codes, scales, biases = [], [], []
-    for _ in range(layout["matrices"] * n):
+    for _ in range(layout["matrices"] * layout["rows"]):
         row = []
         for _ in range(groups):
             values = [_below(draws, n_bins + 1) for _ in range(group_size)]
@@ -538,7 +550,7 @@ def case_data_for(info, entry, case, layout):
     for row in codes:
         payload = _pack_bitstream(row, bits)
         w += list(struct.unpack(f"<{len(payload) // 4}I", bytes(payload)))
-    assert len(w) == layout["matrices"] * n * layout["words"]
+    assert len(w) == layout["matrices"] * layout["rows"] * layout["words"]
     # Every element lies on the quarter, 2^-3 and 2^-5 grids the exactness
     # argument needs and is exact in the element type.
     assert all(_exact_dyadic(value, 4) and abs(value) <= 1 for value in inputs)
@@ -603,14 +615,18 @@ def _direct(info, data):
         for row in range(m):
             vector = x[batch["x"] + row * k : batch["x"] + (row + 1) * k]
             for col in range(n):
-                line = batch["w"] * n + col
-                codes = data["codes"][line]
                 total, bound = 0.0, 0.0
                 for index, value in enumerate(vector):
-                    group = line * groups + index // group_size
+                    # Weight row and code of input ``index`` and output ``col``.
+                    if layout["transposed"]:
+                        line, position = batch["w"] * k + index, col
+                    else:
+                        line, position = batch["w"] * n + col, index
+                    code = data["codes"][line][position]
+                    group = line * groups + position // group_size
                     scale, bias = scales[group], biases[group]
-                    total += (scale * codes[index] + bias) * value
-                    bound += abs(value) * (abs(scale) * codes[index] + abs(bias))
+                    total += (scale * code + bias) * value
+                    bound += abs(value) * (abs(scale) * code + abs(bias))
                 assert _exact_dyadic(total) and bound < 2**19, (info, total, bound)
                 budget = max(budget, bound)
                 index = batch["y"] + row * n + col
@@ -1021,6 +1037,7 @@ def _expected_scope():
         + len(ENTRIES)
         + QMV_UNALIGNED_ENTRY_COUNT
         + QMV_WIDE_ENTRY_COUNT
+        + QVM_ENTRY_COUNT
     )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
@@ -1028,6 +1045,7 @@ def _expected_scope():
         "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
         "qmvUnalignedGateEntryCount": QMV_UNALIGNED_ENTRY_COUNT,
         "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
+        "qvmGateEntryCount": QVM_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
             "count": UNIT_ENTRY_COUNT - covered,
@@ -1107,7 +1125,8 @@ def test_quantized_qmv_entries_follow_mlx_instantiation():
         + len(ENTRIES)
         + QMV_UNALIGNED_ENTRY_COUNT
         + QMV_WIDE_ENTRY_COUNT
-        + 1188
+        + QVM_ENTRY_COUNT
+        + 1026
         == UNIT_ENTRY_COUNT
     )
 

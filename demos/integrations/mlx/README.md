@@ -1991,6 +1991,42 @@ upstream kernels, which must produce the same words. This covers
 432/17,832 entries; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
 
+`contracts/quantized_qvm.current-tree.translation.json` pins a further 162
+entries of `quantized.metal` and their 486 artifacts: `affine_qvm` with and
+without batching and `affine_gather_qvm`, for the same element types, group
+sizes and bit widths, which `quantized.cpp`'s `qvm` and `gather_qvm` pick
+for weights that are not transposed, `K` rows of `N` codes, when `M` is
+below 4 and, for `qvm`, `K` below 1,024. `qvm_impl` gives each simdgroup 32
+output columns and each lane one input row per block of 32: the lane copies
+its row's `vec_w` record, reads it through a private byte view and `qouter`
+adds `x * (scale * w + bias)` into all 32 results, which `simd_sum` reduces
+on 32-lane software subgroups on OpenGL and DirectX. On DirectX, `qouter`'s
+pointer becomes an array parameter emitted once per backing; for 3, 5 and
+6 bits its own default backing would become the same HLSL overload as the
+byte view, so DirectX emits only the backings that calls reach and refuses
+any two that remain indistinguishable. After the whole blocks,
+a last pass reads only where `K` reaches the lane and zeroes `x`, the scale
+and the bias of the other lanes, and a simdgroup whose first column is past
+`N` returns before `simd_sum`. Required CI executes 432 dispatches and
+293,760 checked elements per target on Metal, Mesa EGL and Direct3D 12 WARP
+in the `quantized-qvm-0` through `quantized-qvm-3` legs, on `(32, 2, 1)`
+threadgroups over a `(M, ceil(N / 64), B)` grid. Unbatched entries run a `K`
+of 13 below one block, whole blocks and two blocks with a nine-lane last
+pass, with an odd number of 32-column groups where group size 32 allows it so
+that the last simdgroup returns; batched and gather entries combine them with
+the layouts of the `qmv_fast` gate. Its inputs keep every float32
+intermediate exact; only the final `static_cast<T>` rounds, which 61,872
+float16 and bfloat16 results need, 19,574 of them halfway cases. A
+lane-level model of the blocks, the last pass and the return must reach
+direct dequantized dot products and store every column once, and mutated
+models that drop the bias, the last pass, the simdgroup column offset, the
+column group or the weight batch offset, keep the first block's scales or
+reverse a pack are rejected. Every word is compared exactly, eight trailing
+guards must keep their values and inputs must be unchanged; Metal also runs
+the unchanged upstream kernels, which must produce the same words. This
+covers 162/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,
