@@ -15,6 +15,10 @@ from .ray_tracing_import import (
     ray_variable_locations,
     refuse_untranslated_statement,
 )
+from .struct_result_import import (
+    spirv_struct_result_call,
+    spirv_struct_result_member,
+)
 from .VulkanAst import *
 from .VulkanLexer import *
 
@@ -1194,7 +1198,7 @@ class VulkanParser:
         self.spirv_apply_decoration_groups(
             decorations, member_decorations, group_decorates, group_member_decorates
         )
-        self.spirv_register_struct_type_names(types, names)
+        self.spirv_register_struct_type_names(types, names, member_names)
         self.spirv_assign_flattened_resource_block_member_aliases(
             variables,
             names,
@@ -2230,6 +2234,27 @@ class VulkanParser:
                     ),
                 )
                 continue
+
+            if result_id and opcode == "OpExtInst" and len(operands) == 4:
+                struct_value = spirv_struct_result_call(
+                    self,
+                    result_id,
+                    operands[0],
+                    extended_instruction_imports.get(operands[1]),
+                    operands[2],
+                    self.spirv_assembly_operand_expression(
+                        operands[3], expressions, names, decorations, constants
+                    ),
+                    statements,
+                    names,
+                    decorations,
+                    types,
+                    constants,
+                )
+                if struct_value is not None:
+                    expressions[result_id] = struct_value
+                    expression_type_ids[result_id] = operands[0]
+                    continue
 
             if result_id and opcode == "OpExtInst" and len(operands) >= 3:
                 call = FunctionCallNode(
@@ -4108,9 +4133,15 @@ class VulkanParser:
                 member_index = self.spirv_integer_constant_operand(index_operand, {})
                 member_types = type_info.get("member_types", [])
                 if member_index is not None and 0 <= member_index < len(member_types):
-                    sparse_extract = self.spirv_sparse_image_result_extract_expression(
+                    sparse_extract = spirv_struct_result_member(
                         expression, member_index
                     )
+                    if sparse_extract is None:
+                        sparse_extract = (
+                            self.spirv_sparse_image_result_extract_expression(
+                                expression, member_index
+                            )
+                        )
                     if sparse_extract is not None:
                         expression = sparse_extract
                         current_type_id = member_types[member_index]
@@ -6545,12 +6576,30 @@ class VulkanParser:
 
         return layouts
 
-    def spirv_register_struct_type_names(self, types, names):
+    def spirv_register_struct_type_names(self, types, names, member_names=None):
+        # OpName may give several struct types one name (glslang calls every modf and frexp result ``ResType``).
+        # Struct types whose names and members agree are declared once; any other one takes the first free
+        # ``name_N``, so no two CrossGL struct declarations conflict.
+        member_names = member_names or {}
+        taken = {}
+        used_names = set(names.values())
         for type_id, type_info in types.items():
-            if type_info.get("kind") == "struct":
-                type_info["name"] = names.get(
-                    type_id
-                ) or self.spirv_fallback_identifier(type_id, "struct")
+            if type_info.get("kind") != "struct":
+                continue
+            name = names.get(type_id) or self.spirv_fallback_identifier(
+                type_id, "struct"
+            )
+            signature = (
+                tuple(type_info.get("member_types", [])),
+                tuple(sorted(member_names.get(type_id, {}).items())),
+            )
+            if taken.get(name, signature) != signature:
+                suffix = 1
+                while f"{name}_{suffix}" in taken or f"{name}_{suffix}" in used_names:
+                    suffix += 1
+                name = f"{name}_{suffix}"
+            taken.setdefault(name, signature)
+            type_info["name"] = name
 
     def spirv_assembly_structs(
         self,

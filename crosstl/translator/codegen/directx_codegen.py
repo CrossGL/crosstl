@@ -166,6 +166,7 @@ from .enum_utils import (
     infer_enum_constructor_type,
     sanitize_type_name,
 )
+from .exponent_builtins import hlsl_exponent_call
 from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
@@ -26937,6 +26938,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     args,
                     [self.generate_expression(arg) for arg in args],
                 )
+            exponent_refusal = hlsl_exponent_call(self, func_name, args)
+            if exponent_refusal is not None:
+                return exponent_refusal
             boolean_mix = boolean_mix_selector(
                 self, func_name, args, getattr(self, "function_return_types", {})
             )

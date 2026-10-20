@@ -1510,6 +1510,15 @@ CASES = [
         pack_cases.exponent_reference,
     ),
     Case(
+        "s_frexp_ldexp_modf",
+        "exponent",
+        "FrexpStruct, ModfStruct and Ldexp with struct results read by OpCompositeExtract",
+        "GLSL.std.450: member 0 is the significand or fraction, member 1 the exponent or whole part",
+        pack_cases.exponent_inputs(),
+        np.uint32,
+        pack_cases.exponent_reference,
+    ),
+    Case(
         "h_frexp_ldexp_modf",
         "exponent",
         "frexp and ldexp with float exponents, modf into an int",

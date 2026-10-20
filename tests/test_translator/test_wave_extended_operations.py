@@ -222,7 +222,16 @@ def test_glsl_round_trip_keeps_subgroup_builtins(tmp_path):
         path = tmp_path / "round_trip.comp"
         path.write_text(glsl, encoding="utf-8")
         result = subprocess.run(
-            [glslang, "--target-env", "vulkan1.1", "-S", "comp", str(path)],
+            [
+                glslang,
+                "--target-env",
+                "vulkan1.1",
+                "-S",
+                "comp",
+                str(path),
+                "-o",
+                str(tmp_path / "round_trip.spv"),
+            ],
             capture_output=True,
             text=True,
         )
