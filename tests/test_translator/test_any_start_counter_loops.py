@@ -1,9 +1,10 @@
 """Initializer-free counter loops entered with a uniform but unknown counter.
 
 ``int k = T; if (mode > 0) { for (; k > 0; k--) { ... } } else { ... }``
-reaches each loop with whatever value the counter holds. The DirectX software
-subgroup proof accepts such a loop when the flow analysis proves the counter
-uniform at the loop and the loop terminates for every value of its type.
+reaches each loop with whatever value the counter holds. The DirectX and
+OpenGL software subgroup proofs accept such a loop when the flow analysis
+proves the counter uniform at the loop and the loop terminates for every
+value of its type.
 """
 
 import os
@@ -259,16 +260,17 @@ kernel void counted_products(
 }
 """
 DIRECTX_ERROR = "project.translate.directx-software-subgroup-invalid"
+OPENGL_ERROR = "project.translate.opengl-software-subgroup-invalid"
 
 
-def _translate(root, source=METAL_KERNEL):
+def _translate(root, source=METAL_KERNEL, target="directx"):
     root.mkdir(parents=True, exist_ok=True)
     (root / "counted.metal").write_text(source)
     report = translate_project(
         ProjectConfig(
             root=root,
             include_patterns=("counted.metal",),
-            targets=("directx",),
+            targets=(target,),
             output_dir="out",
             workgroup_size=(32, 2, 1),
             source_options={
@@ -283,7 +285,11 @@ def _translate(root, source=METAL_KERNEL):
                             "cooperative_matrix_software_lowering": True,
                             "software_subgroup_width": 32,
                             "relative_wave_shuffle_out_of_range": "self",
-                        }
+                        },
+                        "opengl": {
+                            "cooperative_matrix_software_lowering": True,
+                            "software_subgroup_width": 32,
+                        },
                     },
                 }
             },
@@ -307,44 +313,70 @@ def test_directx_accepts_descending_loops_from_a_uniform_counter(tmp_path):
         _compile(text, work, profile="cs_6_2")
 
 
-@pytest.mark.parametrize(
-    "rewrites",
+REJECTED_REWRITES = [
+    [("int k = T;", "int k = T + int(lane % 2);")],
+    [("if (mode > 0) {", "if (mode > int(lane % 2)) {")],
     [
-        [("int k = T;", "int k = T + int(lane % 2);")],
-        [("if (mode > 0) {", "if (mode > int(lane % 2)) {")],
-        [
-            (
-                "simdgroup_multiply_accumulate(C, A, B, C);\n    }",
-                "simdgroup_multiply_accumulate(C, A, B, C);\n      k -= int(lane % 2);\n    }",
-            )
-        ],
-        [
-            (
-                "simdgroup_store(C, out, 8);",
-                "k = int(lane);\n  simdgroup_store(C, out, 8);",
-            )
-        ],
-        [("int k = T;", "uint k = uint(T);"), ("k > 0;", "k >= 0u;")],
-        [
-            ("int k = T;", "int k = T;\n  for (int r = 0; r < 2; r++) {"),
-            ("  simdgroup_store", "  }\n  simdgroup_store"),
-        ],
+        (
+            "simdgroup_multiply_accumulate(C, A, B, C);\n    }",
+            "simdgroup_multiply_accumulate(C, A, B, C);\n      k -= int(lane % 2);\n    }",
+        )
     ],
-    ids=[
-        "divergent-start",
-        "divergent-branch",
-        "written-in-body",
-        "written-elsewhere",
-        "unsigned-wrap",
-        "inside-another-loop",
+    [
+        (
+            "simdgroup_store(C, out, 8);",
+            "k = int(lane);\n  simdgroup_store(C, out, 8);",
+        )
     ],
-)
-def test_directx_rejects_unproven_any_start_loops(tmp_path, rewrites):
+    [("int k = T;", "uint k = uint(T);"), ("k > 0;", "k >= 0u;")],
+    [
+        ("int k = T;", "int k = T;\n  for (int r = 0; r < 2; r++) {"),
+        ("  simdgroup_store", "  }\n  simdgroup_store"),
+    ],
+]
+REJECTED_IDS = [
+    "divergent-start",
+    "divergent-branch",
+    "written-in-body",
+    "written-elsewhere",
+    "unsigned-wrap",
+    "inside-another-loop",
+]
+
+
+def _rewritten(rewrites):
     source = METAL_KERNEL
     for old, new in rewrites:
         assert old in source, old
         source = source.replace(old, new, 1)
-    report = _translate(tmp_path, source)
+    return source
+
+
+@pytest.mark.parametrize("rewrites", REJECTED_REWRITES, ids=REJECTED_IDS)
+def test_directx_rejects_unproven_any_start_loops(tmp_path, rewrites):
+    report = _translate(tmp_path, _rewritten(rewrites))
     assert report["summary"]["translatedCount"] == 0, report
     codes = {item["code"] for item in report["diagnostics"]}
     assert codes == {DIRECTX_ERROR}, codes
+
+
+# --- OpenGL software subgroups ----------------------------------------------
+
+
+def test_opengl_accepts_descending_loops_from_a_uniform_counter(tmp_path):
+    report = _translate(tmp_path, target="opengl")
+    assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+    (artifact,) = report["artifacts"]
+    text = (tmp_path / artifact["path"]).read_text()
+    assert text.count("for (; ") == 2 and "simdgroup_" not in text
+    from tests.test_translator.test_metal_builtin_ownership import _compile
+
+    _compile(text, "opengl", tmp_path)
+
+
+@pytest.mark.parametrize("rewrites", REJECTED_REWRITES, ids=REJECTED_IDS)
+def test_opengl_rejects_unproven_any_start_loops(tmp_path, rewrites):
+    report = _translate(tmp_path, _rewritten(rewrites), target="opengl")
+    assert report["summary"]["translatedCount"] == 0, report
+    codes = {item["code"] for item in report["diagnostics"]}
+    assert codes == {OPENGL_ERROR}, codes

@@ -2,7 +2,8 @@
 
 Helper summaries follow loops and in-place writes to by-value parameters and
 initialized locals. Entry flows follow member writes of followed records, and
-guards fold when a compile-time constant decides them.
+guards fold when a compile-time constant decides them: the DirectX and OpenGL
+proofs then follow only the branch every invocation takes.
 """
 
 import pytest
@@ -172,12 +173,12 @@ def _guard_source(declaration, guard):
         ),
     ],
 )
-def test_directx_guards_decided_by_constants_fold(tmp_path, declaration, guard):
-    generated = _return_codegen("directx").generate_stage(
+def test_guards_decided_by_constants_fold(tmp_path, declaration, guard, return_target):
+    generated = _return_codegen(return_target).generate_stage(
         parse(_guard_source(declaration, guard)), "compute"
     )
     assert "WaveActiveSum" not in generated
-    _compile(generated, "directx", tmp_path)
+    _compile(generated, return_target, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -190,9 +191,9 @@ def test_directx_guards_decided_by_constants_fold(tmp_path, declaration, guard):
         ("bool masked = false; masked = true;", "masked && invocation > 2u"),
     ],
 )
-def test_directx_guards_left_to_runtime_values_are_refused(declaration, guard):
+def test_guards_left_to_runtime_values_are_refused(declaration, guard, return_target):
     with pytest.raises(RETURN_ERRORS):
-        _return_codegen("directx").generate_stage(
+        _return_codegen(return_target).generate_stage(
             parse(_guard_source(declaration, guard)), "compute"
         )
 
@@ -211,12 +212,12 @@ def test_directx_omits_branches_constants_rule_out():
     assert "inputWords[" not in generated
 
 
-def test_directx_constant_branches_follow_lexical_scope():
+def test_constant_branches_follow_lexical_scope(return_target):
     body = """{ const bool masked = false; }
         if (masked) { outputWords[index] = 12345u; }
         if (!masked) { outputWords[index] = 23456u; }
         outputWords[index] = WaveActiveSum(invocation);"""
-    generated = _return_codegen("directx").generate_stage(
+    generated = _return_codegen(return_target).generate_stage(
         parse(_source("uint", body, "const bool masked = true;")), "compute"
     )
     # The block's constant ends with the block; the shader constant decides.
@@ -240,3 +241,73 @@ def test_directx_constant_guards_keep_their_condition_and_drop_dead_branches(
     assert "23456" in generated and "45678" in generated
     assert "12345" not in generated and "34567" not in generated
     _compile(generated, "directx", tmp_path)
+
+
+def test_opengl_omits_branches_constants_rule_out(tmp_path):
+    body = """const bool masked = false;
+        if (masked) { outputWords[index] = 12345u; }
+        if (!masked || inputWords[index] > 0u) { outputWords[index] = 23456u; }
+        outputWords[index] = WaveActiveSum(invocation);"""
+    generated = _return_codegen("opengl").generate_stage(
+        parse(_source("uint", body)), "compute"
+    )
+    entry = generated.split("void main")[1]
+    assert "12345" not in entry
+    assert "23456" in entry
+    # The constant decides the second guard, so its runtime side is gone.
+    assert "inputWords[" not in entry
+    _compile(generated, "opengl", tmp_path)
+
+
+DEAD_BRANCH_HELPER = "uint total(uint value) { return WaveActiveSum(value); }"
+DEAD_BRANCHES = [
+    # A divergent return before collective work.
+    """if (masked) {
+            if (invocation > 3u) { return; }
+            outputWords[index] = WaveActiveSum(invocation);
+        }""",
+    # A collective helper called under a divergent guard.
+    """if (masked) {
+            if (invocation > 3u) { outputWords[index] = total(invocation); }
+        }""",
+    # The same, in the else branch of a guard the constant takes.
+    """if (!masked) {
+            outputWords[index] = 1u;
+        } else if (invocation > 3u) {
+            outputWords[index] = total(invocation);
+        }""",
+]
+
+
+@pytest.mark.parametrize("branch", DEAD_BRANCHES[:2])
+def test_branches_constants_rule_out_need_no_uniform_collectives(
+    tmp_path, branch, return_target
+):
+    body = f"""const bool masked = false;
+        {branch}
+        outputWords[index] = total(invocation);"""
+    generated = _return_codegen(return_target).generate_stage(
+        parse(_source("uint", body, DEAD_BRANCH_HELPER)), "compute"
+    )
+    _compile(generated, return_target, tmp_path)
+
+
+@pytest.mark.parametrize("branch", DEAD_BRANCHES)
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "bool masked = invocation > 100u;",
+        # A written local is not a constant.
+        "bool masked = false; masked = invocation > 100u;",
+    ],
+)
+def test_branches_runtime_values_select_keep_their_collectives_checked(
+    branch, declaration, return_target
+):
+    body = f"""{declaration}
+        {branch}
+        outputWords[index] = total(invocation);"""
+    with pytest.raises(RETURN_ERRORS):
+        _return_codegen(return_target).generate_stage(
+            parse(_source("uint", body, DEAD_BRANCH_HELPER)), "compute"
+        )

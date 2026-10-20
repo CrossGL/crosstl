@@ -18,7 +18,9 @@ from ..ast import (
     BlockNode,
     DoWhileNode,
     ForNode,
+    IdentifierNode,
     IfNode,
+    LiteralNode,
     UnaryOpNode,
     VariableNode,
     WhileNode,
@@ -47,6 +49,43 @@ def guard_bool_value(codegen: Any, expr: Any, constants: dict[str, bool]):
             if left is (operator == "||"):
                 return left
             return guard_bool_value(codegen, expr.right, constants)
+    return None
+
+
+def literal_guard_value(
+    expr: Any, constants: dict[str, bool], map_operator: Callable[[Any], Any]
+):
+    """Fold a guard built only from booleans, or return ``None``.
+
+    Operands are ``true``/``false`` literals and names ``constants`` binds to a
+    boolean. ``!``, ``==`` and ``!=`` need every operand; ``&&`` and ``||``
+    fold as soon as their left side decides them, because short-circuit
+    evaluation never evaluates the right side then.
+    """
+    if isinstance(expr, LiteralNode):
+        value = expr.value
+        if isinstance(value, str) and value in {"true", "false"}:
+            return value == "true"
+        return value if isinstance(value, bool) else None
+    if isinstance(expr, IdentifierNode):
+        value = constants.get(expr.name)
+        return value if isinstance(value, bool) else None
+    if isinstance(expr, UnaryOpNode) and map_operator(expr.operator) == "!":
+        inner = literal_guard_value(expr.operand, constants, map_operator)
+        return None if inner is None else not inner
+    if isinstance(expr, BinaryOpNode):
+        operator = map_operator(expr.operator)
+        if operator not in {"&&", "||", "==", "!="}:
+            return None
+        left = literal_guard_value(expr.left, constants, map_operator)
+        if left is None:
+            return None
+        if operator in {"&&", "||"} and left is (operator == "||"):
+            return left
+        right = literal_guard_value(expr.right, constants, map_operator)
+        if right is None or operator in {"&&", "||"}:
+            return right
+        return (left == right) is (operator == "==")
     return None
 
 
@@ -162,6 +201,35 @@ def lexical_constant_guards(
         body,
         {name: value for name, value in inherited.items() if name not in parameters},
     )
+    return guards
+
+
+def literal_branch_guards(
+    functions: Any,
+    inherited: dict[str, bool],
+    *,
+    written: Callable[[Any], set[str]],
+    map_operator: Callable[[Any], Any],
+    tracked: Callable[[Any], bool],
+) -> dict[int, bool]:
+    """``lexical_constant_guards`` over ``functions`` with ``literal_guard_value``.
+
+    ``written(function)`` names what the function may write; ``tracked``
+    accepts the boolean local declarations that may hold a constant.
+    """
+    guards: dict[int, bool] = {}
+    for function in functions:
+        guards.update(
+            lexical_constant_guards(
+                function,
+                inherited,
+                written=written(function),
+                fold=lambda expression, constants: literal_guard_value(
+                    expression, constants, map_operator
+                ),
+                tracked=tracked,
+            )
+        )
     return guards
 
 
