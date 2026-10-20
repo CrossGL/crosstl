@@ -455,6 +455,7 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
+from .resource_helper_calls import is_read_only_helper_expression
 from .sampler_pairs import (
     lower_combined_sampler_pairs,
     with_combined_sampler_header,
@@ -14561,6 +14562,7 @@ class GLSLCodeGen(
                 self.glsl_side_effect_free_expression(argument)
                 or isinstance(argument, FunctionCallNode)
                 and argument_members
+                or is_read_only_helper_expression(self, argument)
             ):
                 return {}
             for member, interval in argument_members.items():
