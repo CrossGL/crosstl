@@ -23,8 +23,9 @@ lists every gap behind each bar.
 pip install crosstl
 ```
 
-CrossTL needs Python 3.11 or later. Validating the generated code needs the target's own tools (glslang, DXC,
-spirv-tools, naga or the Metal compiler), which CrossTL does not install.
+CrossTL needs Python 3.11 or later. Validating the generated code needs the target's own compiler or validator
+(glslang, DXC, spirv-tools, naga, the Metal compiler, nvcc, hipcc, slangc, rust-gpu or the Mojo compiler), which
+CrossTL does not install.
 
 ## Quickstart
 
@@ -78,16 +79,15 @@ crosstl translate saxpy.cgl --backend vulkan --output -
 | SPIR-V assembly | `vulkan` | measured | available |
 | WGSL | `wgsl` | measured | not offered |
 | GLSL ES 3.00 (WebGL 2) | `webgl` | available | not offered |
-| CUDA | `cuda` | available | available |
-| HIP | `hip` | available | available |
-| Slang | `slang` | available | available |
-| Rust | `rust` | available | available |
-| Mojo | `mojo` | available | available |
+| CUDA | `cuda` | measured | measured |
+| HIP | `hip` | measured | measured |
+| Slang | `slang` | measured | measured |
+| Rust (rust-gpu) | `rust` | measured | measured |
+| Mojo | `mojo` | measured | measured |
 | OpenCL C | | not offered | available |
 
 A measured direction has a row in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md). An
-available direction is implemented and unit-tested but not yet measured; coverage for CUDA, HIP, Slang, Rust and Mojo
-comes next. The language names `glsl`, `hlsl`, `msl` and `spirv` work as backend names too, and `cgl` writes the
+available direction is implemented and unit-tested but not yet measured. The language names `glsl`, `hlsl`, `msl` and `spirv` work as backend names too, and `cgl` writes the
 CrossGL a native source imports to. CrossGL has its own coverage row, CrossGL IR, which measures how many of the
 features in all the measured languages CrossGL can express.
 
