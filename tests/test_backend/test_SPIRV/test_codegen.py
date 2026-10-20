@@ -10534,5 +10534,53 @@ def test_glslang_cooperative_matrix_length_codegen_reparse():
     parse_crossgl(generated_code)
 
 
+SPIRV_OP_SMOD_FLOORED_MODULO_REPRODUCER_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %inValue %outValue
+OpExecutionMode %main OriginUpperLeft
+OpName %inValue "inValue"
+OpName %outValue "outValue"
+OpDecorate %inValue Location 0
+OpDecorate %inValue Flat
+OpDecorate %outValue Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%v2int = OpTypeVector %int 2
+%ptr_input_v2int = OpTypePointer Input %v2int
+%ptr_output_v2int = OpTypePointer Output %v2int
+%inValue = OpVariable %ptr_input_v2int Input
+%outValue = OpVariable %ptr_output_v2int Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v2int %inValue
+%x = OpCompositeExtract %int %loaded 0
+%y = OpCompositeExtract %int %loaded 1
+%floored = OpSMod %int %x %y
+%truncated = OpSRem %int %x %y
+%outv = OpCompositeConstruct %v2int %floored %truncated
+OpStore %outValue %outv
+OpReturn
+OpFunctionEnd
+"""
+
+
+def test_spirv_op_smod_floored_modulo_import_codegen_reparse():
+    tokens = tokenize_code(SPIRV_OP_SMOD_FLOORED_MODULO_REPRODUCER_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int2 inValue @input @location(0) @flat;" in generated_code
+    assert "int2 outValue @output @location(0);" in generated_code
+    assert (
+        "outValue = int2(mod(inValue[0], inValue[1]), (inValue[0] % inValue[1]));"
+        in generated_code
+    )
+    assert "OpSMod" not in generated_code
+    assert "OpSRem" not in generated_code
+    parse_crossgl(generated_code)
+
+
 if __name__ == "__main__":
     pytest.main()

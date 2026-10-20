@@ -168,7 +168,6 @@ class VulkanParser:
         "BitwiseXor": "^",
         "FAdd": "+",
         "FDiv": "/",
-        "FMod": "%",
         "FMul": "*",
         "FOrdEqual": "==",
         "FOrdGreaterThan": ">",
@@ -201,7 +200,6 @@ class VulkanParser:
         "SGreaterThanEqual": ">=",
         "SLessThan": "<",
         "SLessThanEqual": "<=",
-        "SMod": "%",
         "SRem": "%",
         "ShiftLeftLogical": "<<",
         "ShiftRightArithmetic": ">>",
@@ -244,11 +242,13 @@ class VulkanParser:
         "BitFieldSExtract": "bitfieldExtract",
         "BitFieldUExtract": "bitfieldExtract",
         "BitReverse": "bitfieldReverse",
+        "FMod": "mod",
         "OuterProduct": "outerProduct",
         "QuantizeToF16": "spirvQuantizeToF16",
         "SatConvertSToU": "spirvSatConvertSToU",
         "SDot": "spirvSDot",
         "SDotKHR": "spirvSDot",
+        "SMod": "mod",
         "SUDot": "spirvSUDot",
         "SUDotKHR": "spirvSUDot",
         "UDot": "spirvUDot",
@@ -6469,6 +6469,8 @@ class VulkanParser:
                     else ArrayAccessNode(expression, index)
                 )
             return expression
+        if operation in self.SPIRV_CORE_FUNCTIONS:
+            return FunctionCallNode(self.SPIRV_CORE_FUNCTIONS[operation], args)
         return FunctionCallNode(f"spirv_{operation}", args)
 
     def spirv_static_composite_element(self, expression, index):
