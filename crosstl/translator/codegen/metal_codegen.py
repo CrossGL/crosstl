@@ -86,6 +86,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_array_copies import (
     generate_metal_array_copy,
     generate_metal_array_initializer,
@@ -17866,6 +17867,10 @@ class MetalCodeGen:
     def metal_struct_member_effective_semantic(
         self, member, default_member_semantics, struct_name=None
     ):
+        if struct_name in self.metal_fragment_entry_output_struct_names:
+            color = metal_fragment_output_color_semantic(self, member)
+            if color is not None:
+                return color
         semantic = self.semantic_from_node(member)
         if (
             struct_name in self.metal_union_layouts
@@ -20111,6 +20116,16 @@ class MetalCodeGen:
         if self.is_metal_ray_stage(shader_type):
             return False
         if self.is_graphics_stage_output_parameter(parameter, shader_type):
+            return False
+        # Vertex built-ins are function parameters; MSL rejects them inside the [[stage_in]] structure.
+        if self.canonical_metal_semantic(self.semantic_from_node(parameter)) in {
+            "vertex_id",
+            "instance_id",
+            "base_vertex",
+            "base_instance",
+            "amplification_id",
+            "amplification_count",
+        }:
             return False
         return True
 

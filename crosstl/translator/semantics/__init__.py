@@ -35,6 +35,10 @@ from .shader_records import (
 )
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
+from .stage_interface_structs import (
+    StageInterfaceUnsupportedError,
+    gather_stage_interface_variables,
+)
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
@@ -47,6 +51,7 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
+    "StageInterfaceUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
@@ -99,7 +104,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
 
     User functions named like texture or image built-ins are first renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
-    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). A structure an
+    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For MSL and
+    HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
+    structures (:mod:`.stage_interface_structs`). A structure an
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
@@ -131,6 +138,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     resolve_intrinsic_named_functions(program)
     canonicalize_texture_swizzles(program)
+    gather_stage_interface_variables(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
