@@ -4,7 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    labels: [dependencies]
     groups:
       github-actions:
         patterns:
           - "*"
+  # Python dependencies get security updates only; this entry sets their labels.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels: [dependencies]

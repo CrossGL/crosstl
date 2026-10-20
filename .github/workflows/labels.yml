@@ -1,0 +1,70 @@
+name: Labels
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+# Pull requests that touch the label set print the changes; pushes to main make them.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/labels.yml
+      - tools/labels.py
+  pull_request:
+    paths:
+      - .github/labels.yml
+      - .github/workflows/labels.yml
+      - tools/labels.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: labels-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    name: Plan label changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Print label changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.labels --repo "$GITHUB_REPOSITORY"
+
+  sync:
+    name: Sync labels
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Apply label changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.labels --repo "$GITHUB_REPOSITORY" --apply

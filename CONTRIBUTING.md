@@ -1,99 +1,72 @@
-# Contribution Guidelines
+# Contributing to CrossTL
 
-Thank you for your interest in contributing to **CrossTL**!
+Thank you for helping. This guide covers setting up a checkout, running the
+tests, and getting a pull request merged. Please follow the
+[code of conduct](.github/CODE_OF_CONDUCT.md).
 
-## How to Contribute
+## Setup
 
-### 1. Fork the Repository
-
-Start by forking the **crosstl** repository on GitHub to your own account.
-
-### 2. Clone Your Fork
-
-Clone your forked repository to your local machine:
+CrossTL needs Python 3.11 or later.
 
 ```bash
-git clone https://github.com/your-username/crosstl.git
+git clone https://github.com/CrossGL/crosstl.git
 cd crosstl
+python -m venv .venv && source .venv/bin/activate
+pip install -e . -r requirements.txt pytest-xdist pre-commit
+pre-commit install
 ```
 
-### 3. Create a Branch
+`pre-commit` runs black, isort, ruff and the repository checks on the files
+you commit. Run `pre-commit run --all-files` before your first push if you
+installed it late.
 
-Create a new branch for your changes. Use a descriptive name for your branch:
+Native validators are optional. Tests that need glslang, DXC, SPIRV-Tools or
+the Metal toolchain are skipped when the tool is missing, and CI runs them on
+Linux, Windows and macOS.
+
+## Tests
+
+Run the tests for the code you changed first, then the wider suite:
 
 ```bash
-git checkout -b feature-name
+pytest tests/test_translator/test_parser.py -q                 # one file
+pytest tests/test_translator/test_parser.py -q -k struct       # matching tests
+pytest tests/test_translator tests/test_backend -n auto -q     # translator and backends
+pytest tests -n auto -q                                        # everything
 ```
 
-### 4. Make Changes
+Translator tests live in `tests/test_translator`, importer tests for each
+source language in `tests/test_backend/test_<language>`, and differential
+conformance checks in `tests/conformance`. [TESTING.md](.github/TESTING.md)
+describes what CI runs on each platform.
 
-Make your changes to the codebase. Follow the project's coding style and guidelines. Ensure that your changes do not break existing functionality.
+## Adding a feature
 
-### 5. Write Unit Tests
+Most changes touch one importer (`crosstl/backend/<language>`) or one code
+generator (`crosstl/translator/codegen`). Add a test next to the existing ones
+for that language that translates a small input and checks the output, or the
+diagnostic when the input cannot be expressed. Unsupported constructs must
+raise a diagnostic rather than produce partial output.
 
-Ensure that your code is reliable by writing unit tests:
-- Add tests for any new functionality or changes.
-- Make sure your code passes all existing and new tests.
-- You can run the test suite locally using:
+Changes to the CrossGL language itself update the parser, every code generator
+and importer that handles the construct, and the examples under `examples/` in
+the same pull request.
 
-```bash
-pytest tests/
-```
+## Picking an issue
 
-### 6. Commit Your Changes
+Issues labelled [`good first issue`](https://github.com/CrossGL/crosstl/labels/good%20first%20issue)
+are small and well scoped; [`help wanted`](https://github.com/CrossGL/crosstl/labels/help%20wanted)
+marks larger ones maintainers would welcome help with. `backend:<language>`
+labels say which language an issue concerns, and `area:` labels say which part
+of the code. Comment on an issue before starting so work is not duplicated.
 
-Commit your changes with a clear and concise commit message:
+## Pull requests
 
-```bash
-git add .
-git commit -m "Description of your changes"
-```
+Open the pull request against `main`. Required checks run on every push:
+translator, backend, complete-suite, example and demo tests on Linux, macOS and
+Windows. Once they pass and a maintainer has reviewed the change, it joins the
+merge queue, which tests the exact commit that will land, and is squash-merged.
 
-### 7. Push to GitHub
-
-Push your changes to your forked repository on GitHub:
-
-```bash
-git push origin feature-name
-```
-
-### 8. Open a Pull Request
-
-Open a pull request on the original repository. Provide a detailed description of your changes, why they are necessary, and any additional information that may be useful for the reviewers.
-
-### Assigning or Creating Issues
-
-If you're looking for something to work on, check out the open issues on our repository! You can assign yourself to an issue by commenting:
-
-```plaintext
-@CrossGL-issue-bot assign me
-```
-
-The bot will automatically assign the issue to you.
-
-If you'd like to propose a new feature or report a bug, create a new issue with as much detail as possible, then comment with the same command to get it assigned.
-
-## Contribution Pipeline
-
-### Issue Tracking
-
-We use GitHub Issues to track bugs, enhancements, and tasks. When opening an issue:
-- Provide a clear description.
-- Include steps to reproduce the issue if it's a bug.
-- Suggest a solution if possible.
-
-### Code Review
-
-All contributions go through a code review process. The maintainers will review your pull request and provide feedback. Be prepared to make additional changes based on the feedback.
-
-### Continuous Integration (CI)
-
-We use CI to run automated tests on all pull requests. Ensure that your code passes all the tests before submitting.
-
-### Merging
-
-Once your pull request has been reviewed and approved, it will be merged into the main branch.
-
-## Thank You
-
-Thank you for contributing to **Crosstl**!
+Keep a pull request to one change. Write commit messages and the pull request
+title in the imperative, describing the behavior that changes ("Reject
+recursive functions in the Metal generator"), with a body that says why.

@@ -37,5 +37,4 @@ Implementation Notes
 
 Keep WebGL-specific restrictions in ``WebGLCodeGen`` rather than adding WebGL
 conditionals throughout ``GLSLCodeGen``. When a capability becomes safe for
-WebGL, promote it by adding focused WebGL tests and updating the support matrix
-metadata in the same change.
+WebGL, promote it with focused WebGL tests in the same change.
