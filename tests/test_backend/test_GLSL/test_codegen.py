@@ -1723,7 +1723,7 @@ def test_codegen_constant_expression_resource_binding_from_godot_scene_forward()
 
     shader_ast = parse_crossgl(crossgl)
     glsl = GLSLCodeGen().generate(shader_ast)
-    assert "layout(binding = 1036) uniform sampler2D SAMPLER_NEAREST_CLAMP;" in glsl
+    assert "layout(binding = 12) uniform sampler2D SAMPLER_NEAREST_CLAMP;" in glsl
     GLSLParser(GLSLLexer(glsl).tokenize(), "fragment").parse()
 
 

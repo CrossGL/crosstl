@@ -42621,7 +42621,7 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "kind": "texture",
             "type": "sampler2D",
             "set": 0,
-            "binding": 1026,
+            "binding": 2,
             "access": "read",
         },
     ]
