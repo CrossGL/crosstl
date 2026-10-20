@@ -1,10 +1,11 @@
 """HLSL intrinsics from DXC's intrinsic table (``utils/hct/gen_intrin_main.txt``).
 
-The ``Intrinsics`` namespace holds the global functions; every ``<Object>Methods`` namespace holds the methods of one
-resource or object type. ``VkIntrinsics`` is left out: those are DXC's SPIR-V extensions (``vk::``), not Direct3D
-HLSL. Declarations follow the grammar described at the top of the table; generic layouts (``<>``, ``<c>``, ``<r, c>``)
-are made concrete as two-component vectors and 2x2 matrices, and meta types such as ``float_like`` or ``numeric``
-as their 32-bit member.
+The ``Intrinsics`` and ``DxIntrinsics`` namespaces hold the global functions; every ``<Object>Methods`` namespace
+holds the methods of one resource or object type. The ``Vk`` namespaces and ``BufferPointer`` are left out: those are
+DXC's SPIR-V extensions (``vk::``), not Direct3D HLSL. Declarations follow the grammar described at the top of the
+table; generic layouts (``<>``, ``<c>``, ``<r, c>``) are made concrete as two-component vectors and 2x2 matrices, meta
+types such as ``float_like`` or ``numeric`` as their 32-bit member, and an object's element type (``$classT``) as the
+one :data:`~tools.coverage.objects.OBJECTS` declares it with.
 """
 
 from __future__ import annotations
@@ -13,9 +14,25 @@ import re
 
 from .. import crossgl
 from ..model import VOID, Feature, Param, Signature, Type
+from ..objects import OBJECTS, SAMPLERS, Object
 from .common import pick
 
-LEFT_OUT = {"VkIntrinsics": "DXC's SPIR-V extensions, not Direct3D HLSL"}
+_VULKAN = "DXC's SPIR-V extensions, not Direct3D HLSL"
+LEFT_OUT = dict.fromkeys(
+    (
+        "VkIntrinsics",
+        "VkSubpassInputMethods",
+        "VkSubpassInputMSMethods",
+        "BufferPointerMethods",
+    ),
+    _VULKAN,
+)
+# Namespaces of global functions, and the prefix HLSL calls their functions by.
+_FUNCTIONS = {"Intrinsics": "", "DxIntrinsics": "dx::"}
+# Methods that take implicit derivatives, which a compute probe of one thread cannot.
+_DERIVATIVES = frozenset(
+    "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped".split()
+)
 # Shader model the probes are compiled for; intrinsics that need a newer one are listed but not probed.
 SHADER_MODEL = (6, 6)
 SCALAR = {
@@ -198,34 +215,82 @@ def declarations(text: str):
             )
 
 
+def _concrete(text: str, kind: Object) -> str:
+    """``text`` with an object's generic types made concrete: ``$classT`` is its element type, ``$funcT`` (the type a
+    templated load returns) ``uint``, and ``$match<0, -1> void<n>`` the element's component type in that layout.
+    """
+    element = kind.element or Type("uint")
+    spelled = element.scalar + (f"<{element.shape[0]}>" if element.shape else "")
+    text = re.sub(r"\$match<\s*0\s*,\s*-1\s*>\s*void\b", element.scalar, text)
+    text = re.sub(r"\$match<\s*-1\s*,\s*0\s*>\s*void\b", spelled, text)
+    text = re.sub(r"\bany_sampler\b", "sampler", text)
+    return text.replace("$classT", spelled).replace("$funcT", "uint")
+
+
+def _probed(signature: Signature) -> bool:
+    """Whether a method probe can pass every argument: values, and the samplers it declares."""
+    kinds = [signature.result, *(p.type for p in signature.params)]
+    return all(not k.opaque or k == VOID or k.opaque in SAMPLERS for k in kinds)
+
+
+def _overloads(
+    declared: list, concrete=lambda text: text
+) -> tuple[list[Signature], str]:
+    """The overloads the probes' shader model has, and a note when there are none."""
+    needed = min(_shader_model(attributes) for attributes, _, _ in declared)
+    signatures = []
+    for attributes, result, params in declared:
+        if _shader_model(attributes) > SHADER_MODEL:
+            continue
+        try:
+            signatures.append(_signature(concrete(result), concrete(params)))
+        except _Unsupported:
+            continue
+    if needed > SHADER_MODEL:
+        return [], f"needs shader model {needed[0]}.{needed[1]}"
+    return signatures, "" if signatures else "variadic"
+
+
+def _method(owner: str, name: str, declared: list) -> Feature:
+    kind = OBJECTS.get(owner)
+    signatures, note = _overloads(
+        declared, (lambda text: _concrete(text, kind)) if kind else str
+    )
+    if kind is None and not note.startswith("needs"):
+        signatures, note = [], f"no probe for {owner} objects yet"
+    # The plainest overload: no offset, clamp or tiled-resource status.
+    ordered = sorted(signatures, key=lambda s: (_preference(s), len(s.params)))
+    chosen = next((s for s in ordered if _probed(s)), ordered[0] if ordered else None)
+    return Feature(
+        "hlsl",
+        "method",
+        f"{owner}.{name}",
+        None if note else chosen,
+        group=owner,
+        crossgl=name,
+        stage="fragment" if name in _DERIVATIVES else "compute",
+        note=note,
+        spelling=name,
+    )
+
+
 def parse(
     text: str, glsl_names: set[str] | frozenset[str] = frozenset()
 ) -> list[Feature]:
     functions: dict[str, list] = {}
-    methods: dict[tuple[str, str], str] = {}
+    methods: dict[tuple[str, str], list] = {}
     for namespace, name, attributes, result, params in declarations(text):
         if namespace in LEFT_OUT or "hidden" in attributes or name.startswith("__"):
             continue
-        if namespace == "Intrinsics":
+        if namespace in _FUNCTIONS:
+            name = _FUNCTIONS[namespace] + name
             functions.setdefault(name, []).append((attributes, result, params))
         else:
-            methods.setdefault((namespace.removesuffix("Methods"), name), attributes)
+            owner = namespace.removesuffix("Methods")
+            methods.setdefault((owner, name), []).append((attributes, result, params))
     features = []
     for name, declared in sorted(functions.items()):
-        needed = min(_shader_model(attributes) for attributes, _, _ in declared)
-        signatures = []
-        for attributes, result, params in declared:
-            if _shader_model(attributes) > SHADER_MODEL:
-                continue
-            try:
-                signatures.append(_signature(result, params))
-            except _Unsupported:
-                continue
-        note = ""
-        if needed > SHADER_MODEL:
-            note = f"needs shader model {needed[0]}.{needed[1]}"
-        elif not signatures:
-            note = "variadic"
+        signatures, note = _overloads(declared)
         features.append(
             Feature(
                 "hlsl",
@@ -238,15 +303,8 @@ def parse(
                 note=note,
             )
         )
-    for (owner, name), _ in sorted(methods.items()):
-        features.append(
-            Feature(
-                "hlsl",
-                "method",
-                f"{owner}.{name}",
-                None,
-                group=owner,
-                note="object methods are not probed yet",
-            )
-        )
+    features += [
+        _method(owner, name, declared)
+        for (owner, name), declared in sorted(methods.items())
+    ]
     return features

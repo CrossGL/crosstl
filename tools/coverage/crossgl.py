@@ -202,6 +202,11 @@ class CrossGL(Dialect):
     language = "crossgl"
     suffix = ".cgl"
 
+    # CrossGL declares HLSL's resource object types and calls their methods under HLSL's names; the backend assigns
+    # the registers.
+    def resource(self, spelling: str, name: str, register: str) -> str:
+        return f"{spelling} {name};"
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = ["shader Probe {"]
         lines += [f"    {line}" for line in parts.get("prelude", ())]

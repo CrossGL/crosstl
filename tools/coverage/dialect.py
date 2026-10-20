@@ -85,6 +85,10 @@ class Dialect:
         initial = f" = {value}" if value else ""
         return f"{self.type(kind)} {name}{initial};"
 
+    def resource(self, spelling: str, name: str, register: str) -> str:
+        """The declaration of a resource object, such as a texture or a sampler, of type ``spelling``."""
+        raise ProbeError(f"no probe for {self.language} {spelling} objects yet")
+
     def call(self, name: str, arguments: list[str]) -> str:
         return f"{name}({', '.join(arguments)})"
 
