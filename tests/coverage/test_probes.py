@@ -115,6 +115,27 @@ def test_fragment_probes_are_valid(language):
         assert verdict.accepted, verdict.log
 
 
+def test_an_interpolant_is_read_straight_from_a_shader_input():
+    vec2 = Type("float", (2,))
+    centroid = feature("interpolateAtCentroid", vec2, vec2, stage="fragment")
+    glsl = probes.build(centroid, "glsl").source
+    assert "layout(location = 0) in vec2 a0;" in glsl
+    assert "vec2 r = interpolateAtCentroid(a0);" in glsl
+    crossgl = probes.build(centroid, "crossgl").source
+    assert "        vec2 uv;\n        vec2 a0;\n    }" in crossgl
+    assert "vec2 r = interpolateAtCentroid(input.a0);" in crossgl
+    hlsl = Feature(
+        "hlsl",
+        "function",
+        "EvaluateAttributeCentroid",
+        centroid.signature,
+        stage="fragment",
+    )
+    assert "float4 main(float2 a0 : TEXCOORD0) : SV_Target {" in (
+        probes.build(hlsl, "hlsl").source
+    )
+
+
 def test_baseline_reads_the_same_arguments_without_the_call():
     mix = feature("mix", VEC3, VEC3, VEC3, VEC3)
     probe = probes.build(mix, "glsl").source

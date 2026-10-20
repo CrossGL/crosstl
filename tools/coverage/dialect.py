@@ -116,6 +116,10 @@ class Dialect:
     def statement(self, expression: str) -> str:
         return f"{expression};"
 
+    def stage_input(self, name: str) -> str:
+        """How a fragment shader reads its input ``name``, which :meth:`fragment` declares from ``inputs``."""
+        return name
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         """A compute kernel that runs ``body`` once per invocation, with ``i`` the invocation's index.
 
@@ -129,5 +133,6 @@ class Dialect:
         """A fragment shader that runs ``body`` with ``i`` set to 0 and writes a constant colour.
 
         Fragment-only features, such as derivatives, are probed here; the buffers are the same as :meth:`kernel`'s.
+        ``parts`` may add ``inputs``, the shader inputs as ``(type spelling, name)``, for a function that takes one.
         """
         raise ProbeError(f"{self.language} has no fragment stage")

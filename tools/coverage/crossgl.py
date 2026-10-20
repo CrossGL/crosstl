@@ -224,12 +224,16 @@ class CrossGL(Dialect):
         lines += ["        }", "    }", "}"]
         return "\n".join(lines) + "\n"
 
+    def stage_input(self, name: str) -> str:
+        return f"input.{name}"
+
     def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = ["shader Probe {"]
         lines += [f"    {line}" for line in parts.get("prelude", ())]
         lines += [
             "    struct FragmentInput {",
             "        vec2 uv;",
+            *(f"        {kind} {name};" for kind, name in parts.get("inputs", ())),
             "    }",
             "    struct FragmentOutput {",
             "        vec4 color;",
