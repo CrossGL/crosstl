@@ -224,6 +224,35 @@ class CrossGL(Dialect):
         lines += ["        }", "    }", "}"]
         return "\n".join(lines) + "\n"
 
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in parts.get("prelude", ())]
+        lines += [
+            "    struct FragmentInput {",
+            "        vec2 uv;",
+            "    }",
+            "    struct FragmentOutput {",
+            "        vec4 color;",
+            "    }",
+            "    fragment {",
+        ]
+        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += [
+            "        FragmentOutput main(FragmentInput input) {",
+            "            FragmentOutput output;",
+            "            uint i = 0u;",
+        ]
+        lines += [f"            {line}" for line in body]
+        lines += [
+            "            output.color = vec4(input.uv, 0.0, 1.0);",
+            "            return output;",
+            "        }",
+            "    }",
+            "}",
+        ]
+        return "\n".join(lines) + "\n"
+
 
 DIALECT = CrossGL()
 

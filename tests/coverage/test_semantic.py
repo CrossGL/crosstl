@@ -24,9 +24,9 @@ ASSEMBLY = """
 """
 
 
-def glsl(name, result, *params):
+def glsl(name, result, *params, stage="compute"):
     signature = Signature(result, tuple(Param(p) for p in params))
-    return Feature("glsl", "function", name, signature, crossgl=name)
+    return Feature("glsl", "function", name, signature, crossgl=name, stage=stage)
 
 
 def test_instructions_reads_function_bodies_and_names_extended_instructions():
@@ -66,6 +66,7 @@ def test_lower_names_spirv_features_directly_and_honours_curated_entries(monkeyp
         (glsl("fma", VEC2, VEC2, VEC2, VEC2), "GLSL.std.450:Fma"),
         (glsl("floatBitsToInt", Type("int", (2,)), VEC2), "OpBitcast"),
         (glsl("dot", Type("float"), VEC2, VEC2), "OpDot"),
+        (glsl("dFdxFine", VEC2, VEC2, stage="fragment"), "OpDPdxFine"),
     ],
     ids=lambda value: value.name if isinstance(value, Feature) else value,
 )

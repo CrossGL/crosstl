@@ -65,12 +65,54 @@ def test_probe_refuses_what_it_cannot_express():
         probes.build(
             feature("texture", Type("float", (4,)), Type.other("sampler2D")), "crossgl"
         )
-    with pytest.raises(probes.ProbeError, match="fragment"):
-        probes.build(feature("dFdx", VEC3, VEC3, stage="fragment"), "crossgl")
+    with pytest.raises(probes.ProbeError, match="no vertex-stage probe"):
+        probes.build(feature("dFdx", VEC3, VEC3, stage="vertex"), "crossgl")
+    with pytest.raises(probes.ProbeError, match="cuda has no fragment stage"):
+        probes.build(feature("dFdx", VEC3, VEC3, stage="fragment"), "cuda")
     with pytest.raises(probes.NoSpelling, match="no spelling"):
         probes.build(feature("NMin", VEC3, VEC3, VEC3, crossgl=""), "crossgl")
     with pytest.raises(probes.ProbeError, match="double"):
         probes.build(feature("abs", Type("double"), Type("double")), "metal")
+
+
+DFDX = feature("dFdx", VEC3, VEC3, stage="fragment")
+
+
+@pytest.mark.parametrize(
+    ("language", "entry"),
+    [
+        ("crossgl", "FragmentOutput main(FragmentInput input) {"),
+        ("glsl", "layout(location = 0) out vec4 color;"),
+        ("hlsl", "float4 main() : SV_Target {"),
+        ("metal", "fragment float4 probe(device float* fin [[buffer(0)]]"),
+        ("rust", "#[spirv(fragment)]"),
+        ("slang", '[shader("fragment")]\nfloat4 main() : SV_Target {'),
+        ("wgsl", "@fragment\nfn main() -> @location(0) vec4<f32> {"),
+    ],
+)
+def test_fragment_features_get_a_fragment_shader(language, entry):
+    probe = probes.build(DFDX, language)
+    assert entry in probe.source
+    assert "compute" not in probe.source and "numthreads" not in probe.source
+    assert probe.suffix == (
+        ".frag" if language == "glsl" else probes.DIALECTS[language].suffix
+    )
+
+
+@pytest.mark.parametrize("language", ["glsl", "hlsl", "metal", "slang", "wgsl"])
+def test_fragment_probes_are_valid(language):
+    if not validators.available(language):
+        pytest.skip(f"no {language} validator")
+    name = {"hlsl": "ddx", "metal": "dfdx", "slang": "ddx", "wgsl": "dpdx"}.get(
+        language, "dFdx"
+    )
+    spelled = Feature(
+        language, "function", name, DFDX.signature, crossgl="dFdx", stage="fragment"
+    )
+    for baseline in (False, True):
+        probe = probes.build(spelled, language, baseline=baseline)
+        verdict = validators.validate(language, probe.source, "fragment", probe.entry)
+        assert verdict.accepted, verdict.log
 
 
 def test_baseline_reads_the_same_arguments_without_the_call():

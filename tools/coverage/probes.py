@@ -23,21 +23,37 @@ _BUFFERS = {"float": "fin", "int": "iin", "uint": "uin"}
 class GLSL(Dialect):
     language = "glsl"
     suffix = ".comp"
+    fragment_suffix = ".frag"
+
+    def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
+        lines = [
+            f"layout(std430, binding = {binding}) buffer B{binding} {{ {kind} {name}[]; }};"
+            for binding, (kind, name) in enumerate(buffers)
+        ]
+        return lines + list(parts.get("declarations", ()))
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = [
             "#version 460",
             *parts.get("prelude", ()),
             "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;",
+            *self._globals(buffers, parts),
         ]
-        for binding, (kind, name) in enumerate(buffers):
-            lines.append(
-                f"layout(std430, binding = {binding}) buffer B{binding} {{ {kind} {name}[]; }};"
-            )
-        lines += parts.get("declarations", ())
         lines += ["void main() {", "    uint i = gl_GlobalInvocationID.x;"]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["}"]) + "\n"
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            "#version 460",
+            *parts.get("prelude", ()),
+            *self._globals(buffers, parts),
+            "layout(location = 0) out vec4 color;",
+            "void main() {",
+            "    uint i = 0u;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["    color = vec4(0.0);", "}"]) + "\n"
 
 
 class HLSL(Dialect):
@@ -45,6 +61,7 @@ class HLSL(Dialect):
     suffix = ".hlsl"
     rows_first = True
     entry_attributes: tuple[str, ...] = ("[numthreads(1, 1, 1)]",)
+    fragment_attributes: tuple[str, ...] = ()
 
     def vector(self, scalar: str, size: int) -> str:
         return f"{scalar}{size}"
@@ -61,21 +78,34 @@ class HLSL(Dialect):
     def resource(self, spelling: str, name: str, register: str) -> str:
         return f"{spelling} {name} : register({register});"
 
-    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+    def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
         lines = list(parts.get("prelude", ()))
         lines += [
             self.buffer(kind, name, binding)
             for binding, (kind, name) in enumerate(buffers)
         ]
-        lines += parts.get("declarations", ())
+        return lines + list(parts.get("declarations", ()))
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         params = ", ".join(["uint3 id : SV_DispatchThreadID", *parts.get("params", ())])
-        lines += [
+        lines = [
+            *self._globals(buffers, parts),
             *self.entry_attributes,
             f"void main({params}) {{",
             "    uint i = id.x;",
         ]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["}"]) + "\n"
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            *self._globals(buffers, parts),
+            *self.fragment_attributes,
+            "float4 main() : SV_Target {",
+            "    uint i = 0u;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["    return float4(0.0, 0.0, 0.0, 0.0);", "}"]) + "\n"
 
 
 class Metal(Dialect):
@@ -96,24 +126,42 @@ class Metal(Dialect):
             raise ProbeError(f"Metal has no {scalar} matrices")
         return f"float{columns}x{rows}"
 
-    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        params = [
+    def _params(self, buffers: list[Buffer]) -> list[str]:
+        return [
             f"device {kind}* {name} [[buffer({binding})]]"
             for binding, (kind, name) in enumerate(buffers)
         ]
-        params.append("uint3 id [[thread_position_in_grid]]")
-        params += parts.get("params", ())
-        lines = [
+
+    def _head(self, parts: dict) -> list[str]:
+        return [
             "#include <metal_stdlib>",
             "using namespace metal;",
             *parts.get("prelude", ()),
             "",
             *parts.get("declarations", ()),
+        ]
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        params = self._params(buffers)
+        params.append("uint3 id [[thread_position_in_grid]]")
+        params += parts.get("params", ())
+        lines = [
+            *self._head(parts),
             f"kernel void probe({', '.join(params)}) {{",
             "    uint i = id.x;",
         ]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["}"]) + "\n"
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        params = [*self._params(buffers), *parts.get("params", ())]
+        lines = [
+            *self._head(parts),
+            f"fragment float4 probe({', '.join(params)}) {{",
+            "    uint i = 0u;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["    return float4(0.0);", "}"]) + "\n"
 
 
 class WGSL(Dialect):
@@ -154,23 +202,36 @@ class WGSL(Dialect):
         # An atomic buffer element can only be used through atomic built-in functions.
         return "" if atomic else self.store("outp[i]")
 
-    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+    def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
         lines = list(parts.get("prelude", ()))
         lines += [
             f"@group(0) @binding({binding}) var<storage, read_write> {name}: array<{kind}>;"
             for binding, (kind, name) in enumerate(buffers)
         ]
-        lines += parts.get("declarations", ())
+        return lines + list(parts.get("declarations", ()))
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         params = ", ".join(
             ["@builtin(global_invocation_id) id: vec3<u32>", *parts.get("params", ())]
         )
-        lines += [
+        lines = [
+            *self._globals(buffers, parts),
             "@compute @workgroup_size(1, 1, 1)",
             f"fn main({params}) {{",
             "    let i = id.x;",
         ]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["}"]) + "\n"
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            *self._globals(buffers, parts),
+            "@fragment",
+            f"fn main({', '.join(parts.get('params', ()))}) -> @location(0) vec4<f32> {{",
+            "    let i = 0u;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["    return vec4<f32>(0.0);", "}"]) + "\n"
 
 
 class CUDA(Dialect):
@@ -231,6 +292,7 @@ class Slang(HLSL):
     language = "slang"
     suffix = ".slang"
     entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
+    fragment_attributes = ('[shader("fragment")]',)
 
     def buffer(self, kind: str, name: str, binding: int) -> str:
         # slangc assigns bindings in declaration order; a D3D register would only draw a warning for SPIR-V.
@@ -400,7 +462,26 @@ class Rust(Dialect):
         return value
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        params = ["#[spirv(global_invocation_id)] id: UVec3"]
+        entry = (
+            "#[spirv(compute(threads(1)))]",
+            "#[spirv(global_invocation_id)] id: UVec3",
+        )
+        return self._entry(entry, buffers, ["let i = id.x as usize;", *body], parts)
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        parts = {**parts, "params": [*parts.get("params", ()), "color: &mut Vec4"]}
+        body = ["let i = 0usize;", *body, "*color = Vec4::ZERO;"]
+        return self._entry(("#[spirv(fragment)]",), buffers, body, parts)
+
+    def _entry(
+        self,
+        entry: tuple[str, ...],
+        buffers: list[Buffer],
+        body: list[str],
+        parts: dict,
+    ) -> str:
+        """An entry point: ``entry`` is its attribute and any built-in parameters, ahead of the buffers."""
+        attribute, *params = entry
         for binding, (kind, name) in enumerate(buffers):
             access = "&mut " if name == "outp" else "&"
             params.append(
@@ -424,11 +505,10 @@ class Rust(Dialect):
             *(line for line in prelude if not line.startswith("#!")),
             "",
             *declarations,
-            "#[spirv(compute(threads(1)))]",
+            attribute,
             "pub fn probe(",
             *(f"    {param}," for param in params),
             ") {",
-            "    let i = id.x as usize;",
         ]
         lines += [f"    {line}" for line in body]
         lines.append("}")
@@ -577,7 +657,7 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         return Probe(language, source, entry, suffix)
     if feature.signature is None:
         raise ProbeError(feature.note or "the feature list gives no signature")
-    if feature.stage != "compute":
+    if feature.stage not in ("compute", "fragment"):
         raise ProbeError(f"no {feature.stage}-stage probe yet")
     name = (
         feature.crossgl if language == "crossgl" else feature.spelling or feature.name
@@ -602,5 +682,10 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     atomic = any(p.direction == "inout" for p in feature.signature.params)
     buffers.append((dialect.buffer_element(output, atomic), "outp"))
     declarations = receiver.declarations if receiver else []
+    if feature.stage == "fragment":
+        source = dialect.fragment(buffers, body, declarations=declarations)
+        return Probe(
+            language, source, dialect.entry, dialect.fragment_suffix or dialect.suffix
+        )
     source = dialect.kernel(buffers, body, declarations=declarations)
     return Probe(language, source, dialect.entry, dialect.suffix)

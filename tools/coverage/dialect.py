@@ -24,6 +24,8 @@ class Dialect:
     language = ""
     suffix = ""
     entry = "main"
+    # The file suffix of a fragment probe, where the language's tools tell the stage from it.
+    fragment_suffix = ""
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
@@ -122,3 +124,10 @@ class Dialect:
         ``params``.
         """
         raise NotImplementedError
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A fragment shader that runs ``body`` with ``i`` set to 0 and writes a constant colour.
+
+        Fragment-only features, such as derivatives, are probed here; the buffers are the same as :meth:`kernel`'s.
+        """
+        raise ProbeError(f"{self.language} has no fragment stage")
