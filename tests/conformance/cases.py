@@ -15,7 +15,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import conversion_cases, half_cases, warp_cases
+from . import conversion_cases, half_cases, pack_cases, warp_cases
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 EXT_LANG = {
@@ -1461,6 +1461,44 @@ CASES = [
         _tile(np.arange(16, dtype=np.int32), dtype=np.int32),
         np.int32,
         o_fib,
+    ),
+    Case(
+        "g_pack",
+        "pack",
+        "packUnorm/packSnorm 4x8 and 2x16, packHalf2x16",
+        "GLSL 4.60 §8.4: round(clamp(c) * scale), first component in the low bits",
+        pack_cases.pack_inputs(),
+        np.uint32,
+        pack_cases.pack_reference,
+    ),
+    Case(
+        "g_unpack",
+        "pack",
+        "unpackUnorm/unpackSnorm 4x8 and 2x16, unpackHalf2x16",
+        "GLSL 4.60 §8.4: f / scale clamped to [-1, 1]; division within 2.5 ULP",
+        pack_cases.unpack_inputs(),
+        np.float32,
+        pack_cases.unpack_reference,
+        compare="ulp:3",
+    ),
+    Case(
+        "g_bitfield",
+        "bitfield",
+        "bitfieldExtract and bitfieldInsert with run-time offsets and widths",
+        "GLSL 4.60 §8.8: width 0 extracts 0 and inserts nothing; signed extracts sign-extend",
+        pack_cases.bitfield_inputs(),
+        np.uint32,
+        pack_cases.bitfield_reference,
+    ),
+    Case(
+        "g_mix_select",
+        "select",
+        "mix(x, y, bvec) with infinite and NaN operands",
+        "GLSL 4.60 §8.3: a boolean selector selects; the other operand does not reach the result",
+        pack_cases.mix_select_inputs(),
+        np.float32,
+        pack_cases.mix_select_reference,
+        compare="bits",
     ),
     Case(
         "u_atomic_add",

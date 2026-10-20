@@ -281,6 +281,13 @@ class GLSLHlslValueMixin:
             if info["family"] not in self.GLSL_UNIFIED_COMPONENT_RANKS:
                 return None
             described.append(info)
+        if (
+            func_name == "mix"
+            and len(described) == 3
+            and described[2]["family"] == "bool"
+        ):
+            # A boolean selector selects (GLSL 4.60 section 8.3); it must never become a weight.
+            return None
         families = {info["family"] for info in described}
         common = max(families, key=self.GLSL_UNIFIED_COMPONENT_RANKS.get)
         if func_name in self.GLSL_UNIFIED_FLOAT_BUILTINS and common in {
@@ -368,6 +375,10 @@ class GLSLHlslValueMixin:
             integer_dot = self.generate_glsl_integer_dot(arguments)
             if integer_dot is not None:
                 return integer_dot
+        if func_name == "mix" and len(arguments) == 3:
+            boolean_mix = self.generate_glsl_boolean_mix(arguments)
+            if boolean_mix is not None:
+                return boolean_mix
         if func_name == "atomicCompareExchange" and len(arguments) == 3:
             # Returns the original value, like GLSL atomicCompSwap.
             return self.generate_glsl_memory_atomic_call("atomicCompSwap", arguments)
@@ -382,6 +393,20 @@ class GLSLHlslValueMixin:
             else:
                 rendered.append(self.glsl_converted_operand(argument, target_type))
         return f"{func_name}({', '.join(rendered)})"
+
+    def generate_glsl_boolean_mix(self, arguments):
+        """``mix`` with a boolean selector, splatting a scalar selector to the value width."""
+        infos = [
+            self.glsl_value_type_info(self.glsl_source_expression_type(argument))
+            for argument in arguments
+        ]
+        if None in infos or infos[2]["family"] != "bool":
+            return None
+        width = max(info["width"] for info in infos[:2])
+        x, y, selector = (self.generate_expression(argument) for argument in arguments)
+        if infos[2]["width"] == 1 and width > 1:
+            selector = f"bvec{width}({selector})"
+        return f"mix({x}, {y}, {selector})"
 
     def glsl_expression_is_unsigned(self, expression):
         info = self.glsl_value_type_info(self.glsl_source_expression_type(expression))

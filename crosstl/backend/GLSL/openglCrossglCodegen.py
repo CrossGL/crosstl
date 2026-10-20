@@ -3846,7 +3846,12 @@ class GLSLToCrossGLConverter:
             ):
                 object_name = f"output.{node.object.name}"
             else:
-                object_name = node.object.name
+                # A member of an anonymous buffer block ('data.length()')
+                # names the block instance's member, as in the variable path.
+                object_name = (
+                    self.anonymous_ssbo_member_reference(node.object.name)
+                    or node.object.name
+                )
         else:
             object_name = self.generate_expression(node.object)
             if isinstance(node.object, ArrayAccessNode) and node.member == "length":

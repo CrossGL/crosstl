@@ -2239,8 +2239,10 @@ def test_generated_hlsl_compute_synchronization_compiles_with_dxc(tmp_path):
     code = HLSLCodeGen().generate(
         crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
     )
-    assert code.count("GroupMemoryBarrierWithGroupSync();") == 2
-    assert "AllMemoryBarrier();" in code
+    # barrier(); memoryBarrier(); workgroupBarrier(); run back to back, so one barrier over all memory that
+    # synchronizes the group orders every access as the three do (barrier_peephole).
+    assert code.count("AllMemoryBarrierWithGroupSync();") == 1
+    assert "GroupMemoryBarrierWithGroupSync();" not in code
     assert "workgroupBarrier();" not in code
     shader_path.write_text(code, encoding="utf-8")
 

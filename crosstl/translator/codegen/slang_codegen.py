@@ -9295,7 +9295,13 @@ class SlangCodeGen(LoweringRefusalMixin):
                     ]
                 )
             else:
-                args = ", ".join([self.generate_expression(arg) for arg in node.args])
+                # The call's own expected type says nothing about its operands.
+                args = ", ".join(
+                    [
+                        self.generate_expression_without_expected(arg)
+                        for arg in node.args
+                    ]
+                )
             callee = self.convert_type(callee)
             if (
                 callee == "saturate"
@@ -13860,7 +13866,10 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def projected_texture_coord(self, texture_node, coord_node, coord):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
-        coord_type = self.resource_base_type(self.get_expression_type(coord_node))
+        coord_type = self.resource_base_type(
+            self.get_expression_type(coord_node)
+            or self.type_name_string(self.expression_result_type(coord_node))
+        )
         specs = {
             "sampler1D": {
                 "vec2": ("x", "y"),

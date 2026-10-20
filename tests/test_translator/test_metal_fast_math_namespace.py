@@ -24,6 +24,7 @@ import pytest
 import crosstl.backend.Metal.MetalCrossGLCodeGen as metal_frontend
 from crosstl import translate
 from crosstl.translator.ast import FunctionCallNode
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.math_namespaces import (
     METAL_FAST_MATH_FUNCTIONS,
@@ -198,7 +199,12 @@ def test_other_targets_ignore_the_fast_namespace(tmp_path, target):
     for label, prefix in (("plain", ""), ("fast", "fast::"), ("q", "metal::fast::")):
         path = tmp_path / f"{label}.cgl"
         path.write_text(_crossgl(prefix), encoding="utf-8")
-        outputs.append(translate(str(path), backend=target, format_output=False))
+        # A target that refuses an unrelated construct must refuse every
+        # spelling identically; the namespace may not change either outcome.
+        try:
+            outputs.append(translate(str(path), backend=target, format_output=False))
+        except LoweringRefused as refusal:
+            outputs.append(f"refused: {refusal}")
     assert outputs[0] == outputs[1] == outputs[2]
     assert "fast::" not in outputs[0]
 

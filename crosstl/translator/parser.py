@@ -3,6 +3,10 @@
 import logging
 from copy import deepcopy
 
+from .anonymous_blocks import (
+    AnonymousBufferBlock,
+    bind_anonymous_buffer_block_members,
+)
 from .ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -328,6 +332,7 @@ class Parser:
     def __init__(self, tokens, strict_function_bodies=False):
         self.tokens = tokens
         self.strict_function_bodies = strict_function_bodies
+        self.anonymous_buffer_blocks = []
         self.active_generic_parameter_names = set()
         self.value_type_scopes = [{}]
         self.current_function_return_type = None
@@ -411,6 +416,7 @@ class Parser:
         return ("EOF", None)
 
     def finalize_shader(self, shader):
+        bind_anonymous_buffer_block_members(shader, self.anonymous_buffer_blocks)
         return validate_shader_cbuffers(shader)
 
     def append_parsed_nodes(self, collection, parsed):
@@ -1219,7 +1225,8 @@ class Parser:
 
         variable_name = self.default_layout_buffer_instance_name(block_name)
         variable_type = NamedType(block_name)
-        if self.current_token[0] == "IDENTIFIER":
+        anonymous = self.current_token[0] != "IDENTIFIER"
+        if not anonymous:
             variable_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
@@ -1246,6 +1253,13 @@ class Parser:
             qualifiers=qualifiers + ["buffer"],
             attributes=self.glsl_buffer_block_attributes(layout_attributes),
         )
+        if anonymous:
+            self.anonymous_buffer_blocks.append(
+                AnonymousBufferBlock(
+                    variable_node,
+                    [getattr(member, "name", None) for member in members],
+                )
+            )
         return struct_node, variable_node
 
     def glsl_buffer_block_attributes(self, layout_attributes):

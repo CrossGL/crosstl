@@ -17,6 +17,7 @@ import crosstl
 from crosstl.translator.codegen.image_access_contracts import (
     projected_texture_compare_reference,
 )
+from crosstl.translator.codegen.slang_refusals import SlangLoweringRefused
 
 PROJECTED_COMPARES = """
 shader ProjectedCompare {
@@ -228,10 +229,9 @@ def test_slang_rejects_coordinates_without_a_projection_component(tmp_path, call
     source = PROJECTED_COMPARES.replace(
         "textureCompareProj(shadowMap, input.uvq, input.depth)", call, 1
     )
-    code = _flat(_translate(tmp_path, source, "slang"))
-    # The Slang emitter reports refusals as loss markers; it is never emitted verbatim.
-    assert (
-        "/* unsupported Slang shadow compare: textureCompareProj requires sampler2DShadow vec3/vec4"
-        in code
-    )
-    assert f"= {call}" not in code
+    # The Slang emitter refuses the call; it is never emitted verbatim.
+    with pytest.raises(
+        SlangLoweringRefused,
+        match="Slang shadow compare: textureCompareProj requires sampler2DShadow vec3/vec4",
+    ):
+        _translate(tmp_path, source, "slang")
