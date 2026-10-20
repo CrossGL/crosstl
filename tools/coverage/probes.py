@@ -14,6 +14,7 @@ from . import constructs
 from .crossgl import DIALECT as CROSSGL
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .model import Feature, Signature, Type
+from .objects import Receiver
 
 __all__ = ["DIALECTS", "NoSpelling", "Probe", "ProbeError", "build", "spell"]
 _BUFFERS = {"float": "fin", "int": "iin", "uint": "uin"}
@@ -56,6 +57,9 @@ class HLSL(Dialect):
 
     def buffer(self, kind: str, name: str, binding: int) -> str:
         return f"RWStructuredBuffer<{kind}> {name} : register(u{binding});"
+
+    def resource(self, spelling: str, name: str, register: str) -> str:
+        return f"{spelling} {name} : register({register});"
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = list(parts.get("prelude", ()))
@@ -465,10 +469,11 @@ def _storage(scalar: str) -> str:
 
 
 class _Builder:
-    def __init__(self, dialect: Dialect):
+    def __init__(self, dialect: Dialect, receiver: Receiver | None = None):
         self.dialect = dialect
+        self.receiver = receiver
         self.offsets: dict[str, int] = {}
-        self.lines: list[str] = []
+        self.lines: list[str] = list(receiver.locals) if receiver else []
 
     def element(self, scalar: str) -> str:
         storage = _storage(scalar)
@@ -494,11 +499,17 @@ class _Builder:
 
     def _arguments(self, signature: Signature) -> tuple[list[str], Type | None]:
         dialect, arguments, output = self.dialect, [], None
+        receiver = self.receiver
         for kind in (signature.result, *(p.type for p in signature.params)):
-            dialect.type(kind)  # raises ProbeError for what the language cannot spell
+            if not (receiver and receiver.takes(kind)):
+                dialect.type(
+                    kind
+                )  # raises ProbeError for what the language cannot spell
         for index, param in enumerate(signature.params):
             local = f"a{index}"
-            if param.direction == "inout":
+            if receiver and receiver.takes(param.type):
+                arguments.append(receiver.argument(param.type))
+            elif param.direction == "inout":
                 if output is not None:
                     raise ProbeError("more than one inout parameter")
                 arguments.append(dialect.inout_argument())
@@ -521,6 +532,8 @@ class _Builder:
         dialect = self.dialect
         arguments, output = self._arguments(signature)
         atomic = output is not None
+        if self.receiver:
+            name = self.receiver.call(name)
         call = dialect.call(name, arguments)
         result = signature.result
         if output is not None or result.opaque:
@@ -575,7 +588,11 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
             + (f": {feature.note}" if feature.note else "")
         )
     dialect = DIALECTS[language]
-    builder = _Builder(dialect)
+    # A method is called on an object of its type, which the feature's group names.
+    receiver = (
+        Receiver(feature.group, dialect) if feature.category == "method" else None
+    )
+    builder = _Builder(dialect, receiver)
     body, output = builder.body(name, feature.signature, baseline)
     buffers = [
         (dialect.type(Type(scalar)), _BUFFERS[scalar])
@@ -584,4 +601,6 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     ]
     atomic = any(p.direction == "inout" for p in feature.signature.params)
     buffers.append((dialect.buffer_element(output, atomic), "outp"))
-    return Probe(language, dialect.kernel(buffers, body), dialect.entry, dialect.suffix)
+    declarations = receiver.declarations if receiver else []
+    source = dialect.kernel(buffers, body, declarations=declarations)
+    return Probe(language, source, dialect.entry, dialect.suffix)
