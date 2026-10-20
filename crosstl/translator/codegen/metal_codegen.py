@@ -89,6 +89,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
 from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -362,6 +363,12 @@ from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_refusals import metal_refusals
 from .metal_stage_refusals import refuse_metal_stages
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
+from .metal_wave_extended import (
+    emit_metal_wave_extension_helpers,
+    metal_subgroup_lane_mask_expression,
+    metal_wave_extension_call,
+    metal_wave_extension_lane_requirements,
+)
 from .operator_spellings import map_c_family_operator
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -994,6 +1001,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.lowered_glsl_buffer_blocks = {}
         self.required_buffer_atomic_compare_helpers = set()
         self.required_metal_wave_ballot_helper = False
+        self.metal_wave_extension_helpers = {}
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
@@ -2298,6 +2306,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.suppress_image_load_component_suffix = False
         self.required_buffer_atomic_compare_helpers = set()
         self.required_metal_wave_ballot_helper = False
+        self.metal_wave_extension_helpers = {}
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
@@ -3158,6 +3167,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         code += self.generate_buffer_atomic_compare_helpers()
         code += self.generate_pointer_atomic_compare_helpers()
         code += self.generate_metal_wave_helpers()
+        code += emit_metal_wave_extension_helpers(self)
         code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_metal_inverse_helpers()
@@ -6297,6 +6307,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         compute_name = self.metal_compute_builtin_expression_name(name)
         if compute_name != name:
             return compute_name
+        lane_mask = metal_subgroup_lane_mask_expression(self, name)
+        if lane_mask is not None:
+            return lane_mask
         diagnostic = self.metal_glsl_subgroup_lane_builtin_diagnostic(name)
         if diagnostic is not None:
             return diagnostic
@@ -6429,6 +6442,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def used_wave_stage_builtin_operations(self, body):
         operations = set()
         for node in self.iter_ast_nodes(body):
+            operations.update(metal_wave_extension_lane_requirements(node))
             if isinstance(node, WaveOpNode):
                 operation = getattr(node, "operation", None)
             elif isinstance(node, FunctionCallNode):
@@ -12882,9 +12896,17 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         )
 
     def generate_metal_wave_op_expression(self, node):
-        return self.generate_metal_wave_operation(node.operation, node.arguments)
+        result = self.generate_metal_wave_operation(node.operation, node.arguments)
+        if result is None:
+            return self.metal_wave_diagnostic_expression(
+                node.operation, node.arguments, "is not recognized by the Metal backend"
+            )
+        return result
 
     def generate_metal_wave_operation(self, operation, arguments):
+        extension = metal_wave_extension_call(self, operation, arguments)
+        if extension is not None:
+            return extension
         expected_arity = self.METAL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_arity is None:
             return None
@@ -13172,6 +13194,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return f"as_type<{mapped_type}>({inner})"
 
     def metal_wave_result_type(self, operation, arguments):
+        if operation in WAVE_EXTENDED_OPERATIONS:
+            return wave_extended_result_type(
+                operation,
+                self.expression_result_type(arguments[0]) if arguments else None,
+            )
         if operation in self.METAL_WAVE_UINT_RESULT_INTRINSICS:
             return "uint"
         if operation in self.METAL_WAVE_BOOL_RESULT_INTRINSICS:

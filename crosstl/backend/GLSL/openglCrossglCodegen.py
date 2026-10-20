@@ -35,6 +35,7 @@ from .OpenglAst import (
     VectorConstructorNode,
     WhileNode,
 )
+from .subgroup_import import import_subgroup_call
 
 try:
     from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
@@ -3698,6 +3699,10 @@ class GLSLToCrossGLConverter:
         ray_query_call = self.generate_ray_query_method_call(name, node.args)
         if ray_query_call is not None:
             return ray_query_call
+
+        subgroup_call = import_subgroup_call(self, name, node.args)
+        if subgroup_call is not None:
+            return subgroup_call
 
         if name in self.ARB_LOD_CLAMP_FUNCTIONS:
             return self.texture_lod_clamp_call(name, node.args)

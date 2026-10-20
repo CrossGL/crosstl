@@ -80,6 +80,7 @@ from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespa
 from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
 from .validation import validate_shader_cbuffers
+from .wave_operations import GLSL_SUBGROUP_FUNCTIONS, WAVE_EXTENDED_OPERATIONS
 
 WAVE_INTRINSICS = {
     "WaveGetLaneCount",
@@ -122,6 +123,7 @@ WAVE_INTRINSICS = {
     "WaveMultiPrefixBitAnd",
     "WaveMultiPrefixBitOr",
     "WaveMultiPrefixBitXor",
+    *sorted(WAVE_EXTENDED_OPERATIONS),
 }
 
 COOPERATIVE_MATRIX_INTRINSICS = {
@@ -5093,6 +5095,9 @@ class Parser:
                 if isinstance(left, IdentifierNode):
                     if left.name in WAVE_INTRINSICS:
                         left = WaveOpNode(left.name, arguments)
+                    elif left.name in GLSL_SUBGROUP_FUNCTIONS:
+                        # CrossGL also accepts the GL_KHR_shader_subgroup spelling of a wave operation.
+                        left = WaveOpNode(GLSL_SUBGROUP_FUNCTIONS[left.name], arguments)
                     elif left.name in COOPERATIVE_MATRIX_INTRINSICS:
                         left = self.infer_cooperative_matrix_operation_or_preserve(
                             CooperativeMatrixOpNode(

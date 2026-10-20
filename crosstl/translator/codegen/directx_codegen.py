@@ -103,6 +103,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -197,6 +198,11 @@ from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
+from .hlsl_wave_extended import (
+    emit_hlsl_wave_extension_helpers,
+    hlsl_subgroup_lane_mask_expression,
+    hlsl_wave_extension_call,
+)
 from .image_access_contracts import (
     TEXTURE_COMPARE_INTRINSIC_NAMES,
     TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
@@ -2398,6 +2404,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         self.required_hlsl_half_selection_helpers = set()
         self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
+        self.hlsl_wave_extension_helpers = {}
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
         self.required_hlsl_software_subgroup_helpers = set()
@@ -3759,6 +3766,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         self.required_hlsl_half_selection_helpers = set()
         self.hlsl_half_selection_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
+        self.hlsl_wave_extension_helpers = {}
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
         self.required_hlsl_software_subgroup_helpers = set()
@@ -5061,6 +5069,7 @@ class HLSLCodeGen(LoweringRefusalMixin):
         code += self.hlsl_matrix_orientation.helper_code()
         code += self.generate_hlsl_fragment_shading_rate_helper()
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
+        code += emit_hlsl_wave_extension_helpers(self)
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_wide_integer_compound_helpers()
         code += self.generate_hlsl_inverse_hyperbolic_helpers()
@@ -26404,6 +26413,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             standard_constant = self.hlsl_standard_math_constant_expression(name)
             if standard_constant is not None:
                 return standard_constant
+            lane_mask = hlsl_subgroup_lane_mask_expression(self, name)
+            if lane_mask is not None:
+                return lane_mask
             self.hlsl_resource_pointer_array_bare_expression_error(expr)
             self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return self.hlsl_identifier_name(name)
@@ -26421,6 +26433,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             standard_constant = self.hlsl_standard_math_constant_expression(expr.name)
             if standard_constant is not None:
                 return standard_constant
+            lane_mask = hlsl_subgroup_lane_mask_expression(self, expr.name)
+            if lane_mask is not None:
+                return lane_mask
             self.hlsl_resource_pointer_array_bare_expression_error(expr)
             self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return self.hlsl_identifier_name(expr.name)
@@ -29462,6 +29477,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
 
     def generate_hlsl_wave_intrinsic_call(self, operation, args):
+        extension = hlsl_wave_extension_call(self, operation, args)
+        if extension is not None:
+            return extension
         expected_args = self.HLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_args is None:
             raise ValueError(f"DirectX wave intrinsic '{operation}' is not recognized")
@@ -29579,6 +29597,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return expression
 
     def hlsl_wave_intrinsic_return_type(self, operation, args):
+        if operation in WAVE_EXTENDED_OPERATIONS:
+            return wave_extended_result_type(
+                operation, self.expression_result_type(args[0]) if args else None
+            )
         if operation in self.HLSL_WAVE_UINT_RESULT_INTRINSICS:
             return "uint"
         if operation == "WaveActiveAllEqual" and args:
