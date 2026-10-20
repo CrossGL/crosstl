@@ -192,7 +192,9 @@ def _lines(text: str, spelled: dict[str, str]) -> list[str]:
     return _Text(text).substitute(spelled).splitlines() if text else []
 
 
-_PROGRAM_SUFFIX = {"glsl": {"vertex": ".vert", "fragment": ".frag"}}
+_PROGRAM_SUFFIX = {
+    "glsl": {"vertex": ".vert", "fragment": ".frag", "geometry": ".geom"}
+}
 
 
 def build(feature: Feature, language: str, dialect):

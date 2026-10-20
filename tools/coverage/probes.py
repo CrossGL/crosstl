@@ -1,5 +1,5 @@
-"""Minimal probe programs: one call of one feature inside a compute kernel, or a fragment or ray-tracing shader for a
-feature only that stage has.
+"""Minimal probe programs: one call of one feature inside a compute kernel, or a fragment, geometry or ray-tracing
+shader for a feature only that stage has.
 
 Arguments are read from input buffers, so no call folds to a constant, and the result is written to an output
 buffer, so no call is dead code. Output probes are CrossGL (:mod:`.crossgl`); input probes are written in the source
@@ -199,7 +199,7 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         language == "crossgl" and feature.counterpart
     ):
         raise ProbeError(feature.note or "the feature list gives no signature")
-    if feature.stage not in ("compute", "fragment", *RAYTRACING_STAGES):
+    if feature.stage not in ("compute", "fragment", "geometry", *RAYTRACING_STAGES):
         raise ProbeError(f"no {feature.stage}-stage probe yet")
     name = (
         feature.crossgl if language == "crossgl" else feature.spelling or feature.name
@@ -236,6 +236,11 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         )
         return Probe(
             language, source, dialect.entry, dialect.fragment_suffix or dialect.suffix
+        )
+    if feature.stage == "geometry":
+        source = dialect.geometry(buffers, body, declarations=declarations)
+        return Probe(
+            language, source, dialect.entry, dialect.geometry_suffix or dialect.suffix
         )
     if feature.stage in RAYTRACING_STAGES:
         source = dialect.raytracing(

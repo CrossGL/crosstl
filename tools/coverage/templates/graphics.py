@@ -57,6 +57,11 @@ GLSL = {
         program="#version 460\nlayout(location = 0) in vec2 uv;\nlayout(location = 0) out vec4 color;\n"
         "void main() {\n    color = vec4(uv, 0.0, 1.0);\n}\n"
     ),
+    "geometry": Template(
+        program="#version 460\nlayout(points) in;\nlayout(points, max_vertices = 1) out;\n"
+        "layout(location = 0) in vec4 position[];\nvoid main() {\n    gl_Position = position[0] * 2.0;\n"
+        "    EmitVertex();\n    EndPrimitive();\n}\n"
+    ),
     "discard": Template(
         program="#version 460\nlayout(location = 0) in vec2 uv;\nlayout(location = 0) out vec4 color;\n"
         "void main() {\n    if (uv.x < 0.5) {\n        discard;\n    }\n    color = vec4(uv, 0.0, 1.0);\n}\n"
@@ -119,6 +124,13 @@ HLSL = {
     ),
     "fragment": Template(
         program="float4 main(float2 uv : TEXCOORD0) : SV_Target {\n    return float4(uv, 0.0, 1.0);\n}\n",
+        entry="main",
+    ),
+    "geometry": Template(
+        program="struct GeometryOut {\n    float4 position : SV_Position;\n};\n\n[maxvertexcount(1)]\n"
+        "void main(point float4 position[1] : POSITION, inout PointStream<GeometryOut> stream) {\n"
+        "    GeometryOut output;\n    output.position = position[0] * 2.0;\n    stream.Append(output);\n"
+        "    stream.RestartStrip();\n}\n",
         entry="main",
     ),
     "discard": Template(
@@ -363,5 +375,12 @@ SLANG = {
     "num-workgroups": Template("outp[i] = float(WorkgroupCount().x);"),
     "vertex": _slang(HLSL["vertex"], "vertex"),
     "fragment": _slang(HLSL["fragment"], "fragment"),
+    # The stage attribute goes on the entry point, after the output struct.
+    "geometry": replace(
+        HLSL["geometry"],
+        program=HLSL["geometry"].program.replace(
+            "[maxvertexcount", '[shader("geometry")]\n[maxvertexcount'
+        ),
+    ),
     "discard": _slang(HLSL["discard"], "fragment"),
 }

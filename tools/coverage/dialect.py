@@ -24,8 +24,9 @@ class Dialect:
     language = ""
     suffix = ""
     entry = "main"
-    # The file suffix of a fragment probe, where the language's tools tell the stage from it.
+    # The file suffix of a fragment or geometry probe, where the language's tools tell the stage from it.
     fragment_suffix = ""
+    geometry_suffix = ""
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
@@ -168,6 +169,11 @@ class Dialect:
         ``parts`` may add ``inputs``, the shader inputs as ``(type spelling, name)``, for a function that takes one.
         """
         raise ProbeError(f"{self.language} has no fragment stage")
+
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A geometry shader that takes and emits points and runs ``body`` with ``i`` set to 0, for a feature only
+        that stage has; the buffers and ``parts`` are :meth:`kernel`'s."""
+        raise ProbeError(f"no geometry-stage probe for {self.language} yet")
 
     def raytracing(
         self, stage: str, buffers: list[Buffer], body: list[str], **parts

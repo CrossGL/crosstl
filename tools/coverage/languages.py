@@ -13,6 +13,7 @@ class GLSL(Dialect):
     language = "glsl"
     suffix = ".comp"
     fragment_suffix = ".frag"
+    geometry_suffix = ".geom"
 
     def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
         lines = [
@@ -55,6 +56,19 @@ class GLSL(Dialect):
         ]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["    color = vec4(0.0);", "}"]) + "\n"
+
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            "#version 460",
+            *parts.get("prelude", ()),
+            "layout(points) in;",
+            "layout(points, max_vertices = 1) out;",
+            *self._globals(buffers, parts),
+            "void main() {",
+            "    uint i = 0u;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["}"]) + "\n"
 
 
 class HLSL(Dialect):

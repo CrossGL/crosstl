@@ -174,6 +174,38 @@ def test_raytracing_probes_are_valid(language):
             assert verdict.accepted, verdict.log
 
 
+EMIT_STREAM_VERTEX = feature(
+    "EmitStreamVertex", VOID, Param(Type("int"), "const"), stage="geometry"
+)
+
+
+def test_geometry_features_get_a_point_geometry_shader():
+    glsl = probes.build(EMIT_STREAM_VERTEX, "glsl")
+    assert glsl.suffix == ".geom"
+    assert "layout(points) in;\nlayout(points, max_vertices = 1) out;" in glsl.source
+    assert "    EmitStreamVertex(0);" in glsl.source
+    assert "local_size_x" not in glsl.source
+    crossgl = probes.build(EMIT_STREAM_VERTEX, "crossgl").source
+    assert "    geometry {\n        layout(points) in;" in crossgl
+    assert "            EmitStreamVertex(0);" in crossgl
+    with pytest.raises(probes.ProbeError, match="no geometry-stage probe for hlsl"):
+        probes.build(EMIT_STREAM_VERTEX, "hlsl")
+
+
+def test_geometry_probes_are_valid():
+    if not validators.available("glsl"):
+        pytest.skip("no glsl validator")
+    for name, params in (
+        ("EmitVertex", ()),
+        ("EmitStreamVertex", EMIT_STREAM_VERTEX.signature.params),
+    ):
+        spelled = feature(name, VOID, *params, stage="geometry")
+        for baseline in (False, True):
+            probe = probes.build(spelled, "glsl", baseline=baseline)
+            verdict = validators.validate("glsl", probe.source, "geometry", probe.entry)
+            assert verdict.accepted, verdict.log
+
+
 def test_an_interpolant_is_read_straight_from_a_shader_input():
     vec2 = Type("float", (2,))
     centroid = feature("interpolateAtCentroid", vec2, vec2, stage="fragment")

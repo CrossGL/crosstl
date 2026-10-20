@@ -389,6 +389,20 @@ class CrossGL(Dialect):
         lines += ["        }", "    }", "}"]
         return "\n".join(lines) + "\n"
 
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in parts.get("prelude", ())]
+        lines += ["    geometry {", *(f"        {line}" for line in _POINTS_IN_AND_OUT)]
+        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += ["        void main() {", "            uint i = 0u;"]
+        lines += [f"            {line}" for line in body]
+        lines += ["        }", "    }", "}"]
+        return "\n".join(lines) + "\n"
+
+
+# A geometry stage's input and output primitives, as the CrossGL importers write them.
+_POINTS_IN_AND_OUT = ("layout(points) in;", "layout(points, max_vertices = 1) out;")
 
 DIALECT = CrossGL()
 
@@ -447,6 +461,12 @@ CONSTRUCTS: dict[str, Template] = {
         "        VertexOutput main(VertexInput input) {\n            VertexOutput output;\n"
         "            output.position = input.position * 2.0;\n            return output;\n        }\n"
         "    }\n}\n"
+    ),
+    "geometry": Template(
+        program="shader Probe {\n    in vec4 inPosition[1] @location(0);\n    geometry {\n"
+        + "".join(f"        {line}\n" for line in _POINTS_IN_AND_OUT)
+        + "        void main() {\n            gl_Position = inPosition[0] * 2.0;\n"
+        "            EmitVertex();\n            EndPrimitive();\n        }\n    }\n}\n"
     ),
     "fragment": Template(program=_FRAGMENT.replace("{body}", "")),
     "discard": Template(

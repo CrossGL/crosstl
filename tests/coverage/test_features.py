@@ -137,6 +137,14 @@ int imageAtomicAdd(IMAGE_PARAMS, int data)
 ----
 vec2 interpolateAtOffset(float interpolant, vec2 offset)
 ----
+
+== Geometry Shader Functions
+
+[source,glsl]
+----
+void EmitStreamVertex(int stream)
+void EmitVertex()
+----
 """
 
 
@@ -167,6 +175,9 @@ def test_glsl_marks_constant_offsets_arrays_and_implicit_lod():
     assert gather.params[2].type == Type.other("ivec2[4]")
     assert len(gather.params) == 3
     assert features["texture"].stage == "fragment"
+    stream = features["EmitStreamVertex"]
+    assert stream.stage == "geometry"
+    assert stream.signature.params == (Param(Type("int"), "const"),)
 
 
 GRAMMAR = """{"instructions": [
@@ -358,6 +369,7 @@ def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
             ("compute", "cs"),
             ("fragment", "ps"),
             ("vertex", "vs"),
+            ("geometry", "gs"),
             ("ray-generation", "lib"),
             ("intersection", "lib"),
             ("any-hit", "lib"),

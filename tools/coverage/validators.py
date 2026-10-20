@@ -47,7 +47,12 @@ SUFFIX = {
     "spirv": ".spvasm",
     "wgsl": ".wgsl",
 }
-GLSL_STAGES = {"compute": "comp", "fragment": "frag", "vertex": "vert"}
+GLSL_STAGES = {
+    "compute": "comp",
+    "fragment": "frag",
+    "vertex": "vert",
+    "geometry": "geom",
+}
 # The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one.
 HLSL_SHADER_MODEL = (6, 9)
 # Ray-tracing shaders compile as a library, whose ``[shader(...)]`` attributes name the entry points.
@@ -57,6 +62,7 @@ HLSL_PROFILES = {
         "compute": "cs",
         "fragment": "ps",
         "vertex": "vs",
+        "geometry": "gs",
         **dict.fromkeys(RAYTRACING_STAGES, "lib"),
     }.items()
 }
@@ -174,7 +180,7 @@ def _run(arguments: list[str], cwd: str) -> Verdict:
 
 
 # Entry-point names HLSL writers conventionally give each stage, tried when a shader has no ``main``.
-HLSL_STAGE_ENTRIES = {"vertex": "VSMain", "fragment": "PSMain"}
+HLSL_STAGE_ENTRIES = {"vertex": "VSMain", "fragment": "PSMain", "geometry": "GSMain"}
 
 
 def hlsl_entry(source: str, stage: str) -> str:

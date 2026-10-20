@@ -77,6 +77,9 @@ def _param(text: str) -> tuple[Type, str]:
     if words[-1] == "offset" and kind.scalar == "int":
         # A texel offset must be a constant expression (GLSL 4.60, section 8.9.2).
         direction = "const"
+    if words[-1] == "stream":
+        # So must a vertex stream (GLSL 4.60, section 8.16).
+        direction = "const"
     return kind, direction
 
 

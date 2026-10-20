@@ -108,7 +108,7 @@ def test_every_curated_construct_has_a_crossgl_template():
 
 
 def test_a_construct_without_a_template_is_untested_not_absent():
-    feature = _feature("glsl", "geometry")
+    feature = _feature("glsl", "tessellation-control")
     with pytest.raises(probes.ProbeError, match="no glsl probe template"):
         probes.build(feature, "glsl")
 
@@ -123,6 +123,7 @@ def test_kernel_templates_fill_the_language_spelling_of_types():
 def test_stage_programs_take_the_stage_suffix():
     probe = probes.build(_feature("glsl", "fragment"), "glsl")
     assert probe.suffix == ".frag"
+    assert probes.build(_feature("glsl", "geometry"), "glsl").suffix == ".geom"
     assert probes.build(_feature("glsl", "discard"), "glsl").suffix == ".frag"
 
 
