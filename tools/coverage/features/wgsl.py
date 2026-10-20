@@ -12,7 +12,8 @@ import re
 
 from .. import crossgl
 from ..model import VOID, Feature, Param, Signature, Type
-from .common import pick, split
+from ..objects import UNIFORMS
+from .common import pick, prototype, split
 
 LEFT_OUT = {
     "subgroup matrix": "Chromium extension (chromium_experimental_subgroup_matrix)",
@@ -229,8 +230,13 @@ def parse(
     features = []
     for name, overloads in sorted(functions.items()):
         # Vector overloads first, as the GLSL list makes its generic types vectors.
-        chosen = pick(sorted((o[3] for o in overloads), key=_scalar_only))
+        chosen = pick(
+            sorted((o[3] for o in overloads), key=_scalar_only), UNIFORMS["wgsl"]
+        )
         group, stage, template, _ = next(o for o in overloads if o[3] is chosen)
+        spelling, counterpart = crossgl.spelling("wgsl", name, glsl_names), None
+        if name in crossgl.COUNTERPARTS["wgsl"]:
+            spelling, counterpart = prototype(crossgl.COUNTERPARTS["wgsl"][name])
         features.append(
             Feature(
                 "wgsl",
@@ -238,9 +244,10 @@ def parse(
                 name,
                 chosen,
                 group=group,
-                crossgl=crossgl.spelling("wgsl", name, glsl_names),
+                crossgl=spelling,
                 stage=stage,
                 spelling=f"{name}<{template}>" if template else "",
+                counterpart=counterpart,
             )
         )
     return features

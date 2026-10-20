@@ -8,7 +8,7 @@ anywhere else.
 
 from __future__ import annotations
 
-from .dialect import Buffer, Dialect
+from .dialect import WIDE_INTEGERS, Buffer, Dialect, ProbeError
 from .templates import C_FAMILY, Template
 
 # Built-in functions CrossGL spells as GLSL does rather than as the backend does. A rename applies only when the GLSL
@@ -192,6 +192,31 @@ RENAMES["hip"] = RENAMES["cuda"]
 RENAMES["slang"] = RENAMES["hlsl"]
 
 
+# Functions CrossGL writes with other arguments than the backend, as GLSL prototypes. WGSL's texture functions take a
+# texture and a sampler, where CrossGL, like GLSL, takes one combined sampler; ``const`` marks an argument the probe
+# passes as the constant 0, for a WGSL function that always reads level 0.
+COUNTERPARTS = {
+    "wgsl": {
+        "textureDimensions": "ivec2 textureSize(sampler2D, const int)",
+        "textureGather": "vec4 textureGather(sampler2D, vec2)",
+        "textureGatherCompare": "vec4 textureGather(sampler2DShadow, vec2, float)",
+        "textureLoad": "vec4 texelFetch(sampler2D, ivec2, int)",
+        "textureNumLayers": "ivec3 textureSize(sampler2DArray, const int)",
+        "textureNumLevels": "int textureQueryLevels(sampler2D)",
+        "textureNumSamples": "int textureSamples(sampler2DMS)",
+        "textureSample": "vec4 texture(sampler2D, vec2)",
+        "textureSampleBias": "vec4 texture(sampler2D, vec2, float)",
+        "textureSampleCompare": "float texture(sampler2DShadow, vec3)",
+        "textureSampleCompareLevel": (
+            "float textureLod(sampler2DShadow, vec3, const float)"
+        ),
+        "textureSampleGrad": "vec4 textureGrad(sampler2D, vec2, vec2, vec2)",
+        "textureSampleLevel": "vec4 textureLod(sampler2D, vec2, float)",
+        "textureStore": "void imageStore(image2D, ivec2, vec4)",
+    },
+}
+
+
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:
     """The CrossGL name of ``language``'s built-in ``name``."""
     renamed = RENAMES.get(language, {}).get(name, name)
@@ -201,11 +226,25 @@ def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) ->
 class CrossGL(Dialect):
     language = "crossgl"
     suffix = ".cgl"
+    wide_integers = True
+
+    def scalar(self, scalar: str) -> str:
+        return {"int64": "int64_t", "uint64": "uint64_t"}.get(scalar, scalar)
+
+    def vector(self, scalar: str, size: int) -> str:
+        if scalar in WIDE_INTEGERS:
+            raise ProbeError("no 64-bit integer vector probe for CrossGL yet")
+        return super().vector(scalar, size)
 
     # CrossGL declares HLSL's resource object types and calls their methods under HLSL's names; the backend assigns
     # the registers.
     def resource(self, spelling: str, name: str, register: str) -> str:
         return f"{spelling} {name};"
+
+    # GLSL's samplers and images keep their GLSL spelling; the backend assigns the bindings.
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        layout = f"layout({image_format}) " if image_format else ""
+        return f"{layout}uniform {spelling} {name};"
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = ["shader Probe {"]
@@ -222,6 +261,39 @@ class CrossGL(Dialect):
         ]
         lines += [f"            {line}" for line in body]
         lines += ["        }", "    }", "}"]
+        return "\n".join(lines) + "\n"
+
+    def stage_input(self, name: str) -> str:
+        return f"input.{name}"
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in parts.get("prelude", ())]
+        lines += [
+            "    struct FragmentInput {",
+            "        vec2 uv;",
+            *(f"        {kind} {name};" for kind, name in parts.get("inputs", ())),
+            "    }",
+            "    struct FragmentOutput {",
+            "        vec4 color;",
+            "    }",
+            "    fragment {",
+        ]
+        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += [
+            "        FragmentOutput main(FragmentInput input) {",
+            "            FragmentOutput output;",
+            "            uint i = 0u;",
+        ]
+        lines += [f"            {line}" for line in body]
+        lines += [
+            "            output.color = vec4(input.uv, 0.0, 1.0);",
+            "            return output;",
+            "        }",
+            "    }",
+            "}",
+        ]
         return "\n".join(lines) + "\n"
 
 

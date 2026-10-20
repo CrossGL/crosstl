@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 
 from ..model import Feature, Signature, Type
+from ..objects import UNIFORMS
 from .common import glsl_type, pick, signature, slug
 
 LEFT_OUT = {
@@ -21,6 +22,10 @@ STAGES = {
     "geometry-shader-functions": "geometry",
     "fragment-processing-functions": "fragment",
 }
+# Texture functions that compute an implicit level of detail, from derivatives only a fragment shader has.
+IMPLICIT_LOD = frozenset(
+    {"texture", "textureOffset", "textureProj", "textureProjOffset", "textureQueryLod"}
+)
 # The generic type names of section 8, made concrete for a probe.
 GENERIC = {
     "genFType": "vec3",
@@ -33,14 +38,20 @@ GENERIC = {
     "uvec": "uvec3",
     "bvec": "bvec3",
     "mat": "mat3",
+    "gvec4": "vec4",
 }
+# ``gsampler2D`` and ``gimage2D`` stand for the float, int and uint forms; a probe uses the float one.
+_GENERIC_OPAQUE = re.compile(r"g((?:sampler|image|subpassInput)\w*)")
+# Section 8.12 writes image functions with this placeholder for an image and its coordinate.
+_IMAGE_PARAMS = "IMAGE_PARAMS"
 _PRECISION = re.compile(r"\b(?:highp|mediump|lowp)\s+")
-_OPTIONAL = re.compile(r"\[[^\[\]]*\]")
+# Optional trailing arguments, written ``[, float bias]``; ``offsets[4]`` is an array parameter instead.
+_OPTIONAL = re.compile(r"\[\s*,[^\[\]]*\]")
 _PROTOTYPE = re.compile(r"\b([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*\(([^(){};]*)\)")
 
 
 def _type(spelling: str) -> Type:
-    return glsl_type(GENERIC.get(spelling, spelling))
+    return glsl_type(GENERIC.get(spelling, _GENERIC_OPAQUE.sub(r"\1", spelling)))
 
 
 def _param(text: str) -> tuple[Type, str]:
@@ -59,7 +70,14 @@ def _param(text: str) -> tuple[Type, str]:
         words.pop(0)
     if not words:
         raise ValueError(f"empty parameter {text!r}")
-    return _type(words[0]), direction
+    if "[" in words[-1]:
+        # An array parameter, such as textureGatherOffsets' ``ivec2 offsets[4]``.
+        return Type.other(words[0] + words[-1][words[-1].index("[") :]), direction
+    kind = _type(words[0])
+    if words[-1] == "offset" and kind.scalar == "int":
+        # A texel offset must be a constant expression (GLSL 4.60, section 8.9.2).
+        direction = "const"
+    return kind, direction
 
 
 def parse_prototype(text: str) -> tuple[str, Signature] | None:
@@ -69,6 +87,9 @@ def parse_prototype(text: str) -> tuple[str, Signature] | None:
     result, name, params = match.groups()
     if result in ("return", "if", "else"):
         return None
+    # The 2D form of the placeholder; an atomic's image holds the scalar type the function returns.
+    image = {"int": "iimage2D", "uint": "uimage2D"}.get(result, "image2D")
+    params = params.replace(_IMAGE_PARAMS, f"{image} image, ivec2 P")
     parts = [p.strip() for p in params.split(",") if p.strip() and p.strip() != "void"]
     return name, signature(_type(result), [_param(p) for p in parts])
 
@@ -129,16 +150,20 @@ def overloads(text: str) -> dict[str, tuple[str, list[Signature]]]:
     return found
 
 
+def _stage(name: str, group: str) -> str:
+    return "fragment" if name in IMPLICIT_LOD else STAGES.get(group, "compute")
+
+
 def parse(text: str) -> list[Feature]:
     return [
         Feature(
             "glsl",
             "function",
             name,
-            pick(signatures),
+            pick(signatures, UNIFORMS["glsl"]),
             group=group,
             crossgl=name,
-            stage=STAGES.get(group, "compute"),
+            stage=_stage(name, group),
         )
         for name, (group, signatures) in sorted(overloads(text).items())
     ]

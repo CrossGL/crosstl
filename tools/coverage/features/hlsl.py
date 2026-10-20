@@ -15,6 +15,7 @@ import re
 from .. import crossgl
 from ..model import VOID, Feature, Param, Signature, Type
 from ..objects import OBJECTS, SAMPLERS, Object
+from ..validators import HLSL_SHADER_MODEL as SHADER_MODEL
 from .common import pick
 
 _VULKAN = "DXC's SPIR-V extensions, not Direct3D HLSL"
@@ -33,8 +34,6 @@ _FUNCTIONS = {"Intrinsics": "", "DxIntrinsics": "dx::"}
 _DERIVATIVES = frozenset(
     "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped".split()
 )
-# Shader model the probes are compiled for; intrinsics that need a newer one are listed but not probed.
-SHADER_MODEL = (6, 6)
 SCALAR = {
     "bool": "bool",
     "int": "int",
@@ -67,7 +66,7 @@ STAGES = {
         "WorldRayOrigin WorldRayDirection ObjectRayOrigin ObjectRayDirection RayTMin RayTCurrent PrimitiveIndex "
         "InstanceID InstanceIndex GeometryIndex HitKind RayFlags ObjectToWorld ObjectToWorld3x4 ObjectToWorld4x3 "
         "WorldToObject WorldToObject3x4 WorldToObject4x3 ClusterID GetRemainingRecursionLevels "
-        "TriangleObjectPositions"
+        "TriangleObjectPositions dx::MaybeReorderThread"
     ),
     "mesh": "SetMeshOutputCounts",
     "amplification": "DispatchMesh",
@@ -78,6 +77,24 @@ STAGES = {
     ),
 }
 _STAGE_OF = {name: stage for stage, names in STAGES.items() for name in names.split()}
+# Parameters that must be immediate values although the table declares them ``in``: GetAttributeAtVertex
+# reads one of the primitive's three vertices, so its index is a literal 0, 1 or 2 (HLSL SM 6.1 barycentrics),
+# and Barrier's memory-type and semantic flags must be constants (HLSL SM 6.8 barriers).
+_IMMEDIATE = {"GetAttributeAtVertex": (1,), "Barrier": (0, 1)}
+
+
+def _immediate(name: str, signature: Signature | None) -> Signature | None:
+    """``signature`` with the parameters ``_IMMEDIATE`` names for ``name`` marked ``const``."""
+    positions = _IMMEDIATE.get(name, ())
+    if signature is None or not positions:
+        return signature
+    params = tuple(
+        Param(p.type, "const") if index in positions else p
+        for index, p in enumerate(signature.params)
+    )
+    return Signature(signature.result, params)
+
+
 _DECLARATION = re.compile(
     r"(?P<result>.+?)\s*\[\[(?P<attributes>[^\]]*)\]\]\s*(?P<name>\w+)\s*\((?P<params>.*)\)\s*(?::\s*\w+)?\s*;"
 )
@@ -296,7 +313,11 @@ def parse(
                 "hlsl",
                 "function",
                 name,
-                None if note else pick(sorted(signatures, key=_preference)),
+                (
+                    None
+                    if note
+                    else _immediate(name, pick(sorted(signatures, key=_preference)))
+                ),
                 group="intrinsics",
                 crossgl=crossgl.spelling("hlsl", name, glsl_names),
                 stage=_STAGE_OF.get(name, "compute"),

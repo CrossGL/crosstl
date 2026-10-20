@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 
-from ..model import Param, Signature, Type
+from ..model import VOID, Param, Signature, Type
 
 # Vector and matrix spellings shared by GLSL and CrossGL.
 _VECTOR = re.compile(r"(b|i|u|d)?vec([2-4])")
@@ -34,12 +35,35 @@ def glsl_type(spelling: str) -> Type:
     return Type.other(spelling)
 
 
-def pick(overloads: list[Signature]) -> Signature:
-    """The overload a probe uses: the first one built from value types only, else the first one."""
+def pick(
+    overloads: list[Signature], opaque: Collection[str] = frozenset()
+) -> Signature:
+    """The overload a probe uses: the first one built from value types only, else the first one whose other types
+    are all in ``opaque``, the samplers, textures and images a probe can declare, else the first one.
+    """
     for signature in overloads:
         if not signature.unsupported:
             return signature
+    for signature in overloads:
+        kinds = (signature.result, *(p.type for p in signature.params))
+        if all(not k.opaque or k.opaque in opaque or k == VOID for k in kinds):
+            return signature
     return overloads[0]
+
+
+def prototype(text: str) -> tuple[str, Signature]:
+    """Parse a prototype such as ``vec4 textureLod(sampler2D, vec2, const float)``: GLSL type spellings without
+    parameter names, where ``const`` marks a parameter that must be a constant expression.
+    """
+    match = re.fullmatch(r"(\w+)\s+(\w+)\s*\((.*)\)", text.strip())
+    if not match:
+        raise ValueError(f"not a prototype: {text!r}")
+    result, name, params = match.groups()
+    parts = []
+    for param in filter(None, (p.strip() for p in params.split(","))):
+        words = param.split()
+        parts.append((glsl_type(words[-1]), "const" if words[0] == "const" else "in"))
+    return name, signature(glsl_type(result), parts)
 
 
 def signature(result: Type, params: list[tuple[Type, str]]) -> Signature:

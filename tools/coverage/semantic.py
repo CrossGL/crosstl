@@ -135,10 +135,13 @@ def lower(feature: Feature) -> tuple[str, str]:
         baseline = probes.build(feature, feature.language, baseline=True)
     except probes.ProbeError as error:
         return "", str(error)
-    lowered, log = validators.lower(feature.language, probe.source, probe.entry)
+    stage = feature.stage
+    lowered, log = validators.lower(feature.language, probe.source, probe.entry, stage)
     if not lowered:
         return "", f"does not lower to SPIR-V: {_first_error(log)}"
-    reference, log = validators.lower(feature.language, baseline.source, baseline.entry)
+    reference, log = validators.lower(
+        feature.language, baseline.source, baseline.entry, stage
+    )
     if not reference:
         return "", f"the baseline does not lower to SPIR-V: {_first_error(log)}"
     semantic = identify(instructions(lowered), instructions(reference))
