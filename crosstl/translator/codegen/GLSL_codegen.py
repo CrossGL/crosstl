@@ -16252,7 +16252,17 @@ class GLSLCodeGen(
                 for child in value.child_nodes():
                     visit(child, active_aliases, active_intervals)
 
-        visit_sequence(getattr(function, "body", []), aliases, intervals)
+        # The body is analyzed outside its own generation scope, so its parameters
+        # must shadow same-named caller locals when helper calls are summarized.
+        parameter_types = {
+            parameter.name: getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            for parameter in parameters
+            if getattr(parameter, "name", None)
+        }
+        with self.glsl_lexical_source_type_scope(parameter_types):
+            visit_sequence(getattr(function, "body", []), aliases, intervals)
         return access_intervals
 
     def validate_glsl_workgroup_pointer_specialization(
@@ -16443,10 +16453,11 @@ class GLSLCodeGen(
             return None, None
 
         params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
-        workgroup_parameter_intervals = self.glsl_workgroup_call_parameter_intervals(
-            callee,
-            args,
-        )
+        # Argument intervals depend on the caller's lexical types, as the binding does.
+        with self.glsl_lexical_source_type_scope(lexical_source_types):
+            workgroup_parameter_intervals = (
+                self.glsl_workgroup_call_parameter_intervals(callee, args)
+            )
         access_requirements = self.function_image_access_requirements.get(func_name, {})
         bindings = {}
         key_parts = []
@@ -16949,10 +16960,11 @@ class GLSLCodeGen(
         if source_func is None:
             return None
 
-        proof_parameter_intervals = self.glsl_workgroup_call_parameter_intervals(
-            source_func,
-            args,
-        )
+        with self.glsl_lexical_source_type_scope(lexical_source_types):
+            proof_parameter_intervals = self.glsl_workgroup_call_parameter_intervals(
+                source_func,
+                args,
+            )
         copied_nodes = {}
         clone = deepcopy(source_func, copied_nodes)
         # Resource specialization changes bindings, not the proven control flow.
