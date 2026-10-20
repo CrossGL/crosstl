@@ -17,8 +17,11 @@ it is a workgroup-scope barrier whatever its memory scope. Otherwise a memory ba
 classes cover the instruction's; Acquire, Release and AcquireRelease all become the CrossGL fences' acquire-release
 ordering. A control barrier whose memory semantics reach beyond workgroup memory, or beyond workgroup scope,
 becomes ``fence; workgroupBarrier(); fence``, so that both the writes before the barrier and the reads after it are
-ordered. A barrier whose operands are not constants (specialization constants included), whose execution scope is
-not the workgroup, or whose memory scope is ``CrossDevice`` has no CrossGL equivalent and is refused.
+ordered; its middle is ``workgroupExecutionBarrier`` when the semantics leave workgroup memory out. Subgroup-scope
+barriers become the GL_KHR_shader_subgroup barriers (``subgroupBarrier``, ``subgroupMemoryBarrierShared`` and so on)
+or ``subgroupExecutionBarrier``. A barrier whose operands are not constants (specialization constants included),
+whose execution scope is neither the workgroup nor the subgroup, or whose memory scope is ``CrossDevice`` has no
+CrossGL equivalent and is refused.
 """
 
 from __future__ import annotations
@@ -117,13 +120,18 @@ def spirv_barrier_statements(opcode: str, operand_values, execution_models):
     if opcode == "OpMemoryBarrier":
         scope = _constant_value(operand_values[0], opcode, "Memory scope")
         semantics = _constant_value(operand_values[1], opcode, "Semantics")
-        fence = _memory_fence(scope, semantics & _STORAGE_BITS, opcode)
+        storage = semantics & _STORAGE_BITS
+        fence = (_subgroup_memory_fence(scope, storage) if storage else None) or (
+            _memory_fence(scope, storage, opcode)
+        )
         # A memory barrier without storage classes orders nothing (SPIR-V 1.6 section 3.25).
         return [_call(fence)] if fence is not None else []
 
     execution = _constant_value(operand_values[0], opcode, "Execution scope")
     scope = _constant_value(operand_values[1], opcode, "Memory scope")
     semantics = _constant_value(operand_values[2], opcode, "Semantics")
+    if execution == SUBGROUP:
+        return _subgroup_control_barrier(scope, semantics & _STORAGE_BITS, opcode)
     if execution != WORKGROUP:
         raise SpirvBarrierUnsupportedError(
             f"OpControlBarrier execution scope {_SCOPE_NAMES.get(execution, execution)}: CrossGL control "
@@ -139,4 +147,38 @@ def spirv_barrier_statements(opcode: str, operand_values, execution_models):
     if not storage & ~_WORKGROUP_BITS:
         return [_call("workgroupBarrier")]
     fence = _memory_fence(scope, storage, opcode)
-    return [_call(fence), _call("workgroupBarrier"), _call(fence)]
+    # workgroupBarrier orders workgroup memory as well; without it the execution barrier alone sits between the
+    # fences.
+    control = (
+        "workgroupBarrier" if storage & _WORKGROUP_BITS else "workgroupExecutionBarrier"
+    )
+    return [_call(fence), _call(control), _call(fence)]
+
+
+def _subgroup_control_barrier(scope: int, storage: int, opcode: str):
+    if not storage:
+        return [_call("subgroupExecutionBarrier")]
+    fence = _subgroup_memory_fence(scope, storage)
+    if fence is not None:
+        # subgroupBarrier orders buffer, image and workgroup memory for the subgroup (GL_KHR_shader_subgroup).
+        return [_call("subgroupBarrier")]
+    fence = _memory_fence(scope, storage, opcode)
+    return [_call(fence), _call("subgroupExecutionBarrier"), _call(fence)]
+
+
+def _subgroup_memory_fence(scope: int, storage: int):
+    """The GL_KHR_shader_subgroup fence for a subgroup-scope barrier over ``storage``, or ``None``."""
+    if scope not in {SUBGROUP, INVOCATION} or storage & ~(
+        _BUFFER_BITS | _WORKGROUP_BITS | IMAGE_MEMORY
+    ):
+        return None
+    classes = (
+        bool(storage & _BUFFER_BITS),
+        bool(storage & _WORKGROUP_BITS),
+        bool(storage & IMAGE_MEMORY),
+    )
+    return {
+        (True, False, False): "subgroupMemoryBarrierBuffer",
+        (False, True, False): "subgroupMemoryBarrierShared",
+        (False, False, True): "subgroupMemoryBarrierImage",
+    }.get(classes, "subgroupMemoryBarrier")

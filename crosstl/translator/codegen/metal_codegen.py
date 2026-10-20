@@ -99,6 +99,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .barrier_peephole import merge_adjacent_metal_barriers
 from .buffer_block_diagnostics import (
     BufferBlockUnsupportedError,
     record_unsupported_layout_failures,
@@ -1917,7 +1918,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         Raises :class:`MetalLoweringRefused` listing every construct that has no faithful Metal lowering.
         """
         lower_relational_builtins(ast)
-        return self.refusals.run(self.render_program, ast, target_stage)
+        return merge_adjacent_metal_barriers(
+            self.refusals.run(self.render_program, ast, target_stage)
+        )
 
     def refuse_lowering(self, reason, fallback=""):
         """Record a construct with no faithful Metal lowering and return ``fallback`` in its place.
@@ -12759,6 +12762,22 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "workgroupExecutionBarrier": "threadgroup_barrier(mem_flags::mem_none)",
             "subgroupExecutionBarrier": "simdgroup_barrier(mem_flags::mem_none)",
+            # The GL_KHR_shader_subgroup barriers order buffer, image and shared memory, or one of them, for the
+            # subgroup; Metal spells each as a SIMD-group barrier over the same memory, as it spells workgroup
+            # fences as threadgroup barriers.
+            "subgroupBarrier": (
+                "simdgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
+            "subgroupMemoryBarrier": (
+                "simdgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
+            "subgroupMemoryBarrierBuffer": "simdgroup_barrier(mem_flags::mem_device)",
+            "subgroupMemoryBarrierShared": (
+                "simdgroup_barrier(mem_flags::mem_threadgroup)"
+            ),
+            "subgroupMemoryBarrierImage": "simdgroup_barrier(mem_flags::mem_texture)",
             # groupMemoryBarrier and memoryBarrier order buffer, image and shared memory (GLSL 4.60 section
             # 8.16); deviceMemoryBarrier orders buffers and textures (HLSL DeviceMemoryBarrier).
             "groupMemoryBarrier": (

@@ -35,6 +35,7 @@ from ...translator.semantics.sampler_states import (
 )
 from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
+from .barrier_import import metal_barrier_statements
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -10315,8 +10316,11 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 lowered_callback = self.generate_callback_statement(
                     stmt, indent, is_main
                 )
+                lowered_barrier = self.generate_metal_barrier_statement(stmt, indent)
                 if lowered_callback is not None:
                     code += lowered_callback
+                elif lowered_barrier is not None:
+                    code += lowered_barrier
                 else:
                     code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, (MethodCallNode, CallNode)):
@@ -12736,24 +12740,40 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             return self.metal_atomic_thread_fence_call(args, source_location)
 
         if unscoped_name in {"threadgroup_barrier", "simdgroup_barrier"}:
-            flags = self.metal_mem_flag_names(args)
-            if flags and len(flags) > 1:
-                flags = flags - {"mem_none"}
-            if unscoped_name == "threadgroup_barrier" and flags == {"mem_none"}:
-                return "workgroupExecutionBarrier()"
-            if unscoped_name == "simdgroup_barrier" and flags == {"mem_none"}:
-                return "subgroupExecutionBarrier()"
-            if flags == {"mem_threadgroup"}:
-                return "workgroupBarrier()"
-            if flags == {"mem_device"}:
-                return "memoryBarrierBuffer()"
-            if flags == {"mem_texture"}:
-                return "memoryBarrierImage()"
-            if flags == {"mem_device", "mem_threadgroup", "mem_texture"}:
-                return "allMemoryBarrier()"
-            return None
+            if self.metal_user_function_overloads(name):
+                return None
+            lowered = metal_barrier_statements(
+                unscoped_name, self.metal_mem_flag_names(args)
+            )
+            if isinstance(lowered, str):
+                return self.refuse_import(lowered, "workgroupBarrier()")
+            if len(lowered) != 1:
+                return self.refuse_import(
+                    f"{unscoped_name} with device or texture memory flags becomes a sequence of CrossGL "
+                    "barriers, which needs a statement of its own",
+                    "workgroupBarrier()",
+                )
+            return f"{lowered[0]}()"
 
         return None
+
+    def generate_metal_barrier_statement(self, stmt, indent):
+        """A Metal barrier statement as its CrossGL barrier sequence, or ``None`` for other statements."""
+        name = str(stmt.name).lstrip(":")
+        unscoped_name = name.split("::")[-1]
+        if unscoped_name not in {"threadgroup_barrier", "simdgroup_barrier"}:
+            return None
+        if "::" in name and not name.startswith("metal::"):
+            return None
+        if self.metal_user_function_overloads(name):
+            return None
+        lowered = metal_barrier_statements(
+            unscoped_name, self.metal_mem_flag_names(stmt.args)
+        )
+        if isinstance(lowered, str) or len(lowered) == 1:
+            return None
+        separator = ";\n" + "    " * indent
+        return separator.join(f"{call}()" for call in lowered) + ";\n"
 
     def metal_uniform_value_expression(self, name, args, is_main):
         """Lower Metal's uniformity assertion while preserving its value."""

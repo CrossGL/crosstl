@@ -365,14 +365,19 @@ class HLSLToCrossGLConverter(
             "DeviceMemoryBarrier": "deviceMemoryBarrier",
             "AllMemoryBarrier": "allMemoryBarrier",
         }
+        # A barrier with group sync that orders device memory releases the writes before it and acquires them
+        # after it: a fence on each side of the execution barrier. DeviceMemoryBarrierWithGroupSync does not order
+        # groupshared memory, so its execution barrier is workgroupExecutionBarrier.
         self.function_statement_sequences = {
             "DeviceMemoryBarrierWithGroupSync": (
                 "deviceMemoryBarrier",
-                "workgroupBarrier",
+                "workgroupExecutionBarrier",
+                "deviceMemoryBarrier",
             ),
             "AllMemoryBarrierWithGroupSync": (
                 "allMemoryBarrier",
                 "workgroupBarrier",
+                "allMemoryBarrier",
             ),
         }
         self.interlocked_map = {

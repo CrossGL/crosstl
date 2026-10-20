@@ -4504,7 +4504,8 @@ def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal(tmp_p
     code = MetalCodeGen().generate(
         crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
     )
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    # Adjacent barriers fold into one barrier carrying the union of their flags.
+    assert code.count("threadgroup_barrier(") == 1
     assert (
         "threadgroup_barrier(mem_flags::mem_device | "
         "mem_flags::mem_threadgroup | mem_flags::mem_texture);"

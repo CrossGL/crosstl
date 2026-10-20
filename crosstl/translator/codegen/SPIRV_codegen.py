@@ -130,6 +130,7 @@ from .spirv_stage_distances import (
     load_entry_point_distance,
     store_entry_point_distance,
 )
+from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
 from .stage_io_semantic_locations import spirv_semantic_location
 from .texture_lod_clamp import (
@@ -10484,6 +10485,8 @@ class VulkanSPIRVCodeGen(
             "memoryBarrierImage",
             "memoryBarrierShared",
         }
+        if emit_spirv_subgroup_barrier(self, function_name, args):
+            return self.register_constant(0, self.register_primitive_type("int"))
         if function_name not in synchronization_functions:
             return None
 

@@ -2427,20 +2427,31 @@ def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     shader SynchronizationBuiltins {
         compute {
             void main() {
+                int k = 0;
                 barrier();
+                k = k + 1;
                 memoryBarrier();
+                k = k + 1;
                 workgroupBarrier();
+                k = k + 1;
                 groupMemoryBarrier();
+                k = k + 1;
                 memoryBarrierShared();
+                k = k + 1;
                 memoryBarrierBuffer();
+                k = k + 1;
                 deviceMemoryBarrier();
+                k = k + 1;
                 memoryBarrierImage();
+                k = k + 1;
                 allMemoryBarrier();
+                k = k + 1;
             }
         }
     }
     """
 
+    # The statements between the barriers keep the emitter from merging them.
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     # groupMemoryBarrier and memoryBarrier order buffer, image and shared memory; deviceMemoryBarrier orders
@@ -4398,7 +4409,15 @@ def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers():
     )
     assert "uint index = thread_index_in_threadgroup;" in generated_code
     assert "gl_LocalInvocationIndex" not in generated_code
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
+    # groupMemoryBarrier(); memoryBarrierShared(); is one barrier over the union of their memory.
+    assert (
+        generated_code.count(
+            "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup | "
+            "mem_flags::mem_texture);"
+        )
+        == 1
+    )
+    assert "threadgroup_barrier(mem_flags::mem_threadgroup);" not in generated_code
     assert "groupMemoryBarrier();" not in generated_code
     assert "memoryBarrierShared();" not in generated_code
     assert "writeScratch(scratch, index, float(index));" in generated_code
