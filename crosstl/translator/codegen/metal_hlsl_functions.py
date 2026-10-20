@@ -670,14 +670,25 @@ class MetalHlslFunctionMixin:
             return self.generate_expression(arg)
         if self.metal_reference_parameter_qualifier_for(func_name, index) is not None:
             return self.generate_expression(arg)
-        if self.is_metal_bfloat_storage_read(arg) and (
-            self.map_type(self.type_name_string(param_type)) == "bfloat"
-        ):
-            # A stored bfloat value already has the parameter type; only
-            # computed values (native math yields float or half) need the
-            # explicit construction that expected-type boundaries apply.
+        if (
+            self.is_metal_bfloat_storage_read(arg)
+            or self.is_metal_bfloat_user_call(arg)
+        ) and (self.map_type(self.type_name_string(param_type)) == "bfloat"):
+            # A stored bfloat value or the result of a user function declared
+            # to return bfloat already has the parameter type; only computed
+            # values (native math yields float or half) need the explicit
+            # construction that expected-type boundaries apply.
             return self.generate_expression(arg)
         return self.generate_expression_with_expected(arg, param_type)
+
+    def is_metal_bfloat_user_call(self, expr):
+        """Whether ``expr`` calls a user function whose result is bfloat."""
+        if not isinstance(expr, FunctionCallNode):
+            return False
+        if self.function_call_name(expr) not in self.user_function_names:
+            return False
+        result_type = self.expression_result_type(expr)
+        return result_type is not None and self.map_type(result_type) == "bfloat"
 
     def metal_reference_parameter_qualifier_for(self, func_name, index):
         overloads = self.function_overloads_by_name.get(func_name, [])

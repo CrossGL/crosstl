@@ -13,8 +13,10 @@ from ..ast import (
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
+    LiteralNode,
     MemberAccessNode,
     PointerAccessNode,
+    PrimitiveType,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
@@ -381,6 +383,13 @@ class MetalHlslResourceMixin:
         ):
             # buffer_load(buffer, index) is emitted as buffer[index].
             expr = ArrayAccessNode(expr.args[0], expr.args[1])
+        elif (
+            isinstance(expr, UnaryOpNode)
+            and expr.operator == "*"
+            and not getattr(expr, "is_postfix", False)
+        ):
+            # A dereference reads the first element: *pointer is pointer[0].
+            expr = ArrayAccessNode(expr.operand, LiteralNode(0, PrimitiveType("int")))
         if not isinstance(expr, self.METAL_STORAGE_READ_NODES):
             return False
         expr_type = self.expression_result_type(expr)
