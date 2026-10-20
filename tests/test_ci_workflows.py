@@ -28,6 +28,7 @@ GATING_WORKFLOWS = {
     "full-tests.yml": "Complete Test Suite result",
     "examples-test.yml": "Examples Test result",
     "coverage.yml": "Coverage result",
+    "lint.yml": "Lint result",
     "demo-project-testing.yml": "MLX validation result",
 }
 
