@@ -15,7 +15,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import conversion_cases, half_cases, pack_cases, warp_cases
+from . import conversion_cases, half_cases, integer_cases, pack_cases, warp_cases
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 EXT_LANG = {
@@ -1527,6 +1527,33 @@ CASES = [
         np.float32,
         pack_cases.hlsl_exponent_reference,
         compare="ulp:8",
+    ),
+    Case(
+        "g_extended_arithmetic",
+        "integer",
+        "uaddCarry, usubBorrow, umulExtended and imulExtended, scalar and vector",
+        "GLSL 4.60 §8.8: sum and difference modulo 2^32 with carry or borrow; high and low words of the product",
+        integer_cases.integer_pair_inputs(),
+        np.uint32,
+        integer_cases.extended_arithmetic_reference,
+    ),
+    Case(
+        "s_extended_arithmetic",
+        "integer",
+        "OpIAddCarry, OpISubBorrow, OpUMulExtended and OpSMulExtended read by OpCompositeExtract",
+        "SPIR-V 1.6 §3.52.13: member 0 is the low word, sum or difference, member 1 the high word, carry or borrow",
+        integer_cases.integer_pair_inputs(),
+        np.uint32,
+        integer_cases.extended_arithmetic_reference,
+    ),
+    Case(
+        "s_integer_signedness",
+        "integer",
+        "Shifts, comparisons, division, remainder, modulus and conversions whose opcode signedness differs from the operand type",
+        "SPIR-V 1.6 §3.3.6: the opcode, not the operand type, decides the signedness of an integer operation",
+        integer_cases.integer_pair_inputs(),
+        np.uint32,
+        integer_cases.signedness_reference,
     ),
     Case(
         "u_atomic_add",

@@ -7929,7 +7929,7 @@ def test_spirv_cross_integer_bitcast_codegen_reparse():
     assert (
         "output[0].unsignedValue = asuint(gl_GlobalInvocationID[0]);" in generated_code
     )
-    assert "output[0].signedValue = asint(4294967295);" in generated_code
+    assert "output[0].signedValue = asint(4294967295u);" in generated_code
     assert "spirvBitcast_" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
@@ -8520,10 +8520,14 @@ def test_spirv_tools_extended_arithmetic_codegen_reparse():
     assert "uint outCarry @output @location(1);" in generated_code
     assert "int outLow @output @location(2);" in generated_code
     assert "int outHigh @output @location(3);" in generated_code
-    assert "outSum = spirvIAddCarry(0, 1)[0];" in generated_code
-    assert "outCarry = spirvIAddCarry(0, 1)[1];" in generated_code
-    assert "outLow = spirvSMulExtended(2, 3)[0];" in generated_code
-    assert "outHigh = spirvSMulExtended(2, 3)[1];" in generated_code
+    # The struct members become the result and the out operands of GLSL's built-ins (GLSL 4.60 section 8.8).
+    assert "uint add_sum = uaddCarry(0, 1, add_carry);" in generated_code
+    assert "outSum = add_sum;" in generated_code
+    assert "outCarry = add_carry;" in generated_code
+    assert "imulExtended(2, 3, mul_msb, mul_lsb);" in generated_code
+    assert "outLow = mul_lsb;" in generated_code
+    assert "outHigh = mul_msb;" in generated_code
+    assert "spirv" not in generated_code.lower().replace("spirv_", "")
     assert "OpIAddCarry" not in generated_code
     assert "OpSMulExtended" not in generated_code
     assert "Unhandled statement type" not in generated_code

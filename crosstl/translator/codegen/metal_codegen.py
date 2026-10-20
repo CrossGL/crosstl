@@ -144,6 +144,10 @@ from .enum_utils import (
     infer_enum_constructor_type,
 )
 from .exponent_builtins import emit_metal_exponent_helpers, metal_exponent_call
+from .extended_arithmetic_builtins import (
+    emit_metal_extended_arithmetic_helpers,
+    metal_extended_arithmetic_call,
+)
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -3175,6 +3179,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         code += self.generate_metal_wave_helpers()
         code += emit_metal_wave_extension_helpers(self)
         code += emit_metal_exponent_helpers(self)
+        code += emit_metal_extended_arithmetic_helpers(self)
         code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_metal_inverse_helpers()
@@ -11557,6 +11562,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             exponent_call = metal_exponent_call(self, func_name, expr.args)
             if exponent_call is not None:
                 return exponent_call
+            extended_arithmetic = metal_extended_arithmetic_call(
+                self, func_name, expr.args
+            )
+            if extended_arithmetic is not None:
+                return extended_arithmetic
 
             vector_set = re.fullmatch(
                 r"CrossGLMetalVectorIndex_([iu](?:8|16)vec[234])_set",

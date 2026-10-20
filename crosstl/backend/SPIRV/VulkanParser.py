@@ -7,6 +7,10 @@ import struct
 from ..common_ast import InitializerListNode
 from .access_chains import chain_base_pointee, walk_indices
 from .barrier_import import spirv_barrier_statements
+from .integer_signedness_import import (
+    spirv_integer_binary_expression,
+    spirv_integer_conversion_expression,
+)
 from .local_names import function_local_names
 from .ray_tracing_import import (
     BUILTIN_VARIABLE_NAMES,
@@ -15,7 +19,9 @@ from .ray_tracing_import import (
     ray_variable_locations,
     refuse_untranslated_statement,
 )
+from .select_import import spirv_select_expression
 from .struct_result_import import (
+    spirv_extended_arithmetic_call,
     spirv_struct_result_call,
     spirv_struct_result_member,
 )
@@ -291,12 +297,6 @@ class VulkanParser:
         "SUDotAccSatKHR": "spirvSUDotAccSat",
         "UDotAccSat": "spirvUDotAccSat",
         "UDotAccSatKHR": "spirvUDotAccSat",
-    }
-    SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS = {
-        "IAddCarry": "spirvIAddCarry",
-        "ISubBorrow": "spirvISubBorrow",
-        "SMulExtended": "spirvSMulExtended",
-        "UMulExtended": "spirvUMulExtended",
     }
     SPIRV_ATOMIC_RMW_FUNCTIONS = {
         "OpAtomicIAdd": "atomicAdd",
@@ -1993,17 +1993,24 @@ class VulkanParser:
                 )
                 and len(operands) >= 2
             ):
-                expressions[result_id] = FunctionCallNode(
+                operand = self.spirv_assembly_operand_expression(
+                    operands[1],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                expressions[result_id] = spirv_integer_conversion_expression(
+                    opcode[2:],
+                    operands[0],
+                    operand,
+                    expression_type_ids.get(operands[1])
+                    or constant_types.get(operands[1]),
+                    types,
+                    self.spirv_vector_type_name,
+                ) or FunctionCallNode(
                     self.spirv_type_name(operands[0], types) or operands[0],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
+                    [operand],
                 )
                 expression_type_ids[result_id] = operands[0]
                 continue
@@ -2458,31 +2465,26 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpSelect" and len(operands) >= 4:
+                condition, true_value, false_value = (
+                    self.spirv_assembly_operand_expression(
+                        operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                    for operand in operands[1:4]
+                )
                 record_expression(
                     result_id,
                     operands[0],
-                    TernaryOpNode(
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[3],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
+                    spirv_select_expression(
+                        condition,
+                        true_value,
+                        false_value,
+                        expression_type_ids.get(operands[1])
+                        or constant_types.get(operands[1]),
+                        types,
                     ),
                 )
                 continue
@@ -2504,29 +2506,31 @@ class VulkanParser:
                 continue
 
             operation = opcode[2:] if opcode.startswith("Op") else opcode
-            if (
-                result_id
-                and operation in self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS
-                and len(operands) >= 3
-            ):
-                record_expression(
+            if result_id and len(operands) >= 3:
+                struct_value = spirv_extended_arithmetic_call(
+                    self,
                     result_id,
                     operands[0],
-                    FunctionCallNode(
-                        self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS[operation],
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[1:]
-                        ],
-                    ),
+                    operation,
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operand,
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                        for operand in operands[1:]
+                    ],
+                    statements,
+                    names,
+                    decorations,
+                    types,
                 )
-                continue
+                if struct_value is not None:
+                    expressions[result_id] = struct_value
+                    expression_type_ids[result_id] = operands[0]
+                    continue
 
             if (
                 result_id
@@ -2621,27 +2625,33 @@ class VulkanParser:
                 and operation in self.SPIRV_SPEC_CONSTANT_BINARY_OPS
                 and len(operands) >= 3
             ):
-                record_expression(
-                    result_id,
-                    operands[0],
-                    BinaryOpNode(
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation],
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    ),
+                lhs, rhs = (
+                    self.spirv_assembly_operand_expression(
+                        operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                    for operand in operands[1:3]
                 )
+                expression = spirv_integer_binary_expression(
+                    operation,
+                    operands[0],
+                    lhs,
+                    expression_type_ids.get(operands[1])
+                    or constant_types.get(operands[1]),
+                    rhs,
+                    expression_type_ids.get(operands[2])
+                    or constant_types.get(operands[2]),
+                    types,
+                    self.spirv_vector_type_name,
+                )
+                if expression is None:
+                    expression = BinaryOpNode(
+                        lhs, self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation], rhs
+                    )
+                record_expression(result_id, operands[0], expression)
                 continue
 
             if (
@@ -6864,6 +6874,9 @@ class VulkanParser:
 
     def spirv_constant_literal_expression(self, type_id, literal, types):
         type_info = types.get(type_id, {})
+        if type_info.get("name") == "uint" and str(literal).isdigit():
+            # CrossGL reads an unsuffixed literal as int; one above INT_MAX would widen to a 64-bit integer.
+            return f"{literal}u" if int(str(literal)) > 0x7FFFFFFF else literal
         if type_info.get("name") not in {"half", "float", "double"}:
             return literal
 

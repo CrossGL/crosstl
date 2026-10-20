@@ -81,6 +81,10 @@ from .enum_utils import (
     resolve_generic_enum_specialization,
     substitute_generic_type_name,
 )
+from .extended_arithmetic_builtins import (
+    EXTENDED_ARITHMETIC_FUNCTIONS,
+    spirv_extended_arithmetic_call,
+)
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generic_function_call_name,
@@ -29083,6 +29087,14 @@ class VulkanSPIRVCodeGen(
                 and not self.has_function_reference(callee_name)
             ):
                 return spirv_output_operand_call(self, callee_name, list(expr.args))
+
+            if (
+                callee_name in EXTENDED_ARITHMETIC_FUNCTIONS
+                and not self.has_function_reference(callee_name)
+            ):
+                return spirv_extended_arithmetic_call(
+                    self, callee_name, list(expr.args)
+                )
 
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)
