@@ -356,6 +356,7 @@ from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
 from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_refusals import metal_refusals
+from .metal_stage_refusals import refuse_metal_stages
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .operator_spellings import map_c_family_operator
 from .pointer_reinterpret import (
@@ -2495,10 +2496,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.metal_prelude_insertion_index = len(code)
         if self.requires_metal_system_thread_scope:
             code += self.generate_metal_system_thread_scope_support()
-        if self.has_geometry_stage(ast, target_stage):
-            code += self.generate_metal_geometry_stream_helpers()
-        if self.has_tessellation_stage(ast, target_stage):
-            code += self.generate_metal_tessellation_patch_helpers()
         code += generate_enum_constants(
             self,
             self.plain_enums + self.struct_payload_enums,
@@ -5897,34 +5894,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     return_type = return_wrapper["struct_name"]
                 self.current_function_return_wrapper = return_wrapper
             code += f"fragment {return_type} {function_name}({params_str}) {{\n"
-        elif shader_type == "geometry":
-            params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name, func
-            )
-            function_name = entry_name or f"geometry_{func.name}"
-            self.validate_metal_geometry_stage(
-                func,
-                param_list,
-                stage_node=stage_node,
-            )
-            code += self.generate_metal_geometry_stage_comments(
-                func,
-                param_list,
-                stage_node=stage_node,
-            )
-            code += f"{return_type} {function_name}({params_str}) {{\n"
-        elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
-            params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name, func
-            )
-            function_name = entry_name or self.stage_entry_base_name(shader_type, func)
-            self.validate_metal_tessellation_stage(func, param_list, shader_type)
-            code += self.generate_metal_tessellation_stage_comments(
-                func,
-                param_list,
-                shader_type,
-            )
-            code += f"{return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["compute", "ray_generation"]:
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name, func
@@ -18001,96 +17970,19 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             in self.glsl_buffer_block_struct_names
         )
 
-    def unsupported_stage_types(self):
-        return set()
-
     def validate_supported_stage_types(self, ast, target_stage=None):
-        unsupported_stages = []
-        for stage_type in getattr(ast, "stages", {}) or {}:
-            stage_name = normalize_stage_name(stage_type)
-            if stage_name in self.unsupported_stage_types() and stage_matches(
-                target_stage, stage_name
-            ):
-                unsupported_stages.append(stage_name)
-
-        if unsupported_stages:
-            stage_list = ", ".join(sorted(unsupported_stages))
-            raise ValueError(
-                f"Metal output does not support stage type(s): {stage_list}"
-            )
-
-    def has_geometry_stage(self, ast, target_stage=None):
-        if not stage_matches(target_stage, "geometry"):
-            return False
-
-        for stage_type in getattr(ast, "stages", {}) or {}:
-            if normalize_stage_name(stage_type) == "geometry":
-                return True
-
+        """Refuse the requested stages Metal cannot write as entry points (:mod:`.metal_stage_refusals`)."""
+        stage_names = {
+            normalize_stage_name(stage_type)
+            for stage_type in getattr(ast, "stages", {}) or {}
+        }
         for func in getattr(ast, "functions", []) or []:
             qualifiers = getattr(func, "qualifiers", None)
             if qualifiers is None:
                 qualifiers = [getattr(func, "qualifier", None)]
-            if any(
-                normalize_stage_name(qualifier) == "geometry"
-                for qualifier in qualifiers
-            ):
-                return True
-
-        return False
-
-    def generate_metal_geometry_stream_helpers(self):
-        return (
-            "template <typename T>\n"
-            "struct CrossGLMetalPointStream {\n"
-            "    void Append(T value) { }\n"
-            "    void RestartStrip() { }\n"
-            "};\n\n"
-            "template <typename T>\n"
-            "struct CrossGLMetalLineStream {\n"
-            "    void Append(T value) { }\n"
-            "    void RestartStrip() { }\n"
-            "};\n\n"
-            "template <typename T>\n"
-            "struct CrossGLMetalTriangleStream {\n"
-            "    void Append(T value) { }\n"
-            "    void RestartStrip() { }\n"
-            "};\n\n"
-        )
-
-    def has_tessellation_stage(self, ast, target_stage=None):
-        tessellation_stages = {"tessellation_control", "tessellation_evaluation"}
-        if not any(stage_matches(target_stage, stage) for stage in tessellation_stages):
-            return False
-
-        for stage_type in getattr(ast, "stages", {}) or {}:
-            if normalize_stage_name(stage_type) in tessellation_stages:
-                return True
-
-        for func in getattr(ast, "functions", []) or []:
-            qualifiers = getattr(func, "qualifiers", None)
-            if qualifiers is None:
-                qualifiers = [getattr(func, "qualifier", None)]
-            if any(
-                normalize_stage_name(qualifier) in tessellation_stages
-                for qualifier in qualifiers
-            ):
-                return True
-
-        return False
-
-    def generate_metal_tessellation_patch_helpers(self):
-        return (
-            "template <typename T, int N>\n"
-            "struct CrossGLMetalInputPatch {\n"
-            "    T control_points[N];\n"
-            "    T operator[](uint index) const { return control_points[index]; }\n"
-            "};\n\n"
-            "template <typename T, int N>\n"
-            "struct CrossGLMetalOutputPatch {\n"
-            "    T control_points[N];\n"
-            "    T operator[](uint index) const { return control_points[index]; }\n"
-            "};\n\n"
+            stage_names.update(normalize_stage_name(q) for q in qualifiers if q)
+        refuse_metal_stages(
+            name for name in stage_names if stage_matches(target_stage, name)
         )
 
     def stage_entry_types(self):
@@ -18683,35 +18575,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 return getattr(attr, "arguments", []) or []
         return []
 
-    def metal_geometry_maxvertexcount(self, func, stage_node=None):
-        arguments = self.metal_stage_attribute_arguments(func, "maxvertexcount")
-        if arguments:
-            if len(arguments) != 1:
-                raise ValueError(
-                    "Metal geometry stage maxvertexcount requires exactly one argument"
-                )
-            value_text = self.attribute_value_to_string(arguments[0])
-        else:
-            value_text = None
-            if stage_node is not None:
-                value_text = stage_layout_entry_value(
-                    stage_node, "max_vertices", "out"
-                ) or stage_layout_entry_value(
-                    stage_node,
-                    "maxvertexcount",
-                    "out",
-                )
-            if value_text is None:
-                raise ValueError(
-                    "Metal geometry stage requires maxvertexcount attribute"
-                )
-        value = self.literal_int_value(value_text, self.literal_int_constants)
-        if value is not None and value <= 0:
-            raise ValueError(
-                f"Metal geometry stage maxvertexcount ({value}) must be positive"
-            )
-        return value_text
-
     def metal_parameter_qualifiers(self, parameter):
         qualifiers = []
         allowed_qualifiers = {
@@ -18742,19 +18605,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 qualifiers.append(normalized)
         return qualifiers
 
-    def metal_geometry_input_primitive_qualifier(self, parameter):
-        primitive_qualifiers = {
-            "point",
-            "line",
-            "triangle",
-            "lineadj",
-            "triangleadj",
-        }
-        for qualifier in self.metal_parameter_qualifiers(parameter):
-            if qualifier in primitive_qualifiers:
-                return qualifier
-        return None
-
     def metal_parameter_is_array(self, parameter):
         raw_type = self.parameter_raw_type(parameter)
         if (
@@ -18784,100 +18634,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return None
         return self.literal_int_value(array_size, self.literal_int_constants)
 
-    def validate_metal_geometry_input_primitive_arity(self, parameters):
-        expected_counts = {
-            "point": 1,
-            "line": 2,
-            "triangle": 3,
-            "lineadj": 4,
-            "triangleadj": 6,
-        }
-
-        for parameter in parameters:
-            primitive = self.metal_geometry_input_primitive_qualifier(parameter)
-            if primitive is None:
-                continue
-
-            expected_count = expected_counts[primitive]
-            if not self.metal_parameter_is_array(parameter):
-                raise ValueError(
-                    "Metal geometry stage "
-                    f"{primitive} input primitive parameter '{parameter.name}' "
-                    f"must be an array with {expected_count} element(s)"
-                )
-
-            array_count = self.metal_parameter_array_count(parameter)
-            if array_count is None:
-                continue
-            if array_count != expected_count:
-                raise ValueError(
-                    "Metal geometry stage "
-                    f"{primitive} input primitive parameter '{parameter.name}' "
-                    f"must have {expected_count} element(s), got {array_count}"
-                )
-
-    def validate_metal_geometry_stage(self, func, parameters, stage_node=None):
-        self.metal_geometry_maxvertexcount(func, stage_node=stage_node)
-
-        if not any(
-            self.metal_geometry_stream_info(self.parameter_raw_type(param))
-            for param in parameters
-        ):
-            raise ValueError(
-                "Metal geometry stage parameters must include a PointStream, "
-                "LineStream, or TriangleStream output parameter"
-            )
-
-        if not any(
-            self.metal_geometry_input_primitive_qualifier(param) for param in parameters
-        ):
-            raise ValueError(
-                "Metal geometry stage parameters must include an input primitive "
-                "parameter qualified as point, line, triangle, lineadj, or triangleadj"
-            )
-
-        self.validate_metal_geometry_input_primitive_arity(parameters)
-
-    def generate_metal_geometry_stage_comments(
-        self,
-        func,
-        parameters,
-        stage_node=None,
-    ):
-        maxvertexcount = self.metal_geometry_maxvertexcount(
-            func,
-            stage_node=stage_node,
-        )
-        input_descriptions = []
-        stream_descriptions = []
-
-        for parameter in parameters:
-            primitive = self.metal_geometry_input_primitive_qualifier(parameter)
-            if primitive is not None:
-                input_descriptions.append(f"{primitive}:{parameter.name}")
-
-            stream_info = self.metal_geometry_stream_info(
-                self.parameter_raw_type(parameter)
-            )
-            if stream_info is not None:
-                stream_name, output_type = stream_info
-                stream_descriptions.append(
-                    f"{stream_name}:{parameter.name}->{output_type}"
-                )
-
-        lines = [f"// CrossGL geometry stage: maxvertexcount={maxvertexcount}\n"]
-        if input_descriptions:
-            lines.append(
-                "// CrossGL geometry input primitive: "
-                f"{', '.join(input_descriptions)}\n"
-            )
-        if stream_descriptions:
-            lines.append(
-                "// CrossGL geometry output stream: "
-                f"{', '.join(stream_descriptions)}\n"
-            )
-        return "".join(lines)
-
     def metal_tessellation_stage_attribute_value(self, func, attribute_name):
         arguments = self.metal_stage_attribute_arguments(func, attribute_name)
         if not arguments:
@@ -18888,35 +18644,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 "exactly one argument"
             )
         return self.attribute_value_to_string(arguments[0])
-
-    def metal_tessellation_output_control_points(self, func):
-        output_control_points = self.metal_tessellation_stage_attribute_value(
-            func, "outputcontrolpoints"
-        )
-        if output_control_points is None:
-            output_control_points = self.metal_tessellation_stage_attribute_value(
-                func, "vertices"
-            )
-        return output_control_points
-
-    def metal_tessellation_positive_int_attribute(
-        self, func, attribute_name, stage_name, display_name=None
-    ):
-        value_text = self.metal_tessellation_stage_attribute_value(func, attribute_name)
-        if value_text is None:
-            return None
-        value = self.literal_int_value(value_text, self.literal_int_constants)
-        display_name = display_name or attribute_name
-        if value is None:
-            raise ValueError(
-                f"Metal {stage_name} stage {display_name} must be an integer "
-                f"constant, got {value_text}"
-            )
-        if value <= 0:
-            raise ValueError(
-                f"Metal {stage_name} stage {display_name} ({value}) must be " "positive"
-            )
-        return value
 
     def metal_tessellation_domain(self, func):
         value = self.metal_tessellation_stage_attribute_value(func, "domain")
@@ -18938,275 +18665,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 f"Metal tessellation domain cannot be represented: {value}"
             )
         return mapped
-
-    def metal_tessellation_partitioning(self, func):
-        value = self.metal_tessellation_stage_attribute_value(func, "partitioning")
-        if value is None:
-            return None
-        partition_name = str(value).strip().strip('"').lower()
-        partition_map = {
-            "integer": "integer",
-            "equal": "integer",
-            "equal_spacing": "integer",
-            "fractional_even": "fractional_even",
-            "fractional_even_spacing": "fractional_even",
-            "fractional_odd": "fractional_odd",
-            "fractional_odd_spacing": "fractional_odd",
-        }
-        mapped = partition_map.get(partition_name)
-        if mapped is None:
-            raise ValueError(
-                f"Metal tessellation partitioning cannot be represented: {value}"
-            )
-        return mapped
-
-    def metal_tessellation_output_topology(self, func, domain):
-        value = self.metal_tessellation_stage_attribute_value(func, "outputtopology")
-        if value is None:
-            return None
-
-        topology_name = str(value).strip().strip('"').lower()
-        if topology_name in {"triangle_cw", "triangles_cw"}:
-            if domain != "triangle":
-                raise ValueError(
-                    "Metal tessellation outputtopology triangle_cw requires "
-                    "triangle domain"
-                )
-            return "triangle_cw"
-        if topology_name in {"triangle_ccw", "triangles_ccw"}:
-            if domain != "triangle":
-                raise ValueError(
-                    "Metal tessellation outputtopology triangle_ccw requires "
-                    "triangle domain"
-                )
-            return "triangle_ccw"
-        if topology_name in {"line", "lines"}:
-            if domain != "isoline":
-                raise ValueError(
-                    "Metal tessellation outputtopology line requires isoline domain"
-                )
-            return "line"
-        if topology_name in {"point", "points"}:
-            return "point"
-
-        raise ValueError(
-            f"Metal tessellation outputtopology cannot be represented: {value}"
-        )
-
-    def metal_tessellation_patch_constant_function_name(self, func):
-        return self.metal_tessellation_stage_attribute_value(func, "patchconstantfunc")
-
-    def metal_tessellation_patch_parameters(self, parameters, patch_type):
-        for parameter in parameters:
-            info = self.metal_tessellation_patch_info(
-                self.parameter_raw_type(parameter)
-            )
-            if info is not None and info["kind"] == patch_type:
-                yield parameter, info
-
-    def metal_tessellation_patch_control_point_count(self, parameters, patch_type):
-        for _parameter, info in self.metal_tessellation_patch_parameters(
-            parameters, patch_type
-        ):
-            return info["count_value"]
-        return None
-
-    def validate_metal_tessellation_patch_parameter_signature(
-        self, parameter, info, stage_name
-    ):
-        patch_type = info["kind"]
-        parameter_name = getattr(parameter, "name", None)
-        name_clause = (
-            f" parameter '{parameter_name}'" if parameter_name else " parameter"
-        )
-        type_name = self.type_name_string(self.parameter_raw_type(parameter))
-
-        if not info["valid"]:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} must use "
-                f"{patch_type}<T, N>; found '{type_name or patch_type}'"
-            )
-
-        if info["element_type"] is None:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} must include "
-                "an element type"
-            )
-
-        control_points = info["count_value"]
-        if control_points is None:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} control "
-                f"point count '{info['count_text']}' must be an integer constant"
-            )
-        if control_points <= 0:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} control "
-                f"point count ({control_points}) must be positive"
-            )
-        if control_points > 32:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} control "
-                f"point count ({control_points}) must be at most 32"
-            )
-
-    def validate_metal_tessellation_patch_parameter_signatures(
-        self, parameters, patch_type, stage_name
-    ):
-        for parameter, info in self.metal_tessellation_patch_parameters(
-            parameters, patch_type
-        ):
-            self.validate_metal_tessellation_patch_parameter_signature(
-                parameter, info, stage_name
-            )
-
-    def validate_metal_tessellation_control_stage(self, func, parameters):
-        stage_name = "tessellation_control"
-        domain = self.metal_tessellation_domain(func)
-        if domain is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires domain attribute"
-            )
-        if self.metal_tessellation_partitioning(func) is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires partitioning attribute"
-            )
-        if self.metal_tessellation_output_topology(func, domain) is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires outputtopology attribute"
-            )
-
-        input_patch_parameters = list(
-            self.metal_tessellation_patch_parameters(parameters, "InputPatch")
-        )
-        if not input_patch_parameters:
-            raise ValueError(
-                "Metal tessellation_control stage parameters must include an "
-                "InputPatch<T, N> parameter"
-            )
-        self.validate_metal_tessellation_patch_parameter_signatures(
-            parameters, "InputPatch", stage_name
-        )
-
-        output_control_points = self.metal_tessellation_positive_int_attribute(
-            func, "outputcontrolpoints", stage_name
-        )
-        if output_control_points is None:
-            output_control_points = self.metal_tessellation_positive_int_attribute(
-                func, "vertices", stage_name, display_name="outputcontrolpoints"
-            )
-        if output_control_points is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires outputcontrolpoints "
-                "attribute"
-            )
-        if output_control_points > 32:
-            raise ValueError(
-                "Metal tessellation_control stage outputcontrolpoints "
-                f"({output_control_points}) must be at most 32"
-            )
-
-        input_control_points = self.metal_tessellation_patch_control_point_count(
-            parameters, "InputPatch"
-        )
-        if (
-            input_control_points is not None
-            and output_control_points != input_control_points
-        ):
-            raise ValueError(
-                "Metal tessellation_control stage outputcontrolpoints "
-                f"({output_control_points}) must match the InputPatch control "
-                f"point count ({input_control_points})"
-            )
-
-        patch_constant_func = self.metal_tessellation_patch_constant_function_name(func)
-        if patch_constant_func is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires patchconstantfunc "
-                "attribute"
-            )
-        if patch_constant_func not in self.user_function_names:
-            raise ValueError(
-                "Metal tessellation_control stage patchconstantfunc "
-                f"'{patch_constant_func}' must name a function in the program"
-            )
-
-        if not any(
-            self.metal_parameter_has_semantic(parameter, "SV_OutputControlPointID")
-            for parameter in parameters
-        ):
-            raise ValueError(
-                "Metal tessellation_control stage parameters must include an "
-                "SV_OutputControlPointID parameter"
-            )
-        self.validate_metal_scalar_integer_semantic_types(
-            parameters,
-            stage_name,
-            ("SV_OutputControlPointID", "SV_PrimitiveID"),
-        )
-        self.validate_metal_tessellation_max_factor(func, stage_name)
-
-    def validate_metal_tessellation_evaluation_stage(self, func, parameters):
-        stage_name = "tessellation_evaluation"
-        domain = self.metal_tessellation_domain(func)
-        if domain is None:
-            raise ValueError(
-                "Metal tessellation_evaluation stage requires domain attribute"
-            )
-        self.metal_tessellation_output_topology(func, domain)
-
-        output_patch_parameters = list(
-            self.metal_tessellation_patch_parameters(parameters, "OutputPatch")
-        )
-        if not output_patch_parameters:
-            raise ValueError(
-                "Metal tessellation_evaluation stage parameters must include an "
-                "OutputPatch<T, N> parameter"
-            )
-        self.validate_metal_tessellation_patch_parameter_signatures(
-            parameters, "OutputPatch", stage_name
-        )
-
-        if not any(
-            self.metal_parameter_has_semantic(parameter, "SV_DomainLocation")
-            for parameter in parameters
-        ):
-            raise ValueError(
-                "Metal tessellation_evaluation stage parameters must include an "
-                "SV_DomainLocation parameter"
-            )
-        self.validate_metal_domain_location_type(parameters)
-        self.validate_metal_domain_location_components(func, parameters)
-        self.validate_metal_scalar_integer_semantic_types(
-            parameters,
-            stage_name,
-            ("SV_PrimitiveID",),
-        )
-
-    def validate_metal_tessellation_max_factor(self, func, stage_name):
-        max_tess_factor_text = self.metal_tessellation_stage_attribute_value(
-            func, "maxtessfactor"
-        )
-        if max_tess_factor_text is None:
-            return
-        try:
-            max_tess_factor = float(str(max_tess_factor_text).strip().strip('"'))
-        except ValueError as exc:
-            raise ValueError(
-                "Metal tessellation_control stage maxtessfactor "
-                f"'{max_tess_factor_text}' must be a numeric literal"
-            ) from exc
-        if not (1.0 <= max_tess_factor <= 64.0):
-            raise ValueError(
-                "Metal tessellation_control stage maxtessfactor "
-                f"({max_tess_factor_text}) must be in the range 1.0..64.0"
-            )
-
-    def validate_metal_tessellation_stage(self, func, parameters, shader_type):
-        if shader_type == "tessellation_control":
-            self.validate_metal_tessellation_control_stage(func, parameters)
-        elif shader_type == "tessellation_evaluation":
-            self.validate_metal_tessellation_evaluation_stage(func, parameters)
 
     def validate_metal_domain_location_type(self, parameters):
         for parameter in parameters:
@@ -19325,52 +18783,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             if suffix == "":
                 return 1
         return None
-
-    def generate_metal_tessellation_stage_comments(self, func, parameters, shader_type):
-        metadata = []
-        domain = self.metal_tessellation_domain(func)
-        if domain:
-            metadata.append(f"domain={domain}")
-        partitioning = self.metal_tessellation_partitioning(func)
-        if partitioning:
-            metadata.append(f"partitioning={partitioning}")
-        output_topology = self.metal_tessellation_output_topology(func, domain)
-        if output_topology:
-            metadata.append(f"outputtopology={output_topology}")
-        output_control_points = self.metal_tessellation_output_control_points(func)
-        if output_control_points:
-            metadata.append(f"outputcontrolpoints={output_control_points}")
-        patch_constant_func = self.metal_tessellation_patch_constant_function_name(func)
-        if patch_constant_func:
-            metadata.append(f"patchconstantfunc={patch_constant_func}")
-        max_tess_factor = self.metal_tessellation_stage_attribute_value(
-            func, "maxtessfactor"
-        )
-        if max_tess_factor:
-            metadata.append(f"maxtessfactor={max_tess_factor}")
-
-        lines = [
-            f"// CrossGL {shader_type} stage"
-            f"{': ' + ', '.join(metadata) if metadata else ''}\n"
-        ]
-
-        patch_descriptions = []
-        for parameter in parameters:
-            info = self.metal_tessellation_patch_info(
-                self.parameter_raw_type(parameter)
-            )
-            if info is None or not info["valid"]:
-                continue
-            patch_descriptions.append(
-                f"{info['kind']}:{parameter.name}->{info['element_type']}"
-                f"[{info['count_text']}]"
-            )
-        if patch_descriptions:
-            lines.append(
-                "// CrossGL tessellation patch parameters: "
-                f"{', '.join(patch_descriptions)}\n"
-            )
-        return "".join(lines)
 
     def metal_local_size_threadgroup_total(self, execution_config):
         values = [str(value).strip() for value in compute_local_size(execution_config)]
