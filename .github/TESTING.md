@@ -50,17 +50,23 @@ Branch protection and the merge queue require these checks:
 - `Support Matrix result`
 - `MLX validation result`
 
+The ComputeSharp port workflow (`project-demo-testing.yml`) follows the same
+pattern: it starts on every pull request, merge-queue group and push to main,
+its plan job skips the port's jobs when a change cannot affect the port, and
+it ends in one `ComputeSharp validation result` check.
+
 Public-repository runners have 4 vCPUs on Linux and Windows and 3 on macOS.
 The translator and backend jobs size `pytest-xdist` to match. The Python
-setup steps cache pip downloads, keyed on `requirements.txt`, `pyproject.toml`
-and `setup.cfg`.
+setup steps cache pip downloads, keyed on `requirements.txt` and
+`pyproject.toml`.
 
-Backend, translator, complete-suite, example and open-source demo workflows replace a
-superseded pull-request run when a new revision arrives. The concurrency key
+Backend, translator, complete-suite, example, open-source demo and ComputeSharp
+port workflows replace a superseded pull-request run when a new revision
+arrives. The concurrency key
 includes the workflow name, event and PR number, so unrelated workflows and PRs
 do not cancel each other. Main, scheduled and manually dispatched runs use their
 unique run IDs and are not cancelled by this policy. Workflow-level keys are
-distinct from native job-level queues. The Project Demo Testing workflow instead
+distinct from native job-level queues. The MLX Project Demo Testing workflow instead
 uses independent job and matrix-leg concurrency groups with
 `cancel-in-progress: false`. Active native checks finish; a newer pending job
 can replace an older pending job in the same group. This does not guarantee

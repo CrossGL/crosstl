@@ -1,0 +1,32 @@
+diff --git a/tests/ComputeSharp.Tests/Attributes/CombinatorialTestMethodAttribute.cs b/tests/ComputeSharp.Tests/Attributes/CombinatorialTestMethodAttribute.cs
+index c401f39..f1861c1 100644
+--- a/tests/ComputeSharp.Tests/Attributes/CombinatorialTestMethodAttribute.cs
++++ b/tests/ComputeSharp.Tests/Attributes/CombinatorialTestMethodAttribute.cs
+@@ -274,4 +274,26 @@ public sealed class CombinatorialTestMethodAttribute : TestMethodAttribute, ITes
+     {
+         return $"{methodInfo.Name} ({string.Join(", ", data ?? [])})";
+     }
++
++#if COMPUTESHARP_TRANSLATED_BACKEND
++    /// <summary>
++    /// Publishes the executing case to the translated runtime, which records it with every
++    /// dispatch and readback. Test execution and assertions are unchanged.
++    /// </summary>
++    public override TestResult[] Execute(ITestMethod testMethod)
++    {
++        string displayName = $"{testMethod.TestClassName}.{testMethod.TestMethodName} ({string.Join(", ", testMethod.Arguments ?? [])})";
++
++        AppContext.SetData("ComputeSharp.Portable.CurrentCase", displayName);
++
++        try
++        {
++            return base.Execute(testMethod);
++        }
++        finally
++        {
++            AppContext.SetData("ComputeSharp.Portable.CurrentCase", null);
++        }
++    }
++#endif
+ }
+\ No newline at end of file

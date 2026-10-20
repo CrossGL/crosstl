@@ -58,6 +58,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLIndexTypeError,
     OpenGLIsFiniteError,
     OpenGLMappedOverloadError,
+    OpenGLPreciseQualifierError,
     OpenGLPrivatePointerParameterError,
     OpenGLRecursiveFunctionError,
     OpenGLReferenceParameterError,
@@ -10528,7 +10529,7 @@ def test_glsl_storage_pointer_reinterpret_reads_float_vectors(tmp_path):
 
     generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
 
-    assert "vec4 packed = vec4(" in generated
+    assert "vec4 packed_ = vec4(" in generated
     assert generated.count("uintBitsToFloat(floatBitsToUint(values[int(") == 4
     assert "_Args_base * 4" in generated
     assert "* 16" in generated
@@ -16306,6 +16307,63 @@ def test_glsl_precise_function_returns_lower_through_precise_locals(tmp_path):
         assert "NoContraction" in disassembly.stdout
 
 
+def test_glsl_precise_function_qualifies_only_locals_with_float_operations(tmp_path):
+    # precise orders the floating-point operations that produce a value, so a
+    # local is precise only when a float operation can reach it.
+    code = """
+    shader PreciseIntegerLocals {
+        @precise
+        float stableBits(float value, float scale) {
+            uint bits = floatBitsToUint(value);
+            uint magnitude = bits & 2147483647u;
+            int rounded = int(value * scale + 0.5);
+            uint counter = 0u;
+            counter = counter + 1u;
+            uint masked = bits;
+            masked &= 2147483648u;
+            int accumulated = 0;
+            accumulated = accumulated + int(value * scale);
+            float positive = uintBitsToFloat(magnitude);
+            float rebuilt = uintBitsToFloat(floatBitsToUint(value * scale));
+            float adjusted = uintBitsToFloat(masked);
+            adjusted = adjusted * scale;
+            bool large = magnitude > 1065353216u;
+            float total = positive + rebuilt + adjusted;
+            return large ? float(rounded + int(counter) + accumulated) : total;
+        }
+
+        compute {
+            void main() {
+                float stable = stableBits(2.0, 3.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "    uint bits = floatBitsToUint(value);" in generated_code
+    assert "    uint magnitude = (bits & 2147483647u);" in generated_code
+    assert "    bool large = (magnitude > 1065353216u);" in generated_code
+    assert "precise int rounded = " in generated_code
+    # Integer-only writes add no floating-point operation.
+    assert "    uint counter = 0u;" in generated_code
+    assert "    uint masked = bits;" in generated_code
+    assert "precise int accumulated = 0;" in generated_code
+    # A bit reinterpretation is exact unless its operand has float arithmetic.
+    assert "    float positive = uintBitsToFloat(magnitude);" in generated_code
+    assert "precise float rebuilt = " in generated_code
+    assert "precise float adjusted = " in generated_code
+    assert "precise float total = " in generated_code
+    assert "precise float crossglPreciseReturn = " in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "precise-integer-locals",
+        validate_spirv=True,
+    )
+
+
 def test_glsl_precise_function_multiple_returns_use_collision_safe_locals(tmp_path):
     code = """
     shader PreciseReturnNames {
@@ -16348,6 +16406,65 @@ def test_glsl_precise_function_multiple_returns_use_collision_safe_locals(tmp_pa
         "precise-return-names",
         validate_spirv=True,
     )
+
+
+# A fragment stage with only a uniform and an output keeps every other construct within
+# GLSL 3.30, so the profile changes only for the precise qualifier.
+PRECISE_PROFILE_SHADER = """
+#version {version}
+shader PreciseProfile {{
+    out vec4 fragColor @location(0);
+    @precise
+    float stable(float a, float b, float c) {{
+        // A comment that mentions precise does not need the qualifier.
+        return a * b + c;
+    }}
+    fragment {{
+        uniform vec3 operands;
+        void main() {{
+            fragColor = vec4(stable(operands.x, operands.y, operands.z));
+        }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("330 core", "#version 400 core"),
+        ("430 core", "#version 430 core"),
+        ("320 es", "#version 320 es"),
+    ],
+)
+def test_glsl_precise_output_selects_a_profile_with_the_qualifier(version, expected):
+    generated_code = GLSLCodeGen().generate(
+        crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version=version))
+    )
+
+    assert generated_code.splitlines()[0] == expected
+    assert "precise float crossglPreciseReturn = ((a * b) + c);" in generated_code
+
+
+def test_glsl_profile_is_unchanged_without_precise_output():
+    source = PRECISE_PROFILE_SHADER.format(version="330 core").replace("@precise\n", "")
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert generated_code.splitlines()[0] == "#version 330 core"
+    assert "precise" not in generated_code.replace("mentions precise", "")
+
+
+def test_glsl_es_profile_without_precise_is_rejected():
+    with pytest.raises(OpenGLPreciseQualifierError) as exc_info:
+        GLSLCodeGen().generate(
+            crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version="310 es"))
+        )
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.opengl-precise-unsupported"
+    )
+    assert exc_info.value.version_line == "#version 310 es"
+    assert "GLSL ES 3.20 or desktop GLSL 4.00" in str(exc_info.value)
 
 
 def test_glsl_global_fragment_integer_input_adds_required_flat_qualifier():
@@ -21656,12 +21773,13 @@ def test_for_statement_preserves_declaration_initializers():
     assert "const float weights[2];" in generated_code
     assert "for (int i = 0; (i < 2); (i++))" in generated_code
     assert "for (i = 0; (i < 4); (i++))" in generated_code
+    # ``fixed`` is reserved for future use in GLSL and is escaped.
     assert "for (const int fixed_ = 0; (fixed_ < 0); )" in generated_code
     assert "for (; ; )" in generated_code
     assert "continue;" in generated_code
     assert "break;" in generated_code
     assert "for (int i = 0;;" not in generated_code
-    assert "for (const int fixed = 0;;" not in generated_code
+    assert "for (const int fixed_ = 0;;" not in generated_code
     assert "BreakNode(" not in generated_code
     assert "ContinueNode(" not in generated_code
     assert "None" not in generated_code
@@ -42591,7 +42709,7 @@ def test_opengl_hlsl_bitcast_aliases_map_to_glsl_bit_functions():
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "uint packed = floatBitsToUint(value);" in generated_code
+    assert "uint packed_ = floatBitsToUint(value);" in generated_code
     assert "int signedBits = floatBitsToInt(value);" in generated_code
     assert "float restored = uintBitsToFloat(bits);" in generated_code
     assert "uvec2 pairBits = floatBitsToUint(pair);" in generated_code
@@ -45439,8 +45557,8 @@ def test_opengl_hlsl_bitcast_alias_renames_local_target_shadow():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "uint floatBitsToUint_ = 1u;" in generated_code
-    assert "uint packed = floatBitsToUint(value);" in generated_code
-    assert "float((floatBitsToUint_ + packed))" in generated_code
+    assert "uint packed_ = floatBitsToUint(value);" in generated_code
+    assert "float((floatBitsToUint_ + packed_))" in generated_code
     assert "uint floatBitsToUint = 1u;" not in generated_code
     assert "asuint(" not in generated_code
 
@@ -45464,7 +45582,7 @@ def test_opengl_user_defined_bitcast_alias_function_is_preserved():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "uint asuint(float value)" in generated_code
-    assert "uint packed = asuint(value);" in generated_code
+    assert "uint packed_ = asuint(value);" in generated_code
     assert "floatBitsToUint" not in generated_code
 
 
@@ -49095,3 +49213,34 @@ def test_glsl_storage_byte_view_rejects_mismatched_private_array_layout(tmp_path
     diagnostic = exc_info.value
     assert diagnostic.reason == "unsupported-storage-aggregate-source-layout"
     assert "does not exactly match" in str(diagnostic)
+
+
+def test_glsl_non_square_matrix_subscripts_select_columns(tmp_path):
+    # CrossGL mat3x2 has three rows and two columns (GLSL mat2x3), so a
+    # subscript selects a three-component column.
+    shader = """
+    shader main {
+        vec3 column(mat3x2 m, int i) {
+            return m[i];
+        }
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                mat3x2 m = mat3x2(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0));
+                float e = m[1][2];
+                vec3 c = column(m, 1) + vec3(e);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "vec3 column(mat2x3 m, int i)" in generated_code
+    assert (
+        "mat2x3 m = mat2x3(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0));" in generated_code
+    )
+    assert "float e = m[1][2];" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code, tmp_path, "non_square_matrix_subscripts"
+    )

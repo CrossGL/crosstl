@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp-negative-controls",
+  "description": "Faults injected by the portable runtime (CROSSTL_COMPUTESHARP_FAULT) and the upstream test methods that must fail under each fault. Every discovered case of every listed method must execute and fail; a pass, a skip or a missing case fails the control. The same cases must pass in the unfaulted run.",
+  "controls": [
+    {
+      "fault": "corrupt-readback",
+      "purpose": "The first byte of every buffer and texture readback is altered on the host.",
+      "methods": [
+        "ComputeSharp.Tests.Internals.DebugViewTests.BufferDebugView_NotNull",
+        "ComputeSharp.Tests.Internals.DebugViewTests.Texture2DDebugView_NotNull",
+        "ComputeSharp.Tests.Internals.DebugViewTests.Texture3DDebugView_WithTPixel_NotNull"
+      ]
+    }
+  ]
+}

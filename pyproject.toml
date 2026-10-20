@@ -39,6 +39,11 @@ directx-runtime = ["compushady>=0.17.5,<0.18; platform_system=='Windows'"]
 [project.scripts]
 crosstl = "crosstl._crosstl:main"
 
+[tool.pytest.ini_options]
+markers = ["extended_power: native power accuracy and project-package validation"]
+testpaths = ["tests", "demos/integrations"]
+norecursedirs = [".git", ".venv", "build", "dist", "worktrees"]
+
 [tool.flit.sdist]
 include = ["CHANGELOG.md", "CITATION.cff", ".zenodo.json", "examples/", "support/", "docs/"]
 exclude = ["docs/_build/", "docs/doxygen/build/", "examples/output/", "support/generated/", "**/__pycache__/", "**/*.py[cod]"]

@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.coverage-contract",
+  "commit": "40dbe40de0b1eafb570e2af43f78bcdbffdcc00a",
+  "categories": {
+    "required-gpu": "Portable compute or resource test. It must pass on the original Windows WARP baseline and through the live host adapter on every translated target profile.",
+    "cpu-only": "Host-side test without device execution. It runs with every build and is never counted as translated GPU execution.",
+    "windows-specific": "Direct3D 12, DXGI, DXC/DXIL or COM interop test. It is retained in the original Windows baseline and not executed on translated targets."
+  },
+  "profiles": {
+    "directx-warp": {
+      "role": "original-baseline",
+      "target": "directx",
+      "os": "windows",
+      "device": "Direct3D 12 WARP adapter",
+      "execution": "software",
+      "deviceRows": {
+        "Warp": "execute",
+        "Discrete": "optional-hardware"
+      },
+      "capabilities": {
+        "fp64": true,
+        "rw-texture-rgb32": false
+      }
+    },
+    "metal-apple-gpu": {
+      "role": "translated-target",
+      "target": "metal",
+      "os": "macos",
+      "device": "System default Metal device",
+      "execution": "hardware",
+      "deviceRows": {
+        "Warp": "execute",
+        "Discrete": "execute"
+      },
+      "capabilities": {
+        "fp64": false,
+        "rw-texture-rgb32": false
+      }
+    },
+    "opengl-mesa-llvmpipe": {
+      "role": "translated-target",
+      "target": "opengl",
+      "os": "linux",
+      "device": "Mesa llvmpipe through EGL, OpenGL 4.5 core",
+      "execution": "software",
+      "deviceRows": {
+        "Warp": "execute",
+        "Discrete": "execute"
+      },
+      "capabilities": {
+        "fp64": true,
+        "rw-texture-rgb32": false
+      }
+    }
+  },
+  "deviceRowPolicy": "Translated targets expose one device. The test adapter maps both upstream Device values to it, so every upstream row executes once per target profile and reports the actual device and whether it is hardware or software. The original baseline executes WARP rows; Discrete rows need a hardware adapter and may be inconclusive on hosted runners.",
+  "capabilities": {
+    "fp64": {
+      "description": "Double-precision shader arithmetic. Metal Shading Language has no double type; OpenGL 4.0 core and later provide it (verified at runtime, never assumed)."
+    },
+    "rw-texture-rgb32": {
+      "description": "Typed read-write textures with three 32-bit channels. DXGI R32G32B32 formats have no typed UAV support, Metal has no three-channel 32-bit pixel formats, and OpenGL image load/store has no three-channel formats. Every other ComputeSharp read-write texture element type is required on every profile."
+    }
+  },
+  "adaptations": {},
+  "classes": {
+    "ComputeSharp.Tests.Internals.AlignmentHelperTests": {
+      "category": "cpu-only",
+      "reason": "Integer arithmetic of the runtime's internal AlignmentHelper; no device."
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests": {
+      "category": "required-gpu",
+      "reason": "Debugger views of device buffers, transfer buffers and 1D/2D/3D textures read the resource contents back from the device and compare them with the upstream data."
+    },
+    "ComputeSharp.Tests.Internals.NativeObjectTests": {
+      "category": "cpu-only",
+      "reason": "Reference tracking and disposal of a test-local NativeObject subclass, including concurrent leases; no device."
+    },
+    "ComputeSharp.Tests.Internals.ShaderDataLoaderTests": {
+      "category": "required-gpu",
+      "reason": "Generated dispatch-data loaders of compute shaders over device buffers: constant layout, resource order and captured resources as the runtime binds them."
+    }
+  },
+  "methods": {
+    "ComputeSharp.Tests.Internals.DebugViewTests.BufferDebugView_Null": {
+      "category": "cpu-only",
+      "reason": "Constructs the debug view of a null resource and checks that it has no items; no device."
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.Texture2DDebugView_Null": {
+      "category": "cpu-only",
+      "reason": "Constructs the debug view of a null resource and checks that it has no items; no device."
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.Texture3DDebugView_Null": {
+      "category": "cpu-only",
+      "reason": "Constructs the debug view of a null resource and checks that it has no items; no device."
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.TransferBufferDebugView_Null": {
+      "category": "cpu-only",
+      "reason": "Constructs the debug view of a null resource and checks that it has no items; no device."
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.TransferTexture2DDebugView_Null": {
+      "category": "cpu-only",
+      "reason": "Constructs the debug view of a null resource and checks that it has no items; no device."
+    },
+    "ComputeSharp.Tests.Internals.DebugViewTests.TransferTexture3DDebugView_Null": {
+      "category": "cpu-only",
+      "reason": "Constructs the debug view of a null resource and checks that it has no items; no device."
+    }
+  },
+  "history": [
+    {
+      "date": "2026-10-18",
+      "change": "Initial freeze of the Internals inventory, which the upstream workflow runs next to ComputeSharp.Tests. The portable runtime grants the project the same InternalsVisibleTo access as the Direct3D 12 runtime."
+    }
+  ]
+}
