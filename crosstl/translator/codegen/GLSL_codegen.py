@@ -2088,6 +2088,8 @@ class GLSLCodeGen(
             "WaveActiveMin",
             "WaveActiveMax",
             "WaveShuffleDown",
+            "WaveShuffleUp",
+            "WaveShuffleXor",
             "WaveReadLaneAt",
             "WaveShuffleAndFillUp",
             "subgroupExecutionBarrier",
@@ -2096,6 +2098,16 @@ class GLSLCodeGen(
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
             *GLSL_SOFTWARE_SUBGROUP_SCANS,
         }
+    )
+    # Relative shuffles: source-lane validity and source lane. A source lane
+    # outside the active subgroup yields the calling lane's value.
+    GLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES = {
+        "WaveShuffleDown": ("delta < ({active} - lane)", "lane + delta"),
+        "WaveShuffleUp": ("delta <= lane", "lane - delta"),
+        "WaveShuffleXor": ("(lane ^ delta) < {active}", "lane ^ delta"),
+    }
+    GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES = frozenset(
+        {"WaveReadLaneAt", *GLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES}
     )
     GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
     GLSL_SOFTWARE_SUBGROUP_BUILTIN_ALIASES = frozenset(
@@ -42293,6 +42305,8 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveActiveAllTrue": "All",
             "WaveActiveAnyTrue": "Any",
             "WaveShuffleDown": "ShuffleDown",
+            "WaveShuffleUp": "ShuffleUp",
+            "WaveShuffleXor": "ShuffleXor",
             "WaveReadLaneAt": "ReadLaneAt",
             "WaveShuffleAndFillUp": "ShuffleAndFillUp",
             "WavePrefixSum": "PrefixSum",
@@ -42409,6 +42423,8 @@ complex64_t crossgl_complex64_mod_assign(
             "WavePrefixInclusiveProduct": 10,
             "WaveReadLaneAt": 11,
             "WaveShuffleAndFillUp": 12,
+            "WaveShuffleUp": 13,
+            "WaveShuffleXor": 14,
         }
         for operation, value_type in sorted(
             self.required_glsl_software_subgroup_helpers,
@@ -42419,7 +42435,7 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             helper = self.glsl_software_subgroup_helper_name(operation, value_type)
             if (
-                operation in {"WaveShuffleDown", "WaveReadLaneAt"}
+                operation in self.GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES
                 and value_type == "uvec2"
             ):
                 component_helper = self.glsl_software_subgroup_helper_name(
@@ -42582,12 +42598,13 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 absolute = operation == "WaveReadLaneAt"
                 parameter = "index" if absolute else "delta"
-                valid = (
-                    f"index < {active_count}"
-                    if absolute
-                    else f"delta < ({active_count} - lane)"
-                )
-                source_lane = "index" if absolute else "lane + delta"
+                if absolute:
+                    valid, source_lane = f"index < {active_count}", "index"
+                else:
+                    valid, source_lane = self.GLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES[
+                        operation
+                    ]
+                    valid = valid.format(active=active_count)
                 code += (
                     f"{value_type} {helper}({value_type} value, uint {parameter}) {{\n"
                     f"{lane_setup}"
@@ -42908,7 +42925,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         vector_shuffle_type = (
             mapped_value_type
-            if operation in {"WaveShuffleDown", "WaveReadLaneAt"}
+            if operation in self.GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES
             and mapped_value_type == "uvec2"
             else None
         )
@@ -42956,7 +42973,7 @@ complex64_t crossgl_complex64_mod_assign(
                 reason="value-type-unsupported",
                 source_location=source_location,
             )
-        if operation in {"WaveShuffleDown", "WaveReadLaneAt"}:
+        if operation in self.GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES:
             delta_type = self.glsl_source_expression_type(arguments[1])
             mapped_delta_type = (
                 self.map_type(delta_type) if delta_type is not None else None
@@ -42987,7 +43004,7 @@ complex64_t crossgl_complex64_mod_assign(
         self.required_glsl_software_subgroup_helpers.add((operation, helper_type))
         helper = self.glsl_software_subgroup_helper_name(operation, helper_type)
         value = self.generate_expression_with_expected(arguments[0], mapped_value_type)
-        if operation in {"WaveShuffleDown", "WaveReadLaneAt"}:
+        if operation in self.GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES:
             delta = self.generate_expression(arguments[1])
             return f"{helper}({value}, uint({delta}))"
         if narrow_integer_scan is not None:

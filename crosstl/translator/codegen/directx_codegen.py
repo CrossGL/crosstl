@@ -2262,6 +2262,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
     HLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
         {
             "WaveShuffleDown",
+            "WaveShuffleUp",
+            "WaveShuffleXor",
             "WaveReadLaneAt",
             "WaveShuffleAndFillUp",
             *HLSL_SOFTWARE_SUBGROUP_BARRIERS,
@@ -2269,6 +2271,16 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             *HLSL_SOFTWARE_SUBGROUP_SCANS,
         }
     )
+    # Relative shuffles: helper name, source-lane validity and source lane.
+    HLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES = {
+        "WaveShuffleDown": (
+            "shuffle_down",
+            "delta < ({active} - lane)",
+            "lane + delta",
+        ),
+        "WaveShuffleUp": ("shuffle_up", "delta <= lane", "lane - delta"),
+        "WaveShuffleXor": ("shuffle_xor", "(lane ^ delta) < {active}", "lane ^ delta"),
+    }
     HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
     HLSL_SOFTWARE_SUBGROUP_SHUFFLE_TYPES = HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES | {
         "uint2",
@@ -7996,6 +8008,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             operation_name = operation[len("Wave") :]
         elif operation == "WaveReadLaneAt":
             operation_name = "read_lane_at"
+        elif operation in self.HLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES:
+            operation_name = self.HLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES[operation][0]
         elif operation == "WaveShuffleAndFillUp":
             operation_name = "shuffle_and_fill_up"
         return self.hlsl_software_subgroup_identifier(
@@ -8023,7 +8037,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             if is_vote
             else mapped_value_type in (
                 shuffle_types
-                if operation in {"WaveShuffleDown", "WaveReadLaneAt"}
+                if operation == "WaveReadLaneAt"
+                or operation in self.HLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES
                 else self.HLSL_SOFTWARE_SUBGROUP_VALUE_TYPES
             )
         )
@@ -8259,7 +8274,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             scratch = self.hlsl_software_subgroup_scratch_name(value_type)
             reduction = operation in self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS
             scan = operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
-            delta_parameter = "uint delta, " if operation == "WaveShuffleDown" else ""
+            relative = self.HLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES.get(operation)
+            delta_parameter = "uint delta, " if relative is not None else ""
             if operation == "WaveReadLaneAt":
                 delta_parameter = "uint index, "
             if operation == "WaveShuffleAndFillUp":
@@ -8311,13 +8327,13 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 )
             else:
                 active_count = "activeCount" if partial else f"{width}u"
-                absolute = operation == "WaveReadLaneAt"
-                valid = (
-                    f"index < {active_count}"
-                    if absolute
-                    else f"delta < ({active_count} - lane)"
-                )
-                source_lane = "index" if absolute else "lane + delta"
+                if operation == "WaveReadLaneAt":
+                    valid, source_lane = f"index < {active_count}", "index"
+                else:
+                    # A source lane outside the active subgroup yields the
+                    # calling lane's value, the explicit out-of-range policy.
+                    _name, valid, source_lane = relative
+                    valid = valid.format(active=active_count)
                 code += (
                     f"    bool sourceValid = {valid};\n"
                     f"    uint sourceLane = sourceValid ? {source_lane} : lane;\n"
@@ -28954,6 +28970,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if simd_name == "simd_shuffle_up" and len(args) == 2:
             data = self.generate_expression_with_expected(args[0], None)
             delta = self.generate_expression_with_expected(args[1], "uint")
+            if self.software_subgroup_width is not None:
+                return self.hlsl_cast_metal_simd_shuffle_result(
+                    self.hlsl_software_subgroup_call(
+                        "WaveShuffleUp", value_type, data, delta
+                    )
+                )
             if self.relative_wave_shuffle_out_of_range == "self":
                 return self.hlsl_cast_metal_simd_shuffle_result(
                     self.hlsl_defined_relative_wave_shuffle_call(
