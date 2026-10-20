@@ -445,6 +445,7 @@ from .scalar_return_bounds import (
     vector_return_intervals,
 )
 from .stage_distance_layout import distance_semantic
+from .stage_io_semantic_locations import GLSL_SEMANTIC_LOCATIONS
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -2847,42 +2848,10 @@ class GLSLCodeGen(
             "sv_instanceid": "gl_InstanceID",
             "gl_IsFrontFace": "gl_FrontFacing",
             "gl_PrimitiveID": "gl_PrimitiveID",
-            "Position": "layout(location = 0)",
-            "POSITION": "layout(location = 0)",
-            "Color": "layout(location = 13)",
-            "COLOR": "layout(location = 13)",
-            "COLOR0": "layout(location = 13)",
-            "COLOR1": "layout(location = 14)",
-            "COLOR2": "layout(location = 15)",
-            "COLOR3": "layout(location = 16)",
-            "COLOR4": "layout(location = 17)",
-            "COLOR5": "layout(location = 18)",
-            "COLOR6": "layout(location = 19)",
-            "COLOR7": "layout(location = 20)",
-            "Normal": "layout(location = 1)",
-            "NORMAL": "layout(location = 1)",
-            "Tangent": "layout(location = 2)",
-            "TANGENT": "layout(location = 2)",
-            "Binormal": "layout(location = 3)",
-            "BINORMAL": "layout(location = 3)",
-            "TexCoord": "layout(location = 4)",
-            "TEXCOORD": "layout(location = 4)",
-            "TexCoord0": "layout(location = 5)",
-            "TEXCOORD0": "layout(location = 5)",
-            "TexCoord1": "layout(location = 6)",
-            "TEXCOORD1": "layout(location = 6)",
-            "TexCoord2": "layout(location = 7)",
-            "TEXCOORD2": "layout(location = 7)",
-            "TexCoord3": "layout(location = 8)",
-            "TEXCOORD3": "layout(location = 8)",
-            "TexCoord4": "layout(location = 9)",
-            "TEXCOORD4": "layout(location = 9)",
-            "TexCoord5": "layout(location = 10)",
-            "TEXCOORD5": "layout(location = 10)",
-            "TexCoord6": "layout(location = 11)",
-            "TEXCOORD6": "layout(location = 11)",
-            "TexCoord7": "layout(location = 12)",
-            "TEXCOORD7": "layout(location = 12)",
+            **{
+                semantic: f"layout(location = {location})"
+                for semantic, location in GLSL_SEMANTIC_LOCATIONS.items()
+            },
             # Vertex outputs
             "gl_Position": "gl_Position",
             "gl_PointSize": "gl_PointSize",
@@ -9055,6 +9024,15 @@ class GLSLCodeGen(
         emit_vertex_io = target_stage in {None, "vertex"}
         emit_fragment_io = target_stage in {None, "fragment"}
         emit_graphics_io = target_stage in {None, "vertex", "fragment"}
+        # VSInput, VSOutput and PSInput name stage interfaces by convention only when the program has that stage.
+        program_stage_names = {
+            normalize_stage_name(stage_type)
+            for stage_type in getattr(ast, "stages", {})
+        } | {function_stage_name(func) for func in functions} - {None}
+        legacy_vertex_names = not program_stage_names or "vertex" in program_stage_names
+        legacy_fragment_names = (
+            not program_stage_names or "fragment" in program_stage_names
+        )
         data_struct_nodes = []
         for node in structs:
             if isinstance(node, StructNode):
@@ -9077,6 +9055,7 @@ class GLSLCodeGen(
                     continue
                 elif (
                     node.name == "VSInput"
+                    and legacy_vertex_names
                     or node.name in self.vertex_input_struct_names
                 ):
                     if emit_vertex_io:
@@ -9090,7 +9069,9 @@ class GLSLCodeGen(
                             data_struct_nodes.append(node)
                     elif not emit_graphics_io:
                         data_struct_nodes.append(node)
-                elif node.name == "VSOutput":
+                elif node.name == "VSOutput" and (
+                    legacy_vertex_names or legacy_fragment_names
+                ):
                     emitted_io = False
                     if node.name in self.vertex_output_struct_names and emit_vertex_io:
                         code += self.wrap_stage_guard(
@@ -9117,7 +9098,7 @@ class GLSLCodeGen(
                         )
                         emitted_io = True
                     if not emitted_io:
-                        if emit_vertex_io:
+                        if emit_vertex_io and legacy_vertex_names:
                             code += self.wrap_stage_guard(
                                 self.generate_legacy_output_declarations(node),
                                 "vertex",
@@ -9162,7 +9143,7 @@ class GLSLCodeGen(
                         ast, node.name, emitted_io, emit_graphics_io
                     ):
                         data_struct_nodes.append(node)
-                elif node.name == "PSInput":
+                elif node.name == "PSInput" and legacy_fragment_names:
                     if emit_fragment_io:
                         code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
@@ -9619,8 +9600,20 @@ class GLSLCodeGen(
                     mapped_type_for_layout=f"{mapped_type}{array_suffix}",
                 )
 
+        interface_var_stages = {
+            id(variable): normalize_stage_name(stage_type)
+            for stage_type, stage in getattr(ast, "stages", {}).items()
+            for variable in getattr(stage, "local_variables", []) or []
+        }
         for node in stage_local_interface_vars:
-            code += self.generate_stage_local_interface_variable_declaration(node)
+            # A stage's own in/out variables exist only in that stage's section of a combined program.
+            declaration = self.generate_stage_local_interface_variable_declaration(node)
+            owner = interface_var_stages.get(id(node))
+            code += (
+                declaration
+                if owner is None
+                else self.wrap_stage_guard(declaration, owner)
+            )
 
         cbuffers = self.glsl_cbuffer_nodes(ast, target_stage)
         if cbuffers:
@@ -21129,6 +21122,13 @@ class GLSLCodeGen(
                     continue
                 seen_entries.add(id(func))
                 if entry_declares_parameter_struct(func):
+                    return True
+                # Only vertex and fragment entry points flatten their interface structure locals into stage
+                # variables; any other stage's local of that type is an ordinary structure value.
+                if stage_name not in {
+                    "vertex",
+                    "fragment",
+                } and self.function_body_declares_type(func, struct_name):
                     return True
 
         for func in getattr(ast, "functions", []) or []:

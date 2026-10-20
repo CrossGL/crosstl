@@ -2229,10 +2229,9 @@ class HLSLParser:
             "numthreads" in attribute_names or has_mesh_output_parameter
         ):
             return "mesh"
+        # A geometry entry point needs [maxvertexcount]; a function that only takes the output stream is a helper.
         has_geometry_parameter = any(
-            self.is_geometry_stream_type(getattr(param, "vtype", None))
-            or self.parameter_has_geometry_primitive(param)
-            for param in params
+            self.parameter_has_geometry_primitive(param) for param in params
         )
         if "maxvertexcount" in attribute_names or has_geometry_parameter:
             return "geometry"
