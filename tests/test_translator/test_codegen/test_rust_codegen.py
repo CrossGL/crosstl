@@ -50,11 +50,14 @@ from crosstl.translator.ast import (
     StructMemberNode,
     StructNode,
     StructPatternNode,
+    SyncNode,
     TernaryOpNode,
     VariableNode,
+    WaveOpNode,
     WhileNode,
 )
 from crosstl.translator.codegen.rust_codegen import RustCodeGen
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -18500,8 +18503,8 @@ def test_glsl_buffer_array_declarations_map_to_rust_resources_and_compile(tmp_pa
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_glsl_buffer_block_placeholders_and_access_diagnostics_compile(tmp_path):
-    code = """
+def test_glsl_buffer_block_reads_compile_and_invalid_accesses_are_refused(tmp_path):
+    readable = """
     shader RustGlslBufferBlocks {
         struct Particle {
             vec4 position;
@@ -18522,15 +18525,13 @@ def test_glsl_buffer_block_placeholders_and_access_diagnostics_compile(tmp_path)
         compute {
             void main() {
                 float mass = particleBlock.particles[0u].mass;
-                particleBlock.particles[1u].mass = mass;
-                uint blockedRead = writeOnlyData.value;
-                readOnlyData.value = blockedRead;
+                uint copied = readOnlyData.value + uint(mass);
             }
         }
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(readable)))
 
     assert (
         "// CrossGL resource metadata: name=particleBlock "
@@ -18548,19 +18549,43 @@ def test_glsl_buffer_block_placeholders_and_access_diagnostics_compile(tmp_path)
         generated_code
     )
     assert "let mass: f32 = (*PARTICLE_BLOCK).particles[0].mass;" in generated_code
-    assert (
-        "/* unsupported Rust GLSL buffer block: store Rust placeholder storage "
-        "is immutable */;" in generated_code
-    )
-    assert (
-        "let blockedRead: u32 = /* unsupported Rust GLSL buffer block: load "
-        "writeonly placeholder cannot be read */ 0;" in generated_code
-    )
-    assert (
-        "/* unsupported Rust GLSL buffer block: store readonly placeholder "
-        "cannot be written */;" in generated_code
-    )
+    assert "/* unsupported" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+    refused_accesses = {
+        "particleBlock.particles[1u].mass = 1.0;": (
+            "GLSL buffer block store: the block is an immutable Rust static"
+        ),
+        "uint blockedRead = writeOnlyData.value;": (
+            "GLSL buffer block load: a writeonly block cannot be read"
+        ),
+        "readOnlyData.value = 1u;": (
+            "GLSL buffer block store: a readonly block cannot be written"
+        ),
+    }
+    for statement, reason in refused_accesses.items():
+        program = readable.replace(
+            "uint copied = readOnlyData.value + uint(mass);", statement
+        )
+        with pytest.raises(RustLoweringRefused) as refused:
+            generate_code(parse_code(tokenize_code(program)))
+        assert refused.value.code == "project.translate.rust-lowering-unsupported"
+        assert refused.value.reasons == (reason,)
+
+
+def test_rust_refuses_synchronization_and_subgroup_operations_without_a_lowering():
+    codegen = RustCodeGen()
+    sync = SyncNode("deviceScopeFence")
+    wave = WaveOpNode("WaveUnknownOperation", [IdentifierNode("value")])
+    with codegen.refusals.active():
+        assert codegen.generate_sync_statement(sync, 1) == ""
+        assert codegen.generate_wave_op_expression(wave) == "0"
+    assert codegen.refusals.reasons == [
+        "synchronization deviceScopeFence",
+        "subgroup operation WaveUnknownOperation",
+    ]
+    with pytest.raises(RustLoweringRefused, match="2 constructs"):
+        codegen.refusals.raise_pending()
 
 
 def test_glsl_buffer_block_binding_metadata_and_conflicts_for_rust_codegen(

@@ -178,11 +178,7 @@
   "crosstl/translator/codegen/resource_diagnostics.py::ResourceDiagnosticMixin.unsupported_sampled_resource_call::fallback-text": 1,
   "crosstl/translator/codegen/resource_diagnostics.py::ResourceDiagnosticMixin.unsupported_shadow_resource_call::fallback-text": 1,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.add_builtin_function_call_constraints::identity-fallback": 1,
-  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.generate_glsl_buffer_block_assignment::fallback-text": 2,
-  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.generate_member_access_expression::fallback-text": 1,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.generate_ray_tracing_call_expression::identity-fallback": 1,
-  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.generate_sync_statement::fallback-text": 1,
-  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.generate_wave_op_expression::fallback-text": 1,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.map_generic_type_string::identity-fallback": 1,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.map_operator::identity-fallback": 1,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.map_semantic::identity-fallback": 1,
@@ -193,8 +189,6 @@
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.rust_resource_placeholder_diagnostic_comment::fallback-text": 1,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.source_type_from_rust_type::identity-fallback": 1,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.static_symbol_name::identity-fallback": 1,
-  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.unsupported_glsl_buffer_block_expression::fallback-text": 1,
-  "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.unsupported_glsl_buffer_block_statement::fallback-text": 1,
   "crosstl/translator/codegen/rust_codegen.py::RustCodeGen.wave_op_result_type::identity-fallback": 1,
   "crosstl/translator/codegen/slang_codegen.py::SlangCodeGen.generate_expression::identity-fallback": 2,
   "crosstl/translator/codegen/slang_codegen.py::SlangCodeGen.map_semantic::identity-fallback": 1,
@@ -214,7 +208,7 @@
  },
  "totals": {
   "empty-block-recovery": 1,
-  "fallback-text": 49,
+  "fallback-text": 42,
   "identity-fallback": 177
  }
 }

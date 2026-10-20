@@ -54,6 +54,8 @@ from ..ast import (
 from ..matrix_shape import matrix_type_spelling
 from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .lowering_refusals import LoweringRefusalMixin
+from .rust_refusals import RustLoweringRefused
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,
@@ -61,8 +63,10 @@ from .stage_utils import (
 )
 
 
-class RustCodeGen:
+class RustCodeGen(LoweringRefusalMixin):
     """Emit Rust-like GPU shader source from the shared CrossGL AST."""
+
+    LOWERING_REFUSAL_TYPE = RustLoweringRefused
 
     def __init__(self):
         """Initialize Rust type maps and expression-generation state."""
@@ -637,7 +641,15 @@ class RustCodeGen:
         self.nested_lambda_capture_preclone_depth = 0
 
     def generate(self, ast):
-        """Generate complete Rust-like shader source for a CrossGL AST."""
+        """Generate complete Rust-like shader source for a CrossGL AST.
+
+        A construct with no Rust lowering is recorded as a refusal while generation continues, and the program is
+        then refused as a whole with every reason listed (:class:`RustLoweringRefused`).
+        """
+        return self.refusals.run(self.generate_program, ast)
+
+    def generate_program(self, ast):
+        """Render the Rust program; refusals recorded on the way are raised by :meth:`generate`."""
         self.validate_supported_stage_types(ast)
         self.variable_types = {}
         self.local_variable_names = set()
@@ -5432,7 +5444,7 @@ class RustCodeGen:
         sync_type = getattr(stmt, "sync_type", "")
         rust_name = self.sync_map.get(sync_type)
         if rust_name is None:
-            return f"{indent_str}/* unsupported sync: {sync_type} */\n"
+            return self.refuse_lowering(f"synchronization {sync_type or '<unnamed>'}")
         return f"{indent_str}{rust_name}();\n"
 
     def local_value_default_initializer(self, rust_type):
@@ -5448,7 +5460,9 @@ class RustCodeGen:
         operation = getattr(expr, "operation", "")
         rust_name = self.wave_op_map.get(operation)
         if rust_name is None:
-            return f"/* unsupported wave op: {operation} */"
+            return self.refuse_lowering(
+                f"subgroup operation {operation or '<unnamed>'}", "0"
+            )
         args = ", ".join(self.generate_expression(arg) for arg in expr.arguments or [])
         return f"{rust_name}({args})"
 
@@ -8476,14 +8490,14 @@ class RustCodeGen:
             return None
         if access == "readonly":
             return self.unsupported_glsl_buffer_block_statement(
-                "store", "readonly placeholder cannot be written"
+                "store", "a readonly block cannot be written"
             )
         root_name = self.glsl_buffer_block_root_name(target)
         if root_name in self.static_variable_names and root_name not in (
             self.local_variable_names
         ):
             return self.unsupported_glsl_buffer_block_statement(
-                "store", "Rust placeholder storage is immutable"
+                "store", "the block is an immutable Rust static"
             )
         lhs = self.generate_assignment_target_expression(target)
         lhs_type = self.expression_result_type(target)
@@ -11318,7 +11332,7 @@ class RustCodeGen:
         if access == "writeonly" and self.assignment_lhs_depth == 0:
             return self.unsupported_glsl_buffer_block_expression(
                 "load",
-                "writeonly placeholder cannot be read",
+                "a writeonly block cannot be read",
                 self.expression_result_type(expr),
             )
 
@@ -13174,13 +13188,13 @@ class RustCodeGen:
         return self.glsl_buffer_block_accesses.get(root_name)
 
     def unsupported_glsl_buffer_block_expression(self, operation, reason, result_type):
-        fallback = self.rust_default_value_for_type(result_type)
-        return (
-            f"/* unsupported Rust GLSL buffer block: {operation} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"GLSL buffer block {operation}: {reason}",
+            self.rust_default_value_for_type(result_type),
         )
 
     def unsupported_glsl_buffer_block_statement(self, operation, reason):
-        return f"/* unsupported Rust GLSL buffer block: {operation} {reason} */"
+        return self.refuse_lowering(f"GLSL buffer block {operation}: {reason}")
 
     def rust_default_value_for_type(self, type_name):
         rust_type = self.map_type(type_name)
