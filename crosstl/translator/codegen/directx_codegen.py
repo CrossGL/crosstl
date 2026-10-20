@@ -117,6 +117,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
+from . import hlsl_byte_records
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -19424,12 +19425,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 **element,
                 "kind": f"array_{element['kind']}",
                 "array_extent": extent,
-                "word_extent": extent * element["word_extent"],
+                "word_extent": (
+                    None
+                    if element["word_extent"] is None
+                    else extent * element["word_extent"]
+                ),
                 "size_bytes": extent * element["size_bytes"],
             }, None
 
         type_name = self.type_name_string(value_type)
         scalar_layout = scalar_storage_layout(type_name)
+        byte_scalar = hlsl_byte_records.byte_component(
+            scalar_layout, self.map_type(type_name)
+        )
+        if byte_scalar is not None:
+            return byte_scalar, None
         if (
             scalar_layout is not None
             and scalar_layout.bit_width == 32
@@ -19594,8 +19604,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "the backing type has no fixed aggregate or vector word layout",
             )
             reject(reason, detail)
+        struct_alignment, canonical_attributes = (
+            hlsl_byte_records.record_alignment(
+                struct_node,
+                lambda value: self.literal_int_value(value, self.literal_int_constants),
+            )
+            if struct_node is not None
+            else (None, True)
+        )
         if struct_node is not None and (
-            getattr(struct_node, "attributes", None)
+            not canonical_attributes
             or getattr(struct_node, "inheritance", None)
             or self.hlsl_union_layout_for_type(source_type) is not None
         ):
@@ -19620,11 +19638,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         segments = []
         byte_extent = 0
-        maximum_alignment = 4
+        maximum_alignment = struct_alignment or 1
         if direct_component is not None:
             segments.append({**direct_component, "member": None, "word_offset": 0})
             byte_extent = direct_component["size_bytes"]
-            maximum_alignment = direct_component["alignment"]
+            maximum_alignment = max(maximum_alignment, direct_component["alignment"])
         else:
             for member in members:
                 if getattr(member, "attributes", None):
@@ -19665,19 +19683,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "padded-private-view-layout",
                 "the backing aggregate has implicit trailing padding",
             )
+        if not hlsl_byte_records.byte_segments_are_viewable(segments):
+            reject(
+                "heterogeneous-private-view-layout",
+                "byte backings must be one fixed byte array",
+            )
         word_extent = byte_extent // 4
 
         sole_segment = segments[0] if len(segments) == 1 else None
         if sole_segment is not None and sole_segment["kind"] == "array_scalar":
             backing_kind = "array_member" if struct_node is not None else "array"
             source_layout = sole_segment["layout"]
-            parameter_type = f"{self.map_type(source_layout.name)}[{word_extent}]"
+            element_extent = sole_segment["array_extent"]
+            parameter_type = f"{self.map_type(source_layout.name)}[{element_extent}]"
             member_name = sole_segment.get("member")
             variant = (
                 "word_view",
                 source_layout.name,
                 target_layout.name,
-                word_extent,
+                element_extent,
             )
         elif sole_segment is not None and sole_segment["kind"] == "vector":
             backing_kind = "vector_member" if struct_node is not None else "vector"
@@ -19730,7 +19754,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "parameter_type": parameter_type,
             "helper_name": helper_name,
             "word_extent": word_extent,
-            "target_extent": word_extent * 4 // target_layout.byte_width,
+            "target_extent": byte_extent // target_layout.byte_width,
         }
         self.hlsl_private_pointer_word_views.setdefault(variant, layout)
         self.hlsl_private_pointer_reinterpret_word_views[id(expression)] = layout
@@ -23486,7 +23510,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "storage-view-read-unsupported",
                 "the backing pointer does not provide readable storage",
             )
-        if (
+        byte_source = hlsl_byte_records.is_byte_layout(source_layout)
+        if not byte_source and (
             source_layout is None
             or source_layout.bit_width != 32
             or self.map_type(source_layout.name) not in {"float", "int", "uint"}
@@ -23495,8 +23520,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "unsupported-storage-view-source-layout",
                 "the backing pointer must expose homogeneous 32-bit scalar words",
             )
+        _alignment, canonical_attributes = hlsl_byte_records.record_alignment(
+            struct_node,
+            lambda value: self.literal_int_value(value, self.literal_int_constants),
+        )
         if (
-            getattr(struct_node, "attributes", None)
+            not canonical_attributes
             or getattr(struct_node, "inheritance", None)
             or self.hlsl_union_layout_for_type(target_type) is not None
         ):
@@ -23536,7 +23565,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         target_element_name = self.type_name_string(member_type.element_type)
         target_layout = scalar_storage_layout(target_element_name)
-        if (
+        if byte_source:
+            if not hlsl_byte_records.storage_byte_copy_allowed(
+                source_layout, target_layout
+            ):
+                reject(
+                    "unsupported-storage-view-target-layout",
+                    "a byte storage view can only fill a fixed byte array",
+                )
+        elif (
             target_layout is None
             or target_layout.bit_width != 32
             or self.map_type(target_element_name) not in {"float", "int", "uint"}

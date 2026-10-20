@@ -1593,6 +1593,7 @@ jobs:
           CROSTL_REQUIRE_RESOURCE_ALLOCATION_ORIGINS: "1"
           CROSTL_REQUIRE_STATIC_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_PRIVATE_VECTOR_VIEWS: "1"
+          CROSTL_REQUIRE_BYTE_RECORD_VIEWS: "1"
           CROSTL_REQUIRE_PROJECT_MATRIX_FRAGMENTS: "1"
           CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME: "1"
           CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX: ${{ runner.os == 'Windows' && '1' || '0' }}
@@ -1679,6 +1680,7 @@ jobs:
               tests/test_translator/test_directx_matrix_rounding.py \
               tests/test_translator/test_static_resource_aggregates.py \
               tests/test_translator/test_private_vector_views.py \
+              tests/test_translator/test_byte_record_views.py \
               tests/test_translator/test_project_matrix_fragments.py \
               tests/test_translator/test_directx_cooperative_matrix.py \
               tests/test_translator/test_opengl_cooperative_matrix.py \
