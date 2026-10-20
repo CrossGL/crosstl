@@ -1,5 +1,6 @@
 shader main {
     // Constant Buffers
+    @ buffer_layout(hlsl_cbuffer)
     cbuffer Constants {
         mat4 g_WorldViewProj;
     }

@@ -46,9 +46,14 @@ refines that rule, so `.cgl` sources translate as before.
 
 Statement-shaped operations get statement intrinsics that keep the lvalue structure: `x += e` becomes
 `__cgl_wrap_add_assign(x, e)`, and `++x` becomes `__cgl_wrap_preinc(x)`. Native lowering restores the original
-statement. Polyfill lowering produces `x = asint(asuint(x) + asuint(e))`; it refuses when `x` has side effects, and
-when an increment is used as a value, because the CrossGL parser and emitters do not yet handle assignment
-expressions reliably. The 972 GLSL and HLSL files of the pinned corpus contain no increment used as a value.
+statement. Polyfill lowering produces `x = asint(asuint(x) + asuint(e))`; it refuses when `x` has side effects. The
+CrossGL parser and emitters do not yet handle assignment expressions reliably, so an increment used as a value, as in
+`f(x++)` or `for (int i = 0; i++ < n;)`, becomes a call of a reserved helper instead
+(`crosstl/translator/semantics/step_values.py`): `cgl_rule_wrap_postinc(x)` takes `x` as an `inout` parameter,
+updates it with the polyfill and returns the old value, and the prefix and decrement helpers do the same. This needs
+an emitter that writes `inout` parameters back (Metal, DirectX and Slang); the CUDA, HIP, Mojo and SPIR-V emitters
+pass them by value, so those targets still refuse an increment used as a value. The 972 GLSL and HLSL files of the
+pinned corpus contain no increment used as a value.
 
 ### 2. Typing
 
@@ -166,7 +171,8 @@ switch.
   between bit casts for signed `+`, `-` and `*`, except for loop counters with a proved bound. Generated code is
   longer; the expected runtime cost, not yet measured, is the loss of `nsw`-based optimisations, which is the
   semantic difference.
-- Translation from these sources refuses a signed increment that is used as a value, or a compound assignment to an
-  lvalue with side effects, on targets that need the polyfill.
+- Translation from these sources refuses a compound assignment or increment of an lvalue with side effects on targets
+  that need the polyfill, and a signed increment that is used as a value on those of them whose emitters pass `inout`
+  parameters by value (CUDA, HIP, Mojo and SPIR-V).
 - Metal, CUDA, HIP and OpenCL C sources and `.cgl` sources are unaffected: their signed overflow is undefined.
 - New rule families add table rows and templates, not emitter code, and the SMT gate covers them on arrival.

@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 516,
+        "unsupported_marker_count": 518,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -178,7 +178,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 2192
+        "test_count": 2299
       },
       "translator_codegen": {
         "exists": true,
@@ -207,7 +207,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 359,
+        "unsupported_marker_count": 360,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -358,7 +358,7 @@
           "tests/test_translator/test_scalar_aliases.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 2403
+        "test_count": 2408
       },
       "translator_codegen": {
         "exists": true,
@@ -388,7 +388,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 40,
+        "unsupported_marker_count": 41,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -397,6 +397,10 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "project_diagnostic_code = \"project.translate.webgl-index-type-unsupported\""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "project_diagnostic_code = \"project.translate.webgl-precise-unsupported\""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -465,10 +469,6 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "builtin: builtin for builtin in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "builtin_name = self.webgl_unsupported_builtin_attribute_name(node)"
           }
         ]
       },
@@ -485,7 +485,7 @@
           "tests/test_translator/test_arithmetic_conversions.py",
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 59
+        "test_count": 60
       },
       "translator_codegen": {
         "exists": true,
@@ -636,7 +636,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 588,
+        "unsupported_marker_count": 587,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -780,7 +780,7 @@
           "demos/integrations/mlx/tests/kernels/test_current_unary_trig.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 2618
+        "test_count": 2622
       },
       "translator_codegen": {
         "exists": true,
@@ -909,7 +909,7 @@
           "tests/test_translator/test_native_upload_snapshots.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1247
+        "test_count": 1248
       },
       "translator_codegen": {
         "exists": true,
@@ -1494,7 +1494,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 792
+        "test_count": 795
       },
       "translator_codegen": {
         "exists": true,

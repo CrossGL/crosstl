@@ -1,0 +1,19 @@
+diff --git a/tests/ComputeSharp.Tests/Extensions/DeviceExtensions.cs b/tests/ComputeSharp.Tests/Extensions/DeviceExtensions.cs
+index 58b4c63..9598fef 100644
+--- a/tests/ComputeSharp.Tests/Extensions/DeviceExtensions.cs
++++ b/tests/ComputeSharp.Tests/Extensions/DeviceExtensions.cs
+@@ -24,8 +24,14 @@ public static class DeviceExtensions
+     /// </summary>
+     static DeviceExtensions()
+     {
++#if COMPUTESHARP_TRANSLATED_BACKEND
++        // Translated backends expose exactly one device, which runs both device rows.
++        DiscreteDevice = GraphicsDevice.EnumerateDevices().Single();
++        WarpDevice = DiscreteDevice;
++#else
+         DiscreteDevice = GraphicsDevice.QueryDevices(info => info.IsHardwareAccelerated).FirstOrDefault();
+         WarpDevice = GraphicsDevice.QueryDevices(info => !info.IsHardwareAccelerated).FirstOrDefault();
++#endif
+     }
+ 
+     /// <summary>

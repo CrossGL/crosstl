@@ -25,6 +25,7 @@ from .rule_table import (
     POLYFILLS,
     target_entry,
 )
+from .step_values import StepValueHelpers
 
 
 class RuleInexpressibleError(TranslationDiagnostic):
@@ -44,10 +45,12 @@ class Lowerer:
         self.target = target
         self.report = report
         self.helpers = HelperSet(program, target, RuleInexpressibleError)
+        self.step_values = StepValueHelpers(program, target, RuleInexpressibleError)
 
     def run(self):
         self.visit(self.program, None, None)
         self.helpers.inject()
+        self.step_values.inject()
 
     def visit(self, node, parent, field):
         for slot_field, key in list(child_slots(node)):
@@ -154,11 +157,16 @@ class Lowerer:
         in_block = field in _STATEMENT_FIELDS and isinstance(
             parent, (A.StatementNode, A.CaseNode)
         )
-        if not (in_statement or in_block) or not is_pure(node.operand):
+        if not is_pure(node.operand):
             raise RuleInexpressibleError(
-                f"the signed {node.op} used as a value cannot be rewritten with wrapping arithmetic for "
-                f"{self.target}; write it as a separate statement",
+                f"the signed {node.op} of an lvalue with side effects cannot be rewritten with wrapping "
+                f"arithmetic for {self.target}",
                 target=self.target,
+            )
+        if not (in_statement or in_block):
+            # Used as a value: a helper call updates the operand in place and yields the operator's value.
+            return self.step_values.call(
+                statement.intrinsic, node, statement.result_type
             )
         one = A.LiteralNode(1, A.PrimitiveType("int"))
         value = self.polyfill(

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "kind": "computesharp.evidence-policy",
+  "capabilityQueries": {
+    "fp64": {
+      "capability": "fp64"
+    },
+    "rw-texture-rgb32": {
+      "capability": "texture",
+      "readWrite": true,
+      "elementType": [
+        "ComputeSharp.Float3",
+        "ComputeSharp.Int3",
+        "ComputeSharp.UInt3"
+      ]
+    }
+  },
+  "hostOnlyMethods": {}
+}
