@@ -19,7 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .. import crossgl
+from .. import spellings
 from ..model import VOID, Feature, Param, Signature, Type
 from .common import prototype, split
 
@@ -275,10 +275,10 @@ def parse(
                 metal_type(result),
                 tuple(_param(p) for p in params.split(",") if p.strip()),
             )
-        spelling, counterpart = crossgl.spelling("metal", name, glsl_names), None
+        spelling, counterpart = spellings.spelling("metal", name, glsl_names), None
         note = "" if signature else "no overload takes only value types"
-        if name in crossgl.COUNTERPARTS["metal"]:
-            spelling, counterpart = prototype(crossgl.COUNTERPARTS["metal"][name])
+        if name in spellings.COUNTERPARTS["metal"]:
+            spelling, counterpart = prototype(spellings.COUNTERPARTS["metal"][name])
         elif signature and any(p.type.opaque in ENUMS for p in signature.params):
             spelling = ""
             note = "CrossGL has no operation that takes a memory order or memory flags"

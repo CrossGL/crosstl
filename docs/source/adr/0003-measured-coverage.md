@@ -79,9 +79,10 @@ the id of the GLSL function CrossGL spells the same way. A feature SPIR-V cannot
 `tools/coverage/semantic.py` only when it is known to equal another; otherwise it stays a semantic feature of its own.
 
 A semantic feature is expressible when a CrossGL probe for it parses, type-checks and translates correctly to at least
-one backend that has it. CrossGL probes come from a small template layer, `tools/coverage/crossgl.py`, which Core
-updates in the same pull request as any IR change; no CrossGL probe text is pinned. The row's gaps go to one tracking
-issue labelled `backend:crossgl` and `area:frontend`, which Core owns.
+one backend that has it. CrossGL probes come from a small template layer, `tools/coverage/crossgl.py`, and the
+spelling tables in `tools/coverage/spellings.py`, which Core updates in the same pull request as any IR change; no
+CrossGL probe text is pinned. The row's gaps go to one tracking issue labelled `backend:crossgl` and `area:frontend`,
+which Core owns.
 
 ### 5. Generated data stays out of `main`
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from .. import crossgl
+from .. import spellings
 from ..model import VOID, Feature, Param, Signature, Type
 
 _EXPORTS = re.compile(r"^from\s+(\S+)\s+import\s+(\([^)]*\)|[^\n]+)", re.M)
@@ -249,7 +249,7 @@ def parse(
                     name,
                     found,
                     group=group,
-                    crossgl=crossgl.spelling("mojo", name, glsl_names),
+                    crossgl=spellings.spelling("mojo", name, glsl_names),
                     note=note,
                     spelling=spelling,
                 )

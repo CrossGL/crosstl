@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from .. import crossgl
+from .. import spellings
 from ..model import VOID, Feature, Param, Signature, Type
 
 # The scalar type a probe uses for a parameter bounded by each spirv_std trait; atomics and subgroup integer
@@ -358,7 +358,7 @@ def _feature(
     elif name in _DIFFERENT:
         spelled, note = "", note or _DIFFERENT[name]
     else:
-        renamed = crossgl.spelling("rust", name, glsl_names)
+        renamed = spellings.spelling("rust", name, glsl_names)
         spelled = renamed if renamed != name else bare
     return Feature(
         "rust",
