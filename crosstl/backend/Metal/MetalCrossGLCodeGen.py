@@ -13,6 +13,10 @@ from ...translator.cooperative_matrix import (
 )
 from ...translator.division_math import binary32_division_support
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
+from ...translator.host_workgroup_size import (
+    host_workgroup_size_attribute_text,
+    normalize_threadgroup_size_option,
+)
 from ...translator.integer_literals import integer_literal_parts
 from ...translator.math_namespaces import (
     metal_fast_math_operation,
@@ -1409,7 +1413,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         binary32_power_accuracy_profile=None,
         floating_contraction_profile=None,
         preserve_resource_origins=False,
+        threadgroup_size=None,
     ):
+        # The host picks a Metal kernel's threadgroup size at dispatch time; this option names it.
+        self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         if type(preserve_resource_origins) is not bool:
             raise ValueError("preserve_resource_origins must be a boolean")
         self.preserve_resource_origins = preserve_resource_origins
@@ -3872,6 +3879,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             return (
                 "    // Compute Shader\n"
                 "    compute {\n"
+                + self.kernel_workgroup_size_attribute()
                 + self.generate_function(
                     function,
                     stage_entry=self.should_emit_kernel_stage_entry(function),
@@ -9479,6 +9487,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         ):
             declaration = re.sub(r"(?<=\S)&\s+(\w+)", r" \1", declaration, count=1)
         return declaration
+
+    def kernel_workgroup_size_attribute(self):
+        """The mark of a kernel whose host chooses its threadgroup size, with that size when it is configured."""
+        return (
+            f"        @ {host_workgroup_size_attribute_text(self.threadgroup_size)}\n"
+        )
 
     def generate_function(
         self,

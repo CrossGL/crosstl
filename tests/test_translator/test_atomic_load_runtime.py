@@ -207,7 +207,7 @@ def test_atomic_load_executes_natively(tmp_path, kind, case):
     )
 
 
-def _report(root, source, target):
+def _report(root, source, target, workgroup_size=None):
     (root / "load.metal").write_text(source, encoding="utf-8")
     return translate_project(
         ProjectConfig(
@@ -215,6 +215,7 @@ def _report(root, source, target):
             targets=(target,),
             include_patterns=("load.metal",),
             output_dir="out",
+            workgroup_size=workgroup_size,
         ),
         format_output=False,
     ).to_json()

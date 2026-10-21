@@ -10265,6 +10265,7 @@ def test_hlsl_metal_device_pointer_array_offset_element_snapshots_per_iteration(
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert "int64_t xv_offsets[3];" in generated
@@ -11582,6 +11583,7 @@ def test_hlsl_metal_unsupported_address_space_pointer_arrays_fail_closed(
             backend="directx",
             format_output=False,
             source_backend="metal",
+            source_options={"threadgroup_size": 32},
         )
 
     assert excinfo.value.function_name == function_name
@@ -12480,6 +12482,7 @@ def test_hlsl_metal_nested_physical_storage_pointer_array_preserves_logical_type
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert (
@@ -49546,6 +49549,7 @@ def test_hlsl_metal_bfloat_workgroup_pointer_preserves_logical_pointee_alias(
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert "groupshared uint16_t bfloat_workgroup_alias_shared_vals[32];" in generated
@@ -49600,6 +49604,7 @@ def test_hlsl_metal_bfloat_groupshared_arrays_of_arrays_store_16_bit_payloads(
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert "groupshared uint16_t bfloat_tiles_tile[2][4][32];" in generated

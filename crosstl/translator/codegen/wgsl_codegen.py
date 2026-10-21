@@ -46,6 +46,7 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
+from ..host_workgroup_size import require_static_workgroup_size
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
@@ -1351,6 +1352,7 @@ class WGSLCodeGen:
 
     def stage_workgroup_size_values(self, stage_node):
         config = getattr(stage_node, "execution_config", {}) or {}
+        require_static_workgroup_size(config)
         values = config.get("numthreads") or [
             config.get("local_size_x", "1"),
             config.get("local_size_y", "1"),

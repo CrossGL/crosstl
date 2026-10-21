@@ -35203,6 +35203,7 @@ class TestSpirvShaderValidation:
             str(source_path),
             backend="vulkan-khr-cooperative-matrix",
             format_output=False,
+            source_options={"threadgroup_size": 32},
         )
 
         assert spv_code.count("OpCooperativeMatrixLoadKHR") == 2
@@ -35572,6 +35573,7 @@ class TestSpirvShaderValidation:
             str(source_path),
             backend="vulkan-khr-cooperative-matrix",
             format_output=False,
+            source_options={"threadgroup_size": 32},
         )
 
         assert spv_code.count("OpTypeCooperativeMatrixKHR") == 3

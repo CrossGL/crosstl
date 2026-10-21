@@ -76,7 +76,7 @@ def _translate(tmp_path, source=SOURCE, target="crossgl", profile=PROFILE):
         str(path),
         backend=target,
         format_output=False,
-        source_options={"binary16_widening_profile": profile},
+        source_options={"binary16_widening_profile": profile, "threadgroup_size": 32},
     )
 
 

@@ -143,7 +143,8 @@ def test_region_rejects_mixed_or_out_of_range_groups(offset, count, size):
 def test_region_specialization_compiles_without_changing_source_ast(
     tmp_path, target, grid, size
 ):
-    ast = parse_crossgl(convert(SOURCE))
+    # The host dispatches the source kernel with the region's threadgroup size.
+    ast = parse_crossgl(convert(SOURCE, threadgroup_size=size))
     before = _codegen(target).generate(ast)
     for index, region in enumerate(plan_dispatch_regions(grid, size)):
         lowered = specialize_dispatch_region(ast, region)

@@ -124,7 +124,12 @@ def test_half_physical_representation_covers_every_word():
 def test_half_identity_does_not_emit_numeric_narrowing(tmp_path, case):
     source = tmp_path / "copy.metal"
     source.write_text(_source(case), encoding="utf-8")
-    generated = translate(str(source), backend="opengl", format_output=False)
+    generated = translate(
+        str(source),
+        backend="opengl",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
+    )
     assert "crossgl_round_half" not in generated
 
 

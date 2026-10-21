@@ -1,5 +1,6 @@
 """Utilities for normalizing and matching shader stage qualifiers."""
 
+from ..host_workgroup_size import require_static_workgroup_size
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
@@ -411,6 +412,7 @@ def compute_local_size(execution_config=None):
         if isinstance(value, (list, tuple)) and len(value) >= 3:
             return tuple(compute_local_size_value(item) for item in value[:3])
 
+    require_static_workgroup_size(config)
     return (
         compute_local_size_value(config.get("local_size_x", 1)),
         compute_local_size_value(config.get("local_size_y", 1)),

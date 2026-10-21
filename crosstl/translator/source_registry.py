@@ -546,6 +546,7 @@ def _reverse_metal(
     binary32_power_operand_profile=None,
     binary32_power_accuracy_profile=None,
     floating_contraction_profile=None,
+    threadgroup_size=None,
 ):
     from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 
@@ -574,6 +575,7 @@ def _reverse_metal(
         binary32_power_operand_profile=binary32_power_operand_profile,
         binary32_power_accuracy_profile=binary32_power_accuracy_profile,
         floating_contraction_profile=floating_contraction_profile,
+        threadgroup_size=threadgroup_size,
     )
 
 
