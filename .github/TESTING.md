@@ -74,6 +74,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `docs.yml` | The Sphinx documentation build |
 | `release.yml` | Distribution builds for packaging changes, and publishing from a release tag (see [RELEASING.md](RELEASING.md)) |
 | `labels.yml` | Syncs the labels in `.github/labels.yml` |
+| `stale-prs.yml` | Daily: marks pull requests stale after 14 days without activity and closes them 7 days later; issues are left alone |
 
 The workflow files and their header comments describe each job's steps,
 toolchain pins and timeouts.
