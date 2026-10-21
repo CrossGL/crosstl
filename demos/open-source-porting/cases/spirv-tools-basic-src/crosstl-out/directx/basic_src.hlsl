@@ -5,6 +5,7 @@ struct VertexInput {
 struct VertexOutput {
     float4 ANGLEXfbPosition: TEXCOORD0;
     float4 position: SV_POSITION;
+    float gl_PointSize: PSIZE;
 };
 // Vertex Shader
 VertexOutput VSMain(VertexInput input) {

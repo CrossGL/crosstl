@@ -15,6 +15,7 @@ from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
+from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
@@ -75,6 +76,7 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
+    "BuiltinValueUnsupportedError",
     "ConstantReferenceLayoutError",
     "PackedMemberLayoutError",
     "StageInterfaceUnsupportedError",
@@ -138,7 +140,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
-    HLSL's ``out`` argument (:mod:`.atomic_forms`). For MSL and
+    HLSL's ``out`` argument (:mod:`.atomic_forms`). Built-in value
+    attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
+    target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For MSL and
     HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
     structures (:mod:`.stage_interface_structs`). A structure an
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
@@ -182,6 +186,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_texture_swizzles(program)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
+    canonicalize_builtin_values(program, report.target)
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)

@@ -29564,6 +29564,7 @@ class VulkanSPIRVCodeGen(
             "SV_PRIMITIVEID": "gl_PrimitiveID",
             "SV_VIEWID": "gl_ViewIndex",
             "SV_ISFRONTFACE": "gl_FrontFacing",
+            "SV_SAMPLEINDEX": "gl_SampleID",
             "SV_BARYCENTRICS": "gl_BaryCoordEXT",
             "SV_STENCILREF": "gl_FragStencilRefEXT",
             "SV_POSITION": (
@@ -30036,6 +30037,13 @@ class VulkanSPIRVCodeGen(
         elif builtin_name == "FragStencilRefEXT":
             self.require_capability("StencilExportEXT")
             self.require_extension("SPV_EXT_shader_stencil_export")
+        elif (
+            builtin_name == "PrimitiveId"
+            and self.current_stage_builtin_execution_model() == "Fragment"
+        ):
+            # SPIR-V section 3.21: PrimitiveId requires Geometry, Tessellation, ray tracing or mesh shading; a
+            # fragment shader reading it declares Geometry, as glslang does.
+            self.require_capability("Geometry")
         elif builtin_name == "ViewIndex":
             # SPV_KHR_multiview: core in SPIR-V 1.3, an extension before it.
             self.require_capability("MultiView")
