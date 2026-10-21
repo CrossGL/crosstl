@@ -1,5 +1,6 @@
 """Shared AST validation helpers for the CrossGL translator."""
 
+from .codegen.array_utils import prepend_array_dimension
 from .matrix_shape import matrix_type_spelling
 from .stage_utils import (
     SHADER_STAGE_NAMES,
@@ -1520,6 +1521,11 @@ def _stage_interface_entries(shader, stage, stage_name, direction):
                 entry_point, struct_map, stage_name
             )
         )
+        entries.extend(
+            _stream_parameter_stage_interface_entries(
+                entry_point, struct_map, stage_name
+            )
+        )
     else:
         entries.extend(
             _function_parameter_stage_interface_entries(
@@ -1552,6 +1558,32 @@ def _function_return_stage_interface_entries(function, struct_map, stage_name):
             f"'{getattr(function, 'name', '<anonymous>')}'",
         )
     ]
+
+
+_GEOMETRY_STREAM_TYPES = frozenset({"PointStream", "LineStream", "TriangleStream"})
+
+
+def _stream_parameter_stage_interface_entries(function, struct_map, stage_name):
+    """Members of the vertex structure an HLSL-style geometry entry point appends to its output stream."""
+    entries = []
+    for parameter in getattr(function, "parameters", []) or []:
+        parameter_type = getattr(parameter, "param_type", None)
+        if getattr(parameter_type, "name", None) not in _GEOMETRY_STREAM_TYPES:
+            continue
+        for element_type in getattr(parameter_type, "generic_args", None) or []:
+            element_struct = _resolve_stage_interface_struct(element_type, struct_map)
+            if element_struct is None:
+                continue
+            entries.extend(
+                _stage_interface_entry(
+                    member,
+                    getattr(member, "member_type", None),
+                    f"{stage_name} stage stream vertex member "
+                    f"'{element_struct.name}.{getattr(member, 'name', '<anonymous>')}'",
+                )
+                for member in getattr(element_struct, "members", []) or []
+            )
+    return entries
 
 
 def _function_parameter_stage_interface_entries(function, struct_map, stage_name):
@@ -1716,7 +1748,9 @@ def _stage_interface_type_name(type_node):
         size = (
             expression_debug_name(type_node.size) if type_node.size is not None else ""
         )
-        return f"{_stage_interface_type_name(type_node.element_type)}[{size}]"
+        return prepend_array_dimension(
+            _stage_interface_type_name(type_node.element_type), size
+        )
     if hasattr(type_node, "pointee_type"):
         return f"{_stage_interface_type_name(type_node.pointee_type)}*"
     if hasattr(type_node, "referenced_type"):

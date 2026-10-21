@@ -1,44 +1,44 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 55
+; Bound: 56
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
-OpEntryPoint Vertex %16 "VSMain" %19 %20 %22 %26
-OpEntryPoint Fragment %44 "PSMain" %46 %47 %49
-OpExecutionMode %44 OriginUpperLeft
+OpEntryPoint Vertex %17 "VSMain" %20 %21 %23 %27
+OpEntryPoint Fragment %45 "PSMain" %47 %48 %50
+OpExecutionMode %45 OriginUpperLeft
 OpName %9 "PSInput"
 OpMemberName %9 0 "position"
 OpMemberName %9 1 "color"
-OpName %12 "SceneConstantBuffer"
-OpMemberName %12 0 "offset"
-OpMemberName %12 1 "padding"
-OpName %14 "SceneConstantBuffer"
-OpName %19 "gl_Position"
-OpName %20 "CrossGL_vertex_output_VSMain_color"
-OpName %22 "CrossGL_vertex_input_position"
-OpName %25 "position"
-OpName %26 "CrossGL_vertex_input_color"
-OpName %28 "color"
-OpName %30 "result"
-OpName %46 "PSMain_return_gl_FragColor"
-OpName %47 "gl_FragCoord"
-OpName %49 "CrossGL_fragment_input_input_color"
-OpName %52 "input"
-OpDecorate %12 Block
-OpMemberDecorate %12 0 Offset 0
-OpMemberDecorate %12 1 Offset 16
-OpDecorate %10 ArrayStride 16
-OpDecorate %14 DescriptorSet 0
-OpDecorate %14 Binding 0
-OpDecorate %19 BuiltIn Position
-OpDecorate %20 Location 0
-OpDecorate %22 Location 0
-OpDecorate %26 Location 1
-OpDecorate %46 Location 0
-OpDecorate %47 BuiltIn FragCoord
-OpDecorate %49 Location 1
+OpName %13 "SceneConstantBuffer"
+OpMemberName %13 0 "offset"
+OpMemberName %13 1 "padding"
+OpName %15 "SceneConstantBuffer"
+OpName %20 "gl_Position"
+OpName %21 "CrossGL_vertex_output_VSMain_color"
+OpName %23 "CrossGL_vertex_input_position"
+OpName %26 "position"
+OpName %27 "CrossGL_vertex_input_color"
+OpName %29 "color"
+OpName %31 "result"
+OpName %47 "PSMain_return_gl_FragColor"
+OpName %48 "gl_FragCoord"
+OpName %50 "CrossGL_fragment_input_input_color"
+OpName %53 "input"
+OpDecorate %13 Block
+OpDecorate %12 ArrayStride 16
+OpMemberDecorate %13 0 Offset 0
+OpMemberDecorate %13 1 Offset 16
+OpDecorate %15 DescriptorSet 0
+OpDecorate %15 Binding 0
+OpDecorate %20 BuiltIn Position
+OpDecorate %21 Location 1
+OpDecorate %23 Location 0
+OpDecorate %27 Location 1
+OpDecorate %47 Location 0
+OpDecorate %48 BuiltIn FragCoord
+OpDecorate %50 Location 1
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1
@@ -49,58 +49,59 @@ OpDecorate %49 Location 1
 %9 = OpTypeStruct %8 %8
 %11 = OpConstant %4 15
 %10 = OpTypeArray %8 %11
-%12 = OpTypeStruct %8 %10
-%13 = OpTypePointer Uniform %12
-%15 = OpTypeFunction %2
-%18 = OpTypePointer Output %8
-%21 = OpTypePointer Input %8
-%24 = OpTypePointer Function %8
-%29 = OpTypePointer Function %9
-%32 = OpConstant %4 0
-%33 = OpTypePointer Uniform %8
-%39 = OpConstant %4 1
-%14 = OpVariable %13 Uniform
-%19 = OpVariable %18 Output
-%20 = OpVariable %18 Output
-%22 = OpVariable %21 Input
-%26 = OpVariable %21 Input
-%46 = OpVariable %18 Output
-%47 = OpVariable %21 Input
-%49 = OpVariable %21 Input
-%16 = OpFunction %2 None %15
-%17 = OpLabel
-%25 = OpVariable %24 Function
-%28 = OpVariable %24 Function
-%30 = OpVariable %29 Function
-%23 = OpLoad %8 %22
-OpStore %25 %23
-%27 = OpLoad %8 %26
-OpStore %28 %27
-%31 = OpLoad %8 %25
-%34 = OpAccessChain %33 %14 %32
-%35 = OpLoad %8 %34
-%36 = OpFAdd %8 %31 %35
-%37 = OpAccessChain %24 %30 %32
-OpStore %37 %36
-%38 = OpLoad %8 %28
-%40 = OpAccessChain %24 %30 %39
-OpStore %40 %38
-%41 = OpLoad %9 %30
-%42 = OpCompositeExtract %8 %41 0
-OpStore %19 %42
-%43 = OpCompositeExtract %8 %41 1
+%12 = OpTypeArray %8 %11
+%13 = OpTypeStruct %8 %12
+%14 = OpTypePointer Uniform %13
+%16 = OpTypeFunction %2
+%19 = OpTypePointer Output %8
+%22 = OpTypePointer Input %8
+%25 = OpTypePointer Function %8
+%30 = OpTypePointer Function %9
+%33 = OpConstant %4 0
+%34 = OpTypePointer Uniform %8
+%40 = OpConstant %4 1
+%15 = OpVariable %14 Uniform
+%20 = OpVariable %19 Output
+%21 = OpVariable %19 Output
+%23 = OpVariable %22 Input
+%27 = OpVariable %22 Input
+%47 = OpVariable %19 Output
+%48 = OpVariable %22 Input
+%50 = OpVariable %22 Input
+%17 = OpFunction %2 None %16
+%18 = OpLabel
+%26 = OpVariable %25 Function
+%29 = OpVariable %25 Function
+%31 = OpVariable %30 Function
+%24 = OpLoad %8 %23
+OpStore %26 %24
+%28 = OpLoad %8 %27
+OpStore %29 %28
+%32 = OpLoad %8 %26
+%35 = OpAccessChain %34 %15 %33
+%36 = OpLoad %8 %35
+%37 = OpFAdd %8 %32 %36
+%38 = OpAccessChain %25 %31 %33
+OpStore %38 %37
+%39 = OpLoad %8 %29
+%41 = OpAccessChain %25 %31 %40
+OpStore %41 %39
+%42 = OpLoad %9 %31
+%43 = OpCompositeExtract %8 %42 0
 OpStore %20 %43
+%44 = OpCompositeExtract %8 %42 1
+OpStore %21 %44
 OpReturn
 OpFunctionEnd
-%44 = OpFunction %2 None %15
-%45 = OpLabel
-%52 = OpVariable %29 Function
-%48 = OpLoad %8 %47
-%50 = OpLoad %8 %49
-%51 = OpCompositeConstruct %9 %48 %50
-OpStore %52 %51
-%53 = OpAccessChain %24 %52 %39
-%54 = OpLoad %8 %53
-OpStore %46 %54
+%45 = OpFunction %2 None %16
+%46 = OpLabel
+%53 = OpVariable %30 Function
+%49 = OpLoad %8 %48
+%51 = OpLoad %8 %50
+%52 = OpCompositeConstruct %9 %49 %51
+OpStore %53 %52
+%54 = OpAccessChain %25 %53 %40
+%55 = OpLoad %8 %54
+OpStore %47 %55
 OpReturn
 OpFunctionEnd

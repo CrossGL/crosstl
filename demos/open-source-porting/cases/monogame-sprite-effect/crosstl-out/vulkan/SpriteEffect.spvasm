@@ -32,7 +32,7 @@ OpName %65 "input"
 OpDecorate %13 DescriptorSet 0
 OpDecorate %13 Binding 0
 OpDecorate %21 BuiltIn Position
-OpDecorate %22 Location 0
+OpDecorate %22 Location 1
 OpDecorate %24 Location 2
 OpDecorate %26 Location 0
 OpDecorate %30 Location 1

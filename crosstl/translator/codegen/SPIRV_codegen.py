@@ -56,6 +56,7 @@ from ..matrix_shape import (
     length_method_object,
     matrix_type_spelling,
 )
+from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
@@ -65,7 +66,9 @@ from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
     parse_array_type,
+    prepend_array_dimension,
 )
+from .bitfield_builtins import BITFIELD_ARITIES, spirv_bitfield_call
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     collect_generic_enum_specializations,
@@ -77,6 +80,10 @@ from .enum_utils import (
     generic_type_parts,
     resolve_generic_enum_specialization,
     substitute_generic_type_name,
+)
+from .extended_arithmetic_builtins import (
+    EXTENDED_ARITHMETIC_FUNCTIONS,
+    spirv_extended_arithmetic_call,
 )
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
@@ -96,6 +103,7 @@ from .image_access_contracts import (
     image_access_requirement_label,
     image_access_satisfies_requirement,
 )
+from .pack_builtins import PACK_FUNCTIONS, spirv_pack_call, spirv_pack_result_type
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
@@ -107,11 +115,35 @@ from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
+from .spirv_exponent_builtins import (
+    OUTPUT_OPERAND_FUNCTIONS,
+    spirv_ldexp_call,
+    spirv_output_operand_call,
+)
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
+from .spirv_hlsl_registers import reserve_hlsl_descriptor_slots
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
+from .spirv_per_vertex_builtins import (
+    lower_per_vertex_builtin_arrays,
+    per_vertex_builtin_info,
+    sized_per_vertex_interface_type,
+)
+from .spirv_placed_blocks import (
+    SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION,
+    decorate_placed_uniform_block,
+    matrix_from_column_array,
+    placed_member_type,
+    placed_uniform_block,
+)
+from .spirv_push_constants import (
+    declare_push_constant_block,
+    declare_push_constant_variable,
+    is_push_constant_block,
+    uniform_block_storage_layout,
+)
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -119,6 +151,10 @@ from .spirv_stage_distances import (
     load_entry_point_distance,
     store_entry_point_distance,
 )
+from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
+from .spirv_unavailable_inputs import unread_unavailable_builtin_input
+from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
+from .stage_io_semantic_locations import spirv_semantic_location
 from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
     is_texture_lod_clamp_operation,
@@ -386,6 +422,9 @@ class VulkanSPIRVCodeGen(
         self.refusals = SpirvRefusals()
         self.decorations = []
         self.required_extensions = set()
+        self.source_extensions = set()
+        self.placed_uniform_decorations = {}
+        self.placed_uniform_structs = set()
 
         self.primitive_types = {}
         self.vector_types = {}
@@ -553,6 +592,7 @@ class VulkanSPIRVCodeGen(
         self.current_struct_members = {}
         self.cbuffer_variables = {}
         self.cbuffer_members = {}
+        self.push_constant_block_name = None
 
         self.inputs = []
         self.outputs = []
@@ -566,6 +606,10 @@ class VulkanSPIRVCodeGen(
         self.next_resource_bindings = {}
         self.reserved_resource_bindings = set()
         self.used_resource_bindings = set()
+        # Descriptor slots of resources bound by HLSL register or vk::binding, by node id.
+        self.hlsl_descriptor_slots = {}
+        # Uniform-block arrays of matrix columns, by array type id, with the matrix type a load rebuilds.
+        self.matrix_column_arrays = {}
         self.entry_point_resource_binding_baseline = None
 
         self.is_vertex_shader = False
@@ -599,6 +643,10 @@ class VulkanSPIRVCodeGen(
     def require_extension(self, extension: str):
         """Request a SPIR-V extension for instructions emitted later."""
         self.required_extensions.add(extension)
+
+    def require_source_extension(self, extension: str):
+        """Record a source-language extension the module's layout relies on (``OpSourceExtension``)."""
+        self.source_extensions.add(extension)
 
     def require_non_uniform_descriptor_indexing(self):
         self.require_capability("ShaderNonUniform")
@@ -1695,6 +1743,9 @@ class VulkanSPIRVCodeGen(
             self.resource_type_metadata[id_value] = resource_metadata
         if self.is_non_uniform_value(variable_id):
             self.mark_non_uniform_result(spirv_id)
+        matrix_type = self.matrix_column_arrays.get(result_type.id)
+        if matrix_type is not None:
+            return matrix_from_column_array(self, spirv_id, result_type, matrix_type)
         return spirv_id
 
     def convert_value_for_store(
@@ -5413,9 +5464,20 @@ class VulkanSPIRVCodeGen(
         return True
 
     def validate_sampled_texture_lod_operand(
-        self, function_name: str, lod_id: SpirvId
+        self, function_name: str, operands: list, index: int = 0
     ) -> bool:
+        """Check that ``operands[index]`` is a scalar LOD, converting a scalar integer to ``float`` in place.
+
+        HLSL ``SampleLevel(s, uv, 0)`` and GLSL ``textureLod(t, uv, 0)`` pass an integer level that both languages
+        convert implicitly (GLSL 4.60 section 6.1); ``OpImageSampleExplicitLod`` takes a floating-point ``Lod``.
+        """
+        lod_id = operands[index]
         if self.floating_value_component_count(lod_id) == 1:
+            return True
+        if self.integer_value_component_count(lod_id) == 1:
+            operands[index] = self.convert_value_to_type(
+                lod_id, self.register_primitive_type("float")
+            )
             return True
 
         self.refuse_lowering(
@@ -5762,12 +5824,17 @@ class VulkanSPIRVCodeGen(
             return self.default_value_for_buffer_atomic_failure(function_name, args)
 
         metadata = self.storage_buffer_access_metadata_for_pointer(target_pointer)
-        if metadata is None:
+        # Group-shared integers are atomic at workgroup scope (Vulkan 1.3 appendix
+        # "SPIR-V Environment": atomics on Workgroup storage).
+        workgroup = (
+            metadata is None and target_pointer.type.storage_class == "Workgroup"
+        )
+        if metadata is None and not workgroup:
             self.refuse_lowering(f"{function_name} requires a storage buffer target")
             return self.default_value_for_buffer_atomic_failure(
                 function_name, args, target_type
             )
-        if metadata.get("readonly") or metadata.get("writeonly"):
+        if metadata and (metadata.get("readonly") or metadata.get("writeonly")):
             self.refuse_lowering(
                 f"{function_name} requires a read-write storage buffer"
             )
@@ -5824,7 +5891,7 @@ class VulkanSPIRVCodeGen(
         if atomic_operation is None and function_name == "atomicMax":
             atomic_operation = "OpAtomicSMax" if type_name == "int" else "OpAtomicUMax"
 
-        scope = self.spirv_scope_constant("Device")
+        scope = self.spirv_scope_constant("Workgroup" if workgroup else "Device")
         semantics = self.spirv_memory_semantics_constant()
         id_value = self.get_id()
         if function_name == "atomicCompSwap":
@@ -5960,7 +6027,7 @@ class VulkanSPIRVCodeGen(
             return self.default_value_for_type(result_type)
         if function_name in {"textureProjLod", "textureProjLodOffset"}:
             if not self.validate_sampled_texture_lod_operand(
-                function_name, extra_args[0]
+                function_name, extra_args, 0
             ):
                 return self.default_value_for_type(result_type)
         if function_name in {"textureProjGrad", "textureProjGradOffset"}:
@@ -6080,7 +6147,7 @@ class VulkanSPIRVCodeGen(
             "textureCompareProjLodOffset",
         }:
             if not self.validate_sampled_texture_lod_operand(
-                function_name, extra_args[0]
+                function_name, extra_args, 0
             ):
                 return self.default_value_for_type(result_type)
         if function_name in {
@@ -6527,7 +6594,7 @@ class VulkanSPIRVCodeGen(
 
             if function_name in {"textureCompareLod", "textureCompareLodOffset"}:
                 if not self.validate_sampled_texture_lod_operand(
-                    function_name, extra_args[0]
+                    function_name, extra_args, 0
                 ):
                     return self.default_value_for_type(result_type)
             if function_name in {"textureCompareGrad", "textureCompareGradOffset"}:
@@ -7102,13 +7169,13 @@ class VulkanSPIRVCodeGen(
 
             if function_name == "textureLod":
                 if not self.validate_sampled_texture_lod_operand(
-                    function_name, extra_args[0]
+                    function_name, extra_args, 0
                 ):
                     return self.default_value_for_type(result_type)
                 image_operands = f"Lod %{extra_args[0].id}"
             elif function_name == "textureLodOffset":
                 if not self.validate_sampled_texture_lod_operand(
-                    function_name, extra_args[0]
+                    function_name, extra_args, 0
                 ):
                     return self.default_value_for_type(result_type)
                 if not self.validate_sampled_texture_offset_operand(
@@ -9128,31 +9195,7 @@ class VulkanSPIRVCodeGen(
         return location
 
     def mesh_output_semantic_location(self, semantic: Optional[str]) -> Optional[int]:
-        if semantic is None:
-            return None
-
-        semantic_text = str(semantic)
-        fixed_locations = {
-            "POSITION": 0,
-            "NORMAL": 1,
-            "TANGENT": 2,
-            "BINORMAL": 3,
-            "TEXCOORD": 4,
-            "COLOR": 13,
-            "COLOR0": 13,
-        }
-        if semantic_text in fixed_locations:
-            return fixed_locations[semantic_text]
-
-        match = re.fullmatch(r"TEXCOORD(\d+)", semantic_text)
-        if match:
-            return 5 + int(match.group(1))
-
-        match = re.fullmatch(r"COLOR(\d+)", semantic_text)
-        if match:
-            return 13 + int(match.group(1))
-
-        return None
+        return spirv_semantic_location(semantic)
 
     def ensure_mesh_primitive_index_output(
         self, literal_index: Optional[int] = None
@@ -10475,6 +10518,7 @@ class VulkanSPIRVCodeGen(
         synchronization_functions = {
             "allMemoryBarrier",
             "barrier",
+            "deviceMemoryBarrier",
             "groupMemoryBarrier",
             "workgroupBarrier",
             "workgroupExecutionBarrier",
@@ -10483,6 +10527,8 @@ class VulkanSPIRVCodeGen(
             "memoryBarrierImage",
             "memoryBarrierShared",
         }
+        if emit_spirv_subgroup_barrier(self, function_name, args):
+            return self.register_constant(0, self.register_primitive_type("int"))
         if function_name not in synchronization_functions:
             return None
 
@@ -10499,6 +10545,22 @@ class VulkanSPIRVCodeGen(
             "workgroupBarrier",
             "workgroupExecutionBarrier",
         }
+        if (
+            function_name == "barrier"
+            and self.current_synchronization_execution_models()
+            == {"TessellationControl"}
+        ):
+            # GLSL 4.60 section 8.16: a tessellation control barrier() orders the patch's
+            # invocations; glslang lowers it to a workgroup control barrier without memory semantics.
+            workgroup_scope = self.spirv_scope_constant("Workgroup")
+            invocation_scope = self.spirv_scope_constant("Invocation")
+            no_memory_semantics = self.spirv_memory_semantics_constant()
+            self.emit(
+                f"OpControlBarrier %{workgroup_scope.id} %{invocation_scope.id} "
+                f"%{no_memory_semantics.id}"
+            )
+            return self.register_constant(0, self.register_primitive_type("int"))
+
         if (
             function_name in workgroup_synchronization_functions
             and not self.can_emit_workgroup_synchronization()
@@ -10530,10 +10592,22 @@ class VulkanSPIRVCodeGen(
             )
             return self.register_constant(0, self.register_primitive_type("int"))
 
-        if function_name in {"groupMemoryBarrier", "memoryBarrierShared"}:
+        if function_name == "memoryBarrierShared":
             scope = self.spirv_scope_constant("Workgroup")
             semantics = self.spirv_memory_semantics_constant(
                 "AcquireRelease", "WorkgroupMemory"
+            )
+        elif function_name == "groupMemoryBarrier":
+            # GLSL 4.60 section 8.16: groupMemoryBarrier orders all memory accesses within the workgroup;
+            # glslang emits a Workgroup-scope barrier over uniform, workgroup and image memory.
+            scope = self.spirv_scope_constant("Workgroup")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "UniformMemory", "WorkgroupMemory", "ImageMemory"
+            )
+        elif function_name == "deviceMemoryBarrier":
+            scope = self.spirv_scope_constant("Device")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "UniformMemory", "ImageMemory"
             )
         elif function_name == "memoryBarrierBuffer":
             scope = self.spirv_scope_constant("Device")
@@ -10597,6 +10671,10 @@ class VulkanSPIRVCodeGen(
                     self.register_primitive_type("uint")
                 )
             args.append(value)
+
+        extended = lower_spirv_wave_extension(self, operation, argument_exprs, args)
+        if extended is not None:
+            return extended
 
         if operation == "WaveGetLaneCount":
             if args:
@@ -11594,6 +11672,12 @@ class VulkanSPIRVCodeGen(
             "lerp": "mix",
             "rsqrt": "inversesqrt",
         }.get(function_name, function_name)
+        if function_name in PACK_FUNCTIONS:
+            return spirv_pack_call(self, function_name, args)
+        if function_name in BITFIELD_ARITIES:
+            return spirv_bitfield_call(self, function_name, args)
+        if function_name == "ldexp":
+            return spirv_ldexp_call(self, args)
         synchronization_call = self.call_synchronization_function(function_name, args)
         if synchronization_call is not None:
             return synchronization_call
@@ -13835,6 +13919,7 @@ class VulkanSPIRVCodeGen(
             "input",
             "input_primitive",
             "inputprimitive",
+            "instance",
             "invocations",
             "location",
             "local_size",
@@ -13848,6 +13933,8 @@ class VulkanSPIRVCodeGen(
             "max_total_threads_per_threadgroup",
             "max_vertices",
             "maxprimitives",
+            "maxtessfactor",
+            "maxvertexcount",
             "maxvertices",
             "maybe_unused",
             "numthreads",
@@ -14353,6 +14440,16 @@ class VulkanSPIRVCodeGen(
                         load_entry_point_distance(self, array, distance, member_type)
                     )
                     continue
+                if unread_unavailable_builtin_input(
+                    self,
+                    getattr(self, "spirv_program_ast", None),
+                    execution_model,
+                    member_node,
+                    member_type,
+                    member_name,
+                ):
+                    components.append(self.register_undefined_value(member_type))
+                    continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Input",
@@ -14486,7 +14583,7 @@ class VulkanSPIRVCodeGen(
             interface_type, storage_class, name, interface_node
         )
         preferred_location = self.entry_point_interface_location(
-            semantic, storage_class, node, member_index
+            semantic, storage_class, node, member_index, execution_model
         )
         location = self.global_interface_location(
             interface_node, storage_class, preferred_location=preferred_location
@@ -14563,11 +14660,17 @@ class VulkanSPIRVCodeGen(
         return None
 
     def entry_point_interface_location(
-        self, semantic, storage_class: str, node, member_index: Optional[int]
+        self,
+        semantic,
+        storage_class: str,
+        node,
+        member_index: Optional[int],
+        execution_model: Optional[str] = None,
     ) -> Optional[int]:
         if semantic is None:
             return None
-        if storage_class == "Output":
+        # COLORn names a colour attachment only for a fragment output; elsewhere it is a user varying.
+        if storage_class == "Output" and execution_model in (None, "Fragment"):
             color_location = self.spirv_color_semantic_location(semantic, node)
             if color_location is not None:
                 return color_location
@@ -16558,9 +16661,7 @@ class VulkanSPIRVCodeGen(
         if type_node.__class__.__name__ == "ArrayType":
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = self.format_array_size(type_node.size)
-            return (
-                f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
-            )
+            return prepend_array_dimension(element_type, size)
         if hasattr(type_node, "pointee_type"):
             pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
             return f"{pointee_type}*"
@@ -17250,18 +17351,18 @@ class VulkanSPIRVCodeGen(
                 member_name=member_name,
             )
             if type_name.size is None:
-                return f"{element_type}[]"
+                return prepend_array_dimension(element_type)
             value = evaluate_literal_int_expression(type_name.size, constants)
             if value is None:
                 extent = self.struct_array_extent_expression_text(type_name.size)
                 if self.named_specialization_array_length(extent) is not None:
-                    return f"{element_type}[{extent}]"
+                    return prepend_array_dimension(element_type, extent)
                 raise UnsupportedSPIRVFeatureError(
                     "unresolved fixed array extent",
                     "SPIR-V requires a concrete fixed-array extent for "
                     f"{struct_name}.{member_name}; could not resolve '{extent}'",
                 )
-            return f"{element_type}[{value}]"
+            return prepend_array_dimension(element_type, value)
 
         type_text = self.type_name_from_value(type_name)
         if type_text is None or "[" not in type_text:
@@ -17307,6 +17408,7 @@ class VulkanSPIRVCodeGen(
     def process_cbuffer_declaration(self, cbuffer_node: StructNode) -> SpirvId:
         """Emit a CrossGL cbuffer as a SPIR-V Uniform block."""
         members = []
+        row_major_members = set()
         for member in getattr(cbuffer_node, "members", []) or []:
             member_type_source = getattr(
                 member,
@@ -17315,18 +17417,56 @@ class VulkanSPIRVCodeGen(
             )
             if member_type_source is None:
                 continue
-            member_type = self.map_crossgl_type(member_type_source)
-            members.append((member_type, member.name))
+            if self.uniform_member_is_row_major(member):
+                row_major_members.add(len(members))
+            members.append((self.map_crossgl_type(member_type_source), member.name))
 
-        cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
-        self.decorate_cbuffer_type(cbuffer_type, members)
+        if is_push_constant_block(self, cbuffer_node):
+            if row_major_members:
+                raise UnsupportedSPIRVFeatureError(
+                    "row-major push-constant member",
+                    f"push-constant block {cbuffer_node.name} has row-major matrix members",
+                    missing_capabilities=("spirv.row_major_layout",),
+                )
+            var_id, members = declare_push_constant_block(self, cbuffer_node, members)
+        else:
+            placed = placed_uniform_block(self, cbuffer_node)
+            layout = (
+                placed.clone_key
+                if placed is not None
+                else uniform_block_storage_layout(self, cbuffer_node, row_major_members)
+            )
+            # Block members use layout clones so that ArrayStride/Offset
+            # decorations never reach the logical types used by Function,
+            # Private or Workgroup variables (VUID-StandaloneSpirv-None-10684).
+            members = [
+                (
+                    (
+                        placed_member_type(self, member_type, member_name, placed)
+                        if placed is not None
+                        else self.storage_layout_type(member_type, layout)
+                    ),
+                    member_name,
+                )
+                for member_type, member_name in members
+            ]
+            cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
+            if placed is not None:
+                decorate_placed_uniform_block(self, cbuffer_type, placed)
+            elif layout == "std140":
+                self.decorate_cbuffer_type(cbuffer_type, members, row_major_members)
+            else:
+                self.decorate_storage_buffer_block_type(
+                    cbuffer_type, layout, block_decoration="Block"
+                )
+                self.require_source_extension(SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION)
 
-        var_id = self.create_variable(cbuffer_type, "Uniform", cbuffer_node.name)
-        descriptor_set, binding = self.resource_descriptor_slot(cbuffer_node)
-        self.decorations.append(
-            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
-        )
-        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+            var_id = self.create_variable(cbuffer_type, "Uniform", cbuffer_node.name)
+            descriptor_set, binding = self.resource_descriptor_slot(cbuffer_node)
+            self.decorations.append(
+                f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+            )
+            self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
 
         # HLSL and CrossGL constant-buffer names are not in expression scope: in ``cbuffer ubo { UBO ubo; }`` the
         # identifier ``ubo`` names the member, so the block keeps its name only for reflection.
@@ -17380,6 +17520,14 @@ class VulkanSPIRVCodeGen(
             f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
         )
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
+        # A matrix element needs its column order and stride (Vulkan 1.3 section 15.6.4, "Offset and Stride
+        # Assignment"); the runtime array member carries them.
+        matrix_stride = self.storage_matrix_stride_for_member(element_type, "std430")
+        if matrix_stride is not None:
+            self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 ColMajor")
+            self.decorations.append(
+                f"OpMemberDecorate %{block_type.id} 0 MatrixStride {matrix_stride}"
+            )
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
         variable_type, is_descriptor_array = (
@@ -17860,32 +18008,95 @@ class VulkanSPIRVCodeGen(
             self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
 
     def decorate_cbuffer_type(
-        self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
+        self,
+        cbuffer_type: SpirvId,
+        members: List[Tuple[SpirvId, str]],
+        row_major_members=frozenset(),
     ):
+        """Decorate a uniform block with std140 offsets (GLSL 4.60 section 7.6.2.2).
+
+        ``row_major_members`` holds the indices of matrix members stored row by row: they are laid out as arrays
+        of their rows and decorated ``RowMajor``.
+        """
         if self.type_contains_bfloat16(cbuffer_type):
             self.require_bfloat16_storage(uniform=True)
         self.validate_specialization_sized_member_layout(
             cbuffer_type.type.base_type, members
         )
         self.decorations.append(f"OpDecorate %{cbuffer_type.id} Block")
-        self.decorate_uniform_nested_type(cbuffer_type)
+        # The block's own members are decorated below, with their orientation; only nested types here.
+        decorated_structs = {cbuffer_type.id}
+        for member_type, _member_name in members:
+            self.decorate_uniform_nested_type(member_type, decorated_structs)
 
         offset = 0
-        for member_index, (member_type, _) in enumerate(members):
-            offset = self.align_to(offset, self.uniform_layout_alignment(member_type))
+        for member_index, (member_type, member_name) in enumerate(members):
+            row_major = member_index in row_major_members
+            offset = self.align_to(
+                offset, self.uniform_layout_alignment(member_type, row_major)
+            )
             self.decorations.append(
                 f"OpMemberDecorate %{cbuffer_type.id} {member_index} Offset {offset}"
             )
-            if self.uniform_member_needs_matrix_layout(member_type):
-                self.decorations.append(
-                    f"OpMemberDecorate %{cbuffer_type.id} {member_index} ColMajor"
-                )
-                self.decorations.append(
-                    f"OpMemberDecorate %{cbuffer_type.id} {member_index} MatrixStride 16"
-                )
-            self.decorate_uniform_array_strides(member_type)
+            self.decorate_uniform_matrix_member(
+                cbuffer_type, member_index, member_type, row_major, member_name
+            )
+            self.decorate_uniform_array_strides(member_type, row_major)
             if member_index + 1 < len(members):
-                offset += self.uniform_layout_size(member_type)
+                offset += self.uniform_layout_size(member_type, row_major)
+
+    @staticmethod
+    def uniform_member_is_row_major(member) -> bool:
+        """Whether a block member is declared ``row_major`` (GLSL ``layout(row_major)``, HLSL ``row_major``)."""
+        names = {str(q).lower() for q in getattr(member, "qualifiers", None) or []}
+        names.update(
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(member, "attributes", None) or []
+        )
+        return "row_major" in names and "column_major" not in names
+
+    def decorate_uniform_matrix_member(
+        self, struct_type, member_index, member_type, row_major, member_name=""
+    ):
+        """``ColMajor`` or ``RowMajor`` and the ``MatrixStride`` of a uniform member holding matrices."""
+        matrix_type = self.uniform_innermost_matrix(member_type)
+        if matrix_type is None:
+            if row_major:
+                raise UnsupportedSPIRVFeatureError(
+                    "row-major non-matrix uniform member",
+                    f"uniform member {member_name} is declared row_major but holds no matrix",
+                    missing_capabilities=("spirv.row_major_layout",),
+                )
+            return
+        if row_major and matrix_type is not member_type:
+            column_type, columns = self.matrix_type_info_from_type(matrix_type)
+            _component, rows = self.vector_type_info_from_type(column_type)
+            if rows != columns:
+                # The array type is shared with column-major uses, whose element stride differs.
+                raise UnsupportedSPIRVFeatureError(
+                    "row-major array of non-square matrices",
+                    f"uniform member {member_name} is an array of row-major non-square matrices",
+                    missing_capabilities=("spirv.row_major_layout",),
+                )
+        orientation = "RowMajor" if row_major else "ColMajor"
+        stride = self.uniform_matrix_stride(matrix_type, row_major)
+        self.decorations.append(
+            f"OpMemberDecorate %{struct_type.id} {member_index} {orientation}"
+        )
+        self.decorations.append(
+            f"OpMemberDecorate %{struct_type.id} {member_index} MatrixStride {stride}"
+        )
+
+    def uniform_innermost_matrix(self, type_id: SpirvId):
+        """The matrix type a member or array of members holds, or ``None``."""
+        while type_id is not None:
+            if self.matrix_type_info_from_type(type_id) is not None:
+                return type_id
+            array_info = self.array_type_info_from_type(type_id)
+            if array_info is None:
+                return None
+            type_id = array_info[0]
+        return None
 
     def validate_specialization_sized_member_layout(
         self, type_name: str, members: List[Tuple[SpirvId, str]]
@@ -17924,18 +18135,14 @@ class VulkanSPIRVCodeGen(
             type_id.type.base_type, members
         )
         offset = 0
-        for member_index, (member_type, _) in enumerate(members):
+        for member_index, (member_type, member_name) in enumerate(members):
             offset = self.align_to(offset, self.uniform_layout_alignment(member_type))
             self.decorations.append(
                 f"OpMemberDecorate %{type_id.id} {member_index} Offset {offset}"
             )
-            if self.uniform_member_needs_matrix_layout(member_type):
-                self.decorations.append(
-                    f"OpMemberDecorate %{type_id.id} {member_index} ColMajor"
-                )
-                self.decorations.append(
-                    f"OpMemberDecorate %{type_id.id} {member_index} MatrixStride 16"
-                )
+            self.decorate_uniform_matrix_member(
+                type_id, member_index, member_type, False, member_name
+            )
             self.decorate_uniform_nested_type(member_type, decorated_structs)
             if member_index + 1 < len(members):
                 offset += self.uniform_layout_size(member_type)
@@ -17983,19 +18190,21 @@ class VulkanSPIRVCodeGen(
             )
         )
 
-    def uniform_layout_alignment(self, type_id: SpirvId) -> int:
+    def uniform_layout_alignment(self, type_id: SpirvId, row_major=False) -> int:
+        """The std140 base alignment of ``type_id`` (GLSL 4.60 section 7.6.2.2, rules 1-10)."""
         if self.matrix_type_info_from_type(type_id) is not None:
-            return 16
+            return self.uniform_matrix_stride(type_id, row_major)
 
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, _ = array_info
-            return max(16, self.uniform_layout_alignment(element_type))
+            return self.align_to(
+                self.uniform_layout_alignment(element_type, row_major), 16
+            )
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
-            return max(
-                16,
+            return self.align_to(
                 max(
                     (
                         self.uniform_layout_alignment(member_type)
@@ -18003,30 +18212,46 @@ class VulkanSPIRVCodeGen(
                     ),
                     default=1,
                 ),
+                16,
             )
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
             component_type, component_count = vector_info
-            if self.type_contains_bfloat16(component_type):
-                component_size = self.uniform_scalar_size(component_type)
-                return component_size * (2 if component_count == 2 else 4)
-            return 8 if component_count == 2 else 16
+            component_size = self.uniform_scalar_size(component_type)
+            return component_size * (2 if component_count == 2 else 4)
 
-        if self.type_contains_bfloat16(type_id):
-            return 2
-        return 4
+        return self.uniform_scalar_size(type_id)
 
-    def uniform_layout_size(self, type_id: SpirvId) -> int:
-        matrix_info = self.matrix_type_info_from_type(type_id)
-        if matrix_info is not None:
-            _, column_count = matrix_info
-            return 16 * column_count
+    def uniform_matrix_vectors(self, type_id: SpirvId, row_major=False):
+        """``(component type, components, vectors)`` of the vectors a matrix is stored as: its columns, or its
+        rows when it is row-major (rules 5 and 7)."""
+        column_type, column_count = self.matrix_type_info_from_type(type_id)
+        component_type, row_count = self.vector_type_info_from_type(column_type)
+        if row_major:
+            return component_type, column_count, row_count
+        return component_type, row_count, column_count
+
+    def uniform_matrix_stride(self, type_id: SpirvId, row_major=False) -> int:
+        """The std140 stride between the stored vectors of a matrix: an array element's, a multiple of 16."""
+        component_type, components, _vectors = self.uniform_matrix_vectors(
+            type_id, row_major
+        )
+        component_size = self.uniform_scalar_size(component_type)
+        return self.align_to(component_size * (2 if components == 2 else 4), 16)
+
+    def uniform_layout_size(self, type_id: SpirvId, row_major=False) -> int:
+        """The std140 size of ``type_id``; a three-component vector takes three components (rule 3)."""
+        if self.matrix_type_info_from_type(type_id) is not None:
+            _component, _components, vectors = self.uniform_matrix_vectors(
+                type_id, row_major
+            )
+            return self.uniform_matrix_stride(type_id, row_major) * vectors
 
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, size = array_info
-            stride = self.uniform_array_stride(element_type)
+            stride = self.uniform_array_stride(element_type, row_major)
             return stride * self.array_length_default_value(size)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
@@ -18041,10 +18266,7 @@ class VulkanSPIRVCodeGen(
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
             component_type, component_count = vector_info
-            component_size = self.uniform_scalar_size(component_type)
-            if self.type_contains_bfloat16(component_type):
-                return component_size * component_count
-            return self.align_to(component_size * component_count, 16)
+            return self.uniform_scalar_size(component_type) * component_count
 
         return self.uniform_scalar_size(type_id)
 
@@ -18054,8 +18276,12 @@ class VulkanSPIRVCodeGen(
             return 2
         return 8 if primitive_name in {"double", "i64", "u64"} else 4
 
-    def uniform_array_stride(self, element_type: SpirvId) -> int:
-        return self.align_to(self.uniform_layout_size(element_type), 16)
+    def uniform_array_stride(self, element_type: SpirvId, row_major=False) -> int:
+        """The std140 array stride: the element size rounded up to its alignment rounded up to 16 (rule 4)."""
+        return self.align_to(
+            self.uniform_layout_size(element_type, row_major),
+            self.align_to(self.uniform_layout_alignment(element_type, row_major), 16),
+        )
 
     def uniform_layout_contains_matrix(self, type_id: SpirvId) -> bool:
         if self.matrix_type_info_from_type(type_id) is not None:
@@ -18075,26 +18301,15 @@ class VulkanSPIRVCodeGen(
 
         return False
 
-    def uniform_member_needs_matrix_layout(self, type_id: SpirvId) -> bool:
-        if self.matrix_type_info_from_type(type_id) is not None:
-            return True
-
-        array_info = self.array_type_info_from_type(type_id)
-        if array_info is not None:
-            element_type, _ = array_info
-            return self.uniform_member_needs_matrix_layout(element_type)
-
-        return False
-
-    def decorate_uniform_array_strides(self, type_id: SpirvId):
+    def decorate_uniform_array_strides(self, type_id: SpirvId, row_major=False):
         array_info = self.array_type_info_from_type(type_id)
         if array_info is None:
             return
 
         element_type, _ = array_info
-        stride = self.uniform_array_stride(element_type)
+        stride = self.uniform_array_stride(element_type, row_major)
         self.decorations.append(f"OpDecorate %{type_id.id} ArrayStride {stride}")
-        self.decorate_uniform_array_strides(element_type)
+        self.decorate_uniform_array_strides(element_type, row_major)
 
     def storage_layout_type(self, type_id: SpirvId, layout: str) -> SpirvId:
         if type_id.type.base_type == "bool":
@@ -18351,6 +18566,12 @@ class VulkanSPIRVCodeGen(
         return self.uniform_scalar_size(type_id)
 
     def scalar_layout_size(self, type_id: SpirvId) -> int:
+        """The bytes a scalar-layout value takes before the next member may start.
+
+        GL_EXT_scalar_block_layout reserves no padding after the last element of an array or the last member of a
+        struct: glslang puts the member after ``struct { double d; float f; } s`` at 12 bytes past ``s``, although
+        an array of that struct has a 16-byte stride.
+        """
         matrix_info = self.matrix_type_info_from_type(type_id)
         if matrix_info is not None:
             column_type, column_count = matrix_info
@@ -18359,20 +18580,22 @@ class VulkanSPIRVCodeGen(
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, size = array_info
-            return self.scalar_array_stride(
-                element_type
-            ) * self.array_length_default_value(size)
+            count = self.array_length_default_value(size)
+            if count <= 0:
+                return 0
+            return self.scalar_array_stride(element_type) * (
+                count - 1
+            ) + self.scalar_layout_size(element_type)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
             offset = 0
-            max_alignment = 1
             for member_type, _ in struct_members:
-                alignment = self.scalar_layout_alignment(member_type)
-                max_alignment = max(max_alignment, alignment)
-                offset = self.align_to(offset, alignment)
+                offset = self.align_to(
+                    offset, self.scalar_layout_alignment(member_type)
+                )
                 offset += self.scalar_layout_size(member_type)
-            return self.align_to(offset, max_alignment)
+            return offset
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
@@ -19219,7 +19442,9 @@ class VulkanSPIRVCodeGen(
             )
             if integer_bit_type is not None:
                 return integer_bit_type
-            return None
+            if callee_name in BITFIELD_ARITIES and expr.args:
+                return self.infer_expression_result_type(expr.args[0])
+            return spirv_pack_result_type(self, callee_name)
         if isinstance(expr, ArrayAccessNode):
             array_type = self.infer_expression_result_type(expr.array)
             if array_type is None:
@@ -19926,6 +20151,13 @@ class VulkanSPIRVCodeGen(
         )
         if storage_class == "Uniform" and self.uniform_array_requires_block(var_type):
             return self.process_uniform_array_block_declaration(node, var_type)
+        if storage_class in {"Uniform", "Private"} and is_push_constant_block(
+            self, node
+        ):
+            # 'uniform T name' and HLSL's plain '[[vk::push_constant]] T name' global both name the push constants.
+            push_constant = declare_push_constant_variable(self, node, var_type)
+            if push_constant is not None:
+                return push_constant
         if (
             storage_class == "Uniform"
             and self.current_struct_members.get(var_type.type.base_type) is not None
@@ -19955,6 +20187,8 @@ class VulkanSPIRVCodeGen(
                 self.precise_global_variables.add(node.name)
             return initializer
 
+        if storage_class in {"Input", "Output"}:
+            var_type = sized_per_vertex_interface_type(self, var_type, storage_class)
         if storage_class == "Input":
             var_id = self.global_interface_builtin_variable(node, "Input", var_type)
             if var_id is None:
@@ -20056,6 +20290,10 @@ class VulkanSPIRVCodeGen(
     def resource_descriptor_slot(
         self, node: VariableNode, *, allow_binding_reassignment: bool = False
     ) -> Tuple[int, int]:
+        hlsl_slot = self.hlsl_descriptor_slots.get(id(node))
+        if hlsl_slot is not None:
+            self.used_resource_bindings.add(hlsl_slot)
+            return hlsl_slot
         descriptor_set = self.resource_descriptor_set(node)
         explicit_binding = self.explicit_descriptor_binding(node)
 
@@ -20133,6 +20371,11 @@ class VulkanSPIRVCodeGen(
                     f"binding {explicit_binding}"
                 )
             self.reserved_resource_bindings.add(key)
+        self.hlsl_descriptor_slots = reserve_hlsl_descriptor_slots(
+            self,
+            self.global_descriptor_binding_nodes(ast),
+            skip=lambda node: is_push_constant_block(self, node),
+        )
 
     def explicit_descriptor_binding(self, node: VariableNode) -> Optional[int]:
         binding = self.explicit_interface_integer_attribute(node, "binding")
@@ -20384,6 +20627,11 @@ class VulkanSPIRVCodeGen(
                 if attribute_name == "sample":
                     self.require_capability("SampleRateShading")
                 self.decorations.append(f"OpDecorate %{var_id.id} {decoration_name}")
+        if "patch" in {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", ())
+        }:
+            # GLSL `patch in`/`patch out`: one value per patch, not per control point.
+            self.decorations.append(f"OpDecorate %{var_id.id} Patch")
         if self.declaration_metadata_names(node) & {
             "pervertex",
             "pervertexext",
@@ -24277,7 +24525,9 @@ class VulkanSPIRVCodeGen(
         cbuffer_var, member_type, member_index = member_info
         int_type = self.primitive_types["int"]
         index = self.register_constant(member_index, int_type)
-        ptr_type = self.register_pointer_type(member_type, "Uniform")
+        ptr_type = self.register_pointer_type(
+            member_type, cbuffer_var.type.storage_class or "Uniform"
+        )
         access = self.access_chain(cbuffer_var, [index], ptr_type)
         self.variable_value_types[access.id] = member_type
         return access
@@ -24607,6 +24857,15 @@ class VulkanSPIRVCodeGen(
         A runtime array's length is ``OpArrayLength`` on the block variable; a sized array's is its size.
         """
         callee = getattr(expr, "function", None)
+        if (
+            isinstance(callee, MemberAccessNode)
+            and callee.member == "length"
+            and not (getattr(expr, "args", None) or [])
+            and isinstance(callee.object_expr, (IdentifierNode, VariableNode))
+        ):
+            handled = self.process_runtime_view_length_call(callee.object_expr)
+            if handled is not None:
+                return True, handled
         if not (
             isinstance(callee, MemberAccessNode)
             and callee.member == "length"
@@ -24638,6 +24897,25 @@ class VulkanSPIRVCodeGen(
         self.value_types[id_value] = uint_type
         length = SpirvId(id_value, uint_type.type)
         return True, self.convert_value_to_type(length, int_type)
+
+    def process_runtime_view_length_call(self, object_expr):
+        """``name.length()`` for a ``buffer T* name`` view: ``OpArrayLength`` of its block's runtime array."""
+        pointer = self.variable_pointer_from_expression(object_expr)
+        if pointer is None:
+            return None
+        metadata = self.structured_buffer_metadata_for_pointer(pointer)
+        if metadata is None or metadata.get("runtime_array_type") is None:
+            return None
+        member_index = metadata.get("member_index", 0)
+        uint_type = self.register_primitive_type("uint")
+        int_type = self.register_primitive_type("int")
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpArrayLength %{uint_type.id} %{pointer.id} {member_index}"
+        )
+        self.value_types[id_value] = uint_type
+        length = SpirvId(id_value, uint_type.type)
+        return self.convert_value_to_type(length, int_type)
 
     def single_struct_buffer_zero_index_alias(
         self, buffer_pointer: SpirvId, index_expr
@@ -26968,6 +27246,11 @@ class VulkanSPIRVCodeGen(
         elif isinstance(target, MemberAccessNode):
             base_pointer = self.assignable_pointer_from_expression(target.object)
             if base_pointer is None:
+                # A member of a value with no storage (a call result, a temporary) is not an lvalue.
+                self.refuse_lowering(
+                    f"Cannot assign to member {target.member} of "
+                    f"{self.diagnostic_expression(target.object)}: it does not name storage"
+                )
                 return
 
             member_name = target.member
@@ -28273,43 +28556,33 @@ class VulkanSPIRVCodeGen(
         else:
             self.emit(f"OpSwitch %{expression.id} %{default_label.id}")
 
-        if not case_labels:
-            self.emit(f"%{default_label.id} = OpLabel")
-            self.current_label = default_label.id
-            self.loop_merge_labels.append(merge_label)
-            try:
-                self.process_statements(self.switch_case_statements(default_case))
-                if not self.current_block_has_terminator():
-                    self.create_branch(merge_label)
-            finally:
-                self.loop_merge_labels.pop()
+        # Cases run in source order: one whose statements do not end in a jump falls through into the next, which
+        # SPIR-V expresses as a branch to that case's block (SPIR-V 1.6 section 2.11.1).
+        labels_by_case = {id(case): label for _literal, label, case in case_labels}
+        sequence = []
+        for case in cases:
+            if id(case) in labels_by_case:
+                sequence.append((labels_by_case[id(case)], case))
+            elif default_case is not None and case is default_case:
+                sequence.append((default_label, case))
+        if default_case is not None and all(
+            case is not default_case for _label, case in sequence
+        ):
+            sequence.append((default_label, default_case))
 
-            self.emit(f"%{merge_label.id} = OpLabel")
-            self.current_label = merge_label.id
-            return
-
-        for _literal_value, label, case in case_labels:
+        for index, (label, case) in enumerate(sequence):
+            following = (
+                sequence[index + 1][0] if index + 1 < len(sequence) else merge_label
+            )
             self.emit(f"%{label.id} = OpLabel")
             self.current_label = label.id
             self.loop_merge_labels.append(merge_label)
             try:
                 self.process_statements(self.switch_case_statements(case))
                 if not self.current_block_has_terminator():
-                    self.create_branch(merge_label)
+                    self.create_branch(following)
             finally:
                 self.loop_merge_labels.pop()
-
-        if default_case is not None:
-            self.emit(f"%{default_label.id} = OpLabel")
-            self.current_label = default_label.id
-            self.loop_merge_labels.append(merge_label)
-            try:
-                self.process_statements(self.switch_case_statements(default_case))
-            finally:
-                self.loop_merge_labels.pop()
-
-        if not self.current_block_has_terminator():
-            self.create_branch(merge_label)
 
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
@@ -29020,6 +29293,20 @@ class VulkanSPIRVCodeGen(
             if isinstance(callee_name, str) and callee_name.lower() == "nonuniformext":
                 return self.process_non_uniform_function_call(callee_name, expr.args)
 
+            if (
+                callee_name in OUTPUT_OPERAND_FUNCTIONS
+                and not self.has_function_reference(callee_name)
+            ):
+                return spirv_output_operand_call(self, callee_name, list(expr.args))
+
+            if (
+                callee_name in EXTENDED_ARITHMETIC_FUNCTIONS
+                and not self.has_function_reference(callee_name)
+            ):
+                return spirv_extended_arithmetic_call(
+                    self, callee_name, list(expr.args)
+                )
+
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)
 
@@ -29319,6 +29606,7 @@ class VulkanSPIRVCodeGen(
                 "SubgroupLocalInvocationId",
                 "Input",
             ),
+            **SPIRV_SUBGROUP_BUILTINS,
         }
         return builtins.get(name)
 
@@ -29382,6 +29670,8 @@ class VulkanSPIRVCodeGen(
             )
         if upper_name == "SV_BARYCENTRICS":
             return "gl_BaryCoordEXT"
+        if upper_name == "SV_SAMPLEINDEX":
+            return "gl_SampleID"
         if upper_name == "SV_STENCILREF":
             return "gl_FragStencilRefEXT"
         if upper_name == "SV_DEPTH":
@@ -29393,6 +29683,9 @@ class VulkanSPIRVCodeGen(
 
     def stage_builtin_info(self, name: str):
         name = self.spirv_builtin_alias(name)
+        per_vertex = per_vertex_builtin_info(self, name)
+        if per_vertex is not None:
+            return per_vertex
         builtins = {
             "gl_VertexID": (
                 "uint",
@@ -29436,6 +29729,18 @@ class VulkanSPIRVCodeGen(
                 "Input",
                 {"Fragment"},
             ),
+            "gl_SampleID": (
+                "int",
+                "SampleId",
+                "Input",
+                {"Fragment"},
+            ),
+            "gl_SamplePosition": (
+                "vec2",
+                "SamplePosition",
+                "Input",
+                {"Fragment"},
+            ),
             "gl_SampleMaskIn": (
                 "int[1]",
                 "SampleMask",
@@ -29464,13 +29769,13 @@ class VulkanSPIRVCodeGen(
                 "vec4",
                 "Position",
                 "Output",
-                {"Vertex", "TessellationEvaluation"},
+                {"Vertex", "TessellationEvaluation", "Geometry"},
             ),
             "gl_PointSize": (
                 "float",
                 "PointSize",
                 "Output",
-                {"Vertex", "TessellationEvaluation"},
+                {"Vertex", "TessellationEvaluation", "Geometry"},
             ),
             "gl_FragDepth": (
                 "float",
@@ -29518,6 +29823,12 @@ class VulkanSPIRVCodeGen(
                 "TessCoord",
                 "Input",
                 {"TessellationEvaluation"},
+            ),
+            "gl_PatchVerticesIn": (
+                "int",
+                "PatchVertices",
+                "Input",
+                {"TessellationControl", "TessellationEvaluation"},
             ),
             "gl_TessLevelOuter": (
                 "float[4]",
@@ -29778,6 +30089,8 @@ class VulkanSPIRVCodeGen(
         elif builtin_name in {"FragSizeEXT", "FragInvocationCountEXT"}:
             self.require_capability("FragmentDensityEXT")
             self.require_extension("SPV_EXT_fragment_invocation_density")
+        elif builtin_name in {"SampleId", "SamplePosition"}:
+            self.require_capability("SampleRateShading")
         elif builtin_name == "FragStencilRefEXT":
             self.require_capability("StencilExportEXT")
             self.require_extension("SPV_EXT_shader_stencil_export")
@@ -29785,6 +30098,13 @@ class VulkanSPIRVCodeGen(
             # SPV_KHR_multiview: core in SPIR-V 1.3, an extension before it.
             self.require_capability("MultiView")
             self.require_extension("SPV_KHR_multiview")
+        elif builtin_name == "ViewportIndex":
+            self.require_capability("MultiViewport")
+        elif (
+            builtin_name == "Layer"
+            and self.current_stage_builtin_execution_model() == "Fragment"
+        ):
+            self.require_capability("Geometry")
 
     def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:
         builtin = self.ensure_compute_builtin(name)
@@ -29804,8 +30124,10 @@ class VulkanSPIRVCodeGen(
             return builtin_id
 
         type_name, builtin_name, storage_class = info
-        if builtin_name.startswith("Subgroup"):
-            self.require_group_non_uniform()
+        if builtin_name.startswith("Subgroup") or builtin_name == "NumSubgroups":
+            self.require_group_non_uniform(
+                "GroupNonUniformBallot" if builtin_name.endswith("Mask") else None
+            )
         type_id = self.map_crossgl_type(type_name)
         if storage_class == "Constant":
             builtin_id = self.register_workgroup_size_builtin(
@@ -29872,6 +30194,15 @@ class VulkanSPIRVCodeGen(
         self.emit(f"%{id_value} = OpVariable %{ptr_type.id} {storage_class}")
         self.emit(f'OpName %{id_value} "{name}"')
         self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
+        if builtin_name in {"TessLevelOuter", "TessLevelInner"}:
+            self.decorations.append(f"OpDecorate %{id_value} Patch")
+        if (
+            storage_class == "Input"
+            and self.current_stage_builtin_execution_model() == "Fragment"
+            and self.interface_type_requires_flat(type_id)
+        ):
+            # Vulkan VUID-StandaloneSpirv-Flat-04744 covers built-in inputs too (gl_FragSizeEXT, gl_SampleID).
+            self.decorations.append(f"OpDecorate %{id_value} Flat")
         self.mark_fragment_builtin_execution_mode_if_needed(builtin_name, storage_class)
 
         spirv_id = SpirvId(id_value, ptr_type.type, name)
@@ -30558,7 +30889,7 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return "SpacingEqual"
+        return None if self.tessellation_modes_follow_hlsl(stage) else "SpacingEqual"
 
     def tessellation_vertex_order_mode(self, stage) -> str:
         """Return the tessellation-evaluation vertex-order execution mode."""
@@ -30579,7 +30910,16 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return "VertexOrderCcw"
+        return None if self.tessellation_modes_follow_hlsl(stage) else "VertexOrderCcw"
+
+    def tessellation_modes_follow_hlsl(self, stage) -> bool:
+        """Whether ``stage`` declares its domain as an HLSL-style ``@domain`` attribute.
+
+        HLSL declares the spacing and winding on the hull shader only, so an HLSL-style stage that names neither
+        leaves them to the control stage, as DXC does. A GLSL evaluation shader that omits them means
+        ``equal_spacing`` and ``ccw`` (GLSL 4.60 section 4.4.1.2), which SPIR-V must state.
+        """
+        return self.stage_attribute_value(stage, "domain") is not None
 
     def tessellation_point_mode(self, stage) -> bool:
         """Return whether tessellation evaluation should emit PointMode."""
@@ -30605,20 +30945,20 @@ class VulkanSPIRVCodeGen(
                 f"OpExecutionMode %{function_id.id} OutputVertices "
                 f"{self.tessellation_control_output_vertices(stage)}"
             )
-            return
+            if not self.tessellation_modes_follow_hlsl(stage):
+                return
+            # An HLSL hull declares the domain, spacing and winding; DXC states them on the control stage too.
 
-        self.emit(
-            f"OpExecutionMode %{function_id.id} {self.tessellation_domain_mode(stage)}"
-        )
-        self.emit(
-            f"OpExecutionMode %{function_id.id} {self.tessellation_spacing_mode(stage)}"
-        )
-        self.emit(
-            f"OpExecutionMode %{function_id.id} "
-            f"{self.tessellation_vertex_order_mode(stage)}"
-        )
+        modes = [
+            self.tessellation_domain_mode(stage),
+            self.tessellation_spacing_mode(stage),
+            self.tessellation_vertex_order_mode(stage),
+        ]
         if self.tessellation_point_mode(stage):
-            self.emit(f"OpExecutionMode %{function_id.id} PointMode")
+            modes.append("PointMode")
+        for mode in modes:
+            if mode is not None:
+                self.emit(f"OpExecutionMode %{function_id.id} {mode}")
 
     def mesh_stage_output_limits(self, function_id: SpirvId, stage) -> Tuple[int, int]:
         """Return OutputVertices and OutputPrimitivesEXT execution-mode limits."""
@@ -30745,7 +31085,10 @@ class VulkanSPIRVCodeGen(
         memory_model = []
         entry_points = []
         execution_modes = []
-        debug_names = []
+        debug_names = [
+            f'OpSourceExtension "{extension}"'
+            for extension in sorted(getattr(self, "source_extensions", ()))
+        ]
         annotations = []
         declarations = []
         global_variables = []
@@ -30938,7 +31281,19 @@ class VulkanSPIRVCodeGen(
 
         validate_recursion_free(ast, "vulkan")
         lower_relational_builtins(ast)
+        lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
+        ast = lower_constant_buffer_resources(
+            ast,
+            lambda name: self.refuse_lowering(
+                f"array of constant buffers '{name}': the SPIR-V emitter does not declare descriptor arrays "
+                "of uniform blocks yet"
+            ),
+        )
+        self.spirv_program_ast = ast
+        self.per_vertex_program_stages = list(
+            (getattr(ast, "stages", None) or {}).items()
+        )
         self.program_execution_models = {
             self.spirv_execution_model(self.stage_key(stage_type))
             for stage_type in getattr(ast, "stages", None) or {}

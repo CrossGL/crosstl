@@ -14,11 +14,26 @@ from .annotate import Annotator
 from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
+from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
+from .constant_reference_layouts import (
+    ConstantReferenceLayoutError,
+    hoist_constant_reference_layouts,
+)
+from .descriptor_arrays import (
+    DescriptorArrayUnsupportedError,
+    flatten_descriptor_arrays,
+)
+from .dxr_ray_interfaces import (
+    DxrRayInterfaceUnsupportedError,
+    lower_dxr_ray_interfaces,
+)
+from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_stage_interfaces import (
     HlslStageInterfaceUnsupportedError,
     legalize_hlsl_stage_interfaces,
 )
+from .hlsl_tess_factors import TessFactorUnsupportedError, fit_tess_factors_to_domain
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
 from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
@@ -27,6 +42,7 @@ from .intrinsic_named_functions import (
 from .lower import Lowerer, RuleInexpressibleError
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
+from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
 from .shader_records import (
@@ -44,6 +60,14 @@ from .storage_blocks import (
     normalize_spirv_storage_blocks,
 )
 from .struct_scalar_splats import expand_struct_scalar_splats
+from .structured_layouts import (
+    StructuredLayoutUnsupportedError,
+    legalize_structured_layouts,
+)
+from .tessellation_patches import (
+    TessellationPatchUnsupportedError,
+    lower_tessellation_patches,
+)
 from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
@@ -51,10 +75,16 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
+    "ConstantReferenceLayoutError",
+    "PackedMemberLayoutError",
     "StageInterfaceUnsupportedError",
+    "TessFactorUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
+    "DescriptorArrayUnsupportedError",
+    "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
+    "GeometryStreamUnsupportedError",
     "HalfFloatUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
@@ -69,6 +99,7 @@ __all__ = [
     "ShadowSampleUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
     "TARGET_ENTRIES",
+    "TessellationPatchUnsupportedError",
     "UnsizedArrayUnsupportedError",
     "apply_rule_carrying",
 ]
@@ -104,13 +135,23 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
 
     User functions named like texture or image built-ins are first renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
-    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For MSL and
+    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For OpenGL, SPIR-V
+    and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
+    value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
+    HLSL's ``out`` argument (:mod:`.atomic_forms`). For MSL and
     HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
     structures (:mod:`.stage_interface_structs`). A structure an
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
+    For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
+    inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`), and HLSL-style hull and domain stages
+    become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
+    hull's patch-constant function running in invocation 0 after a barrier (:mod:`.tessellation_patches`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
-    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). For targets that build arrays
+    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
+    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), and constant
+    references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
+    storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
     (:mod:`.array_values`), and Metal callees that write an ``in`` array parameter get a copy of it
     (:mod:`.array_parameters`). ``a.length()`` of a sized
@@ -126,7 +167,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refused (:mod:`.implicit_lod`).
     Structs holding samplers,
     textures or images are flattened into separate resources for SPIR-V, or refused with
-    :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`).
+    :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
+    one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
     CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
     registers. The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target
@@ -138,10 +180,19 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     resolve_intrinsic_named_functions(program)
     canonicalize_texture_swizzles(program)
+    canonicalize_atomic_calls(program, report.target)
+    hlsl_out_argument_atomics(program, report.target)
     gather_stage_interface_variables(program, report.target)
+    fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
+    lower_tessellation_patches(program, report.target)
+    lower_geometry_streams(program, report.target)
+    lower_dxr_ray_interfaces(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
+    legalize_structured_layouts(program, report.target)
+    hoist_constant_reference_layouts(program, report.target)
+    refuse_unplaced_packed_members(program, report.target)
     hoist_array_constructors(program, report.target)
     copy_written_array_parameters(program, report.target)
     refuse_per_vertex_inputs(program, report.target)
@@ -151,6 +202,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
     legalize_opaque_struct_members(program, report.target)
+    flatten_descriptor_arrays(program, report.target)
     legalize_shadow_samples(program, report.target)
     legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)

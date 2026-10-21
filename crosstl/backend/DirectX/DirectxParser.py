@@ -28,6 +28,7 @@ from .DirectxAst import (
     MemberAccessNode,
     PragmaNode,
     ReturnNode,
+    ScopedBlockNode,
     ShaderNode,
     StructNode,
     SwitchNode,
@@ -39,6 +40,7 @@ from .DirectxAst import (
     WhileNode,
 )
 from .entry_stage_hints import demote_name_hinted_helpers, entry_name_stage_hint
+from .matrix_pack_pragma import apply_matrix_orientation, pack_matrix_orientation
 
 TYPE_TOKENS = {
     "FLOAT",
@@ -378,6 +380,8 @@ class HLSLParser:
         self.synthetic_cbuffer_names = set()
         self.synthetic_enum_count = 0
         self.effect_stage_entries = {}
+        # The orientation the last ``#pragma pack_matrix`` set, if any.
+        self.matrix_pack_orientation = None
 
     def parse(self):
         structs = []
@@ -406,6 +410,11 @@ class HLSLParser:
 
             if self.current_token[0] == "PREPROCESSOR":
                 directive = self.parse_preprocessor_directive()
+                orientation = pack_matrix_orientation(directive)
+                if orientation is not None:
+                    # The matrices declared after it carry the orientation themselves.
+                    self.matrix_pack_orientation = orientation
+                    continue
                 if directive is not None:
                     structs.append(directive)
                 continue
@@ -419,6 +428,7 @@ class HLSLParser:
                     continue
                 synthetic_start = len(self.synthetic_structs)
                 struct = self.parse_struct()
+                apply_matrix_orientation(struct, self.matrix_pack_orientation)
                 structs.extend(self.synthetic_structs[synthetic_start:])
                 structs.append(struct)
                 continue
@@ -457,13 +467,16 @@ class HLSLParser:
                     declaration_qualifiers=qualifiers,
                     declaration_attributes=attributes,
                 )
+                apply_matrix_orientation(struct, self.matrix_pack_orientation)
                 structs.extend(self.synthetic_structs[synthetic_start:])
                 structs.append(struct)
                 continue
 
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 synthetic_start = len(self.synthetic_structs)
-                cbuffers.append(self.parse_cbuffer(attributes=attributes))
+                cbuffer = self.parse_cbuffer(attributes=attributes)
+                apply_matrix_orientation(cbuffer, self.matrix_pack_orientation)
+                cbuffers.append(cbuffer)
                 structs.extend(self.synthetic_structs[synthetic_start:])
                 continue
 
@@ -505,6 +518,8 @@ class HLSLParser:
                     allow_semantic=True,
                     consume_semicolon=True,
                 )
+                for declaration in self.ensure_statement_list(declarations):
+                    apply_matrix_orientation(declaration, self.matrix_pack_orientation)
                 global_variables.extend(declarations)
 
         demote_name_hinted_helpers(self, functions, structs)
@@ -2229,10 +2244,9 @@ class HLSLParser:
             "numthreads" in attribute_names or has_mesh_output_parameter
         ):
             return "mesh"
+        # A geometry entry point needs [maxvertexcount]; a function that only takes the output stream is a helper.
         has_geometry_parameter = any(
-            self.is_geometry_stream_type(getattr(param, "vtype", None))
-            or self.parameter_has_geometry_primitive(param)
-            for param in params
+            self.parameter_has_geometry_primitive(param) for param in params
         )
         if "maxvertexcount" in attribute_names or has_geometry_parameter:
             return "geometry"
@@ -2677,7 +2691,8 @@ class HLSLParser:
             return "discard"
 
         if self.current_token[0] == "LBRACE":
-            return self.parse_block()
+            # A nested compound statement opens a scope (HLSL follows C here), so it stays a node.
+            return ScopedBlockNode(self.parse_block())
 
         if self.current_token[0] == "PREPROCESSOR":
             self.parse_preprocessor_directive()

@@ -126,6 +126,30 @@ def validate(
     ]
     if results[0].status == "accepted":
         results.append(
-            run([*tool("spirv-val").command, "--target-env", environment, output])
+            run(
+                [
+                    *tool("spirv-val").command,
+                    "--target-env",
+                    environment,
+                    *spirv_layout_flags(path),
+                    output,
+                ]
+            )
         )
     return results, {}
+
+
+def spirv_layout_flags(path):
+    """``spirv-val`` flags for the block layouts a module declares it relies on.
+
+    A module whose blocks need the scalar block layout says so with ``OpSourceExtension
+    "GL_EXT_scalar_block_layout"``, as glslang does; the host then enables ``scalarBlockLayout``. Any other module
+    is checked against Vulkan's default layout rules.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    if 'OpSourceExtension "GL_EXT_scalar_block_layout"' in text:
+        return ["--scalar-block-layout"]
+    return []

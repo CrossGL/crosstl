@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 72,
-        "endOffset": 2370,
+        "endLine": 67,
+        "endOffset": 2273,
         "file": "crosstl-out/directx/CubeFDM_fs.hlsl",
-        "length": 2370,
+        "length": 2273,
         "line": 1,
         "offset": 0
       },

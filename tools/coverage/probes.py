@@ -33,6 +33,7 @@ _STAGE_PROGRAMS = {
     "tessellation-control": "tessellation_control",
     "mesh": "mesh",
     "task": "task",
+    "node": "node",
 }
 # Stages whose probe declares a payload, which a parameter of a user-defined or by-reference type takes: the task
 # payload a task shader hands to its mesh workgroups, and the ray payload a hit shader receives and can trace with.
@@ -141,11 +142,15 @@ class _Builder:
     def _arguments(self, signature: Signature) -> tuple[list[str], Type | None]:
         dialect, arguments, output = self.dialect, [], None
         receiver = self.receiver
-        for kind in (signature.result, *(p.type for p in signature.params)):
+        result = signature.result
+        read = bool(
+            result.opaque
+            and (dialect.reading(result.opaque) or dialect.holding(result.opaque))
+        )
+        for kind in ([] if read else [result]) + [p.type for p in signature.params]:
             if not self._resource(kind):
-                dialect.type(
-                    kind
-                )  # raises ProbeError for what the language cannot spell
+                # Raises ProbeError for what the language cannot spell.
+                dialect.type(kind.element)
         for index, param in enumerate(signature.params):
             local = f"a{index}"
             if self.payload and (
@@ -173,8 +178,15 @@ class _Builder:
             elif param.direction == "out":
                 self.lines.append(dialect.declare(param.type, local))
                 arguments.append(dialect.out_argument(local))
+            elif param.direction == "const" and param.type.count:
+                self.lines.append(dialect.constant_array(param.type, local))
+                arguments.append(local)
             elif param.direction == "const":
                 arguments.append(dialect.literal(param.type))
+            elif param.direction == "address":
+                value = self.value(param.type)
+                self.lines.append(dialect.declare(param.type, local, value))
+                arguments.append(dialect.address(local))
             else:
                 value = self.value(param.type)
                 self.lines.append(dialect.declare(param.type, local, value))
@@ -192,7 +204,18 @@ class _Builder:
             name = self.receiver.call(name)
         call = dialect.call(name, arguments)
         result = signature.result
-        if output is not None or result.opaque:
+        reading = dialect.reading(result.opaque) if result.opaque else None
+        held = dialect.holding(result.opaque) if result.opaque else ""
+        if output is None and reading:
+            output, read = reading
+            stores = [
+                dialect.declare(output, "r", read.format(call)),
+                dialect.store("r"),
+            ]
+        elif output is None and held:
+            output = Type("uint")
+            stores = [f"{held} r = {call};", dialect.store(dialect.literal(output))]
+        elif output is not None or result.opaque:
             stores = [dialect.statement(call)]
             if output is None:
                 output = Type("uint")
@@ -243,6 +266,9 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         *RAYTRACING_STAGES,
     ):
         raise ProbeError(f"no {feature.stage}-stage probe yet")
+    absent = dialect.absent(feature.stage)
+    if absent:
+        raise NoSpelling(absent)
     name = feature.crossgl if crossgl else feature.spelling or feature.name
     if not name:
         raise NoSpelling(
@@ -282,7 +308,12 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         )
     if feature.stage in _STAGE_PROGRAMS:
         program = getattr(dialect, _STAGE_PROGRAMS[feature.stage])
-        source = program(buffers, body, declarations=declarations)
+        if receiver and receiver.parameter:
+            source = program(
+                buffers, body, declarations=declarations, parameter=receiver.parameter
+            )
+        else:
+            source = program(buffers, body, declarations=declarations)
         suffix = dialect.geometry_suffix if feature.stage == "geometry" else ""
         return Probe(language, source, dialect.entry, suffix or dialect.suffix)
     if feature.stage in RAYTRACING_STAGES:

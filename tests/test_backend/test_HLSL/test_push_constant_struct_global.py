@@ -60,6 +60,6 @@ def test_vk_push_constant_struct_global_reparses():
 
     crossgl = generate_crossgl(hlsl)
 
-    assert "@ vk_push_constant" in crossgl
-    assert "var PushConstants push_constants;" in crossgl
+    assert "@ push_constant" in crossgl
+    assert "ConstantBuffer<PushConstants> push_constants;" in crossgl
     parse_crossgl(crossgl)

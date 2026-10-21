@@ -46,6 +46,7 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
+from .array_utils import prepend_array_dimension
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
@@ -4158,9 +4159,7 @@ class WGSLCodeGen:
             )
         if isinstance(vtype, ArrayType):
             element = self.raw_type_name_string(vtype.element_type)
-            if vtype.size is None:
-                return f"{element}[]"
-            return f"{element}[{vtype.size}]"
+            return prepend_array_dimension(element, vtype.size)
         if isinstance(vtype, NamedType):
             if not vtype.generic_args:
                 return str(vtype.name)

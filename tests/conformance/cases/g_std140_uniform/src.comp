@@ -1,0 +1,29 @@
+#version 450
+// std140: bias shares the 16-byte slot of the vec3 at byte 12; the vec2 and float arrays have a 16-byte stride, so
+// offsets is at 16, 32 and 48 and weights at 128 and 144; mat3 columns are 16 bytes apart from 64; an array fills
+// whole slots, so tail starts at 160 rather than right after weights[1].
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Inp { float x[]; };
+layout(std430, binding = 1) writeonly buffer Outp { float o[]; };
+layout(std140, binding = 2) uniform Params {
+    vec3 scale;
+    float bias;
+    vec2 offsets[3];
+    mat3 rot;
+    int mode;
+    float weights[2];
+    vec2 tail;
+} params;
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    float v = x[i];
+    vec3 r = params.rot * vec3(v, 1.0, 2.0);
+    o[8u * i + 0u] = v * params.scale.x + params.bias;
+    o[8u * i + 1u] = v * params.scale.y + params.scale.z;
+    o[8u * i + 2u] = params.offsets[i % 3u].x;
+    o[8u * i + 3u] = params.offsets[i % 3u].y;
+    o[8u * i + 4u] = r[i % 3u];
+    o[8u * i + 5u] = float(params.mode);
+    o[8u * i + 6u] = params.weights[i % 2u];
+    o[8u * i + 7u] = params.tail.y;
+}

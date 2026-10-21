@@ -24,6 +24,10 @@ _ES_CLIP = "GLSL ES 3.00 has no clip or cull distances"
 _ES_BARYCENTRIC = "GLSL ES 3.00 has no fragment barycentrics"
 _ES_SAMPLE = "GLSL ES 3.00 has no per-sample shading variables (GLSL ES 3.20)"
 _ES_LAYER = "GLSL ES 3.00 has no layered or multi-viewport rendering"
+_ES_DENSITY = "GLSL ES 3.00 has no fragment density map queries (GL_EXT_fragment_invocation_density)"
+_ES_SHADING_RATE = (
+    "GLSL ES 3.00 has no fragment shading rate (GL_EXT_fragment_shading_rate)"
+)
 
 # OpenGL ES Shading Language 3.00, section 7 (built-in variables) against GLSL 4.60 section 7.
 WEBGL_UNAVAILABLE_BUILTINS = {
@@ -46,12 +50,21 @@ WEBGL_UNAVAILABLE_BUILTINS = {
     "gl_DrawID": "GLSL ES 3.00 has no draw index",
     "gl_BaseVertex": "GLSL ES 3.00 has no base vertex",
     "gl_BaseInstance": "GLSL ES 3.00 has no base instance",
+    # GL_EXT_fragment_invocation_density and GL_EXT_fragment_shading_rate are not WebGL 2 extensions.
+    "gl_FragSizeEXT": _ES_DENSITY,
+    "gl_FragInvocationCountEXT": _ES_DENSITY,
+    "gl_ShadingRateEXT": _ES_SHADING_RATE,
+    "gl_PrimitiveShadingRateEXT": _ES_SHADING_RATE,
 }
 
 WEBGL_UNAVAILABLE_FUNCTION_PATTERNS = (
     (
         re.compile(r"\bsparse\w*ARB\b"),
         "GLSL ES 3.00 has no sparse texture residency queries (GL_ARB_sparse_texture2)",
+    ),
+    (
+        re.compile(r"\b(?:rayQueryEXT|accelerationStructureEXT)\b"),
+        "GLSL ES 3.00 has no ray queries or acceleration structures (GL_EXT_ray_query is not a WebGL 2 extension)",
     ),
 )
 

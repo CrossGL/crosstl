@@ -22,7 +22,7 @@ from ..model import (
     Type,
     raytracing_stage,
 )
-from ..objects import OBJECTS, SAMPLERS, element
+from ..objects import OBJECTS, SAMPLERS, VERTEX, element
 from ..validators import HLSL_SHADER_MODEL as SHADER_MODEL
 from .common import pick
 
@@ -41,6 +41,9 @@ _FUNCTIONS = {"Intrinsics": "", "DxIntrinsics": "dx::"}
 # The shader model 2 and 3 samplers. DXC's table still declares tex1D through texCUBEproj on them, but DXC has no
 # spelling for the types and rejects every call with "Unsupported intrinsic", so those functions are left out.
 _LEGACY_SAMPLER = re.compile(r"\bsampler(?:1d|2d|3d|_cube)\b")
+# Functions the table declares but DXC rejects for every target: "Unsupported intrinsic" when compiling to DXIL, and
+# no equivalent or no implementation when compiling to SPIR-V.
+_REJECTED = frozenset({("Intrinsics", "abort"), ("Intrinsics", "source_mark")})
 # Methods that take implicit derivatives, which a compute probe of one thread cannot.
 _DERIVATIVES = frozenset(
     "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped"
@@ -75,8 +78,18 @@ SCALAR = {
     "p32i8": "int8x4_packed",
     "p32u8": "uint8x4_packed",
 }
+# The unsigned instances of DXC's scalar integer templates, as DXC spells them.
+_UNSIGNED_INSTANCES = {
+    "int32_only": frozenset({"uint"}),
+    "any_int32": frozenset({"uint"}),
+    "any_int16or32": frozenset({"uint"}),
+    "any_int": frozenset({"uint", "u64"}),
+    "int64_only": frozenset({"u64"}),
+    "any_int64": frozenset({"u64"}),
+}
 # Intrinsics that only exist in one kind of shader stage (Direct3D 12 functional specification), under the report's
-# stage names: Direct3D's amplification stage is the task stage, and its hull stage the tessellation-control stage.
+# stage names: Direct3D's amplification stage is the task stage, its hull stage the tessellation-control stage, and
+# a work graph's node shader the node stage.
 STAGES = {
     "fragment": (
         "clip ddx ddx_coarse ddx_fine ddy ddy_coarse ddy_fine fwidth EvaluateAttributeAtSample "
@@ -87,9 +100,9 @@ STAGES = {
         "CallShader TraceRay ReportHit IgnoreHit AcceptHitAndEndSearch DispatchRaysIndex DispatchRaysDimensions "
         "WorldRayOrigin WorldRayDirection ObjectRayOrigin ObjectRayDirection RayTMin RayTCurrent PrimitiveIndex "
         "InstanceID InstanceIndex GeometryIndex HitKind RayFlags ObjectToWorld ObjectToWorld3x4 ObjectToWorld4x3 "
-        "WorldToObject WorldToObject3x4 WorldToObject4x3 ClusterID GetRemainingRecursionLevels "
-        "TriangleObjectPositions dx::MaybeReorderThread"
+        "WorldToObject WorldToObject3x4 WorldToObject4x3 ClusterID TriangleObjectPositions dx::MaybeReorderThread"
     ),
+    "node": "GetRemainingRecursionLevels",
     "mesh": "SetMeshOutputCounts",
     "task": "DispatchMesh",
     "tessellation-control": (
@@ -114,6 +127,21 @@ def stage_of(name: str) -> str:
 # reads one of the primitive's three vertices, so its index is a literal 0, 1 or 2 (HLSL SM 6.1 barycentrics),
 # and Barrier's memory-type and semantic flags must be constants (HLSL SM 6.8 barriers).
 _IMMEDIATE = {"GetAttributeAtVertex": (1,), "Barrier": (0, 1)}
+
+
+# Intrinsics whose table declaration admits more types than the operation has. DXC declares
+# ``NonUniformResourceIndex(in any<> index)``, but the function marks an index into a resource array, so the HLSL
+# reference declares it ``uint NonUniformResourceIndex(uint index)`` (Resource binding in HLSL, shader model 5.1)
+# and Slang deprecates every other type as having no effect. The probe passes the documented type.
+_DOCUMENTED = {"NonUniformResourceIndex": ("uint", "in uint index")}
+
+
+def _documented(name: str, declared: list) -> list:
+    """``declared`` with the result and parameters ``_DOCUMENTED`` gives for ``name``; attributes stay the table's."""
+    if name not in _DOCUMENTED:
+        return declared
+    result, params = _DOCUMENTED[name]
+    return [(attributes, result, params) for attributes, _, _ in declared]
 
 
 def _immediate(name: str, signature: Signature | None) -> Signature | None:
@@ -165,9 +193,14 @@ def _own(spelling: str) -> tuple[dict | None, Type | None]:
         return None, Type.other(spelling.strip() or "unknown")
     base, layout = match.group("base"), match.group("layout")
     reference = (
-        {"x": int(match.group("x")), "y": int(match.group("y"))}
-        if match.group("x") is not None
-        else None
+        {
+            "x": int(match.group("x")),
+            "y": int(match.group("y")),
+            # ``float<2>`` fixes the size; ``$match`` then only matches scalar, vector or matrix and the component.
+            "sized": bool(
+                layout and all(p.strip().isdigit() for p in layout.split(","))
+            ),
+        } if match.group("x") is not None else None
     )
     if base == "void":
         return reference, Type.other("void")
@@ -180,7 +213,11 @@ def _own(spelling: str) -> tuple[dict | None, Type | None]:
 
 
 def _resolve(spellings: list[str]) -> list[Type]:
-    """Apply ``$match<X, Y>``: the layout comes from type X and the component type from type Y."""
+    """Apply ``$match<X, Y>``: the layout comes from type X and the component type from type Y.
+
+    A spelling with its own size, such as the ``$match<2, 2> float<2>`` gradients of ``Texture2DArray.SampleGrad``,
+    keeps that size.
+    """
     parsed = [_own(s) for s in spellings]
     own = [kind for _, kind in parsed]
     final: list[Type | None] = list(own)
@@ -203,8 +240,29 @@ def _resolve(spellings: list[str]) -> list[Type]:
         if layout is None or component is None or layout.opaque or component.opaque:
             final[position] = kind
             continue
-        final[position] = Type(component.scalar, layout.shape if layout else ())
+        shape = kind.shape if reference.get("sized") else layout.shape
+        final[position] = Type(component.scalar, shape)
     return [kind or Type.other("unknown") for kind in final]
+
+
+def _unsigned(spellings: list[str], directions: list[str]) -> list[str]:
+    """``spellings`` with the integer templates made unsigned when an atomic destination takes an unsigned operand.
+
+    DXC declares ``InterlockedAdd(ref int32_only result, in uint value)``. The template's first instance, ``int``,
+    would make the probe pass a ``uint`` value to an ``int`` destination through an implicit conversion, so the
+    probe takes the unsigned instance and passes one type throughout.
+    """
+    params = spellings[1:]
+    fixed = {s for s in params if s in ("uint", "u64")}
+    if not any(
+        d == "inout" and s in _UNSIGNED_INSTANCES for s, d in zip(params, directions)
+    ):
+        return spellings
+    chosen = []
+    for spelling in spellings:
+        admitted = _UNSIGNED_INSTANCES.get(spelling, frozenset()) & fixed
+        chosen.append(next(iter(admitted)) if len(admitted) == 1 else spelling)
+    return chosen
 
 
 def _signature(result: str, params: str) -> Signature:
@@ -223,7 +281,7 @@ def _signature(result: str, params: str) -> Signature:
         type_text = " ".join(words[:-1])
         spellings.append(type_text)
         directions.append(direction)
-    kinds = _resolve(spellings)
+    kinds = _resolve(_unsigned(spellings, directions))
     return Signature(
         kinds[0], tuple(Param(k, d) for k, d in zip(kinds[1:], directions))
     )
@@ -267,13 +325,14 @@ def declarations(text: str):
 
 def _concrete(text: str, held: Type | None) -> str:
     """``text`` with an object's generic types made concrete: ``$classT`` is its element type ``held``, ``$funcT``
-    (the type a templated load returns) ``uint``, and ``$match<0, -1> void<n>`` the element's component type in that
-    layout.
+    (the type a templated load returns) ``uint``, ``$match<0, -1> void<n>`` the element's component type in that
+    layout, and ``$match<-1, 1> void``, the vertex a stream's ``Append`` takes, the geometry probe's vertex type.
     """
     held = held or Type("uint")
     spelled = held.scalar + (f"<{held.shape[0]}>" if held.shape else "")
     text = re.sub(r"\$match<\s*0\s*,\s*-1\s*>\s*void\b", held.scalar, text)
     text = re.sub(r"\$match<\s*-1\s*,\s*0\s*>\s*void\b", spelled, text)
+    text = re.sub(r"\$match<\s*-1\s*,\s*1\s*>\s*void\b", VERTEX, text)
     text = re.sub(r"\bany_sampler\b", "sampler", text)
     return text.replace("$classT", spelled).replace("$funcT", "uint")
 
@@ -312,6 +371,10 @@ def _method(owner: str, name: str, declared: list) -> Feature:
     # The plainest overload: no offset, clamp or tiled-resource status.
     ordered = sorted(signatures, key=lambda s: (_preference(s), len(s.params)))
     chosen = next((s for s in ordered if _probed(s)), ordered[0] if ordered else None)
+    # A static method, such as dx::HitObject::MakeNop, is called on its type.
+    static = kind and all(
+        "static" in attributes.split(",") for attributes, _, _ in declared
+    )
     return Feature(
         "hlsl",
         "method",
@@ -321,7 +384,7 @@ def _method(owner: str, name: str, declared: list) -> Feature:
         crossgl=name,
         stage="fragment" if name in _DERIVATIVES else kind.stage if kind else "compute",
         note=note,
-        spelling=name,
+        spelling=f"{kind.spelling}::{name}" if static else name,
     )
 
 
@@ -333,7 +396,7 @@ def parse(
     for namespace, name, attributes, result, params in declarations(text):
         if namespace in LEFT_OUT or "hidden" in attributes or name.startswith("__"):
             continue
-        if _LEGACY_SAMPLER.search(params):
+        if _LEGACY_SAMPLER.search(params) or (namespace, name) in _REJECTED:
             continue
         if namespace in _FUNCTIONS:
             name = _FUNCTIONS[namespace] + name
@@ -343,7 +406,7 @@ def parse(
             methods.setdefault((owner, name), []).append((attributes, result, params))
     features = []
     for name, declared in sorted(functions.items()):
-        signatures, note = _overloads(declared)
+        signatures, note = _overloads(_documented(name, declared))
         features.append(
             Feature(
                 "hlsl",

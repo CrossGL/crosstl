@@ -60,6 +60,8 @@ _DECLARATION = re.compile(
 )
 # Enumerations a probe passes as a constant; :class:`~tools.coverage.languages.Metal` names the enumerator.
 ENUMS = ("memory_order", "mem_flags")
+# The masks a ballot returns. A probe reads one as its ``vote_t`` integer, which Metal converts it to explicitly.
+VOTES = ("simd_vote", "quad_vote")
 _ATOMIC = re.compile(r"_atomic\s*<\s*T\b[^>]*>")
 
 
@@ -98,10 +100,15 @@ def _concrete(spelling: str, template: str, bound: str = "") -> str:
     return _WIDENED.get(spelling, spelling)
 
 
+def _result(spelling: str) -> bool:
+    """Whether a probe can receive ``spelling``: a value, or a ballot's mask."""
+    return spelling in VOTES or _value(spelling)
+
+
 def _value(spelling: str) -> bool:
     """Whether a probe can pass or receive ``spelling``: a value, an atomic operand in the output buffer, or an
     enumeration it passes as a constant."""
-    spelling = re.sub(r"^(?:out|inout) ", "", spelling)
+    spelling = re.sub(r"^(?:out|inout|address) ", "", spelling)
     return spelling in ENUMS or bool(
         re.fullmatch(
             r"(float|int|uint|bool|long|ulong|half)([2-4])?|(?:float|half)[2-4]x[2-4]|void",
@@ -131,7 +138,11 @@ def _declared(part: str, template: str, bound: str) -> str | None:
         pointee = _QUALIFIERS.sub("", part.rsplit("*", 1)[0]).strip()
         if bound and _ATOMIC.fullmatch(pointee):
             return f"inout {bound}"
-        return f"{_concrete(pointee, template, bound)}*"
+        kind = _concrete(pointee, template, bound)
+        # A pointer to a thread-local value, such as compare-exchange's expected value, takes a local's address.
+        if part.startswith("thread ") and _value(kind):
+            return f"address {kind}"
+        return f"{kind}*"
     reference = "&" in part
     words = part.replace("&", " ").rsplit(None, 1)
     kind = _concrete(words[0] if len(words) == 2 else part, template, bound)
@@ -185,12 +196,11 @@ _PREFERRED = ("float", "int", "uint", "bool", "long", "ulong", "half")
 
 def _preference(overload: tuple[str, list[str]]) -> tuple:
     result, params = overload
-    kinds = [result, *params]
     first = params[0] if params else result
     scalar = re.match(r"[a-z]+", first).group(0) if re.match(r"[a-z]+", first) else ""
     width = re.search(r"(\d)$", first)
     return (
-        not all(_value(k) for k in kinds),
+        not (_result(result) and all(_value(k) for k in params)),
         _PREFERRED.index(scalar) if scalar in _PREFERRED else len(_PREFERRED),
         {None: 1, "3": 0}.get(width and width.group(1), 2),
         # Of two otherwise equal overloads, such as an atomic function with and without memory flags, the shorter.
@@ -218,7 +228,7 @@ def generate(include: Path, toolchain: str, language: str) -> str:
                 continue
             listed.add(name)
             result, params = min(found, key=_preference)
-            usable = all(_value(k) for k in [result, *params])
+            usable = _result(result) and all(_value(k) for k in params)
             lines.append(
                 f"{header} {name} "
                 + (f"{result}({', '.join(params)})" if usable else "-")

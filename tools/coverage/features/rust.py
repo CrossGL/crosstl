@@ -68,6 +68,10 @@ _DIFFERENT = {
 }
 # CrossGL builds vectors with constructors rather than functions.
 _CONSTRUCTORS = {"Vec3::new": "vec3", "Vec3::splat": "vec3"}
+# Parameters a probe passes as literals. The probes target Vulkan 1.1 (SPIR-V 1.3), where a subgroup broadcast's lane
+# id and a quad broadcast's index must be constants (SPIR-V specification, OpGroupNonUniformBroadcast and
+# OpGroupNonUniformQuadBroadcast).
+_IMMEDIATE = {"subgroup_broadcast": (1,), "subgroup_quad_broadcast": (1,)}
 
 _STRING = re.compile(r'(?<!\w)r#*"(?:.|\n)*?"#*|"(?:\\.|[^"\\])*"')
 _FUNCTION = re.compile(r"^pub (?:const )?(unsafe )?fn (\w+)", re.M)
@@ -353,6 +357,13 @@ def _feature(
     glsl_names: set[str] | frozenset[str],
 ) -> Feature:
     bare = name.rpartition("::")[2]
+    positions = _IMMEDIATE.get(name, ())
+    if found is not None and positions:
+        params = tuple(
+            Param(p.type, "const") if index in positions else p
+            for index, p in enumerate(found.params)
+        )
+        found = Signature(found.result, params)
     if name in _CONSTRUCTORS:
         spelled = _CONSTRUCTORS[name]
     elif name in _DIFFERENT:

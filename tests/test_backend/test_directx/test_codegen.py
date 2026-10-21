@@ -2813,7 +2813,8 @@ def test_codegen_geometry_primitive_before_direction_from_dxc_spirv():
     assert "geometry {" in output
     assert "@ maxvertexcount(3)" in output
     assert (
-        "void main(in point uint id[1] @ VertexID, inout lineStream outData)" in output
+        "void main(in point uint id[1] @ VertexID, inout LineStream<S> outData)"
+        in output
     )
     parse_crossgl(output)
 
@@ -3565,7 +3566,7 @@ def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
 
     output = generate_crossgl(hlsl)
 
-    assert "@ vk_push_constant" in output
+    assert "@ push_constant" in output
     assert "@ register(b0, space1)" in output
     assert "cbuffer PushConstants" in output
     assert "vec4 tint;" in output
@@ -4109,21 +4110,32 @@ def test_codegen_barrier_intrinsics_import_to_crossgl_builtins():
     code = textwrap.dedent("""
         [numthreads(1, 1, 1)]
         void CSMain(uint3 tid : SV_DispatchThreadID) {
+            uint k = 0;
             GroupMemoryBarrierWithGroupSync();
+            k = k + 1;
             GroupMemoryBarrier();
+            k = k + 1;
             DeviceMemoryBarrier();
+            k = k + 1;
             AllMemoryBarrier();
+            k = k + 1;
             DeviceMemoryBarrierWithGroupSync();
+            k = k + 1;
             AllMemoryBarrierWithGroupSync();
         }
     """).strip()
 
     crossgl = generate_crossgl(code)
 
-    assert crossgl.count("workgroupBarrier();") == 3
-    assert crossgl.count("groupMemoryBarrier();") == 1
-    assert crossgl.count("deviceMemoryBarrier();") == 2
-    assert crossgl.count("allMemoryBarrier();") == 2
+    # The WithGroupSync barriers that order device memory become fence, execution barrier, fence;
+    # DeviceMemoryBarrierWithGroupSync does not order groupshared memory.
+    assert crossgl.count("workgroupBarrier();") == 2
+    assert crossgl.count("workgroupExecutionBarrier();") == 1
+    # GroupMemoryBarrier orders groupshared memory only: CrossGL's memoryBarrierShared.
+    assert crossgl.count("memoryBarrierShared();") == 1
+    assert "groupMemoryBarrier();" not in crossgl
+    assert crossgl.count("deviceMemoryBarrier();") == 3
+    assert crossgl.count("allMemoryBarrier();") == 3
     assert "GroupMemoryBarrierWithGroupSync();" not in crossgl
     assert "GroupMemoryBarrier();" not in crossgl
     assert "DeviceMemoryBarrier();" not in crossgl
@@ -4131,17 +4143,22 @@ def test_codegen_barrier_intrinsics_import_to_crossgl_builtins():
     assert "DeviceMemoryBarrierWithGroupSync();" not in crossgl
     assert "AllMemoryBarrierWithGroupSync();" not in crossgl
 
+    # Each barrier round-trips to itself: the emitter merges the fences around an execution barrier back
+    # into the WithGroupSync form.
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert regenerated_hlsl.count("GroupMemoryBarrierWithGroupSync();") == 3
-    assert regenerated_hlsl.count("GroupMemoryBarrier();") == 1
-    assert regenerated_hlsl.count("DeviceMemoryBarrier();") == 2
-    assert regenerated_hlsl.count("AllMemoryBarrier();") == 2
+    for intrinsic in (
+        "GroupMemoryBarrierWithGroupSync();",
+        "GroupMemoryBarrier();",
+        "DeviceMemoryBarrier();",
+        "AllMemoryBarrier();",
+        "DeviceMemoryBarrierWithGroupSync();",
+        "AllMemoryBarrierWithGroupSync();",
+    ):
+        assert regenerated_hlsl.count(intrinsic) == 1, intrinsic
     assert "workgroupBarrier();" not in regenerated_hlsl
     assert "groupMemoryBarrier();" not in regenerated_hlsl
     assert "deviceMemoryBarrier();" not in regenerated_hlsl
     assert "allMemoryBarrier();" not in regenerated_hlsl
-    assert "DeviceMemoryBarrierWithGroupSync();" not in regenerated_hlsl
-    assert "AllMemoryBarrierWithGroupSync();" not in regenerated_hlsl
 
 
 def test_codegen_resource_arrays_and_spaces():

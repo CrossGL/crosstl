@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 32,
-        "endOffset": 680,
+        "endLine": 28,
+        "endOffset": 660,
         "file": "crosstl-out/cgl/cube.vert.cgl",
-        "length": 680,
+        "length": 660,
         "line": 1,
         "offset": 0
       },

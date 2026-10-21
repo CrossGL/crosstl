@@ -17,9 +17,16 @@ texture types (``texture2D``) become the combined type of their pair, because Op
 
 The pairs reach a texture through helper functions as well: a texture parameter takes the pair its body (and its
 callees) sample it with, and each call site passes the uniform of that pair. A parameter that the body samples
-through more than one sampler state would need a specialized copy of the function per pair, and a texture sampled
-through a sampler chosen at run time (``s[i]``) has no OpenGL equivalent; both are refused. Sources indexed through
-``nonuniformEXT`` keep their separate Vulkan GLSL form, which the emitter preserves for descriptor indexing.
+through more than one sampler state would need a specialized copy of the function per pair, and is refused.
+
+A texture sampled through an element of a sampler array chosen at run time (``texture(t, s[i], P)``, as HLSL
+``t.Sample(s[i], uv)``) takes an array of combined uniforms, ``t_s[N]``, whose element ``k`` the host binds to the
+texture with sampler ``k``; the read becomes ``texture(t_s[i], P)``. The index stays dynamically uniform, as HLSL and
+Vulkan require of a sampler index without ``NonUniformResourceIndex``, which OpenGL 4.0 and later accept for sampler
+arrays; the GLSL ES emitter selects the element with constant indices. A selection that reaches the texture through a
+helper's sampler parameter, or a texture array read with an unrelated sampler index, has no such form and is refused.
+Sources indexed through ``nonuniformEXT`` keep their separate Vulkan GLSL form, which the emitter preserves for
+descriptor indexing.
 
 The returned records list every pair of each split texture, in the ``// crosstl-combined-samplers:`` artifact
 header, so a host can bind the same texture with each sampler object to the units of those uniforms.
@@ -110,6 +117,7 @@ _OWN = ("own",)
 _FETCH = ("fetch",)
 _DYNAMIC = ("dynamic",)
 _PARALLEL = "elementwise"
+_SELECTED = "selected"
 
 
 def _type_of(node):
@@ -144,6 +152,27 @@ def _set_type(node, type_node):
     for attribute in ("var_type", "param_type", "vtype"):
         if hasattr(node, attribute):
             setattr(node, attribute, type_node)
+
+
+def _sampler_array_size(resource):
+    """The element count of a one-dimensional sized sampler array, or ``None``."""
+    type_node = _type_of(resource.node)
+    if not isinstance(type_node, ArrayType) or isinstance(
+        type_node.element_type, ArrayType
+    ):
+        return None
+    size = type_node.size
+    if isinstance(size, int):
+        return size if size > 0 else None
+    literal = _literal_index(size) if isinstance(size, ASTNode) else None
+    return literal if literal and literal > 0 else None
+
+
+def _is_selected(key):
+    source = key[0]
+    return (
+        len(source) == 2 and isinstance(source[0], _Resource) and source[1] == _SELECTED
+    )
 
 
 def _call_name(call):
@@ -220,6 +249,9 @@ class _Resource:
         self.preserved = False
         self.reaching = []  # sampler parameters: the sampler sources callers bind
         self.arguments = []  # texture parameters: the resources callers pass
+        self.selected_indices = (
+            {}
+        )  # id(operands) -> sampler index of a direct run-time selection
 
     @property
     def is_shadow_type(self):
@@ -250,6 +282,9 @@ class _Lowering:
         self.calls = []  # (caller, call, callee)
         self.records = []
         self.taken_names = set()
+        self.site_calls = (
+            {}
+        )  # id(call.args) -> call, to keep a call's ``arguments`` alias in step
 
     def refuse(self, detail):
         refuse_unsupported(self.target, "explicit sampler", detail, None)
@@ -328,7 +363,8 @@ class _Lowering:
 
     # Analysis ---------------------------------------------------------------------------------------------------
 
-    def sampler_source(self, function, operand, texture_operand=None):
+    def sampler_source(self, function, operand, texture_operand=None, selectable=False):
+        """The sampler state an operand names; ``selectable`` admits a root sampler array element chosen at run time."""
         resource, index = self.resolve(function, operand)
         if resource is None or resource.kind != "sampler":
             return None
@@ -345,7 +381,17 @@ class _Lowering:
             # which a host expresses by binding sampler i to the unit of texture i.
             return (resource, _PARALLEL)
         literal = _literal_index(index)
-        return _DYNAMIC if literal is None else (resource, literal)
+        if literal is not None:
+            return (resource, literal)
+        if (
+            selectable
+            and resource.is_root
+            and _sampler_array_size(resource) is not None
+            and not isinstance(texture_operand, ArrayAccessNode)
+        ):
+            # ``texture(t, s[i], P)``: one combined uniform per element of ``s``, indexed by ``i``.
+            return (resource, _SELECTED)
+        return _DYNAMIC
 
     def scan(self):
         for function in self.functions:
@@ -354,6 +400,7 @@ class _Lowering:
                     continue
                 name = _call_name(call)
                 args = call.args
+                self.site_calls[id(args)] = call
                 if name in _FILTERED_OPS or name in _FETCH_OPS:
                     self.scan_texture_operation(function, call, name, args)
                 elif name in self.by_name:
@@ -371,7 +418,9 @@ class _Lowering:
             texture.preserved = True
             return
         sampler = (
-            self.sampler_source(function, args[1], args[0]) if len(args) > 1 else None
+            self.sampler_source(function, args[1], args[0], selectable=True)
+            if len(args) > 1
+            else None
         )
         if sampler == "preserved":
             texture.preserved = True
@@ -386,6 +435,8 @@ class _Lowering:
             key = (sampler, None)
         else:
             key = (sampler, name in _COMPARE_OPS)
+        if _is_selected(key):
+            texture.selected_indices[id(call.args)] = args[1].index_expr
         texture.add_site(key, call.args, 0)
 
     def propagate(self):
@@ -626,7 +677,18 @@ class _Lowering:
                 "samplers; OpenGL needs a specialized copy of the function per sampler"
             )
             return
-        if any(source == _DYNAMIC for source, _shadow in filtered):
+        if any(source == _DYNAMIC for source, _shadow in filtered) or any(
+            _is_selected(key)
+            and not (
+                resource.is_root
+                and all(
+                    id(operands) in resource.selected_indices
+                    for site_key, operands, _slot in resource.sites
+                    if site_key == key
+                )
+            )
+            for key in filtered
+        ):
             self.refuse(
                 f"texture {self.resource_label(resource)} is sampled through a sampler selected at run time; "
                 "OpenGL binds one sampler state to each texture unit"
@@ -660,11 +722,15 @@ class _Lowering:
                 return None
             key = filtered[0] if filtered else (_FETCH, False)
             return [(key, key[1])]
-        # The declaration's own sampler state stays on its uniform; explicit pairs follow in first-use order.
-        ordered = sorted(plain + shadow, key=lambda key: key[0] != _OWN)
+        # The declaration's own sampler state stays on its uniform; explicit pairs follow in first-use order, and
+        # pairs with a sampler selected at run time (arrays of combined uniforms) after those.
+        ordered = sorted(
+            plain + shadow, key=lambda key: (key[0] != _OWN, _is_selected(key))
+        )
         if not ordered:
             return [((_FETCH, False), False)]
-        if not plain and needs_fetch:
+        if (not plain and needs_fetch) or _is_selected(ordered[0]):
+            # The declaration stays a single non-shadow uniform, for texel fetches or bound without a sampler.
             ordered.insert(0, (_FETCH, False))
         return [(key, key[1]) for key in ordered]
 
@@ -708,11 +774,28 @@ class _Lowering:
                 not in _BINDING_ATTRIBUTES
             ]
             self.retype(clone, resource, shadow)
+            if _is_selected(key):
+                # Element i of the copy is the texture combined with element i of the sampler array.
+                sampler_type = _type_of(key[0][0].node)
+                _set_type(
+                    clone, ArrayType(_type_of(clone), deepcopy(sampler_type.size))
+                )
             # After every declaration, so that the units the emitter assigns to the source's resources stay put.
             resource.container.append(clone)
         self.retype(resource.node, resource, variants[0][1])
         for key, operands, slot in resource.sites:
-            self.rename_site(operands, slot, names.get(key, names[primary_key]))
+            name = names.get(key, names[primary_key])
+            if _is_selected(key):
+                operands[slot] = ArrayAccessNode(
+                    IdentifierNode(name),
+                    deepcopy(resource.selected_indices[id(operands)]),
+                )
+            else:
+                self.rename_site(operands, slot, name)
+            call = self.site_calls.get(id(operands))
+            arguments = getattr(call, "arguments", None)
+            if isinstance(arguments, list) and arguments is not operands:
+                arguments[slot] = operands[slot]
         if len(variants) > 1:
             for key, shadow in variants:
                 self.records.append(self.record(resource, key, names[key], shadow))
@@ -723,7 +806,7 @@ class _Lowering:
             suffix = source[0]
         else:
             suffix = source[0].name
-            if len(source) == 2 and source[1] != _PARALLEL:
+            if len(source) == 2 and source[1] not in (_PARALLEL, _SELECTED):
                 suffix = f"{suffix}_{source[1]}"
         base = f"{resource.name}_{suffix}"
         if shadow:
@@ -758,6 +841,9 @@ class _Lowering:
             record["sampler"] = source[0].name
             if len(source) == 2 and source[1] == _PARALLEL:
                 record["elementwise"] = True
+            elif len(source) == 2 and source[1] == _SELECTED:
+                # The uniform is an array: element i is the texture bound with element i of the samplers.
+                record["samplerArray"] = True
             elif len(source) == 2:
                 record["samplerIndex"] = source[1]
         return record

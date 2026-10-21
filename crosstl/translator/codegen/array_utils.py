@@ -103,6 +103,18 @@ def split_array_type_suffix(type_name: str) -> Tuple[str, str]:
     return type_name[:open_bracket], type_name[open_bracket:]
 
 
+def prepend_array_dimension(element_type: str, size=None) -> str:
+    """The C-style spelling of an array of ``size`` elements of the type spelled ``element_type``.
+
+    The new dimension is the outermost, so its suffix comes first: an array of 2 ``float[3]`` is ``float[2][3]``
+    (C, GLSL 4.60 section 4.1.9, HLSL and MSL all read ``T a[2][3]`` as 2 arrays of 3). ``size`` is the spelled
+    extent; ``None`` or ``""`` leaves the dimension unsized.
+    """
+    base_type, array_suffix = split_array_type_suffix(str(element_type))
+    extent = "" if size is None else size
+    return f"{base_type}[{extent}]{array_suffix}"
+
+
 def collect_struct_member_types(structs, type_name_string) -> Dict[str, Dict[str, str]]:
     """Collect raw struct member types for expression type inference."""
     member_types = {}
@@ -388,6 +400,53 @@ def _evaluate_literal_int_text_expression(
         return None
 
     return evaluate(root)
+
+
+def fold_array_type_counts(
+    type_name: str, constants: Optional[Dict[str, int]] = None
+) -> str:
+    """Rewrite each ``[count]`` of ``type_name`` that is a compile-time integer.
+
+    ``vec4[(12 * 3)]`` becomes ``vec4[36]`` and ``float[N + 1]`` becomes
+    ``float[5]`` when ``constants`` maps ``N`` to 4. A count that does not
+    evaluate, or evaluates to a negative value, is kept as written so that
+    layout planners still refuse it.
+    """
+    text = str(type_name or "")
+    if "[" not in text:
+        return text
+    constants = constants or {}
+    pieces = []
+    index = 0
+    while index < len(text):
+        open_index = text.find("[", index)
+        if open_index < 0:
+            pieces.append(text[index:])
+            break
+        depth = 0
+        close_index = -1
+        for position in range(open_index, len(text)):
+            if text[position] == "[":
+                depth += 1
+            elif text[position] == "]":
+                depth -= 1
+                if depth == 0:
+                    close_index = position
+                    break
+        if close_index < 0:
+            pieces.append(text[index:])
+            break
+        count_text = text[open_index + 1 : close_index].strip()
+        value = None
+        if count_text and not count_text.isdigit() and "[" not in count_text:
+            value = _evaluate_literal_int_text_expression(count_text, constants)
+        pieces.append(text[index:open_index])
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            pieces.append(f"[{int(value)}]")
+        else:
+            pieces.append(text[open_index : close_index + 1])
+        index = close_index + 1
+    return "".join(pieces)
 
 
 def _evaluate_literal_int_cast(target_type, expression, constants) -> Optional[int]:

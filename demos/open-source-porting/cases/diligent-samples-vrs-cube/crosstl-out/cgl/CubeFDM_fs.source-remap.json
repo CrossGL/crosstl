@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 44,
-        "endOffset": 1100,
+        "endLine": 38,
+        "endOffset": 1023,
         "file": "crosstl-out/cgl/CubeFDM_fs.cgl",
-        "length": 1100,
+        "length": 1023,
         "line": 1,
         "offset": 0
       },

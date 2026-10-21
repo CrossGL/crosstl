@@ -202,6 +202,29 @@ def test_rust_functions_that_compute_something_else_have_no_crossgl_spelling():
     assert features["unsigned_max"].crossgl == "unsigned_max"
 
 
+BROADCAST = """
+pub unsafe fn subgroup_broadcast<I: ScalarOrVector>(value: I, id: u32) -> I {
+    value
+}
+
+pub fn subgroup_shuffle<I: ScalarOrVector>(value: I, id: u32) -> I {
+    value
+}
+"""
+
+
+def test_rust_passes_a_broadcast_lane_id_as_a_literal():
+    found = rust.parse({"arch": BROADCAST}, FLOAT, VEC3)
+    features = {f.name: f for f in found}
+    # Before SPIR-V 1.5 a broadcast's lane id must be a constant; a shuffle's need not be.
+    assert features["subgroup_broadcast"].signature.params[1] == Param(
+        Type("uint"), "const"
+    )
+    assert features["subgroup_shuffle"].signature.params[1] == Param(Type("uint"))
+    source = probes.build(features["subgroup_broadcast"], "rust").source
+    assert "let r: f32 = unsafe { subgroup_broadcast(a0, 0) };" in source
+
+
 def feature(name, result, *params, spelling=""):
     signature = Signature(
         result, tuple(p if isinstance(p, Param) else Param(p) for p in params)
@@ -274,12 +297,46 @@ needs_rust_gpu = pytest.mark.skipif(
     not validators.available("rust"), reason="rust-gpu is not installed"
 )
 
+# Fine and coarse derivatives and helper invocations need capabilities beyond Vulkan 1.1's defaults.
+FRAGMENT_SAMPLES = [
+    Feature(
+        "rust",
+        "function",
+        "Derivative::dfdx_fine",
+        Signature(Type("float"), (Param(Type("float")),)),
+        spelling=".dfdx_fine",
+        stage="fragment",
+    ),
+    Feature(
+        "rust",
+        "function",
+        "demote_to_helper_invocation",
+        Signature(VOID, ()),
+        stage="fragment",
+    ),
+    Feature(
+        "rust",
+        "function",
+        "is_helper_invocation",
+        Signature(Type("bool"), ()),
+        stage="fragment",
+    ),
+]
+
 
 @needs_rust_gpu
 @pytest.mark.parametrize("probe_feature", SAMPLES, ids=lambda f: f.name)
 @pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
 def test_rust_probes_compile_with_rust_gpu(probe_feature, baseline):
     probe = probes.build(probe_feature, "rust", baseline=baseline)
+    verdict = validators.validate("rust", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
+@needs_rust_gpu
+@pytest.mark.parametrize("probe_feature", FRAGMENT_SAMPLES, ids=lambda f: f.name)
+def test_rust_fragment_probes_compile_with_rust_gpu(probe_feature):
+    probe = probes.build(probe_feature, "rust")
     verdict = validators.validate("rust", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
 

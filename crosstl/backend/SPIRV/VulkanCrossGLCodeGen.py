@@ -1256,6 +1256,8 @@ class VulkanToCrossGLConverter:
             attributes.append(f"@input_attachment_index({input_attachment_index})")
         if getattr(node, "push_constant", False):
             attributes.append("@push_constant")
+        if getattr(node, "buffer_layout", None):
+            attributes.append(f"@buffer_layout({node.buffer_layout})")
         return f" {' '.join(attributes)}" if attributes else ""
 
     def spirv_input_attachment_index(self, node):
@@ -1639,8 +1641,9 @@ class VulkanToCrossGLConverter:
         type_name, ray_attributes = self.ray_storage_qualified_type_parts(
             self.variable_type(node)
         )
+        precise = ["precise"] if getattr(node, "spirv_precise", False) else []
         attributes = self.ray_storage_attribute_suffix(
-            [*ray_attributes, *(extra_attributes or [])]
+            [*ray_attributes, *(extra_attributes or []), *precise]
         )
         return f"{self.map_type(type_name)} {override_name or node.name}{attributes}"
 

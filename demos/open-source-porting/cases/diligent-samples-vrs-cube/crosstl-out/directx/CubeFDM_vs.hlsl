@@ -1,9 +1,4 @@
 
-struct g_Constants {
-    float4x4 WorldViewProj;
-    int PrimitiveShadingRate;
-    int DrawMode;
-};
 struct VertexInput {
     float3 in_Pos: TEXCOORD0;
     float2 in_UV: TEXCOORD1;
@@ -13,7 +8,7 @@ struct VertexOutput {
     float4 gl_Position: SV_POSITION;
 };
 // Constant Buffers
-cbuffer Uniforms : register(b0) {
+cbuffer g_Constants : register(b0) {
     float4x4 WorldViewProj;
     int PrimitiveShadingRate;
     int DrawMode;
