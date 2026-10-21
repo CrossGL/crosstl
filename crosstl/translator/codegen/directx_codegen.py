@@ -14871,6 +14871,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "highp",
             "mediump",
             "lowp",
+            # A declared buffer layout is a layout contract, not a semantic.
+            "buffer_layout",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
         return str(getattr(attr, "name", "")).lower() in metadata

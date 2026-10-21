@@ -16744,6 +16744,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             pointee_type = self.metal_native_narrow_bitcast_storage_type(
                 raw_param_type.pointee_type
             ) or self.map_resource_type_with_format(raw_param_type.pointee_type, node)
+            layout_storage = getattr(self, "metal_hlsl_pointer_parameters", {}).get(
+                id(node)
+            )
+            if layout_storage is not None:
+                pointee_type = layout_storage[0]
             memory_qualifiers = self.resource_memory_qualifier_prefix(
                 node, raw_param_type
             )

@@ -22,9 +22,9 @@ def test_hazard_inventory_and_oracles():
     # built-ins, SPIR-V's FrexpStruct and ModfStruct, GLSL and SPIR-V extended integer arithmetic, and SPIR-V
     # integer instructions whose opcode signedness differs from their operand types, SPIR-V structured control
     # flow with function variables and with phis, an HLSL structured buffer of structs with vector members, a
-    # Metal buffer of structs with packed vector members, and Metal buffers of float3, float3x3 and structs in the
-    # natural MSL layout.
-    assert len(CASES) == len(BY_ID) == 99
+    # Metal buffer of structs with packed vector members, Metal buffers of float3, float3x3 and structs in the
+    # natural MSL layout, and Metal helper functions that take packed and natural buffer pointers.
+    assert len(CASES) == len(BY_ID) == 101
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",

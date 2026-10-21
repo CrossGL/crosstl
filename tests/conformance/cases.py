@@ -151,6 +151,41 @@ def check_metal_struct(inputs, out):
     return len(bad) == 0, detail
 
 
+# The words of an MSL ``struct { float3 a; float b; }`` that hold values: a (0-2) and b (4).
+_METAL_FLOAT3_FLOAT_WORDS = np.array([0, 1, 2, 4])
+
+
+def check_metal_helper_struct(inputs, out):
+    """m_float3_helper: element i gets b = v and a = (v, 0, 1) with v = src[i].a.y + src[i].b, bit for bit; the
+    padding words are unspecified."""
+    r = inputs.reshape(64, 8).astype(np.float32)
+    v = (r[:, 1] + r[:, 4]).astype(np.float32)
+    zero, one = np.zeros_like(v), np.ones_like(v)
+    want = np.stack([v, zero, one, v], axis=1).astype(np.float32)
+    got = out.astype(np.float32).reshape(64, 8)[:, _METAL_FLOAT3_FLOAT_WORDS]
+    bad = np.argwhere(got.view(np.uint32) != want.view(np.uint32))
+    detail = {"mismatches": int(len(bad)), "n": int(want.size)}
+    if len(bad):
+        element, word = (int(value) for value in bad[0])
+        detail.update(
+            element=element,
+            word=int(_METAL_FLOAT3_FLOAT_WORDS[word]),
+            got=repr(float(got[element, word])),
+            want=repr(float(want[element, word])),
+        )
+    return len(bad) == 0, detail
+
+
+def o_packed_helper(inp):
+    """m_packed_helper: element i of the packed_float3 output is (z, y + 0.5, x) of input element i."""
+    r = inp.reshape(64, 3).astype(np.float32)
+    return (
+        np.stack([r[:, 2], r[:, 1] + np.float32(0.5), r[:, 0]], axis=1)
+        .reshape(-1)
+        .astype(np.float32)
+    )
+
+
 def o_struct_stride(inp):
     r = inp.reshape(64, 7).astype(np.float32)
     out = np.stack(
@@ -1295,6 +1330,27 @@ CASES = [
             + np.float32(3.0) * r[:, 9]
         )(inp.reshape(64, 12).astype(np.float32)).astype(np.float32),
         compare="ulp:0",
+    ),
+    Case(
+        "m_packed_helper",
+        "H16",
+        "packed_float3 pointers passed to helper functions, with an element offset: 12-byte stride",
+        "MSL packed_float3",
+        np.arange(64 * 3, dtype=np.float32),
+        np.float32,
+        o_packed_helper,
+        compare="ulp:0",
+    ),
+    Case(
+        "m_float3_helper",
+        "H16",
+        "struct {float3 a; float b;} pointers passed to helper functions, with an element offset: 32-byte elements",
+        "MSL natural struct layout",
+        np.arange(64 * 8, dtype=np.float32),
+        np.float32,
+        None,
+        out_count=64 * 8,
+        check=check_metal_helper_struct,
     ),
     Case(
         "m_float3_struct",

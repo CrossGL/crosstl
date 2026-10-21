@@ -11441,13 +11441,18 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             roots.discard(id(root))
 
     def structured_buffer_parameter_layout(self, func, parameter):
-        """The ``@buffer_layout`` a structured-buffer parameter needs to keep its Metal element layout."""
-        if not self.structured_buffer_pointer_type(parameter):
+        """The ``@buffer_layout`` a buffer or device pointer parameter needs to keep its Metal element layout."""
+        if self.structured_buffer_pointer_type(parameter):
+            element_type = self.structured_buffer_element_source_type(parameter)
+            kind = "buffer parameter"
+        else:
+            element_type = self.metal_device_pointer_element_type(parameter)
+            kind = "pointer parameter"
+        if element_type is None:
             return None
-        element_type = self.structured_buffer_element_source_type(parameter)
         return self.metal_buffer_element_layout(
             element_type,
-            f"buffer parameter {parameter.name} of {getattr(func, 'name', 'a function')}",
+            f"{kind} {parameter.name} of {getattr(func, 'name', 'a function')}",
         )
 
     def binds_reference_argument(self, function_name, expression, index):
