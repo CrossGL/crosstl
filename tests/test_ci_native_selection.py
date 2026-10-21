@@ -524,6 +524,9 @@ def test_native_arithmetic_selection_retains_every_device_test():
     )
     full_suite = (WORKFLOW_DIR / "full-tests.yml").read_text()
     assert "runs-on: ubuntu-latest" in full_suite
-    assert (
-        "python -m pytest tests demos/integrations --durations=25 -n auto" in full_suite
+    run = workflow_text.workflow_job_step_section(
+        full_suite, "pytest", "Run complete test suite"
     )
+    assert "python -m pytest tests demos/integrations" in run
+    arguments = run.split("python -m pytest", 1)[1]
+    assert " -m " not in arguments and " -k " not in arguments

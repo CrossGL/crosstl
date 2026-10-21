@@ -104,7 +104,9 @@ def _categories(report: dict) -> list[str]:
 
 def _sources(report: dict, repository: str) -> list[str]:
     lines = ["| Language | Feature list | Pinned at |", "|---|---|---|"]
-    for language, source in report["sources"].items():
+    # A language may draw on several lists, keyed "<language>-<part>"; each row names the language itself.
+    for key, source in report["sources"].items():
+        language = key.split("-", 1)[0]
         if source.get("repository"):
             url = f"https://github.com/{source['repository']}/blob/{source['commit']}/{source['path']}"
             pinned = f"`{source['commit'][:12]}`"

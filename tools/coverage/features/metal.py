@@ -44,6 +44,7 @@ _WIDENED = {"ushort": "uint", "short": "int"}
 _QUALIFIERS = re.compile(
     r"\b(?:const|constexpr|static|inline|thread|device|threadgroup|constant|volatile|explicit|METAL_\w+)\b"
 )
+_MACRO = re.compile(r"\bMETAL_\w+\b")
 _DECLARATION = re.compile(
     r"METAL_FUNC\s+(?P<result>.*?)\b(?P<name>[A-Za-z]\w*)\s*\((?P<params>.*)\)", re.S
 )
@@ -108,7 +109,8 @@ def declarations(header: str, text: str):
             continue
         params = []
         for part in split(match.group("params")):
-            part = re.sub(r"=.*$", "", part).strip()
+            # Attribute macros such as METAL_MAYBE_UNDEF follow the parameter name.
+            part = _MACRO.sub("", re.sub(r"=.*$", "", part)).strip()
             reference = "&" in part
             words = part.replace("&", " ").rsplit(None, 1)
             kind = _concrete(words[0] if len(words) == 2 else part, template)

@@ -22,9 +22,15 @@ concurrency:
 
 jobs:
   pytest:
+    name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    # Hosted runners have taken 33 to 59 minutes for the whole suite.
-    timeout-minutes: 90
+    # One runner took 33 to 66 minutes for the whole suite. tools/pytest_shard.py
+    # splits it by test file, so each shard runs about a third of it.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
 
     steps:
       - name: Checkout repository
@@ -45,7 +51,9 @@ jobs:
       - name: Run complete test suite
         run: |
           mkdir -p build/reports
-          python -m pytest tests demos/integrations --durations=25 -n auto --junitxml build/reports/full-tests-pytest.xml
+          python -m pytest tests demos/integrations \
+            -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
+            --durations=25 -n auto --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
         if: always()
@@ -61,13 +69,13 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: full-test-failure-summary
+          name: full-test-failure-summary-${{ matrix.shard }}
           path: |
             build/reports/full-tests-pytest.xml
             build/reports/full-tests-failure-summary.json
             build/reports/full-tests-failure-summary.md
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 14
 
   shader-validators:
     name: Shader Validators (${{ matrix.os }})
