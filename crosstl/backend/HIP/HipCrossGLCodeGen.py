@@ -5211,7 +5211,9 @@ class HipToCrossGLConverter:
 
         self.emit("@compute")
         self.emit("@stage_entry")
-        self.emit(kernel_workgroup_size_attribute(self.threadgroup_size))
+        self.emit(
+            kernel_workgroup_size_attribute(self.threadgroup_size, whole_groups=True)
+        )
 
         params = []
         buffer_params = (

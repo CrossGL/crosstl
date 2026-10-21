@@ -148,6 +148,23 @@ def test_grid_index_and_grid_stride_need_no_block_size(tmp_path, backend, source
     assert _size(_translate(tmp_path, source, ".cu", backend), backend) == (1, 1, 1)
 
 
+@pytest.mark.parametrize("backend", sorted(SIZES))
+@pytest.mark.parametrize("suffix", [".cu", ".hip"])
+def test_named_block_size_is_kept_when_results_do_not_depend_on_it(
+    tmp_path, backend, suffix
+):
+    """CUDA and HIP launches cover whole blocks, so the named block size keeps the host's group count."""
+    code = _translate(
+        tmp_path, CUDA_GRID_STRIDE, suffix, backend, threadgroup_size=[64, 1, 1]
+    )
+    assert _size(code, backend) == (64, 1, 1)
+    crossgl = _translate(
+        tmp_path, CUDA_GRID_STRIDE, suffix, "cgl", threadgroup_size=[64, 1, 1]
+    )
+    assert "@workgroup_size(64, 1, 1)" in crossgl
+    assert "@host_workgroup_size" not in crossgl
+
+
 @pytest.mark.parametrize("suffix", [".cu", ".hip"])
 def test_grid_index_imports_as_the_global_invocation_id(tmp_path, suffix):
     crossgl = _translate(tmp_path, CUDA_GRID_STRIDE, suffix, "cgl")
