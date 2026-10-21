@@ -1091,7 +1091,11 @@ def _refuse(work, target, config, entry):
     report = translation.to_json()
     translation.write_json(work / "report.json")
     expected = _refusal(target, entry)
-    (diagnostic,) = report["diagnostics"]
+    # Validation reports the failed artifact once more, with the same cause.
+    diagnostic, follow_up = report["diagnostics"]
+    assert follow_up["code"] == "project.validate.failed-artifact"
+    assert follow_up["severity"] == "error" and follow_up["target"] == target
+    assert follow_up["message"].endswith(expected["message"])
     assert diagnostic["severity"] == "error"
     assert diagnostic["target"] == target
     for key in ("code", "message", "missingCapabilities"):
