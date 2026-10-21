@@ -179,6 +179,7 @@ from .glsl_buffer_layout import (
     matrix_column_offsets,
     vector_component_offsets,
 )
+from .hlsl_buffer_layout import BUFFER_LAYOUT_ATTRIBUTE
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -21736,6 +21737,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 or self.normalized_metal_abi_attribute_name(attr) == "function_constant"
                 or self.metal_interpolation_attribute_name(attr) is not None
                 or self.is_precision_qualifier_attribute(attr)
+                or str(getattr(attr, "name", "")).lower() == BUFFER_LAYOUT_ATTRIBUTE
             ):
                 continue
             if hasattr(attr, "name"):
