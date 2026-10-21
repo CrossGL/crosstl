@@ -3,6 +3,11 @@
 import hashlib
 import re
 
+from ..thread_hierarchy import (
+    global_invocation_axis,
+    kernel_workgroup_size_attribute,
+    normalize_threadgroup_size_option,
+)
 from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -497,7 +502,9 @@ class HipToCrossGLConverter:
         }
     )
 
-    def __init__(self):
+    def __init__(self, threadgroup_size=None):
+        # The host picks a HIP kernel's block size at launch time; this option names it.
+        self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         self.indent_level = 0
         self.output = []
         self.identifier_name_scopes = [{}]
@@ -5201,7 +5208,7 @@ class HipToCrossGLConverter:
 
         self.emit("@compute")
         self.emit("@stage_entry")
-        self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
+        self.emit(kernel_workgroup_size_attribute(self.threadgroup_size))
 
         params = []
         self.push_resource_object_hint_scope(
@@ -6320,6 +6327,9 @@ class HipToCrossGLConverter:
 
     def visit_BinaryOpNode(self, node):
         self.validate_record_operator_operands(node.op, (node.left, node.right))
+        axis = global_invocation_axis(node)
+        if axis is not None:
+            return f"gl_GlobalInvocationID.{axis}"
         left = self.visit(node.left)
         right = self.visit(node.right)
         return f"({left} {node.op} {right})"

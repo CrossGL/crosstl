@@ -48633,11 +48633,8 @@ def test_translate_project_hip_pointer_parameters_lower_to_directx_resources(
 
     assert "RWStructuredBuffer<float> A : register(u0);" in output
     assert "StructuredBuffer<float> B : register(t1);" in output
-    assert (
-        "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
-        "uint3 groupID : SV_GroupID)"
-    ) in output
-    assert "int i = ((uint3(1, 1, 1).x * groupID.x) + groupThreadID.x);" in output
+    assert "void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)" in output
+    assert "int i = dispatchThreadID.x;" in output
     assert "A[i] += B[i];" in output
     assert "float A[] : group" not in output
     assert "float B[] : group" not in output
@@ -55650,10 +55647,14 @@ def test_translate_project_khronos_opencl_reduce_lowers_all_target_artifacts(
         encoding="utf-8",
     )
 
+    # The host picks the reduction's work-group size; the project names it.
     payload = translate_project(
-        repo,
-        targets=["cgl", "opengl", "metal", "vulkan"],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo,
+            targets=("cgl", "opengl", "metal", "vulkan"),
+            output_dir="out",
+            source_options={"opencl": {"threadgroup_size": 64}},
+        ),
         validate=True,
     ).to_json()
 
@@ -55783,10 +55784,14 @@ def test_translate_project_khronos_opencl_reduce_lowers_supported_target_artifac
         encoding="utf-8",
     )
 
+    # The host picks the reduction's work-group size; the project names it.
     payload = translate_project(
-        repo,
-        targets=["cgl", "opengl", "metal", "vulkan"],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo,
+            targets=("cgl", "opengl", "metal", "vulkan"),
+            output_dir="out",
+            source_options={"opencl": {"threadgroup_size": 64}},
+        ),
         validate=True,
     ).to_json()
 
@@ -55855,9 +55860,12 @@ def test_translate_project_opencl_reduce_get_num_groups_directx_uses_cbuffer_inp
     )
 
     payload = translate_project(
-        repo,
-        targets=["directx"],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo,
+            targets=("directx",),
+            output_dir="out",
+            source_options={"opencl": {"threadgroup_size": 64}},
+        ),
     ).to_json()
 
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
@@ -56304,13 +56312,9 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
                 }
             }
             """,
-            [
-                "global_idx_uint: SIMD[DType.uint32, 4]",
-                "thread_idx_uint: SIMD[DType.uint32, 4]",
-                "block_idx_uint: SIMD[DType.uint32, 4]",
-                "block_dim_uint: SIMD[DType.uint32, 4]",
-            ],
-            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+            # The grid index imports as the global invocation id.
+            ["global_idx_uint: SIMD[DType.uint32, 4]"],
+            "var i: Int32 = global_idx_uint[0]",
         ),
         (
             "add_kernel.hip",
@@ -56327,12 +56331,8 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
                 }
             }
             """,
-            [
-                "thread_idx_uint: SIMD[DType.uint32, 4]",
-                "block_idx_uint: SIMD[DType.uint32, 4]",
-                "block_dim_uint: SIMD[DType.uint32, 4]",
-            ],
-            "((block_dim_uint[0] * block_idx_uint[0]) + thread_idx_uint[0])",
+            ["global_idx_uint: SIMD[DType.uint32, 4]"],
+            "var i: Int32 = global_idx_uint[0]",
         ),
     ],
 )
@@ -56407,10 +56407,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         for artifact in payload["artifacts"]
     }
 
-    assert (
-        "var i: i32 = ((gl_WorkGroupSize.x * gl_WorkGroupID.x) + "
-        "gl_LocalInvocationID.x);"
-    ) in outputs["cgl"]
+    # The grid index imports as the global invocation id, which needs no block size.
+    assert "var i: i32 = gl_GlobalInvocationID.x;" in outputs["cgl"]
 
     metal_output = outputs["metal"]
     assert "kernel void kernel_vectorAdd(" in metal_output
@@ -56418,13 +56416,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "device float* A [[buffer(1)]]" in metal_output
     assert "device float* B [[buffer(2)]]" in metal_output
     assert "constant vectorAdd_Args& vectorAdd_Args [[buffer(3)]]" in metal_output
-    assert "thread_position_in_threadgroup" in metal_output
-    assert "threadgroup_position_in_grid" in metal_output
-    assert "threads_per_threadgroup" in metal_output
-    assert (
-        "int i = threads_per_threadgroup.x * threadgroup_position_in_grid.x + "
-        "thread_position_in_threadgroup.x;"
-    ) in metal_output
+    assert "int i = thread_position_in_grid.x;" in metal_output
+    assert "threads_per_threadgroup" not in metal_output
     assert "if (i < vectorAdd_Args.N)" in metal_output
     assert "[[group]]" not in metal_output
     for gl_builtin in [
@@ -56440,9 +56433,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "RWStructuredBuffer<float> A : register(u1);" in directx_output
     assert "RWStructuredBuffer<float> B : register(u2);" in directx_output
     assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
-    assert "uint3 groupID : SV_GroupID" in directx_output
-    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
-    assert "SV_DispatchThreadID" not in directx_output
+    assert "uint3 dispatchThreadID : SV_DispatchThreadID" in directx_output
+    assert "SV_GroupID" not in directx_output
     assert "float A[]" not in directx_output
     assert "float B[]" not in directx_output
     assert "float C[]" not in directx_output
@@ -56465,8 +56457,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert "DescriptorSet 0" in spirv_output
     for binding in ("Binding 0", "Binding 1", "Binding 2", "Binding 3"):
         assert binding in spirv_output
-    assert "WorkgroupId" in spirv_output
-    assert "LocalInvocationId" in spirv_output
+    assert "GlobalInvocationId" in spirv_output
+    assert "WorkgroupId" not in spirv_output
     assert_spirv_asm_validates_if_available(spirv_output, tmp_path)
 
     wgsl_output = outputs["wgsl"]
@@ -56474,10 +56466,8 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
         "fn compute_main(@builtin(global_invocation_id) "
         "global_invocation_id: vec3<u32>"
     ) in wgsl_output
-    assert "var thread_id: vec3<u32> = global_invocation_id;" in wgsl_output
-    assert "var block_id: vec3<u32> = workgroup_id;" in wgsl_output
-    assert "var thread_local_id: vec3<u32> = local_invocation_id;" in wgsl_output
-    assert "var block_dim: vec3<u32> = vec3<u32>(1u, 1u, 1u);" in wgsl_output
+    assert "var i: i32 = i32(global_invocation_id.x);" in wgsl_output
+    assert "workgroup_id" not in wgsl_output
     assert ": void" not in wgsl_output
 
 
@@ -56606,8 +56596,7 @@ def test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl(
     assert "RWStructuredBuffer<float> B : register(u1);" in directx_output
     assert "RWStructuredBuffer<float> C : register(u2);" in directx_output
     assert "cbuffer vectorAdd_Args : register(b3)" in directx_output
-    assert "uint3 groupID : SV_GroupID" in directx_output
-    assert "uint3 groupThreadID : SV_GroupThreadID" in directx_output
+    assert "uint3 dispatchThreadID : SV_DispatchThreadID" in directx_output
     assert "float A[]" not in directx_output
     assert "float B[]" not in directx_output
     assert "float C[]" not in directx_output

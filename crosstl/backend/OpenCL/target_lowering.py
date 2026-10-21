@@ -27,6 +27,7 @@ from crosstl.translator.ast import (
     VariableNode,
     VectorType,
 )
+from crosstl.translator.host_workgroup_size import function_entry_execution_config
 
 OPENCL_TARGET_UNSUPPORTED_CODE = "opencl.target.unsupported"
 OPENCL_TARGET_UNRESOLVED_HELPER_CODE = "opencl.target.unresolved-helper"
@@ -390,6 +391,9 @@ def _parameter_binding(parameter):
 
 
 def _stage_execution_config(function):
+    config = function_entry_execution_config(function)
+    if config:
+        return config
     for attribute in getattr(function, "attributes", []) or []:
         name = str(getattr(attribute, "name", "")).lower()
         if name not in {"workgroup_size", "local_size", "numthreads"}:

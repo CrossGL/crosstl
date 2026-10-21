@@ -727,9 +727,7 @@ def test_cuda_native_saxpy_round_trip_regenerates_native_cuda(tmp_path):
 
     assert "f32 a" in crossgl
     assert "u32 n" in crossgl
-    assert "gl_WorkGroupID.x" in crossgl
-    assert "gl_WorkGroupSize.x" in crossgl
-    assert "gl_LocalInvocationID.x" in crossgl
+    assert "var idx: u32 = gl_GlobalInvocationID.x;" in crossgl
 
     assert 'extern "C" __global__ void saxpy(' in regenerated_cuda
     assert re.search(r"\bfloat\s+a\b", regenerated_cuda)
@@ -3253,10 +3251,7 @@ def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
         "partition of the current workgroup"
     ) in crossgl
     assert crossgl.count("workgroupBarrier();") == 3
-    assert (
-        "var globaltid: u32 = ((gl_WorkGroupID.x * gl_WorkGroupSize.x) + "
-        "gl_LocalInvocationID.x);"
-    ) in crossgl
+    assert "var globaltid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "for (var i: i32 = (32 / 2); (i > 0); i >>= 1)" in crossgl
     assert "tmp[gl_LocalInvocationIndex] = beta;" in crossgl
     assert (

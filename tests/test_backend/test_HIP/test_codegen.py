@@ -137,18 +137,10 @@ class TestHipCodeGen:
         assert "kernel void scale(" in result
         assert "const device float* input [[buffer(0)]]" in result
         assert "device float* output [[buffer(1)]]" in result
-        assert (
-            "uint3 thread_position_in_threadgroup " "[[thread_position_in_threadgroup]]"
-        ) in result
-        assert (
-            "uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]]"
-            in result
-        )
-        assert "uint3 threads_per_threadgroup [[threads_per_threadgroup]]" in result
-        assert (
-            "uint i = threadgroup_position_in_grid.x * "
-            "threads_per_threadgroup.x + thread_position_in_threadgroup.x;"
-        ) in result
+        # The grid index imports as gl_GlobalInvocationID, which needs no block size.
+        assert "uint3 thread_position_in_grid [[thread_position_in_grid]]" in result
+        assert "uint i = thread_position_in_grid.x;" in result
+        assert "threads_per_threadgroup" not in result
         assert "output[i] = input[i] * 2.0;" in result
         assert "int main(" not in result
         assert "[[compute]]" not in result
@@ -170,12 +162,8 @@ class TestHipCodeGen:
 
         assert "RWStructuredBuffer<float> a : register(u0);" in result
         assert "StructuredBuffer<float> b : register(t1);" in result
-        assert (
-            "void CSMain(uint3 groupThreadID : SV_GroupThreadID, "
-            "uint3 groupID : SV_GroupID)"
-        ) in result
-        assert "int global_idx = (groupThreadID.x +" in result
-        assert "(groupID.x * uint3(1, 1, 1).x));" in result
+        assert "void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)" in result
+        assert "int global_idx = dispatchThreadID.x;" in result
         assert "a[global_idx] += b[global_idx];" in result
         assert "float a[] : group" not in result
         assert "float b[] : group" not in result
@@ -201,9 +189,9 @@ class TestHipCodeGen:
         assert "OpDecorate" in result and "Binding 0" in result
         assert "OpDecorate" in result and "Binding 1" in result
         assert "OpMemberDecorate" in result and "NonWritable" in result
-        assert "BuiltIn WorkgroupId" in result
-        assert "BuiltIn LocalInvocationId" in result
-        assert "BuiltIn WorkgroupSize" in result
+        assert "BuiltIn GlobalInvocationId" in result
+        assert "BuiltIn WorkgroupId" not in result
+        assert "BuiltIn WorkgroupSize" not in result
         assert "OpAccessChain" in result
         assert "OpFMul" in result
         assert "OpStore" in result
@@ -17340,7 +17328,7 @@ class TestHipCodeGen:
         assert "unsigned int* flags" in result
         assert "unsigned int n" in result
         assert "float scale" in result
-        assert "unsigned int tid = ((blockIdx.x * blockDim.x) + threadIdx.x);" in result
+        assert "unsigned int tid = (blockIdx.x * blockDim.x + threadIdx.x);" in result
         assert "float value = (in_[tid] * scale);" in result
         assert "flags[tid] = (tid & 255u);" in result
         assert not re.search(r"\b(?:f32|u32)\b", result)

@@ -415,7 +415,9 @@ class Parser:
         return ("EOF", None)
 
     def finalize_shader(self, shader):
-        return resolve_host_workgroup_sizes(validate_shader_cbuffers(shader))
+        return resolve_host_workgroup_sizes(
+            validate_shader_cbuffers(shader), self.layout_argument_to_string
+        )
 
     def append_parsed_nodes(self, collection, parsed):
         """Append one parsed node or extend a list of parsed nodes."""

@@ -120,6 +120,16 @@ NATIVE_SOURCE_SNIPPETS = {
     ),
 }
 
+# The host picks the block size of these kernels at launch time; the snippets read threadIdx, which depends on it.
+HOST_SIZED_SUFFIXES = frozenset({".cu", ".cuh", ".cuda", ".hip"})
+
+
+def _host_size_options(filename):
+    if Path(filename).suffix in HOST_SIZED_SUFFIXES:
+        return {"threadgroup_size": 32}
+    return None
+
+
 NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
     "cuda_header": (
         "shader.cuh",
@@ -2204,7 +2214,10 @@ def test_native_source_to_registered_target_pipeline_is_total(
     source_path = _write_source(tmp_path, filename, source)
 
     generated = crosstl.translate(
-        str(source_path), backend=target_backend, format_output=False
+        str(source_path),
+        backend=target_backend,
+        format_output=False,
+        source_options=_host_size_options(filename),
     )
 
     _assert_generated_output_is_usable(generated)
@@ -2221,7 +2234,10 @@ def test_native_source_extension_alias_to_registered_target_pipeline_is_total(
     source_path = _write_source(tmp_path, filename, source)
 
     generated = crosstl.translate(
-        str(source_path), backend=target_backend, format_output=False
+        str(source_path),
+        backend=target_backend,
+        format_output=False,
+        source_options=_host_size_options(filename),
     )
 
     _assert_generated_output_is_usable(generated)

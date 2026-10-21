@@ -51,7 +51,10 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..diagnostics import TranslationDiagnostic
-from ..host_workgroup_size import require_static_workgroup_size
+from ..host_workgroup_size import (
+    function_entry_execution_config,
+    require_static_workgroup_size,
+)
 from ..matrix_shape import (
     crossgl_matrix_shape,
     length_method_object,
@@ -498,6 +501,7 @@ class VulkanSPIRVCodeGen(
         self.current_function_name = None
         self.current_function_id = None
         self.current_stage = None
+        self.module_compute_entry_config = None
         self.current_return_type = None
         self.current_return_type_source = None
         self.current_return_semantic_output = None
@@ -30124,7 +30128,10 @@ class VulkanSPIRVCodeGen(
 
     def compute_local_size(self, stage) -> Tuple[int, int, int]:
         """Return compute workgroup dimensions from a stage execution config."""
-        config = getattr(stage, "execution_config", {}) or {}
+        if stage is None:
+            config = self.module_compute_entry_config or {}
+        else:
+            config = getattr(stage, "execution_config", {}) or {}
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
             if isinstance(value, (list, tuple)) and len(value) >= 3:
@@ -31102,6 +31109,17 @@ class VulkanSPIRVCodeGen(
             else:
                 helper_functions.append(func)
 
+        compute_entry_configs = [
+            function_entry_execution_config(func)
+            for func, qualifier in top_level_entries
+            if qualifier == "compute"
+        ]
+        if compute_entry_configs and all(
+            config == compute_entry_configs[0] for config in compute_entry_configs
+        ):
+            # Built-ins read outside a stage take the size of the module's compute entries.
+            self.module_compute_entry_config = compute_entry_configs[0]
+
         if self.tessellation_control_stage is None:
             for func, qualifier in top_level_entries:
                 if qualifier == "tessellation_control":
@@ -31176,7 +31194,11 @@ class VulkanSPIRVCodeGen(
                     "TessellationControl",
                     "TessellationEvaluation",
                 }
-                stage_metadata = func if is_tessellation_entry else None
+                stage_metadata = (
+                    func
+                    if is_tessellation_entry or execution_model == "GLCompute"
+                    else None
+                )
                 entry_points.append(
                     (execution_model, function_id, func.name, stage_metadata)
                 )

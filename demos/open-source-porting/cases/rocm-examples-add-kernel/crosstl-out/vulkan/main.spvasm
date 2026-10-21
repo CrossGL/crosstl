@@ -1,11 +1,11 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 46
+; Bound: 38
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
-OpEntryPoint GLCompute %11 "AddKernel" %23 %28
+OpEntryPoint GLCompute %11 "AddKernel" %23
 OpExecutionMode %11 LocalSize 1 1 1
 OpName %14 "aBuffer"
 OpMemberName %14 0 "a"
@@ -13,10 +13,8 @@ OpName %16 "a"
 OpName %17 "bBuffer"
 OpMemberName %17 0 "b"
 OpName %19 "b"
-OpName %23 "gl_LocalInvocationID"
+OpName %23 "gl_GlobalInvocationID"
 OpName %25 "global_idx"
-OpName %28 "gl_WorkGroupID"
-OpName %32 "gl_WorkGroupSize"
 OpDecorate %14 BufferBlock
 OpMemberDecorate %14 0 Offset 0
 OpDecorate %13 ArrayStride 4
@@ -27,9 +25,7 @@ OpMemberDecorate %17 0 Offset 0
 OpMemberDecorate %17 0 NonWritable
 OpDecorate %19 DescriptorSet 0
 OpDecorate %19 Binding 1
-OpDecorate %23 BuiltIn LocalInvocationId
-OpDecorate %28 BuiltIn WorkgroupId
-OpDecorate %32 BuiltIn WorkgroupSize
+OpDecorate %23 BuiltIn GlobalInvocationId
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1
@@ -48,33 +44,25 @@ OpDecorate %32 BuiltIn WorkgroupSize
 %21 = OpTypeVector %20 3
 %22 = OpTypePointer Input %21
 %24 = OpTypePointer Function %4
-%31 = OpConstant %20 1
-%32 = OpConstantComposite %21 %31 %31 %31
-%38 = OpConstant %4 0
-%39 = OpTypePointer Uniform %5
+%30 = OpConstant %4 0
+%31 = OpTypePointer Uniform %5
 %16 = OpVariable %15 Uniform
 %19 = OpVariable %18 Uniform
 %23 = OpVariable %22 Input
-%28 = OpVariable %22 Input
 %11 = OpFunction %2 None %10
 %12 = OpLabel
 %25 = OpVariable %24 Function
 %26 = OpLoad %21 %23
 %27 = OpCompositeExtract %20 %26 0
-%29 = OpLoad %21 %28
-%30 = OpCompositeExtract %20 %29 0
-%33 = OpCompositeExtract %20 %32 0
-%34 = OpIMul %20 %30 %33
-%35 = OpIAdd %20 %27 %34
-%36 = OpBitcast %4 %35
-OpStore %25 %36
-%37 = OpLoad %4 %25
-%40 = OpAccessChain %39 %16 %38 %37
-%41 = OpLoad %5 %40
-%42 = OpLoad %4 %25
-%43 = OpAccessChain %39 %19 %38 %42
-%44 = OpLoad %5 %43
-%45 = OpFAdd %5 %41 %44
-OpStore %40 %45
+%28 = OpBitcast %4 %27
+OpStore %25 %28
+%29 = OpLoad %4 %25
+%32 = OpAccessChain %31 %16 %30 %29
+%33 = OpLoad %5 %32
+%34 = OpLoad %4 %25
+%35 = OpAccessChain %31 %19 %30 %34
+%36 = OpLoad %5 %35
+%37 = OpFAdd %5 %33 %36
+OpStore %32 %37
 OpReturn
 OpFunctionEnd
