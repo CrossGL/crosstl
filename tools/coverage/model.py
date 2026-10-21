@@ -70,7 +70,7 @@ def raytracing_stage(name: str) -> str:
 
 @dataclass(frozen=True)
 class Type:
-    """A value type: a scalar, a vector ``(n,)`` or a matrix ``(columns, rows)``.
+    """A value type: a scalar, a vector ``(n,)`` or a matrix ``(columns, rows)``, or an array of ``count`` of them.
 
     Any other kind of type, such as a sampler or an image, is carried as ``opaque`` with its upstream spelling. A
     probe can pass only the samplers, images and objects that :mod:`.objects` declares.
@@ -79,12 +79,20 @@ class Type:
     scalar: str
     shape: tuple[int, ...] = ()
     opaque: str = ""
+    count: int = 0
 
     def __post_init__(self):
         if not self.opaque and self.scalar not in SCALARS:
             raise ValueError(f"unknown scalar type {self.scalar!r}")
         if len(self.shape) > 2 or any(not 2 <= n <= 4 for n in self.shape):
             raise ValueError(f"unsupported shape {self.shape!r}")
+        if self.count < 0 or (self.count and self.opaque):
+            raise ValueError(f"unsupported array of {self.count} {self.opaque!r}")
+
+    @property
+    def element(self) -> Type:
+        """The type of one element of an array, or the type itself."""
+        return Type(self.scalar, self.shape, self.opaque)
 
     @classmethod
     def other(cls, spelling: str) -> Type:

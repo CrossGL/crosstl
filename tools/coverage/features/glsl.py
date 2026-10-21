@@ -71,8 +71,13 @@ def _param(text: str) -> tuple[Type, str]:
         words.pop(0)
     if not words:
         raise ValueError(f"empty parameter {text!r}")
+    array = re.fullmatch(r"\w+\[(\d+)\]", words[-1])
+    if array:
+        # textureGatherOffsets' ``ivec2 offsets[4]``, whose offsets must be constant expressions (GLSL 4.60,
+        # section 8.9.4).
+        kind = concrete_type(words[0])
+        return Type(kind.scalar, kind.shape, count=int(array.group(1))), "const"
     if "[" in words[-1]:
-        # An array parameter, such as textureGatherOffsets' ``ivec2 offsets[4]``.
         return Type.other(words[0] + words[-1][words[-1].index("[") :]), direction
     kind = concrete_type(words[0])
     if words[-1] == "offset" and kind.scalar == "int":

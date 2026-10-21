@@ -172,7 +172,7 @@ def test_glsl_marks_constant_offsets_arrays_and_implicit_lod():
     # An interpolation offset is a float and need not be constant.
     assert features["interpolateAtOffset"].signature.params[1].direction == "in"
     gather = features["textureGatherOffsets"].signature
-    assert gather.params[2].type == Type.other("ivec2[4]")
+    assert gather.params[2] == Param(Type("int", (2,), count=4), "const")
     assert len(gather.params) == 3
     assert features["texture"].stage == "fragment"
     stream = features["EmitStreamVertex"]

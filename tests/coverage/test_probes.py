@@ -562,6 +562,13 @@ TEXEL_OFFSET = feature(
 ATOMIC_COUNTER = feature(
     "atomicCounterAdd", Type("uint"), Type.other("atomic_uint"), Type("uint")
 )
+GATHER_OFFSETS = feature(
+    "textureGatherOffsets",
+    VEC4,
+    Type.other("sampler2D"),
+    Type("float", (2,)),
+    Param(Type("int", (2,), count=4), "const"),
+)
 
 
 def test_function_probe_declares_the_samplers_and_images_it_passes():
@@ -591,12 +598,26 @@ def test_constant_vector_arguments_are_zero_vectors():
     assert "textureLodOffset(u0, a1, a2, ivec2(0, 0))" in source
 
 
+@pytest.mark.parametrize("language", ["glsl", "crossgl"])
+def test_constant_array_arguments_are_local_constants(language):
+    source = probes.build(GATHER_OFFSETS, language).source
+    zero = "ivec2(0, 0)"
+    assert f"const ivec2 a2[4] = ivec2[4]({', '.join([zero] * 4)});" in source
+    assert "vec4 r = textureGatherOffsets(u0, a1, a2);" in source
+
+
+def test_array_arguments_that_need_not_be_constant_stay_untested():
+    probe = feature("f", Type("float"), Param(Type("float", count=2)), crossgl="f")
+    with pytest.raises(probes.ProbeError, match="array parameters"):
+        probes.build(probe, "glsl")
+
+
 @pytest.mark.skipif(
     not validators.available("glsl"), reason="glslangValidator is not installed"
 )
 @pytest.mark.parametrize(
     "probe_feature",
-    [TEXTURE_LOD, IMAGE_ATOMIC, TEXEL_OFFSET, ATOMIC_COUNTER],
+    [TEXTURE_LOD, IMAGE_ATOMIC, TEXEL_OFFSET, ATOMIC_COUNTER, GATHER_OFFSETS],
     ids=lambda f: f.name,
 )
 def test_glsl_texture_and_image_probes_are_valid_glsl(probe_feature):
