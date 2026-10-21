@@ -78,8 +78,8 @@ TEXEL_HLSL = """
 def test_texture_reads_return_the_declared_element_type():
     crossgl = generate_crossgl(TEXEL_HLSL)
 
-    assert "isampler2D offsets;" in crossgl
-    assert "usampler3D labels;" in crossgl
+    assert "itexture2D offsets;" in crossgl
+    assert "utexture3D labels;" in crossgl
     assert "float d = texelFetch(depth, ThreadIds.xy, 0).x;" in crossgl
     assert "ivec2 o = texelFetch(offsets, ThreadIds.xy, 0).xy;" in crossgl
     assert "uint label = texelFetch(labels, ThreadIds, 0).x;" in crossgl

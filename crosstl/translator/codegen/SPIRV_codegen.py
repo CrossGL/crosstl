@@ -150,6 +150,7 @@ from .spirv_push_constants import (
 )
 from .spirv_ray_builtins import ray_builtin_info
 from .spirv_refusals import SpirvRefusals
+from .spirv_separate_textures import separate_texture_type_info
 from .spirv_stage_distances import (
     entry_point_distance_layout,
     entry_point_distance_variable,
@@ -5118,9 +5119,47 @@ class VulkanSPIRVCodeGen(
             return None
         if metadata.get("kind") == "sampled_image":
             return self.extract_image_from_sampled_image(resource_id, metadata)
-        if metadata.get("kind") == "storage_image":
+        if metadata.get("kind") in {"storage_image", "texture"}:
             return resource_id
         return None
+
+    @staticmethod
+    def image_query_kind_matches(metadata, expected_kind: str) -> bool:
+        """Whether a query or fetch that reads a sampled image may read ``metadata``'s resource.
+
+        A separate texture (``texture2D``, HLSL ``Texture2D``) is the image itself, so size, level, sample count
+        and texel-fetch queries read it directly, as they read the image of a combined sampler.
+        """
+        kind = metadata.get("kind")
+        if expected_kind == "sampled_image":
+            return kind in {"sampled_image", "texture"}
+        return kind == expected_kind
+
+    def texel_fetch_operands(
+        self, function_name: str, args: List[SpirvId], extra_arg_count: int
+    ):
+        """Operands of an unfiltered texel read: a separate texture is fetched from directly.
+
+        A sampler named after the texture (HLSL ``Load`` imported with its pair) is irrelevant to the read, so a
+        separate texture is not combined with it first.
+        """
+        metadata = self.resource_metadata_for_value(args[0]) if args else None
+        if not metadata or metadata.get("kind") != "texture":
+            return self.sampled_texture_operands(
+                function_name, args, extra_arg_count, pair_explicit_sampler=False
+            )
+        coord_index = 1
+        if len(args) > 1:
+            sampler_metadata = self.resource_metadata_for_value(args[1])
+            if sampler_metadata and sampler_metadata.get("kind") == "sampler":
+                coord_index = 2
+        if len(args) < coord_index + 1 + extra_arg_count:
+            self.refuse_lowering(
+                f"{function_name} requires a texture, coordinate, "
+                "and operation operands"
+            )
+            return None
+        return args[0], args[coord_index], args[coord_index + 1 :], metadata
 
     def shadow_compare_operands(
         self, function_name: str, args: List[SpirvId], extra_arg_count: int
@@ -6872,8 +6911,8 @@ class VulkanSPIRVCodeGen(
         if function_name in {"texelFetch", "texelFetchOffset"}:
             required_extra_count = 1 if function_name == "texelFetch" else 2
             # A texel fetch reads the image without filtering, so the sampler it names is irrelevant.
-            sample_args = self.sampled_texture_operands(
-                function_name, args, required_extra_count, pair_explicit_sampler=False
+            sample_args = self.texel_fetch_operands(
+                function_name, args, required_extra_count
             )
             if sample_args is None:
                 return self.register_constant(
@@ -6921,7 +6960,7 @@ class VulkanSPIRVCodeGen(
             ):
                 return self.default_value_for_type(result_type)
 
-            image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
+            image_id = self.image_operand_for_query(sampled_image_id, metadata)
             if image_id is None:
                 return self.default_value_for_type(result_type)
 
@@ -6953,7 +6992,9 @@ class VulkanSPIRVCodeGen(
             expected_kind = (
                 "sampled_image" if function_name == "textureSize" else "storage_image"
             )
-            if not metadata or metadata.get("kind") != expected_kind:
+            if not metadata or not self.image_query_kind_matches(
+                metadata, expected_kind
+            ):
                 self.refuse_lowering(
                     f"{function_name} requires a {expected_kind} operand"
                 )
@@ -7016,7 +7057,9 @@ class VulkanSPIRVCodeGen(
                 if function_name == "textureSamples"
                 else "storage_image"
             )
-            if not metadata or metadata.get("kind") != expected_kind:
+            if not metadata or not self.image_query_kind_matches(
+                metadata, expected_kind
+            ):
                 self.refuse_lowering(
                     f"{function_name} requires a {expected_kind} operand"
                 )
@@ -7053,7 +7096,9 @@ class VulkanSPIRVCodeGen(
 
             sampled_image_id = args[0]
             metadata = self.resource_metadata_for_value(sampled_image_id)
-            if not metadata or metadata.get("kind") != "sampled_image":
+            if not metadata or not self.image_query_kind_matches(
+                metadata, "sampled_image"
+            ):
                 self.refuse_lowering(
                     "textureQueryLevels requires a sampled image operand"
                 )
@@ -7066,7 +7111,7 @@ class VulkanSPIRVCodeGen(
                 )
                 return self.register_constant(0, self.register_primitive_type("int"))
 
-            image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
+            image_id = self.image_operand_for_query(sampled_image_id, metadata)
             if image_id is None:
                 return self.register_constant(0, self.register_primitive_type("int"))
 
@@ -13550,6 +13595,10 @@ class VulkanSPIRVCodeGen(
                 "sampled": 1,
                 "format": "Unknown",
             }
+
+        texture_info = separate_texture_type_info(type_str)
+        if texture_info is not None:
+            return texture_info
 
         image_match = re.fullmatch(
             r"([iu]?image)(1D|2D|3D|Cube)(MS)?(Array)?", type_str

@@ -1339,8 +1339,8 @@ def test_codegen_preserves_contextual_shared_storage_modifier():
     """)
 
     assert "shared float cachedWeight;" in crossgl
-    assert "sampler2D shared;" in crossgl
-    assert "shared sampler2D shared;" not in crossgl
+    assert "texture2D shared;" in crossgl
+    assert "shared texture2D shared;" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -3161,7 +3161,7 @@ def test_codegen_unity_urp_texture_macros_default_to_native_sampling():
         }
     """)
 
-    assert "sampler2D _BaseMap;" in output
+    assert "texture2D _BaseMap;" in output
     assert "sampler sampler_BaseMap;" in output
     assert "texture(_BaseMap, sampler_BaseMap, IN.uv)" in output
     assert "TEXTURE2D" not in output
@@ -3504,7 +3504,7 @@ def test_codegen_cxx11_namespaced_resource_attribute_passthrough():
 
     assert "@ vk_binding(3, 1)" in output
     assert "@ register(t0, space0)" in output
-    assert "sampler2D texture2;" in output
+    assert "texture2D texture2;" in output
 
 
 def test_codegen_subpass_input_globals_reparse_crossgl():
@@ -4778,8 +4778,8 @@ def test_codegen_texture_method_descriptors():
 
 def test_codegen_texture_method_mappings():
     output = generate_crossgl(TEXTURE_METHODS_HLSL)
-    assert "sampler2D tex;" in output
-    assert "sampler2DShadow tex;" not in output
+    assert "texture2D tex;" in output
+    assert "texture2DShadow tex;" not in output
     assert "textureLod(tex, samp, uv, 0.0)" in output
     assert "textureCompare(tex, samp, uv, 0.5)" in output
     assert "textureGather(tex, samp, uv)" in output
@@ -4809,7 +4809,7 @@ def test_codegen_texture_methods_roundtrip_through_translator_codegen():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D tex;" in crossgl
+    assert "texture2D tex;" in crossgl
     assert "sampler samp;" in crossgl
     assert "texture(tex, samp, uv)" in crossgl
     assert "textureLod(tex, samp, uv, 1.0)" in crossgl
@@ -4980,8 +4980,8 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
 
     crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
-    assert "sampler2DShadow shadowMap;" in crossgl
-    assert "sampler2DArrayShadow shadowArray;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
+    assert "texture2DArrayShadow shadowArray;" in crossgl
     assert "textureGatherCompare(shadowMap, compareSampler, uv, depth)" in crossgl
     assert (
         "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
@@ -5077,8 +5077,8 @@ def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
 
     crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
-    assert "sampler2DShadow shadowMap;" in crossgl
-    assert "samplerCubeShadow cubeShadow;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
+    assert "textureCubeShadow cubeShadow;" in crossgl
     assert "textureCompareLod(shadowMap, compareSampler, uv, depth, lod)" in crossgl
     assert (
         "textureCompareLodOffset(shadowMap, compareSampler, uv, depth, lod, offset)"
@@ -5163,9 +5163,9 @@ def test_codegen_texture_compare_bias_member_imports_as_compare_with_diagnostics
 
     crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
 
-    assert "sampler2DShadow shadowMap;" in crossgl
-    assert "sampler2DArrayShadow shadowArray;" in crossgl
-    assert "samplerCubeShadow cubeShadow;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
+    assert "texture2DArrayShadow shadowArray;" in crossgl
+    assert "textureCubeShadow cubeShadow;" in crossgl
     assert (
         "DirectX texture overload extras for SampleCmpBias: CrossGL has no operand for LOD bias"
         in message
@@ -5628,7 +5628,7 @@ def test_codegen_resource_array_receivers_use_canonical_calls():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D textures[2];" in crossgl
+    assert "texture2D textures[2];" in crossgl
     assert "image2D images[2];" in crossgl
     assert "RWStructuredBuffer<int> buffers[2];" in crossgl
     assert "texture(textures[index], samp, uv)" in crossgl
@@ -5672,7 +5672,7 @@ def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers()
     crossgl = generate_crossgl(code)
 
     assert "@ register(t3, space1)" in crossgl
-    assert "sampler2D textures[2];" in crossgl
+    assert "texture2D textures[2];" in crossgl
     assert "@ register(s5, space1)" in crossgl
     assert "sampler samplers[2];" in crossgl
     assert "@ register(u4, space2)" in crossgl
@@ -5723,7 +5723,7 @@ def test_codegen_nonuniform_resource_index_descriptor_arrays_roundtrip():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D textures[4];" in crossgl
+    assert "texture2D textures[4];" in crossgl
     assert "sampler samplers[4];" in crossgl
     assert "uint textureIndex = NonUniformResourceIndex(materialIndex);" in crossgl
     assert "uint samplerSlot = NonUniformResourceIndex(samplerIndex);" in crossgl
@@ -5762,7 +5762,7 @@ def test_codegen_nonuniform_resource_index_multidimensional_arrays_roundtrip():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D textures[][4];" in crossgl
+    assert "texture2D textures[][4];" in crossgl
     assert "sampler samplers[];" in crossgl
     assert (
         "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in crossgl
@@ -5802,7 +5802,7 @@ def test_codegen_feedback_texture_arrays_preserve_feedback_kind_and_uav_register
     crossgl = generate_crossgl(code)
 
     assert "@ register(t0, space9)" in crossgl
-    assert "sampler2D pairedTextures[2];" in crossgl
+    assert "texture2D pairedTextures[2];" in crossgl
     assert "@ register(u0, space9)" in crossgl
     assert "feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2];" in crossgl
     assert "@ register(u2, space9)" in crossgl
@@ -6229,7 +6229,7 @@ def test_codegen_sample_cmp_infers_shadow_texture_for_translator_roundtrip():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shadowMap;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
     assert "sampler compareSampler;" in crossgl
     assert "samplerShadow" not in crossgl
     assert "textureCompareLod(shadowMap, compareSampler, uv, depth, 0.0)" in crossgl
@@ -6267,10 +6267,10 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DArrayShadow shadowArray;" in crossgl
-    assert "samplerCubeShadow shadowCube;" in crossgl
-    assert "sampler2DShadow shadowMap;" in crossgl
-    assert "float helper(sampler2DShadow localShadow, sampler localSampler" in crossgl
+    assert "texture2DArrayShadow shadowArray;" in crossgl
+    assert "textureCubeShadow shadowCube;" in crossgl
+    assert "texture2DShadow shadowMap;" in crossgl
+    assert "float helper(texture2DShadow localShadow, sampler localSampler" in crossgl
     assert (
         "textureCompareLod(shadowArray, compareSampler, uvLayer, depth, 0.0)" in crossgl
     )
@@ -6339,9 +6339,9 @@ def test_codegen_sample_cmp_infers_shadow_struct_members():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shadow;" in crossgl
-    assert "sampler2D color;" in crossgl
-    assert "sampler2DShadow color;" not in crossgl
+    assert "texture2DShadow shadow;" in crossgl
+    assert "texture2D color;" in crossgl
+    assert "texture2DShadow color;" not in crossgl
     assert (
         "textureCompareLod(resources.shadow, compareSampler, uv, depth, 0.0)" in crossgl
     )
@@ -6389,9 +6389,9 @@ def test_codegen_shadow_struct_member_inference_is_scoped_by_struct_type():
 
     crossgl = generate_crossgl(code)
 
-    assert "struct ShadowBundle {\n        sampler2DShadow texture;" in crossgl
-    assert "struct ColorBundle {\n        sampler2D texture;" in crossgl
-    assert "struct ColorBundle {\n        sampler2DShadow texture;" not in crossgl
+    assert "struct ShadowBundle {\n        texture2DShadow texture;" in crossgl
+    assert "struct ColorBundle {\n        texture2D texture;" in crossgl
+    assert "struct ColorBundle {\n        texture2DShadow texture;" not in crossgl
     assert (
         "textureCompareLod(shadowResources.texture, compareSampler, uv, depth, 0.0)"
         in (crossgl)
@@ -6447,12 +6447,12 @@ def test_codegen_sample_cmp_infers_shadow_struct_members_through_helpers():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shadow;" in crossgl
-    assert "sampler2D color;" in crossgl
-    assert "sampler2DShadow color;" not in crossgl
-    assert "float readShadow(sampler2DShadow source" in crossgl
-    assert "float readShadowWrapper(sampler2DShadow source" in crossgl
-    assert "vec4 readColor(sampler2D source" in crossgl
+    assert "texture2DShadow shadow;" in crossgl
+    assert "texture2D color;" in crossgl
+    assert "texture2DShadow color;" not in crossgl
+    assert "float readShadow(texture2DShadow source" in crossgl
+    assert "float readShadowWrapper(texture2DShadow source" in crossgl
+    assert "vec4 readColor(texture2D source" in crossgl
     assert "readShadowWrapper(resources.shadow, compareSampler, uv, depth)" in crossgl
     assert "readColor(resources.color, linearSampler, uv)" in crossgl
 
@@ -6503,11 +6503,11 @@ def test_codegen_sample_cmp_infers_shadow_struct_member_arrays_through_helpers()
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shadows[2];" in crossgl
-    assert "sampler2D colors[2];" in crossgl
-    assert "sampler2DShadow colors[2];" not in crossgl
-    assert "float readShadow(sampler2DShadow source" in crossgl
-    assert "vec4 readColor(sampler2D source" in crossgl
+    assert "texture2DShadow shadows[2];" in crossgl
+    assert "texture2D colors[2];" in crossgl
+    assert "texture2DShadow colors[2];" not in crossgl
+    assert "float readShadow(texture2DShadow source" in crossgl
+    assert "vec4 readColor(texture2D source" in crossgl
     assert "readShadow(resources.shadows[index], compareSampler, uv, depth)" in crossgl
     assert "readColor(resources.colors[index], linearSampler, uv)" in crossgl
 
@@ -6540,11 +6540,11 @@ def test_codegen_helper_propagation_keeps_mixed_texture_non_shadow():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2D tex;" in crossgl
-    assert "sampler2DShadow tex;" not in crossgl
-    assert "vec4 readRegular(sampler2D regularSource, sampler localSampler" in crossgl
+    assert "texture2D tex;" in crossgl
+    assert "texture2DShadow tex;" not in crossgl
+    assert "vec4 readRegular(texture2D regularSource, sampler localSampler" in crossgl
     assert (
-        "float readShadow(sampler2DShadow shadowSource, sampler localSampler" in crossgl
+        "float readShadow(texture2DShadow shadowSource, sampler localSampler" in crossgl
     )
     assert "readRegular(tex, samp, uv)" in crossgl
     assert "readShadow(tex, compareSampler, uv, depth)" in crossgl
@@ -6567,8 +6567,8 @@ def test_codegen_shadow_inference_keeps_parameter_names_scoped():
 
     crossgl = generate_crossgl(code)
 
-    assert "sampler2DShadow shared;" in crossgl
-    assert "vec4 readRegular(sampler2D shared_, sampler localSampler" in crossgl
+    assert "texture2DShadow shared;" in crossgl
+    assert "vec4 readRegular(texture2D shared_, sampler localSampler" in crossgl
     assert "textureCompareLod(shared, compareSampler, uv, depth, 0.0)" in crossgl
     assert "texture(shared_, localSampler, uv)" in crossgl
     assert parse_crossgl(crossgl) is not None
@@ -6595,12 +6595,12 @@ def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():
 
     crossgl = generate_crossgl(code)
 
-    assert "samplerCubeArrayShadow cubeShadowArray;" in crossgl
+    assert "textureCubeArrayShadow cubeShadowArray;" in crossgl
     assert (
-        "float leaf(samplerCubeArrayShadow leafShadow, sampler leafSampler" in crossgl
+        "float leaf(textureCubeArrayShadow leafShadow, sampler leafSampler" in crossgl
     )
     assert (
-        "float wrapper(samplerCubeArrayShadow wrappedShadow, sampler wrappedSampler"
+        "float wrapper(textureCubeArrayShadow wrappedShadow, sampler wrappedSampler"
         in crossgl
     )
     assert (
@@ -6670,11 +6670,11 @@ def test_codegen_nested_cube_array_helper_mixed_use_stays_non_shadow():
 
     crossgl = generate_crossgl(code)
 
-    assert "samplerCubeArray cubeTex;" in crossgl
-    assert "samplerCubeArrayShadow cubeTex;" not in crossgl
-    assert "vec4 regularLeaf(samplerCubeArray source, sampler localSampler" in crossgl
+    assert "textureCubeArray cubeTex;" in crossgl
+    assert "textureCubeArrayShadow cubeTex;" not in crossgl
+    assert "vec4 regularLeaf(textureCubeArray source, sampler localSampler" in crossgl
     assert (
-        "float shadowLeaf(samplerCubeArrayShadow source, sampler localSampler"
+        "float shadowLeaf(textureCubeArrayShadow source, sampler localSampler"
         in crossgl
     )
     assert "regularWrapper(cubeTex, samp, cubeLayer)" in crossgl

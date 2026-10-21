@@ -73,12 +73,22 @@ _SEPARATE_TO_COMBINED = {
     "texture3D": "sampler3D",
     "textureCube": "samplerCube",
     "textureCubeArray": "samplerCubeArray",
+    "texture2DMS": "sampler2DMS",
+    "texture2DMSArray": "sampler2DMSArray",
 }
 _SEPARATE_TO_COMBINED.update(
     {
         f"{prefix}{separate}": f"{prefix}{combined}"
         for prefix in ("i", "u")
         for separate, combined in list(_SEPARATE_TO_COMBINED.items())
+    }
+)
+# Separate depth textures (MSL ``depth2d``, an HLSL ``Texture2D`` only ever depth-compared) are the combined shadow
+# types of the same image.
+_SEPARATE_TO_COMBINED.update(
+    {
+        f"texture{shape}Shadow": f"sampler{shape}Shadow"
+        for shape in ("1D", "1DArray", "2D", "2DArray", "Cube", "CubeArray")
     }
 )
 _SHADOW_OF = {
@@ -257,6 +267,10 @@ class _Resource:
     def is_shadow_type(self):
         return self.base_type in _PLAIN_OF
 
+    @property
+    def is_multisample_type(self):
+        return "MS" in str(self.base_type or "")
+
     def add_key(self, key):
         if key not in self.keys:
             self.keys.append(key)
@@ -427,6 +441,9 @@ class _Lowering:
             return
         if name in _FETCH_OPS:
             key = (_FETCH, False)
+        elif texture.is_multisample_type:
+            # A multisample texture has no sampler state to pair with: the target refuses the filtered operation.
+            return
         elif sampler is None:
             # The texture's own sampler state: its declared type already says whether it compares.
             key = (_OWN, texture.is_shadow_type)
@@ -861,13 +878,21 @@ def lower_combined_sampler_pairs(ast, target):
     survey = _Lowering(ast, target)
     survey.collect()
     if not survey.has_separate_resources():
+        if not _has_separate_types(ast, _MEMBER_TYPE):
+            return ast, []
+        ast = deepcopy(ast)
+        _combine_remaining_separate_types(ast, _MEMBER_TYPE)
         return ast, []
     lowering = _Lowering(deepcopy(ast), target)
     lowering.collect()
     lowering.scan()
     lowering.propagate()
     lowering.bind_sampler_parameters()
-    return lowering.lower(), lowering.records
+    lowered = lowering.lower()
+    # Struct members are not resources the pairing tracks: a member texture is declared combined, and its
+    # explicit samplers are dropped at the use sites as for any combined texture.
+    _combine_remaining_separate_types(lowered, _MEMBER_TYPE)
+    return lowered, lowering.records
 
 
 def canonicalize_separate_textures(ast, target=None, depth_for_compares=False):
@@ -889,7 +914,7 @@ def canonicalize_separate_textures(ast, target=None, depth_for_compares=False):
     survey.collect()
     survey.scan()
     survey.propagate()
-    if not survey.texture_retypes(depth_for_compares):
+    if not survey.texture_retypes(depth_for_compares) and not _has_separate_types(ast):
         return ast
     lowering = _Lowering(deepcopy(ast), target)
     lowering.collect()
@@ -897,7 +922,41 @@ def canonicalize_separate_textures(ast, target=None, depth_for_compares=False):
     lowering.propagate()
     for resource, base in lowering.texture_retypes(depth_for_compares).items():
         _set_type(resource.node, _with_base_type(_type_of(resource.node), base))
+    _combine_remaining_separate_types(lowering.ast)
     return lowering.ast
+
+
+_TYPE_ATTRIBUTES = ("var_type", "param_type", "member_type", "return_type")
+_MEMBER_TYPE = ("member_type",)
+
+
+def _has_separate_types(ast, attributes=_TYPE_ATTRIBUTES):
+    return any(
+        _base_type_name(getattr(node, attribute, None)) in _SEPARATE_TO_COMBINED
+        for node in _walk(ast)
+        for attribute in attributes
+        if getattr(node, attribute, None) is not None
+    )
+
+
+def _combine_remaining_separate_types(ast, attributes=_TYPE_ATTRIBUTES):
+    """Spell every separate texture type the survey does not track (struct members, locals, results) as combined.
+
+    A struct member's or a local's texture is the same native texture as a module resource of its type; the depth
+    variant (``texture2DShadow``) already says whether it is a depth texture.
+    """
+    for node in _walk(ast):
+        for attribute in attributes:
+            type_node = getattr(node, attribute, None)
+            if type_node is None:
+                continue
+            base = _base_type_name(type_node)
+            if base in _SEPARATE_TO_COMBINED:
+                setattr(
+                    node,
+                    attribute,
+                    _with_base_type(type_node, _SEPARATE_TO_COMBINED[base]),
+                )
 
 
 def with_combined_sampler_header(source, records):
