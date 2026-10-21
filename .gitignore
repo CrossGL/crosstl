@@ -7,6 +7,7 @@ dist/
 *.egg-info/
 
 # Generated locally
+.hypothesis/
 docs/_build/
 examples/output/
 /coverage.json

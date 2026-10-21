@@ -35,7 +35,7 @@
         },
         {
             "scheme": "url",
-            "identifier": "https://crossgl.github.io/crossgl-docs/",
+            "identifier": "https://docs.crossgl.net/products/crossgl-translator/index.html",
             "relation": "isDocumentedBy"
         }
     ],
