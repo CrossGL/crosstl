@@ -91,8 +91,6 @@ jobs:
     name: Coverage (GLSL, WebGL, HLSL, SPIR-V, WGSL, Slang)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    env:
-      CROSSTL_COVERAGE_CACHE: ${{ github.workspace }}/../coverage-cache
     steps:
       - uses: actions/checkout@v7
         with:
@@ -148,10 +146,12 @@ jobs:
       - name: Restore upstream feature sources
         uses: actions/cache@v6
         with:
-          path: ${{ github.workspace }}/../coverage-cache
-          key: coverage-upstream-${{ hashFiles('tools/coverage/upstream.py') }}
+          path: ${{ runner.temp }}/coverage-cache
+          key: coverage-upstream-linux-${{ hashFiles('tools/coverage/upstream.py') }}
 
       - name: Measure coverage
+        env:
+          CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
         run: |
           python -m tools.coverage run --strict --jobs 4 \
             --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
@@ -180,8 +180,6 @@ jobs:
             name: HIP
           - backend: mojo
             name: Mojo
-    env:
-      CROSSTL_COVERAGE_CACHE: ${{ github.workspace }}/../coverage-cache
     steps:
       - uses: actions/checkout@v7
         with:
@@ -241,11 +239,12 @@ jobs:
       - name: Restore upstream feature sources
         uses: actions/cache@v6
         with:
-          path: ${{ github.workspace }}/../coverage-cache
-          key: coverage-upstream-${{ hashFiles('tools/coverage/upstream.py') }}
+          path: ${{ runner.temp }}/coverage-cache
+          key: coverage-upstream-${{ matrix.backend }}-${{ hashFiles('tools/coverage/upstream.py') }}
 
       - name: Measure coverage
         env:
+          CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           BACKEND: ${{ matrix.backend }}
         run: python -m tools.coverage run --strict --jobs 4 --backend "$BACKEND" --output "coverage-$BACKEND.json"
 
@@ -261,9 +260,6 @@ jobs:
     if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    env:
-      CROSSTL_COVERAGE_CACHE: ${{ github.workspace }}/../coverage-cache
-      CROSSTL_COVERAGE_RUST_GPU: ${{ github.workspace }}/../rust-gpu
     steps:
       - uses: actions/checkout@v7
         with:
@@ -291,13 +287,13 @@ jobs:
         id: rust-gpu
         uses: actions/cache@v6
         with:
-          path: ${{ github.workspace }}/../rust-gpu
+          path: ${{ runner.temp }}/rust-gpu
           key: rust-gpu-${{ env.RUST_GPU_COMMIT }}-${{ runner.os }}
 
       - name: Install rust-gpu ${{ env.RUST_GPU_VERSION }}
         run: |
           set -euo pipefail
-          root="$CROSSTL_COVERAGE_RUST_GPU"
+          root="$RUNNER_TEMP/rust-gpu"
           if [ ! -d "$root/.git" ]; then
             git clone --quiet --depth 1 --branch "v$RUST_GPU_VERSION" https://github.com/Rust-GPU/rust-gpu "$root"
           fi
@@ -318,10 +314,13 @@ jobs:
       - name: Restore upstream feature sources
         uses: actions/cache@v6
         with:
-          path: ${{ github.workspace }}/../coverage-cache
-          key: coverage-upstream-${{ hashFiles('tools/coverage/upstream.py') }}
+          path: ${{ runner.temp }}/coverage-cache
+          key: coverage-upstream-rust-${{ hashFiles('tools/coverage/upstream.py') }}
 
       - name: Measure coverage
+        env:
+          CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+          CROSSTL_COVERAGE_RUST_GPU: ${{ runner.temp }}/rust-gpu
         run: python -m tools.coverage run --strict --jobs 4 --backend rust --output coverage-rust.json
 
       - uses: actions/upload-artifact@v7
