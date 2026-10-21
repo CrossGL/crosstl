@@ -14,6 +14,7 @@ from .annotate import Annotator
 from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
+from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_stage_interfaces import (
     HlslStageInterfaceUnsupportedError,
@@ -51,6 +52,7 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
+    "ComputeEntryValueNameError",
     "StageInterfaceUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
     "FAMILIES",
@@ -104,7 +106,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
 
     User functions named like texture or image built-ins are first renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
-    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For MSL and
+    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For HLSL, MSL,
+    SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
+    (:mod:`.compute_entry_values`). For MSL and
     HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
     structures (:mod:`.stage_interface_structs`). A structure an
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
@@ -138,6 +142,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     resolve_intrinsic_named_functions(program)
     canonicalize_texture_swizzles(program)
+    lower_compute_entry_values(program, report.target)
     gather_stage_interface_variables(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
