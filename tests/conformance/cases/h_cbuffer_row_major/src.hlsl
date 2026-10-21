@@ -1,7 +1,7 @@
 // HLSL constant-buffer packing with a row_major float3x3: each row starts a register, the last row is not padded,
 // so k packs at 108 after the rows at 64, 80 and 96; the float2 array's last element is not padded either, so
 // tail packs at 56; weights starts a register at 128.
-cbuffer Params : register(b0) {
+cbuffer Params : register(b2) {
     float3 scale;
     float bias;
     float2 offsets[3];

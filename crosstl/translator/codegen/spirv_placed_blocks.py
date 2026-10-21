@@ -59,6 +59,8 @@ __all__ = [
     "SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION",
     "PlacedUniformBlock",
     "decorate_placed_uniform_block",
+    "matrix_from_column_array",
+    "placed_member_type",
     "placed_uniform_block",
 ]
 
@@ -81,6 +83,8 @@ class PlacedUniformBlock:
     layout_type: HlslLayoutType
     placements: tuple
     clone_key: str
+    # Root column-major matrix members declared as arrays of their columns (see :func:`_column_array_members`).
+    column_arrays: frozenset = frozenset()
 
 
 def _unsupported(feature, message, capability):
@@ -232,18 +236,45 @@ def _placed_value_size(layout_type, layout):
     return size
 
 
-def _check_validator_extents(struct_name, placements, layout):
+def _column_array_members(placements, layout):
+    """Names of the root column-major matrices whose last column's padding holds the next member.
+
+    HLSL packs ``float k`` after a ``float3x3`` into the matrix's third register, but ``spirv-val`` sizes a
+    ``ColMajor`` matrix member as ``columns * MatrixStride`` and would report the two members as overlapping. The
+    matrix is therefore declared as an array of its column vectors whose ``ArrayStride`` is the matrix stride: the
+    same bytes, sized ``(columns - 1) * stride`` plus one column. Loads rebuild the matrix from its columns, and
+    an index selects a column as it does in a matrix.
+    """
+    ordered = sorted(placements, key=lambda placement: placement.offset)
+    names = set()
+    for previous, placement in zip(ordered, ordered[1:]):
+        matrix = previous.layout_type
+        if matrix.kind != "matrix" or matrix.row_major:
+            continue
+        if placement.offset < previous.offset + _validator_extent(
+            matrix, layout, previous.size
+        ):
+            names.add(previous.name)
+    return frozenset(names)
+
+
+def _check_validator_extents(
+    struct_name, placements, layout, column_arrays=frozenset()
+):
     """Refuse members that start inside the padding ``spirv-val`` counts as part of the member before them.
 
-    A column-major matrix whose last column leaves room for the next member (HLSL packs ``float k`` after a
-    ``float3x3`` into its third register) has no SPIR-V spelling as a matrix member: ``spirv-val`` counts the
-    whole last column stride and reports the members as overlapping.
+    A column-major matrix whose last column leaves room for the next member has a SPIR-V spelling only as a root
+    member of the block (``column_arrays``, see :func:`_column_array_members`); inside a nested struct or an
+    array ``spirv-val`` counts its whole last column stride and reports the members as overlapping.
     """
     ordered = sorted(placements, key=lambda placement: placement.offset)
     for previous, placement in zip(ordered, ordered[1:]):
-        end = previous.offset + _validator_extent(
-            previous.layout_type, layout, previous.size
-        )
+        if previous.name in column_arrays:
+            end = previous.offset + previous.size
+        else:
+            end = previous.offset + _validator_extent(
+                previous.layout_type, layout, previous.size
+            )
         if placement.offset < end:
             raise HlslLayoutError(
                 f"member '{placement.name}' of '{struct_name}' at byte {placement.offset} lies in the padding "
@@ -293,14 +324,48 @@ def placed_uniform_block(codegen, node) -> PlacedUniformBlock | None:
         placements = _root_placements(layout_type, layout)
         if _placements_signature(placements, layout) == _std140_signature(layout_type):
             return None
-        _check_validator_extents(node.name, placements, layout)
+        column_arrays = _column_array_members(placements, layout)
+        _check_validator_extents(node.name, placements, layout, column_arrays)
     except HlslLayoutError as exc:
         raise _unsupported(
             "uniform block layout",
             f"Cannot reproduce the {layout} layout of uniform block '{node.name}' in SPIR-V: {exc}",
             f"spirv.uniform_block.{layout}_layout",
         ) from exc
-    return PlacedUniformBlock(layout, layout_type, placements, f"placed_{layout}")
+    return PlacedUniformBlock(
+        layout, layout_type, placements, f"placed_{layout}", column_arrays
+    )
+
+
+def placed_member_type(codegen, member_type, member_name, plan: PlacedUniformBlock):
+    """The SPIR-V type of a member of a placed block: its layout clone, or an array of a matrix's columns."""
+    if member_name not in plan.column_arrays:
+        return codegen.storage_layout_type(member_type, plan.clone_key)
+    matrix_info = codegen.matrix_type_info_from_type(member_type)
+    if matrix_info is None:
+        raise _unsupported(
+            "uniform block layout",
+            f"SPIR-V uniform block member '{member_name}' is not a matrix type",
+            f"spirv.uniform_block.{plan.layout}_layout",
+        )
+    column_type, columns = matrix_info
+    array_type = codegen.register_layout_array_type(
+        column_type, columns, f"{plan.clone_key}_columns"
+    )
+    codegen.matrix_column_arrays[array_type.id] = member_type
+    return array_type
+
+
+def matrix_from_column_array(codegen, value, array_type, matrix_type):
+    """Rebuild a matrix value from a loaded array of its columns."""
+    column_type, columns = codegen.array_type_info_from_type(array_type)
+    return codegen.composite_construct(
+        matrix_type,
+        [
+            codegen.composite_extract(value, column_type, index)
+            for index in range(int(columns))
+        ],
+    )
 
 
 def _decorate_once(codegen, type_id, decoration, value, decorated):
@@ -350,7 +415,9 @@ def _innermost_matrix(layout_type):
     return layout_type if layout_type.kind == "matrix" else None
 
 
-def _decorate_members(codegen, struct_type, placements, layout, decorated):
+def _decorate_members(
+    codegen, struct_type, placements, layout, decorated, column_arrays=frozenset()
+):
     members = codegen.current_struct_members.get(struct_type.type.base_type) or []
     if len(members) != len(placements):
         raise HlslLayoutError(
@@ -360,6 +427,10 @@ def _decorate_members(codegen, struct_type, placements, layout, decorated):
         codegen.decorations.append(
             f"OpMemberDecorate %{struct_type.id} {index} Offset {placement.offset}"
         )
+        if placement.name in column_arrays:
+            stride = _matrix_stride(placement.layout_type, layout)
+            _decorate_once(codegen, member_type, "ArrayStride", stride, decorated)
+            continue
         matrix = _innermost_matrix(placement.layout_type)
         if matrix is not None:
             orientation = "RowMajor" if matrix.row_major else "ColMajor"
@@ -380,7 +451,14 @@ def decorate_placed_uniform_block(codegen, block_type, plan: PlacedUniformBlock)
     decorated = codegen.placed_uniform_decorations
     codegen.decorations.append(f"OpDecorate %{block_type.id} Block")
     try:
-        _decorate_members(codegen, block_type, plan.placements, plan.layout, decorated)
+        _decorate_members(
+            codegen,
+            block_type,
+            plan.placements,
+            plan.layout,
+            decorated,
+            plan.column_arrays,
+        )
     except HlslLayoutError as exc:
         raise _unsupported(
             "uniform block layout",

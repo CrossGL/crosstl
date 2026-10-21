@@ -11,7 +11,10 @@ exact HLSL offsets:
 * ``bool`` uses four-byte ``uint`` storage; reads convert back to ``bool``;
 * constant-buffer arrays of scalars or vectors use four-component storage so
   each element occupies one 16-byte register; element reads select the
-  original components;
+  original components. The last element of an HLSL array is not padded, so
+  when the next member packs into its register the array is stored as its
+  register words instead, ``struct { T v[...]; }`` with none after the last
+  element, and an element helper reads ``v[4 * i]`` onwards;
 * constant-buffer matrices keep the native type when its columns match the
   HLSL registers (``floatCx4``). Every other float, integer or boolean matrix
   is stored as its register words, ``struct { T v[...]; }`` with four words
@@ -102,6 +105,8 @@ class MetalLayoutMember:
     # Components selected after indexing an array whose elements were widened.
     element_suffix: str = ""
     nested_struct: Optional[str] = None
+    # Helper that reads element ``i`` of an array held as register words: ``helper(storage, i)``.
+    element_load: Optional[str] = None
 
     @property
     def converted(self):
@@ -109,6 +114,7 @@ class MetalLayoutMember:
             self.read_conversion
             or self.write_conversion
             or self.element_suffix
+            or self.element_load
             or self.storage_type.startswith("packed_")
         )
 
@@ -160,7 +166,8 @@ class MetalHlslBufferLayouts:
         self.int_constants: Dict[str, int] = dict(int_constants or {})
         self.struct_plans: Dict[str, MetalLayoutPlan] = {}
         self.struct_layouts: Dict[str, str] = {}
-        # Definitions of the matrix storage structs and helpers, by struct name.
+        # Definitions of the register-word storage structs of matrices and
+        # trimmed arrays, with their helpers, by struct name.
         self.matrix_storages: Dict[str, str] = {}
 
     def storage_definitions(self, plan):
@@ -268,8 +275,11 @@ class MetalHlslBufferLayouts:
         plan = MetalLayoutPlan(name=name, layout=layout)
         cursor = 0
         max_alignment = 1
-        for placement in placements:
-            member = self.member_storage(placement, layout)
+        for index, placement in enumerate(placements):
+            following = (
+                placements[index + 1].offset if index + 1 < len(placements) else None
+            )
+            member = self.member_storage(placement, layout, following)
             if member.offset % member.alignment:
                 raise HlslLayoutError(
                     f"member '{placement.name}' of '{name}' at {label} offset "
@@ -335,11 +345,12 @@ class MetalHlslBufferLayouts:
             member.alignment = alignment
             plan.alignment = max(plan.alignment, alignment)
 
-    def member_storage(self, placement, layout):
+    def member_storage(self, placement, layout, following=None):
+        """Metal storage of one member; ``following`` is the offset of the member after it, if any."""
         layout_type = placement.layout_type
         offset = placement.offset
         if layout_type.kind == "array":
-            return self.array_member_storage(placement, layout)
+            return self.array_member_storage(placement, layout, following)
         storage_type, size, alignment, read, write, nested = self.value_storage(
             layout_type, layout
         )
@@ -389,7 +400,7 @@ class MetalHlslBufferLayouts:
             return plan.name, plan.size, plan.alignment, None, None, plan.name
         raise HlslLayoutError(f"unsupported HLSL buffer value kind '{kind}'")
 
-    def array_member_storage(self, placement, layout):
+    def array_member_storage(self, placement, layout, following=None):
         layout_type = placement.layout_type
         element = layout_type.element
         count = layout_type.count
@@ -401,6 +412,12 @@ class MetalHlslBufferLayouts:
                     f"64-bit scalar arrays in {label} buffers are not supported"
                 )
             width = element.components if element.kind == "vector" else 1
+            if (
+                layout == HLSL_CBUFFER_LAYOUT
+                and following is not None
+                and following < placement.offset + 16 * count
+            ):
+                return self.trimmed_array_storage(placement, element.scalar, width)
             read = None
             if element.scalar == "bool":
                 read = "bool" if width == 1 else f"bool{width}"
@@ -441,6 +458,29 @@ class MetalHlslBufferLayouts:
             read_conversion=read,
             write_conversion=write,
             nested_struct=nested,
+        )
+
+    def trimmed_array_storage(self, placement, scalar, width):
+        """Register words of a constant-buffer array whose last register the next member shares.
+
+        Element ``i`` starts at word ``4 * i`` and the storage ends after the
+        last element's ``width`` words, where HLSL packs the next member.
+        """
+        count = placement.layout_type.count
+        logical = scalar if width == 1 else f"{scalar}{width}"
+        name = f"crosstl_hlsl_cbuffer_{logical}_array{count}"
+        words = 4 * (count - 1) + width
+        if name not in self.matrix_storages:
+            self.matrix_storages[name] = metal_trimmed_array_storage_definition(
+                name, scalar, width, words
+            )
+        return MetalLayoutMember(
+            name=placement.name,
+            offset=placement.offset,
+            storage_type=name,
+            size=4 * words,
+            alignment=4,
+            element_load=f"{name}_element",
         )
 
     def matrix_storage(self, layout_type, padded, layout=HLSL_CBUFFER_LAYOUT):
@@ -620,6 +660,32 @@ def metal_matrix_storage_definition(
         f"    {name} m = {{}};\n"
         f"{''.join(stores)}"
         "    return m;\n"
+        "}\n"
+        "#endif\n"
+    )
+
+
+def metal_trimmed_array_storage_definition(name, scalar, width, words):
+    """A register-word struct for a constant-buffer array of ``width``-component values and its element helper."""
+    logical = scalar if width == 1 else f"{scalar}{width}"
+    word = "uint" if scalar == "bool" else scalar
+    values = ", ".join(
+        "a.v[4 * index]" if component == 0 else f"a.v[4 * index + {component}]"
+        for component in range(width)
+    )
+    if scalar == "bool":
+        value = (
+            f"bool({values})" if width == 1 else f"bool{width}(uint{width}({values}))"
+        )
+    else:
+        value = values if width == 1 else f"{logical}({values})"
+    guard = name.upper()
+    return (
+        f"#ifndef {guard}\n"
+        f"#define {guard}\n"
+        f"struct {name} {{\n    {word} v[{words}];\n}};\n"
+        f"inline {logical} {name}_element({name} a, int index) {{\n"
+        f"    return {value};\n"
         "}\n"
         "#endif\n"
     )

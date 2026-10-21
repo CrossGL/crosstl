@@ -39,6 +39,17 @@ from .hlsl_buffer_layout import (
 from .metal_hlsl_buffer_layout import LAYOUT_LABELS, MetalHlslBufferLayouts
 
 
+def metal_layout_refusal(message, layout):
+    """The typed diagnostic for a buffer layout Metal declarations cannot reproduce."""
+    from .metal_codegen import UnsupportedMetalFeatureError
+
+    return UnsupportedMetalFeatureError(
+        "buffer layout",
+        message,
+        missing_capabilities=(f"metal.buffer_layout.{layout}",),
+    )
+
+
 class MetalHlslResourceMixin:
     """HLSL resource, binding and buffer-layout members of ``MetalCodeGen``."""
 
@@ -190,14 +201,16 @@ class MetalHlslResourceMixin:
                 ]
                 plan = planner.plan_cbuffer(cbuffer.name, members, layout)
             except HlslLayoutError as exc:
-                raise ValueError(
+                raise metal_layout_refusal(
                     f"Cannot reproduce the {LAYOUT_LABELS[layout]} layout of cbuffer "
-                    f"'{cbuffer.name}' in Metal: {exc}"
+                    f"'{cbuffer.name}' in Metal: {exc}",
+                    layout,
                 ) from exc
             self.metal_hlsl_cbuffer_plans[id(cbuffer)] = plan
             for member in plan.members:
-                if member.array_count is not None and (
-                    member.element_suffix or member.read_conversion
+                if member.element_load or (
+                    member.array_count is not None
+                    and (member.element_suffix or member.read_conversion)
                 ):
                     self.metal_hlsl_cbuffer_array_members[member.name] = member
         for node in self.metal_hlsl_structured_declarations(ast):
@@ -222,9 +235,10 @@ class MetalHlslResourceMixin:
             try:
                 storage = planner.plan_structured_element(element_type)
             except HlslLayoutError as exc:
-                raise ValueError(
+                raise metal_layout_refusal(
                     f"Cannot reproduce the HLSL layout of structured buffer "
-                    f"'{node.name}' in Metal: {exc}"
+                    f"'{node.name}' in Metal: {exc}",
+                    HLSL_STRUCTURED_LAYOUT,
                 ) from exc
             previous = self.metal_hlsl_structured_buffers.get(node.name)
             if previous is not None and previous != storage:
@@ -241,9 +255,10 @@ class MetalHlslResourceMixin:
         try:
             return planner.plan_structured_element(str(element_type))
         except HlslLayoutError as exc:
-            raise ValueError(
+            raise metal_layout_refusal(
                 f"Cannot reproduce the HLSL layout of pointer parameter "
-                f"'{node.name}' in Metal: {exc}"
+                f"'{node.name}' in Metal: {exc}",
+                HLSL_STRUCTURED_LAYOUT,
             ) from exc
 
     @staticmethod
@@ -318,6 +333,8 @@ class MetalHlslResourceMixin:
             member = cbuffer_arrays[name]
             base = self.cbuffer_member_references[name]
             index = self.generate_expression(index_expr)
+            if member.element_load:
+                return f"{member.element_load}({base}, {index})", None
             return f"{base}[{index}]{member.element_suffix}", member.read_conversion
         storage = self.metal_hlsl_structured_buffer_storage(array_expr)
         if storage is not None and storage[1]:
@@ -326,6 +343,10 @@ class MetalHlslResourceMixin:
             return f"{array}[{index}]", storage[1]
         if isinstance(array_expr, MemberAccessNode):
             member = self.metal_hlsl_layout_member(array_expr)
+            if member is not None and member.element_load:
+                array = self.generate_expression(array_expr)
+                index = self.generate_expression(index_expr)
+                return f"{member.element_load}({array}, {index})", None
             if (
                 member is not None
                 and member.array_count is not None
@@ -358,8 +379,9 @@ class MetalHlslResourceMixin:
             node = node.object if isinstance(node, MemberAccessNode) else node.array
             member = self.metal_hlsl_layout_member(node)
             if member is not None and member.storage_type in planner.matrix_storages:
+                kind = "array" if member.element_load else "matrix"
                 raise ValueError(
-                    "Cannot store to part of HLSL constant-buffer matrix "
+                    f"Cannot store to part of HLSL constant-buffer {kind} "
                     f"'{node.member}' in Metal: it is held as register words"
                 )
         if isinstance(target, MemberAccessNode):

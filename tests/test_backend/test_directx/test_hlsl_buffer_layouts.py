@@ -14,7 +14,10 @@ import pytest
 from crosstl.backend.DirectX import DirectxCrossGLCodeGen
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
-from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_codegen import (
+    MetalCodeGen,
+    UnsupportedMetalFeatureError,
+)
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -310,15 +313,67 @@ def test_metal_passes_hlsl_layout_members_to_reference_parameters_through_tempor
     )
 
 
-def test_metal_rejects_hlsl_layouts_it_cannot_reproduce():
+def test_metal_packs_members_into_the_last_register_of_a_cbuffer_array(tmp_path):
     # The last element of an HLSL array is not padded to a register, so the
-    # next member packs into it; Metal array elements cannot overlap it.
-    with pytest.raises(ValueError, match="overlaps the Metal storage"):
+    # next member packs into it (DXC: a at 0, c at 40, b2 at 48, d at 68, q at 80,
+    # e at 108). Such arrays are held as register words read by an element helper.
+    metal = generate_metal("""
+        cbuffer P : register(b0)
+        {
+            float2 a[3];
+            float c;
+            bool b2[2];
+            bool d;
+            int3 q[2];
+            float e;
+            float w[2];
+        }
+        RWStructuredBuffer<float> o : register(u0);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID)
+        {
+            float2 t[3] = a;
+            o[id.x] = t[2].x + a[id.x].y + c + (b2[id.x] ? 1.0 : 0.0) + (d ? 1.0 : 0.0)
+                + q[id.x].z + e + w[id.x];
+        }
+        """)
+
+    assert "struct crosstl_hlsl_cbuffer_float2_array3 {\n    float v[10];\n};" in metal
+    assert "struct crosstl_hlsl_cbuffer_bool_array2 {\n    uint v[5];\n};" in metal
+    assert (
+        "return int3(a.v[4 * index], a.v[4 * index + 1], a.v[4 * index + 2]);" in metal
+    )
+    assert "crosstl_hlsl_cbuffer_float2_array3_element(p.a, id.x).y" in metal
+    assert "crosstl_hlsl_cbuffer_float2_array3_element(p.a, 2)" in metal
+    assert "crosstl_hlsl_cbuffer_bool_array2_element(p.b2, id.x) ?" in metal
+    # Nothing follows the last array, so it keeps one four-component register per element.
+    assert "    float4 w[2];\n" in metal
+    compile_metal_with_layout(
+        metal,
+        tmp_path,
+        offsets=[
+            ("P", "a", 0),
+            ("P", "c", 40),
+            ("P", "b2", 48),
+            ("P", "d", 68),
+            ("P", "q", 80),
+            ("P", "e", 108),
+            ("P", "w", 112),
+        ],
+    )
+
+
+def test_metal_rejects_hlsl_layouts_it_cannot_reproduce():
+    # The next member packs into the last register of an array of matrices,
+    # whose Metal elements are padded to whole registers.
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="overlaps the Metal storage"
+    ):
         generate_metal("""
-            cbuffer _ : register(b0) { float a[2]; float b; }
+            cbuffer _ : register(b0) { float2x2 a[2]; float b; }
             RWStructuredBuffer<float> o : register(u0);
             [numthreads(1, 1, 1)]
-            void main(uint3 id : SV_DispatchThreadID) { o[id.x] = a[id.x] + b; }
+            void main(uint3 id : SV_DispatchThreadID) { o[id.x] = a[id.x][0].x + b; }
             """)
 
     with pytest.raises(ValueError, match="matrices in HLSL structured buffers"):

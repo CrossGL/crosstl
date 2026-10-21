@@ -1,7 +1,7 @@
 // HLSL constant-buffer packing: a member never straddles a 16-byte register and every array element starts one,
 // but the last element is not padded, so tail packs at 56 next to offsets[2]; the column-major float3x3 takes the
 // xyz of three registers from 64, so k packs at 108; weights starts a register at 128.
-cbuffer Params : register(b0) {
+cbuffer Params : register(b2) {
     float3 scale;
     float bias;
     float2 offsets[3];

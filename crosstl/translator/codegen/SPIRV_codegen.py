@@ -120,6 +120,7 @@ from .spirv_exponent_builtins import (
     spirv_output_operand_call,
 )
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
+from .spirv_hlsl_registers import reserve_hlsl_descriptor_slots
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
@@ -132,6 +133,8 @@ from .spirv_per_vertex_builtins import (
 from .spirv_placed_blocks import (
     SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION,
     decorate_placed_uniform_block,
+    matrix_from_column_array,
+    placed_member_type,
     placed_uniform_block,
 )
 from .spirv_push_constants import (
@@ -601,6 +604,10 @@ class VulkanSPIRVCodeGen(
         self.next_resource_bindings = {}
         self.reserved_resource_bindings = set()
         self.used_resource_bindings = set()
+        # Descriptor slots of resources bound by HLSL register or vk::binding, by node id.
+        self.hlsl_descriptor_slots = {}
+        # Uniform-block arrays of matrix columns, by array type id, with the matrix type a load rebuilds.
+        self.matrix_column_arrays = {}
         self.entry_point_resource_binding_baseline = None
 
         self.is_vertex_shader = False
@@ -1734,6 +1741,9 @@ class VulkanSPIRVCodeGen(
             self.resource_type_metadata[id_value] = resource_metadata
         if self.is_non_uniform_value(variable_id):
             self.mark_non_uniform_result(spirv_id)
+        matrix_type = self.matrix_column_arrays.get(result_type.id)
+        if matrix_type is not None:
+            return matrix_from_column_array(self, spirv_id, result_type, matrix_type)
         return spirv_id
 
     def convert_value_for_store(
@@ -17364,7 +17374,14 @@ class VulkanSPIRVCodeGen(
             # decorations never reach the logical types used by Function,
             # Private or Workgroup variables (VUID-StandaloneSpirv-None-10684).
             members = [
-                (self.storage_layout_type(member_type, layout), member_name)
+                (
+                    (
+                        placed_member_type(self, member_type, member_name, placed)
+                        if placed is not None
+                        else self.storage_layout_type(member_type, layout)
+                    ),
+                    member_name,
+                )
                 for member_type, member_name in members
             ]
             cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
@@ -20207,6 +20224,10 @@ class VulkanSPIRVCodeGen(
     def resource_descriptor_slot(
         self, node: VariableNode, *, allow_binding_reassignment: bool = False
     ) -> Tuple[int, int]:
+        hlsl_slot = self.hlsl_descriptor_slots.get(id(node))
+        if hlsl_slot is not None:
+            self.used_resource_bindings.add(hlsl_slot)
+            return hlsl_slot
         descriptor_set = self.resource_descriptor_set(node)
         explicit_binding = self.explicit_descriptor_binding(node)
 
@@ -20284,6 +20305,11 @@ class VulkanSPIRVCodeGen(
                     f"binding {explicit_binding}"
                 )
             self.reserved_resource_bindings.add(key)
+        self.hlsl_descriptor_slots = reserve_hlsl_descriptor_slots(
+            self,
+            self.global_descriptor_binding_nodes(ast),
+            skip=lambda node: is_push_constant_block(self, node),
+        )
 
     def explicit_descriptor_binding(self, node: VariableNode) -> Optional[int]:
         binding = self.explicit_interface_integer_attribute(node, "binding")

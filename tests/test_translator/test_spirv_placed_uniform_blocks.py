@@ -13,8 +13,6 @@ import re
 import shutil
 import subprocess
 
-import pytest
-
 import crosstl
 from tests.spirv_friendly_names import friendly_spirv
 
@@ -175,9 +173,21 @@ def test_hlsl_cbuffer_laid_out_as_std140_keeps_the_default_rules(tmp_path):
         assert result.returncode == 0, result.stderr[-2000:]
 
 
-def test_member_in_column_major_matrix_padding_is_refused(tmp_path):
-    with pytest.raises(Exception, match=r"padding SPIR-V counts as part of 'rot'"):
-        _translate(tmp_path, HLSL_MATRIX_TAIL, "shader.hlsl", "directx")
+def test_member_in_column_major_matrix_padding_keeps_its_offset(tmp_path):
+    # Each column of the column-major float3x3 takes the xyz of a register, so k packs at 44 into the last
+    # column's register. SPIR-V counts a matrix's last-column padding as part of the matrix, so the member is
+    # declared as an array of its columns (ArrayStride 16, the MatrixStride) and a load rebuilds the matrix.
+    code = _translate(tmp_path, HLSL_MATRIX_TAIL, "shader.hlsl", "directx")
+    assert _member_offsets(code, "Params") == [0, 44]
+    assert re.search(r"OpDecorate %_arr_v3float_\w+ ArrayStride 16", code)
+    assert re.search(
+        r"(%\w+) = OpCompositeConstruct %mat3v3float (%\w+ ){2}%\w+\n.*?OpMatrixTimesVector %v3float \1 ",
+        code,
+        re.S,
+    )
+    result = _validate(tmp_path, code, "--scalar-block-layout")
+    if result is not None:
+        assert result.returncode == 0, result.stderr[-2000:]
 
 
 def test_glsl_offset_and_align_qualifiers_reach_spirv(tmp_path):

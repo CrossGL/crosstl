@@ -424,9 +424,13 @@ class GLSLHlslConstantBuffers:
             for member in getattr(node, "members", []) or []
             if getattr(member, "name", None) and not isinstance(member, FunctionNode)
         ]
-        label = {HLSL_CBUFFER_LAYOUT: "HLSL", "metal": "MSL"}.get(
-            source_layout, source_layout
-        )
+        # The GLSL block layouts (std140, std430, scalar) are their own labels.
+        if source_layout == HLSL_CBUFFER_LAYOUT:
+            label = "HLSL"
+        elif source_layout == "metal":
+            label = "MSL"
+        else:
+            label = source_layout
         try:
             layout_type = struct_type(
                 node.name,
