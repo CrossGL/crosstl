@@ -332,6 +332,10 @@ def _method(owner: str, name: str, declared: list) -> Feature:
     # The plainest overload: no offset, clamp or tiled-resource status.
     ordered = sorted(signatures, key=lambda s: (_preference(s), len(s.params)))
     chosen = next((s for s in ordered if _probed(s)), ordered[0] if ordered else None)
+    # A static method, such as dx::HitObject::MakeNop, is called on its type.
+    static = kind and all(
+        "static" in attributes.split(",") for attributes, _, _ in declared
+    )
     return Feature(
         "hlsl",
         "method",
@@ -341,7 +345,7 @@ def _method(owner: str, name: str, declared: list) -> Feature:
         crossgl=name,
         stage="fragment" if name in _DERIVATIVES else kind.stage if kind else "compute",
         note=note,
-        spelling=name,
+        spelling=f"{kind.spelling}::{name}" if static else name,
     )
 
 

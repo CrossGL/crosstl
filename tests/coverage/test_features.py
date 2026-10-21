@@ -366,6 +366,9 @@ def test_hlsl_hit_object_methods_are_probed_in_a_ray_generation_shader():
     is_miss = features["DxHitObject.IsMiss"]
     assert (is_miss.stage, is_miss.signature.result) == ("ray-generation", Type("bool"))
     assert features["DxHitObject.MakeNop"].stage == "ray-generation"
+    # A static method is called on its type, the others on the object.
+    assert features["DxHitObject.MakeNop"].spelling == "dx::HitObject::MakeNop"
+    assert features["DxHitObject.IsMiss"].spelling == "IsMiss"
 
 
 def test_hlsl_stream_methods_are_probed_in_a_geometry_shader():

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .model import WIDE_INTEGERS
-from .objects import VERTEX
+from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .templates import C_FAMILY, Template
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -260,6 +260,10 @@ class CrossGL(Dialect):
 
     def absent(self, stage: str) -> str:
         return "CrossGL has no work-graph node stage" if stage == "node" else ""
+
+    # CrossGL spells Direct3D's hit object as HLSL does.
+    def holding(self, opaque: str) -> str:
+        return OBJECTS[HIT_OBJECT].spelling if opaque == HIT_OBJECT else ""
 
 
 # A geometry stage's input and output primitives, as the CrossGL importers write them.

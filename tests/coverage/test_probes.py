@@ -202,6 +202,28 @@ def test_node_probes_are_valid_and_a_library_needs_an_entry_of_the_stage():
     assert "no node entry point" in verdict.log
 
 
+MAKE_NOP = Feature(
+    "hlsl",
+    "method",
+    "DxHitObject.MakeNop",
+    Signature(Type.other("DxHitObject"), ()),
+    group="DxHitObject",
+    crossgl="MakeNop",
+    spelling="dx::HitObject::MakeNop",
+    stage="ray-generation",
+)
+
+
+def test_a_static_method_returning_a_hit_object_keeps_it_in_a_local():
+    hlsl = probes.build(MAKE_NOP, "hlsl").source
+    assert "    dx::HitObject r = dx::HitObject::MakeNop();" in hlsl
+    crossgl = probes.build(MAKE_NOP, "crossgl").source
+    assert "            dx::HitObject r = obj.MakeNop();" in crossgl
+    if validators.available("hlsl"):
+        verdict = validators.validate("hlsl", hlsl, "ray-generation")
+        assert verdict.accepted, verdict.log
+
+
 def node_method(owner, name, result, *params):
     return Feature(
         "hlsl",

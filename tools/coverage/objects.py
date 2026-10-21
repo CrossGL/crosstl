@@ -36,6 +36,8 @@ VERTEX = "Vertex"
 STREAM = f"PointStream<{VERTEX}>"
 # The record type of a work-graph probe's node inputs and outputs.
 RECORD = "Record"
+# The hit object of shader execution reordering, as DXC's table names it.
+HIT_OBJECT = "DxHitObject"
 
 
 def _node(spelling: str) -> Object:
@@ -90,7 +92,7 @@ OBJECTS: dict[str, Object] = {
     "RayQuery": Object("RayQuery<RAY_FLAG_NONE>"),
     # A default-constructed hit object is a NOP hit object (HLSL shader execution reordering), which a ray-generation
     # shader can query.
-    "DxHitObject": Object("dx::HitObject", stage="ray-generation"),
+    HIT_OBJECT: Object("dx::HitObject", stage="ray-generation"),
     # A geometry shader's output stream is a parameter of its entry point.
     "Stream": Object(STREAM, stage="geometry", parameter=True),
     # A work graph's node shader takes its inputs and outputs as entry-point parameters (HLSL work graphs). The
@@ -263,4 +265,5 @@ class Receiver:
         return name
 
     def call(self, method: str) -> str:
-        return f"{self.name}.{method}"
+        """The callee of ``method``: the object's own method, or a static method its type spells."""
+        return method if "::" in method else f"{self.name}.{method}"

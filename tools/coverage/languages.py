@@ -8,7 +8,7 @@ from .crossgl import ES_DIALECT as CROSSGL_ES
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .kernels import CUDA, HIP, Mojo, Rust
 from .model import RAYTRACING_STAGES, Type
-from .objects import RECORD, STREAM, VERTEX
+from .objects import HIT_OBJECT, OBJECTS, RECORD, STREAM, VERTEX
 
 
 class GLSL(Dialect):
@@ -281,6 +281,8 @@ class HLSL(Dialect):
     }
 
     def holding(self, opaque: str) -> str:
+        if opaque == HIT_OBJECT:
+            return OBJECTS[HIT_OBJECT].spelling
         return f"{opaque}<{RECORD}>" if opaque in self._RECORDS else ""
 
     def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
