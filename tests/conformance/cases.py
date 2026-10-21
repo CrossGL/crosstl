@@ -119,6 +119,38 @@ def _i32_edge(n=64):
     return _tile(base, n).astype(np.int32)
 
 
+# The words of an MSL ``struct { float3 a; float b; float2 c; }`` that hold values: a (0-2), b (4) and c (6-7).
+_METAL_STRUCT_WORDS = np.array([0, 1, 2, 4, 6, 7])
+
+
+def check_metal_struct(inputs, out):
+    """The value words of each 8-word MSL struct, bit for bit; the padding words are unspecified."""
+    r = inputs.reshape(64, 8).astype(np.float32)
+    want = np.stack(
+        [
+            r[:, 2] + r[:, 4],
+            r[:, 1] + r[:, 4] + np.float32(0.5),
+            r[:, 0] + r[:, 4],
+            r[:, 0] - r[:, 7],
+            r[:, 4] * np.float32(2.0),
+            r[:, 1],
+        ],
+        axis=1,
+    ).astype(np.float32)
+    got = out.astype(np.float32).reshape(64, 8)[:, _METAL_STRUCT_WORDS]
+    bad = np.argwhere(got.view(np.uint32) != want.view(np.uint32))
+    detail = {"mismatches": int(len(bad)), "n": int(want.size)}
+    if len(bad):
+        element, word = (int(value) for value in bad[0])
+        detail.update(
+            element=element,
+            word=int(_METAL_STRUCT_WORDS[word]),
+            got=repr(float(got[element, word])),
+            want=repr(float(want[element, word])),
+        )
+    return len(bad) == 0, detail
+
+
 def o_struct_stride(inp):
     r = inp.reshape(64, 7).astype(np.float32)
     out = np.stack(
@@ -1238,6 +1270,42 @@ CASES = [
         np.float32,
         o_struct_stride,
         compare="ulp:0",
+    ),
+    Case(
+        "m_float3_stride",
+        "H16",
+        "float3: 16-byte stride",
+        "MSL float3 size and alignment",
+        np.arange(64 * 4, dtype=np.float32),
+        np.float32,
+        lambda inp: inp[1::4].astype(np.float32),
+        compare="ulp:0",
+    ),
+    Case(
+        "m_float3x3_stride",
+        "H16",
+        "float3x3: 16-byte columns, 48-byte stride; a column read and a matrix-vector product",
+        "MSL matrix size, alignment and column order",
+        np.arange(64 * 12, dtype=np.float32),
+        np.float32,
+        lambda inp: (
+            lambda r: r[:, 8]
+            + r[:, 1]
+            + np.float32(2.0) * r[:, 5]
+            + np.float32(3.0) * r[:, 9]
+        )(inp.reshape(64, 12).astype(np.float32)).astype(np.float32),
+        compare="ulp:0",
+    ),
+    Case(
+        "m_float3_struct",
+        "H16",
+        "struct {float3 a; float b; float2 c;}: b at offset 16, c at 24, 32-byte elements",
+        "MSL natural struct layout",
+        np.arange(64 * 8, dtype=np.float32),
+        np.float32,
+        None,
+        out_count=64 * 8,
+        check=check_metal_struct,
     ),
     Case(
         "h_float3_stride",

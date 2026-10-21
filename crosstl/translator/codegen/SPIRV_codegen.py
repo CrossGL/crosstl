@@ -17401,6 +17401,14 @@ class VulkanSPIRVCodeGen(
             f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
         )
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
+        # A matrix element needs its column order and stride (Vulkan 1.3 section 15.6.4, "Offset and Stride
+        # Assignment"); the runtime array member carries them.
+        matrix_stride = self.storage_matrix_stride_for_member(element_type, "std430")
+        if matrix_stride is not None:
+            self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 ColMajor")
+            self.decorations.append(
+                f"OpMemberDecorate %{block_type.id} 0 MatrixStride {matrix_stride}"
+            )
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
         variable_type, is_descriptor_array = (

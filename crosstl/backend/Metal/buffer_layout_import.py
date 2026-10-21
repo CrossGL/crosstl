@@ -1,35 +1,42 @@
-"""The CrossGL buffer layout that reproduces the bytes of a Metal buffer element holding packed vectors.
+"""The CrossGL buffer layout that reproduces the bytes of a Metal buffer element.
 
-CrossGL spells MSL's ``packed_float3`` as ``vec3``: the packed types are storage forms of the vector types, with the
-same components and operations but scalar alignment and no padding (MSL 3.2 section 2.2.3). A ``device
-packed_float3*`` element is 12 bytes; a ``device float3*`` element, and a GLSL std430 ``vec3[]`` element, take 16.
-An importer that only renamed the type therefore had every target read and write the buffer at other offsets than
-the host that filled it.
+A ``device`` or ``constant`` buffer of MSL holds its elements in their natural layout: ``float2`` is 8-byte and
+``float3`` and ``float4`` 16-byte sized and aligned, a matrix is an array of such columns, a struct aligns each
+member to its own alignment and rounds its size to the widest, and ``bool`` takes one byte (MSL 3.2 section 2.2 and
+table 2.4). The packed vector types are storage forms of the vector types with scalar alignment and no padding
+(MSL 3.2 section 2.2.3), and CrossGL spells ``packed_float3`` as ``vec3``.
 
-HLSL structured buffers lay out every 32-bit scalar and vector at four-byte alignment with no padding (D3D11.3
-functional specification section 5.3.7), which is exactly the layout of an element built from scalars and packed
-vectors. :meth:`MetalBufferLayoutImport.metal_buffer_element_layout` computes the Metal layout of an element type
-from its source spelling and compares it with the HLSL structured and std430 layouts of its CrossGL type:
+The HLSL structured-buffer rules lay out every 32-bit scalar and vector at four-byte alignment with no padding
+(D3D11.3 functional specification section 5.3.7), and GLSL's std430 rules size ``vec3`` 12 bytes with 16-byte
+alignment (GLSL 4.60 section 7.6.2.2), so ``device float3*`` has a 16-byte stride against HLSL's 12 and
+``struct { float3 a; float b; }`` takes 32 bytes against 16 for both. An importer that kept the CrossGL type alone
+had the other targets read and write the buffer at other offsets than the host that filled it.
+:meth:`MetalBufferLayoutImport.metal_buffer_element_layout` computes the Metal layout of an element type from its
+source spelling and compares it with the HLSL structured, std430 and natural MSL layouts of its CrossGL type:
 
-* an element with no packed vector keeps CrossGL's default (``None``);
-* an element whose Metal layout is the HLSL structured layout is marked ``hlsl_structured``, which every target
-  reproduces (the Metal generator with packed storage, OpenGL and SPIR-V with a buffer of 32-bit words);
-* an element whose Metal layout is the std430 layout needs no mark (``None``);
-* any other packed element, or one holding a matrix, is refused, because no CrossGL buffer layout reproduces it.
+* an element laid out alike by all three keeps CrossGL's default (``None``), and so does a lone ``bool`` scalar or
+  vector, whose one-byte storage the host binding contract reports;
+* a packed element without matrices whose Metal layout is the HLSL structured layout is marked
+  ``hlsl_structured``, which every target reproduces (the Metal generator with packed storage, OpenGL and SPIR-V
+  with a buffer of 32-bit words);
+* an element whose Metal layout is the natural MSL layout of its CrossGL type is marked ``metal``, which the Metal
+  generator keeps and HLSL, OpenGL and SPIR-V reproduce with a buffer of 32-bit words where their rules differ;
+* any other packed element is refused, because no CrossGL buffer layout reproduces it.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ...translator.codegen.array_utils import evaluate_literal_int_expression
 from .MetalAst import VariableNode
 from .type_layout import metal_type_layout
 
-__all__ = ["HLSL_STRUCTURED", "MetalBufferLayoutImport"]
+__all__ = ["HLSL_STRUCTURED", "METAL", "MetalBufferLayoutImport"]
 
 HLSL_STRUCTURED = "hlsl_structured"
+METAL = "metal"
 
 _NAMESPACE = r"(?:(?:metal|simd)::)?"
 _PACKED = re.compile(rf"^{_NAMESPACE}packed_([a-z0-9_]+?)([234])$")
@@ -50,7 +57,7 @@ class _Type:
     form: str  # scalar, vector, matrix, array or struct
     scalar: str = ""
     size: int = 0  # bytes per scalar
-    lanes: int = 1
+    lanes: int = 1  # components of a vector, rows of a matrix
     columns: int = 0
     packed: bool = False
     element: _Type | None = None
@@ -62,20 +69,38 @@ def _round(value, alignment):
     return -(-value // alignment) * alignment
 
 
+def _vector(size, lanes, packed, rules):
+    offsets = tuple(size * lane for lane in range(lanes))
+    if rules == "hlsl" or lanes == 1 or packed and rules == "metal":
+        return size * lanes, size, offsets
+    if rules == "metal":
+        extent = size * (4 if lanes == 3 else lanes)
+        return extent, extent, offsets
+    return size * lanes, size * (2 if lanes == 2 else 4), offsets
+
+
 def _place(node, rules):
-    """``(size, alignment, offsets)`` of ``node`` under ``rules``; ``offsets`` lists every scalar component."""
+    """``(size, alignment, offsets)`` of ``node`` under ``rules``; ``offsets`` lists every scalar component.
+
+    Matrices are columns of ``lanes`` rows, the column-major storage CrossGL gives every target.
+    """
     size = 4 if node.scalar == "bool" and rules != "metal" else node.size
     if node.form == "scalar":
         return size, size, (0,)
     if node.form == "vector":
-        offsets = tuple(size * lane for lane in range(node.lanes))
-        if rules == "hlsl" or node.packed and rules == "metal":
-            return size * node.lanes, size, offsets
-        if rules == "metal":
-            extent = size * (4 if node.lanes == 3 else node.lanes)
-            return extent, extent, offsets
-        alignment = size * (2 if node.lanes == 2 else 4)
-        return size * node.lanes, alignment, offsets
+        return _vector(size, node.lanes, node.packed, rules)
+    if node.form == "matrix":
+        column, alignment, offsets = _vector(size, node.lanes, False, rules)
+        stride = _round(column, alignment)
+        return (
+            stride * node.columns,
+            alignment,
+            tuple(
+                index * stride + offset
+                for index in range(node.columns)
+                for offset in offsets
+            ),
+        )
     if node.form == "array":
         element_size, alignment, element_offsets = _place(node.element, rules)
         stride = _round(element_size, alignment)
@@ -102,6 +127,16 @@ def _layout(node, rules):
     return _round(size, alignment), offsets
 
 
+def _unpacked(node):
+    """``node`` with every packed vector replaced by its vector type: the natural MSL layout of its CrossGL type."""
+    return replace(
+        node,
+        packed=False,
+        element=None if node.element is None else _unpacked(node.element),
+        members=tuple(_unpacked(member) for member in node.members),
+    )
+
+
 def _walk(node):
     yield node
     if node.element is not None:
@@ -114,7 +149,8 @@ class MetalBufferLayoutImport:
     """Mixin for :class:`MetalToCrossGLConverter`: the ``@buffer_layout`` a Metal buffer element needs."""
 
     def metal_buffer_element_layout(self, element_type, context):
-        """``"hlsl_structured"`` or ``None`` for ``element_type``; records a refusal when no layout fits."""
+        """``"hlsl_structured"``, ``"metal"`` or ``None`` for ``element_type``; records a refusal when no layout
+        fits."""
         try:
             node = self.metal_layout_type(str(element_type), ())
         except _Unknown:
@@ -123,22 +159,22 @@ class MetalBufferLayoutImport:
                     f"{context}: the layout of the packed element type {element_type} cannot be determined"
                 )
             return None
+        if node.form in ("scalar", "vector") and node.scalar == "bool":
+            return None
         parts = list(_walk(node))
-        if not any(part.packed for part in parts):
-            return None
-        if any(part.form == "matrix" for part in parts):
-            self.refuse_import(
-                f"{context}: a buffer element that holds packed vectors and matrices has no CrossGL buffer layout"
-            )
-            return None
+        packed = any(part.packed for part in parts)
+        matrix = any(part.form == "matrix" for part in parts)
         metal = _layout(node, "metal")
-        if metal == _layout(node, "hlsl"):
+        if metal == _layout(node, "hlsl") == _layout(node, "std430"):
+            return None
+        if packed and not matrix and metal == _layout(node, "hlsl"):
             return HLSL_STRUCTURED
-        if metal != _layout(node, "std430"):
-            self.refuse_import(
-                f"{context}: the Metal layout of {element_type} matches neither the HLSL structured-buffer nor "
-                "the std430 layout of its CrossGL type"
-            )
+        if metal == _layout(_unpacked(node), "metal"):
+            return METAL
+        self.refuse_import(
+            f"{context}: the Metal layout of {element_type} matches neither the HLSL structured-buffer layout nor "
+            "the natural MSL layout of its CrossGL type"
+        )
         return None
 
     def metal_layout_type(self, type_text, resolving):
@@ -152,7 +188,13 @@ class MetalBufferLayoutImport:
             return self.metal_layout_vector(packed.group(1), int(packed.group(2)), True)
         matrix = _MATRIX.match(text)
         if matrix and self.metal_layout_scalar_size(matrix.group(1)):
-            return _Type("matrix", scalar=matrix.group(1))
+            return _Type(
+                "matrix",
+                scalar=matrix.group(1),
+                size=self.metal_layout_scalar_size(matrix.group(1)),
+                lanes=int(matrix.group(3)),
+                columns=int(matrix.group(2)),
+            )
         scalar_size = self.metal_layout_scalar_size(text)
         if scalar_size:
             return _Type("scalar", scalar=text.split("::")[-1], size=scalar_size)

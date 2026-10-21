@@ -61,36 +61,33 @@ def _kernel(element, prelude=""):
 
 
 @pytest.mark.parametrize(
-    ("element", "prelude", "marked"),
+    ("element", "prelude", "layout"),
     (
-        ("packed_float3", "", True),
-        ("packed_int2", "", True),
-        ("P", "struct P { float a; packed_float3 b; };", True),
-        # packed_float3 then float3: Metal puts b at 16, as std430 does, so no mark is needed.
-        ("Q", "struct Q { packed_float3 a; float3 b; };", False),
-        ("float3", "", False),
-        ("S", "struct S { float a; float b; };", False),
+        ("packed_float3", "", "hlsl_structured"),
+        # 8 bytes with 4-byte alignment: a lone element has the same stride under every rule set.
+        ("packed_int2", "", None),
+        ("P", "struct P { float a; packed_float3 b; };", "hlsl_structured"),
+        # packed_float3 then float3: Metal puts b at 16, as float3 a would, so the natural layout holds.
+        ("Q", "struct Q { packed_float3 a; float3 b; };", "metal"),
+        # Metal puts m at 16, as a float3 a would; HLSL structured buffers cannot reproduce the matrix.
+        ("M", "struct M { packed_float3 a; float3x3 m; };", "metal"),
+        ("float3", "", "metal"),
+        ("S", "struct S { float a; float b; };", None),
     ),
 )
-def test_import_marks_packed_elements_with_the_hlsl_structured_layout(
-    tmp_path, element, prelude, marked
+def test_import_marks_packed_elements_with_their_layout(
+    tmp_path, element, prelude, layout
 ):
     code = _flat(_translate(tmp_path, "cgl", _kernel(element, prelude)))
-    assert ("@buffer_layout(hlsl_structured) RWStructuredBuffer" in code) is marked
+    marks = re.findall(r"@buffer_layout\((\w+)\) RWStructuredBuffer", code)
+    assert marks == ([layout] if layout else [])
 
 
-@pytest.mark.parametrize(
-    ("prelude", "reason"),
-    (
-        # Metal: b at 16, 24 bytes; HLSL structured: b at 12; std430: 32 bytes.
-        ("struct R { packed_float3 a; float2 b; };", "matches neither"),
-        ("struct M { packed_float3 a; float3x3 m; };", "packed vectors and matrices"),
-    ),
-)
-def test_import_refuses_packed_elements_no_layout_reproduces(tmp_path, prelude, reason):
-    element = prelude.split()[1]
-    with pytest.raises(MetalImportRefused, match=re.escape(reason)):
-        _translate(tmp_path, "cgl", _kernel(element, prelude))
+def test_import_refuses_packed_elements_no_layout_reproduces(tmp_path):
+    # Metal: b at 16, 24 bytes; natural MSL (float3 a): b at 16, 32 bytes; HLSL structured: b at 12, 20 bytes.
+    prelude = "struct R { packed_float3 a; float2 b; };"
+    with pytest.raises(MetalImportRefused, match="matches neither"):
+        _translate(tmp_path, "cgl", _kernel("R", prelude))
 
 
 def test_import_writes_through_buffer_elements(tmp_path):
