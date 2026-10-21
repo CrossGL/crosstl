@@ -4,7 +4,7 @@ import pytest
 
 from tools.coverage import probes, validators
 from tools.coverage.features.common import prototype
-from tools.coverage.model import VOID, Feature, Param, Signature, Type
+from tools.coverage.model import STRING, VOID, Feature, Param, Signature, Type
 
 VEC3 = Type("float", (3,))
 
@@ -508,6 +508,134 @@ def test_trace_ray_probes_are_valid(language):
         assert verdict.accepted, verdict.log
 
 
+UDT = Type("", (), "udt")
+REPORT_HIT = Feature(
+    "hlsl",
+    "function",
+    "ReportHit",
+    Signature(Type("bool"), (Param(Type("float")), Param(UINT), Param(UDT))),
+    crossgl="ReportHit",
+    stage="intersection",
+)
+GET_ATTRIBUTES = Feature(
+    "hlsl",
+    "method",
+    "DxHitObject.GetAttributes",
+    Signature(VOID, (Param(UDT, "out"),)),
+    group="DxHitObject",
+    crossgl="GetAttributes",
+    spelling="GetAttributes",
+    stage="ray-generation",
+)
+
+
+@pytest.mark.parametrize(
+    ("language", "barycentrics"),
+    [
+        ("hlsl", "float2(fin[i + 1u], fin[i + 2u])"),
+        ("crossgl", "vec2(fin[i + 1u], fin[i + 2u])"),
+    ],
+)
+def test_an_intersection_shader_reports_triangle_attributes(language, barycentrics):
+    source = probes.build(REPORT_HIT, language).source
+    assert "BuiltInTriangleIntersectionAttributes a2;" in source
+    assert f"a2.barycentrics = {barycentrics};" in source
+    assert "bool r = ReportHit(a0, a1, a2);" in source
+
+
+def test_a_hit_object_writes_its_attributes_to_a_local():
+    for language in ("hlsl", "crossgl"):
+        source = probes.build(GET_ATTRIBUTES, language).source
+        assert "BuiltInTriangleIntersectionAttributes a0;" in source
+        assert "barycentrics" not in source
+        assert "obj.GetAttributes(a0);" in source
+
+
+def test_a_user_defined_inout_parameter_where_no_ray_starts_stays_untested():
+    swapped = Signature(Type("bool"), (Param(UDT, "inout"),))
+    with pytest.raises(probes.ProbeError, match="parameters of type udt"):
+        probes.build(replace(REPORT_HIT, signature=swapped), "hlsl")
+
+
+def hit_object(name, result, *params):
+    return Feature(
+        "hlsl",
+        "method",
+        f"DxHitObject.{name}",
+        Signature(result, params),
+        group="DxHitObject",
+        crossgl=name,
+        spelling=f"dx::HitObject::{name}",
+        stage="ray-generation",
+    )
+
+
+HIT = Type.other("DxHitObject")
+INVOKE = hit_object("Invoke", VOID, Param(HIT), Param(UDT, "inout"))
+TRACE_FROM_HIT_OBJECT = hit_object(
+    "TraceRay",
+    HIT,
+    *(Param(t) for t in (Type.other("acceleration_struct"), *[UINT] * 5)),
+    Param(Type.other("ray_desc")),
+    Param(UDT, "inout"),
+)
+FROM_RAY_QUERY = hit_object("FromRayQuery", HIT, Param(Type.other("RayQuery")))
+
+
+@pytest.mark.parametrize(
+    ("language", "struct", "call"),
+    [
+        ("hlsl", "struct [raypayload] Payload", "dx::HitObject::Invoke(a0, payload);"),
+        ("crossgl", "    struct Payload {", "obj.Invoke(a0, payload);"),
+    ],
+)
+def test_a_ray_generation_shader_passes_a_local_payload(language, struct, call):
+    source = probes.build(INVOKE, language).source
+    assert struct in source
+    assert "Payload payload;" in source
+    assert "dx::HitObject a0;" in source
+    assert call in source
+    traced = probes.build(TRACE_FROM_HIT_OBJECT, language).source
+    assert "Payload payload;" in traced
+    assert "TraceRay(u0, a1, a2, a3, a4, a5, a6, payload);" in traced
+
+
+def test_a_ray_generation_shader_declares_a_payload_only_when_it_traces():
+    for language in ("hlsl", "crossgl"):
+        source = probes.build(FROM_RAY_QUERY, language).source
+        assert "Payload" not in source
+
+
+def test_a_hit_object_is_made_from_a_ray_query_that_has_run():
+    for language in ("hlsl", "crossgl"):
+        source = probes.build(FROM_RAY_QUERY, language).source
+        assert "RayQuery<RAY_FLAG_NONE> a0;\n" in source
+        assert "a0.Proceed();\n" in source
+        assert "FromRayQuery(a0);" in source
+
+
+@pytest.mark.parametrize(
+    "feature", [INVOKE, TRACE_FROM_HIT_OBJECT, FROM_RAY_QUERY], ids=lambda f: f.name
+)
+def test_hit_object_constructor_probes_are_valid(feature):
+    if not validators.available("hlsl"):
+        pytest.skip("no hlsl validator")
+    for baseline in (False, True):
+        probe = probes.build(feature, "hlsl", baseline=baseline)
+        verdict = validators.validate("hlsl", probe.source, feature.stage, probe.entry)
+        assert verdict.accepted, verdict.log
+
+
+@pytest.mark.parametrize("feature", [REPORT_HIT, GET_ATTRIBUTES])
+def test_hit_attribute_probes_are_valid(feature):
+    if not validators.available("hlsl"):
+        pytest.skip("no hlsl validator")
+    for baseline in (False, True):
+        probe = probes.build(feature, "hlsl", baseline=baseline)
+        verdict = validators.validate("hlsl", probe.source, feature.stage, probe.entry)
+        assert verdict.accepted, verdict.log
+
+
 def test_stages_without_a_function_probe_say_so():
     for stage in STAGE_FUNCTIONS:
         with pytest.raises(probes.ProbeError, match=f"no {stage}-stage probe for glsl"):
@@ -740,6 +868,20 @@ def test_function_probe_declares_the_samplers_and_images_it_passes():
     crossgl = probes.build(IMAGE_ATOMIC, "crossgl").source
     assert "        layout(r32ui) uniform uimage2D u0;" in crossgl
     assert "uint r = imageAtomicAdd(u0, a1, a2);" in crossgl
+
+
+def test_a_subpass_input_names_its_input_attachment():
+    subpass = feature("subpassLoad", VEC4, Type.other("subpassInput"), stage="fragment")
+    source = probes.build(subpass, "glsl").source
+    assert (
+        "layout(input_attachment_index = 0, binding = 8) uniform subpassInput u0;"
+        in source
+    )
+    assert "vec4 r = subpassLoad(u0);" in source
+    crossgl = probes.build(subpass, "crossgl").source
+    assert (
+        "        layout(input_attachment_index = 0) uniform subpassInput u0;" in crossgl
+    )
 
 
 def test_atomic_counters_use_the_first_atomic_counter_binding():
@@ -978,6 +1120,32 @@ def test_wgsl_has_no_output_parameters():
         probes.build(frexp, "wgsl")
 
 
+WORKGROUP_LOAD = Feature(
+    "wgsl",
+    "function",
+    "workgroupUniformLoad",
+    Signature(Type("float"), (Param(Type("float"), "workgroup"),)),
+    crossgl="workgroupUniformLoad",
+)
+
+
+def test_workgroup_parameter_takes_a_shared_variable_the_probe_fills():
+    source = probes.build(WORKGROUP_LOAD, "wgsl").source
+    assert "var<workgroup> a0: f32;" in source
+    assert "    a0 = fin[i + 0u];" in source
+    assert "    var r: f32 = workgroupUniformLoad(&a0);" in source
+    crossgl = probes.build(WORKGROUP_LOAD, "crossgl").source
+    assert "        shared float a0;" in crossgl
+    assert "            float r = workgroupUniformLoad(a0);" in crossgl
+
+
+@pytest.mark.skipif(not validators.available("wgsl"), reason="naga is not installed")
+def test_workgroup_parameter_probe_is_valid_wgsl():
+    probe = probes.build(WORKGROUP_LOAD, "wgsl")
+    verdict = validators.validate("wgsl", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
 METAL_SIGNATURES = [
     feature("fma", VEC3, VEC3, VEC3, VEC3),
     feature("select", VEC3, VEC3, VEC3, Type("bool", (3,))),
@@ -1038,6 +1206,21 @@ def test_cuda_and_hip_pass_the_address_of_a_local_for_a_pointer_to_values():
         probes.build(norm, "crossgl")
 
 
+def test_hip_and_crossgl_pass_the_empty_string_for_a_c_string():
+    nan = Feature(
+        "hip",
+        "function",
+        "nanf",
+        Signature(Type("float"), (Param(STRING, "const"),)),
+        crossgl="nan",
+    )
+    assert '    float r = nanf("");' in probes.build(nan, "hip").source
+    assert '            float r = nan("");' in probes.build(nan, "crossgl").source
+    # Languages without strings say so rather than spelling one.
+    with pytest.raises(probes.ProbeError, match="parameters of type string"):
+        probes.build(replace(nan, language="glsl"), "glsl")
+
+
 def test_metal_compare_exchange_takes_the_address_of_the_expected_value():
     exchange = next(
         f for f in METAL_SIGNATURES if f.name == "atomic_compare_exchange_weak"
@@ -1059,8 +1242,8 @@ def test_metal_ballots_are_read_as_their_vote_integer():
     assert (
         "uint r = static_cast<quad_vote::vote_t>(quad_active_threads_mask());" in source
     )
-    # CrossGL has no mask type to read.
-    with pytest.raises(probes.ProbeError, match="quad_vote"):
+    # CrossGL has no mask type to read, so the operation is an IR gap, not an untested probe.
+    with pytest.raises(probes.NoSpelling, match="no type for Metal's quad_vote"):
         probes.build(mask, "crossgl")
 
 
@@ -1212,7 +1395,23 @@ MOJO_SIGNATURES = [
     feature("isnan", Type("bool"), Type("float")),
     feature("pop_count", Type("int"), Type("int")),
     feature("ldexp", Type("double"), Type("double"), Type("int")),
+    feature("gcd", Type("int64"), Type("int64"), Type("int64")),
+    feature("frexp", Type.other("StaticTuple[Float32, 2]"), Type("float")),
+    feature(
+        "divmod", Type.other("Tuple[Float32, Float32]"), Type("float"), Type("float")
+    ),
 ]
+
+
+def test_mojo_probe_spells_the_word_sized_int_and_reads_the_first_of_a_pair():
+    source = probes.build(MOJO_SIGNATURES[4], "mojo").source
+    assert "    var a0: Int = Int(iin[i + 0])\n" in source
+    assert "    var r: Int = gcd(a0, a1)\n    outp[i] = Int32(r)\n" in source
+    source = probes.build(MOJO_SIGNATURES[5], "mojo").source
+    assert "    var r: Float32 = frexp(a0)[0]\n    outp[i] = r\n" in source
+    # Only Mojo reads a pair.
+    with pytest.raises(probes.ProbeError, match="Tuple"):
+        probes.build(MOJO_SIGNATURES[6], "cuda")
 
 
 def test_mojo_probe_is_a_gpu_kernel_over_pointers():

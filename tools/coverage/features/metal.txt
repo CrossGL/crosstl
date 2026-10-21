@@ -101,7 +101,6 @@ metal_geometric length_squared float(float3)
 metal_geometric normalize float3(float3)
 metal_geometric reflect float3(float3, float3)
 metal_geometric refract float3(float3, float3, float)
-metal_matrix coherent -
 metal_matrix determinant float(out float3x3)
 metal_matrix make_filled_matrix -
 metal_matrix transpose float3x3(out float3x3)

@@ -17,10 +17,28 @@ from __future__ import annotations
 from ..ast import AssignmentNode, IdentifierNode
 
 __all__ = [
+    "builtin_output_value",
     "flattened_stage_output_assignment",
     "render_flattened_stage_output_store",
     "render_stage_struct_value_return",
 ]
+
+
+# GLSL built-in outputs declared with a signed type whatever the CrossGL member naming them holds: GLSL 4.60
+# section 7.1.2 declares ``out int gl_SampleMask[]``.
+_SIGNED_BUILTIN_OUTPUTS = frozenset({"gl_SampleMask[0]"})
+
+
+def builtin_output_value(codegen, output_name, rendered, value_type):
+    """``rendered``, a value of ``value_type``, converted for storing into the stage output ``output_name``.
+
+    A uint sample mask is stored as an int; GLSL's uint-to-int conversion keeps its bits (section 5.4.1).
+    """
+    if output_name not in _SIGNED_BUILTIN_OUTPUTS:
+        return rendered
+    if value_type and codegen.map_type(value_type) == "int":
+        return rendered
+    return f"int({rendered})"
 
 
 def flattened_stage_output_assignment(codegen, expression):
@@ -79,9 +97,9 @@ def render_flattened_stage_output_store(codegen, variable_name, value, indent):
                 "flattened-stage-output-member",
                 f"member '{member.name}' has no GLSL stage output",
             )
-        rendered = codegen.generate_expression_with_expected(
-            argument, codegen.member_type_name(member)
-        )
+        member_type = codegen.member_type_name(member)
+        rendered = codegen.generate_expression_with_expected(argument, member_type)
+        rendered = builtin_output_value(codegen, output_name, rendered, member_type)
         code += f"{indent_str}{output_name} = {rendered};\n"
     return code
 
@@ -108,7 +126,14 @@ def render_stage_struct_value_return(codegen, value, indent):
     code = f"{indent_str}{codegen.map_type(type_name)} {local} = {rendered};\n"
     for member in members:
         member_name = codegen.glsl_struct_member_name(type_name, member.name)
-        code += f"{indent_str}{member_map[member.name]} = {local}.{member_name};\n"
+        output_name = member_map[member.name]
+        stored = builtin_output_value(
+            codegen,
+            output_name,
+            f"{local}.{member_name}",
+            codegen.member_type_name(member),
+        )
+        code += f"{indent_str}{output_name} = {stored};\n"
     return code
 
 

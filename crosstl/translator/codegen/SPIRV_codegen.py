@@ -144,6 +144,7 @@ from .spirv_push_constants import (
     is_push_constant_block,
     uniform_block_storage_layout,
 )
+from .spirv_ray_builtins import ray_builtin_info
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -314,6 +315,19 @@ class VulkanSPIRVCodeGen(
 
     POINTER_OFFSET_RESET_MARKER_PREFIX = "; __crosstl_pointer_offset_reset_"
     COOPERATIVE_MATRIX_KHR_PROFILE = "vulkan-khr-cooperative-matrix"
+    # Execution models whose extensions (SPV_EXT_mesh_shader, SPV_KHR_ray_tracing) need a SPIR-V 1.4 module.
+    SPIRV_1_4_EXECUTION_MODELS = frozenset(
+        {
+            "MeshEXT",
+            "TaskEXT",
+            "RayGenerationKHR",
+            "IntersectionKHR",
+            "AnyHitKHR",
+            "ClosestHitKHR",
+            "MissKHR",
+            "CallableKHR",
+        }
+    )
     COOPERATIVE_MATRIX_SCOPE_VALUES = {"subgroup": 3}
     COOPERATIVE_MATRIX_USE_VALUES = {
         "matrix_a": 0,
@@ -18322,11 +18336,29 @@ class VulkanSPIRVCodeGen(
                 "through no descriptor (GL_EXT_ray_tracing)"
             )
 
+    def uses_storage_buffer_storage_class(self) -> bool:
+        """Whether storage buffers are ``StorageBuffer`` + ``Block`` rather than ``Uniform`` + ``BufferBlock``.
+
+        The SPIR-V specification's Decoration table lists ``BufferBlock`` as missing after version 1.3, so a
+        module that must be 1.4 or later declares its storage buffers in the ``StorageBuffer`` storage class
+        (core since 1.3). The execution models are known before any buffer is declared.
+        """
+        return (
+            self.cooperative_matrix_khr_enabled
+            or self.include_resource_interface_variables
+            or bool(
+                set(getattr(self, "program_execution_models", ()) or ())
+                & self.SPIRV_1_4_EXECUTION_MODELS
+            )
+        )
+
     def storage_buffer_storage_class(self) -> str:
-        return "StorageBuffer" if self.cooperative_matrix_khr_enabled else "Uniform"
+        return (
+            "StorageBuffer" if self.uses_storage_buffer_storage_class() else "Uniform"
+        )
 
     def storage_buffer_block_decoration(self) -> str:
-        return "Block" if self.cooperative_matrix_khr_enabled else "BufferBlock"
+        return "Block" if self.uses_storage_buffer_storage_class() else "BufferBlock"
 
     def decorate_storage_buffer_nested_type(
         self, type_id: SpirvId, layout: str = "std430"
@@ -29533,6 +29565,7 @@ class VulkanSPIRVCodeGen(
             "SV_PRIMITIVEID": "gl_PrimitiveID",
             "SV_VIEWID": "gl_ViewIndex",
             "SV_ISFRONTFACE": "gl_FrontFacing",
+            "SV_SAMPLEINDEX": "gl_SampleID",
             "SV_BARYCENTRICS": "gl_BaryCoordEXT",
             "SV_STENCILREF": "gl_FragStencilRefEXT",
             "SV_POSITION": (
@@ -29594,6 +29627,9 @@ class VulkanSPIRVCodeGen(
 
     def stage_builtin_info(self, name: str):
         name = self.spirv_builtin_alias(name)
+        ray = ray_builtin_info(self, name)
+        if ray is not None:
+            return ray
         per_vertex = per_vertex_builtin_info(self, name)
         if per_vertex is not None:
             return per_vertex
@@ -29835,7 +29871,7 @@ class VulkanSPIRVCodeGen(
             ),
             "gl_GeometryIndexEXT": (
                 "int",
-                "GeometryIndexKHR",
+                "RayGeometryIndexKHR",
                 "Input",
                 {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR"},
             ),
@@ -30005,6 +30041,13 @@ class VulkanSPIRVCodeGen(
         elif builtin_name == "FragStencilRefEXT":
             self.require_capability("StencilExportEXT")
             self.require_extension("SPV_EXT_shader_stencil_export")
+        elif (
+            builtin_name == "PrimitiveId"
+            and self.current_stage_builtin_execution_model() == "Fragment"
+        ):
+            # SPIR-V section 3.21: PrimitiveId requires Geometry, Tessellation, ray tracing or mesh shading; a
+            # fragment shader reading it declares Geometry, as glslang does.
+            self.require_capability("Geometry")
         elif builtin_name == "ViewIndex":
             # SPV_KHR_multiview: core in SPIR-V 1.3, an extension before it.
             self.require_capability("MultiView")
@@ -30012,9 +30055,10 @@ class VulkanSPIRVCodeGen(
         elif builtin_name == "ViewportIndex":
             self.require_capability("MultiViewport")
         elif (
-            builtin_name == "Layer"
+            builtin_name in {"Layer", "PrimitiveId"}
             and self.current_stage_builtin_execution_model() == "Fragment"
         ):
+            # A fragment stage reads both through the Geometry capability (SPIR-V section 3.2.20, BuiltIn).
             self.require_capability("Geometry")
 
     def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:
@@ -30962,6 +31006,11 @@ class VulkanSPIRVCodeGen(
 
     def spirv_module_version(self) -> str:
         if self.include_resource_interface_variables:
+            return "1.4"
+        if (
+            set(getattr(self, "program_execution_models", ()) or ())
+            & self.SPIRV_1_4_EXECUTION_MODELS
+        ):
             return "1.4"
         if "MeshShadingEXT" in self.required_capabilities:
             return "1.4"

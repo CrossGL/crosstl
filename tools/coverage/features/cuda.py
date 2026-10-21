@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 from .. import spellings
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import STRING, VOID, Feature, Param, Signature, Type
 
 # Definitions in the headers that are not CUDA device functions a kernel calls: the pre-Volta warp votes CUDA 9
 # removed, a helper of those votes, the debugger trap and profiler counters, and C library functions. The last four
@@ -48,6 +48,10 @@ _ATOMIC_PREFERENCE = ("i", "u", "f", "ll", "ull", "ill", "d", "us")
 _ATTRIBUTE = re.compile(r"__attribute__\s*\(\([^)]*\)\)")
 # Block comments, such as the ``/* clock_t= */`` before clock's result type.
 _COMMENT = re.compile(r"/\*.*?\*/", re.S)
+# Declarations only an MSVC build sees: the ``long double`` predicates ``__finitel``, ``__isinfl`` and ``__isnanl``
+# that Microsoft's C library headers call. The probes are validated on Linux, where Clang's headers do not declare
+# them.
+_MSVC_ONLY = re.compile(r"^#ifdef _MSC_VER\n.*?^#endif[^\n]*\n", re.M | re.S)
 
 
 def cuda_type(spelling: str) -> Type:
@@ -67,6 +71,9 @@ def parameter(text: str, atomic: bool, first: bool) -> Param:
     pointee = text.rstrip("*").strip()
     if text.count("*") > 1:
         return Param(Type.other(text))
+    if " ".join(pointee.split()) == "const char":
+        # A C string, such as the tag of nan and nanf, takes a string constant.
+        return Param(STRING, "const")
     if pointee.startswith("const "):
         # A pointer to constant values, such as the vector norm reads, takes the address of a local.
         kind = cuda_type(pointee)
@@ -79,7 +86,7 @@ def parameter(text: str, atomic: bool, first: bool) -> Param:
 def definitions(text: str, group: str) -> list[tuple[str, str, Signature, str]]:
     """``(name, group, signature, helper)`` for every function the header defines, first definition of a name only.
     ``helper`` is the typed atomic helper's own name, or empty."""
-    text = _ATTRIBUTE.sub("", _COMMENT.sub("", text))
+    text = _ATTRIBUTE.sub("", _COMMENT.sub("", _MSVC_ONLY.sub("", text)))
     found: dict[str, tuple[str, str, Signature, str]] = {}
     for result, name, params in _DEFINITION.findall(text):
         if name in LEFT_OUT:

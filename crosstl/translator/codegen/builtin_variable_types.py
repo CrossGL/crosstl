@@ -44,6 +44,24 @@ CROSSGL_BUILTIN_VARIABLE_TYPES = {
     "gl_SubgroupID": "uint",
     "gl_SubgroupSize": "uint",
     "gl_SubgroupInvocationID": "uint",
+    # Ray tracing stages (GLSL_EXT_ray_tracing section 7.1); gl_PrimitiveID and gl_InstanceID keep their types.
+    "gl_LaunchIDEXT": "uvec3",
+    "gl_LaunchSizeEXT": "uvec3",
+    "gl_InstanceCustomIndexEXT": "int",
+    "gl_GeometryIndexEXT": "int",
+    "gl_WorldRayOriginEXT": "vec3",
+    "gl_WorldRayDirectionEXT": "vec3",
+    "gl_ObjectRayOriginEXT": "vec3",
+    "gl_ObjectRayDirectionEXT": "vec3",
+    "gl_RayTminEXT": "float",
+    "gl_RayTmaxEXT": "float",
+    "gl_HitTEXT": "float",
+    "gl_IncomingRayFlagsEXT": "uint",
+    "gl_HitKindEXT": "uint",
+    "gl_ObjectToWorldEXT": "mat4x3",
+    "gl_WorldToObjectEXT": "mat4x3",
+    "gl_ObjectToWorld3x4EXT": "mat3x4",
+    "gl_WorldToObject3x4EXT": "mat3x4",
 }
 
 

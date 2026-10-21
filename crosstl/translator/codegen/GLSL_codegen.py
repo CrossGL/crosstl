@@ -145,6 +145,7 @@ from .builtin_result_types import (
     component_access_type,
     inferred_value_type,
 )
+from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
@@ -202,6 +203,7 @@ from .generic_struct_utils import (
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_generic_vectors import glsl_generic_vector_constructor_name
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
 from .glsl_hlsl_precise import GLSLHlslPreciseMixin
@@ -227,6 +229,7 @@ from .glsl_stage_distances import (
     distance_private_output_declaration,
 )
 from .glsl_stage_output_values import (
+    builtin_output_value,
     flattened_stage_output_assignment,
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
@@ -23595,9 +23598,9 @@ class GLSLCodeGen(
             output_name = self.current_stage_output_member_map.get(member.name)
             if output_name is None:
                 continue
-            value = self.generate_expression_with_expected(
-                value_expr, self.member_type_name(member)
-            )
+            member_type = self.member_type_name(member)
+            value = self.generate_expression_with_expected(value_expr, member_type)
+            value = builtin_output_value(self, output_name, value, member_type)
             code += f"{indent_str}{output_name} = {value};\n"
         code += distance_output_epilogue(self, indent_str)
         code += f"{indent_str}return;\n"
@@ -36370,15 +36373,7 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_builtin_identifier_result_type(self, name):
         if not name:
             return None
-        target_name = self.glsl_target_builtin_identifier(name)
-        return {
-            "gl_GlobalInvocationID": "uvec3",
-            "gl_LocalInvocationID": "uvec3",
-            "gl_WorkGroupID": "uvec3",
-            "gl_NumWorkGroups": "uvec3",
-            "gl_WorkGroupSize": "uvec3",
-            "gl_LocalInvocationIndex": "uint",
-        }.get(target_name)
+        return crossgl_builtin_variable_type(self.glsl_target_builtin_identifier(name))
 
     def expression_result_type(self, expr):
         if expr is None:
@@ -38185,6 +38180,9 @@ complex64_t crossgl_complex64_mod_assign(
                 else self.glsl_source_expression_type(right_node)
             ),
         )
+        right = builtin_output_value(
+            self, left, right, self.glsl_source_expression_type(right_node)
+        )
         return f"{left} {op} {right}"
 
     def generate_if(self, node, indent, is_main=False):
@@ -39575,6 +39573,9 @@ complex64_t crossgl_complex64_mod_assign(
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
             original_func_name = self.glsl_builtin_option_constructor_name(
+                original_func_name
+            )
+            original_func_name = glsl_generic_vector_constructor_name(
                 original_func_name
             )
             if original_func_name != func_name:

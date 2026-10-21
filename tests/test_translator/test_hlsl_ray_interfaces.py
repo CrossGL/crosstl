@@ -135,7 +135,11 @@ def _validate(tmp_path, hlsl):
 
 def test_raygen_traces_with_a_ray_desc_and_the_payload_variable(tmp_path):
     hlsl = _hlsl(tmp_path, "shader.rgen", RAYGEN)
-    assert "struct CrossGLRayPayload_hitValue {\n    float3 value;\n};" in hlsl
+    assert (
+        "struct [raypayload] CrossGLRayPayload_hitValue {\n"
+        "    float3 value : read(caller, closesthit, miss, anyhit) "
+        ": write(caller, closesthit, miss, anyhit);\n};" in hlsl
+    )
     assert "static CrossGLRayPayload_hitValue hitValue;" in hlsl
     assert (
         "RayDesc crossgl_ray_desc(float3 origin, float tmin, float3 direction, float tmax)"
