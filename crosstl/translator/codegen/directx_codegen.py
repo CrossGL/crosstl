@@ -2226,12 +2226,16 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         "WavePrefixInclusiveSum": ("+", True),
         "WavePrefixInclusiveProduct": ("*", True),
     }
+    # Subgroup barriers that software subgroups lower to the workgroup barrier.
+    HLSL_SOFTWARE_SUBGROUP_BARRIERS = frozenset(
+        {"subgroupExecutionBarrier", "subgroupBarrier"}
+    )
     HLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
         {
             "WaveShuffleDown",
             "WaveReadLaneAt",
             "WaveShuffleAndFillUp",
-            "subgroupExecutionBarrier",
+            *HLSL_SOFTWARE_SUBGROUP_BARRIERS,
             *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS,
             *HLSL_SOFTWARE_SUBGROUP_SCANS,
         }
@@ -5244,7 +5248,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             elif isinstance(node, FunctionCallNode):
                 function_name = self.function_call_name(node)
                 if (
-                    function_name == "subgroupExecutionBarrier"
+                    function_name in self.HLSL_SOFTWARE_SUBGROUP_BARRIERS
                     and function_name not in self.function_return_types
                 ):
                     records.append((function_name, node))
@@ -27625,7 +27629,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
 
-        if func_name in {"subgroupExecutionBarrier", "subgroupBarrier"}:
+        if func_name in self.HLSL_SOFTWARE_SUBGROUP_BARRIERS:
             if args:
                 raise self.hlsl_software_subgroup_error(
                     "DirectX subgroup execution barriers require zero arguments",
@@ -27646,10 +27650,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="execution-barrier-contract-unproven",
                     source_location=source_location,
                 )
+            # The subgroup barrier also orders buffer and image memory (GL_KHR_shader_subgroup).
+            intrinsic = (
+                "AllMemoryBarrierWithGroupSync"
+                if func_name == "subgroupBarrier"
+                else "GroupMemoryBarrierWithGroupSync"
+            )
             if (
-                "GroupMemoryBarrierWithGroupSync" in self.global_variable_types
-                or "GroupMemoryBarrierWithGroupSync"
-                in self.standard_math_constant_shadow_names
+                intrinsic in self.global_variable_types
+                or intrinsic in self.standard_math_constant_shadow_names
             ):
                 raise self.hlsl_software_subgroup_error(
                     "DirectX subgroup execution barrier target intrinsic is shadowed "
@@ -27658,10 +27667,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="target-intrinsic-shadowed",
                     source_location=source_location,
                 )
-            if func_name == "subgroupBarrier":
-                # The subgroup barrier also orders buffer and image memory (GL_KHR_shader_subgroup).
-                return "AllMemoryBarrierWithGroupSync()"
-            return "GroupMemoryBarrierWithGroupSync()"
+            return f"{intrinsic}()"
 
         if func_name == "atomicThreadFence":
             return self.generate_hlsl_atomic_thread_fence(

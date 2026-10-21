@@ -2054,6 +2054,10 @@ class GLSLCodeGen(
             "subgroupMemoryBarrierImage",
         }
     )
+    # Subgroup barriers that software subgroups lower to the workgroup barrier.
+    GLSL_SOFTWARE_SUBGROUP_BARRIERS = frozenset(
+        {"subgroupExecutionBarrier", "subgroupBarrier"}
+    )
     # Workgroup-scope fences that order the memory of each subgroup fence for the subgroup as well.
     GLSL_SUBGROUP_FENCE_WIDENINGS = {
         "subgroupMemoryBarrier": "groupMemoryBarrier",
@@ -2071,6 +2075,7 @@ class GLSLCodeGen(
             "WaveReadLaneAt",
             "WaveShuffleAndFillUp",
             "subgroupExecutionBarrier",
+            "subgroupBarrier",
             "CooperativeMatrixMultiplyAccumulate",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
             *GLSL_SOFTWARE_SUBGROUP_SCANS,
@@ -4601,7 +4606,7 @@ class GLSLCodeGen(
             elif isinstance(node, FunctionCallNode):
                 name = self.function_call_name(node)
                 if (
-                    name == "subgroupExecutionBarrier"
+                    name in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
                     and name not in self.function_return_types
                 ):
                     records.append((name, node))
@@ -6019,7 +6024,7 @@ class GLSLCodeGen(
         for node in self.walk_ast(ast):
             if (
                 isinstance(node, FunctionCallNode)
-                and self.function_call_name(node) == "subgroupExecutionBarrier"
+                and self.function_call_name(node) in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
             ):
                 execution_barrier_call_nodes.update((id(node), id(node.function)))
         for node in self.walk_ast(ast):
@@ -25051,6 +25056,11 @@ class GLSLCodeGen(
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            subgroup_barrier = self.generate_glsl_software_subgroup_barrier_statement(
+                expression, indent
+            )
+            if subgroup_barrier is not None:
+                return subgroup_barrier
             clip_statement = self.generate_clip_statement(expression, indent)
             if clip_statement is not None:
                 return clip_statement
@@ -25077,6 +25087,11 @@ class GLSLCodeGen(
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            subgroup_barrier = self.generate_glsl_software_subgroup_barrier_statement(
+                stmt, indent
+            )
+            if subgroup_barrier is not None:
+                return subgroup_barrier
             clip_statement = self.generate_clip_statement(stmt, indent)
             if clip_statement is not None:
                 return clip_statement
@@ -25085,6 +25100,33 @@ class GLSLCodeGen(
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_glsl_software_subgroup_barrier_statement(self, expr, indent):
+        """A statement ``subgroupBarrier()`` under software subgroups, or ``None``.
+
+        Software subgroups are slices of the workgroup, so their execution barrier is the workgroup
+        ``barrier()``. ``barrier()`` orders only shared memory (GLSL 4.60 section 8.16), so full
+        ``memoryBarrier()`` fences before and after it also order the buffer and image memory the subgroup
+        barrier covers (GL_KHR_shader_subgroup), releasing earlier writes and acquiring them afterwards.
+        """
+        if (
+            self.software_subgroup_width is None
+            or not isinstance(expr, FunctionCallNode)
+            or self.function_call_name(expr) != "subgroupBarrier"
+            or "subgroupBarrier" in self.function_return_types
+        ):
+            return None
+        arguments = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        control = self.generate_glsl_software_subgroup_operation(
+            "subgroupExecutionBarrier",
+            arguments,
+            source_location=getattr(expr, "source_location", None),
+        )
+        indent_str = "    " * indent
+        return "".join(
+            f"{indent_str}{line};\n"
+            for line in ("memoryBarrier()", control, "memoryBarrier()")
+        )
 
     def glsl_dynamic_resource_call_dispatch_info(self, expr):
         if not isinstance(expr, FunctionCallNode):
@@ -42633,7 +42675,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         expected_arity = (
             0
-            if operation == "subgroupExecutionBarrier"
+            if operation in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
             else self.GLSL_WAVE_INTRINSIC_ARITIES[operation]
         )
         accepted_arities = self.GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES.get(
@@ -42649,6 +42691,14 @@ complex64_t crossgl_complex64_mod_assign(
             )
         if operation == "subgroupExecutionBarrier":
             return "barrier()"
+        if operation == "subgroupBarrier":
+            raise self.glsl_software_subgroup_error(
+                "OpenGL software subgroup barriers over buffer, image and shared memory "
+                "must be statements",
+                operation=operation,
+                reason="subgroup-memory-barrier-unsupported",
+                source_location=source_location,
+            )
         if operation == "WaveShuffleAndFillUp":
             diagnostic = self.glsl_wave_validate_shuffle_and_fill_up(
                 operation, arguments
