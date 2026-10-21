@@ -22,8 +22,12 @@ OUTPUT_BACKENDS = {
     "rust": "rust",
     "slang": "slang",
     "spirv": "vulkan",
+    "webgl": "webgl",
     "wgsl": "wgsl",
 }
+# The CrossGL dialect (a key of :data:`.probes.DIALECTS`) each language's output probes are written in, when it is not
+# plain CrossGL: GLSL ES 3.00 runs no compute kernels.
+CROSSGL_DIALECTS = {"webgl": "crossgl-es"}
 INPUT_BACKENDS = {
     "cuda": "cuda",
     "glsl": "opengl",
@@ -165,7 +169,7 @@ def run_output(feature: Feature, language: str) -> Result:
         return Result(feature, "output", outcome, detail, tool, semantic)
 
     try:
-        probe = probes.build(feature, "crossgl")
+        probe = probes.build(feature, CROSSGL_DIALECTS.get(language, "crossgl"))
     except probes.NoSpelling as error:
         return result("refused", str(error))
     except probes.ProbeError as error:

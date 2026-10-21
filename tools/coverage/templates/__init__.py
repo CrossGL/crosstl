@@ -15,6 +15,7 @@ from __future__ import annotations
 from .base import ABSENT, C_FAMILY, Template
 from .compute import CUDA, HIP, MOJO, RUST
 from .graphics import GLSL, HLSL, METAL, SLANG, WGSL
+from .webgl import WEBGL
 
 __all__ = ["ABSENT", "C_FAMILY", "TEMPLATES", "Template"]
 
@@ -27,6 +28,7 @@ TEMPLATES = {
     "hlsl": HLSL,
     "metal": METAL,
     "slang": SLANG,
+    "webgl": WEBGL,
     "wgsl": WGSL,
     "spirv": {},
 }

@@ -33,6 +33,7 @@ TOOLS = {
     "rust": "rust-gpu",
     "slang": "slangc",
     "spirv": "spirv-val",
+    "webgl": "glslangValidator",
     "wgsl": "naga",
 }
 SUFFIX = {
@@ -45,6 +46,7 @@ SUFFIX = {
     "rust": ".rs",
     "slang": ".slang",
     "spirv": ".spvasm",
+    "webgl": ".frag",
     "wgsl": ".wgsl",
 }
 GLSL_STAGES = {
@@ -210,6 +212,26 @@ def _run(arguments: list[str], cwd: str) -> Verdict:
     return Verdict(result.returncode == 0, log[:2000])
 
 
+def _suffix(language: str, stage: str) -> str:
+    """The file suffix of a probe, from which glslang tells its stage. A WebGL kernel probe is a fragment shader."""
+    if language == "glsl":
+        return f".{GLSL_STAGES[stage]}"
+    if language == "webgl":
+        return ".vert" if stage == "vertex" else ".frag"
+    return SUFFIX[language]
+
+
+# glslang checks a shader against the version its ``#version`` line names, so a WebGL shader must name GLSL ES 3.00.
+_ESSL_VERSION = re.compile(r"\A(?:\s|//[^\n]*\n)*#\s*version\s+300\s+es\b")
+
+
+def _essl(name: str, source: str, scratch: str) -> Verdict:
+    """Check a WebGL shader with glslang as GLSL ES 3.00, the shading language of WebGL 2."""
+    if not _ESSL_VERSION.match(source):
+        return Verdict(False, "error: the shader does not begin with #version 300 es")
+    return _run([*command("glslangValidator"), name], scratch)
+
+
 # Entry-point names HLSL writers conventionally give each stage, tried when a shader has no ``main``.
 HLSL_STAGE_ENTRIES = {
     "vertex": "VSMain",
@@ -311,10 +333,10 @@ def validate(
     """Check ``source`` with the language's reference validator, compiling for ``target`` when the language has
     more than one (Slang). Call only when :func:`available` is true."""
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
-        name = "probe" + (
-            f".{GLSL_STAGES[stage]}" if language == "glsl" else SUFFIX[language]
-        )
+        name = "probe" + _suffix(language, stage)
         Path(scratch, name).write_text(source)
+        if language == "webgl":
+            return _essl(name, source, scratch)
         if language == "glsl":
             # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V 1.4 and later, so those shaders are
             # checked for Vulkan.

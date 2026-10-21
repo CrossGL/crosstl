@@ -50,7 +50,8 @@ _OPTIONAL = re.compile(r"\[\s*,[^\[\]]*\]")
 _PROTOTYPE = re.compile(r"\b([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*\(([^(){};]*)\)")
 
 
-def _type(spelling: str) -> Type:
+def concrete_type(spelling: str) -> Type:
+    """The probe's type for a GLSL type spelling, with the generic names of section 8 made concrete."""
     return glsl_type(GENERIC.get(spelling, _GENERIC_OPAQUE.sub(r"\1", spelling)))
 
 
@@ -73,7 +74,7 @@ def _param(text: str) -> tuple[Type, str]:
     if "[" in words[-1]:
         # An array parameter, such as textureGatherOffsets' ``ivec2 offsets[4]``.
         return Type.other(words[0] + words[-1][words[-1].index("[") :]), direction
-    kind = _type(words[0])
+    kind = concrete_type(words[0])
     if words[-1] == "offset" and kind.scalar == "int":
         # A texel offset must be a constant expression (GLSL 4.60, section 8.9.2).
         direction = "const"
@@ -94,7 +95,7 @@ def parse_prototype(text: str) -> tuple[str, Signature] | None:
     image = {"int": "iimage2D", "uint": "uimage2D"}.get(result, "image2D")
     params = params.replace(_IMAGE_PARAMS, f"{image} image, ivec2 P")
     parts = [p.strip() for p in params.split(",") if p.strip() and p.strip() != "void"]
-    return name, signature(_type(result), [_param(p) for p in parts])
+    return name, signature(concrete_type(result), [_param(p) for p in parts])
 
 
 def _blocks(text: str):

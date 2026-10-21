@@ -4,7 +4,8 @@ languages in :mod:`.kernels` and CrossGL's own dialect in :mod:`.crossgl`."""
 from __future__ import annotations
 
 from .crossgl import DIALECT as CROSSGL
-from .dialect import Buffer, Dialect, ProbeError
+from .crossgl import ES_DIALECT as CROSSGL_ES
+from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .kernels import CUDA, HIP, Mojo, Rust
 from .model import RAYTRACING_STAGES, Type
 
@@ -415,6 +416,55 @@ class WGSL(Dialect):
         return "\n".join(lines + ["    return vec4<f32>(0.0);", "}"]) + "\n"
 
 
+class WebGL(Dialect):
+    """GLSL ES 3.00, the shading language of WebGL 2. It has no compute stage and no storage buffers, so every probe is
+    a fragment shader that reads uniform arrays and writes a local array (:data:`.dialect.UNIFORM_ARRAY_LENGTH`).
+    """
+
+    language = "webgl"
+    suffix = ".frag"
+    _HEADER = ("#version 300 es", "precision highp float;", "precision highp int;")
+    _SCALARS = frozenset({"float", "int", "uint", "bool"})
+
+    def type(self, kind: Type) -> str:
+        if not kind.opaque and kind.scalar not in self._SCALARS:
+            raise ProbeError(f"GLSL ES 3.00 has no {kind.scalar} type")
+        return super().type(kind)
+
+    def read(self, buffer: str, offset: int) -> str:
+        return uniform_read(buffer, offset)
+
+    # GLSL ES 3.00 has no binding layouts, and no default precision for most sampler types.
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        if image_format:
+            raise ProbeError("GLSL ES 3.00 has no images")
+        return f"uniform highp {spelling} {name};"
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        *inputs, (output, _) = buffers
+        lines = [
+            *self._HEADER,
+            *parts.get("prelude", ()),
+            *(
+                f"uniform {kind} {name}[{UNIFORM_ARRAY_LENGTH}];"
+                for kind, name in inputs
+            ),
+            *parts.get("declarations", ()),
+            "layout(location = 0) out vec4 color;",
+            "void main() {",
+            "    color = vec4(0.0);",
+            f"    {output} outp[1];",
+            "    uint i = 0u;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["}"]) + "\n"
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        if parts.get("inputs"):
+            raise ProbeError("no shader-input probe for GLSL ES yet")
+        return self.kernel(buffers, body, **parts)
+
+
 class Slang(HLSL):
     """Slang compiles HLSL kernels; the ``shader`` attribute marks the entry point, so slangc needs no ``-entry``."""
 
@@ -447,6 +497,9 @@ DIALECTS: dict[str, Dialect] = {
         Mojo(),
         Rust(),
         Slang(),
+        WebGL(),
         WGSL(),
     )
 }
+# WebGL's output probes are written in the CrossGL dialect that GLSL ES can run: see :class:`.crossgl.CrossGLES`.
+DIALECTS["crossgl-es"] = CROSSGL_ES

@@ -63,6 +63,7 @@ TOOLS = {
     "rust": "rust-gpu",
     "slang": "slangc",
     "spirv": "spirv-val",
+    "webgl": "glslang",
     "wgsl": "naga",
 }
 AREA = {"output": "area:codegen", "input": "area:frontend"}

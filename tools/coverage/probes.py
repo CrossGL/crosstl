@@ -223,18 +223,18 @@ class _Builder:
 
 
 def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
-    """The probe for ``feature`` in ``language``: CrossGL for the output direction, the feature's own language for
-    input and for lowering to SPIR-V."""
+    """The probe for ``feature`` in ``language``, a key of :data:`DIALECTS`: CrossGL (``crossgl``, or for WebGL
+    ``crossgl-es``) for the output direction, the feature's own language for input and for lowering to SPIR-V.
+    """
+    dialect = DIALECTS[language]
+    crossgl = dialect.language == "crossgl"
     if constructs.is_construct(feature):
         if baseline:
             raise ProbeError("language-level features have no baseline probe")
-        dialect = DIALECTS[language]
-        source, entry, suffix = constructs.build(feature, language, dialect)
+        source, entry, suffix = constructs.build(feature, dialect)
         return Probe(language, source, entry, suffix)
     # A counterpart stands in for a signature the probes cannot spell, but only in the CrossGL probe.
-    if feature.signature is None and not (
-        language == "crossgl" and feature.counterpart
-    ):
+    if feature.signature is None and not (crossgl and feature.counterpart):
         raise ProbeError(feature.note or "the feature list gives no signature")
     if feature.stage not in (
         "compute",
@@ -243,15 +243,12 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         *RAYTRACING_STAGES,
     ):
         raise ProbeError(f"no {feature.stage}-stage probe yet")
-    name = (
-        feature.crossgl if language == "crossgl" else feature.spelling or feature.name
-    )
+    name = feature.crossgl if crossgl else feature.spelling or feature.name
     if not name:
         raise NoSpelling(
             "CrossGL has no spelling for this operation"
             + (f": {feature.note}" if feature.note else "")
         )
-    dialect = DIALECTS[language]
     # A method is called on an object of its type, which the feature's group names.
     receiver = (
         Receiver(feature.group, dialect, feature.spelling)
@@ -265,7 +262,7 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         dialect, receiver, interpolant or "", feature.stage in _PAYLOAD_STAGES
     )
     signature = feature.signature
-    if language == "crossgl" and feature.counterpart:
+    if crossgl and feature.counterpart:
         signature = feature.counterpart
     body, output = builder.body(name, signature, baseline)
     buffers = [

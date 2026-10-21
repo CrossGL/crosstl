@@ -157,6 +157,8 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
     "hlsl": _acceleration_structure("RaytracingAccelerationStructure"),
     "slang": _acceleration_structure("RaytracingAccelerationStructure"),
     "wgsl": _WGSL_UNIFORMS,
+    # GLSL ES 3.00 has no images or multisampled samplers; the probe passes the samplers CrossGL also declares.
+    "webgl": _same("sampler2D", "sampler2DShadow", "sampler2DArray"),
 }
 # Uniforms bind past the probe's buffers.
 _FIRST_UNIFORM = 8

@@ -16,6 +16,7 @@ NAMES = {
     "hlsl": "HLSL",
     "metal": "Metal",
     "spirv": "SPIR-V",
+    "webgl": "WebGL",
     "wgsl": "WGSL",
     "cuda": "CUDA",
     "hip": "HIP",

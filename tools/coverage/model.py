@@ -36,6 +36,7 @@ LANGUAGES = (
     "rust",
     "slang",
     "spirv",
+    "webgl",
     "wgsl",
 )
 DIRECTIONS = ("output", "input")

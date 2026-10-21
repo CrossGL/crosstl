@@ -13,7 +13,10 @@ from .model import DIRECTIONS, OUTCOMES, Result, Score
 
 SCHEMA = 1
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
-NOT_OFFERED = {("wgsl", "input"): "CrossTL has no WGSL source frontend"}
+NOT_OFFERED = {
+    ("webgl", "input"): "CrossTL has no WebGL source frontend",
+    ("wgsl", "input"): "CrossTL has no WGSL source frontend",
+}
 
 
 def _commit() -> str:

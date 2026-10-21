@@ -21,13 +21,14 @@ CURATED: dict[str, str] = {}
 # Languages whose functions, or some of them, have no id of their own. They take the id of the function of the named
 # language that CrossGL spells the same way: Metal ``fabs`` and CUDA ``fabsf`` are CrossGL ``abs``, so they share
 # GLSL ``abs``'s id. WGSL ``frexp`` returns a result structure that its probe cannot spell, so it has no id either and
-# shares GLSL ``frexp``'s.
+# shares GLSL ``frexp``'s. GLSL ES 3.00 does not compile to SPIR-V, so WebGL's functions share GLSL's ids.
 BORROWED = {
     "cuda": "glsl",
     "hip": "glsl",
     "metal": "glsl",
     "mojo": "glsl",
     "rust": "glsl",
+    "webgl": "glsl",
     "wgsl": "glsl",
 }
 # Feature groups whose SPIR-V does not identify them: glam writes Vec3's methods in plain Rust arithmetic, so

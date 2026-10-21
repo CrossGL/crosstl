@@ -195,12 +195,14 @@ def _lines(text: str, spelled: dict[str, str]) -> list[str]:
 
 # GLSL tools tell a program's stage from its file suffix.
 _PROGRAM_SUFFIX = {
-    "glsl": {stage: f".{suffix}" for stage, suffix in GLSL_STAGES.items()}
+    language: {stage: f".{suffix}" for stage, suffix in GLSL_STAGES.items()}
+    for language in ("glsl", "webgl")
 }
 
 
-def build(feature: Feature, language: str, dialect):
-    """The probe of a language-level feature in ``language``, as ``(source, entry, suffix)``."""
+def build(feature: Feature, dialect):
+    """The probe of a language-level feature in ``dialect``'s language, as ``(source, entry, suffix)``."""
+    language = dialect.language
     template = _template(feature.name, language)
     if template is ABSENT:
         raise ProbeError(f"{language} has no spelling for {feature.name}")

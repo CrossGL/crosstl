@@ -20,6 +20,21 @@ class NoSpelling(ProbeError):
     """The language has no spelling for the operation, so the operation is a gap rather than an untested probe."""
 
 
+# GLSL ES 3.00 has neither storage buffers nor a compute stage (GLSL ES 3.00.6, sections 2 and 4.3), so a WebGL probe,
+# in GLSL ES and in CrossGL, is a fragment shader that reads its inputs from uniform arrays of this length and writes
+# its result to a local array.
+UNIFORM_ARRAY_LENGTH = 32
+
+
+def uniform_read(buffer: str, offset: int) -> str:
+    """Element ``offset`` of the uniform array that stands in for the input buffer ``buffer``."""
+    if offset >= UNIFORM_ARRAY_LENGTH:
+        raise ProbeError(
+            f"the probe reads more than {UNIFORM_ARRAY_LENGTH} elements of {buffer}"
+        )
+    return f"{buffer}[i + {offset}u]"
+
+
 class Dialect:
     language = ""
     suffix = ""

@@ -8,7 +8,7 @@ anywhere else.
 
 from __future__ import annotations
 
-from .dialect import Buffer, Dialect, ProbeError
+from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .model import WIDE_INTEGERS
 from .templates import C_FAMILY, Template
 
@@ -491,6 +491,43 @@ class CrossGL(Dialect):
 _POINTS_IN_AND_OUT = ("layout(points) in;", "layout(points, max_vertices = 1) out;")
 
 DIALECT = CrossGL()
+
+
+class CrossGLES(CrossGL):
+    """The CrossGL probes of the WebGL output direction. GLSL ES 3.00 has no compute stage and no storage buffers, so
+    a kernel probe is a fragment stage that reads its inputs from uniform arrays and writes a local array, as the
+    GLSL ES probe does (:data:`.dialect.UNIFORM_ARRAY_LENGTH`). Its entry point returns nothing, so a probe body can
+    return early."""
+
+    def read(self, buffer: str, offset: int) -> str:
+        return uniform_read(buffer, offset)
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        *inputs, (output, _) = buffers
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in parts.get("prelude", ())]
+        lines += ["    fragment {"]
+        lines += [
+            f"        uniform {kind} {name}[{UNIFORM_ARRAY_LENGTH}];"
+            for kind, name in inputs
+        ]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += [
+            "        void main() {",
+            f"            {output} outp[1];",
+            "            uint i = 0u;",
+        ]
+        lines += [f"            {line}" for line in body]
+        lines += ["        }", "    }", "}"]
+        return "\n".join(lines) + "\n"
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        if parts.get("inputs"):
+            raise ProbeError("no shader-input probe for GLSL ES yet")
+        return self.kernel(buffers, body, **parts)
+
+
+ES_DIALECT = CrossGLES()
 
 
 def _scalar(spelling: str, source: str = "iin") -> Template:
