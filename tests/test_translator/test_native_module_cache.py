@@ -155,3 +155,34 @@ def test_cache_key_ignores_per_execution_paths_only(tmp_path):
         ),
     )
     assert cache.key(artifact, scratch, changed) != keys[1]
+
+
+def test_reuse_restores_every_produced_module_at_its_new_path(tmp_path):
+    # A two-step toolchain (compile to an intermediate, then link) leaves both
+    # modules in scratch; a reused execution must leave the same files.
+    cache = ValidatedModuleCache()
+    artifact = tmp_path / "kernel.metal"
+    artifact.write_text("kernel void k() {}\n", encoding="utf-8")
+    first = tmp_path / "first"
+    first.mkdir()
+    (first / "k.air").write_bytes(b"intermediate")
+    (first / "k.metallib").write_bytes(b"library")
+    cache.store("key", artifact, [first / "k.air", first / "k.metallib"])
+    (first / "k.air").write_bytes(b"changed after store")
+    second = tmp_path / "second" / "nested"
+    assert cache.reuse("key", artifact, [second / "k.air", second / "k.metallib"])
+    assert (second / "k.air").read_bytes() == b"intermediate"
+    assert (second / "k.metallib").read_bytes() == b"library"
+    assert not cache.reuse("other", artifact, [second / "k.air"])
+    assert (cache.hits, cache.misses) == (1, 1)
+    with pytest.raises(ValueError, match="stored module count"):
+        cache.reuse("key", artifact, [second / "k.metallib"])
+
+
+def test_validation_only_sequences_restore_nothing(tmp_path):
+    cache = ValidatedModuleCache()
+    artifact = tmp_path / "kernel.spv"
+    artifact.write_bytes(b"\x03\x02#\x07")
+    cache.store("key", artifact, [artifact])
+    assert cache.reuse("key", artifact, [artifact])
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["kernel.spv"]

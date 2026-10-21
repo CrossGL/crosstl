@@ -31,21 +31,22 @@ def _normalized(value: Any, artifact: str, scratch: str) -> Any:
 
 
 class ValidatedModuleCache:
-    """Reuse a validated module for later executions of byte-identical artifacts.
+    """Reuse validated modules for later executions of byte-identical artifacts.
 
     A key covers the artifact bytes and suffix and every validation command
     (arguments, standard input and produced module path), with the
     per-execution artifact and scratch paths replaced by placeholders. A hit
     therefore means the exact command sequence already succeeded on identical
     input in this session; only fully successful sequences are stored, so a
-    failure is always re-run and reported. Stored modules live in a private
-    directory that is removed with the cache.
+    failure is always re-run and reported. Every module the sequence produced,
+    intermediate ones included, is stored in a private directory that is
+    removed with the cache, and restored at the same per-execution paths.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._directory: Path | None = None
-        self._modules: dict[str, str | None] = {}
+        self._modules: dict[str, list[str]] = {}
         self.hits = 0
         self.misses = 0
 
@@ -72,8 +73,16 @@ class ValidatedModuleCache:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-    def reuse(self, key: str, artifact_path: Path, module_path: Path) -> bool:
-        """Place the stored module at ``module_path``; ``False`` on a miss."""
+    def reuse(
+        self, key: str, artifact_path: Path, module_paths: Sequence[Path]
+    ) -> bool:
+        """Restore every stored module at ``module_paths``; ``False`` on a miss.
+
+        ``module_paths`` lists the path each validation command produces, in
+        command order, so intermediate modules (for example Metal ``.air``
+        before its ``.metallib``) reappear exactly where a fresh validation
+        would leave them.
+        """
 
         with self._lock:
             if key not in self._modules:
@@ -81,25 +90,37 @@ class ValidatedModuleCache:
                 return False
             stored = self._modules[key]
             self.hits += 1
-        if stored is None:
-            # The key's module path was the artifact itself: validation only.
-            return True
-        destination = Path(module_path)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(stored, destination)
+        destinations = [
+            Path(path) for path in module_paths if Path(path) != Path(artifact_path)
+        ]
+        if len(destinations) != len(stored):
+            raise ValueError("Validated module reuse expects the stored module count")
+        for source, destination in zip(stored, destinations):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
         return True
 
-    def store(self, key: str, artifact_path: Path, module_path: Path) -> None:
-        if Path(module_path) == Path(artifact_path):
-            with self._lock:
-                self._modules[key] = None
-            return
+    def store(
+        self, key: str, artifact_path: Path, module_paths: Sequence[Path]
+    ) -> None:
+        """Keep a copy of every module the successful validation produced.
+
+        Paths equal to the artifact are validation-only steps and store nothing.
+        """
+
+        produced = [
+            Path(path) for path in module_paths if Path(path) != Path(artifact_path)
+        ]
         with self._lock:
-            if self._directory is None:
+            if produced and self._directory is None:
                 directory = Path(tempfile.mkdtemp(prefix="crosstl-native-modules-"))
                 weakref.finalize(self, shutil.rmtree, directory, True)
                 self._directory = directory
-            stored = self._directory / f"{key}{Path(module_path).suffix}"
-        shutil.copyfile(module_path, stored)
+            root = self._directory
+        stored = []
+        for index, path in enumerate(produced):
+            destination = root / f"{key}-{index}{path.suffix}"
+            shutil.copyfile(path, destination)
+            stored.append(str(destination))
         with self._lock:
-            self._modules[key] = str(stored)
+            self._modules[key] = stored

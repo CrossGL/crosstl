@@ -1639,14 +1639,18 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 details={"target": self.target, "commandCount": 0},
             )
             return artifact_path
-        module_path = artifact_path
-        for command_spec in commands:
-            if command_spec.module_path is not None:
-                module_path = command_spec.module_path
+        produced = [
+            command_spec.module_path
+            for command_spec in commands
+            if command_spec.module_path is not None
+        ]
+        module_path = produced[-1] if produced else artifact_path
+        # Each distinct produced module once, in first-production order.
+        produced = list(dict.fromkeys(produced))
         cache_key = None
         if self.validated_modules is not None:
             cache_key = self.validated_modules.key(artifact_path, temp_dir, commands)
-            if self.validated_modules.reuse(cache_key, artifact_path, module_path):
+            if self.validated_modules.reuse(cache_key, artifact_path, produced):
                 for command_spec in commands:
                     state.record_step(
                         "validate",
@@ -1690,7 +1694,7 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                     },
                 )
         if cache_key is not None:
-            self.validated_modules.store(cache_key, artifact_path, module_path)
+            self.validated_modules.store(cache_key, artifact_path, produced)
         return module_path
 
     def _load_artifact(self, state: RuntimeExecutionState, module_path: Path) -> Any:
