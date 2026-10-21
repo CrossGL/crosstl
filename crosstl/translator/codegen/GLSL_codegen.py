@@ -202,6 +202,7 @@ from .generic_struct_utils import (
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_generic_vectors import glsl_generic_vector_constructor_name
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
 from .glsl_hlsl_precise import GLSLHlslPreciseMixin
@@ -39575,6 +39576,9 @@ complex64_t crossgl_complex64_mod_assign(
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
             original_func_name = self.glsl_builtin_option_constructor_name(
+                original_func_name
+            )
+            original_func_name = glsl_generic_vector_constructor_name(
                 original_func_name
             )
             if original_func_name != func_name:
