@@ -8,8 +8,15 @@ anywhere else.
 
 from __future__ import annotations
 
-from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
-from .model import WIDE_INTEGERS
+from .dialect import (
+    UNIFORM_ARRAY_LENGTH,
+    Buffer,
+    Dialect,
+    NoSpelling,
+    ProbeError,
+    uniform_read,
+)
+from .model import WIDE_INTEGERS, Type
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .templates import C_FAMILY, Template
 
@@ -263,6 +270,12 @@ class CrossGL(Dialect):
 
     def absent(self, stage: str) -> str:
         return "CrossGL has no work-graph node stage" if stage == "node" else ""
+
+    def type(self, kind: Type) -> str:
+        # A Metal ballot returns a simd_vote or quad_vote mask (features.metal.VOTES), which no CrossGL type holds.
+        if kind.opaque in ("simd_vote", "quad_vote"):
+            raise NoSpelling(f"CrossGL has no type for Metal's {kind.opaque} mask")
+        return super().type(kind)
 
     # CrossGL spells Direct3D's hit object as HLSL does.
     def holding(self, opaque: str) -> str:
