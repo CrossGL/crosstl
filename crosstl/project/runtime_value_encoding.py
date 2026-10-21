@@ -13,6 +13,13 @@ def storage_words(values: Any, *, width: int = 32) -> list[int]:
     """Flatten exact storage words without conversion through host floats."""
     if width not in (16, 32):
         raise ValueError("Storage word width must be 16 or 32 bits.")
+    if (
+        type(values) is list
+        and all(type(value) is int for value in values)
+        and (not values or (min(values) >= 0 and max(values) < (1 << width)))
+    ):
+        # A flat list of in-range words is its own flattening.
+        return list(values)
     if isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
         return [word for value in values for word in storage_words(value, width=width)]
     if (

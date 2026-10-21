@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 from crosstl.translator.resource_storage import encoded_storage_dtype
 
 from .runtime_value_encoding import validate_value_encoding
+from .runtime_values import flatten_values, scalars_fit
 from .runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeDispatchRequest,
@@ -5027,17 +5028,7 @@ def _dtype_size(dtype: str) -> int:
     return struct.calcsize("<" + _dtype_format(dtype))
 
 
-def _flatten_values(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, (str, bytes, bytearray)):
-        return [value]
-    if isinstance(value, Sequence):
-        flattened: list[Any] = []
-        for item in value:
-            flattened.extend(_flatten_values(item))
-        return flattened
-    return [value]
+_flatten_values = flatten_values
 
 
 def _native_buffer_element_count(binding: NativeRuntimeBufferBinding) -> int:
@@ -5156,6 +5147,8 @@ def _pack_values(
                 f"{target} narrow integer buffer values must be integers in [{low}, {high}]."
             )
     if dtype in {"float16", "float32"}:
+        if scalars_fit(values, dtype):
+            return struct.pack("<" + _dtype_format(dtype) * expected_count, *values)
         special_bits = (
             {
                 "nan": 0x7E00,

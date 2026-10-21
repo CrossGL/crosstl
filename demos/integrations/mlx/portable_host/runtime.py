@@ -6,6 +6,7 @@ import ctypes
 import hashlib
 import json
 import math
+import shutil
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from crosstl.project import (
     build_native_loader_dispatch_request,
     prepare_native_loader_dispatch_regions,
 )
+from crosstl.project.metal_runtime import MetalComputeRuntime
 from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
@@ -416,14 +418,26 @@ class HostRuntime:
             self.reduction_descriptors.update(descriptors)
             self.reduction_directories.update({key: directory for key in descriptors})
         self.trace.parent.mkdir(parents=True, exist_ok=True)
+        # Each package artifact is compiled and validated once per session;
+        # later dispatches of byte-identical sources reuse the validated module
+        # and record the reuse on every validation step.
         if self.target == "opengl":
             adapter = OpenGLRuntimeParityAdapter(
-                runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                runtime=OpenGLComputeRuntime(context_backends=("egl",)),
+                reuse_validated_modules=True,
             )
         elif self.target == "directx":
-            adapter = DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+            adapter = DirectXRuntimeParityAdapter(
+                runtime=DirectXComputeRuntime(), reuse_validated_modules=True
+            )
         elif self.target == "metal":
-            adapter = MetalRuntimeParityAdapter()
+            # An explicit resolver gives this session its own helper, built
+            # once, instead of re-keying the shared helper on the toolchain
+            # with three xcrun lookups before every dispatch.
+            adapter = MetalRuntimeParityAdapter(
+                runtime=MetalComputeRuntime(tool_resolver=shutil.which),
+                reuse_validated_modules=True,
+            )
         else:
             raise ValueError(f"Unsupported host target: {self.target}")
         self.executor = RuntimeParityExecutor(

@@ -23,7 +23,9 @@ from crosstl.project.directx_toolchain import (
     dxc_compiler_arguments_for_source,
     dxc_profile_for_source,
 )
+from crosstl.project.native_module_cache import ValidatedModuleCache
 from crosstl.project.runtime_value_encoding import validate_value_encoding
+from crosstl.project.runtime_values import flatten_values
 from crosstl.project.storage_record_layout import validate_storage_record_layout
 from crosstl.translator.codegen import normalize_backend_name
 
@@ -1166,8 +1168,14 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
         validate: bool = True,
         command_runner: Any | None = None,
         tool_resolver: Any | None = None,
+        reuse_validated_modules: bool = False,
     ):
+        if type(reuse_validated_modules) is not bool:
+            raise TypeError("reuse_validated_modules must be a bool.")
         self.runtime = runtime
+        self.validated_modules = (
+            ValidatedModuleCache() if reuse_validated_modules else None
+        )
         if required_tools is not None:
             self.required_tools = tuple(required_tools)
         self.required_environment = tuple(required_environment)
@@ -1633,6 +1641,25 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
             return artifact_path
         module_path = artifact_path
         for command_spec in commands:
+            if command_spec.module_path is not None:
+                module_path = command_spec.module_path
+        cache_key = None
+        if self.validated_modules is not None:
+            cache_key = self.validated_modules.key(artifact_path, temp_dir, commands)
+            if self.validated_modules.reuse(cache_key, artifact_path, module_path):
+                for command_spec in commands:
+                    state.record_step(
+                        "validate",
+                        command_spec.action,
+                        details={
+                            "target": self.target,
+                            "returncode": 0,
+                            "reusedValidatedModule": cache_key,
+                        },
+                    )
+                return module_path
+        module_path = artifact_path
+        for command_spec in commands:
             command = tuple(command_spec.command)
             result = self.command_runner(command, input_text=command_spec.input_text)
             command_result = _native_runtime_command_result(command, result)
@@ -1662,6 +1689,8 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                         **details,
                     },
                 )
+        if cache_key is not None:
+            self.validated_modules.store(cache_key, artifact_path, module_path)
         return module_path
 
     def _load_artifact(self, state: RuntimeExecutionState, module_path: Path) -> Any:
@@ -7687,12 +7716,7 @@ def _infer_shape(value: Any) -> tuple[int, ...]:
 
 
 def _flatten_values(value: Any) -> list[Any]:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        flattened: list[Any] = []
-        for item in value:
-            flattened.extend(_flatten_values(item))
-        return flattened
-    return [value]
+    return flatten_values(value, keep_none=True)
 
 
 def _values_match(
