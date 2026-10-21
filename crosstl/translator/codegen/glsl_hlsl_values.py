@@ -28,20 +28,6 @@ class GLSLHlslValueMixin:
                 return True
         return False
 
-    def glsl_matrix_constructor_name(self, name):
-        """GLSL spelling of a non-square CrossGL matrix constructor.
-
-        CrossGL ``matRxC`` has R rows and C columns, while GLSL ``matCxR`` names
-        columns first. Matrix type nodes are already emitted columns first; a
-        constructor call names its type as a string and is mapped the same way.
-        """
-        match = re.fullmatch(r"(d?mat)([234])x([234])", str(name or ""))
-        if match is None or match.group(2) == match.group(3):
-            return name
-        if name in self.function_return_types:
-            return name
-        return f"{match.group(1)}{match.group(3)}x{match.group(2)}"
-
     def glsl_static_global_zero_value(self, vtype):
         """Zero value of a static global: HLSL zero-initializes static storage."""
         mapped_type = str(self.map_type(vtype) or "")

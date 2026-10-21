@@ -2525,7 +2525,7 @@ def test_spirv_implicit_lod_min_lod_offset_parse():
     assert ast.spirv_constants["%min_lod"] == "0.5"
     assert isinstance(assignment, AssignmentNode)
     assert isinstance(assignment.right, FunctionCallNode)
-    assert assignment.right.name == "spirvTextureOffsetMinLod"
+    assert assignment.right.name == "textureOffsetClamp"
     assert len(assignment.right.args) == 4
     assert isinstance(assignment.right.args[0], VariableNode)
     assert assignment.right.args[0].name == "colorTex"

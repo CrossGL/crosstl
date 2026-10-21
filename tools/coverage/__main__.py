@@ -113,6 +113,12 @@ def _run(args: argparse.Namespace) -> int:
         for language in languages
         if language in validators.SPIRV_COMPILERS and not validators.can_lower(language)
     ]
+    if (
+        "spirv" in languages
+        and "input" in directions
+        and not validators.can_lower("glsl")
+    ):
+        missing.append(f"spirv input ({', '.join(_lowering_gaps('glsl'))})")
     if args.strict and missing:
         print("error: missing tools for " + "; ".join(missing), file=sys.stderr)
         return 2

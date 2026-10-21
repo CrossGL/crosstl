@@ -49,6 +49,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..matrix_shape import matrix_type_spelling
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
     collect_literal_int_constants,
@@ -114,6 +115,11 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .relational_builtins import lower_relational_builtins
+from .slang_projected_compare import (
+    SLANG_PROJECTED_COMPARE_FORMS,
+    generate_slang_projected_compare,
+    is_slang_projected_compare,
+)
 from .stage_utils import (
     compute_local_size,
     is_fragment_output_parameter,
@@ -1316,6 +1322,7 @@ class SlangCodeGen:
             "textureCompareOffset",
             "textureGatherCompare",
             "textureGatherCompareOffset",
+            *SLANG_PROJECTED_COMPARE_FORMS,
         }
 
         for current in self.walk_ast(node):
@@ -4615,9 +4622,10 @@ class SlangCodeGen:
         if hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
             if element_type == "float":
-                if type_node.rows == type_node.cols:
-                    return f"mat{type_node.rows}"
-                return f"mat{type_node.rows}x{type_node.cols}"
+                return matrix_type_spelling(type_node, "float")
+            if type(type_node).__name__ == "MatrixType":
+                # Slang keeps the CrossGL column-by-row spelling order.
+                return f"{element_type}{type_node.cols}x{type_node.rows}"
             return f"{element_type}{type_node.rows}x{type_node.cols}"
         if hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
@@ -13134,6 +13142,9 @@ class SlangCodeGen:
             "textureCompareOffset",
         }:
             return self.generate_texture_compare(func_name, args)
+
+        if is_slang_projected_compare(func_name):
+            return generate_slang_projected_compare(self, func_name, args)
 
         if func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
             return self.generate_texture_gather_compare(func_name, args)

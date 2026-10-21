@@ -1007,7 +1007,7 @@ def test_raster_system_semantics_codegen_canonicalizes_layer_viewport_and_distan
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "uint view @ gl_ViewID;" in generated_code
+    assert "uint view @ gl_ViewIndex;" in generated_code
     assert "uint layer @ gl_Layer;" in generated_code
     assert "uint viewport @ gl_ViewportIndex;" in generated_code
     assert "float clip @ gl_ClipDistance;" in generated_code

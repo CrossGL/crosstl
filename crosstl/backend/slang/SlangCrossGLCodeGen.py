@@ -618,7 +618,7 @@ class SlangToCrossGLConverter:
             # SV_Coverage is also a fragment input, handled contextually
             # for parameters in map_semantic.
             "SV_Coverage": "gl_SampleMask",
-            "SV_ViewID": "gl_ViewID",
+            "SV_ViewID": "gl_ViewIndex",
             "SV_RenderTargetArrayIndex": "gl_Layer",
             "SV_ViewportArrayIndex": "gl_ViewportIndex",
             "SV_ClipDistance": "gl_ClipDistance",

@@ -37,6 +37,22 @@ def test_instructions_reads_function_bodies_and_names_extended_instructions():
     assert not any(op.startswith("NonSemantic") for op in found)
 
 
+def test_a_read_of_a_built_in_variable_names_the_built_in():
+    assembly = """
+               OpDecorate %2 BuiltIn WorldRayOriginKHR
+          %1 = OpFunction %void None %5
+          %6 = OpLabel
+          %7 = OpLoad %v3float %2
+               OpReturn
+               OpFunctionEnd
+"""
+    found = semantic.instructions(assembly)
+    assert found["BuiltIn:WorldRayOriginKHR"] == 1
+    assert semantic.identify(found, Counter({"OpReturn": 1})) == (
+        "BuiltIn:WorldRayOriginKHR"
+    )
+
+
 def test_identify_subtracts_the_baseline_and_the_plumbing():
     baseline = Counter({"OpLoad": 3, "OpStore": 1, "OpIAdd": 2})
     probe = Counter({"OpLoad": 3, "OpStore": 2, "OpIAdd": 2, "OpSelect": 1})

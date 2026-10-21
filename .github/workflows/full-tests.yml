@@ -25,7 +25,7 @@ jobs:
     name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
     runs-on: ubuntu-latest
     # One runner took 33 to 66 minutes for the whole suite. tools/pytest_shard.py
-    # splits it by test file, so each shard runs about a third of it.
+    # splits it by test id, so each shard runs about a third of it.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -40,17 +40,13 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
-          python -m pip install pytest-xdist
+          python -m pip install -e ".[test]"
 
       - name: Run complete test suite
         run: |
@@ -98,9 +94,7 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install optional shader validators
@@ -206,8 +200,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
+          python -m pip install -e ".[test]"
 
       - name: Run external shader validator tests
         shell: bash
@@ -274,9 +267,7 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install adapter toolchain
@@ -335,8 +326,7 @@ jobs:
         if: steps.probe_runtime_parity.outputs.available == 'true'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
+          python -m pip install -e ".[test]"
 
       - name: Install optional Vulkan runtime dependency
         if: matrix.adapter == 'vulkan' && steps.probe_runtime_parity.outputs.available == 'true'
@@ -414,9 +404,7 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install DirectX Shader Compiler
@@ -471,9 +459,7 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install GLSL and SPIR-V tools
@@ -547,9 +533,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
-          python -m pip install pytest-xdist
+          python -m pip install -e ".[test]"
 
       - name: Verify compiler toolchain is active
         run: |
@@ -665,9 +649,7 @@ jobs:
         uses: actions/setup-python@v7
         with:
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
+          cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
       - name: Install GLSL validator
@@ -676,9 +658,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install -r requirements.txt
-          python -m pip install pytest-xdist
+          python -m pip install -e ".[test]"
 
       - name: Verify Metal toolchain is active
         run: |

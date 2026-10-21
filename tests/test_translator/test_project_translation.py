@@ -41675,7 +41675,9 @@ def test_metal_project_canonicalizes_leading_zero_function_constant_ids(
         ]
         assert "layout(constant_id = 0) const int first = 0;" in generated
         assert "layout(constant_id = 1) const int second = 0;" in generated
-        GLSLParser(GLSLLexer(generated).tokenize()).parse()
+        # A required constant exists only in a SPIR-V compile; any other compile stops at #error.
+        assert '#error "specialization constant first has no default' in generated
+        GLSLParser(GLSLLexer(generated, defines={"GL_SPIRV": "100"}).tokenize()).parse()
         if shutil.which("glslangValidator"):
             toolchain_runs = project_pipeline._run_toolchain_smoke([artifact], tmp_path)
             assert len(toolchain_runs) == 1
@@ -41762,7 +41764,9 @@ def test_metal_project_canonicalizes_suffixed_function_constant_ids(tmp_path):
     opengl_source = (tmp_path / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
     for _name, constant_id, _spelling in expected_ids:
         assert f"layout(constant_id = {constant_id})" in opengl_source
-    GLSLParser(GLSLLexer(opengl_source).tokenize()).parse()
+    # The constants are required overrides: they exist only in a SPIR-V compile.
+    assert '#error "specialization constant decimal has no default' in opengl_source
+    GLSLParser(GLSLLexer(opengl_source, defines={"GL_SPIRV": "100"}).tokenize()).parse()
     if shutil.which("glslangValidator"):
         toolchain_runs = project_pipeline._run_toolchain_smoke(
             [artifacts["opengl"]], tmp_path
@@ -42538,7 +42542,7 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
             "kind": "texture",
             "type": "sampler2D",
             "set": 0,
-            "binding": 1026,
+            "binding": 2,
             "access": "read",
         },
     ]

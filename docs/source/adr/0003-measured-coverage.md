@@ -50,6 +50,8 @@ their pinned commits, checks their digests and caches them. No feature list is w
 ### 3. Each feature is checked by the target's reference validator
 
 For every feature the engine generates a minimal probe, in CrossGL for output and in the source language for input.
+SPIR-V is compiler output rather than a language people write, so its input probe is the module glslang compiles the
+feature's GLSL probe to.
 It translates the probe and validates the result with `glslangValidator` (GLSL), DXC (HLSL), `spirv-val`
 (SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA), hipcc (HIP), slangc
 compiling to SPIR-V (Slang), the Mojo compiler with MAX's GPU package (Mojo) or rustc with the rust-gpu

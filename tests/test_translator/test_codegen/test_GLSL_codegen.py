@@ -87,6 +87,14 @@ from tests.lowering_refusal_helpers import (
 )
 
 
+def glsl_body_identifiers(code):
+    """GLSL identifiers outside the leading ``// crosstl-*`` artifact-contract records."""
+    body = "\n".join(
+        line for line in code.splitlines() if not line.startswith("// crosstl-")
+    )
+    return set(re.findall(r"[A-Za-z_]\w*", body))
+
+
 def tokenize_code(code: str) -> List:
     lexer = Lexer(code)
     return lexer.get_tokens()
@@ -15508,7 +15516,8 @@ def test_glsl_repeated_struct_storage_resources_use_distinct_block_names(tmp_pat
 
 
 def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
-    # Mirrors the compiler OpenGL lowering policy: set N, binding M -> N * 1024 + M.
+    # OpenGL has no descriptor sets: set 0 keeps its bindings, and a resource of another set keeps its binding
+    # when that is free in its class (uniform blocks, storage blocks, texture units), else takes the lowest free one.
     code = """
     shader DescriptorSetFlatteningGLSL {
         struct Params {
@@ -15536,9 +15545,9 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
 
     assert "layout(std140, binding = 0) uniform Params {" in generated
     assert "} frameParams;" in generated
-    assert "layout(std140, binding = 1024) uniform Params_materialParams {" in generated
+    assert "layout(std140, binding = 1) uniform Params_materialParams {" in generated
     assert "} materialParams;" in generated
-    assert "layout(std140, binding = 1024) uniform Params {" not in generated
+    assert "layout(std140, binding = 1) uniform Params {" not in generated
     assert "frameParams.color" in generated
     assert "materialParams.color" in generated
     assert (
@@ -15546,11 +15555,11 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
         in generated
     )
     assert (
-        "layout(std430, binding = 2049) buffer historyBuffer { float history[]; };"
+        "layout(std430, binding = 0) buffer historyBuffer { float history[]; };"
         in generated
     )
     assert "layout(binding = 4) uniform sampler2D baseMap;" in generated
-    assert "layout(binding = 1028) uniform sampler2D detailMap;" in generated
+    assert "layout(binding = 0) uniform sampler2D detailMap;" in generated
 
 
 def test_glsl_struct_uniform_derived_block_name_collision_uses_stable_suffix(
@@ -15697,7 +15706,7 @@ def test_glsl_descriptor_set_flattening_is_attribute_order_independent():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
+    assert "layout(binding = 2) uniform sampler2D tex;" in generated
 
 
 def test_glsl_register_space_flattens_to_opengl_binding():
@@ -15715,7 +15724,7 @@ def test_glsl_register_space_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(rgba32f, binding = 2051) uniform image2D img;" in generated
+    assert "layout(rgba32f, binding = 3) uniform image2D img;" in generated
 
 
 def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
@@ -15737,7 +15746,7 @@ def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(std140, binding = 1026) uniform Params {" in generated
+    assert "layout(std140, binding = 2) uniform Params {" in generated
     assert "} materialParams;" in generated
 
 
@@ -15754,7 +15763,7 @@ def test_glsl_stage_resource_descriptor_set_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
+    assert "layout(binding = 2) uniform sampler2D tex;" in generated
 
 
 @pytest.mark.parametrize(
@@ -24432,8 +24441,8 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
                 vec2 barycentrics = rq.CandidateTriangleBarycentrics();
                 bool frontFace = rq.CommittedTriangleFrontFace();
                 bool aabbOpaque = rq.CandidateAABBOpaque();
-                mat3x4 objectToWorld = rq.CommittedObjectToWorld();
-                mat3x4 worldToObject = rq.CandidateWorldToObject3x4();
+                mat4x3 objectToWorld = rq.CommittedObjectToWorld();
+                mat4x3 worldToObject = rq.CandidateWorldToObject3x4();
                 vec3 trianglePositions[3];
                 rq.CandidateTriangleVertexPositions(trianglePositions);
                 rq.CommittedTriangleVertexPositions(trianglePositions);
@@ -33344,7 +33353,7 @@ def test_opengl_texture_gather_offset_variants_filter_sampler_arguments():
         "gatherOps(colorMap, layerMap, uv, uvLayer, offset, offset0, offset1, offset2, offset3, component)"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", s, uv" not in generated_code
     assert ", s, uvLayer" not in generated_code
 
@@ -33568,7 +33577,7 @@ def test_opengl_texture_gather_offsets_mix_literal_and_dynamic_offsets():
         in generated_code
     )
     assert "textureGatherOffsets(" not in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", s, uvLayer" not in generated_code
     # Literal and variable offsets both become one textureGatherOffset each.
     assert "textureGatherOffset(layers, uvLayer, ivec2((-1), 0), 0).w" in generated_code
@@ -33828,7 +33837,13 @@ def test_opengl_cube_texture_gather_offsets_emit_diagnostics():
     assert offsets_diagnostic in generated_code_refusal
     assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
-    assert "cubeSampler" not in generated_code
+    # The helpers sample through cubeSampler, which takes its own combined uniform per texture.
+    assert "cubeSampler" not in glsl_body_identifiers(generated_code)
+    assert (
+        "layout(binding = 2) uniform samplerCube cubeMap_cubeSampler;" in generated_code
+    )
+    assert "gatherCube(cubeMap_cubeSampler, direction," in generated_code
+    assert "gatherCubeArray(cubeArray_cubeSampler, cubeLayer," in generated_code
 
 
 def test_opengl_unsupported_dimension_texture_gather_emits_diagnostics():
@@ -33881,7 +33896,11 @@ def test_opengl_unsupported_dimension_texture_gather_emits_diagnostics():
     )
     assert diagnostic in generated_code_refusal
     assert "textureGather(" not in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
+    assert "gatherLine(lineMap_linearSampler, u, component)" in generated_code
+    assert (
+        "gatherVolume(volumeMap_linearSampler, volumeUv, component)" in generated_code
+    )
 
 
 def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments():
@@ -33967,7 +33986,7 @@ def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments():
         "offsetOps(colorMap, layerMap, uv, uvLayer, lod, ddx, ddy, offset)"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", s, uv" not in generated_code
     assert ", s, uvLayer" not in generated_code
     assert "textureOffset(" not in generated_code
@@ -34072,7 +34091,7 @@ def test_opengl_cube_texture_sample_offsets_emit_diagnostics():
         "layout(binding = 3) uniform samplerCubeArrayShadow shadowArray;"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert (
         "vec4 cubeOffsets(samplerCube tex, vec3 direction, float lod, vec3 ddx, vec3 ddy, ivec2 offset)"
         in generated_code
@@ -34177,7 +34196,7 @@ def test_opengl_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_mem
         )
         in generated_code_refusal
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "input.uv" not in generated_code
     assert "input.pixel" not in generated_code
     assert "textureOffset(" not in generated_code
@@ -34286,7 +34305,7 @@ def test_opengl_projected_texture_variants_filter_sampler_arguments():
         "projectedOps(colorMap, volumeMap, uvq, uvqw, xyzq, ddx, ddy, offset)"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", s, uvq" not in generated_code
     assert ", s, uvqw" not in generated_code
     assert ", s, xyzq" not in generated_code
@@ -34336,7 +34355,7 @@ def test_opengl_texture_offset_non_const_extension_allows_dynamic_offsets():
         "vec4 projected = textureProjOffset(colorMap, uvq, offset);" in generated_code
     )
     assert "texel offsets must be compile-time integer constants" not in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
 
 
 def test_opengl_direct_projected_texture_stage_input_members():
@@ -34411,7 +34430,7 @@ def test_opengl_direct_projected_texture_stage_input_members():
         )
         in generated_code_refusal
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", input." not in generated_code
     assert "textureProjOffset(" not in generated_code
     assert "textureProjLodOffset(" not in generated_code
@@ -34477,7 +34496,7 @@ def test_opengl_direct_projected_array_texture_stage_input_members():
         )
         in generated_code_refusal
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", input." not in generated_code
     assert "textureProjOffset(" not in generated_code
     assert "textureProjLodOffset(" not in generated_code
@@ -34783,11 +34802,11 @@ def test_opengl_implicit_projected_stage_input_members_strip_samplers():
     assert "vec4 colorLod = textureProjLod(colorMap, uvqw, lod);" in generated_code
     assert "vec4 volume = textureProj(volumeMap, xyzq);" in generated_code
     assert (
-        "float shadow = texture(shadowMap, vec3(uvq.xy / uvq.z, depth));"
+        "float shadow = texture(shadowMap, vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
-        "float shadowGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float shadowGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert "unsupported GLSL texture compare" not in generated_code
@@ -34892,10 +34911,11 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float projected = texture(tex, vec3(uvq.xy / uvq.z, depth));" in generated_code
+        "float projected = texture(tex, vec3(uvq.xy / uvq.z, depth / uvq.z));"
+        in generated_code
     )
     assert (
-        "float projectedW = texture(tex, vec3(uvqw.xy / uvqw.w, depth));"
+        "float projectedW = texture(tex, vec3(uvqw.xy / uvqw.w, depth / uvqw.w));"
         in generated_code
     )
     assert (
@@ -34903,7 +34923,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code_refusal
     )
     assert (
-        "float lodProjected = textureLod(tex, vec3(uvq.xy / uvq.z, depth), lod);"
+        "float lodProjected = textureLod(tex, vec3(uvq.xy / uvq.z, depth / uvq.z), lod);"
         in generated_code
     )
     assert (
@@ -34913,7 +34933,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code_refusal
     )
     assert (
-        "float gradProjected = textureGrad(tex, vec3(uvq.xy / uvq.z, depth), ddx, ddy);"
+        "float gradProjected = textureGrad(tex, vec3(uvq.xy / uvq.z, depth / uvq.z), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -34931,7 +34951,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float projected = texture(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
+        "float projected = texture(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w));"
         in generated_code
     )
     assert (
@@ -34945,7 +34965,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code_refusal
     )
     assert (
-        "float gradProjected = textureGrad(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float gradProjected = textureGrad(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -35002,7 +35022,7 @@ def test_opengl_direct_projected_shadow_compare_stage_input_members():
         in generated_code
     )
     assert (
-        "float planar = texture(shadowMap, vec3(uvq.xy / uvq.z, depth));"
+        "float planar = texture(shadowMap, vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35010,7 +35030,7 @@ def test_opengl_direct_projected_shadow_compare_stage_input_members():
         in generated_code_refusal
     )
     assert (
-        "float arrayGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float arrayGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert "compareSampler" not in generated_code
@@ -35111,7 +35131,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code
     )
     assert (
-        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth));"
+        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35119,7 +35139,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code_refusal
     )
     assert (
-        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
+        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth / uvq.z), lod);"
         in generated_code
     )
     assert (
@@ -35129,7 +35149,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code_refusal
     )
     assert (
-        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
+        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w));"
         in generated_code
     )
     assert (
@@ -35137,7 +35157,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code_refusal
     )
     assert (
-        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -35247,7 +35267,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code
     )
     assert (
-        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth));"
+        "float planar = texture(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35255,7 +35275,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code_refusal
     )
     assert (
-        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
+        "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth / uvq.z), lod);"
         in generated_code
     )
     assert (
@@ -35265,7 +35285,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code_refusal
     )
     assert (
-        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth));"
+        "float arrayProjected = texture(shadowArrays[2], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w));"
         in generated_code
     )
     assert (
@@ -35273,7 +35293,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code_refusal
     )
     assert (
-        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
         in generated_code
     )
     assert (
@@ -35390,7 +35410,7 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
         "vec3 uvq, vec4 uvLayerQ, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset)"
     ) in generated_code
     assert (
-        "float planarHigh = texture(shadowMaps[LAYER], vec3(uvq.xy / uvq.z, depth));"
+        "float planarHigh = texture(shadowMaps[LAYER], vec3(uvq.xy / uvq.z, depth / uvq.z));"
         in generated_code
     )
     assert (
@@ -35399,7 +35419,7 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
     )
     assert (
         "float arrayHigh = textureGrad(shadowArrays[(2 * 2)], "
-        "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth / uvLayerQ.w), ddx, ddy);"
     ) in generated_code
     assert (
         "texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants"
@@ -35570,7 +35590,7 @@ def test_opengl_projected_cube_shadow_compare_lowers_supported_basic_form():
         in generated_code
     )
     assert (
-        "float projected = texture(tex, vec4(cubeProj.xyz / cubeProj.w, depth));"
+        "float projected = texture(tex, vec4(cubeProj.xyz / cubeProj.w, depth / cubeProj.w));"
         in generated_code
     )
     expected_cube_diagnostics = {
@@ -35645,16 +35665,21 @@ def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
 
     assert "layout(binding = 0) uniform samplerCube cubeMap;" in generated_code
     assert "layout(binding = 1) uniform samplerCubeArray cubeArray;" in generated_code
+    # The explicit sampler and the cube's own sampler state are two pairs, so two texture units.
     assert (
-        "vec4 cubeProjected = texture(cubeMap, cubeProj.xyz / cubeProj.w);"
+        "layout(binding = 2) uniform samplerCube cubeMap_linearSampler;"
         in generated_code
     )
     assert (
-        "vec4 cubeLod = textureLod(cubeMap, cubeProj.xyz / cubeProj.w, lod);"
+        "vec4 cubeProjected = texture(cubeMap_linearSampler, cubeProj.xyz / cubeProj.w);"
         in generated_code
     )
     assert (
-        "vec4 cubeGrad = textureGrad(cubeMap, cubeProj.xyz / cubeProj.w, ddx, ddy);"
+        "vec4 cubeLod = textureLod(cubeMap_linearSampler, cubeProj.xyz / cubeProj.w, lod);"
+        in generated_code
+    )
+    assert (
+        "vec4 cubeGrad = textureGrad(cubeMap_linearSampler, cubeProj.xyz / cubeProj.w, ddx, ddy);"
         in generated_code
     )
     assert (
@@ -35684,7 +35709,7 @@ def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
             f"projected texture: {func_name} requires 1D, 2D, 2D-array, or 3D projection coordinates"
             in generated_code_refusal
         )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "textureProj(cubeMap" not in generated_code
     assert "textureProj(cubeArray" not in generated_code
 
@@ -35879,11 +35904,11 @@ def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_for
             in generated_code_refusal
         )
     assert (
-        "float fixedProjected = texture(maps[2], vec4(cubeProj.xyz / cubeProj.w, depth));"
+        "float fixedProjected = texture(maps[2], vec4(cubeProj.xyz / cubeProj.w, depth / cubeProj.w));"
         in generated_code
     )
     assert (
-        "float globalShadow = texture(shadowCubes[layer], vec4(cubeProj.xyz / cubeProj.w, depth));"
+        "float globalShadow = texture(shadowCubes[layer], vec4(cubeProj.xyz / cubeProj.w, depth / cubeProj.w));"
         in generated_code
     )
     assert (
@@ -36096,7 +36121,7 @@ def test_opengl_integer_projected_textures_lower_supported_forms_and_diagnose_cu
         "signedProjected(signedMap, signedCube, signedCubeArray, uvq, cubeProj, lod, ddx, ddy, offset)"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "textureProj(cube" not in generated_code
     assert "textureProj(cubeArray" not in generated_code
 
@@ -36173,7 +36198,7 @@ def test_opengl_integer_sampler_offsets_and_gathers_strip_sampler_arguments():
         "uvec4 gatheredCubeArray = textureGather(unsignedCubeArray, cubeLayer);"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert ", linearSampler" not in generated_code
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
@@ -36383,11 +36408,33 @@ def test_opengl_cube_shadow_gather_compare_supports_cube_and_cube_array():
         "vec4 implicitCubeArrayShadow(samplerCubeArrayShadow tex, vec4 cubeLayer, float depth)"
         in generated_code
     )
-    assert "gatherCubeShadow(cubeShadow, direction, depth)" in generated_code
-    assert "gatherCubeArrayShadow(cubeShadowArray, cubeLayer, depth)" in generated_code
+    # compareSampler and each texture's own sampler state are two pairs: two combined uniforms per texture.
+    assert (
+        "layout(binding = 2) uniform samplerCubeShadow cubeShadow_compareSampler;"
+        in generated_code
+    )
+    assert (
+        "gatherCubeShadow(cubeShadow_compareSampler, direction, depth)"
+        in generated_code
+    )
+    assert (
+        "gatherCubeArrayShadow(cubeShadowArray_compareSampler, cubeLayer, depth)"
+        in generated_code
+    )
+    assert "implicitCubeShadow(cubeShadow, direction, depth)" in generated_code
+    assert (
+        "implicitCubeArrayShadow(cubeShadowArray, cubeLayer, depth)" in generated_code
+    )
+    assert (
+        "textureGather(cubeShadow_compareSampler, direction, depth)" in generated_code
+    )
+    assert (
+        "textureGather(cubeShadowArray_compareSampler, cubeLayer, depth)"
+        in generated_code
+    )
     assert "textureGather(cubeShadow, direction, depth)" in generated_code
     assert "textureGather(cubeShadowArray, cubeLayer, depth)" in generated_code
-    assert "compareSampler" not in generated_code
+    assert "compareSampler" not in glsl_body_identifiers(generated_code)
     assert "unsupported GLSL texture gather compare" not in generated_code
     assert "textureGatherCompare(" not in generated_code
     assert "input." not in generated_code
@@ -36940,9 +36987,9 @@ def test_opengl_nested_implicit_shadow_compare_lod_grad_strips_samplers():
     assert "textureGradOffset(" not in generated_code
 
 
-def test_opengl_array_shadow_compare_lod_reports_unsupported():
+def test_opengl_array_shadow_compare_lod_requires_shadow_lod_extension():
     shader = """
-    shader ArrayShadowCompareLodUnsupported {
+    shader ArrayShadowCompareLod {
         sampler2DArrayShadow shadowArray;
         sampler compareSampler;
 
@@ -36959,8 +37006,8 @@ def test_opengl_array_shadow_compare_lod_reports_unsupported():
             float depth,
             float lod
         ) {
-            float rejected = textureCompareLod(tex, s, uvLayer, depth, lod);
-            return rejected;
+            float sampled = textureCompareLod(tex, s, uvLayer, depth, lod);
+            return sampled;
         }
 
         fragment {
@@ -36978,15 +37025,14 @@ def test_opengl_array_shadow_compare_lod_reports_unsupported():
     }
     """
 
-    generated_code, generated_code_refusal = glsl_partial_output(
-        GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
     )
 
-    assert (
-        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert "float sampled = textureLod(tex, vec4(uvLayer, depth), lod);" in (
+        generated_code
     )
-    assert "textureLod(" not in generated_code
 
 
 def test_opengl_array_shadow_compare_lod_offset_reports_unsupported():
@@ -37125,9 +37171,17 @@ def test_opengl_cube_shadow_compare_lod_offset_diagnostics():
         GLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
     )
 
+    # GL_EXT_texture_shadow_lod adds textureLod for cube and cube-array shadows, but no textureLodOffset.
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert "float lodRejected = textureLod(tex, vec4(direction, depth), lod);" in (
+        generated_code
+    )
+    assert "float lodRejected = textureLod(tex, cubeLayer, depth, lod);" in (
+        generated_code
+    )
     assert (
         "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+        not in generated_code_refusal
     )
     assert (
         "texture compare: textureCompareLodOffset explicit LOD offsets require 2D shadow samplers"
@@ -37145,7 +37199,6 @@ def test_opengl_cube_shadow_compare_lod_offset_diagnostics():
         "texture compare: textureCompareGrad explicit gradients require 2D, 2D-array, or cube shadow samplers"
         in generated_code_refusal
     )
-    assert "textureLod(" not in generated_code
     assert "textureLodOffset(" not in generated_code
     assert "textureGradOffset(" not in generated_code
     assert "textureCompareLod(" not in generated_code
@@ -37297,9 +37350,14 @@ def test_opengl_array_shadow_compare_lod_grad_resource_arrays():
         )
         in generated_code_refusal
     )
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert (
+        "float arrayLod = textureLod(shadowArrays[2], vec4(uvLayer, depth), lod);"
+        in generated_code
+    )
     assert (
         "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+        not in generated_code_refusal
     )
     assert (
         glsl_dynamic_texel_offset_diagnostic(
@@ -37388,9 +37446,18 @@ def test_opengl_cube_shadow_compare_lod_grad_resource_arrays():
         "float cubeShadowLayer(samplerCubeShadow cubeMaps[4], samplerCubeArrayShadow cubeArrays[4], int layer, vec3 direction, vec4 cubeLayer, float depth, float lod, vec3 ddx, vec3 ddy)"
         in generated_code
     )
+    assert "#extension GL_EXT_texture_shadow_lod : require" in generated_code
+    assert (
+        "float cubeLod = textureLod(cubeMaps[layer], vec4(direction, depth), lod);"
+        in generated_code
+    )
+    assert (
+        "float cubeArrayLod = textureLod(cubeArrays[2], cubeLayer, depth, lod);"
+        in generated_code
+    )
     assert (
         "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+        not in generated_code_refusal
     )
     assert (
         "float cubeGrad = textureGrad(cubeMaps[1], vec4(direction, depth), ddx, ddy);"
@@ -40548,7 +40615,7 @@ def test_opengl_texture_query_functions():
     assert "return textureSize(tex, 0);" in generated_code
     assert "ivec2 queryMs(sampler2DMS tex)" in generated_code
     assert "return textureSize(tex);" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "textureQueryLod(tex, s, uv)" not in generated_code
 
 
@@ -40850,7 +40917,7 @@ def test_opengl_integer_multisample_invalid_sampling_and_offsets_emit_typed_diag
         "layout(binding = 1) uniform usampler2DMSArray unsignedMsArray;"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "multisample texture call: texture on isampler2DMS" in generated_code_refusal
     assert (
         "multisample texture call: textureLod on isampler2DMS" in generated_code_refusal
@@ -41625,7 +41692,7 @@ def test_opengl_multisample_compare_operations_emit_diagnostics():
 
     assert "layout(binding = 0) uniform sampler2DMS msTex;" in generated_code
     assert "layout(binding = 1) uniform sampler2DMSArray msArray;" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
 
     for func_name in {
         "textureCompare",
@@ -41973,7 +42040,7 @@ def test_opengl_direct_stage_texture_queries_mix_size_levels_and_lod():
         "layout(binding = 5) uniform samplerCubeArrayShadow cubeShadowArray;"
         in generated_code
     )
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "ivec2 colorSize = textureSize(colorMap, 1);" in generated_code
     assert "ivec3 layerSize = textureSize(layerMap, 2);" in generated_code
     assert "ivec3 cubeSize = textureSize(cubeArray, 0);" in generated_code
@@ -41983,7 +42050,15 @@ def test_opengl_direct_stage_texture_queries_mix_size_levels_and_lod():
     assert "int colorLevels = textureQueryLevels(colorMap);" in generated_code
     assert "int shadowLevels = textureQueryLevels(shadowArray);" in generated_code
     assert "vec2 colorLod = textureQueryLod(colorMap, uv);" in generated_code
-    assert "vec2 layerLod = textureQueryLod(layerMap, uvLayer.xy);" in generated_code
+    # The level layerMap reports through linearSampler and through its own state may differ: two units.
+    assert (
+        "layout(binding = 6) uniform sampler2DArray layerMap_linearSampler;"
+        in generated_code
+    )
+    assert (
+        "vec2 layerLod = textureQueryLod(layerMap_linearSampler, uvLayer.xy);"
+        in generated_code
+    )
     assert "vec2 cubeLod = textureQueryLod(cubeArray, cubeLayer.xyz);" in generated_code
     assert (
         "vec2 implicitLayerLod = textureQueryLod(layerMap, uvLayer.xy);"
@@ -42069,7 +42144,7 @@ def test_opengl_array_texture_query_lod_uses_non_layer_coordinates():
     assert "queryCubeArrayLod(cubeArray, cubeLayer)" in generated_code
     assert "queryArrayElementLod(layerMaps, uvLayer)" in generated_code
     assert "queryCubeArrayElementLod(cubeArrays, cubeLayer)" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "linearSamplers" not in generated_code
     assert "textureQueryLod(tex, uvLayer);" not in generated_code
     assert "textureQueryLod(tex, cubeLayer);" not in generated_code
@@ -42224,7 +42299,7 @@ def test_opengl_shadow_array_texture_query_lod_uses_non_layer_coordinates():
     assert "queryCubeArrayLod(cubeShadowArray, cubeLayer)" in generated_code
     assert "queryArrayElementLod(shadowArrays, uvLayer)" in generated_code
     assert "queryCubeArrayElementLod(cubeShadowArrays, cubeLayer)" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "linearSamplers" not in generated_code
     assert "textureQueryLod(tex, uvLayer);" not in generated_code
     assert "textureQueryLod(tex, cubeLayer);" not in generated_code
@@ -42318,10 +42393,10 @@ def test_opengl_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes()
     )
     assert "vec2 lodValue = textureQueryLod(tex, direction);" in generated_code
     assert "float cmp = texture(tex, vec4(direction, depth));" in generated_code
-    assert (
-        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in generated_code_refusal
+    assert "float cmpLod = textureLod(tex, vec4(direction, depth), lod);" in (
+        generated_code
     )
+    assert "float cmpLod = textureLod(tex, cubeLayer, depth, lod);" in generated_code
     assert (
         "float grad = textureGrad(tex, vec4(direction, depth), ddx, ddy);"
         in generated_code
@@ -43379,11 +43454,12 @@ def test_opengl_lowers_contextual_aggregate_initializers(tmp_path):
     assert "Bundle result = Bundle(Pair(x, y), float[2](1.0, 2.0));" in generated_code
     assert "result = Bundle(Pair(y, x), float[2](3.0, 4.0));" in generated_code
     assert "vec2 direction = vec2(1.0, 2.0);" in generated_code
-    assert "mat2 basis = mat2(vec2(1.0, 3.0), vec2(2.0, 4.0));" in generated_code
-    assert "mat2 flatBasis = mat2(vec2(5.0, 7.0), vec2(6.0, 8.0));" in generated_code
+    # Nested lists are columns and flat lists fill columns in order (GLSL 4.60 4.1.11).
+    assert "mat2 basis = mat2(vec2(1.0, 2.0), vec2(3.0, 4.0));" in generated_code
+    assert "mat2 flatBasis = mat2(vec2(5.0, 6.0), vec2(7.0, 8.0));" in generated_code
     assert (
-        "mat3x2 rectangular = mat3x2(vec2(1.0, 4.0), "
-        "vec2(2.0, 5.0), vec2(3.0, 6.0));" in generated_code
+        "mat2x3 rectangular = mat2x3(vec3(1.0, 2.0, 3.0), "
+        "vec3(4.0, 5.0, 6.0));" in generated_code
     )
     assert "return {" not in generated_code
     assert " = {{" not in generated_code
@@ -45690,7 +45766,7 @@ def test_opengl_explicit_sampler_argument_is_dropped():
 
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "layout(binding = 1) uniform samplerCube envMap;" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "texture(colorMap, uv)" in generated_code
 
 
@@ -45722,7 +45798,7 @@ def test_opengl_sampler_parameter_is_dropped():
     assert "vec4 sampleColor(vec2 uv)" in generated_code
     assert "texture(colorMap, uv)" in generated_code
     assert "sampleColor(uv)" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "sampleState" not in generated_code
 
 
@@ -45755,7 +45831,7 @@ def test_opengl_texture_parameter_keeps_combined_sampler():
     assert "vec4 sampleColor(sampler2D tex, vec2 uv)" in generated_code
     assert "texture(tex, uv)" in generated_code
     assert "sampleColor(colorMap, uv)" in generated_code
-    assert "linearSampler" not in generated_code
+    assert "linearSampler" not in glsl_body_identifiers(generated_code)
     assert "sampleState" not in generated_code
 
 
@@ -49216,17 +49292,17 @@ def test_glsl_storage_byte_view_rejects_mismatched_private_array_layout(tmp_path
 
 
 def test_glsl_non_square_matrix_subscripts_select_columns(tmp_path):
-    # CrossGL mat3x2 has three rows and two columns (GLSL mat2x3), so a
-    # subscript selects a three-component column.
+    # CrossGL mat2x3 has two columns of three rows, like GLSL mat2x3 (ADR
+    # 0004), so a subscript selects a three-component column.
     shader = """
     shader main {
-        vec3 column(mat3x2 m, int i) {
+        vec3 column(mat2x3 m, int i) {
             return m[i];
         }
         compute {
             @ numthreads(1, 1, 1)
             void main() {
-                mat3x2 m = mat3x2(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0));
+                mat2x3 m = mat2x3(vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0));
                 float e = m[1][2];
                 vec3 c = column(m, 1) + vec3(e);
             }

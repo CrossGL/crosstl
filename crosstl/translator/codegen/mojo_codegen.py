@@ -50,6 +50,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..matrix_shape import matrix_type_spelling
 from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
@@ -3867,10 +3868,7 @@ class MojoCodeGen:
                 return f"{element_type}{size}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
-            prefix = "dmat" if element_type == "double" else "mat"
-            if type_node.rows == type_node.cols:
-                return f"{prefix}{type_node.rows}"
-            return f"{prefix}{type_node.rows}x{type_node.cols}"
+            return matrix_type_spelling(type_node, element_type)
         else:
             return str(type_node)
 

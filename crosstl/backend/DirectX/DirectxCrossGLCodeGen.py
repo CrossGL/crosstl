@@ -12,6 +12,7 @@ from crosstl.translator.codegen.hlsl_buffer_layout import (
     HLSL_CBUFFER_LAYOUT,
     HLSL_STRUCTURED_LAYOUT,
 )
+from crosstl.translator.codegen.stage_distance_layout import distance_semantic_spelling
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 
 from ..common_ast import (
@@ -26,6 +27,11 @@ from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
+from .hlsl_matrix_import import (
+    HLSLMatrixImportMixin,
+    crossgl_matrix_type_name,
+    hlsl_matrix_type_map,
+)
 from .precise_arithmetic import HLSLPreciseArithmeticMixin
 from .struct_method_calls import HLSLStructMethodCallMixin
 from .struct_methods import (
@@ -65,6 +71,7 @@ class HLSLIntegerConversionError(ValueError):
 
 
 class HLSLToCrossGLConverter(
+    HLSLMatrixImportMixin,
     ImportRefusalMixin,
     HLSLPreciseArithmeticMixin,
     HLSLUnormStoreRoundingMixin,
@@ -265,45 +272,8 @@ class HLSLToCrossGLConverter(
             "bool2": "bvec2",
             "bool3": "bvec3",
             "bool4": "bvec4",
-            # Matrix Types - float
-            "float2x2": "mat2",
-            "float2x3": "mat2x3",
-            "float2x4": "mat2x4",
-            "float3x2": "mat3x2",
-            "float3x3": "mat3",
-            "float3x4": "mat3x4",
-            "float4x2": "mat4x2",
-            "float4x3": "mat4x3",
-            "float4x4": "mat4",
-            # Matrix Types - half
-            "half2x2": "f16mat2",
-            "half2x3": "f16mat2x3",
-            "half2x4": "f16mat2x4",
-            "half3x2": "f16mat3x2",
-            "half3x3": "f16mat3",
-            "half3x4": "f16mat3x4",
-            "half4x2": "f16mat4x2",
-            "half4x3": "f16mat4x3",
-            "half4x4": "f16mat4",
-            "fixed2x2": "mat2",
-            "fixed2x3": "mat2x3",
-            "fixed2x4": "mat2x4",
-            "fixed3x2": "mat3x2",
-            "fixed3x3": "mat3",
-            "fixed3x4": "mat3x4",
-            "fixed4x2": "mat4x2",
-            "fixed4x3": "mat4x3",
-            "fixed4x4": "mat4",
-            # Matrix Types - double
-            "double2x2": "dmat2",
-            "double2x3": "dmat2x3",
-            "double2x4": "dmat2x4",
-            "double3x2": "dmat3x2",
-            "double3x3": "dmat3",
-            "double3x4": "dmat3x4",
-            "double4x2": "dmat4x2",
-            "double4x3": "dmat4x3",
-            "double4x4": "dmat4",
+            # Matrix Types: HLSL floatRxC is CrossGL matCxR (ADR 0004)
+            **hlsl_matrix_type_map(),
             # Texture Types
             "Texture1D": "sampler1D",
             "Texture1DArray": "sampler1DArray",
@@ -432,7 +402,8 @@ class HLSLToCrossGLConverter(
             "SampleCmpLevel": "textureCompareLod",
             "SampleCmpGrad": "textureCompareGrad",
             "SampleCmpBias": "textureCompare",
-            "SampleCmpLevelZero": "textureCompare",
+            # SampleCmpLevelZero compares at mip level 0, with no implicit derivatives.
+            "SampleCmpLevelZero": "textureCompareLod",
             "Load": "texelFetch",
             "Gather": "textureGather",
             "GatherCmp": "textureGatherCompare",
@@ -533,7 +504,7 @@ class HLSLToCrossGLConverter(
             "SV_InsideTessFactor": "gl_TessLevelInner",
             "SV_DomainLocation": "gl_TessCoord",
             # Mesh/Task semantics
-            "SV_ViewID": "gl_ViewID",
+            "SV_ViewID": "gl_ViewIndex",
             "SV_DispatchMeshID": "mesh_DispatchMeshID",
             # Raytracing semantics
             "SV_RayFlags": "rt_RayFlags",
@@ -636,10 +607,11 @@ class HLSLToCrossGLConverter(
                 type_map[f"{hlsl_prefix}{width}"] = f"{crossgl_prefix}{width}"
 
         for hlsl_prefix in ("min16float", "min10float", "float16_t"):
-            for columns in range(2, 5):
-                for rows in range(2, 5):
-                    suffix = str(columns) if columns == rows else f"{columns}x{rows}"
-                    type_map[f"{hlsl_prefix}{columns}x{rows}"] = f"f16mat{suffix}"
+            for rows in range(2, 5):
+                for cols in range(2, 5):
+                    type_map[f"{hlsl_prefix}{rows}x{cols}"] = crossgl_matrix_type_name(
+                        hlsl_prefix, rows, cols
+                    )
 
         return type_map
 
@@ -882,18 +854,55 @@ class HLSLToCrossGLConverter(
         if member in self.texture_method_map:
             texture_function = self.texture_method_map[member]
             dropped_parameters = []
-            if member == "Sample" and cube_family_resource and arg_count in {3, 4}:
-                texture_function = "texture"
-                if arg_count == 3:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "Sample" and arg_count in {3, 4, 5}:
-                texture_function = "textureOffset"
-                if arg_count == 4:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 5:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
+            # The Shader Model 5 tiled-resource overloads take a minimum-LOD Clamp after the offset (cube
+            # textures have none) and an optional status output last; CrossGL carries the clamp as the
+            # texture*Clamp operations, so only a status output is still dropped.
+            clamp_overloads = {
+                # member: (operands before the offset, unclamped, clamped, cube clamped)
+                "Sample": (2, "textureOffset", "textureOffsetClamp", "textureClamp"),
+                "SampleBias": (
+                    3,
+                    "textureOffset",
+                    "textureOffsetClamp",
+                    "textureClamp",
+                ),
+                "SampleGrad": (
+                    4,
+                    "textureGradOffset",
+                    "textureGradOffsetClamp",
+                    "textureGradClamp",
+                ),
+                "SampleCmp": (
+                    3,
+                    "textureCompareOffset",
+                    "textureCompareOffsetClamp",
+                    "textureCompareClamp",
+                ),
+                "SampleCmpGrad": (
+                    5,
+                    "textureCompareGradOffset",
+                    "textureCompareGradOffsetClamp",
+                    "textureCompareGradClamp",
+                ),
+            }
+            if member in clamp_overloads and arg_count is not None:
+                operands, offset_form, clamp_form, cube_clamp_form = clamp_overloads[
+                    member
+                ]
+                if cube_family_resource and arg_count in {operands + 1, operands + 2}:
+                    texture_function = cube_clamp_form
+                    if arg_count == operands + 2:
+                        dropped_parameters.append("status output")
+                elif not cube_family_resource and arg_count in {
+                    operands + 1,
+                    operands + 2,
+                    operands + 3,
+                }:
+                    texture_function = (
+                        offset_form if arg_count == operands + 1 else clamp_form
+                    )
+                    if arg_count == operands + 3:
+                        dropped_parameters.append("status output")
             elif member == "SampleLevel" and cube_family_resource and arg_count == 4:
                 texture_function = "textureLod"
                 dropped_parameters.append("status output")
@@ -901,63 +910,6 @@ class HLSLToCrossGLConverter(
                 texture_function = "textureLodOffset"
                 if arg_count == 5:
                     dropped_parameters.append("status output")
-            elif (
-                member == "SampleGrad"
-                and cube_family_resource
-                and arg_count in {
-                    5,
-                    6,
-                }
-            ):
-                texture_function = "textureGrad"
-                if arg_count == 5:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "SampleGrad" and arg_count in {5, 6, 7}:
-                texture_function = "textureGradOffset"
-                if arg_count == 6:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 7:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif (
-                member == "SampleBias"
-                and cube_family_resource
-                and arg_count in {
-                    4,
-                    5,
-                }
-            ):
-                texture_function = "texture"
-                if arg_count == 4:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "SampleBias" and arg_count in {4, 5, 6}:
-                texture_function = "textureOffset"
-                if arg_count == 5:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 6:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif (
-                member == "SampleCmp"
-                and cube_family_resource
-                and arg_count in {
-                    4,
-                    5,
-                }
-            ):
-                texture_function = "textureCompare"
-                if arg_count == 4:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "SampleCmp" and arg_count in {4, 5, 6}:
-                texture_function = "textureCompareOffset"
-                if arg_count == 5:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 6:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
             elif member == "SampleCmpLevel" and cube_family_resource and arg_count == 5:
                 texture_function = "textureCompareLod"
                 dropped_parameters.append("status output")
@@ -965,25 +917,6 @@ class HLSLToCrossGLConverter(
                 texture_function = "textureCompareLodOffset"
                 if arg_count == 6:
                     dropped_parameters.append("status output")
-            elif (
-                member == "SampleCmpGrad"
-                and cube_family_resource
-                and arg_count in {
-                    6,
-                    7,
-                }
-            ):
-                texture_function = "textureCompareGrad"
-                if arg_count == 6:
-                    dropped_parameters.append("LOD clamp")
-                else:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
-            elif member == "SampleCmpGrad" and arg_count in {6, 7, 8}:
-                texture_function = "textureCompareGradOffset"
-                if arg_count == 7:
-                    dropped_parameters.append("LOD clamp")
-                elif arg_count == 8:
-                    dropped_parameters.extend(["LOD clamp", "status output"])
             elif (
                 member == "SampleCmpBias"
                 and cube_family_resource
@@ -1021,10 +954,10 @@ class HLSLToCrossGLConverter(
                 and cube_family_resource
                 and arg_count == 4
             ):
-                texture_function = "textureCompare"
+                texture_function = "textureCompareLod"
                 dropped_parameters.append("status output")
             elif member == "SampleCmpLevelZero" and arg_count in {4, 5}:
-                texture_function = "textureCompareOffset"
+                texture_function = "textureCompareLodOffset"
                 if arg_count == 5:
                     dropped_parameters.append("status output")
             elif member == "Gather" and cube_family_resource and arg_count == 3:
@@ -1230,6 +1163,24 @@ class HLSLToCrossGLConverter(
         ):
             sampler, coords, bias, offset = rendered_args[:4]
             method_args = [obj, sampler, coords, offset, bias]
+        elif (
+            member == "SampleBias"
+            and descriptor["function"] == "textureOffsetClamp"
+            and len(rendered_args) >= 5
+        ):
+            sampler, coords, bias, offset, clamp = rendered_args[:5]
+            method_args = [obj, sampler, coords, offset, clamp, bias]
+        elif (
+            member == "SampleBias"
+            and descriptor["function"] == "textureClamp"
+            and len(rendered_args) >= 4
+        ):
+            sampler, coords, bias, clamp = rendered_args[:4]
+            method_args = [obj, sampler, coords, clamp, bias]
+        elif member == "SampleCmpLevelZero" and len(rendered_args) >= 3:
+            # The explicit level 0 goes between the reference and the offset (textureCompareLod[Offset]).
+            sampler, coords, compare = rendered_args[:3]
+            method_args = [obj, sampler, coords, compare, "0.0", *rendered_args[3:]]
         elif member == "SampleCmpBias" and descriptor["function"] == "textureCompare":
             sampler, coords, compare = rendered_args[:3]
             method_args = [obj, sampler, coords, compare]
@@ -3560,6 +3511,7 @@ class HLSLToCrossGLConverter(
         }
         self.integer_compound_helpers = {}
         self.integer_helper_reserved_names = set()
+        self.reset_matrix_import_state()
         pending = [ast]
         while pending:
             node = pending.pop()
@@ -3738,6 +3690,7 @@ class HLSLToCrossGLConverter(
                 code += self.generate_function(func)
 
         code += self.generate_integer_compound_helpers()
+        code += self.generate_matrix_row_setters()
         reduction_helpers = (
             self.generate_trigonometric_helpers()
             + self.generate_precise_arithmetic_helpers()
@@ -4163,6 +4116,11 @@ class HLSLToCrossGLConverter(
                 code += f"    @ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_CBUFFER_LAYOUT})\n"
                 code += f"    cbuffer {cbuffer_name} {{\n"
                 for member in node.members:
+                    self.record_variable_type(
+                        member,
+                        self.global_variable_types,
+                        self.global_resource_array_dims,
+                    )
                     code += self.format_matrix_layout_attributes(member, 2)
                     code += self.format_attributes(getattr(member, "attributes", []), 2)
                     code += self.format_binding_attributes(member, 2)
@@ -5042,6 +5000,9 @@ class HLSLToCrossGLConverter(
         converted = self.wide_integer_compound_expression(node, is_main)
         if converted is not None:
             return converted
+        matrix_assignment = self.matrix_assignment_expression(node, is_main)
+        if matrix_assignment is not None:
+            return matrix_assignment
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
         op = node.operator
@@ -5067,12 +5028,18 @@ class HLSLToCrossGLConverter(
             right = self.generate_expression(expr.right, is_main)
             left = self.maybe_parenthesize(expr.left, left)
             right = self.maybe_parenthesize(expr.right, right)
+            matrix_product = self.matrix_product_expression(expr, left, right)
+            if matrix_product is not None:
+                return matrix_product
             return f"{left} {expr.op} {right}"
 
         elif isinstance(expr, AssignmentNode):
             converted = self.wide_integer_compound_expression(expr, is_main)
             if converted is not None:
                 return converted
+            matrix_assignment = self.matrix_assignment_expression(expr, is_main)
+            if matrix_assignment is not None:
+                return matrix_assignment
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             op = expr.operator
@@ -5201,9 +5168,18 @@ class HLSLToCrossGLConverter(
                     raise HLSLSelectOverloadError()
                 condition, true_value, false_value = rendered_args
                 return f"select({false_value}, {true_value}, {condition})"
+            if func_name not in self.source_function_names:
+                rendered_args = self.truncate_intrinsic_vector_arguments(
+                    func_name, expr.args, rendered_args
+                )
             args = ", ".join(rendered_args)
+            matrix_constructor = self.matrix_constructor_expression(
+                func_name, expr.args, is_main
+            )
+            if matrix_constructor is not None:
+                return matrix_constructor
             if func_name == "mul" and len(expr.args) == 2:
-                return self.generate_mul_expression(expr.args, rendered_args)
+                return self.mul_call_expression(expr.args, rendered_args)
             if func_name == "mad" and len(expr.args) == 3:
                 left = self.maybe_parenthesize(expr.args[0], rendered_args[0])
                 right = self.maybe_parenthesize(expr.args[1], rendered_args[1])
@@ -5266,6 +5242,9 @@ class HLSLToCrossGLConverter(
             )
             if scalar_splat is not None:
                 return scalar_splat
+            matrix_member = self.matrix_member_expression(expr, is_main)
+            if matrix_member is not None:
+                return matrix_member
             if isinstance(expr.object, (int, float)):
                 obj = f"({obj})"
             elif isinstance(
@@ -5278,6 +5257,9 @@ class HLSLToCrossGLConverter(
             texel_access = self.generate_texel_access(expr, is_main)
             if texel_access is not None:
                 return texel_access
+            matrix_index = self.matrix_index_expression(expr, is_main)
+            if matrix_index is not None:
+                return matrix_index
             array = self.generate_expression(expr.array, is_main)
             if isinstance(
                 expr.array, (BinaryOpNode, TernaryOpNode, UnaryOpNode, AssignmentNode)
@@ -5287,6 +5269,11 @@ class HLSLToCrossGLConverter(
             index = self.generate_expression(expr.index, is_main)
             return f"{array}[{index}]"
         elif isinstance(expr, CastNode):
+            matrix_shape = self.hlsl_matrix_shape(expr.target_type)
+            if matrix_shape is not None:
+                return self.matrix_conversion_expression(
+                    matrix_shape, expr.expression, is_main
+                )
             if (
                 expr.expression == 0
                 and not isinstance(expr.expression, bool)
@@ -5321,11 +5308,21 @@ class HLSLToCrossGLConverter(
             return f"{condition} ? {left} : {right}"
 
         elif isinstance(expr, VectorConstructorNode):
+            matrix_constructor = self.matrix_constructor_expression(
+                expr.type_name, expr.args, is_main
+            )
+            if matrix_constructor is not None:
+                return matrix_constructor
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{self.map_type(expr.type_name)}({args})"
         elif isinstance(expr, InitializerListNode):
+            matrix_initializer = self.matrix_initializer_expression(
+                expected_type, expr, is_main
+            )
+            if matrix_initializer is not None:
+                return matrix_initializer
             elements = ", ".join(
                 self.generate_expression(element, is_main) for element in expr.elements
             )
@@ -5360,10 +5357,11 @@ class HLSLToCrossGLConverter(
     def map_type(self, hlsl_type):
         """Map an HLSL type name to the closest CrossGL type name.
 
-        CrossGL ``matRxC`` has ``R`` rows and ``C`` columns. With row-major
-        packing CrossGL holds the transpose of every HLSL matrix (HLSL rows
-        become columns, see :meth:`generate_mul_expression`), so a non-square
-        HLSL ``floatRxC`` becomes ``matCxR`` and ``intRxC`` becomes ``intCxR``.
+        HLSL ``floatRxC`` is CrossGL ``matCxR``, the same matrix (ADR 0004),
+        and the integer ``intRxC`` keeps its spelling. With row-major packing
+        CrossGL holds the transpose of every HLSL matrix (HLSL rows become
+        columns, see :meth:`generate_mul_expression`), so a non-square HLSL
+        ``floatRxC`` becomes ``matRxC`` and ``intRxC`` becomes ``intCxR``.
         """
         mapped = self.map_type_preserving_matrix_shape(hlsl_type)
         if self.matrix_packing != "row_major" or not isinstance(mapped, str):
@@ -5667,11 +5665,9 @@ class HLSLToCrossGLConverter(
             "float16_t": "f16mat",
             "double": "dmat",
         }
-        prefix = prefixes.get(str(scalar_type).strip())
-        if prefix is None:
+        if prefixes.get(str(scalar_type).strip()) is None:
             return None
-        suffix = str(rows) if rows == cols else f"{rows}x{cols}"
-        return f"{prefix}{suffix}"
+        return crossgl_matrix_type_name(str(scalar_type).strip(), rows, cols)
 
     def map_rasterizer_ordered_buffer_type(self, base_type, element_type):
         buffer_type = {
@@ -5838,7 +5834,10 @@ class HLSLToCrossGLConverter(
                         continue
                     suffix = semantic_upper[len(hlsl_prefix) :]
                     if not suffix or suffix.isdigit():
-                        mapped = crossgl_semantic
+                        # The semantic index orders the value in the target's distance array.
+                        mapped = distance_semantic_spelling(
+                            crossgl_semantic, int(suffix or 0)
+                        )
                         break
         mapped = mapped or semantic
         return f"@ {mapped}"

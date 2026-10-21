@@ -24,7 +24,7 @@ body:
     id: target
     attributes:
       label: Target language
-      options: [CrossGL, GLSL, HLSL, Metal, SPIR-V, WGSL, CUDA, HIP, Slang, Rust, Mojo, Other]
+      options: [CrossGL, GLSL, GLSL ES (WebGL), HLSL, Metal, SPIR-V, WGSL, CUDA, HIP, Slang, Rust, Mojo, Other]
     validations:
       required: true
   - type: textarea

@@ -42,6 +42,6 @@ ConstantBuffer<Camera> camera : register(b0);
 // Vertex Shader
 Output VSMain(Input in_) {
     Output out_;
-    out_.viewDir = __crossgl_round_half3(float3(normalize((camera.invViewMatrix[3].xyz - in_.position))));
+    out_.viewDir = __crossgl_round_half3(float3(normalize((camera.invViewMatrix._m03_m13_m23_m33.xyz - in_.position))));
     return out_;
 }

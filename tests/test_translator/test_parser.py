@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 from typing import List
 
@@ -4102,6 +4104,79 @@ def test_unterminated_generic_value_expression_is_rejected():
         parser.parse_type()
 
 
+def test_complete_shader_declaration_still_parses():
+    code = """
+    shader Complete {
+        float identity(float value) { return value; }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert [function.name for function in ast.functions] == ["identity"]
+
+
+@pytest.mark.parametrize(
+    "source,message",
+    [
+        pytest.param(
+            "shader Incomplete { float identity(float value) { return value; }",
+            "Unterminated shader declaration 'Incomplete'",
+            id="shader",
+        ),
+        pytest.param(
+            "shader S { compute { void main() { float x = 1.0; }",
+            "Unterminated compute stage block",
+            id="stage-block",
+        ),
+        pytest.param(
+            "compute { void main() { float x = 1.0; }",
+            "Unterminated compute stage block",
+            id="top-level-stage-block",
+        ),
+        pytest.param(
+            "shader S { compute { void main() { if (true) {",
+            "Unterminated compute stage block",
+            id="function-body",
+        ),
+        pytest.param(
+            "shader S { cbuffer Params { float scale;",
+            "Unterminated cbuffer 'Params'",
+            id="cbuffer",
+        ),
+        pytest.param(
+            "shader S { compute { layout(std430) buffer Data { float values[];",
+            "Unterminated buffer block 'Data'",
+            id="buffer-block",
+        ),
+    ],
+)
+def test_unterminated_declaration_fails_in_bounded_subprocess(source, message):
+    # Keep a regression in a child process so a parser hang cannot stall pytest.
+    script = (
+        "import sys\n"
+        "from crosstl.translator.lexer import Lexer\n"
+        "from crosstl.translator.parser import Parser\n"
+        "try:\n"
+        "    Parser(Lexer(sys.stdin.read()).tokens).parse()\n"
+        "except SyntaxError as exc:\n"
+        "    print(exc)\n"
+        "else:\n"
+        "    raise SystemExit('expected SyntaxError for unterminated input')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=source,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert message in result.stdout
+
+
 def test_nested_generic_type_close_does_not_eat_shift_operator():
     code = """
     shader NestedGenericClosers {
@@ -4198,6 +4273,42 @@ def test_hlsl_parameter_qualifiers_parse():
     assert patch_param.param_type.name == "OutputPatch"
     assert patch_param.param_type.generic_args[0].name == "GSOutput"
     assert patch_param.param_type.generic_args[1].value == 3
+
+
+def test_struct_named_like_a_primitive_qualifier_is_a_type():
+    """Primitive qualifiers are lower-case keywords; ``Triangle`` and ``Point`` stay user type names."""
+    code = """
+    shader UserPrimitiveTypes {
+        struct Triangle {
+            vec3 normal;
+        };
+
+        struct Point {
+            vec3 position;
+        };
+
+        Triangle unpack(uint index, int vertexSize) {
+            Triangle tri;
+            tri.normal = vec3(float(index + uint(vertexSize)));
+            return tri;
+        }
+
+        Point lift(Point point, triangle Triangle prims[3]) {
+            return point;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    unpack, lift = ast.functions
+    assert unpack.name == "unpack"
+    assert unpack.return_type.name == "Triangle"
+    assert [param.name for param in unpack.parameters] == ["index", "vertexSize"]
+    point_param, prims_param = lift.parameters
+    assert point_param.qualifiers == []
+    assert point_param.param_type.name == "Point"
+    assert prims_param.qualifiers == ["triangle"]
+    assert prims_param.param_type.element_type.name == "Triangle"
 
 
 def test_backend_parameter_address_and_access_qualifiers_parse():
@@ -4837,11 +4948,12 @@ def test_matrix_type_keywords_parse():
     ast = parse_code(tokens)
     statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
 
+    # CrossGL follows GLSL: matCxR has C columns and R rows.
     affine = statements[0]
     assert isinstance(affine.var_type, MatrixType)
     assert affine.var_type.element_type.name == "float"
-    assert affine.var_type.rows == 3
-    assert affine.var_type.cols == 4
+    assert affine.var_type.cols == 3
+    assert affine.var_type.rows == 4
 
     precise = statements[1]
     assert isinstance(precise.var_type, MatrixType)
@@ -4854,8 +4966,8 @@ def test_matrix_type_keywords_parse():
     jacobian = statements[2]
     assert isinstance(jacobian.var_type, MatrixType)
     assert jacobian.var_type.element_type.name == "double"
-    assert jacobian.var_type.rows == 4
-    assert jacobian.var_type.cols == 3
+    assert jacobian.var_type.cols == 4
+    assert jacobian.var_type.rows == 3
 
 
 def test_sampler_type_keywords_parse():

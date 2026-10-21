@@ -8,8 +8,9 @@ functions of resource and object types are left out.
 
 Generic parameters are made concrete as in the HLSL list: a floating-point or arithmetic ``T`` is ``float``, an
 integer, atomic or unconstrained one ``int``, a logical one ``uint``, and a ``let`` size is 2. A function whose every
-``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V, so a function
-whose ``require`` names no SPIR-V target is rejected in its own probe and stays untested.
+``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V. A function whose
+``require`` names no SPIR-V target but allows HLSL compiles for HLSL instead, which DXC then checks, in the stage
+Direct3D allows it in; any other function stays untested.
 """
 
 from __future__ import annotations
@@ -18,8 +19,17 @@ import re
 from dataclasses import dataclass
 
 from .. import crossgl
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import (
+    OTHER_WIDTHS,
+    VOID,
+    Feature,
+    Param,
+    Signature,
+    Type,
+    raytracing_stage,
+)
 from .common import pick, split
+from .hlsl import stage_of as direct3d_stage
 
 # The scalar each generic constraint is probed with.
 CONSTRAINTS = {
@@ -57,12 +67,23 @@ _SCALARS = {
     "float32_t": "float",
     "double": "double",
     "float64_t": "double",
+    "half": "half",
+    "float16_t": "half",
+    "int16_t": "int16",
+    "uint16_t": "uint16",
+    "int64_t": "int64",
+    "uint64_t": "uint64",
+    "int8_t4_packed": "int8x4_packed",
+    "uint8_t4_packed": "uint8x4_packed",
 }
 _SHORTHAND = re.compile(
-    r"(bool|int|uint|float|double|int32_t|uint32_t|float32_t|float64_t)([1-4])(?:x([1-4]))?"
+    r"(bool|int|uint|float|double|half|int32_t|uint32_t|float32_t|float64_t|float16_t|int16_t|uint16_t|int64_t"
+    r"|uint64_t)([1-4])(?:x([1-4]))?"
 )
 # The targets a ``require`` capability atom such as ``cuda_glsl_hlsl_spirv`` is made of.
 TARGETS = frozenset("cpp cuda glsl hlsl metal spirv wgsl llvm".split())
+# Capability atoms that imply one target without naming it (source/slang/slang-capabilities.capdef).
+_ATOM_TARGETS = {"optix_coopvec": "cuda", "optix_multilevel_traversal": "cuda"}
 _GENERIC_TYPE = re.compile(r"(vector|matrix)\s*<(.*)>")
 _QUALIFIERS = {
     "in": "in",
@@ -397,9 +418,18 @@ def stage(declaration: Declaration) -> str:
     return stages[0] if stages else "compute"
 
 
+def _stage(name: str, declaration: Declaration) -> str:
+    """:func:`stage`, with a ray-tracing function probed in the ray-tracing stage that has it, and DispatchMesh, which
+    launches mesh workgroups, in the task stage."""
+    found = stage(declaration)
+    if found == "mesh" and name == "DispatchMesh":
+        return "task"
+    return raytracing_stage(name) if found == "raytracing" else found
+
+
 def _preference(signature: Signature) -> tuple[bool, bool, int]:
-    """Sort key among overloads: value-returning before ``void``, 32-bit before ``double``, and vectors before
-    scalars before matrices, so a generic function is probed with two-component vectors as in the HLSL list.
+    """Sort key among overloads: value-returning before ``void``, 32-bit before 64-bit or 16-bit, and vectors
+    before scalars before matrices, so a generic function is probed with two-component vectors as in the HLSL list.
     """
     kinds = [signature.result, *(p.type for p in signature.params)]
     shapes = {len(k.shape) for k in kinds if not k.opaque}
@@ -407,22 +437,23 @@ def _preference(signature: Signature) -> tuple[bool, bool, int]:
     return (
         signature.result == VOID
         and any(p.direction == "out" for p in signature.params),
-        any(k.scalar == "double" for k in kinds),
+        any(k.scalar in OTHER_WIDTHS for k in kinds),
         rank,
     )
 
 
-def spirv_target(declaration: Declaration) -> bool:
-    """Whether some ``require`` alternative allows SPIR-V; one that names no target allows every target."""
+def allows(declaration: Declaration, target: str) -> bool:
+    """Whether some ``require`` alternative allows ``target``; one that names no target allows every target."""
     clauses = re.findall(r"require\s*\(([^)]*)\)", declaration.requires)
     for clause in clauses or [""]:
+        atoms = [_ATOM_TARGETS.get(atom, atom) for atom in re.findall(r"\w+", clause)]
         targets = {
             part
-            for atom in re.findall(r"\w+", clause)
+            for atom in atoms
             if set(atom.split("_")) <= TARGETS
             for part in atom.split("_")
         }
-        if not targets or "spirv" in targets:
+        if not targets or target in targets:
             return True
     return False
 
@@ -465,8 +496,12 @@ def parse(
     for name, declared in sorted(overloads.items()):
         candidates = [(s, d) for s, d in ((signature(d), d) for _, d in declared) if s]
         note = "" if candidates else "variadic"
-        if not any(spirv_target(d) for _, d in declared):
-            candidates, note = [], "needs a target other than SPIR-V"
+        target, stage = "", _stage(name, declared[0][1])
+        if not any(allows(d, "spirv") for _, d in declared):
+            candidates = [(s, d) for s, d in candidates if allows(d, "hlsl")]
+            target, stage = "hlsl", direct3d_stage(name) or stage
+            if not any(allows(d, "hlsl") for _, d in declared):
+                note = "needs a target other than SPIR-V and HLSL"
         chosen = None
         if candidates:
             chosen = pick(sorted((s for s, _ in candidates), key=_preference))
@@ -479,9 +514,10 @@ def parse(
                 chosen,
                 group=declared[0][0],
                 crossgl=crossgl.spelling("slang", name, glsl_names),
-                stage=stage(declared[0][1]),
+                stage=stage,
                 note=note,
                 spelling=explicit(source, chosen) if chosen else "",
+                target=target if chosen else "",
             )
         )
     return features

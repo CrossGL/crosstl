@@ -56,7 +56,10 @@ from ..math_namespaces import (
     METAL_MATH_NAMESPACE_ANNOTATION,
     METAL_PRECISE_MATH_FUNCTIONS,
 )
+from ..matrix_shape import length_method_object
 from ..resource_identity import resource_identity_marker
+from ..semantics.array_layers import metal_sampled_array_layer
+from ..semantics.sampler_states import is_sampler_constructor
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..structure_conversions import (
@@ -262,6 +265,7 @@ from .image_access_contracts import (
     numeric_scalar_type_kind,
     operation_argument_type_error,
     operation_dimension_argument_error,
+    projected_texture_compare_reference,
     projected_texture_extra_argument_count_error,
     projected_texture_offset_capability_error,
     record_explicit_image_metadata,
@@ -336,6 +340,12 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .metal_array_copies import (
+    generate_metal_array_copy,
+    generate_metal_array_initializer,
+    render_metal_split_member_constructor_arguments,
+)
+from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_hlsl_functions import MetalHlslFunctionMixin
 from .metal_hlsl_matrix import (
     hlsl_emulated_matrix_shape,
@@ -344,6 +354,7 @@ from .metal_hlsl_matrix import (
 )
 from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
+from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_refusals import metal_refusals
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .operator_spellings import map_c_family_operator
@@ -357,6 +368,7 @@ from .pointer_reinterpret import (
 )
 from .relational_builtins import lower_relational_builtins, metal_logical_not_operand
 from .resource_arrays import collect_resource_array_size_hints
+from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -371,6 +383,10 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_layout_entry_value,
     stage_matches,
+)
+from .texture_lod_clamp import (
+    is_texture_lod_clamp_operation,
+    metal_texture_lod_clamp_call,
 )
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
@@ -894,6 +910,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.metal_lowered_program_scope_groupshared_global_ids = set()
         self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
+        self.program_scope_sampler_constants = set()
         self.metal_type_aliases = {}
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
@@ -977,6 +994,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
         self.required_metal_inverse_helpers = set()
+        self.metal_matrix_builtins = MetalMatrixBuiltins(self)
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
@@ -1294,13 +1312,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "mat3": "float3x3",
             "mat4": "float4x4",
             "mat2x2": "float2x2",
-            "mat2x3": "float3x2",
-            "mat2x4": "float4x2",
-            "mat3x2": "float2x3",
+            "mat2x3": "float2x3",
+            "mat2x4": "float2x4",
+            "mat3x2": "float3x2",
             "mat3x3": "float3x3",
-            "mat3x4": "float4x3",
-            "mat4x2": "float2x4",
-            "mat4x3": "float3x4",
+            "mat3x4": "float3x4",
+            "mat4x2": "float4x2",
+            "mat4x3": "float4x3",
             "mat4x4": "float4x4",
             "half2x2": "half2x2",
             "half2x3": "half2x3",
@@ -1315,13 +1333,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "f16mat3": "half3x3",
             "f16mat4": "half4x4",
             "f16mat2x2": "half2x2",
-            "f16mat2x3": "half3x2",
-            "f16mat2x4": "half4x2",
-            "f16mat3x2": "half2x3",
+            "f16mat2x3": "half2x3",
+            "f16mat2x4": "half2x4",
+            "f16mat3x2": "half3x2",
             "f16mat3x3": "half3x3",
-            "f16mat3x4": "half4x3",
-            "f16mat4x2": "half2x4",
-            "f16mat4x3": "half3x4",
+            "f16mat3x4": "half3x4",
+            "f16mat4x2": "half4x2",
+            "f16mat4x3": "half4x3",
             "f16mat4x4": "half4x4",
             "simd_float2x2": "float2x2",
             "simd_float2x3": "float2x3",
@@ -1418,6 +1436,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "gl_ClipDistance": "clip_distance",
             "gl_Layer": "render_target_array_index",
             "gl_ViewportIndex": "viewport_array_index",
+            # Vertex amplification is Metal's multiview (MSL 2.2 section 5.2.3.1).
+            "gl_ViewIndex": "amplification_id",
             # Fragment inputs
             "gl_FragColor": "[[color(0)]]",
             "gl_FragColor0": "[[color(0)]]",
@@ -1907,6 +1927,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
     def render_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
+        ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
@@ -1937,6 +1958,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.metal_lowered_program_scope_groupshared_global_ids = set()
         self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
+        self.program_scope_sampler_constants = set()
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -2053,6 +2075,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.required_image_atomic_compare_helpers = set()
         self.required_pointer_atomic_compare_helpers = set()
         self.required_metal_inverse_helpers = set()
+        self.metal_matrix_builtins = MetalMatrixBuiltins(self)
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
@@ -2266,6 +2289,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
         self.required_metal_inverse_helpers = set()
+        self.metal_matrix_builtins = MetalMatrixBuiltins(self)
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
@@ -3118,6 +3142,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_metal_inverse_helpers()
+        code += self.metal_matrix_builtins.code()
         code += self.generate_metal_integer_dot_helper()
         code += functions_code
         if self.metal_emulated_matrix_shapes:
@@ -3256,6 +3281,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
                 mapped_type = "float"
             declaration = format_c_style_array_declaration(mapped_type, name)
+            if mapped_type == "sampler":
+                # Program-scope fixed sampler state; texture calls take it as
+                # their explicit sampler argument.
+                self.program_scope_sampler_constants.add(name)
             code += (
                 f"{self.metal_unused_declaration_qualifier('constant')} "
                 f"{declaration} = {value_code};\n"
@@ -4302,6 +4331,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
     def generate_struct_constructor_argument(self, expr, field_type):
         """Convert promoted narrow values back to the aggregate's physical field type."""
+        array_initializer = generate_metal_array_initializer(self, expr, field_type)
+        if array_initializer is not None:
+            return array_initializer
         raw_type = self.resolve_metal_type_alias(self.type_name_string(field_type))
         base_type, array_suffix = split_array_type_suffix(raw_type)
         native = self.metal_native_narrow_bitcast_storage_type(base_type)
@@ -4346,12 +4378,19 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return None
 
         fields = list(self.struct_member_types[constructor_name].items())
-        rendered_args = render_constructor_arguments(
+        rendered_args = render_metal_split_member_constructor_arguments(
             self,
-            constructor_name,
             expr,
             fields,
+            self.metal_stage_io_member_lowerings.get(constructor_name, {}),
         )
+        if rendered_args is None:
+            rendered_args = render_constructor_arguments(
+                self,
+                constructor_name,
+                expr,
+                fields,
+            )
         return format_struct_constructor_expression(
             self,
             self.map_type(constructor_name),
@@ -6254,7 +6293,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def metal_graphics_builtin_expression_name(self, name):
         if name is None or name in self.local_variable_types:
             return name
-        return self.current_metal_graphics_builtin_parameter_names.get(name, name)
+        parameter = self.current_metal_graphics_builtin_parameter_names.get(name, name)
+        if name == "gl_ViewIndex" and parameter != name:
+            # GLSL's view index is an int; Metal's amplification_id is a uint.
+            return f"int({parameter})"
+        return parameter
 
     def metal_builtin_expression_name(self, name):
         graphics_name = self.metal_graphics_builtin_expression_name(name)
@@ -6277,6 +6320,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return None
         if name == "gl_VertexIndex":
             return "uint"
+        if name == "gl_ViewIndex":
+            return "int"
         if name == "gl_FragCoord":
             return "float4"
         return None
@@ -6588,6 +6633,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def metal_vertex_builtin_parameter_specs(self):
         return [
             ("gl_VertexIndex", "uint", "vertex_id"),
+            ("gl_ViewIndex", "uint", "amplification_id"),
         ]
 
     def metal_fragment_builtin_parameter_specs(self):
@@ -6627,13 +6673,21 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         ) in self.metal_vertex_builtin_parameter_specs():
             if builtin_name not in used_names or attribute in explicit_stage_builtins:
                 continue
-            name = self.unique_metal_generated_name("_crossglVertexID", reserved_names)
+            base_name = {"gl_ViewIndex": "_crossglViewIndex"}.get(
+                builtin_name, "_crossglVertexID"
+            )
+            name = self.unique_metal_generated_name(base_name, reserved_names)
             reserved_names.add(name)
             required_parameters.append((builtin_name, name, param_type, attribute))
         return required_parameters
 
     def used_metal_vertex_builtin_names(self, body):
-        builtin_names = {"gl_VertexIndex"}
+        builtin_names = {
+            builtin
+            for builtin, _type, _attribute in (
+                self.metal_vertex_builtin_parameter_specs()
+            )
+        }
         used_names = set()
         for node in self.iter_ast_nodes(body):
             class_name = node.__class__.__name__
@@ -6728,6 +6782,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "front_facing": "bool",
             "render_target_array_index": "uint",
             "viewport_array_index": "uint",
+            "amplification_id": "uint",
             "position": "float4",
             "point_coord": "float2",
             "sample_id": "uint",
@@ -6970,8 +7025,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             attribute = parameter.get("attribute")
             attribute_index = self.metal_attribute_index_from_attribute(attribute)
             if (
-                attribute_index is None
-                and not parameter.get("preserve_user_attribute")
+                attribute_index is None and not parameter.get("preserve_user_attribute")
             ) and (
                 attribute is None
                 or not attribute.strip()
@@ -7070,7 +7124,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     f"'{metal_semantic}' and is not supported"
                 )
             actual_type = self.map_type(self.struct_member_raw_type(member))
-            if actual_type != expected_type:
+            # A half-precision color attachment value is the same four-component
+            # output; [[color(n)]] accepts half vectors (MSL 3.2 section 5.2.3.4).
+            half_color = metal_semantic.startswith("color(") and actual_type == "half4"
+            if actual_type != expected_type and not half_color:
                 struct_name = getattr(struct_node, "name", "<anonymous>")
                 member_name = getattr(member, "name", "<anonymous>")
                 raise ValueError(
@@ -7087,6 +7144,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "front_facing": "bool",
             "render_target_array_index": "uint",
             "viewport_array_index": "uint",
+            "amplification_id": "uint",
             "position": "float4",
             "point_coord": "float2",
             "point_size": "float",
@@ -7762,6 +7820,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
     def collect_cbuffer_member_references(self, cbuffers):
         references = {}
+        self.metal_cbuffer_member_types = {}
         ambiguous_members = collect_duplicate_cbuffer_member_names(cbuffers)
         layout_plans = getattr(self, "metal_hlsl_cbuffer_plans", {}) or {}
         for cbuffer in cbuffers:
@@ -7780,6 +7839,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 ):
                     reference = f"{layout_member.read_conversion}({reference})"
                 references[member_name] = reference
+                member_type = (
+                    getattr(member, "member_type", None)
+                    or getattr(member, "vtype", None)
+                    or getattr(member, "var_type", None)
+                )
+                if member_type is not None:
+                    self.metal_cbuffer_member_types[member_name] = (
+                        self.type_name_string(member_type)
+                    )
         self.ambiguous_cbuffer_members = ambiguous_members
         return references
 
@@ -7952,6 +8020,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     if address_space_mismatch is not None
                     else ""
                 )
+                if value_array_type is None:
+                    init_expr = (
+                        generate_metal_array_initializer(self, initial_value, var_type)
+                        or init_expr
+                    )
                 return f"{diagnostic_prefix}{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"
@@ -9743,6 +9816,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 self.local_variable_types.get(expr.name)
                 or self.metal_program_scope_value_global_types.get(expr.name)
                 or self.metal_global_resource_value_type(expr.name)
+                or getattr(self, "metal_cbuffer_member_types", {}).get(expr.name)
             )
         if isinstance(expr, (VariableNode, BackendVariableNode)):
             name = getattr(expr, "name", None)
@@ -9756,6 +9830,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 self.local_variable_types.get(name)
                 or self.metal_program_scope_value_global_types.get(name)
                 or self.metal_global_resource_value_type(name)
+                or getattr(self, "metal_cbuffer_member_types", {}).get(name)
             )
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
@@ -9883,6 +9958,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 if native is not None and native[-1:] in {"2", "3", "4"}:
                     return native[:-1]
                 return self.vector_component_type(array_type)
+            matrix_dimensions = self.metal_matrix_dimensions(
+                self.type_name_string(array_type) or ""
+            )
+            if matrix_dimensions is not None:
+                # An MSL floatCxR subscript is a column of R components, as in CrossGL.
+                return f"{matrix_dimensions[0]}{matrix_dimensions[2]}"
             component_type = component_access_type(
                 self.type_name_string(array_type), C_FAMILY
             )
@@ -10482,6 +10563,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             converted = self.metal_registered_structure_assignment(target, value)
             if converted is not None:
                 rhs = converted
+            array_copy = generate_metal_array_copy(self, target, value)
+            if array_copy is not None:
+                return array_copy
 
         reference_declaration = self.generate_local_reference_assignment_declaration(
             target, value, rhs
@@ -11375,6 +11459,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 metal_type = self.map_type(constructor_type)
                 matrix_resize = self.generate_metal_matrix_resize_constructor(
                     metal_type, getattr(expr, "arguments", [])
+                ) or self.metal_matrix_builtins.component_constructor(
+                    metal_type, getattr(expr, "arguments", [])
                 )
                 if matrix_resize is not None:
                     return matrix_resize
@@ -11463,6 +11549,17 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             block_length = self.glsl_buffer_block_length_call(func_expr, expr.args)
             if block_length is not None:
                 return block_length
+            length_object = length_method_object(func_expr, expr.args)
+            matrix_dimensions = (
+                self.metal_matrix_dimensions(
+                    self.expression_result_type(length_object) or ""
+                )
+                if length_object is not None
+                else None
+            )
+            if matrix_dimensions is not None:
+                # A matrix's length() is its column count (GLSL 4.60 section 5.10).
+                return f"int({matrix_dimensions[1]})"
 
             unsupported_table_call = (
                 self.unsupported_metal_ray_function_table_array_member_call(func_expr)
@@ -11559,11 +11656,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             if mesh_output_call is not None:
                 return mesh_output_call
 
-            min_lod_clamp_call = self.generate_texture_min_lod_clamp_call(
-                func_name, expr.args
-            )
-            if min_lod_clamp_call is not None:
-                return min_lod_clamp_call
+            if is_texture_lod_clamp_operation(func_name):
+                return metal_texture_lod_clamp_call(self, func_name, expr.args, expr)
 
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
@@ -11589,6 +11683,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     else "normalize"
                 )
                 return f"{call_name}({args})"
+            matrix_builtin = self.metal_matrix_builtins.call(func_name, expr.args)
+            if matrix_builtin is not None:
+                return matrix_builtin
             if (
                 func_name == "inverse"
                 and len(expr.args) == 1
@@ -11995,6 +12092,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             ):
                 metal_type = self.map_type(func_name)
                 matrix_resize = self.generate_metal_matrix_resize_constructor(
+                    metal_type, expr.args
+                ) or self.metal_matrix_builtins.component_constructor(
                     metal_type, expr.args
                 )
                 if matrix_resize is not None:
@@ -14111,6 +14210,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return
 
         members = self.metal_intersection_result_members(raw_return_type)
+        if members is None and mapped_return_type == "void":
+            # GL_EXT_ray_tracing and SPIR-V intersection shaders report hits
+            # through calls; a Metal intersection function returns its result.
+            self.refuse_lowering(
+                f"{primitive_type} intersection stage: a void entry that reports "
+                "hits with ReportHit has no lowering to a Metal intersection "
+                "function result yet"
+            )
+            return
         if members is None:
             if primitive_type == "triangle":
                 raise ValueError(
@@ -18265,6 +18373,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def metal_struct_member_effective_semantic(
         self, member, default_member_semantics, struct_name=None
     ):
+        if struct_name in self.metal_fragment_entry_output_struct_names:
+            color = metal_fragment_output_color_semantic(self, member)
+            if color is not None:
+                return color
         semantic = self.semantic_from_node(member)
         if (
             struct_name in self.metal_union_layouts
@@ -18298,6 +18410,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if canonical.startswith("color(") or canonical.startswith("depth("):
             return False
         return canonical not in {
+            "amplification_id",
             "barycentric_coord",
             "clip_distance",
             "front_facing",
@@ -23773,6 +23886,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         )
         if sampler_name in self.sampler_variable_names():
             return True
+        if sampler_name in self.program_scope_sampler_constants or (
+            is_sampler_constructor(args[1])
+        ):
+            return True
         arg_type = self.expression_result_type(args[1])
         return arg_type is not None and self.is_sampler_type(arg_type)
 
@@ -24731,19 +24848,19 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
     def array_texture_coordinate_parts(self, coord):
         coord_xy = self.vector_component(coord, "xy")
-        layer = f"uint({self.vector_component(coord, 'z')})"
+        layer = metal_sampled_array_layer(self.vector_component(coord, "z"))
         return coord_xy, layer
 
     def cube_array_texture_coordinate_parts(self, coord):
         coord_xyz = self.vector_component(coord, "xyz")
-        layer = f"uint({self.vector_component(coord, 'w')})"
+        layer = metal_sampled_array_layer(self.vector_component(coord, "w"))
         return coord_xyz, layer
 
     def texture_coordinate_parts(self, texture_type, coord):
         texture_type = self.resource_base_type(texture_type)
         if texture_type.startswith("texture1d_array<"):
             coord_x = self.vector_component(coord, "x")
-            layer = f"uint({self.vector_component(coord, 'y')})"
+            layer = metal_sampled_array_layer(self.vector_component(coord, "y"))
             return coord_x, layer
         if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
             return self.cube_array_texture_coordinate_parts(coord)
@@ -24804,6 +24921,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         )
         is_depth2d = texture_type.startswith("depth2d<")
         is_depth2d_array = texture_type.startswith("depth2d_array<")
+        # MSL depth textures gather (one depth per texel) and sample with offsets like their colour
+        # counterparts (MSL specification 6.12.6-6.12.9).
+        is_depth = is_depth2d or is_depth2d_array
         return {
             "texture_type": texture_type,
             "gather": (
@@ -24811,9 +24931,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 or is_texture2d_array
                 or is_texturecube
                 or is_texturecube_array
+                or is_depth
+                or texture_type.startswith(("depthcube<", "depthcube_array<"))
             ),
-            "gather_offset": is_texture2d or is_texture2d_array,
-            "sample_offset": is_texture2d or is_texture2d_array or is_texture3d,
+            "gather_offset": is_texture2d or is_texture2d_array or is_depth,
+            "sample_offset": (
+                is_texture2d or is_texture2d_array or is_texture3d or is_depth
+            ),
             "projected_offset": is_texture2d or is_texture2d_array or is_texture3d,
             "compare_offset": is_depth2d or is_depth2d_array,
             "gather_compare_offset": is_depth2d or is_depth2d_array,
@@ -24977,7 +25101,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             f"{self.vector_component(coord, divisor)}"
         )
         if texture_type == "texture2d_array<float>":
-            return f"{projected_coord}, uint({self.vector_component(coord, 'z')})"
+            layer = metal_sampled_array_layer(self.vector_component(coord, "z"))
+            return f"{projected_coord}, {layer}"
         return projected_coord
 
     def projected_texture_offset_supported(self, texture_type):
@@ -25411,14 +25536,65 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return False
         return self.is_depth_texture_resource(
             self.texture_argument_resource_type(args[0])
+        ) and not self.is_plain_depth_read(func_name, args)
+
+    # ``depthcube_array`` is absent: CrossGL's ``texture(t, P, ref)`` on it passes the reference after a full
+    # coordinate (GLSL's samplerCubeArrayShadow overload), so the coordinate size cannot tell a plain read.
+    DEPTH_SAMPLE_COORDINATE_SIZES = {
+        "depth2d<": 2,
+        "depth2d_array<": 3,
+        "depthcube<": 3,
+    }
+    PLAIN_DEPTH_READ_OPERATIONS = frozenset(
+        {
+            "texture",
+            "textureLod",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGrad",
+            "textureGradOffset",
+            "texelFetch",
+            "texelFetchOffset",
+        }
+    )
+
+    def is_plain_depth_read(self, func_name, args):
+        """Whether a sample or fetch reads a depth texture's value rather than comparing against it.
+
+        A coordinate with exactly the texture's sampling dimensions carries no packed reference (GLSL's
+        ``texture(sampler2DShadow, vec3)`` packs one in ``.z``), and fetches never compare. MSL returns the depth
+        as a scalar where HLSL and GLSL return ``(d, 0, 0, 1)``.
+        """
+        if func_name not in self.PLAIN_DEPTH_READ_OPERATIONS or len(args) < 2:
+            return False
+        texture_type = self.resource_base_type(
+            self.texture_argument_resource_type(args[0])
         )
+        if not self.is_depth_texture_resource(texture_type):
+            return False
+        if func_name.startswith("texelFetch"):
+            return True
+        size = next(
+            (
+                count
+                for prefix, count in self.DEPTH_SAMPLE_COORDINATE_SIZES.items()
+                if texture_type.startswith(prefix)
+            ),
+            None,
+        )
+        coord_index = 2 if self.texture_call_uses_explicit_sampler(args) else 1
+        if size is None or len(args) <= coord_index:
+            return False
+        if func_name.startswith("textureGrad"):
+            return True
+        return self.expression_component_count(args[coord_index]) == size
 
     def packed_shadow_compare_coord_args(self, texture_type, coord):
         texture_type = self.resource_base_type(texture_type)
         if texture_type.startswith("depth2d_array<"):
             return [
                 self.vector_component(coord, "xy"),
-                f"uint({self.vector_component(coord, 'z')})",
+                metal_sampled_array_layer(self.vector_component(coord, "z")),
             ], self.vector_component(coord, "w")
         if texture_type.startswith("depth2d<"):
             return [self.vector_component(coord, "xy")], self.vector_component(
@@ -25427,7 +25603,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if texture_type.startswith("depthcube_array<"):
             return [
                 self.vector_component(coord, "xyz"),
-                f"uint({self.vector_component(coord, 'w')})",
+                metal_sampled_array_layer(self.vector_component(coord, "w")),
             ], None
         if texture_type.startswith("depthcube<"):
             return [self.vector_component(coord, "xyz")], self.vector_component(
@@ -25528,7 +25704,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         args = [sampler_arg] + coord_args + [compare] + sample_options + trailing_args
         return f"{texture_name}.sample_compare({', '.join(args)})"
 
-    def texture_compare_projected_coord_args(self, texture_type, coord_arg, coord):
+    def texture_compare_projected_coord_args(
+        self, texture_type, coord_arg, coord, compare
+    ):
+        """The ``sample_compare`` coordinate arguments then the reference, divided by ``q``; else ``None``."""
         texture_type = self.resource_base_type(texture_type)
         coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
 
@@ -25539,28 +25718,24 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 divisor = self.vector_component(coord, "w")
             else:
                 return None
-            return [f"{self.vector_component(coord, 'xy')} / {divisor}"]
-
-        if texture_type == "depthcube<float>":
+            coord_args = [f"{self.vector_component(coord, 'xy')} / {divisor}"]
+        elif texture_type == "depthcube<float>":
             if coord_type not in {"vec4", "float4"}:
                 return None
-            return [
-                f"{self.vector_component(coord, 'xyz')} / "
-                f"{self.vector_component(coord, 'w')}"
-            ]
-
-        if texture_type != "depth2d_array<float>" or coord_type not in {
+            divisor = self.vector_component(coord, "w")
+            coord_args = [f"{self.vector_component(coord, 'xyz')} / {divisor}"]
+        elif texture_type == "depth2d_array<float>" and coord_type in {
             "vec4",
             "float4",
         }:
+            divisor = self.vector_component(coord, "w")
+            coord_args = [
+                f"{self.vector_component(coord, 'xy')} / {divisor}",
+                metal_sampled_array_layer(self.vector_component(coord, "z")),
+            ]
+        else:
             return None
-
-        projected_coord = (
-            f"{self.vector_component(coord, 'xy')} / "
-            f"{self.vector_component(coord, 'w')}"
-        )
-        layer = f"uint({self.vector_component(coord, 'z')})"
-        return [projected_coord, layer]
+        return coord_args + [projected_texture_compare_reference(compare, divisor)]
 
     def generate_texture_compare_call(
         self,
@@ -25587,13 +25762,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             coord_index = 2 if self.is_explicit_sampler_argument(args or []) else 1
             coord_arg = (args or [None, None])[coord_index]
             coord_args = self.texture_compare_projected_coord_args(
-                texture_type, coord_arg, coord
+                texture_type, coord_arg, coord, compare
             )
             if coord_args is None:
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_projected_coordinate_error("Metal")
                 )
-            projected_args = [sampler_arg] + coord_args + [compare]
+            projected_args = [sampler_arg] + coord_args
 
             if is_texture_compare_basic_operation(func_name):
                 count_error = texture_compare_extra_argument_count_error(
@@ -26660,6 +26835,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return None
 
     def generate_texture_call(self, func_name, args):
+        expression = self.generate_texture_call_value(func_name, args)
+        if expression is not None and self.is_plain_depth_read(func_name, args):
+            # An MSL depth read is a scalar; HLSL and GLSL read a depth texel as (d, 0, 0, 1).
+            return f"float4({expression}, 0.0, 0.0, 1.0)"
+        return expression
+
+    def generate_texture_call_value(self, func_name, args):
         if not func_name:
             return None
 
@@ -26710,13 +26892,17 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if storage_image_operation is not None:
             return storage_image_operation
 
-        packed_shadow_call = self.generate_packed_shadow_texture_sample_call(
-            func_name,
-            texture_name,
-            sampler_arg,
-            coord,
-            extra_args,
-            texture_type,
+        packed_shadow_call = (
+            self.generate_packed_shadow_texture_sample_call(
+                func_name,
+                texture_name,
+                sampler_arg,
+                coord,
+                extra_args,
+                texture_type,
+            )
+            if not self.is_plain_depth_read(func_name, args)
+            else None
         )
         if packed_shadow_call is not None:
             return packed_shadow_call
@@ -26863,7 +27049,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     )
                 offset = self.generate_expression(args[3])
                 if is_array_texture:
-                    texel_coord, layer = self.texture_coordinate_parts(
+                    texel_coord, layer, _ = self.texture_read_coordinate_components(
                         texture_type, coord
                     )
                     return (
@@ -26891,34 +27077,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return f"{texture_name}.read({offset_coord}, {lod})"
 
         return None
-
-    def generate_texture_min_lod_clamp_call(self, func_name, args):
-        if func_name not in {"textureMinLodClamp", "textureMinLodClampOffset"}:
-            return None
-
-        parts = self.texture_call_parts(args)
-        if parts is None:
-            return None
-
-        texture_name, sampler_arg, coord, extra_args = parts
-        expected_extra_args = 2 if func_name == "textureMinLodClampOffset" else 1
-        if len(extra_args) != expected_extra_args:
-            return None
-
-        texture_type = self.texture_argument_resource_type(args[0])
-        sample_args = [sampler_arg]
-        if self.is_array_texture_resource(texture_type):
-            coord_xy, layer = self.texture_coordinate_parts(texture_type, coord)
-            sample_args.extend([coord_xy, layer])
-        else:
-            sample_args.append(coord)
-
-        min_lod = self.generate_expression(extra_args[0])
-        sample_args.append(f"min_lod_clamp({min_lod})")
-        if expected_extra_args == 2:
-            sample_args.append(self.generate_expression(extra_args[1]))
-
-        return f"{texture_name}.sample({', '.join(sample_args)})"
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""

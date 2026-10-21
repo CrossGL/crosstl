@@ -19,7 +19,6 @@ systems-language targets.
    backend-support
    backends/index
    extending
-   doxygen
    adr/index
 
 .. toctree::

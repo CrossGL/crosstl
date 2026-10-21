@@ -143,17 +143,17 @@ def test_matrix_products_accumulate_from_the_first_term(tmp_path):
     # is the CrossGL product rotation * p.
     assert "vec3 q = crosstl_hlsl_mul_mat3_vec3(rotation, p);" in code
     assert "vec3 w = crosstl_hlsl_mul_vec3_mat3(p, rotation);" in code
-    assert "vec2 v2 = crosstl_hlsl_mul_vec3_mat3x2(p, wide);" in code
-    assert "vec3 v3 = crosstl_hlsl_mul_mat3x2_vec2(wide, p.xy);" in code
+    assert "vec2 v2 = crosstl_hlsl_mul_vec3_mat2x3(p, wide);" in code
+    assert "vec3 v3 = crosstl_hlsl_mul_mat2x3_vec2(wide, p.xy);" in code
     assert "mat3 m = crosstl_hlsl_mul_mat3_mat3(rotation, rotation);" in code
     assert "crosstl_hlsl_mul_mat4_vec4(world, vec4(p, 1))" in code
     assert (
         "vec3((((left[0][0] * right.x) + (left[1][0] * right.y)) + "
         "(left[2][0] * right.z)), "
     ) in code
-    # CrossGL mat3x2 has three rows and two columns: GLSL mat2x3.
-    assert "vec3 crosstl_hlsl_mul_mat3x2_vec2(mat2x3 left, vec2 right) {" in code
-    assert "vec2 crosstl_hlsl_mul_vec3_mat3x2(vec3 left, mat2x3 right) {" in code
+    # CrossGL mat2x3 has two columns and three rows, like GLSL mat2x3.
+    assert "vec3 crosstl_hlsl_mul_mat2x3_vec2(mat2x3 left, vec2 right) {" in code
+    assert "vec2 crosstl_hlsl_mul_vec3_mat2x3(vec3 left, mat2x3 right) {" in code
     validate_glsl_if_available(code, tmp_path)
 
 
@@ -194,8 +194,8 @@ def test_matrix_product_helpers_reproduce_hlsl_mul(tmp_path):
     cases = [
         ("mul_mat3_vec3", rotation, p, p @ rotation),
         ("mul_vec3_mat3", p, rotation, rotation @ p),
-        ("mul_vec3_mat3x2", p, wide, wide @ p),
-        ("mul_mat3x2_vec2", wide, p[:2], p[:2] @ wide),
+        ("mul_vec3_mat2x3", p, wide, wide @ p),
+        ("mul_mat2x3_vec2", wide, p[:2], p[:2] @ wide),
     ]
     for name, cgl_left, cgl_right, expected in cases:
         actual = evaluate_helper(
