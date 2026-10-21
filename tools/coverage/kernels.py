@@ -38,6 +38,9 @@ class CUDA(Dialect):
     def out_argument(self, name: str) -> str:
         return f"&{name}"
 
+    def address(self, name: str) -> str:
+        return f"&{name}"
+
     def inout_argument(self) -> str:
         return "&outp[i]"
 

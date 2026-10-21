@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .model import WIDE_INTEGERS
+from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .templates import C_FAMILY, Template
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -141,6 +142,9 @@ class CrossGL(Dialect):
         return "\n".join(lines) + "\n"
 
     def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        stream = parts.get("parameter")
+        if stream:
+            return self._streaming_geometry(stream, buffers, body, parts)
         lines = ["shader Probe {"]
         lines += [f"    {line}" for line in parts.get("prelude", ())]
         lines += ["    geometry {", *(f"        {line}" for line in _POINTS_IN_AND_OUT)]
@@ -150,6 +154,23 @@ class CrossGL(Dialect):
         lines += [f"            {line}" for line in body]
         lines += ["        }", "    }", "}"]
         return "\n".join(lines) + "\n"
+
+    def _streaming_geometry(
+        self, stream: str, buffers: list[Buffer], body: list[str], parts: dict
+    ) -> str:
+        """A geometry stage written as Direct3D writes one, whose entry point takes its input point and the output
+        stream ``obj``."""
+        functions = [
+            f"void main(point vec4 position[1] @ POSITION, inout {stream} obj)",
+            "    @maxvertexcount(1) {",
+            "    uint i = 0u;",
+            f"    {VERTEX} {self.vertex};",
+            f"    {self.vertex}.value = position[0];",
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+        shared = (f"struct {VERTEX} {{", "    vec4 value @ TEXCOORD0;", "}")
+        return self._program("geometry", shared, buffers, functions, parts)
 
     def _program(
         self,
@@ -236,6 +257,13 @@ class CrossGL(Dialect):
             f"groupshared Payload {self.payload} @ taskPayloadSharedEXT;",
         )
         return self._program("task", shared, buffers, functions, parts)
+
+    def absent(self, stage: str) -> str:
+        return "CrossGL has no work-graph node stage" if stage == "node" else ""
+
+    # CrossGL spells Direct3D's hit object as HLSL does.
+    def holding(self, opaque: str) -> str:
+        return OBJECTS[HIT_OBJECT].spelling if opaque == HIT_OBJECT else ""
 
 
 # A geometry stage's input and output primitives, as the CrossGL importers write them.

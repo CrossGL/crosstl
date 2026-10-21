@@ -10,7 +10,7 @@ from tools.coverage.features import (
     spirv,
     wgsl,
 )
-from tools.coverage.model import Param, Signature, Type
+from tools.coverage.model import VOID, Param, Signature, Type
 
 GLSL_EXCERPT = """
 == Common Functions
@@ -172,7 +172,7 @@ def test_glsl_marks_constant_offsets_arrays_and_implicit_lod():
     # An interpolation offset is a float and need not be constant.
     assert features["interpolateAtOffset"].signature.params[1].direction == "in"
     gather = features["textureGatherOffsets"].signature
-    assert gather.params[2].type == Type.other("ivec2[4]")
+    assert gather.params[2] == Param(Type("int", (2,), count=4), "const")
     assert len(gather.params) == 3
     assert features["texture"].stage == "fragment"
     stream = features["EmitStreamVertex"]
@@ -223,7 +223,11 @@ $type1 [[rn]] ddx(in float_like<> x);
 $type1 [[rn]] GetAttributeAtVertex(in numeric<> value, in uint VertexID);
 float<3> [[rn]] WorldRayOrigin();
 void [[]] IgnoreHit();
+uint [[]] GetRemainingRecursionLevels();
+void [[]]   abort();
+void [[]] source_mark();
 void [[]] Barrier(in uint MemoryTypeFlags, in uint SemanticFlags);
+$type1 [[rn]] NonUniformResourceIndex(in any<> index) : nonuniform_resource_index;
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
 uint   [[rn,min_sm=6.10]] GetGroupWaveIndex();
 float_like<4> [[ro]] tex2D(in sampler2d s, in float_like<2> x) : tex2d;
@@ -240,6 +244,14 @@ $match<0, -1> void<4> [[ro]] GatherCmp(in sampler_cmp s, in float<2> x, in float
 $classT [[]] Load(in int<3> x, in int<2> o, out uint_only status) : tex2d_t_load_o_s;
 $classT [[ro]] Load(in int<3> x) : tex2d_t_load;
 $match<0, -1> void<4> [[ro]] GatherRaw(in sampler s, in float<2> x);
+} namespace
+
+namespace Texture2DArrayMethods {
+$classT [[ro]] SampleGrad(in sampler s, in float<3> x, in $match<2, 2> float<2> ddx, in $match<2, 2> float<2> ddy) : tex2d_t_dd_array;
+} namespace
+
+namespace TextureCUBEArrayMethods {
+float_like [[ro]] SampleCmpGrad(in sampler_cmp s, in float<4> x, in float compareValue, in $match<2, 2> float<3> ddx, in $match<2, 2> float<3> ddy) : texcube_t_comp_dd_array;
 } namespace
 
 namespace FeedbackTexture2DMethods {
@@ -264,6 +276,15 @@ namespace NodeOutputMethods {
     bool [[]] IsValid();
 } namespace
 
+namespace FutureObjectMethods {
+    bool [[]] IsValid();
+} namespace
+
+namespace StreamMethods {
+void [[]] Append(in $match<-1, 1> void x) : stream_append;
+void [[]] RestartStrip() : stream_restart;
+} namespace
+
 namespace DxIntrinsics {
     void [[min_sm=6.9]] MaybeReorderThread(in uint CoherenceHint, in uint NumCoherenceHintBitsFromLSB);
 } namespace
@@ -280,6 +301,10 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     assert "VkSubpassInput.SubpassLoad" not in features
     # DXC rejects every call to the shader model 2 and 3 sampling functions.
     assert "tex2D" not in features and "texCUBElod" not in features
+    # Nor does it compile abort or source_mark for any target.
+    assert "abort" not in features and "source_mark" not in features
+    # A work graph's recursion depth exists only in its node shaders.
+    assert features["GetRemainingRecursionLevels"].stage == "node"
     assert features["Texture2D.CalculateLevelOfDetail"].category == "method"
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
@@ -313,6 +338,24 @@ def test_hlsl_methods_take_the_element_type_of_their_object():
     assert features["ByteAddressBuffer.Load"].signature.result == Type("uint")
 
 
+def test_hlsl_matched_types_keep_a_size_the_table_spells_out():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    # Array layers take no gradient: Texture2DArray.SampleGrad has float3 coordinates and float2 gradients.
+    grad = features["Texture2DArray.SampleGrad"].signature
+    assert [p.type for p in grad.params[1:]] == [
+        Type("float", (3,)),
+        Type("float", (2,)),
+        Type("float", (2,)),
+    ]
+    compare = features["TextureCUBEArray.SampleCmpGrad"].signature
+    assert [p.type for p in compare.params[1:]] == [
+        Type("float", (4,)),
+        Type("float"),
+        Type("float", (3,)),
+        Type("float", (3,)),
+    ]
+
+
 def test_hlsl_gather_raw_returns_the_raw_bits_of_a_uint_texture():
     features = by_name(hlsl.parse(HLSL_TABLE))
     assert features["Texture2D.GatherRaw"].signature.result == Type("uint", (4,))
@@ -330,8 +373,18 @@ def test_hlsl_feedback_methods_take_the_texture_they_record():
 
 def test_hlsl_methods_of_types_no_probe_declares_are_untested():
     features = by_name(hlsl.parse(HLSL_TABLE))
-    assert features["NodeOutput.IsValid"].signature is None
-    assert features["NodeOutput.IsValid"].note == "no probe for NodeOutput objects yet"
+    assert features["FutureObject.IsValid"].signature is None
+    assert (
+        features["FutureObject.IsValid"].note == "no probe for FutureObject objects yet"
+    )
+
+
+def test_hlsl_work_graph_objects_are_probed_in_a_node_shader():
+    node_output = by_name(hlsl.parse(HLSL_TABLE))["NodeOutput.IsValid"]
+    assert (node_output.stage, node_output.signature) == (
+        "node",
+        Signature(Type("bool"), ()),
+    )
 
 
 def test_hlsl_hit_object_methods_are_probed_in_a_ray_generation_shader():
@@ -339,6 +392,18 @@ def test_hlsl_hit_object_methods_are_probed_in_a_ray_generation_shader():
     is_miss = features["DxHitObject.IsMiss"]
     assert (is_miss.stage, is_miss.signature.result) == ("ray-generation", Type("bool"))
     assert features["DxHitObject.MakeNop"].stage == "ray-generation"
+    # A static method is called on its type, the others on the object.
+    assert features["DxHitObject.MakeNop"].spelling == "dx::HitObject::MakeNop"
+    assert features["DxHitObject.IsMiss"].spelling == "IsMiss"
+
+
+def test_hlsl_stream_methods_are_probed_in_a_geometry_shader():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    append, restart = features["Stream.Append"], features["Stream.RestartStrip"]
+    assert (append.stage, restart.stage) == ("geometry", "geometry")
+    # Append takes a vertex of the stream's element type: the one the geometry probe fills in.
+    assert append.signature.params == (Param(Type.other("Vertex")),)
+    assert restart.signature == Signature(VOID, ())
 
 
 def test_hlsl_resolves_generic_layouts_and_matched_types():
@@ -357,6 +422,10 @@ def test_hlsl_resolves_generic_layouts_and_matched_types():
     assert vertex.stage == "fragment"
     barrier = features["Barrier"].signature
     assert [p.direction for p in barrier.params] == ["const", "const"]
+    # The table admits any type, but the function marks a resource array index: ``uint`` in the HLSL reference.
+    assert features["NonUniformResourceIndex"].signature == Signature(
+        Type("uint"), (Param(Type("uint"), "in"),)
+    )
 
 
 def test_hlsl_reads_16_bit_scalars():
@@ -379,7 +448,24 @@ def test_hlsl_reads_64_bit_and_packed_8_bit_integers():
     assert unpack.params[0].type == Type("int8x4_packed")
     assert features["pack_u8"].signature.result == Type("uint8x4_packed")
     # The 32-bit overload of a function is probed rather than its 64-bit one.
-    assert features["InterlockedAdd"].signature.params[0].type == Type("int")
+    assert features["InterlockedAdd"].signature.params[0].type == Type("uint")
+
+
+def test_hlsl_atomic_destinations_take_the_unsigned_instance_of_their_operand():
+    table = (
+        "namespace Intrinsics {\n"
+        "void [[]] InterlockedCompareExchange(ref int32_only result, in uint compare, in uint value,"
+        " out any_int32 original);\n"
+        "void [[]] InterlockedMin(ref int32_only result, in any_int32 value) : interlockedmin;\n"
+        "}\n"
+    )
+    features = by_name(hlsl.parse(table))
+    exchange = features["InterlockedCompareExchange"].signature
+    assert [p.type for p in exchange.params] == [Type("uint")] * 4
+    # With no fixed unsigned operand, the signed instance stays.
+    assert [p.type for p in features["InterlockedMin"].signature.params] == [
+        Type("int")
+    ] * 2
 
 
 def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
@@ -401,6 +487,7 @@ def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
             ("closest-hit", "lib"),
             ("miss", "lib"),
             ("callable", "lib"),
+            ("node", "lib"),
         )
     }
 
@@ -534,6 +621,23 @@ def test_metal_reads_the_generated_list():
     )
 
 
+def test_metal_lists_ballots_whose_mask_a_probe_reads(tmp_path):
+    for header in metal.HEADERS:
+        (tmp_path / header).write_text("")
+    (tmp_path / "metal_simdgroup").write_text(
+        "METAL_FUNC simd_vote simd_ballot(bool expr)\n{\n  return simd_vote(0);\n}\n"
+        "METAL_FUNC bool simd_none(simd_vote vote)\n{\n  return false;\n}\n"
+    )
+    lines = metal.generate(tmp_path, "test", "9.9").splitlines()
+    assert "metal_simdgroup simd_ballot simd_vote(bool)" in lines
+    # A probe reads a mask a function returns, but has none to pass.
+    assert "metal_simdgroup simd_none -" in lines
+    ballot = by_name(metal.parse("metal_simdgroup simd_ballot simd_vote(bool)\n"))
+    assert ballot["simd_ballot"].signature == Signature(
+        Type.other("simd_vote"), (Param(Type("bool")),)
+    )
+
+
 METAL_SIMDGROUP_HEADER = """
 template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
 METAL_FUNC T simd_shuffle(T data METAL_MAYBE_UNDEF, ushort simd_lane_id)
@@ -576,6 +680,9 @@ atomic_compare_exchange_weak_explicit(volatile device _atomic<T, S> *object, thr
 {
 }
 METAL_FUNC void atomic_thread_fence(mem_flags flags, memory_order order, thread_scope scope = thread_scope_device) METAL_CONST_ARG(flags)
+METAL_FUNC void prefetch(const device float *p)
+{
+}
 """
 
 
@@ -591,9 +698,15 @@ def test_metal_header_parse_reads_atomic_functions():
         ),
         # Metal declares the atomic max and min without a fetch for 64-bit unsigned integers only.
         ("atomic_max_explicit", "void", ["inout ulong", "ulong", "memory_order"]),
-        # A pointer to anything but an atomic object is not probed.
-        ("atomic_compare_exchange_weak_explicit", "bool", ["inout int", "int*", "int"]),
+        # A pointer to a thread-local value takes the address of a local.
+        (
+            "atomic_compare_exchange_weak_explicit",
+            "bool",
+            ["inout int", "address int", "int"],
+        ),
         ("atomic_thread_fence", "void", ["mem_flags", "memory_order"]),
+        # A pointer to anything else is not probed.
+        ("prefetch", "void", ["float*"]),
     ]
 
 
@@ -647,6 +760,8 @@ __DEVICE__ float fabsf(float __a) { return __nv_fabsf(__a); }
 __DEVICE__ double frexp(double __a, int *__b) { return __nv_frexp(__a, __b); }
 __DEVICE__ float frexpf(float __a, int *__b) { return __nv_frexpf(__a, __b); }
 __DEVICE__ long labs(long __a) { return llabs(__a); }
+__DEVICE__ double powi(double __a, int __b) { return __nv_powi(__a, __b); }
+__DEVICE__ double norm(int __dim, const double *__t) { return __nv_norm(__dim, __t); }
 __DEVICE__ void *memcpy(void *__a, const void *__b, size_t __c) {
   return __builtin_memcpy(__a, __b, __c);
 }
@@ -666,6 +781,8 @@ __DEVICE__ unsigned int __uAtomicAdd_block(unsigned int *__p, unsigned int __v) 
   return __nvvm_atom_cta_add_gen_i((int *)__p, __v);
 }
 __DEVICE__ int __popc(unsigned int __a) { return __nv_popc(__a); }
+__DEVICE__ int __isfinited(double __a) { return __nv_isfinited(__a); }
+__DEVICE__ /* clock_t= */ int clock() { return __nvvm_read_ptx_sreg_clock(); }
 __DEVICE_VOID__ void __threadfence(void) { __nvvm_membar_gl(); }
 """
 
@@ -677,6 +794,7 @@ def test_cuda_reads_device_functions_and_leaves_out_the_rest():
         "__threadfence",
         "atomicAdd",
         "atomicAdd_block",
+        "clock",
         "erf",
         "erff",
         "fabs",
@@ -684,11 +802,19 @@ def test_cuda_reads_device_functions_and_leaves_out_the_rest():
         "frexp",
         "frexpf",
         "labs",
+        "norm",
     ]
     # ``long`` is 64 bits wide on Linux, where nvcc validates the probes.
     assert features["labs"].signature.params[0].type == Type("int64")
     assert features["__threadfence"].group == "intrinsics"
     assert features["fabsf"].group == "math"
+    # The comment before clock's result type is not part of it.
+    assert features["clock"].signature == Signature(Type("int"), ())
+    # A pointer to constant values takes the address of a local.
+    assert features["norm"].signature.params == (
+        Param(Type("int")),
+        Param(Type("double"), "address"),
+    )
 
 
 def test_cuda_atomics_take_the_int_helper_and_bind_the_pointer_inout():
@@ -880,6 +1006,12 @@ void ProcessTriTessFactorsAvg(in float3 RawEdgeFactors, in float InsideScale, ou
 [require(cuda_glsl_hlsl_spirv, raytracing_anyhit_closesthit_intersection_miss)]
 float3 WorldRayOrigin();
 
+[require(cuda_glsl_hlsl_spirv, raytracing_anyhit_closesthit_intersection_miss)]
+float3x4 ObjectToWorld3x4();
+
+/// Alias for ObjectToWorld3x4.
+[NonUniformReturn] float3x4 ObjectToWorld() { return ObjectToWorld3x4(); }
+
 __generic<A>
 [require(glsl_hlsl_spirv, raytracing_intersection)]
 bool ReportHit(float tHit, uint hitKind, A attributes);
@@ -918,6 +1050,8 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
         "GetTraversableChild",
         "InterlockedAdd",
         "InterlockedExchange",
+        "ObjectToWorld",
+        "ObjectToWorld3x4",
         "ProcessTriTessFactorsAvg",
         "ReportHit",
         "WorkgroupCount",
@@ -944,6 +1078,8 @@ def test_slang_stages_targets_and_explicit_generic_arguments():
     assert features["clip"].stage == "fragment"
     assert features["WorldRayOrigin"].stage == "closest-hit"
     assert features["ReportHit"].stage == "intersection"
+    # An alias without a require attribute takes the stage of the Direct3D intrinsic it is named after.
+    assert features["ObjectToWorld"].stage == "closest-hit"
     # One require alternative works in compute, so no other stage is needed.
     assert features["WorkgroupCount"].stage == "compute"
     # SPIR-V lacks it, so it compiles for HLSL, in the hull stage Direct3D allows it in.

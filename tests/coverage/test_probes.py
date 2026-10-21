@@ -176,6 +176,118 @@ def test_raytracing_probes_are_valid(language):
             assert verdict.accepted, verdict.log
 
 
+REMAINING_RECURSION = feature("GetRemainingRecursionLevels", Type("uint"), stage="node")
+
+
+def test_node_features_get_a_broadcasting_node_shader_crossgl_cannot_spell():
+    source = probes.build(REMAINING_RECURSION, "hlsl").source
+    assert '[Shader("node")]\n[NodeLaunch("broadcasting")]' in source
+    assert "    uint r = GetRemainingRecursionLevels();" in source
+    with pytest.raises(probes.NoSpelling, match="no work-graph node stage"):
+        probes.build(REMAINING_RECURSION, "crossgl")
+    with pytest.raises(probes.ProbeError, match="no node-stage probe for glsl"):
+        probes.build(REMAINING_RECURSION, "glsl")
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+def test_node_probes_are_valid_and_a_library_needs_an_entry_of_the_stage():
+    for baseline in (False, True):
+        probe = probes.build(REMAINING_RECURSION, "hlsl", baseline=baseline)
+        verdict = validators.validate("hlsl", probe.source, "node", probe.entry)
+        assert verdict.accepted, verdict.log
+    # DXC compiles a library without entry points, which no pipeline can run.
+    plain = probe.source.replace('[Shader("node")]\n', "")
+    verdict = validators.validate("hlsl", plain, "node", probe.entry)
+    assert not verdict.accepted
+    assert "no node entry point" in verdict.log
+
+
+MAKE_NOP = Feature(
+    "hlsl",
+    "method",
+    "DxHitObject.MakeNop",
+    Signature(Type.other("DxHitObject"), ()),
+    group="DxHitObject",
+    crossgl="MakeNop",
+    spelling="dx::HitObject::MakeNop",
+    stage="ray-generation",
+)
+
+
+def test_a_static_method_returning_a_hit_object_keeps_it_in_a_local():
+    hlsl = probes.build(MAKE_NOP, "hlsl").source
+    assert "    dx::HitObject r = dx::HitObject::MakeNop();" in hlsl
+    crossgl = probes.build(MAKE_NOP, "crossgl").source
+    assert "            dx::HitObject r = obj.MakeNop();" in crossgl
+    if validators.available("hlsl"):
+        verdict = validators.validate("hlsl", hlsl, "ray-generation")
+        assert verdict.accepted, verdict.log
+
+
+def node_method(owner, name, result, *params):
+    return Feature(
+        "hlsl",
+        "method",
+        f"{owner}.{name}",
+        Signature(result, tuple(Param(p) for p in params)),
+        group=owner,
+        crossgl=name,
+        spelling=name,
+        stage="node",
+    )
+
+
+NODE_METHODS = [
+    node_method("NodeOutput", "IsValid", Type("bool")),
+    node_method(
+        "NodeOutput",
+        "GetThreadNodeOutputRecords",
+        Type.other("ThreadNodeOutputRecords"),
+        Type("uint"),
+    ),
+    node_method("EmptyNodeOutput", "ThreadIncrementOutputCount", VOID, Type("uint")),
+    node_method("EmptyNodeInput", "Count", Type("uint")),
+    node_method("GroupNodeInputRecords", "Count", Type("uint")),
+    node_method("RWDispatchNodeInputRecord", "FinishedCrossGroupSharing", Type("bool")),
+    node_method("GroupOrThreadNodeOutputRecords", "OutputComplete", VOID),
+]
+
+
+def test_node_objects_are_entry_parameters_of_their_kind_of_node():
+    is_valid, records, _, empty_input, _, shared, complete = (
+        probes.build(f, "hlsl").source for f in NODE_METHODS
+    )
+    assert "void main([MaxRecords(1)] NodeOutput<Record> obj) {" in is_valid
+    assert '[NodeLaunch("broadcasting")]\n[NodeDispatchGrid(1, 1, 1)]' in is_valid
+    # A call whose records object is dropped crashes DXC, so the probe keeps it.
+    assert (
+        "    ThreadNodeOutputRecords<Record> r = obj.GetThreadNodeOutputRecords(a0);"
+        in (records)
+    )
+    # An input record makes the node a coalescing one, which has no fixed grid.
+    assert '[NodeLaunch("coalescing")]\n[NumThreads(1, 1, 1)]' in empty_input
+    assert "void main([MaxRecords(1)] EmptyNodeInput obj) {" in empty_input
+    assert "struct [NodeTrackRWInputSharing] Record {" in shared
+    assert "globallycoherent RWDispatchNodeInputRecord<Record> obj" in shared
+    assert "void main([MaxRecords(1)] NodeOutput<Record> output) {" in complete
+    assert (
+        "    ThreadNodeOutputRecords<Record> obj = output.GetThreadNodeOutputRecords(1);"
+        in (complete)
+    )
+    for method in NODE_METHODS:
+        with pytest.raises(probes.NoSpelling, match="no work-graph node stage"):
+            probes.build(method, "crossgl")
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+@pytest.mark.parametrize("node_feature", NODE_METHODS, ids=lambda f: f.name)
+@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
+def test_node_object_probes_are_valid(node_feature, baseline):
+    probe = probes.build(node_feature, "hlsl", baseline=baseline)
+    verdict = validators.validate("hlsl", probe.source, "node", probe.entry)
+    assert verdict.accepted, verdict.log
+
+
 EMIT_STREAM_VERTEX = feature(
     "EmitStreamVertex", VOID, Param(Type("int"), "const"), stage="geometry"
 )
@@ -190,8 +302,56 @@ def test_geometry_features_get_a_point_geometry_shader():
     crossgl = probes.build(EMIT_STREAM_VERTEX, "crossgl").source
     assert "    geometry {\n        layout(points) in;" in crossgl
     assert "            EmitStreamVertex(0);" in crossgl
-    with pytest.raises(probes.ProbeError, match="no geometry-stage probe for hlsl"):
-        probes.build(EMIT_STREAM_VERTEX, "hlsl")
+    assert "PointStream" not in crossgl
+
+
+STREAM_APPEND = Feature(
+    "hlsl",
+    "method",
+    "Stream.Append",
+    Signature(VOID, (Param(Type.other("Vertex")),)),
+    group="Stream",
+    crossgl="Append",
+    spelling="Append",
+    stage="geometry",
+)
+STREAM_RESTART = replace(
+    STREAM_APPEND,
+    name="Stream.RestartStrip",
+    signature=Signature(VOID, ()),
+    crossgl="RestartStrip",
+    spelling="RestartStrip",
+)
+
+
+def test_stream_methods_are_called_on_the_geometry_shaders_output_stream():
+    hlsl = probes.build(STREAM_APPEND, "hlsl").source
+    assert (
+        "void main(point float4 position[1] : POSITION, inout PointStream<Vertex> obj) {"
+        in hlsl
+    )
+    assert "    emitted.value = position[0];\n    obj.Append(emitted);" in hlsl
+    crossgl = probes.build(STREAM_APPEND, "crossgl").source
+    assert "    struct Vertex {\n        vec4 value @ TEXCOORD0;\n    }" in crossgl
+    assert (
+        "void main(point vec4 position[1] @ POSITION, inout PointStream<Vertex> obj)"
+        in crossgl
+    )
+    assert "            obj.Append(emitted);" in crossgl
+    assert "layout(points)" not in crossgl
+    # A stream's methods need the stream the entry point takes; nothing else declares it.
+    assert "PointStream<Vertex> obj;" not in crossgl
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+@pytest.mark.parametrize(
+    "probe_feature", [STREAM_APPEND, STREAM_RESTART], ids=lambda f: f.name
+)
+def test_stream_probes_are_valid_hlsl(probe_feature):
+    for baseline in (False, True):
+        probe = probes.build(probe_feature, "hlsl", baseline=baseline)
+        verdict = validators.validate("hlsl", probe.source, "geometry", probe.entry)
+        assert verdict.accepted, verdict.log
 
 
 def test_geometry_probes_are_valid():
@@ -562,6 +722,13 @@ TEXEL_OFFSET = feature(
 ATOMIC_COUNTER = feature(
     "atomicCounterAdd", Type("uint"), Type.other("atomic_uint"), Type("uint")
 )
+GATHER_OFFSETS = feature(
+    "textureGatherOffsets",
+    VEC4,
+    Type.other("sampler2D"),
+    Type("float", (2,)),
+    Param(Type("int", (2,), count=4), "const"),
+)
 
 
 def test_function_probe_declares_the_samplers_and_images_it_passes():
@@ -591,12 +758,26 @@ def test_constant_vector_arguments_are_zero_vectors():
     assert "textureLodOffset(u0, a1, a2, ivec2(0, 0))" in source
 
 
+@pytest.mark.parametrize("language", ["glsl", "crossgl"])
+def test_constant_array_arguments_are_local_constants(language):
+    source = probes.build(GATHER_OFFSETS, language).source
+    zero = "ivec2(0, 0)"
+    assert f"const ivec2 a2[4] = ivec2[4]({', '.join([zero] * 4)});" in source
+    assert "vec4 r = textureGatherOffsets(u0, a1, a2);" in source
+
+
+def test_array_arguments_that_need_not_be_constant_stay_untested():
+    probe = feature("f", Type("float"), Param(Type("float", count=2)), crossgl="f")
+    with pytest.raises(probes.ProbeError, match="array parameters"):
+        probes.build(probe, "glsl")
+
+
 @pytest.mark.skipif(
     not validators.available("glsl"), reason="glslangValidator is not installed"
 )
 @pytest.mark.parametrize(
     "probe_feature",
-    [TEXTURE_LOD, IMAGE_ATOMIC, TEXEL_OFFSET, ATOMIC_COUNTER],
+    [TEXTURE_LOD, IMAGE_ATOMIC, TEXEL_OFFSET, ATOMIC_COUNTER, GATHER_OFFSETS],
     ids=lambda f: f.name,
 )
 def test_glsl_texture_and_image_probes_are_valid_glsl(probe_feature):
@@ -614,8 +795,8 @@ def test_ray_query_is_a_local_variable():
 
 
 def test_method_probe_needs_an_object_it_can_declare():
-    with pytest.raises(probes.ProbeError, match="no probe for NodeOutput objects"):
-        probes.build(method("NodeOutput", "IsValid", Type("bool")), "hlsl")
+    with pytest.raises(probes.ProbeError, match="no probe for FutureObject objects"):
+        probes.build(method("FutureObject", "IsValid", Type("bool")), "hlsl")
     with pytest.raises(probes.ProbeError, match="no probe for metal Texture2D"):
         probes.build(SAMPLE_LEVEL, "metal")
 
@@ -803,6 +984,15 @@ METAL_SIGNATURES = [
         Type.other("void"),
         Param(Type.other("mem_flags"), "const"),
     ),
+    feature(
+        "atomic_compare_exchange_weak",
+        Type("bool"),
+        Param(Type("int"), "inout"),
+        Param(Type("int"), "address"),
+        Type("int"),
+    ),
+    feature("simd_ballot", Type.other("simd_vote"), Type("bool")),
+    feature("quad_active_threads_mask", Type.other("quad_vote")),
     feature("pack_half_to_unorm4x8", Type("uint"), Type("half", (4,))),
     feature("unpack_unorm565_to_half", Type("half", (3,)), Type("uint")),
 ]
@@ -816,6 +1006,48 @@ def test_metal_probes_are_valid_metal(probe_feature):
     probe = probes.build(probe_feature, "metal")
     verdict = validators.validate("metal", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_cuda_and_hip_pass_the_address_of_a_local_for_a_pointer_to_values():
+    norm = Feature(
+        "cuda",
+        "function",
+        "normf",
+        Signature(Type("float"), (Param(Type("int")), Param(Type("float"), "address"))),
+        crossgl="norm",
+    )
+    for language in ("cuda", "hip"):
+        source = probes.build(replace(norm, language=language), language).source
+        assert "    float a1 = fin[i + 0u];" in source
+        assert "    float r = normf(a0, &a1);" in source
+    with pytest.raises(probes.ProbeError, match="no probe passes crossgl a pointer"):
+        probes.build(norm, "crossgl")
+
+
+def test_metal_compare_exchange_takes_the_address_of_the_expected_value():
+    exchange = next(
+        f for f in METAL_SIGNATURES if f.name == "atomic_compare_exchange_weak"
+    )
+    source = probes.build(exchange, "metal").source
+    assert "    int a1 = iin[i + 0u];" in source
+    assert "atomic_compare_exchange_weak(&outp[i], &a1, a2);" in source
+    with pytest.raises(probes.ProbeError, match="no probe passes hlsl a pointer"):
+        probes.build(exchange, "hlsl")
+
+
+def test_metal_ballots_are_read_as_their_vote_integer():
+    ballot = feature("simd_ballot", Type.other("simd_vote"), Type("bool"))
+    source = probes.build(ballot, "metal").source
+    assert "device ulong* outp" in source
+    assert "ulong r = static_cast<simd_vote::vote_t>(simd_ballot(a0));" in source
+    mask = feature("quad_active_threads_mask", Type.other("quad_vote"))
+    source = probes.build(mask, "metal").source
+    assert (
+        "uint r = static_cast<quad_vote::vote_t>(quad_active_threads_mask());" in source
+    )
+    # CrossGL has no mask type to read.
+    with pytest.raises(probes.ProbeError, match="quad_vote"):
+        probes.build(mask, "crossgl")
 
 
 def test_metal_half_arguments_are_read_from_float_buffers():
