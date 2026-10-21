@@ -999,6 +999,12 @@ void ProcessTriTessFactorsAvg(in float3 RawEdgeFactors, in float InsideScale, ou
 [require(cuda_glsl_hlsl_spirv, raytracing_anyhit_closesthit_intersection_miss)]
 float3 WorldRayOrigin();
 
+[require(cuda_glsl_hlsl_spirv, raytracing_anyhit_closesthit_intersection_miss)]
+float3x4 ObjectToWorld3x4();
+
+/// Alias for ObjectToWorld3x4.
+[NonUniformReturn] float3x4 ObjectToWorld() { return ObjectToWorld3x4(); }
+
 __generic<A>
 [require(glsl_hlsl_spirv, raytracing_intersection)]
 bool ReportHit(float tHit, uint hitKind, A attributes);
@@ -1037,6 +1043,8 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
         "GetTraversableChild",
         "InterlockedAdd",
         "InterlockedExchange",
+        "ObjectToWorld",
+        "ObjectToWorld3x4",
         "ProcessTriTessFactorsAvg",
         "ReportHit",
         "WorkgroupCount",
@@ -1063,6 +1071,8 @@ def test_slang_stages_targets_and_explicit_generic_arguments():
     assert features["clip"].stage == "fragment"
     assert features["WorldRayOrigin"].stage == "closest-hit"
     assert features["ReportHit"].stage == "intersection"
+    # An alias without a require attribute takes the stage of the Direct3D intrinsic it is named after.
+    assert features["ObjectToWorld"].stage == "closest-hit"
     # One require alternative works in compute, so no other stage is needed.
     assert features["WorkgroupCount"].stage == "compute"
     # SPIR-V lacks it, so it compiles for HLSL, in the hull stage Direct3D allows it in.
