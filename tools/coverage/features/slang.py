@@ -420,8 +420,12 @@ def stage(declaration: Declaration) -> str:
 
 def _stage(name: str, declaration: Declaration) -> str:
     """:func:`stage`, with a ray-tracing function probed in the ray-tracing stage that has it, and DispatchMesh, which
-    launches mesh workgroups, in the task stage."""
+    launches mesh workgroups, in the task stage. A declaration with no ``require`` attribute, such as the
+    ``ObjectToWorld`` alias of ``ObjectToWorld3x4``, takes the stage of the Direct3D intrinsic of its name.
+    """
     found = stage(declaration)
+    if not re.search(r"require\s*\(", declaration.requires):
+        found = direct3d_stage(name) or found
     if found == "mesh" and name == "DispatchMesh":
         return "task"
     return raytracing_stage(name) if found == "raytracing" else found
