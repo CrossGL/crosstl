@@ -26,6 +26,7 @@ from typing import List, Tuple
 
 from ..ast import ArrayNode, FunctionNode
 from .array_utils import format_c_style_array_declaration
+from .buffer_member_layout import member_explicit_offset, member_is_row_major
 from .hlsl_buffer_layout import (
     CBUFFER_REGISTER_SIZE,
     HLSL_CBUFFER_LAYOUT,
@@ -36,7 +37,8 @@ from .hlsl_buffer_layout import (
     cbuffer_array_stride,
     cbuffer_matrix_vector_stride,
     cbuffer_struct_placements,
-    matrix_type,
+    contains_row_major_matrix,
+    oriented_matrix_type,
     scalar_type,
     struct_type,
     vector_type,
@@ -259,12 +261,13 @@ class GLSLHlslConstantBuffers:
             member_type = getattr(member, "vtype", None)
         return self.type_name_string(member_type)
 
-    def glsl_hlsl_cbuffer_layout_type(self, raw_type, stack=()):
+    def glsl_hlsl_cbuffer_layout_type(self, raw_type, stack=(), row_major=False):
+        """The layout type of ``raw_type``; ``row_major`` orients a matrix (or the matrices of an array)."""
         raw_type = str(raw_type or "").strip()
         array_match = ARRAY_PATTERN.fullmatch(raw_type)
         if array_match is not None:
             element = self.glsl_hlsl_cbuffer_layout_type(
-                array_match.group("element"), stack
+                array_match.group("element"), stack, row_major
             )
             if element.kind == "array":
                 raise HlslLayoutError(
@@ -296,7 +299,7 @@ class GLSLHlslConstantBuffers:
                 scalar = MATRIX_SCALARS[matrix.group("emulated")]
             else:
                 scalar = "double" if matrix.group("double") else "float"
-            return matrix_type(scalar, columns, rows)
+            return oriented_matrix_type(scalar, columns, rows, row_major)
         struct = self.glsl_struct_node(mapped)
         if struct is not None:
             return self.glsl_hlsl_cbuffer_struct_layout_type(mapped, struct, stack)
@@ -313,7 +316,9 @@ class GLSLHlslConstantBuffers:
             if isinstance(member, FunctionNode) or member_name not in member_types:
                 continue
             member_type = self.glsl_hlsl_cbuffer_layout_type(
-                self.type_name_string(member_types[member_name]), (*stack, name)
+                self.type_name_string(member_types[member_name]),
+                (*stack, name),
+                member_is_row_major(member),
             )
             members.append((member_name, member_type))
         return struct_type(name, members)
@@ -346,16 +351,23 @@ class GLSLHlslConstantBuffers:
                         self.glsl_hlsl_cbuffer_layout_type(
                             self.glsl_hlsl_cbuffer_member_raw_type(member),
                             (node.name,),
+                            member_is_row_major(member),
                         ),
                     )
                     for member in members
                 ],
+                [member_explicit_offset(member) for member in members],
             )
             placements, size = cbuffer_struct_placements(layout_type)
             std140_offsets, _std140_size, _alignment = std140_struct_offsets(
                 layout_type
             )
-            if all(
+            # GLSL orients a whole block member, not the members of its struct.
+            nested_orientation = any(
+                member_type.kind != "matrix" and contains_row_major_matrix(member_type)
+                for _name, member_type in layout_type.members
+            )
+            if not nested_orientation and all(
                 hlsl_scalar_offsets(placement.layout_type, placement.offset)
                 == std140_scalar_offsets(placement.layout_type, std140_offset)
                 for placement, std140_offset in zip(placements, std140_offsets)
@@ -431,12 +443,28 @@ class GLSLHlslConstantBuffers:
             stride = cbuffer_matrix_vector_stride(layout_type)
             column_type = vector_type(layout_type.scalar, layout_type.components)
             emulated = layout_type.scalar in ("int", "uint", "bool")
+            columns = f"{target}.c" if emulated else target
+            if layout_type.row_major:
+                # Register ``r`` holds row ``r``: its component ``c`` is element ``[c][r]``.
+                element = scalar_type(layout_type.scalar)
+                for row in range(layout_type.registers):
+                    for column in range(layout_type.components):
+                        value = self.glsl_hlsl_cbuffer_vector_value(
+                            loader,
+                            element,
+                            location.shifted(
+                                row * stride + column * layout_type.scalar_size
+                            ),
+                        )
+                        loader.lines.append(
+                            f"{indent}{columns}[{column}][{row}] = {value};"
+                        )
+                return
             for index in range(layout_type.registers):
-                column = f"{target}.c[{index}]" if emulated else f"{target}[{index}]"
                 value = self.glsl_hlsl_cbuffer_vector_value(
                     loader, column_type, location.shifted(index * stride)
                 )
-                loader.lines.append(f"{indent}{column} = {value};")
+                loader.lines.append(f"{indent}{columns}[{index}] = {value};")
             return
         if kind == "struct":
             placements, _size = cbuffer_struct_placements(layout_type)

@@ -10180,6 +10180,7 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                 semantic_attr = self.map_semantic(semantic)
                 interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
                 precise_prefix = self.hlsl_precise_modifier_prefix(member)
+                precise_prefix += self.hlsl_matrix_orientation_prefix(member)
                 tess_factor_declaration = self.hlsl_tess_factor_member_declaration(
                     declaration_type,
                     member.name,
@@ -10263,6 +10264,7 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             semantic_attr = self.map_semantic(semantic)
             interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
             precise_prefix = self.hlsl_precise_modifier_prefix(member)
+            precise_prefix += self.hlsl_matrix_orientation_prefix(member)
             tess_factor_declaration = self.hlsl_tess_factor_member_declaration(
                 member_type,
                 member.name,
@@ -14860,6 +14862,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_precise_modifier_prefix(self, node):
         return "precise " if self.hlsl_has_precise_modifier(node) else ""
 
+    def hlsl_matrix_orientation_prefix(self, node):
+        """``row_major `` or ``column_major `` for a declaration that sets its matrix orientation."""
+        qualifier = self.hlsl_cbuffer_member_layout_qualifier(node)
+        return f"{qualifier} " if qualifier else ""
+
     def is_hlsl_declaration_metadata_attribute(self, attr):
         metadata = {
             "hlsl_program_constant",
@@ -14873,6 +14880,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "lowp",
             # A declared buffer layout is a layout contract, not a semantic.
             "buffer_layout",
+            # Matrix orientation is a storage qualifier and is emitted as one.
+            "row_major",
+            "column_major",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
         return str(getattr(attr, "name", "")).lower() in metadata

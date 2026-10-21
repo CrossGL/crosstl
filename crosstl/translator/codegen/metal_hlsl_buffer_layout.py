@@ -17,7 +17,12 @@ exact HLSL offsets:
   is stored as its register words, ``struct { T v[...]; }`` with four words
   per register and none after the last vector, so the next member may pack
   into that register as in HLSL; a load helper builds the matrix on reads and
-  a store helper splits it on writes.
+  a store helper splits it on writes;
+* a ``row_major`` matrix holds one row per register. When its rows have four
+  float components they are the columns of a native ``floatRx4``, which is
+  read through ``transpose``; other shapes use register words whose load
+  helper reads the rows;
+* members with ``packoffset`` sit at the bytes it names, in offset order.
 
 A layout that Metal cannot express raises :class:`HlslLayoutError` instead of
 silently reading other bytes.
@@ -34,7 +39,7 @@ from .hlsl_buffer_layout import (
     align_to,
     array_type,
     cbuffer_array_stride,
-    matrix_type,
+    oriented_matrix_type,
     scalar_type,
     struct_placements,
     struct_type,
@@ -137,11 +142,12 @@ class MetalHlslBufferLayouts:
         return "".join(self.matrix_storages[name] for name in names)
 
     # Type descriptions -------------------------------------------------
-    def layout_type(self, raw_type, stack=()):
+    def layout_type(self, raw_type, stack=(), row_major=False):
+        """The layout type of ``raw_type``; ``row_major`` orients a matrix (or the matrices of an array)."""
         raw_type = str(raw_type).strip()
         array_match = re.fullmatch(r"(.+?)\s*\[\s*(\d+)\s*\]", raw_type)
         if array_match is not None:
-            element = self.layout_type(array_match.group(1), stack)
+            element = self.layout_type(array_match.group(1), stack, row_major)
             if element.kind == "array":
                 raise HlslLayoutError(
                     "multidimensional arrays in HLSL buffers are not supported"
@@ -155,11 +161,17 @@ class MetalHlslBufferLayouts:
             _kind, name, members = resolved
             if name in stack:
                 raise HlslLayoutError(f"recursive struct '{name}' in an HLSL buffer")
+            # Members are ``(name, raw_type)`` or ``(name, raw_type, row_major)``.
             return struct_type(
                 name,
                 [
-                    (member_name, self.layout_type(member_type, (*stack, name)))
-                    for member_name, member_type in members
+                    (
+                        member[0],
+                        self.layout_type(
+                            member[1], (*stack, name), len(member) > 2 and member[2]
+                        ),
+                    )
+                    for member in members
                 ],
             )
 
@@ -182,7 +194,7 @@ class MetalHlslBufferLayouts:
             == (matrix_match.group(1) in ("int", "uint", "bool"))
         ):
             scalar, columns, rows = matrix_match.groups()
-            return matrix_type(scalar, int(columns), int(rows))
+            return oriented_matrix_type(scalar, int(columns), int(rows), row_major)
         raise HlslLayoutError(f"type '{raw_type}' has no HLSL buffer layout")
 
     # Struct plans -------------------------------------------------------
@@ -214,6 +226,9 @@ class MetalHlslBufferLayouts:
 
     def plan_members(self, name, layout_type, layout, root=False):
         placements, _hlsl_size = struct_placements(layout_type, layout)
+        # Metal lays a struct out in member order; members placed by packoffset
+        # are declared in the order of their offsets.
+        placements = sorted(placements, key=lambda placement: placement.offset)
         plan = MetalLayoutPlan(name=name, layout=layout)
         cursor = 0
         max_alignment = 1
@@ -365,29 +380,43 @@ class MetalHlslBufferLayouts:
         ``padded`` storage fills the last register too, as array elements do.
         """
         scalar = layout_type.scalar
-        columns, rows = layout_type.registers, layout_type.components
+        registers, components = layout_type.registers, layout_type.components
+        row_major = layout_type.row_major
+        columns, rows = (
+            (components, registers) if row_major else (registers, components)
+        )
         if scalar == "double":
             raise HlslLayoutError("Metal has no double-precision matrices")
-        if scalar == "float" and rows == 4:
-            return f"float{columns}x4", 16 * columns, 16, None, None, None
+        if scalar == "float" and components == 4:
+            # Each register holds a whole float4: a column, or a row of the transpose.
+            native = f"float{registers}x4"
+            conversion = "transpose" if row_major else None
+            return native, 16 * registers, 16, conversion, conversion, None
         name = f"crosstl_hlsl_cbuffer_{scalar}{columns}x{rows}"
+        if row_major:
+            name += "_row_major"
         if padded:
             name += "_padded"
-        words = 4 * columns if padded else 4 * (columns - 1) + rows
+        words = 4 * registers if padded else 4 * (registers - 1) + components
         if name not in self.matrix_storages:
             self.matrix_storages[name] = metal_matrix_storage_definition(
-                name, scalar, columns, rows, words
+                name, scalar, columns, rows, words, row_major
             )
         return name, 4 * words, 4, f"{name}_load", f"{name}_store", None
 
     def plan_cbuffer(self, name, members):
-        """Plan a constant buffer declared with HLSL packing."""
+        """Plan a constant buffer declared with HLSL packing.
+
+        ``members`` are ``(name, raw_type, row_major, offset)``, where ``offset``
+        is the byte offset of a ``packoffset`` qualifier or ``None``.
+        """
         layout_type = struct_type(
             name,
             [
-                (member_name, self.layout_type(member_type, (name,)))
-                for member_name, member_type in members
+                (member_name, self.layout_type(member_type, (name,), row_major))
+                for member_name, member_type, row_major, _offset in members
             ],
+            [member[3] for member in members],
         )
         return self.plan_members(name, layout_type, HLSL_CBUFFER_LAYOUT, root=True)
 
@@ -409,8 +438,13 @@ class MetalHlslBufferLayouts:
         return storage_type, read, write
 
 
-def metal_matrix_storage_definition(name, scalar, columns, rows, words):
-    """A register-word struct for one matrix shape with its load and store helpers."""
+def metal_matrix_storage_definition(
+    name, scalar, columns, rows, words, row_major=False
+):
+    """A register-word struct for one matrix shape with its load and store helpers.
+
+    The registers hold the columns of the matrix, or its rows when ``row_major``.
+    """
     logical = (
         f"float{columns}x{rows}"
         if scalar == "float"
@@ -421,7 +455,10 @@ def metal_matrix_storage_definition(name, scalar, columns, rows, words):
     loads = []
     stores = []
     for column in range(columns):
-        indices = [4 * column + row for row in range(rows)]
+        if row_major:
+            indices = [4 * row + column for row in range(rows)]
+        else:
+            indices = [4 * column + row for row in range(rows)]
         values = ", ".join(f"m.v[{index}]" for index in indices)
         if scalar == "bool":
             vector = f"bool{rows}(uint{rows}({values}))"
