@@ -8,34 +8,23 @@ whole-array maximum. Every package is translated before the native worker
 starts; the maximum is packaged on demand at the widths the run launches.
 """
 
-import argparse
-import json
+import sys
 from collections import Counter
 from itertools import product
-from pathlib import Path
 
-from demos.integrations.mlx.portable_host import gemv_layout, matmul_layout
-from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
-from demos.integrations.mlx.portable_host.verify import upstream_test_sources
-from demos.integrations.mlx.portable_host.verify_upstream_quantization import (
-    execute,
-    worker,
-    write_json,
+from demos.integrations.mlx.portable_host import (
+    gemv_layout,
+    matmul_layout,
+    upstream_runner,
 )
 
+MODULE = "demos.integrations.mlx.portable_host.verify_upstream_qvm"
+LABEL = "test_qvm"
 UPSTREAM_TESTS = ("test_quantized.TestQuantized.test_qvm",)
 # test_qvm's product(group_size, bits, M, N, B), in the test's order.
 GRID = ((128, 64, 32), (2, 3, 4, 5, 6, 8), (32, 128, 256), (128, 256, 67), (0, 1, 3, 8))
 REDUCTIONS = ("all_reduce_maxfloat32",)
 TIMEOUTS = {"random": 600, "packages": 2400, "cpu": 600, "native": 7200}
-
-
-def _row_strides(shape):
-    strides, step = [], 1
-    for extent in reversed(shape):
-        strides.append(step)
-        step *= extent
-    return strides[::-1]
 
 
 def products():
@@ -64,7 +53,11 @@ def expected_dispatches():
             )
         ] += 1
         route = gemv_layout.route(
-            "float32", x_shape, _row_strides(x_shape), w_shape, _row_strides(w_shape)
+            "float32",
+            x_shape,
+            upstream_runner.row_strides(x_shape),
+            w_shape,
+            upstream_runner.row_strides(w_shape),
         )
         counts[route["entry"]] += 1
     return counts
@@ -80,137 +73,35 @@ def package_entries():
 
 
 def validate_trace(trace, target, count):
-    if len(trace) != count or any(record.get("target") != target for record in trace):
-        raise RuntimeError(
-            "Upstream test_qvm trace is incomplete or uses another target"
-        )
-    observed = Counter(
-        record["entry"]
-        for record in trace
-        if record["entry"].startswith(("affine_", "gemv_"))
+    upstream_runner.check_trace(
+        trace,
+        target,
+        count,
+        label=LABEL,
+        expected=expected_dispatches(),
+        prefixes=("affine_", "gemv_"),
+        reductions=REDUCTIONS,
     )
-    if observed != expected_dispatches():
-        raise RuntimeError(
-            "Upstream test_qvm did not route every product through its translated kernel"
-        )
-    if not any(record["entry"] in REDUCTIONS for record in trace):
-        raise RuntimeError(
-            "Upstream test_qvm did not evaluate its error bound natively"
-        )
 
 
 def prepare_packages(root, packages, reductions, jobs):
     """Translate every matrix-vector entry and index the on-demand maximum."""
-    from demos.integrations.mlx.portable_host import (
-        gemv_packages,
-        matmul_packages,
-        reduction_packages,
-    )
+    from demos.integrations.mlx.portable_host import gemv_packages, matmul_packages
 
-    target = json.loads((Path(packages) / "index.json").read_text())["target"]
     qvm, gemv = package_entries()
-    records = matmul_packages.build_entries(root, packages, target, qvm, jobs)
-    records += gemv_packages.build_entries(root, packages, target, gemv, jobs)
-    reduction_packages.build_packages(
+    upstream_runner.translate_ahead(
         root,
+        packages,
         reductions,
-        target,
-        family="all",
-        entries=REDUCTIONS,
-        on_demand=True,
+        jobs,
+        [(matmul_packages, qvm), (gemv_packages, gemv)],
+        REDUCTIONS,
     )
-    for record in records:
-        print(json.dumps(record), flush=True)
 
 
 def run(root, packages, output, jobs=3):
-    root, packages, output = (Path(path).resolve() for path in (root, packages, output))
-    output.mkdir(parents=True, exist_ok=False)
-    preparation = verify_prepared(root)
-    sources = upstream_test_sources(root, UPSTREAM_TESTS)
-    target = json.loads((packages / "index.json").read_text())["target"]
-    write_json(
-        output / "inputs.json",
-        {"adaptation": preparation, "sources": sources, "target": target},
-    )
-    random, reductions = output / "random-packages", output / "reductions"
-    module = ["-m", __package__ + ".verify_upstream_qvm"]
-    common = ["--mlx-root", str(root), "--packages", str(packages)]
-    commands = [
-        (
-            "random",
-            TIMEOUTS["random"],
-            [
-                "-m",
-                "demos.integrations.mlx.portable_host.random_packages",
-                "--mlx-root",
-                str(root),
-                "--target",
-                target,
-                "--output-dir",
-                str(random),
-            ],
-        ),
-        (
-            "packages",
-            TIMEOUTS["packages"],
-            [*module, "--prepare", *common, "--jobs", str(jobs)]
-            + ["--output-dir", str(reductions)],
-        ),
-    ]
-    for mode in ("cpu", "native"):
-        commands.append(
-            (
-                mode,
-                TIMEOUTS[mode],
-                [*module, "--worker", mode, *common]
-                + ["--reductions", str(reductions), "--random", str(random)]
-                + ["--output-dir", str(output / mode)],
-            )
-        )
-    failures, results = execute(output, commands, UPSTREAM_TESTS, "MLX test_qvm")
-    after = verify_prepared(root)
-    write_json(output / "adaptation-after.json", after)
-    if preparation != after or sources != upstream_test_sources(root, UPSTREAM_TESTS):
-        raise RuntimeError("MLX sources changed during upstream test_qvm verification")
-    if failures:
-        raise RuntimeError(
-            f"Upstream test_qvm workers failed: {', '.join(failures)}; inspect {output}"
-        )
-    trace = [
-        json.loads(line)
-        for line in (output / "native/trace.jsonl").read_text().splitlines()
-    ]
-    validate_trace(trace, target, results["native"]["nativeDispatches"])
-    evidence = {
-        "commit": COMMIT,
-        "target": target,
-        "upstreamTestSources": sources,
-        "results": results,
-        "entries": dict(sorted(Counter(record["entry"] for record in trace).items())),
-        "sourceUnchanged": True,
-        "fullUpstreamSuite": False,
-    }
-    write_json(output / "evidence.json", evidence)
-    return evidence
+    return upstream_runner.run(sys.modules[__name__], root, packages, output, jobs)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mlx-root", type=Path, required=True)
-    parser.add_argument("--packages", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--reductions", type=Path)
-    parser.add_argument("--random", type=Path)
-    parser.add_argument("--jobs", type=int, default=3)
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--worker", choices=("cpu", "native"))
-    mode.add_argument("--prepare", action="store_true")
-    args = parser.parse_args()
-    if args.prepare:
-        prepare_packages(args.mlx_root, args.packages, args.output_dir, args.jobs)
-    elif args.worker:
-        # About 20k dispatches: full value arrays would exceed 4 GB of trace.
-        worker(args, UPSTREAM_TESTS, trace_values=False)
-    else:
-        run(args.mlx_root, args.packages, args.output_dir, args.jobs)
+    upstream_runner.main(sys.modules[__name__])

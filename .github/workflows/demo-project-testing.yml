@@ -3233,13 +3233,15 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
       CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
 
-    name: MLX upstream quantized tests (${{ matrix.target }})
+    name: MLX upstream ${{ matrix.test }} (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 240
+    timeout-minutes: 270
     strategy:
       fail-fast: false
       matrix:
+        # Each unchanged upstream test runs on its own leg of every platform.
+        test: [qvm, qmv]
         include:
           - os: ubuntu-24.04
             target: opengl
@@ -3272,7 +3274,9 @@ jobs:
             2>&1 | tee .mlx-portable-quantized/dependencies.log
       - name: Validate quantized host contracts
         if: runner.os == 'Linux'
-        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_upstream_qvm.py
+        run: |
+          python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_upstream_runner.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qvm.py demos/integrations/mlx/tests/host/test_portable_upstream_qmv.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
@@ -3343,7 +3347,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX quantized host build" -- \
             python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-quantized/build.log
-      - name: Run the unchanged upstream test_qvm through translated kernels
+      - name: Run the unchanged upstream test through translated kernels
         env:
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -3351,15 +3355,15 @@ jobs:
           CROSTL_DIRECTX_FORCE_WARP: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 11100 --label "MLX upstream test_qvm" -- \
-            python -m demos.integrations.mlx.portable_host.verify_upstream_qvm --mlx-root mlx-upstream \
-              --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/upstream-qvm \
-              2>&1 | tee .mlx-portable-quantized/upstream-qvm.log
+          python tools/run_bounded_command.py --timeout-seconds 12300 --label "MLX upstream test_${{ matrix.test }}" -- \
+            python -m demos.integrations.mlx.portable_host.verify_upstream_${{ matrix.test }} --mlx-root mlx-upstream \
+              --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/upstream-${{ matrix.test }} \
+              2>&1 | tee .mlx-portable-quantized/upstream-${{ matrix.test }}.log
       - name: Retain quantized execution evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mlx-portable-upstream-quantized-${{ matrix.target }}-${{ github.run_attempt }}
+          name: mlx-portable-upstream-quantized-${{ matrix.test }}-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-quantized
           include-hidden-files: true
           if-no-files-found: error

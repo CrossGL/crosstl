@@ -1,9 +1,6 @@
-"""The unchanged upstream test_qvm runner: routing, trace and worker checks."""
+"""The unchanged upstream test_qvm runner: routing, trace and package checks."""
 
 import json
-import re
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -13,9 +10,6 @@ from demos.integrations.mlx.portable_host import (
 from demos.integrations.mlx.portable_host import verify_upstream_qvm as upstream
 
 GEMV = "gemv_t_float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0_axpby0"
-WORKFLOW = (
-    Path(__file__).resolve().parents[5] / ".github/workflows/demo-project-testing.yml"
-)
 
 
 def record(mode, dispatches=None):
@@ -108,72 +102,6 @@ def test_results_name_test_qvm():
         quantization.validate_result(record("cpu"), "cpu")
 
 
-@pytest.mark.parametrize(
-    "fault", [None, "random", "packages", "cpu", "native", "source"]
-)
-def test_runner_prepares_packages_before_both_workers(tmp_path, monkeypatch, fault):
-    packages = tmp_path / "packages"
-    packages.mkdir()
-    (packages / "index.json").write_text(json.dumps({"target": "directx"}))
-    preparations = []
-
-    def prepared(root):
-        preparations.append(root)
-        changed = fault == "source" and len(preparations) > 1
-        return {"source": "changed" if changed else "pinned"}
-
-    monkeypatch.setattr(upstream, "verify_prepared", prepared)
-    monkeypatch.setattr(
-        upstream, "upstream_test_sources", lambda *args: {"test_quantized.py": "pin"}
-    )
-    commands = []
-
-    def execute(command, **kwargs):
-        if "--worker" in command:
-            mode = command[command.index("--worker") + 1]
-        else:
-            mode = "packages" if "--prepare" in command else "random"
-        commands.append((mode, command))
-        destination = Path(command[command.index("--output-dir") + 1])
-        destination.mkdir()
-        if mode in ("cpu", "native"):
-            quantization.write_json(destination / "results.json", record(mode))
-            if mode == "native":
-                (destination / "trace.jsonl").write_text(
-                    "\n".join(json.dumps(item) for item in trace("directx"))
-                )
-        return SimpleNamespace(returncode=int(mode == fault))
-
-    monkeypatch.setattr(quantization.subprocess, "run", execute)
-    output = tmp_path / "evidence"
-    if fault:
-        with pytest.raises(RuntimeError, match="workers failed|sources changed"):
-            upstream.run(tmp_path, packages, output)
-        assert not (output / "evidence.json").exists()
-    else:
-        evidence = upstream.run(tmp_path, packages, output)
-        assert evidence["fullUpstreamSuite"] is False
-        assert evidence["entries"][GEMV] == 504
-    expected = ["random", "packages", "cpu", "native"]
-    if fault in ("random", "packages"):
-        expected = expected[: expected.index(fault) + 1]
-    assert [mode for mode, _ in commands] == expected
-    for mode, command in commands:
-        assert (output / f"{mode}.command.json").exists()
-        timeout = int(command[command.index("--timeout-seconds") + 1])
-        assert timeout == upstream.TIMEOUTS[mode]
-        if mode != "random":
-            assert "demos.integrations.mlx.portable_host.verify_upstream_qvm" in command
-        if mode == "native":
-            assert command[command.index("--reductions") + 1] == str(
-                output / "reductions"
-            )
-            assert command[command.index("--random") + 1] == str(
-                output / "random-packages"
-            )
-    assert len(preparations) == 2
-
-
 def test_prepare_translates_routes_and_indexes_the_maximum(tmp_path, monkeypatch):
     from demos.integrations.mlx.portable_host import (
         gemv_packages,
@@ -210,52 +138,3 @@ def test_prepare_translates_routes_and_indexes_the_maximum(tmp_path, monkeypatch
         "metal",
         {"family": "all", "entries": ("all_reduce_maxfloat32",), "on_demand": True},
     )
-
-
-def test_ci_runs_test_qvm_on_every_quantized_host_platform():
-    import yaml
-
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    job = workflow["jobs"]["quantized-upstream-host"]
-    assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
-    assert job["needs"] == ["ci-plan", "portable-host"]
-    assert "continue-on-error" not in job
-    assert "quantized-upstream-host" in workflow["jobs"]["result"]["needs"]
-    assert {
-        item["target"]: item["os"] for item in job["strategy"]["matrix"]["include"]
-    } == {"metal": "macos-26", "directx": "windows-2025", "opengl": "ubuntu-24.04"}
-    names = [item.get("name") for item in job["steps"]]
-    steps = dict(zip(names, job["steps"]))
-    step = steps["Run the unchanged upstream test_qvm through translated kernels"]
-    assert "if" not in step and "continue-on-error" not in step
-    assert "set -euo pipefail" in step["run"]
-    assert "portable_host.verify_upstream_qvm" in step["run"]
-    assert "--packages .mlx-portable-quantized/base/packages" in step["run"]
-    assert "tee .mlx-portable-quantized/upstream-qvm.log" in step["run"]
-    assert step["env"]["CROSTL_DIRECTX_FORCE_WARP"] == "1"
-    (deadline,) = re.findall(r"--timeout-seconds (\d+)", step["run"])
-    # The outer deadline covers every bounded command the runner starts.
-    assert int(deadline) >= sum(upstream.TIMEOUTS.values()) + 300
-    deadlines = [
-        int(value)
-        for item in job["steps"]
-        for value in re.findall(r"--timeout-seconds (\d+)", item.get("run", ""))
-    ]
-    # Every bounded command, plus setup, fits inside the job limit.
-    assert sum(deadlines) + 15 * 60 <= job["timeout-minutes"] * 60
-    order = [
-        "Build adapted upstream MLX",
-        "Run the unchanged upstream test_qvm through translated kernels",
-        "Retain quantized execution evidence",
-    ]
-    assert [names.index(item) for item in order] == sorted(
-        names.index(item) for item in order
-    )
-    assert (
-        "test_portable_upstream_qvm.py" in steps["Validate quantized host contracts"][
-            "run"
-        ]
-    )
-    retain = steps["Retain quantized execution evidence"]
-    assert retain["if"] == "always()"
-    assert retain["with"]["name"].startswith("mlx-portable-upstream-quantized-")

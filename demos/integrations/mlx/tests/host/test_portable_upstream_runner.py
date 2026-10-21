@@ -1,0 +1,257 @@
+"""The shared upstream matrix-product runner and its CI job, for every runner."""
+
+import json
+import re
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from demos.integrations.mlx.portable_host import (
+    upstream_runner,
+    verify_upstream_qmv,
+)
+from demos.integrations.mlx.portable_host import (
+    verify_upstream_quantization as quantization,
+)
+from demos.integrations.mlx.portable_host import verify_upstream_qvm
+
+WORKFLOW = (
+    Path(__file__).resolve().parents[5] / ".github/workflows/demo-project-testing.yml"
+)
+RUNNERS = {"qvm": verify_upstream_qvm, "qmv": verify_upstream_qmv}
+RUN_STEP = "Run the unchanged upstream test through translated kernels"
+
+
+def record(spec, mode, dispatches):
+    return {
+        "mode": mode,
+        "tests": list(spec.UPSTREAM_TESTS),
+        "testsRun": 1,
+        "success": True,
+        "skipped": [],
+        "errors": [],
+        "failures": [],
+        "nativeDispatches": dispatches if mode == "native" else 0,
+    }
+
+
+def trace(spec, target):
+    items = [
+        {"entry": entry, "target": target}
+        for entry, count in sorted(spec.expected_dispatches().items())
+        for _ in range(count)
+    ]
+    return items + [
+        {"entry": "all_reduce_maxfloat32", "target": target, "threads": 64},
+        {"entry": "rbitsc", "target": target},
+    ]
+
+
+def test_row_strides():
+    assert upstream_runner.row_strides((3, 1, 64)) == [64, 64, 1]
+    assert upstream_runner.row_strides((7,)) == [1]
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "count", "target", "unexpected", "missing", "maximum"]
+)
+def test_check_trace_requires_exact_routed_dispatches(fault):
+    expected = {"affine_a": 2, "gemv_b": 1}
+    items = [
+        {"entry": "affine_a", "target": "metal"},
+        {"entry": "affine_a", "target": "metal"},
+        {"entry": "gemv_b", "target": "metal"},
+        {"entry": "copy_c", "target": "metal"},
+        {"entry": "max", "target": "metal"},
+    ]
+    count = len(items)
+    if fault == "count":
+        count += 1
+    elif fault == "target":
+        items[3]["target"] = "opengl"
+    elif fault == "unexpected":
+        items[3]["entry"] = "gemv_c"
+    elif fault == "missing":
+        items.pop(0)
+        count -= 1
+    elif fault == "maximum":
+        items.pop()
+        count -= 1
+    check = dict(label="t", expected=expected, prefixes=("affine_", "gemv_"))
+    if fault:
+        with pytest.raises(RuntimeError, match="Upstream t"):
+            upstream_runner.check_trace(
+                items, "metal", count, reductions=("max",), **check
+            )
+    else:
+        upstream_runner.check_trace(items, "metal", count, reductions=("max",), **check)
+
+
+@pytest.mark.parametrize("name", sorted(RUNNERS))
+@pytest.mark.parametrize(
+    "fault", [None, "random", "packages", "cpu", "native", "source"]
+)
+def test_runner_prepares_packages_before_both_workers(
+    tmp_path, monkeypatch, name, fault
+):
+    spec = RUNNERS[name]
+    items = trace(spec, "directx")
+    packages = tmp_path / "packages"
+    packages.mkdir()
+    (packages / "index.json").write_text(json.dumps({"target": "directx"}))
+    preparations = []
+
+    def prepared(root):
+        preparations.append(root)
+        changed = fault == "source" and len(preparations) > 1
+        return {"source": "changed" if changed else "pinned"}
+
+    monkeypatch.setattr(upstream_runner, "verify_prepared", prepared)
+    monkeypatch.setattr(
+        upstream_runner,
+        "upstream_test_sources",
+        lambda *args: {"test_quantized.py": "pin"},
+    )
+    commands = []
+
+    def execute(command, **kwargs):
+        if "--worker" in command:
+            mode = command[command.index("--worker") + 1]
+        else:
+            mode = "packages" if "--prepare" in command else "random"
+        commands.append((mode, command))
+        destination = Path(command[command.index("--output-dir") + 1])
+        destination.mkdir()
+        if mode in ("cpu", "native"):
+            quantization.write_json(
+                destination / "results.json", record(spec, mode, len(items))
+            )
+            if mode == "native":
+                (destination / "trace.jsonl").write_text(
+                    "\n".join(json.dumps(item) for item in items)
+                )
+        return SimpleNamespace(returncode=int(mode == fault))
+
+    monkeypatch.setattr(quantization.subprocess, "run", execute)
+    output = tmp_path / "evidence"
+    if fault:
+        with pytest.raises(RuntimeError, match="workers failed|sources changed"):
+            spec.run(tmp_path, packages, output)
+        assert not (output / "evidence.json").exists()
+    else:
+        evidence = spec.run(tmp_path, packages, output)
+        assert evidence["fullUpstreamSuite"] is False
+        assert evidence["target"] == "directx"
+        assert sum(evidence["entries"].values()) == len(items)
+        assert json.loads((output / "evidence.json").read_text()) == evidence
+    expected = ["random", "packages", "cpu", "native"]
+    if fault in ("random", "packages"):
+        expected = expected[: expected.index(fault) + 1]
+    assert [mode for mode, _ in commands] == expected
+    for mode, command in commands:
+        assert (output / f"{mode}.command.json").exists()
+        timeout = int(command[command.index("--timeout-seconds") + 1])
+        assert timeout == spec.TIMEOUTS[mode]
+        if mode != "random":
+            assert spec.MODULE in command
+        if mode == "native":
+            assert command[command.index("--reductions") + 1] == str(
+                output / "reductions"
+            )
+            assert command[command.index("--random") + 1] == str(
+                output / "random-packages"
+            )
+    assert len(preparations) == 2
+
+
+@pytest.mark.parametrize("name", sorted(RUNNERS))
+def test_runner_module_names_itself(name):
+    spec = RUNNERS[name]
+    assert spec.MODULE == spec.__name__
+    assert spec.LABEL == "test_" + name
+    assert spec.UPSTREAM_TESTS == (f"test_quantized.TestQuantized.test_{name}",)
+    assert set(spec.TIMEOUTS) == {"random", "packages", "cpu", "native"}
+
+
+@pytest.mark.parametrize("name", sorted(RUNNERS))
+def test_cli_dispatches_each_mode(tmp_path, monkeypatch, name):
+    spec = RUNNERS[name]
+    calls = []
+    monkeypatch.setattr(
+        spec, "prepare_packages", lambda *args: calls.append(("prepare", args))
+    )
+    monkeypatch.setattr(
+        upstream_runner,
+        "worker",
+        lambda args, tests, trace_values: calls.append(
+            ("worker", args.worker, tests, trace_values)
+        ),
+    )
+    monkeypatch.setattr(
+        upstream_runner, "run", lambda *args: calls.append(("run", args[0]))
+    )
+    common = ["--mlx-root", "m", "--packages", "p", "--output-dir", "o"]
+    upstream_runner.main(spec, [*common, "--prepare", "--jobs", "2"])
+    upstream_runner.main(spec, [*common, "--worker", "native"])
+    upstream_runner.main(spec, common)
+    assert calls == [
+        ("prepare", (Path("m"), Path("p"), Path("o"), 2)),
+        ("worker", "native", spec.UPSTREAM_TESTS, False),
+        ("run", spec),
+    ]
+
+
+def test_ci_runs_every_upstream_test_on_every_quantized_host_platform():
+    import yaml
+
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    job = workflow["jobs"]["quantized-upstream-host"]
+    assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+    assert job["needs"] == ["ci-plan", "portable-host"]
+    assert "continue-on-error" not in job
+    assert "quantized-upstream-host" in workflow["jobs"]["result"]["needs"]
+    matrix = job["strategy"]["matrix"]
+    assert sorted(matrix["test"]) == sorted(RUNNERS)
+    assert {item["target"]: item["os"] for item in matrix["include"]} == {
+        "metal": "macos-26",
+        "directx": "windows-2025",
+        "opengl": "ubuntu-24.04",
+    }
+    assert matrix.get("exclude") is None
+    assert "${{ matrix.test }}" in job["name"] and "${{ matrix.target }}" in job["name"]
+    names = [item.get("name") for item in job["steps"]]
+    steps = dict(zip(names, job["steps"]))
+    step = steps[RUN_STEP]
+    assert "if" not in step and "continue-on-error" not in step
+    assert "set -euo pipefail" in step["run"]
+    assert "portable_host.verify_upstream_${{ matrix.test }}" in step["run"]
+    assert "--packages .mlx-portable-quantized/base/packages" in step["run"]
+    assert "tee .mlx-portable-quantized/upstream-${{ matrix.test }}.log" in step["run"]
+    assert step["env"]["CROSTL_DIRECTX_FORCE_WARP"] == "1"
+    (deadline,) = re.findall(r"--timeout-seconds (\d+)", step["run"])
+    for spec in RUNNERS.values():
+        # The outer deadline covers every bounded command each runner starts.
+        assert int(deadline) >= sum(spec.TIMEOUTS.values()) + 300
+    deadlines = [
+        int(value)
+        for item in job["steps"]
+        for value in re.findall(r"--timeout-seconds (\d+)", item.get("run", ""))
+    ]
+    # Every bounded command, plus setup, fits inside the job limit.
+    assert sum(deadlines) + 15 * 60 <= job["timeout-minutes"] * 60
+    order = [
+        "Build adapted upstream MLX",
+        RUN_STEP,
+        "Retain quantized execution evidence",
+    ]
+    assert [names.index(item) for item in order] == sorted(
+        names.index(item) for item in order
+    )
+    contracts = steps["Validate quantized host contracts"]["run"]
+    for name in (*RUNNERS, "runner"):
+        assert f"test_portable_upstream_{name}.py" in contracts
+    retain = steps["Retain quantized execution evidence"]
+    assert retain["if"] == "always()"
+    assert retain["with"]["name"].startswith("mlx-portable-upstream-quantized-")
+    assert "${{ matrix.test }}" in retain["with"]["name"]

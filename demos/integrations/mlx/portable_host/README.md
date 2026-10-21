@@ -386,6 +386,23 @@ need the floating-point `Matmul` route below for their reference products;
 `test_qmv`'s unbatched references are matrix-matrix products, which take the
 steel GEMM or split-K route.
 
+`verify_upstream_qvm.py` and `verify_upstream_qmv.py` run those two tests
+unchanged, first on MLX's CPU and then through the translated host, with the
+shared steps in `upstream_runner.py`. Each runner translates every quantized and
+floating-point product entry the test reaches before the native worker starts,
+and packages the whole-array maximum of its error bound on demand. The native
+trace must hold exactly the affine, `gemv` and steel dispatches that
+quantized.cpp and matmul.cpp would make for every subtest: `test_qmv` reaches
+60 `affine_qmv_quad`, `affine_qmv_fast` and `affine_qmv` entries, both `gemv`
+tiles, two fused GEMM entries and the split-K product with its accumulation.
+The `MLX upstream` jobs run each test on Metal, Direct3D 12 (WARP) and OpenGL
+(Mesa) in the heavy tier.
+
+```bash
+python -m demos.integrations.mlx.portable_host.verify_upstream_qmv \
+  --mlx-root mlx-upstream --packages host-packages --output-dir upstream-qmv
+```
+
 ## Floating-Point Matrix-Vector Products
 
 `Matmul::eval_gpu` routes float32, float16 and bfloat16 products with one
