@@ -244,7 +244,8 @@ SEPARATE_TEXTURE_PROGRAM = """shader main {
 
 
 @pytest.mark.parametrize(
-    "backend", ["directx", "metal", "opengl", "slang", "rust", "mojo", "cuda", "hip"]
+    "backend",
+    ["directx", "metal", "opengl", "slang", "rust", "mojo", "cuda", "hip", "wgsl"],
 )
 def test_targets_declare_a_separate_texture_like_an_explicitly_sampled_one(
     tmp_path, backend
@@ -264,6 +265,22 @@ def test_targets_declare_a_separate_texture_like_an_explicitly_sampled_one(
 
     assert separate == combined
     assert not re.search(r"\btexture2D albedo\b", separate)
+
+
+HLSL_INTEGER_TEXTURE = """Texture2D<uint4> counts : register(t0);
+
+uint4 main(float4 position : SV_Position) : SV_Target {
+    return counts.Load(int3(position.xy, 0));
+}
+"""
+
+
+def test_wgsl_declares_an_integer_hlsl_texture(tmp_path):
+    # WGSL once skipped the declaration of a separate integer texture and read an undeclared name.
+    wgsl = _translate(tmp_path, HLSL_INTEGER_TEXTURE, ".hlsl", "wgsl")
+
+    assert re.search(r"var counts: texture_2d<u32>;", wgsl)
+    assert "textureLoad(counts" in wgsl
 
 
 def test_cuda_texture_size_infers_its_vector_result(tmp_path):
