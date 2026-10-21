@@ -75,6 +75,15 @@ SCALAR = {
     "p32i8": "int8x4_packed",
     "p32u8": "uint8x4_packed",
 }
+# The unsigned instances of DXC's scalar integer templates, as DXC spells them.
+_UNSIGNED_INSTANCES = {
+    "int32_only": frozenset({"uint"}),
+    "any_int32": frozenset({"uint"}),
+    "any_int16or32": frozenset({"uint"}),
+    "any_int": frozenset({"uint", "u64"}),
+    "int64_only": frozenset({"u64"}),
+    "any_int64": frozenset({"u64"}),
+}
 # Intrinsics that only exist in one kind of shader stage (Direct3D 12 functional specification), under the report's
 # stage names: Direct3D's amplification stage is the task stage, and its hull stage the tessellation-control stage.
 STAGES = {
@@ -207,6 +216,26 @@ def _resolve(spellings: list[str]) -> list[Type]:
     return [kind or Type.other("unknown") for kind in final]
 
 
+def _unsigned(spellings: list[str], directions: list[str]) -> list[str]:
+    """``spellings`` with the integer templates made unsigned when an atomic destination takes an unsigned operand.
+
+    DXC declares ``InterlockedAdd(ref int32_only result, in uint value)``. The template's first instance, ``int``,
+    would make the probe pass a ``uint`` value to an ``int`` destination through an implicit conversion, so the
+    probe takes the unsigned instance and passes one type throughout.
+    """
+    params = spellings[1:]
+    fixed = {s for s in params if s in ("uint", "u64")}
+    if not any(
+        d == "inout" and s in _UNSIGNED_INSTANCES for s, d in zip(params, directions)
+    ):
+        return spellings
+    chosen = []
+    for spelling in spellings:
+        admitted = _UNSIGNED_INSTANCES.get(spelling, frozenset()) & fixed
+        chosen.append(next(iter(admitted)) if len(admitted) == 1 else spelling)
+    return chosen
+
+
 def _signature(result: str, params: str) -> Signature:
     if "..." in params:
         raise _Unsupported("variadic")
@@ -223,7 +252,7 @@ def _signature(result: str, params: str) -> Signature:
         type_text = " ".join(words[:-1])
         spellings.append(type_text)
         directions.append(direction)
-    kinds = _resolve(spellings)
+    kinds = _resolve(_unsigned(spellings, directions))
     return Signature(
         kinds[0], tuple(Param(k, d) for k, d in zip(kinds[1:], directions))
     )

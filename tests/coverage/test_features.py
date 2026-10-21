@@ -379,7 +379,24 @@ def test_hlsl_reads_64_bit_and_packed_8_bit_integers():
     assert unpack.params[0].type == Type("int8x4_packed")
     assert features["pack_u8"].signature.result == Type("uint8x4_packed")
     # The 32-bit overload of a function is probed rather than its 64-bit one.
-    assert features["InterlockedAdd"].signature.params[0].type == Type("int")
+    assert features["InterlockedAdd"].signature.params[0].type == Type("uint")
+
+
+def test_hlsl_atomic_destinations_take_the_unsigned_instance_of_their_operand():
+    table = (
+        "namespace Intrinsics {\n"
+        "void [[]] InterlockedCompareExchange(ref int32_only result, in uint compare, in uint value,"
+        " out any_int32 original);\n"
+        "void [[]] InterlockedMin(ref int32_only result, in any_int32 value) : interlockedmin;\n"
+        "}\n"
+    )
+    features = by_name(hlsl.parse(table))
+    exchange = features["InterlockedCompareExchange"].signature
+    assert [p.type for p in exchange.params] == [Type("uint")] * 4
+    # With no fixed unsigned operand, the signed instance stays.
+    assert [p.type for p in features["InterlockedMin"].signature.params] == [
+        Type("int")
+    ] * 2
 
 
 def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
