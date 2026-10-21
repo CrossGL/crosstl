@@ -156,6 +156,15 @@ def collect_resource_array_size_hints(
         for func_name, params in function_arrays.items()
     }
     fixed_requirements = {}
+    if (
+        not global_hints
+        and not any(function_hints.values())
+        and not fixed_global_array_sizes
+        and not any(fixed_function_array_sizes.values())
+    ):
+        # No array to size or check: every scan below only reads these tables,
+        # so they would stay empty. Skip walking every function body.
+        return {}, {func_name: {} for func_name in function_hints}
     functions_by_name = {getattr(func, "name", None): func for func in functions}
     functions_by_name = {name: func for name, func in functions_by_name.items() if name}
     return_index_hints = {}

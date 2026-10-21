@@ -135,6 +135,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .ast_walk import walk_ast_values
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .builtin_result_types import (
@@ -54570,31 +54571,7 @@ complex64_t crossgl_complex64_mod_assign(
         return names
 
     def walk_ast(self, root):
-        visited = set()
-
-        def walk(value):
-            if value is None or isinstance(value, (str, int, float, bool)):
-                return
-            if isinstance(value, dict):
-                for item in value.values():
-                    yield from walk(item)
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    yield from walk(item)
-                return
-
-            value_id = id(value)
-            if value_id in visited:
-                return
-            visited.add(value_id)
-            yield value
-
-            if hasattr(value, "__dict__"):
-                for child in vars(value).values():
-                    yield from walk(child)
-
-        yield from walk(root)
+        return walk_ast_values(root)
 
     def is_sampler_type(self, vtype):
         return self.resource_base_type(vtype) in {"sampler", "comparison_sampler"}
@@ -55542,21 +55519,20 @@ complex64_t crossgl_complex64_mod_assign(
     def next_available_resource_binding_from(
         self, used_bindings, namespace, binding, count
     ):
+        # The first window of ``count`` slots at or after ``binding`` that no used
+        # range overlaps. One sweep in start order finds it: a range that
+        # overlaps the current window forces the window past its end, and once a
+        # range starts after the window every later one does too.
         count = max(count or 1, 1)
-        ranges = used_bindings.get(namespace, [])
-        while True:
-            end = binding + count - 1
-            conflict_end = None
-            for used_start, used_end, _ in ranges:
-                if binding <= used_end and used_start <= end:
-                    conflict_end = (
-                        used_end
-                        if conflict_end is None
-                        else max(conflict_end, used_end)
-                    )
-            if conflict_end is None:
-                return binding
-            binding = conflict_end + 1
+        for used_start, used_end, _ in sorted(
+            used_bindings.get(namespace, []), key=lambda used: used[0]
+        ):
+            if used_end < binding:
+                continue
+            if used_start > binding + count - 1:
+                break
+            binding = used_end + 1
+        return binding
 
     def resource_binding_range_conflict_names(
         self, used_bindings, namespace, start, count, name=None

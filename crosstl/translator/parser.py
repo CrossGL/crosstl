@@ -325,6 +325,9 @@ class Parser:
 
     def __init__(self, tokens, strict_function_bodies=False):
         self.tokens = tokens
+        # Every in-place token edit, as (position, replaced token), so that a
+        # lookahead can undo its edits without copying the whole token list.
+        self.token_edits = []
         self.strict_function_bodies = strict_function_bodies
         self.active_generic_parameter_names = set()
         self.value_type_scopes = [{}]
@@ -395,12 +398,24 @@ class Parser:
     def eat_type_greater_than(self):
         """Consume one generic ``>`` close, splitting lexer ``>>`` when needed."""
         if self.current_token[0] == "BITWISE_SHIFT_RIGHT":
+            self.token_edits.append((self.pos, self.tokens[self.pos]))
             self.tokens[self.pos] = ("GREATER_THAN", ">")
             self.tokens.insert(self.pos + 1, ("GREATER_THAN", ">"))
             self.current_token = self.tokens[self.pos]
             self.eat("GREATER_THAN")
             return
         self.eat("GREATER_THAN")
+
+    def mark_token_edits(self):
+        """Return a mark that ``undo_token_edits`` can restore the tokens to."""
+        return len(self.token_edits)
+
+    def undo_token_edits(self, mark):
+        """Undo, newest first, every ``>>`` split made since ``mark``."""
+        while len(self.token_edits) > mark:
+            position, token = self.token_edits.pop()
+            del self.tokens[position + 1]
+            self.tokens[position] = token
 
     def peek(self, offset=1):
         peek_pos = self.pos + offset
@@ -2291,7 +2306,7 @@ class Parser:
         """
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
 
         try:
             self.parse_attribute_annotations()
@@ -2381,7 +2396,7 @@ class Parser:
         except Exception:
             return False
         finally:
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
@@ -3699,7 +3714,7 @@ class Parser:
         """Parse one angle-bracket type or value argument."""
         start_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
         argument = None
 
         try:
@@ -3745,7 +3760,7 @@ class Parser:
         }:
             return argument
 
-        self.tokens[:] = saved_tokens
+        self.undo_token_edits(token_mark)
         self.pos = start_pos
         self.current_token = saved_token
         argument = self.parse_expression(stop_at_generic_close=True)
@@ -4881,10 +4896,10 @@ class Parser:
 
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
 
         def restore():
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
@@ -5247,7 +5262,7 @@ class Parser:
 
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
         try:
             self.parse_generic_arguments()
             return self.current_token[0] in {
@@ -5263,7 +5278,7 @@ class Parser:
         except SyntaxError:
             return False
         finally:
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
@@ -5274,7 +5289,7 @@ class Parser:
 
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
         try:
             generic_args = self.parse_generic_arguments()
             return self.current_token[0] == "LPAREN" and (
@@ -5283,7 +5298,7 @@ class Parser:
         except SyntaxError:
             return False
         finally:
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
@@ -5831,7 +5846,7 @@ class Parser:
         """Return whether the current token sequence looks like a function."""
         saved_pos = self.pos
         saved_token = self.current_token
-        saved_tokens = list(self.tokens)
+        token_mark = self.mark_token_edits()
 
         try:
             while (
@@ -5888,7 +5903,7 @@ class Parser:
         except:
             pass
         finally:
-            self.tokens[:] = saved_tokens
+            self.undo_token_edits(token_mark)
             self.pos = saved_pos
             self.current_token = saved_token
 
