@@ -191,6 +191,7 @@ def hoist_out_of_scope_declarations(body):
                 declared.name,
                 spirv_id=getattr(declared, "spirv_id", None),
                 spirv_type_id=getattr(declared, "spirv_type_id", None),
+                spirv_precise=getattr(declared, "spirv_precise", False),
             )
         )
     return [*declarations, *_rewrite(list(body), hoisted, True)]
