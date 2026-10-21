@@ -60,6 +60,8 @@ _DECLARATION = re.compile(
 )
 # Enumerations a probe passes as a constant; :class:`~tools.coverage.languages.Metal` names the enumerator.
 ENUMS = ("memory_order", "mem_flags")
+# The masks a ballot returns. A probe reads one as its ``vote_t`` integer, which Metal converts it to explicitly.
+VOTES = ("simd_vote", "quad_vote")
 _ATOMIC = re.compile(r"_atomic\s*<\s*T\b[^>]*>")
 
 
@@ -96,6 +98,11 @@ def _concrete(spelling: str, template: str, bound: str = "") -> str:
         columns, rows = (n if n.isdigit() else "3" for n in matrix.groups())
         return f"float{columns}x{rows}"
     return _WIDENED.get(spelling, spelling)
+
+
+def _result(spelling: str) -> bool:
+    """Whether a probe can receive ``spelling``: a value, or a ballot's mask."""
+    return spelling in VOTES or _value(spelling)
 
 
 def _value(spelling: str) -> bool:
@@ -185,12 +192,11 @@ _PREFERRED = ("float", "int", "uint", "bool", "long", "ulong", "half")
 
 def _preference(overload: tuple[str, list[str]]) -> tuple:
     result, params = overload
-    kinds = [result, *params]
     first = params[0] if params else result
     scalar = re.match(r"[a-z]+", first).group(0) if re.match(r"[a-z]+", first) else ""
     width = re.search(r"(\d)$", first)
     return (
-        not all(_value(k) for k in kinds),
+        not (_result(result) and all(_value(k) for k in params)),
         _PREFERRED.index(scalar) if scalar in _PREFERRED else len(_PREFERRED),
         {None: 1, "3": 0}.get(width and width.group(1), 2),
         # Of two otherwise equal overloads, such as an atomic function with and without memory flags, the shorter.
@@ -218,7 +224,7 @@ def generate(include: Path, toolchain: str, language: str) -> str:
                 continue
             listed.add(name)
             result, params = min(found, key=_preference)
-            usable = all(_value(k) for k in [result, *params])
+            usable = _result(result) and all(_value(k) for k in params)
             lines.append(
                 f"{header} {name} "
                 + (f"{result}({', '.join(params)})" if usable else "-")

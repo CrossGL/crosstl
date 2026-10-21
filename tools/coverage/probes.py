@@ -142,7 +142,9 @@ class _Builder:
     def _arguments(self, signature: Signature) -> tuple[list[str], Type | None]:
         dialect, arguments, output = self.dialect, [], None
         receiver = self.receiver
-        for kind in (signature.result, *(p.type for p in signature.params)):
+        result = signature.result
+        read = bool(result.opaque and dialect.reading(result.opaque))
+        for kind in ([] if read else [result]) + [p.type for p in signature.params]:
             if not self._resource(kind):
                 dialect.type(
                     kind
@@ -193,7 +195,14 @@ class _Builder:
             name = self.receiver.call(name)
         call = dialect.call(name, arguments)
         result = signature.result
-        if output is not None or result.opaque:
+        reading = dialect.reading(result.opaque) if result.opaque else None
+        if output is None and reading:
+            output, read = reading
+            stores = [
+                dialect.declare(output, "r", read.format(call)),
+                dialect.store("r"),
+            ]
+        elif output is not None or result.opaque:
             stores = [dialect.statement(call)]
             if output is None:
                 output = Type("uint")

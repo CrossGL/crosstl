@@ -877,6 +877,8 @@ METAL_SIGNATURES = [
         Type.other("void"),
         Param(Type.other("mem_flags"), "const"),
     ),
+    feature("simd_ballot", Type.other("simd_vote"), Type("bool")),
+    feature("quad_active_threads_mask", Type.other("quad_vote")),
     feature("pack_half_to_unorm4x8", Type("uint"), Type("half", (4,))),
     feature("unpack_unorm565_to_half", Type("half", (3,)), Type("uint")),
 ]
@@ -890,6 +892,21 @@ def test_metal_probes_are_valid_metal(probe_feature):
     probe = probes.build(probe_feature, "metal")
     verdict = validators.validate("metal", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_metal_ballots_are_read_as_their_vote_integer():
+    ballot = feature("simd_ballot", Type.other("simd_vote"), Type("bool"))
+    source = probes.build(ballot, "metal").source
+    assert "device ulong* outp" in source
+    assert "ulong r = static_cast<simd_vote::vote_t>(simd_ballot(a0));" in source
+    mask = feature("quad_active_threads_mask", Type.other("quad_vote"))
+    source = probes.build(mask, "metal").source
+    assert (
+        "uint r = static_cast<quad_vote::vote_t>(quad_active_threads_mask());" in source
+    )
+    # CrossGL has no mask type to read.
+    with pytest.raises(probes.ProbeError, match="quad_vote"):
+        probes.build(mask, "crossgl")
 
 
 def test_metal_half_arguments_are_read_from_float_buffers():

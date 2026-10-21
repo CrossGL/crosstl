@@ -305,11 +305,20 @@ class Metal(Dialect):
         "memory_order": "memory_order_relaxed",
         "mem_flags": "mem_flags::mem_none",
     }
+    # A ballot's mask converts to its vote_t integer only explicitly: a 64-bit simd_vote::vote_t and a 16-bit
+    # quad_vote::vote_t, which the probe stores as ulong and uint.
+    _VOTES = {
+        "simd_vote": (Type("uint64"), "static_cast<simd_vote::vote_t>({})"),
+        "quad_vote": (Type("uint"), "static_cast<quad_vote::vote_t>({})"),
+    }
 
     def type(self, kind: Type) -> str:
         if kind.opaque in self._ENUMERATORS:
             return kind.opaque
         return super().type(kind)
+
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        return self._VOTES.get(opaque)
 
     def scalar(self, scalar: str) -> str:
         if scalar == "double":
