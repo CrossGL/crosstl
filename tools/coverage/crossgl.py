@@ -8,7 +8,8 @@ anywhere else.
 
 from __future__ import annotations
 
-from .dialect import WIDE_INTEGERS, Buffer, Dialect, ProbeError
+from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
+from .model import WIDE_INTEGERS
 from .templates import C_FAMILY, Template
 
 # Built-in functions CrossGL spells as GLSL does rather than as the backend does. A rename applies only when the GLSL
@@ -213,8 +214,45 @@ COUNTERPARTS = {
         "textureSampleGrad": "vec4 textureGrad(sampler2D, vec2, vec2, vec2)",
         "textureSampleLevel": "vec4 textureLod(sampler2D, vec2, float)",
         "textureStore": "void imageStore(image2D, ivec2, vec4)",
+        # WGSL returns a result struct where CrossGL, like GLSL, returns one part and writes the other to an output
+        # parameter. Its only compare-exchange is the weak one, and CrossGL's is atomicCompSwap.
+        "frexp": "vec3 frexp(vec3, out ivec3)",
+        "modf": "vec3 modf(vec3, out vec3)",
+        "atomicCompareExchangeWeak": "int atomicCompSwap(inout int, int, int)",
     },
+    # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
+    "metal": {"threadgroup_barrier": "void barrier()"},
 }
+# Metal functions whose overloads take a pointer or return an opaque type (atomic compare-exchange takes the expected
+# value through a pointer, a ballot returns a simd_vote) are measured in the output direction only, through the
+# CrossGL operation that translates to them.
+COUNTERPARTS["metal"].update(
+    {
+        "atomic_compare_exchange_weak": "int atomicCompSwap(inout int, int, int)",
+        "atomic_compare_exchange_weak_explicit": (
+            "int atomicCompSwap(inout int, int, int)"
+        ),
+        "simd_ballot": "uvec4 subgroupBallot(bool)",
+    }
+)
+# Metal's atomic functions, in forms with and without a memory order. CrossGL's, like GLSL's, are relaxed and take
+# none, so the probe passes memory_order_relaxed to the Metal function.
+_METAL_ATOMICS = {
+    "exchange": "atomicExchange",
+    "fetch_add": "atomicAdd",
+    "fetch_and": "atomicAnd",
+    "fetch_max": "atomicMax",
+    "fetch_min": "atomicMin",
+    "fetch_or": "atomicOr",
+    "fetch_xor": "atomicXor",
+}
+RENAMES["metal"].update({f"atomic_{op}": name for op, name in _METAL_ATOMICS.items()})
+COUNTERPARTS["metal"].update(
+    {
+        f"atomic_{op}_explicit": f"int {name}(inout int, int)"
+        for op, name in _METAL_ATOMICS.items()
+    }
+)
 
 
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:
@@ -223,18 +261,47 @@ def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) ->
     return renamed if renamed in glsl_names else name
 
 
+# The stage block of each ray-tracing stage a probe runs in.
+_RAYTRACING_BLOCKS = {
+    "ray-generation": "ray_generation",
+    "intersection": "ray_intersection",
+    "any-hit": "ray_any_hit",
+    "closest-hit": "ray_closest_hit",
+}
+
+
 class CrossGL(Dialect):
     language = "crossgl"
     suffix = ".cgl"
     wide_integers = True
+    narrow_scalars = True
+    packed_bytes = True
+    # The spellings CrossGL's own importers write for these scalars; the HLSL importer reads a packed 8-bit word as
+    # ``uint``, which HLSL converts to and from implicitly.
+    _SCALARS = {
+        "int64": "int64_t",
+        "uint64": "uint64_t",
+        "half": "float16",
+        "int16": "int16",
+        "uint16": "uint16",
+        "int8x4_packed": "uint",
+        "uint8x4_packed": "uint",
+    }
+    _PREFIX = {**Dialect._PREFIX, "half": "f16", "int16": "i16", "uint16": "u16"}
 
     def scalar(self, scalar: str) -> str:
-        return {"int64": "int64_t", "uint64": "uint64_t"}.get(scalar, scalar)
+        return self._SCALARS.get(scalar, scalar)
 
     def vector(self, scalar: str, size: int) -> str:
         if scalar in WIDE_INTEGERS:
             raise ProbeError("no 64-bit integer vector probe for CrossGL yet")
         return super().vector(scalar, size)
+
+    def matrix(self, scalar: str, columns: int, rows: int) -> str:
+        if scalar == "half":
+            shape = f"{columns}" if columns == rows else f"{columns}x{rows}"
+            return f"f16mat{shape}"
+        return super().matrix(scalar, columns, rows)
 
     # CrossGL declares HLSL's resource object types and calls their methods under HLSL's names; the backend assigns
     # the registers.
@@ -296,8 +363,171 @@ class CrossGL(Dialect):
         ]
         return "\n".join(lines) + "\n"
 
+    # A hit shader's parameters are the ray payload and the hit attributes, which the backends declare as their
+    # target requires.
+    _HIT_PARAMETERS = (
+        "Payload payload @ payload, "
+        "BuiltInTriangleIntersectionAttributes attributes @ hit_attribute"
+    )
+
+    def raytracing(
+        self, stage: str, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        hit = stage in ("any-hit", "closest-hit")
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in parts.get("prelude", ())]
+        if hit:
+            lines += ["    struct Payload {", "        vec4 color;", "    }"]
+        lines += [f"    {_RAYTRACING_BLOCKS[stage]} {{"]
+        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += [
+            f"        void main({self._HIT_PARAMETERS if hit else ''}) {{",
+            "            uint i = 0u;",
+        ]
+        lines += [f"            {line}" for line in body]
+        lines += ["        }", "    }", "}"]
+        return "\n".join(lines) + "\n"
+
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in parts.get("prelude", ())]
+        lines += ["    geometry {", *(f"        {line}" for line in _POINTS_IN_AND_OUT)]
+        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += ["        void main() {", "            uint i = 0u;"]
+        lines += [f"            {line}" for line in body]
+        lines += ["        }", "    }", "}"]
+        return "\n".join(lines) + "\n"
+
+    def _program(
+        self,
+        block: str,
+        shared: tuple[str, ...],
+        buffers: list[Buffer],
+        functions: list[str],
+        parts: dict,
+    ) -> str:
+        """A probe whose ``block`` stage declares the buffers and then ``functions``, after the shader-level
+        ``shared`` declarations."""
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in (*parts.get("prelude", ()), *shared)]
+        lines += [f"    {block} {{"]
+        lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += [f"        {line}" for line in functions]
+        lines += ["    }", "}"]
+        return "\n".join(lines) + "\n"
+
+    def tessellation_control(
+        self, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        functions = [
+            "PatchConstants constants(InputPatch<ControlPoint, 3> patch) {",
+            "    PatchConstants output;",
+            "    output.edges[0] = 1.0;",
+            "    output.edges[1] = 1.0;",
+            "    output.edges[2] = 1.0;",
+            "    output.inside = 1.0;",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "    return output;",
+            "}",
+            "ControlPoint main(InputPatch<ControlPoint, 3> patch, uint id @ SV_OutputControlPointID)",
+            "    @domain(tri)",
+            "    @partitioning(integer)",
+            "    @outputtopology(triangle_cw)",
+            "    @outputcontrolpoints(3)",
+            "    @patchconstantfunc(constants) {",
+            "    ControlPoint output;",
+            "    output.position = patch[id].position * 2.0;",
+            "    return output;",
+            "}",
+        ]
+        shared = (
+            "struct ControlPoint {",
+            "    vec4 position @ POSITION;",
+            "}",
+            "struct PatchConstants {",
+            "    float edges[3] @ SV_TessFactor;",
+            "    float inside @ SV_InsideTessFactor;",
+            "}",
+        )
+        return self._program("tessellation_control", shared, buffers, functions, parts)
+
+    def mesh(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        functions = [
+            "void main(@ vertices out Vertex verts[3], @ indices out uvec3 tris[1])",
+            "    @numthreads(1, 1, 1)",
+            "    @outputtopology(triangle) {",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);",
+            "    verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);",
+            "    verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);",
+            "    tris[0] = uvec3(0, 1, 2);",
+            "}",
+        ]
+        shared = ("struct Vertex {", "    vec4 position @ gl_Position;", "}")
+        return self._program("mesh", shared, buffers, functions, parts)
+
+    def task(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        functions = [
+            "void main() @numthreads(1, 1, 1) {",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+        shared = (
+            "struct Payload {",
+            "    uint value;",
+            "}",
+            f"groupshared Payload {self.payload} @ taskPayloadSharedEXT;",
+        )
+        return self._program("task", shared, buffers, functions, parts)
+
+
+# A geometry stage's input and output primitives, as the CrossGL importers write them.
+_POINTS_IN_AND_OUT = ("layout(points) in;", "layout(points, max_vertices = 1) out;")
 
 DIALECT = CrossGL()
+
+
+class CrossGLES(CrossGL):
+    """The CrossGL probes of the WebGL output direction. GLSL ES 3.00 has no compute stage and no storage buffers, so
+    a kernel probe is a fragment stage that reads its inputs from uniform arrays and writes a local array, as the
+    GLSL ES probe does (:data:`.dialect.UNIFORM_ARRAY_LENGTH`). Its entry point returns nothing, so a probe body can
+    return early."""
+
+    def read(self, buffer: str, offset: int) -> str:
+        return uniform_read(buffer, offset)
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        *inputs, (output, _) = buffers
+        lines = ["shader Probe {"]
+        lines += [f"    {line}" for line in parts.get("prelude", ())]
+        lines += ["    fragment {"]
+        lines += [
+            f"        uniform {kind} {name}[{UNIFORM_ARRAY_LENGTH}];"
+            for kind, name in inputs
+        ]
+        lines += [f"        {line}" for line in parts.get("declarations", ())]
+        lines += [
+            "        void main() {",
+            f"            {output} outp[1];",
+            "            uint i = 0u;",
+        ]
+        lines += [f"            {line}" for line in body]
+        lines += ["        }", "    }", "}"]
+        return "\n".join(lines) + "\n"
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        if parts.get("inputs"):
+            raise ProbeError("no shader-input probe for GLSL ES yet")
+        return self.kernel(buffers, body, **parts)
+
+
+ES_DIALECT = CrossGLES()
 
 
 def _scalar(spelling: str, source: str = "iin") -> Template:
@@ -311,6 +541,103 @@ _FRAGMENT = (
     "            FragmentOutput output;\n{body}            output.color = vec4(input.uv, 0.0, 1.0);\n"
     "            return output;\n        }\n    }\n}\n"
 )
+
+
+def _raytracing(
+    block: str, parameters: str = "", body: str = "outp[0] = 1.0;"
+) -> Template:
+    """A ray-tracing stage program; a stage that takes ``parameters`` declares their struct, else writes a buffer."""
+    kind = parameters.split(" ", 1)[0]
+    lines = ["shader Probe {"]
+    if kind:
+        lines += [f"    struct {kind} {{", "        vec4 color;", "    }"]
+    lines += [f"    {block} {{"]
+    if not kind:
+        lines += ["        buffer float* outp;"]
+    lines += [
+        f"        void main({parameters}) {{",
+        f"            {body}",
+        "        }",
+        "    }",
+        "}",
+    ]
+    return Template(program="\n".join(lines) + "\n")
+
+
+_HIT = (
+    "Payload payload @ payload, BuiltInTriangleIntersectionAttributes attributes @ hit_attribute",
+    "payload.color = vec4(attributes.barycentrics, 0.0, 1.0);",
+)
+_RAYTRACING_STAGES = {
+    "ray-generation": _raytracing("ray_generation"),
+    "intersection": _raytracing("ray_intersection"),
+    "any-hit": _raytracing("ray_any_hit", *_HIT),
+    "closest-hit": _raytracing("ray_closest_hit", *_HIT),
+    "miss": _raytracing(
+        "ray_miss",
+        "Payload payload @ payload",
+        "payload.color = vec4(0.0, 0.0, 0.0, 1.0);",
+    ),
+    "callable": _raytracing(
+        "ray_callable",
+        "CallData data @ callable_data",
+        "data.color = vec4(1.0, 0.0, 0.0, 1.0);",
+    ),
+}
+
+# A triangle patch of three control points, tessellated once. CrossGL states the domain, partitioning, topology and
+# patch-constant function on the stage, which every target needs, and names the tessellation values by their
+# semantics, as the HLSL importer does.
+_PATCH = (
+    "shader Probe {\n    struct ControlPoint {\n        vec4 position @ POSITION;\n    }\n"
+    "    struct PatchConstants {\n        float edges[3] @ SV_TessFactor;\n"
+    "        float inside @ SV_InsideTessFactor;\n    }\n"
+)
+_TESSELLATION_STAGES = {
+    "tessellation-control": Template(
+        program=_PATCH + "    tessellation_control {\n"
+        "        PatchConstants constants(InputPatch<ControlPoint, 3> patch) {\n"
+        "            PatchConstants output;\n            output.edges[0] = 1.0;\n            output.edges[1] = 1.0;\n"
+        "            output.edges[2] = 1.0;\n            output.inside = 1.0;\n            return output;\n"
+        "        }\n"
+        "        ControlPoint main(InputPatch<ControlPoint, 3> patch, uint id @ SV_OutputControlPointID)\n"
+        "            @domain(tri)\n            @partitioning(integer)\n            @outputtopology(triangle_cw)\n"
+        "            @outputcontrolpoints(3)\n            @patchconstantfunc(constants) {\n"
+        "            ControlPoint output;\n            output.position = patch[id].position * 2.0;\n"
+        "            return output;\n        }\n    }\n}\n"
+    ),
+    "tessellation-evaluation": Template(
+        program=_PATCH
+        + "    struct DomainOutput {\n        vec4 position @ SV_Position;\n    }\n"
+        "    tessellation_evaluation {\n"
+        "        DomainOutput main(PatchConstants constants, vec3 coord @ SV_DomainLocation,\n"
+        "                          OutputPatch<ControlPoint, 3> patch) @domain(tri) {\n"
+        "            DomainOutput output;\n"
+        "            output.position = patch[0].position * coord.x + patch[1].position * coord.y"
+        " + patch[2].position * coord.z;\n            return output;\n        }\n    }\n}\n"
+    ),
+}
+
+# A mesh shader that writes one triangle, and a task shader that hands a payload to one mesh workgroup. The task
+# payload lives in task-payload storage, which CrossGL names by the GLSL qualifier.
+_MESH_STAGES = {
+    "mesh": Template(
+        program="shader Probe {\n    struct Vertex {\n        vec4 position @ gl_Position;\n    }\n    mesh {\n"
+        "        void main(@ vertices out Vertex verts[3], @ indices out uvec3 tris[1])\n"
+        "            @numthreads(1, 1, 1)\n            @outputtopology(triangle) {\n"
+        "            SetMeshOutputCounts(3, 1);\n"
+        "            verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);\n"
+        "            verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);\n"
+        "            verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);\n"
+        "            tris[0] = uvec3(0, 1, 2);\n        }\n    }\n}\n"
+    ),
+    "task": Template(
+        program="shader Probe {\n    struct Payload {\n        uint value;\n    }\n"
+        "    groupshared Payload payload @ taskPayloadSharedEXT;\n    task {\n"
+        "        void main() @numthreads(1, 1, 1) {\n            payload.value = 1u;\n"
+        "            DispatchMesh(1u, 1u, 1u, payload);\n        }\n    }\n}\n"
+    ),
+}
 
 # Language-level probes (:mod:`.constructs`). Kernel templates use the CrossGL kernel above: ``prelude`` lines are
 # shader-level declarations, ``declarations`` go inside the compute block.
@@ -355,7 +682,16 @@ CONSTRUCTS: dict[str, Template] = {
         "            output.position = input.position * 2.0;\n            return output;\n        }\n"
         "    }\n}\n"
     ),
+    "geometry": Template(
+        program="shader Probe {\n    in vec4 inPosition[1] @location(0);\n    geometry {\n"
+        + "".join(f"        {line}\n" for line in _POINTS_IN_AND_OUT)
+        + "        void main() {\n            gl_Position = inPosition[0] * 2.0;\n"
+        "            EmitVertex();\n            EndPrimitive();\n        }\n    }\n}\n"
+    ),
     "fragment": Template(program=_FRAGMENT.replace("{body}", "")),
+    **_TESSELLATION_STAGES,
+    **_MESH_STAGES,
+    **_RAYTRACING_STAGES,
     "discard": Template(
         program=_FRAGMENT.replace(
             "{body}",

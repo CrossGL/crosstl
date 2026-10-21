@@ -226,6 +226,13 @@ SOURCES = {
         "c125a0fbf6730fde4625fef2618c4f7611ab42edf9b2ad5bb9291002b10bfad3",
         "SPIR-V core grammar (execution models, capabilities, storage classes, instructions)",
     ),
+    "webgl": Source(
+        "google/angle",
+        "1ff891807e391d842c33d552ea26ab26b5341ef4",
+        "src/compiler/translator/builtin_function_declarations.txt",
+        "d644775414f12a0cf61d008c06a6fcac9f29fdcd138ea9334acfd3929fce91ba",
+        "ANGLE's GLSL ES built-in function table",
+    ),
     "wgsl": Source(
         "google/dawn",
         "ff7c6960f62d4249f967a78448918eec21705a86",

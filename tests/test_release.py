@@ -70,7 +70,6 @@ def test_package_build_contract_retains_supported_python_and_resources():
     }
     assert set(source["exclude"]) == {
         "docs/_build/",
-        "docs/doxygen/build/",
         "examples/output/",
         "**/__pycache__/",
         "**/*.py[cod]",

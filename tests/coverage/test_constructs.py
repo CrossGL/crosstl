@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -8,13 +9,20 @@ from tools.coverage.model import Feature
 _MODELS = [
     ("Vertex", ["Shader"]),
     ("TessellationControl", ["Tessellation"]),
+    ("TessellationEvaluation", ["Tessellation"]),
     ("Geometry", ["Geometry"]),
     ("Fragment", ["Shader"]),
     ("GLCompute", ["Shader"]),
     ("Kernel", ["Kernel"]),
     ("TaskNV", ["MeshShadingNV"]),
+    ("TaskEXT", ["MeshShadingEXT"]),
     ("MeshEXT", ["MeshShadingEXT"]),
+    ("RayGenerationKHR", ["RayTracingNV", "RayTracingKHR"]),
+    ("IntersectionKHR", ["RayTracingNV", "RayTracingKHR"]),
     ("AnyHitKHR", ["RayTracingNV", "RayTracingKHR"]),
+    ("ClosestHitKHR", ["RayTracingNV", "RayTracingKHR"]),
+    ("MissKHR", ["RayTracingNV", "RayTracingKHR"]),
+    ("CallableKHR", ["RayTracingNV", "RayTracingKHR"]),
 ]
 
 
@@ -62,11 +70,18 @@ def test_stages_are_the_shader_execution_models():
     assert stages == [
         "vertex",
         "tessellation-control",
+        "tessellation-evaluation",
         "geometry",
         "fragment",
         "compute",
+        "task",
         "mesh",
+        "ray-generation",
+        "intersection",
         "any-hit",
+        "closest-hit",
+        "miss",
+        "callable",
     ]
 
 
@@ -107,8 +122,9 @@ def test_every_curated_construct_has_a_crossgl_template():
     assert {c.name for c in constructs._curated()} <= set(crossgl.CONSTRUCTS)
 
 
-def test_a_construct_without_a_template_is_untested_not_absent():
-    feature = _feature("glsl", "geometry")
+def test_a_construct_without_a_template_is_untested_not_absent(monkeypatch):
+    feature = _feature("glsl", "tessellation-control")
+    monkeypatch.delitem(templates.TEMPLATES["glsl"], "tessellation-control")
     with pytest.raises(probes.ProbeError, match="no glsl probe template"):
         probes.build(feature, "glsl")
 
@@ -123,7 +139,70 @@ def test_kernel_templates_fill_the_language_spelling_of_types():
 def test_stage_programs_take_the_stage_suffix():
     probe = probes.build(_feature("glsl", "fragment"), "glsl")
     assert probe.suffix == ".frag"
+    assert probes.build(_feature("glsl", "geometry"), "glsl").suffix == ".geom"
     assert probes.build(_feature("glsl", "discard"), "glsl").suffix == ".frag"
+    assert probes.build(_feature("glsl", "closest-hit"), "glsl").suffix == ".rchit"
+    tese = probes.build(_feature("glsl", "tessellation-evaluation"), "glsl")
+    assert tese.suffix == ".tese"
+    assert probes.build(_feature("glsl", "task"), "glsl").suffix == ".task"
+    assert probes.build(_feature("glsl", "mesh"), "glsl").suffix == ".mesh"
+
+
+def test_slang_names_the_hull_stage_on_its_entry_point():
+    hull = probes.build(_feature("slang", "tessellation-control"), "slang").source
+    assert '[shader("hull")]\n[domain("tri")]' in hull
+    task = probes.build(_feature("slang", "task"), "slang").source
+    assert '[shader("amplification")]\n[numthreads(1, 1, 1)]' in task
+
+
+@pytest.mark.parametrize(
+    ("stage", "air", "accepted"),
+    [
+        ("vertex", "define void @f() {\n}\n", False),
+        ("vertex", "!air.vertex = !{!9}\n", True),
+        ("compute", "!air.vertex = !{!9}\n", False),
+        ("tessellation-evaluation", "!air.vertex = !{!9}\n", False),
+        (
+            "tessellation-evaluation",
+            '!air.vertex = !{!9}\n!17 = !{!"air.patch", !"triangle"}\n',
+            True,
+        ),
+        ("mesh", "!air.mesh = !{!9}\n", True),
+        ("task", "!air.mesh = !{!9}\n", False),
+        ("task", "!air.object = !{!9}\n", True),
+    ],
+)
+def test_a_metal_probe_needs_an_entry_point_of_its_stage(
+    monkeypatch, stage, air, accepted
+):
+    def run(arguments, cwd):
+        Path(cwd, arguments[arguments.index("-o") + 1]).write_text(air)
+        return validators.Verdict(True)
+
+    monkeypatch.setattr(validators, "command", lambda name: (name,))
+    monkeypatch.setattr(validators, "_run", run)
+    verdict = validators.validate("metal", "", stage)
+    assert verdict.accepted is accepted
+    assert accepted or f"no {stage} entry point" in verdict.log
+
+
+def test_ray_tracing_and_mesh_stages_are_checked_for_vulkan(monkeypatch):
+    commands = []
+
+    def run(arguments, cwd):
+        commands.append(arguments)
+        return validators.Verdict(True)
+
+    monkeypatch.setattr(validators, "command", lambda name: (name,))
+    monkeypatch.setattr(validators, "_run", run)
+    validators.validate("glsl", "", "miss")
+    validators.validate("glsl", "", "mesh")
+    validators.validate("glsl", "", "fragment")
+    assert commands == [
+        ["glslangValidator", "--target-env", "vulkan1.2", "probe.rmiss"],
+        ["glslangValidator", "--target-env", "vulkan1.2", "probe.mesh"],
+        ["glslangValidator", "probe.frag"],
+    ]
 
 
 def test_entry_parameters_join_the_kernel_signature():
@@ -131,6 +210,50 @@ def test_entry_parameters_join_the_kernel_signature():
     assert "id: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>)" in wgsl
     metal = probes.build(_feature("metal", "sampled-texture"), "metal").source
     assert "texture2d<float> tex [[texture(0)]], sampler smp [[sampler(0)]]" in metal
+
+
+@pytest.mark.parametrize(
+    "generated, accepted",
+    [
+        ("void main() { x = ProcessTriTessFactorsAvg(); }", True),
+        ("void main() { /* debugBreak() not currently supported for HLSL */; }", False),
+    ],
+)
+def test_a_slang_probe_for_hlsl_is_written_as_hlsl_and_compiled_by_dxc(
+    monkeypatch, generated, accepted
+):
+    commands = []
+
+    def run(arguments, cwd):
+        commands.append(arguments)
+        if arguments[0] == "slangc":
+            Path(cwd, arguments[arguments.index("-o") + 1]).write_text(generated)
+        return validators.Verdict(True)
+
+    monkeypatch.setattr(validators, "command", lambda name: (name,))
+    monkeypatch.setattr(validators, "_run", run)
+    verdict = validators.validate(
+        "slang", '[shader("hull")]', "tessellation-control", "main", "hlsl"
+    )
+    assert verdict.accepted is accepted
+    slangc = ["slangc", "probe.slang", "-entry", "main", "-target", "hlsl"]
+    assert commands[0] == [*slangc, "-o", "probe.hlsl"]
+    if accepted:
+        profile = validators.HLSL_PROFILES["tessellation-control"]
+        assert commands[1][:5] == ["dxc", "-T", profile, "-E", "main"]
+        assert commands[1][-3:] == ["probe.hlsl", "-Fo", "probe.bin"]
+    else:
+        assert len(commands) == 1
+        assert "debugBreak() not currently supported" in verdict.log
+
+
+def test_a_slang_probe_for_hlsl_needs_dxc(monkeypatch):
+    monkeypatch.setattr(
+        validators, "command", lambda name: (name,) if name == "slangc" else ()
+    )
+    assert validators.missing("slang") == ""
+    assert validators.missing("slang", "hlsl") == "dxc"
+    assert not validators.available("slang", "hlsl")
 
 
 def test_hlsl_entry_falls_back_to_the_stage_convention():
@@ -150,7 +273,7 @@ def _templated(language: str) -> list[Feature]:
 
 @pytest.mark.parametrize(
     "language",
-    ["cuda", "glsl", "hip", "hlsl", "metal", "mojo", "rust", "slang", "wgsl"],
+    ["cuda", "glsl", "hip", "hlsl", "metal", "mojo", "rust", "slang", "webgl", "wgsl"],
 )
 def test_native_templates_are_valid(language):
     if not validators.available(language):

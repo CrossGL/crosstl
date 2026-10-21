@@ -41,7 +41,8 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: pip install -r requirements.txt
+          cache-dependency-path: pyproject.toml
+      - run: pip install "PyYAML>=6,<7"
       - name: Print label changes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,7 +64,8 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: pip install -r requirements.txt
+          cache-dependency-path: pyproject.toml
+      - run: pip install "PyYAML>=6,<7"
       - name: Apply label changes
         env:
           GH_TOKEN: ${{ github.token }}

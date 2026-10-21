@@ -54,25 +54,25 @@ def _collect(project, *args):
     return {line for line in result.stdout.splitlines() if "::" in line}
 
 
-def test_shards_run_every_test_once_and_keep_files_together(tmp_path):
-    for index in range(12):
+def test_shards_run_every_test_once_and_split_large_files(tmp_path):
+    for index in range(4):
         (tmp_path / f"test_mod{index}.py").write_text(
             "import pytest\n\n"
-            "@pytest.mark.parametrize('n', range(3))\n"
+            "@pytest.mark.parametrize('n', range(30))\n"
             "def test_case(n):\n"
             "    pass\n",
             encoding="utf-8",
         )
     everything = _collect(tmp_path)
-    assert len(everything) == 36
+    assert len(everything) == 120
 
     shards = [_collect(tmp_path, "--shard", f"{index}/3") for index in (1, 2, 3)]
     assert set().union(*shards) == everything
     assert sum(len(shard) for shard in shards) == len(everything)
     for shard in shards:
         files = {nodeid.split("::", 1)[0] for nodeid in shard}
-        for path in files:
-            assert {n for n in everything if n.startswith(path + "::")} <= shard
+        assert len(files) == 4
+        assert 20 <= len(shard) <= 60
 
 
 def test_complete_suite_runs_one_job_per_shard():
@@ -90,3 +90,33 @@ def test_complete_suite_runs_one_job_per_shard():
     )
     assert "-p tools.pytest_shard" in command
     assert '--shard "${{ matrix.shard }}/${{ strategy.job-total }}"' in command
+
+
+def test_translator_shard_legs_cover_every_shard():
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "translator-tests.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    job = workflow["jobs"]["test"]
+    matrix = job["strategy"]["matrix"]
+    legs = [(name, "ubuntu-latest") for name in matrix["component"]]
+    legs += [(entry["component"], entry["OS"]) for entry in matrix["include"]]
+    sharded = {}
+    for name, runner in legs:
+        if "-of-" in name:
+            suite, _, spec = name.partition("-")
+            index, _, count = spec.partition("-of-")
+            sharded.setdefault((suite, runner), set()).add((int(index), int(count)))
+    assert set(sharded) == {("general", "ubuntu-latest"), ("all", "windows-latest")}
+    for parts in sharded.values():
+        counts = {count for _, count in parts}
+        assert len(counts) == 1
+        assert {index for index, _ in parts} == set(range(1, counts.pop() + 1))
+    assert "general" not in matrix["component"]
+    command = next(
+        step["run"]
+        for step in job["steps"]
+        if step.get("name") == "Run translator tests"
+    )
+    assert "-p tools.pytest_shard" in command

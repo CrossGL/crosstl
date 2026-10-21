@@ -1,16 +1,20 @@
-"""The dialect of each language a probe can be written in; CrossGL's own is in :mod:`.crossgl`."""
+"""The dialect of each language a probe can be written in. The shading languages are here, the compute-kernel
+languages in :mod:`.kernels` and CrossGL's own dialect in :mod:`.crossgl`."""
 
 from __future__ import annotations
 
 from .crossgl import DIALECT as CROSSGL
-from .dialect import Buffer, Dialect, ProbeError
-from .model import Type
+from .crossgl import ES_DIALECT as CROSSGL_ES
+from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
+from .kernels import CUDA, HIP, Mojo, Rust
+from .model import RAYTRACING_STAGES, Type
 
 
 class GLSL(Dialect):
     language = "glsl"
     suffix = ".comp"
     fragment_suffix = ".frag"
+    geometry_suffix = ".geom"
 
     def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
         lines = [
@@ -54,6 +58,19 @@ class GLSL(Dialect):
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["    color = vec4(0.0);", "}"]) + "\n"
 
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            "#version 460",
+            *parts.get("prelude", ()),
+            "layout(points) in;",
+            "layout(points, max_vertices = 1) out;",
+            *self._globals(buffers, parts),
+            "void main() {",
+            "    uint i = 0u;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["}"]) + "\n"
+
 
 class HLSL(Dialect):
     language = "hlsl"
@@ -61,12 +78,27 @@ class HLSL(Dialect):
     rows_first = True
     entry_attributes: tuple[str, ...] = ("[numthreads(1, 1, 1)]",)
     fragment_attributes: tuple[str, ...] = ()
+    # The validators compile with 16-bit types enabled, so ``half`` is a 16-bit float (HLSL shader model 6.2).
+    wide_integers = True
+    narrow_scalars = True
+    packed_bytes = True
+    _SCALARS = {
+        "int64": "int64_t",
+        "uint64": "uint64_t",
+        "int16": "int16_t",
+        "uint16": "uint16_t",
+        "int8x4_packed": "int8_t4_packed",
+        "uint8x4_packed": "uint8_t4_packed",
+    }
+
+    def scalar(self, scalar: str) -> str:
+        return self._SCALARS.get(scalar, scalar)
 
     def vector(self, scalar: str, size: int) -> str:
-        return f"{scalar}{size}"
+        return f"{self.scalar(scalar)}{size}"
 
     def matrix(self, scalar: str, columns: int, rows: int) -> str:
-        return f"{scalar}{rows}x{columns}"
+        return f"{self.scalar(scalar)}{rows}x{columns}"
 
     def cast(self, kind: Type, value: str) -> str:
         return f"({self.type(kind)}){value}"
@@ -76,6 +108,9 @@ class HLSL(Dialect):
 
     def resource(self, spelling: str, name: str, register: str) -> str:
         return f"{spelling} {name} : register({register});"
+
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        return self.resource(spelling, name, f"t{binding}")
 
     def flat(self, kind: str) -> str:
         return f"nointerpolation {kind}"
@@ -113,24 +148,162 @@ class HLSL(Dialect):
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["    return float4(0.0, 0.0, 0.0, 0.0);", "}"]) + "\n"
 
+    # Hit shaders take the ray payload, which shader model 6.7 and later require to declare who reads and writes each
+    # field, and the triangle's barycentrics.
+    _PAYLOAD = (
+        "struct [raypayload] Payload",
+        "{",
+        "    float4 color : read(caller) : write(anyhit, closesthit);",
+        "};",
+    )
+    _HIT_PARAMETERS = (
+        "inout Payload payload, in BuiltInTriangleIntersectionAttributes attributes"
+    )
+
+    def raytracing(
+        self, stage: str, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        hit = stage in ("any-hit", "closest-hit")
+        lines = [
+            *(self._PAYLOAD if hit else ()),
+            *self._globals(buffers, parts),
+            f'[shader("{RAYTRACING_STAGES[stage]}")]',
+            f"void main({self._HIT_PARAMETERS if hit else ''}) {{",
+            "    uint i = 0u;",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["}"]) + "\n"
+
+    # Entry-point attributes that name a graphics stage, which Slang needs and HLSL takes from the profile instead.
+    stage_attributes: dict[str, tuple[str, ...]] = {}
+    _PATCH = (
+        "struct ControlPoint {",
+        "    float4 position : POSITION;",
+        "};",
+        "struct PatchConstants {",
+        "    float edges[3] : SV_TessFactor;",
+        "    float inside : SV_InsideTessFactor;",
+        "};",
+    )
+
+    def tessellation_control(
+        self, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        lines = [
+            *self._PATCH,
+            *self._globals(buffers, parts),
+            "PatchConstants constants(InputPatch<ControlPoint, 3> patch) {",
+            "    PatchConstants output;",
+            "    output.edges[0] = 1.0;",
+            "    output.edges[1] = 1.0;",
+            "    output.edges[2] = 1.0;",
+            "    output.inside = 1.0;",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "    return output;",
+            "}",
+            *self.stage_attributes.get("tessellation-control", ()),
+            '[domain("tri")]',
+            '[partitioning("integer")]',
+            '[outputtopology("triangle_cw")]',
+            "[outputcontrolpoints(3)]",
+            '[patchconstantfunc("constants")]',
+            "ControlPoint main(InputPatch<ControlPoint, 3> patch, uint id : SV_OutputControlPointID) {",
+            "    ControlPoint output;",
+            "    output.position = patch[id].position * 2.0;",
+            "    return output;",
+            "}",
+        ]
+        return "\n".join(lines) + "\n"
+
+    def mesh(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            "struct Vertex {",
+            "    float4 position : SV_Position;",
+            "};",
+            *self._globals(buffers, parts),
+            *self.stage_attributes.get("mesh", ()),
+            "[numthreads(1, 1, 1)]",
+            '[outputtopology("triangle")]',
+            "void main(out vertices Vertex verts[3], out indices uint3 tris[1]) {",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "    verts[0].position = float4(0.0, 0.0, 0.0, 1.0);",
+            "    verts[1].position = float4(1.0, 0.0, 0.0, 1.0);",
+            "    verts[2].position = float4(0.0, 1.0, 0.0, 1.0);",
+            "    tris[0] = uint3(0, 1, 2);",
+            "}",
+        ]
+        return "\n".join(lines) + "\n"
+
+    def task(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            "struct Payload {",
+            "    uint value;",
+            "};",
+            f"groupshared Payload {self.payload};",
+            *self._globals(buffers, parts),
+            *self.stage_attributes.get("task", ()),
+            "[numthreads(1, 1, 1)]",
+            "void main() {",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+        return "\n".join(lines) + "\n"
+
 
 class Metal(Dialect):
     language = "metal"
     suffix = ".metal"
     entry = "probe"
+    wide_integers = True
+    narrow_scalars = True
+    _SCALARS = {
+        "int64": "long",
+        "uint64": "ulong",
+        "int16": "short",
+        "uint16": "ushort",
+    }
+    # The constant a probe passes for each enumeration a Metal function takes (features.metal.ENUMS). Metal allows
+    # only relaxed ordering on device atomics, and mem_none makes a barrier an execution barrier only.
+    _ENUMERATORS = {
+        "memory_order": "memory_order_relaxed",
+        "mem_flags": "mem_flags::mem_none",
+    }
+
+    def type(self, kind: Type) -> str:
+        if kind.opaque in self._ENUMERATORS:
+            return kind.opaque
+        return super().type(kind)
 
     def scalar(self, scalar: str) -> str:
         if scalar == "double":
             raise ProbeError("Metal has no double type")
-        return scalar
+        return self._SCALARS.get(scalar, scalar)
+
+    def literal(self, kind: Type) -> str:
+        if kind.opaque in self._ENUMERATORS:
+            return self._ENUMERATORS[kind.opaque]
+        return super().literal(kind)
+
+    def buffer_element(self, kind: Type, atomic: bool) -> str:
+        return f"atomic_{self.type(kind)}" if atomic else self.type(kind)
+
+    def inout_argument(self) -> str:
+        return "&outp[i]"
+
+    def keep(self, atomic: bool) -> str:
+        # An atomic buffer element can only be used through atomic functions.
+        return "" if atomic else self.store("outp[i]")
 
     def vector(self, scalar: str, size: int) -> str:
         return f"{self.scalar(scalar)}{size}"
 
     def matrix(self, scalar: str, columns: int, rows: int) -> str:
-        if scalar != "float":
+        if scalar not in ("float", "half"):
             raise ProbeError(f"Metal has no {scalar} matrices")
-        return f"float{columns}x{rows}"
+        return f"{scalar}{columns}x{rows}"
 
     def _params(self, buffers: list[Buffer]) -> list[str]:
         return [
@@ -243,63 +416,53 @@ class WGSL(Dialect):
         return "\n".join(lines + ["    return vec4<f32>(0.0);", "}"]) + "\n"
 
 
-class CUDA(Dialect):
-    language = "cuda"
-    suffix = ".cu"
-    entry = "probe"
-    wide_integers = True
-    _SCALARS = {
-        "uint": "unsigned int",
-        "int64": "long long",
-        "uint64": "unsigned long long",
-    }
-    _VECTORS = {"int64": "longlong", "uint64": "ulonglong"}
+class WebGL(Dialect):
+    """GLSL ES 3.00, the shading language of WebGL 2. It has no compute stage and no storage buffers, so every probe is
+    a fragment shader that reads uniform arrays and writes a local array (:data:`.dialect.UNIFORM_ARRAY_LENGTH`).
+    """
 
-    def scalar(self, scalar: str) -> str:
-        return self._SCALARS.get(scalar, scalar)
+    language = "webgl"
+    suffix = ".frag"
+    _HEADER = ("#version 300 es", "precision highp float;", "precision highp int;")
+    _SCALARS = frozenset({"float", "int", "uint", "bool"})
 
-    def vector(self, scalar: str, size: int) -> str:
-        if scalar == "bool":
-            raise ProbeError("CUDA has no bool vectors")
-        return f"{self._VECTORS.get(scalar, scalar)}{size}"
+    def type(self, kind: Type) -> str:
+        if not kind.opaque and kind.scalar not in self._SCALARS:
+            raise ProbeError(f"GLSL ES 3.00 has no {kind.scalar} type")
+        return super().type(kind)
 
-    def matrix(self, scalar: str, columns: int, rows: int) -> str:
-        raise ProbeError("CUDA has no matrix types")
+    def read(self, buffer: str, offset: int) -> str:
+        return uniform_read(buffer, offset)
 
-    def construct(self, kind: Type, parts: list[str]) -> str:
-        return f"make_{self.type(kind)}({', '.join(parts)})"
-
-    def cast(self, kind: Type, value: str) -> str:
-        return f"({self.type(kind)}){value}"
-
-    def out_argument(self, name: str) -> str:
-        return f"&{name}"
-
-    def inout_argument(self) -> str:
-        return "&outp[i]"
+    # GLSL ES 3.00 has no binding layouts, and no default precision for most sampler types.
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        if image_format:
+            raise ProbeError("GLSL ES 3.00 has no images")
+        return f"uniform highp {spelling} {name};"
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        params = [f"{kind}* {name}" for kind, name in buffers]
-        params += parts.get("params", ())
+        *inputs, (output, _) = buffers
         lines = [
+            *self._HEADER,
             *parts.get("prelude", ()),
+            *(
+                f"uniform {kind} {name}[{UNIFORM_ARRAY_LENGTH}];"
+                for kind, name in inputs
+            ),
             *parts.get("declarations", ()),
-            f'extern "C" __global__ void probe({", ".join(params)}) {{',
-            "    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;",
+            "layout(location = 0) out vec4 color;",
+            "void main() {",
+            "    color = vec4(0.0);",
+            f"    {output} outp[1];",
+            "    uint i = 0u;",
         ]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["}"]) + "\n"
 
-
-class HIP(CUDA):
-    """HIP kernels are CUDA kernels that include the HIP runtime header, which hipcc does not add by itself."""
-
-    language = "hip"
-    suffix = ".hip"
-
-    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        prelude = ["#include <hip/hip_runtime.h>", *parts.pop("prelude", ())]
-        return super().kernel(buffers, body, prelude=prelude, **parts)
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        if parts.get("inputs"):
+            raise ProbeError("no shader-input probe for GLSL ES yet")
+        return self.kernel(buffers, body, **parts)
 
 
 class Slang(HLSL):
@@ -309,226 +472,17 @@ class Slang(HLSL):
     suffix = ".slang"
     entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
     fragment_attributes = ('[shader("fragment")]',)
+    stage_attributes = {
+        "tessellation-control": ('[shader("hull")]',),
+        "mesh": ('[shader("mesh")]',),
+        "task": ('[shader("amplification")]',),
+    }
+    # Slang declares a ray payload as a plain struct; payload access qualifiers are an HLSL shader model 6.7 rule.
+    _PAYLOAD = ("struct Payload", "{", "    float4 color;", "};")
 
     def buffer(self, kind: str, name: str, binding: int) -> str:
         # slangc assigns bindings in declaration order; a D3D register would only draw a warning for SPIR-V.
         return f"RWStructuredBuffer<{kind}> {name};"
-
-
-class Mojo(Dialect):
-    """A Mojo GPU kernel: buffers are pointer arguments and MAX's ``global_idx`` gives the invocation's index."""
-
-    language = "mojo"
-    suffix = ".mojo"
-    entry = "probe"
-    _SCALARS = {
-        "float": "Float32",
-        "double": "Float64",
-        "int": "Int32",
-        "uint": "UInt32",
-        "bool": "Bool",
-    }
-    _DTYPES = {
-        "float": "float32",
-        "double": "float64",
-        "int": "int32",
-        "uint": "uint32",
-        "bool": "bool",
-    }
-
-    def scalar(self, scalar: str) -> str:
-        return self._SCALARS[scalar]
-
-    def vector(self, scalar: str, size: int) -> str:
-        return f"SIMD[DType.{self._DTYPES[scalar]}, {size}]"
-
-    def matrix(self, scalar: str, columns: int, rows: int) -> str:
-        raise ProbeError("Mojo has no matrix types")
-
-    def read(self, buffer: str, offset: int) -> str:
-        return f"{buffer}[i + {offset}]"
-
-    def literal(self, kind: Type) -> str:
-        if kind.shape:
-            raise ProbeError("no constant probe argument of a vector or matrix type")
-        return {"bool": "False", "int": "0", "uint": "0"}.get(kind.scalar, "0.0")
-
-    def declare(self, kind: Type, name: str, value: str = "") -> str:
-        initial = f" = {value}" if value else ""
-        return f"var {name}: {self.type(kind)}{initial}"
-
-    def out_argument(self, name: str) -> str:
-        raise ProbeError("Mojo has no output arguments")
-
-    def to_int(self, condition: str) -> str:
-        return f"Int32(1) if {condition} else Int32(0)"
-
-    def first(self, vector: str) -> str:
-        return f"{vector}[0]"
-
-    def store(self, value: str) -> str:
-        return f"outp[i] = {value}"
-
-    def statement(self, expression: str) -> str:
-        return expression
-
-    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        params = [
-            f"{name}: UnsafePointer[{kind}, MutAnyOrigin]" for kind, name in buffers
-        ]
-        params += parts.get("params", ())
-        lines = [
-            "from std.bit import *",
-            "from std.math import *",
-            "from max.gpu import global_idx",
-            *parts.get("prelude", ()),
-            "",
-            *parts.get("declarations", ()),
-            "",
-            f"def probe({', '.join(params)}):",
-            "    var i: Int = global_idx.x",
-        ]
-        lines += [f"    {line}" for line in body]
-        return "\n".join(lines) + "\n"
-
-
-class Rust(Dialect):
-    """A rust-gpu compute entry point: buffers are slice parameters and glam supplies the vector and matrix types.
-
-    A call spelled ``.name`` is a method of its first argument, and one spelled ``unsafe name`` sits in an ``unsafe``
-    block.
-    """
-
-    language = "rust"
-    suffix = ".rs"
-    entry = "probe"
-    _SCALARS = {
-        "float": "f32",
-        "double": "f64",
-        "int": "i32",
-        "uint": "u32",
-        "bool": "bool",
-    }
-    _GLAM = {"float": "", "double": "D", "int": "I", "uint": "U", "bool": "B"}
-
-    def scalar(self, scalar: str) -> str:
-        return self._SCALARS[scalar]
-
-    def vector(self, scalar: str, size: int) -> str:
-        return f"{self._GLAM[scalar]}Vec{size}"
-
-    def matrix(self, scalar: str, columns: int, rows: int) -> str:
-        if scalar not in ("float", "double") or columns != rows:
-            raise ProbeError("glam has square float matrices only")
-        return f"{self._GLAM[scalar]}Mat{columns}"
-
-    def read(self, buffer: str, offset: int) -> str:
-        return f"{buffer}[i + {offset}]"
-
-    def construct(self, kind: Type, parts: list[str]) -> str:
-        build = "from_cols" if len(kind.shape) == 2 else "new"
-        return f"{self.type(kind)}::{build}({', '.join(parts)})"
-
-    def cast(self, kind: Type, value: str) -> str:
-        if kind.shape:
-            return f"{value}.as_{self.type(kind).lower()}()"
-        return f"({value}) as {self.type(kind)}"
-
-    def literal(self, kind: Type) -> str:
-        if kind.shape:
-            raise ProbeError("no constant probe argument of a vector or matrix type")
-        return {"bool": "false", "int": "0", "uint": "0"}.get(kind.scalar, "0.0")
-
-    def declare(self, kind: Type, name: str, value: str = "") -> str:
-        if not value:
-            return f"let mut {name}: {self.type(kind)} = Default::default();"
-        return f"let {name}: {self.type(kind)} = {value};"
-
-    def call(self, name: str, arguments: list[str]) -> str:
-        unsafe = name.startswith("unsafe ")
-        name = name.removeprefix("unsafe ")
-        if name.startswith("."):
-            receiver, *rest = arguments
-            call = f"{receiver}{name}({', '.join(rest)})"
-        else:
-            call = f"{name}({', '.join(arguments)})"
-        return f"unsafe {{ {call} }}" if unsafe else call
-
-    def out_argument(self, name: str) -> str:
-        return f"&mut {name}"
-
-    def inout_argument(self) -> str:
-        return "&mut outp[i]"
-
-    def to_int(self, condition: str) -> str:
-        return f"if {condition} {{ 1 }} else {{ 0 }}"
-
-    def part(self, matrix: str) -> str:
-        return f"{matrix}.x_axis"
-
-    def buffer_element(self, kind: Type, atomic: bool) -> str:
-        # A storage buffer of 3-vectors needs a 16-byte stride, which glam's 12-byte vectors lack.
-        if kind.shape == (3,):
-            return self.type(Type(kind.scalar, (4,)))
-        return self.type(kind)
-
-    def stored(self, kind: Type, value: str) -> str:
-        if kind.shape == (3,):
-            return f"{value}.extend({self.literal(Type(kind.scalar))})"
-        return value
-
-    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        entry = (
-            "#[spirv(compute(threads(1)))]",
-            "#[spirv(global_invocation_id)] id: UVec3",
-        )
-        return self._entry(entry, buffers, ["let i = id.x as usize;", *body], parts)
-
-    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        parts = {**parts, "params": [*parts.get("params", ()), "color: &mut Vec4"]}
-        body = ["let i = 0usize;", *body, "*color = Vec4::ZERO;"]
-        return self._entry(("#[spirv(fragment)]",), buffers, body, parts)
-
-    def _entry(
-        self,
-        entry: tuple[str, ...],
-        buffers: list[Buffer],
-        body: list[str],
-        parts: dict,
-    ) -> str:
-        """An entry point: ``entry`` is its attribute and any built-in parameters, ahead of the buffers."""
-        attribute, *params = entry
-        for binding, (kind, name) in enumerate(buffers):
-            access = "&mut " if name == "outp" else "&"
-            params.append(
-                f"#[spirv(storage_buffer, descriptor_set = 0, binding = {binding})] {name}: {access}[{kind}]"
-            )
-        params += parts.get("params", ())
-        prelude = list(parts.get("prelude", ()))
-        # Crate attributes (``#![feature(f16)]``) have to precede every item.
-        attributes = [line for line in prelude if line.startswith("#!")]
-        declarations = list(parts.get("declarations", ()))
-        if declarations:
-            declarations.append("")
-        lines = [
-            "#![no_std]",
-            *attributes,
-            "use spirv_std::arch::*;",
-            "use spirv_std::glam::*;",
-            "use spirv_std::memory::{Scope, Semantics};",
-            "use spirv_std::num_traits::Float;",
-            "use spirv_std::spirv;",
-            *(line for line in prelude if not line.startswith("#!")),
-            "",
-            *declarations,
-            attribute,
-            "pub fn probe(",
-            *(f"    {param}," for param in params),
-            ") {",
-        ]
-        lines += [f"    {line}" for line in body]
-        lines.append("}")
-        return "\n".join(lines) + "\n"
 
 
 DIALECTS: dict[str, Dialect] = {
@@ -543,6 +497,9 @@ DIALECTS: dict[str, Dialect] = {
         Mojo(),
         Rust(),
         Slang(),
+        WebGL(),
         WGSL(),
     )
 }
+# WebGL's output probes are written in the CrossGL dialect that GLSL ES can run: see :class:`.crossgl.CrossGLES`.
+DIALECTS["crossgl-es"] = CROSSGL_ES

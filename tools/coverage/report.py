@@ -21,7 +21,10 @@ SCHEMA = 2
 # The fields of a feature row in the order coverage.json stores them; any other field follows in sorted order.
 COLUMNS = ("name", "category", "group", "outcome", "detail")
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
-NOT_OFFERED = {("wgsl", "input"): "CrossTL has no WGSL source frontend"}
+NOT_OFFERED = {
+    ("webgl", "input"): "CrossTL has no WebGL source frontend",
+    ("wgsl", "input"): "CrossTL has no WGSL source frontend",
+}
 
 
 def _commit() -> str:
@@ -119,7 +122,15 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
     tools = sorted(
         {validators.TOOLS[language] for language in languages}
         | ({"spirv-as"} if "spirv" in languages else set())
+        # Slang functions that SPIR-V lacks are compiled for HLSL and checked by DXC.
+        | ({"dxc"} if "slang" in languages else set())
         | ({"spirv-dis"} if set(languages) & set(validators.SPIRV_COMPILERS) else set())
+        # SPIR-V input probes are glslang's output.
+        | (
+            {"glslangValidator", "spirv-dis"}
+            if "spirv" in languages and "input" in directions
+            else set()
+        )
     )
     return {
         "schema": SCHEMA,
