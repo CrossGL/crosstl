@@ -2,9 +2,14 @@
 
 CUDA and HIP launch a kernel over ``gridDim`` blocks of ``blockDim`` threads, and the host picks both at launch
 time. ``__launch_bounds__`` and ``amdgpu_flat_work_group_size`` only bound the block size. An importer therefore
-marks every kernel ``@ host_workgroup_size``, naming the size when its ``threadgroup_size`` source option gives
-it, and the CrossGL parser keeps the mark only on kernels whose results depend on that size (see
-:mod:`crosstl.translator.host_workgroup_size`).
+marks every kernel ``@ host_workgroup_size``, and the CrossGL parser keeps the mark only on kernels whose results
+depend on that size (see :mod:`crosstl.translator.host_workgroup_size`).
+
+When the ``threadgroup_size`` source option names the block size, the kernel imports with
+``@ workgroup_size``: every CUDA and HIP launch covers whole blocks, so a target that runs that size and
+dispatches ``gridDim`` groups runs exactly the source's threads. A target given one invocation per group
+instead would need ``gridDim * blockDim`` groups, past the 65,535 groups per dimension that Direct3D 12 and
+Vulkan guarantee for any kernel over more than that many elements.
 
 ``blockIdx.c * blockDim.c + threadIdx.c`` is the thread's index in the grid. It imports as
 ``gl_GlobalInvocationID.c``, which has that value, the same ``unsigned int`` type, and no dependence on the block
@@ -61,7 +66,16 @@ def global_invocation_axis(node: Any) -> str | None:
     return None
 
 
-def kernel_workgroup_size_attribute(threadgroup_size: Any) -> str:
-    """The CrossGL attribute line of a kernel whose host picks its block size."""
+def kernel_workgroup_size_attribute(
+    threadgroup_size: Any, whole_groups: bool = False
+) -> str:
+    """The CrossGL attribute line of a kernel whose host picks its block size.
+
+    ``whole_groups`` says that the source's launches always cover whole groups, as CUDA and HIP launches do, so
+    a size the host names is the kernel's workgroup size. OpenCL 2.0 and Metal's ``dispatchThreads`` may end
+    the grid with a partial group, which one invocation per group still runs exactly.
+    """
     size = normalize_threadgroup_size_option(threadgroup_size)
+    if whole_groups and size is not None:
+        return f"@workgroup_size({size[0]}, {size[1]}, {size[2]})"
     return f"@{host_workgroup_size_attribute_text(size)}"
