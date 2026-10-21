@@ -383,8 +383,8 @@ lie on dyadic grids that keep every float32 partial sum exact, so each output
 must match an exact float64 reference bit for bit, and float32 results must also
 match MLX's CPU backend. The unchanged upstream `test_qmv` and `test_qvm` also
 need the floating-point `Matmul` route below for their reference products;
-`test_qmv`'s unbatched references are matrix-matrix products, which are not
-routed yet.
+`test_qmv`'s unbatched references are matrix-matrix products; those MLX
+sends to split-K are not routed yet.
 
 ## Floating-Point Matrix-Vector Products
 
@@ -396,9 +396,8 @@ operands, `collapse_batches`, the fold of a contiguous batch into `M`, then
 so it never selects `gemv_wide`, and `Matmul` never computes `axpby`. The host
 copies the operands MLX would copy and, in addition, views with negative
 strides. Empty inputs produce zeros through the translated copy. Single dot
-products, which MLX sends to `dot_product` and an all-reduce, and
-matrix-matrix products, which go to the steel GEMM kernels, fail with an
-explicit error.
+products, which MLX sends to `dot_product` and an all-reduce, fail with an
+explicit error. Matrix-matrix products take the steel GEMM route below.
 
 `gemv_layout.py` rejects a launch unless its entry, grid and workgroup are the
 ones MLX's routing would choose for the bound sizes, leading dimension and batch
@@ -412,8 +411,33 @@ cases reach ten of the twelve instantiated tiles in all three element types,
 both batch variants, transposed and strided operands, broadcast and
 `as_strided` batches, and the batch fold. Each output must match an exact
 float64 reference bit for bit, float32 outputs must also match MLX's CPU
-backend, and a matrix-matrix product and a single dot product must fail with
-the host's error without dispatching.
+backend, and a split-K product and a single dot product must fail with the
+host's error without dispatching.
+
+## Floating-Point Matrix-Matrix Products
+
+Products with more than one output row and column follow matmul.cpp's
+`steel_matmul` after the same operand preparation. The host reports no Apple
+GPU architecture and no NAX unit, so `steel_matmul_axpby` compares the product
+against the split-K case with its 1,024-tile threshold and otherwise selects
+`steel_gemm_fused` with `GEMM_TPARAM_MACRO`'s medium-device tile, 64x64x16
+with 2x2 simdgroups. The host names each entry by matmul.cpp's hash name, so
+the translation freezes the kernel's `has_batch` and `align_M`/`N`/`K`
+function constants; `Matmul` never reads `C`, so `use_out_source` and
+`do_axpby` stay false. Split-K products, which need `steel_gemm_splitk` and its
+accumulation kernel, fail with an explicit error.
+
+`gemm_layout.py` rejects a launch unless its entry, constants, `GEMMParams`,
+grid and workgroup are what matmul.cpp would bind for the sizes and strides,
+and every batch's `A` and `B` tiles lie inside their buffers. `gemm_packages`
+translates entries with the options and range assertions of the current-tree
+GEMM gate (`test_current_gemm_family.py`), and the host packs `GEMMParams`
+into the reflected record layout. The `MLX quantized host` jobs translate the
+routed entries with `python -m demos.integrations.mlx.portable_host.gemm_packages
+--verification --jobs 3` before `verify_matmul.py`, whose GEMM cases cover
+every transposition and element type, partial and whole tiles, several tiles
+per axis, batches with and without `has_batch`, a batch folded into `M` and a
+copied operand, with the same exact references.
 
 ## Block Quantization
 

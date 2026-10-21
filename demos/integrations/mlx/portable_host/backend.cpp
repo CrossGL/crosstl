@@ -2195,6 +2195,92 @@ std::tuple<bool, int64_t, array> gemv_operand(const array& in, bool is_vector) {
   }
   return std::make_tuple(false, int64_t(in.shape(-1)), contiguous_copy(in));
 }
+
+// matmul.cpp steel_matmul_axpby without C. The host reports no Apple GPU
+// architecture and no NAX unit, so GEMM_TPARAM_MACRO takes its medium-device
+// tile and the split-K case uses the threshold of 1024 tiles.
+void dispatch_steel_gemm(
+    const array& a,
+    const array& b,
+    array& out,
+    int M,
+    int N,
+    int K,
+    size_t batch_size_out,
+    int64_t lda,
+    int64_t ldb,
+    bool transpose_a,
+    bool transpose_b,
+    Shape batch_shape,
+    const Strides& A_batch_stride,
+    const Strides& B_batch_stride) {
+  const int64_t split_tiles = int64_t((M + 16 - 1) / 16) * ((N + 16 - 1) / 16);
+  if (batch_size_out == 1 && split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)) {
+    throw std::invalid_argument("CrossTL matmul does not route split-K matrix products yet.");
+  }
+  constexpr int bm = 64, bn = 64, bk = 16, wm = 2, wn = 2;
+  const bool has_batch = batch_shape.size() > 1;
+  auto flag = [](bool value) { return value ? "t" : "n"; };
+  const char* storage = matmul_storage(out.dtype());
+  // steel_matmul_regular_axpby's hash name: the kernel and its constants.
+  const std::string entry = std::string("steel_gemm_fused_") + (transpose_a ? "t" : "n") +
+      (transpose_b ? "t" : "n") + "_" + storage + "_" + storage + "_bm" + std::to_string(bm) +
+      "_bn" + std::to_string(bn) + "_bk" + std::to_string(bk) + "_wm" + std::to_string(wm) +
+      "_wn" + std::to_string(wn) + "_has_batch_" + flag(has_batch) +
+      "_use_out_source_n_do_axpby_n_align_M_" + flag(M % bm == 0) + "_align_N_" +
+      flag(N % bn == 0) + "_align_K_" + flag(K % bk == 0);
+  require_entry(entry);
+  const uint64_t tiles_n = (uint64_t(N) + bn - 1) / bn;
+  const uint64_t tiles_m = (uint64_t(M) + bm - 1) / bm;
+  if (out.size() > max_matmul_elements || batch_size_out > 65535 || tiles_n > 65535 ||
+      tiles_m > 65535 || lda < 0 || lda > int64_t(max_matmul_elements) || ldb < 0 ||
+      ldb > int64_t(max_matmul_elements) || batch_shape.empty() || batch_shape.size() > 16 ||
+      A_batch_stride.size() != batch_shape.size() ||
+      B_batch_stride.size() != batch_shape.size()) {
+    throw std::invalid_argument("CrossTL matmul launch exceeds its bounds.");
+  }
+  out.set_data(allocator::malloc(out.nbytes()));
+  Strides batch_strides = A_batch_stride;
+  batch_strides.insert(batch_strides.end(), B_batch_stride.begin(), B_batch_stride.end());
+  // GEMMParams in params.h order, each widened to int64.
+  std::vector<int64_t> params = {
+      M,
+      N,
+      K,
+      lda,
+      ldb,
+      N,
+      int64_t(tiles_n),
+      int64_t(tiles_m),
+      A_batch_stride.back(),
+      B_batch_stride.back(),
+      int64_t(M) * N,
+      0,
+      K / bk,
+      int64_t(batch_shape.size())};
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  // matmul.cpp binds batch_shape and batch_strides only with has_batch; the
+  // kernel reads neither otherwise.
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"A", storage, data(a), matmul_span(a), 0},
+      {"B", storage, data(b), matmul_span(b), 0},
+      {"D", storage, out.data<void>(), out.size(), 1},
+      {"params", "int64", params.data(), params.size(), 0},
+      {"batch_shape", "int32", batch_shape.data(), batch_shape.size(), 0},
+      {"batch_strides", "int64", batch_strides.data(), batch_strides.size(), 0},
+  };
+  const CrosstlMlxLaunch launch{
+      {uint32_t(tiles_n), uint32_t(tiles_m), uint32_t(batch_size_out)},
+      {32, uint32_t(wn), uint32_t(wm)}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers.data(), static_cast<uint32_t>(buffers.size()), out.size(),
+      &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native matmul failed: ") + error);
+  }
+}
 } // namespace
 
 void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -2246,7 +2332,10 @@ void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // MLX takes gemv_wide only from Apple GPU generation 15, which the host
   // does not report.
   if (std::min(M, N) != 1) {
-    throw std::invalid_argument("CrossTL matmul does not route matrix-matrix products yet.");
+    dispatch_steel_gemm(
+        a, b, out, M, N, K, batch_size_out, a_cols, b_cols, a_transposed, b_transposed,
+        batch_shape, A_batch_stride, B_batch_stride);
+    return;
   }
   // gemv_axbpy without axpby.
   const bool is_b_matrix = N != 1;

@@ -22,7 +22,8 @@ CTYPES = {
     "int32": ctypes.c_int32,
     "int64": ctypes.c_int64,
 }
-RECORDS = [verify.case_record(case) for case in verify.CASES]
+ALL_RECORDS = [verify.case_record(case) for case in verify.CASES]
+RECORDS = [record for record in ALL_RECORDS if record["family"] == "gemv"]
 
 
 def span(shape, strides):
@@ -189,9 +190,9 @@ def test_routes_mirror_matmul_eval_gpu():
     flipped = layout.route("float32", [1, 8], [8, -1], [8, 4], [4, 1])
     assert flipped["copies"]["a"] and flipped["entry"].startswith("gemv_t_")
     for a, b, message in (
-        (([4, 8], [8, 1]), ([8, 5], [5, 1]), "Matrix-matrix"),
+        (([4, 8], [8, 1]), ([8, 5], [5, 1]), "steel GEMM"),
         # test_qmv's unbatched reference folds three vectors into M.
-        (([3, 64], [64, 1]), ([64, 256], [1, 64]), "Matrix-matrix"),
+        (([3, 64], [64, 1]), ([64, 256], [1, 64]), "steel GEMM"),
         (([1, 16], [16, 1]), ([16, 1], [1, 1]), "dot products"),
         (([2, 8], [8, 1]), ([3, 8, 1], [8, 1, 1]), "ranks"),
     ):
@@ -567,7 +568,7 @@ def test_preparation_replaces_the_matmul_stub(monkeypatch):
         "} else if (K >= 16 * out_vector_len) {",
         '(batch_shape.size() == 1 ? "0" : "1") + "_axpby0"',
         "{32, uint32_t(bn), uint32_t(bm)}",
-        "does not route matrix-matrix products yet",
+        "does not route split-K matrix products yet",
         "does not route single dot products yet",
     ):
         assert text in backend, text
@@ -590,37 +591,65 @@ def test_case_data_is_exact_and_rounded():
         assert np.any(data["expected"] != 0)
 
 
-def test_trace_validation_requires_the_routed_entries():
-    trace = [
-        {
+def trace_event(record, target):
+    """The trace event a dispatch of ``record`` writes."""
+    route = record["route"]
+    if record["family"] == "gemm":
+        return {
             "entry": record["entry"],
-            "target": "opengl",
-            "gemvMetadata": {
-                "K": record["route"]["K"],
-                "outVecSize": record["route"]["outVecSize"],
-                "matrixLd": record["route"]["matrixLd"],
-                "batches": record["route"]["batches"],
-            },
+            "target": target,
+            "gemmMetadata": {key: route[key] for key in ("M", "N", "K", "batches")},
             "parameters": {
-                "batch_shape": record["route"]["batchShape"],
-                "vector_batch_stride": record["route"]["vectorBatchStride"],
-                "matrix_batch_stride": record["route"]["matrixBatchStride"],
+                "params": dict(route["params"]),
+                "batch_shape": list(route["batchShape"]),
+                "batch_strides": list(route["batchStrides"]),
             },
         }
-        for record in RECORDS
-    ]
+    return {
+        "entry": record["entry"],
+        "target": target,
+        "gemvMetadata": {
+            "K": route["K"],
+            "outVecSize": route["outVecSize"],
+            "matrixLd": route["matrixLd"],
+            "batches": route["batches"],
+        },
+        "parameters": {
+            "batch_shape": route["batchShape"],
+            "vector_batch_stride": route["vectorBatchStride"],
+            "matrix_batch_stride": route["matrixBatchStride"],
+        },
+    }
+
+
+def test_trace_validation_requires_the_routed_entries():
+    trace = [trace_event(record, "opengl") for record in ALL_RECORDS]
     copy = {"entry": "ggn2_dynamic_copyfloat16float16", "target": "opengl"}
-    verify.validate_trace([copy, *trace], RECORDS, "opengl")
+    verify.validate_trace([copy, *trace], ALL_RECORDS, "opengl")
     with pytest.raises(RuntimeError):
-        verify.validate_trace(trace, RECORDS, "metal")
+        verify.validate_trace(trace, ALL_RECORDS, "metal")
     with pytest.raises(RuntimeError):
-        verify.validate_trace(trace[1:], RECORDS, "opengl")
+        verify.validate_trace(trace[1:], ALL_RECORDS, "opengl")
     trace[0]["parameters"]["vector_batch_stride"] = [1]
     with pytest.raises(RuntimeError):
-        verify.validate_trace(trace, RECORDS, "opengl")
+        verify.validate_trace(trace, ALL_RECORDS, "opengl")
     trace[0]["parameters"]["vector_batch_stride"] = [0]
-    with pytest.raises(RuntimeError, match="cover"):
-        verify.validate_trace(trace[:3], RECORDS[:3], "opengl")
+    gemm = next(
+        index for index, record in enumerate(ALL_RECORDS) if record["family"] == "gemm"
+    )
+    trace[gemm]["parameters"]["params"]["lda"] += 1
+    with pytest.raises(RuntimeError, match="launch differs"):
+        verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    trace[gemm]["parameters"]["params"]["lda"] -= 1
+    verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    # Each family must cover its routes on its own.
+    for family in ("gemv", "gemm"):
+        kept = [record for record in ALL_RECORDS if record["family"] != family] + [
+            record for record in ALL_RECORDS if record["family"] == family
+        ][:3]
+        events = [trace_event(record, "opengl") for record in kept]
+        with pytest.raises(RuntimeError, match="cover"):
+            verify.validate_trace(events, kept, "opengl")
 
 
 def test_ci_runs_the_matmul_route_on_every_quantized_host_platform():
@@ -636,13 +665,16 @@ def test_ci_runs_the_matmul_route_on_every_quantized_host_platform():
     names = [item.get("name") for item in job["steps"]]
     steps = dict(zip(names, job["steps"]))
     translate = steps["Translate floating-point matrix-vector packages"]
-    execute = steps["Execute floating-point matrix-vector products through MLX"]
-    for item in (translate, execute):
+    gemm = steps["Translate steel GEMM packages"]
+    execute = steps["Execute floating-point matrix products through MLX"]
+    for item in (translate, gemm, execute):
         assert "if" not in item and "continue-on-error" not in item
         assert "set -euo pipefail" in item["run"]
         assert "--packages .mlx-portable-quantized/base/packages" in item["run"]
     assert "portable_host.gemv_packages" in translate["run"]
-    assert "--verification" in translate["run"] and "--jobs 3" in translate["run"]
+    assert "portable_host.gemm_packages" in gemm["run"]
+    for item in (translate, gemm):
+        assert "--verification" in item["run"] and "--jobs 3" in item["run"]
     assert "portable_host.verify_matmul" in execute["run"]
     assert "tee .mlx-portable-quantized/matmul.log" in execute["run"]
     assert execute["env"]["CROSTL_DIRECTX_FORCE_WARP"] == "1"
@@ -652,7 +684,8 @@ def test_ci_runs_the_matmul_route_on_every_quantized_host_platform():
     order = [
         "Build adapted upstream MLX",
         "Translate floating-point matrix-vector packages",
-        "Execute floating-point matrix-vector products through MLX",
+        "Translate steel GEMM packages",
+        "Execute floating-point matrix products through MLX",
         "Retain quantized execution evidence",
     ]
     assert [names.index(item) for item in order] == sorted(

@@ -1,20 +1,19 @@
-"""Exercise MLX matmul through translated floating-point matrix-vector kernels.
+"""Exercise MLX matmul through translated floating-point matmul kernels.
 
-Every case routes one ``mx.matmul`` call to one translated ``gemv`` or
-``gemv_t`` entry and checks each output bit against an exact float64
-reference: inputs lie on dyadic grids that keep every float32 partial sum
-exact, whatever its order. Products MLX sends to other kernels must fail with
-the host's explicit error.
+Every case routes one ``mx.matmul`` call to one translated ``gemv``,
+``gemv_t`` or ``steel_gemm_fused`` entry and checks each output bit against an
+exact float64 reference: inputs lie on dyadic grids that keep every float32
+partial sum exact, whatever its order. Products MLX sends to other kernels
+must fail with the host's explicit error.
 """
 
 import argparse
 import hashlib
 import json
-import math
 import struct
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import gemv_layout
+from demos.integrations.mlx.portable_host import gemm_layout, gemv_layout
 from demos.integrations.mlx.portable_host.prepare import verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify_quantized_matmul import rounded
@@ -86,10 +85,39 @@ CASES = (
         ((3, 4, 64), "dense"),
         ((64,), ("strided", (3, 64, 1), (0, 1, 1))),
     ),
+    # Steel GEMM: every transposition and type, partial and whole tiles,
+    # several tiles per axis, batches with and without has_batch, a batch
+    # folded into M and a copied operand.
+    ("gemm-nn-partial", "float32", ((33, 40), "dense"), ((40, 35), "dense")),
+    ("gemm-nn-aligned", "float16", ((128, 64), "dense"), ((64, 64), "dense")),
+    ("gemm-nt", "bfloat16", ((70, 48), "dense"), ((69, 48), "swap")),
+    ("gemm-tn", "float32", ((40, 65), "swap"), ((40, 66), "dense")),
+    ("gemm-tt", "float16", ((24, 130), "swap"), ((70, 24), "swap")),
+    ("gemm-wide", "float32", ((130, 70), "dense"), ((70, 200), "dense")),
+    ("gemm-batched", "float32", ((3, 20, 30), "dense"), ((3, 30, 40), "dense")),
+    (
+        "gemm-batched-aligned",
+        "bfloat16",
+        ((2, 64, 32), "dense"),
+        ((2, 32, 128), "dense"),
+    ),
+    (
+        "gemm-two-batch-axes",
+        "bfloat16",
+        ((2, 3, 17, 24), "dense"),
+        ((1, 3, 24, 19), ("broadcast", (2, 3, 24, 19))),
+    ),
+    (
+        "gemm-batch-folded-into-rows",
+        "float16",
+        ((3, 5, 32), "dense"),
+        ((32, 70), ("strided", (3, 32, 70), (0, 70, 1))),
+    ),
+    ("gemm-copied-operand", "float32", ((20, 64), "step"), ((32, 9), "dense")),
 )
 # Products the host refuses, with the error it raises.
 REFUSALS = (
-    ("matrix-matrix", (4, 8), (8, 5), "matrix-matrix products"),
+    ("split-k", (16, 256), (256, 16), "split-K matrix products"),
     ("dot-product", (1, 16), (16, 1), "single dot products"),
 )
 
@@ -128,9 +156,12 @@ def case_record(case):
     name, dtype, (a_stored, a_view), (b_stored, b_view) = case
     a_shape, a_strides = view_layout(a_stored, a_view)
     b_shape, b_strides = view_layout(b_stored, b_view)
-    route = gemv_layout.route(dtype, a_shape, a_strides, b_shape, b_strides)
+    family, route = gemm_layout.matmul_route(
+        dtype, a_shape, a_strides, b_shape, b_strides
+    )
     return {
         "name": name,
+        "family": family,
         "dtype": dtype,
         "a": {"stored": list(a_stored), "view": a_view, "shape": a_shape},
         "b": {"stored": list(b_stored), "view": b_view, "shape": b_shape},
@@ -248,45 +279,103 @@ def run_refusal(mx, host, refusal):
     return {"name": name, "message": message}
 
 
-def validate_trace(trace, records, target):
-    products = [event for event in trace if event.get("entry", "").startswith("gemv")]
-    expected = [record["entry"] for record in records]
-    if [event["entry"] for event in products] != expected or any(
-        event.get("target") != target for event in trace
-    ):
-        raise RuntimeError("Matmul trace does not match the routed entries")
-    for event, record in zip(products, records):
-        route, metadata = record["route"], event["gemvMetadata"]
-        parameters = event["parameters"]
-        if (
-            metadata["K"],
-            metadata["outVecSize"],
-            metadata["matrixLd"],
-            metadata["batches"],
-        ) != (route["K"], route["outVecSize"], route["matrixLd"], route["batches"]) or (
-            parameters["batch_shape"],
-            parameters["vector_batch_stride"],
-            parameters["matrix_batch_stride"],
-        ) != (
-            route["batchShape"],
-            route["vectorBatchStride"],
-            route["matrixBatchStride"],
-        ):
-            raise RuntimeError(f"Matmul launch differs: {record['name']}")
-    signatures = [gemv_layout.signature(entry) for entry in expected]
+def _gemv_launch_matches(event, record):
+    route, metadata = record["route"], event["gemvMetadata"]
+    parameters = event["parameters"]
+    return (
+        metadata["K"],
+        metadata["outVecSize"],
+        metadata["matrixLd"],
+        metadata["batches"],
+    ) == (route["K"], route["outVecSize"], route["matrixLd"], route["batches"]) and (
+        parameters["batch_shape"],
+        parameters["vector_batch_stride"],
+        parameters["matrix_batch_stride"],
+    ) == (
+        route["batchShape"],
+        route["vectorBatchStride"],
+        route["matrixBatchStride"],
+    )
+
+
+def _gemm_launch_matches(event, record):
+    route, metadata = record["route"], event["gemmMetadata"]
+    parameters = event["parameters"]
+    return (
+        all(metadata[key] == route[key] for key in ("M", "N", "K", "batches"))
+        and parameters["params"] == route["params"]
+        and parameters["batch_shape"] == route["batchShape"]
+        and parameters["batch_strides"] == route["batchStrides"]
+    )
+
+
+def _gemv_covered(records):
+    signatures = [gemv_layout.signature(record["entry"]) for record in records]
     tiles = {
         tuple(info[key] for key in ("kind", "bm", "bn", "sm", "sn", "tm", "tn"))
         for info in signatures
     }
-    if (
-        {info["kind"] for info in signatures} != {"gemv", "gemv_t"}
-        or {info["nc"] for info in signatures} != {False, True}
-        or {info["dtype"] for info in signatures} != set(gemv_layout.DTYPES)
-        or len(tiles) < 10
-        or not any(record["copies"] for record in records)
-        or not any(record["route"]["M"] > 1 for record in records)
-    ):
-        raise RuntimeError("Matmul cases do not cover every route")
+    return (
+        {info["kind"] for info in signatures} == {"gemv", "gemv_t"}
+        and {info["nc"] for info in signatures} == {False, True}
+        and {info["dtype"] for info in signatures} == set(gemv_layout.DTYPES)
+        and len(tiles) >= 10
+        and any(record["copies"] for record in records)
+        and any(record["route"]["M"] > 1 for record in records)
+    )
+
+
+def _gemm_covered(records):
+    signatures = [gemm_layout.signature(record["entry"]) for record in records]
+    constants = [info["constants"] for info in signatures]
+    routes = [record["route"] for record in records]
+    return (
+        {(info["transposeA"], info["transposeB"]) for info in signatures}
+        == {(False, False), (False, True), (True, False), (True, True)}
+        and {info["dtype"] for info in signatures} == set(gemm_layout.DTYPES)
+        and all(
+            {values[name] for values in constants} == {False, True}
+            for name in ("has_batch", "align_M", "align_N", "align_K")
+        )
+        and any(
+            min(route["params"]["tiles_m"], route["params"]["tiles_n"]) > 1
+            for route in routes
+        )
+        and any(record["copies"] for record in records)
+        and any(
+            route["M"] > record["a"]["shape"][-2]
+            for route, record in zip(routes, records)
+        )
+        and any(
+            route["batches"] > 1 and len(route["batchShape"]) == 1 for route in routes
+        )
+    )
+
+
+# (family, entry prefix, launch check, coverage check)
+FAMILIES = (
+    ("gemv", gemv_layout.ENTRY_PREFIXES, _gemv_launch_matches, _gemv_covered),
+    ("gemm", gemm_layout.ENTRY_PREFIXES, _gemm_launch_matches, _gemm_covered),
+)
+
+
+def validate_trace(trace, records, target):
+    if any(event.get("target") != target for event in trace):
+        raise RuntimeError("Matmul trace does not match the routed entries")
+    for family, prefixes, matches, covered in FAMILIES:
+        chosen = [record for record in records if record["family"] == family]
+        products = [
+            event for event in trace if event.get("entry", "").startswith(prefixes)
+        ]
+        if [event["entry"] for event in products] != [
+            record["entry"] for record in chosen
+        ]:
+            raise RuntimeError("Matmul trace does not match the routed entries")
+        for event, record in zip(products, chosen):
+            if not matches(event, record):
+                raise RuntimeError(f"Matmul launch differs: {record['name']}")
+        if not covered(chosen):
+            raise RuntimeError("Matmul cases do not cover every route")
 
 
 def verify(root, packages, output):
@@ -332,8 +421,12 @@ def verify(root, packages, output):
                 "refusals": len(refusals),
                 "dispatches": host.dispatch_count,
                 "elements": sum(
-                    math.prod(record["route"]["batchShape"])
-                    * record["route"]["outVecSize"]
+                    record["route"]["batches"]
+                    * (
+                        record["route"]["outVecSize"]
+                        if record["family"] == "gemv"
+                        else record["route"]["M"] * record["route"]["N"]
+                    )
                     for record in records
                 ),
             }

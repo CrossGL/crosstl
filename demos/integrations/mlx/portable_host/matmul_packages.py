@@ -116,6 +116,10 @@ class TranslatedEntryCache:
     def recipe_hashes(self):
         raise NotImplementedError
 
+    def source_entry(self, entry):
+        """The source entry point an entry translates; entries may add constants."""
+        return entry
+
     def __init__(self, root, directory, target):
         if target not in {"metal", "directx", "opengl"}:
             raise ValueError(f"Unsupported {self.LABEL.lower()} target")
@@ -205,7 +209,8 @@ class TranslatedEntryCache:
             raise ValueError(
                 f"Invalid {self.LABEL.lower()} runtime package: {loader['diagnostics']}"
             )
-        if loader["loadUnits"][0]["entryPoint"]["source"] != identity["entry"]:
+        source_entry = self.source_entry(identity["entry"])
+        if loader["loadUnits"][0]["entryPoint"]["source"] != source_entry:
             raise ValueError(f"{self.LABEL} package selects another entry")
         descriptor = build_native_loader_abi_descriptor(loader)
         if (
@@ -213,9 +218,7 @@ class TranslatedEntryCache:
             or descriptor["target"] != self.target
             or descriptor["stage"] != "compute"
             or descriptor["entryPoint"]["name"]
-            != {"opengl": "main", "directx": "CSMain"}.get(
-                self.target, identity["entry"]
-            )
+            != {"opengl": "main", "directx": "CSMain"}.get(self.target, source_entry)
             or descriptor["source"]["hash"] != {
                 "algorithm": "sha256",
                 "value": identity["sourceHash"],
@@ -241,7 +244,7 @@ class TranslatedEntryCache:
                     f"{self.LABEL} translation failed: {payload['diagnostics']}"
                 )
             (artifact,) = payload["artifacts"]
-            if artifact["entryPoint"]["source"] != entry:
+            if artifact["entryPoint"]["source"] != self.source_entry(entry):
                 raise ValueError(f"{self.LABEL} translation selected another entry")
             (execution,) = artifact["execution"]["entryPoints"]
             if execution["workgroupSize"] != list(self.workgroup_size(entry)):

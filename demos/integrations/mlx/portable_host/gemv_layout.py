@@ -6,8 +6,8 @@ column as matmul.cpp does: ``check_transpose`` on both operands,
 ``gemv_axbpy``'s choice of ``gemv`` or ``gemv_t`` and its tile shape. MLX takes
 ``gemv_wide`` only from Apple GPU generation 15, which the portable host never
 reports, and ``Matmul`` never asks for ``axpby``. Single dot products, which
-MLX sends to ``dot_product`` and an all-reduce, and matrix-matrix products,
-which go to the steel GEMM kernels, fail with an explicit error.
+MLX sends to ``dot_product`` and an all-reduce, fail with an explicit error;
+``gemm_layout`` describes the matrix-matrix route.
 """
 
 import ctypes
@@ -222,12 +222,13 @@ def _row_strides(shape):
     return strides
 
 
-def route(dtype, a_shape, a_strides, b_shape, b_strides):
-    """Matmul::eval_gpu's route for operands of equal rank and batch shape.
+def operands(a_shape, a_strides, b_shape, b_strides):
+    """Matmul::eval_gpu's operand preparation, before it picks a kernel.
 
     ``a`` is ``(..., M, K)`` and ``b`` ``(..., K, N)`` as ops.cpp matmul hands
-    them over. Returns the entry with the values gemv_axbpy binds; raises for
-    the routes the host does not take.
+    them over. Returns ``check_transpose`` for both operands, the collapsed
+    batches, the fold of a contiguous batch into ``M`` and whether MLX would
+    take its dot-product route.
     """
     if len(a_shape) != len(b_shape) or len(a_shape) < 2:
         raise ValueError("Matrix product operand ranks differ")
@@ -265,25 +266,54 @@ def route(dtype, a_shape, a_strides, b_shape, b_strides):
         for shape, strides in ((a_shape, a_strides), (b_shape, b_strides))
         for extent, stride, expected in zip(shape, strides, _row_strides(shape))
     )
-    if m == 1 and n == 1 and batches == 1 and row_contiguous:
+    return {
+        "M": m,
+        "N": n,
+        "K": k,
+        "transposeA": a_transposed,
+        "transposeB": b_transposed,
+        "lda": lda,
+        "ldb": ldb,
+        "batches": batches,
+        "batchShape": batch_shape,
+        "aBatchStride": a_batch,
+        "bBatchStride": b_batch,
+        "dot": m == 1 and n == 1 and batches == 1 and row_contiguous,
+        "copies": {"a": a_copy, "b": b_copy},
+    }
+
+
+def route(dtype, a_shape, a_strides, b_shape, b_strides):
+    """Matmul::eval_gpu's matrix-vector route for operands of equal rank.
+
+    Returns the entry with the values gemv_axbpy binds; raises for the routes
+    that take other kernels.
+    """
+    prepared = operands(a_shape, a_strides, b_shape, b_strides)
+    m, n, k = prepared["M"], prepared["N"], prepared["K"]
+    if prepared["dot"]:
         raise ValueError("Single dot products are not routed")
     if min(m, n) != 1:
-        raise ValueError("Matrix-matrix products are not routed")
+        raise ValueError("Matrix-matrix products take the steel GEMM route")
     is_b_matrix = n != 1
-    transpose_mat = not b_transposed if is_b_matrix else a_transposed
+    a_batch, b_batch = prepared["aBatchStride"], prepared["bBatchStride"]
+    transpose_mat = (
+        not prepared["transposeB"] if is_b_matrix else prepared["transposeA"]
+    )
     out_size = n if is_b_matrix else m
+    batch_shape = prepared["batchShape"]
     return {
         "entry": select(dtype, transpose_mat, k, out_size, len(batch_shape)),
         "M": m,
         "N": n,
         "K": k,
-        "batches": batches,
+        "batches": prepared["batches"],
         "outVecSize": out_size,
-        "matrixLd": ldb if is_b_matrix else lda,
+        "matrixLd": prepared["ldb"] if is_b_matrix else prepared["lda"],
         "batchShape": batch_shape,
         "vectorBatchStride": a_batch if is_b_matrix else b_batch,
         "matrixBatchStride": b_batch if is_b_matrix else a_batch,
-        "copies": {"a": a_copy, "b": b_copy},
+        "copies": prepared["copies"],
     }
 
 

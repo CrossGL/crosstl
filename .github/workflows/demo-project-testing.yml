@@ -3049,7 +3049,7 @@ jobs:
     name: MLX quantized host (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -3085,7 +3085,9 @@ jobs:
             2>&1 | tee .mlx-portable-quantized/dependencies.log
       - name: Validate quantized host contracts
         if: runner.os == 'Linux'
-        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_quantized_matmul.py demos/integrations/mlx/tests/host/test_portable_matmul.py
+        run: |
+          python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_quantized_matmul.py \
+            demos/integrations/mlx/tests/host/test_portable_matmul.py demos/integrations/mlx/tests/host/test_portable_gemm.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
@@ -3182,7 +3184,14 @@ jobs:
             python -m demos.integrations.mlx.portable_host.gemv_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
               2>&1 | tee .mlx-portable-quantized/matmul-translation.log
-      - name: Execute floating-point matrix-vector products through MLX
+      - name: Translate steel GEMM packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX steel GEMM translation" -- \
+            python -m demos.integrations.mlx.portable_host.gemm_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/gemm-translation.log
+      - name: Execute floating-point matrix products through MLX
         env:
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"

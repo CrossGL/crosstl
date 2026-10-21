@@ -111,7 +111,8 @@ def build_entries(root, packages, target, entries, jobs):
 def verification_entries():
     from demos.integrations.mlx.portable_host import verify_matmul
 
-    return [verify_matmul.case_record(case)["entry"] for case in verify_matmul.CASES]
+    records = (verify_matmul.case_record(case) for case in verify_matmul.CASES)
+    return [record["entry"] for record in records if record["family"] == "gemv"]
 
 
 def main(argv=None):

@@ -34,6 +34,8 @@ from demos.integrations.mlx.portable_host import (
     column_reduction_layout,
     copy_layout,
     gather_dispatch,
+    gemm_dispatch,
+    gemm_layout,
     gemv_dispatch,
     gemv_layout,
     half_storage,
@@ -54,6 +56,10 @@ from demos.integrations.mlx.portable_host.gather_packages import (
 from demos.integrations.mlx.portable_host.gather_packages import (
     signature as gather_signature,
 )
+from demos.integrations.mlx.portable_host.gemm_packages import (
+    CACHE_DIRECTORY as GEMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.gemm_packages import GemmPackageCache
 from demos.integrations.mlx.portable_host.gemv_packages import (
     CACHE_DIRECTORY as GEMV_CACHE,
 )
@@ -316,6 +322,11 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.gemms = (
+            GemmPackageCache(mlx_root, self.directory / GEMM_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -479,6 +490,9 @@ class HostRuntime:
             if name.startswith(gemv_layout.ENTRY_PREFIXES) and self.gemvs is not None:
                 gemv_layout.signature(name)
                 return 1
+            if name.startswith(gemm_layout.ENTRY_PREFIXES) and self.gemms is not None:
+                gemm_layout.signature(name)
+                return 1
             if (
                 name.startswith(quantization_layout.ENTRY_PREFIXES)
                 and self.quantization is not None
@@ -536,6 +550,8 @@ class HostRuntime:
             )
         if entry.startswith(gemv_layout.ENTRY_PREFIXES):
             return gemv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry.startswith(gemm_layout.ENTRY_PREFIXES):
+            return gemm_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(quantization_layout.ENTRY_PREFIXES):
             return quantization_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
