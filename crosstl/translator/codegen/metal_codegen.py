@@ -61,6 +61,7 @@ from ..matrix_shape import length_method_object
 from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
 from ..semantics.constant_buffers import lower_constant_buffer_resources
+from ..semantics.hlsl_ray_payloads import PAYLOAD_ACCESS_ATTRIBUTES
 from ..semantics.sampler_states import is_sampler_constructor
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
@@ -21785,6 +21786,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 or self.is_precision_qualifier_attribute(attr)
                 or str(getattr(attr, "name", "")).lower()
                 in (BUFFER_LAYOUT_ATTRIBUTE, "packed")
+                # DXR payload access qualifiers; a Metal payload is a ray_data reference every stage may access.
+                or str(getattr(attr, "name", "")).lower() in PAYLOAD_ACCESS_ATTRIBUTES
             ):
                 continue
             if hasattr(attr, "name"):

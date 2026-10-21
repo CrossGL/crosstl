@@ -77,6 +77,12 @@ from ..metadata_preconditions import (
     with_metadata_precondition_header,
 )
 from ..resource_identity import resource_identity_marker
+from ..semantics.hlsl_ray_payloads import (
+    PAYLOAD_ACCESS_ATTRIBUTES,
+    PAYLOAD_STAGES,
+    RAY_PAYLOAD_ATTRIBUTE,
+    HlslRayPayloadUnsupportedError,
+)
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
@@ -10144,7 +10150,12 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
         if union_layout is not None:
             return self.generate_hlsl_union_storage_declaration(node, union_layout)
 
-        code = f"struct {node.name} {{\n"
+        payload = (
+            "[raypayload] "
+            if self.hlsl_union_attribute(node, RAY_PAYLOAD_ATTRIBUTE)
+            else ""
+        )
+        code = f"struct {payload}{node.name} {{\n"
         members = [
             member
             for member in getattr(node, "members", [])
@@ -10193,7 +10204,9 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                     declaration_type,
                     semantic,
                 )
-                semantic_attr = self.map_semantic(semantic)
+                semantic_attr = self.map_semantic(
+                    semantic
+                ) + self.hlsl_payload_access_qualifiers(member)
                 interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
                 precise_prefix = self.hlsl_precise_modifier_prefix(member)
                 precise_prefix += self.hlsl_matrix_orientation_prefix(member)
@@ -10277,7 +10290,9 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                 member_type,
                 semantic,
             )
-            semantic_attr = self.map_semantic(semantic)
+            semantic_attr = self.map_semantic(
+                semantic
+            ) + self.hlsl_payload_access_qualifiers(member)
             interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
             precise_prefix = self.hlsl_precise_modifier_prefix(member)
             precise_prefix += self.hlsl_matrix_orientation_prefix(member)
@@ -10310,6 +10325,28 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             f"    {layout['storage_type']} {layout['storage_field']};\n"
             "};\n"
         )
+
+    def hlsl_payload_access_qualifiers(self, member):
+        """``member``'s ray payload access qualifiers, `` : read(caller) : write(closesthit)``, or ``""``."""
+        qualifiers = ""
+        for attribute in getattr(member, "attributes", None) or []:
+            keyword = PAYLOAD_ACCESS_ATTRIBUTES.get(
+                str(getattr(attribute, "name", "")).lower()
+            )
+            if keyword is None:
+                continue
+            stages = []
+            for argument in getattr(attribute, "arguments", None) or []:
+                stage = str(getattr(argument, "name", argument)).strip().lower()
+                if stage not in PAYLOAD_STAGES:
+                    raise HlslRayPayloadUnsupportedError(
+                        f"'{stage}' in the {keyword} qualifier of payload field "
+                        f"'{getattr(member, 'name', '')}' is not a payload stage; "
+                        f"the stages are {', '.join(PAYLOAD_STAGES)}"
+                    )
+                stages.append(stage)
+            qualifiers += f" : {keyword}({', '.join(stages)})"
+        return qualifiers
 
     def hlsl_union_attribute(self, node, name):
         for attribute in getattr(node, "attributes", []) or []:
@@ -14993,6 +15030,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "column_major",
             # MSL's packed vector storage is a buffer layout, which the layout planners read.
             "packed",
+            # Ray payload access qualifiers follow the semantic (hlsl_payload_access_qualifiers).
+            *PAYLOAD_ACCESS_ATTRIBUTES,
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
         return str(getattr(attr, "name", "")).lower() in metadata

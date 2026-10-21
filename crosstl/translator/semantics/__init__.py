@@ -30,6 +30,10 @@ from .dxr_ray_interfaces import (
 )
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
+from .hlsl_ray_payloads import (
+    HlslRayPayloadUnsupportedError,
+    annotate_hlsl_ray_payloads,
+)
 from .hlsl_stage_interfaces import (
     HlslStageInterfaceUnsupportedError,
     legalize_hlsl_stage_interfaces,
@@ -88,6 +92,7 @@ __all__ = [
     "FixedSamplerStateUnsupportedError",
     "GeometryStreamUnsupportedError",
     "HalfFloatUnsupportedError",
+    "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
@@ -163,7 +168,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
-    GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`).
+    GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
+    the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
     Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
@@ -206,6 +212,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_texture_lod_clamp(program, report.target)
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
+    annotate_hlsl_ray_payloads(program, report.target)
     legalize_opaque_struct_members(program, report.target)
     flatten_descriptor_arrays(program, report.target)
     legalize_shadow_samples(program, report.target)
