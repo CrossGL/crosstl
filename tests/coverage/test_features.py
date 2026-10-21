@@ -246,6 +246,14 @@ $classT [[ro]] Load(in int<3> x) : tex2d_t_load;
 $match<0, -1> void<4> [[ro]] GatherRaw(in sampler s, in float<2> x);
 } namespace
 
+namespace Texture2DArrayMethods {
+$classT [[ro]] SampleGrad(in sampler s, in float<3> x, in $match<2, 2> float<2> ddx, in $match<2, 2> float<2> ddy) : tex2d_t_dd_array;
+} namespace
+
+namespace TextureCUBEArrayMethods {
+float_like [[ro]] SampleCmpGrad(in sampler_cmp s, in float<4> x, in float compareValue, in $match<2, 2> float<3> ddx, in $match<2, 2> float<3> ddy) : texcube_t_comp_dd_array;
+} namespace
+
 namespace FeedbackTexture2DMethods {
 void [[]] WriteSamplerFeedback(in Texture2D t, in sampler s, in float<2> x);
 void [[]] WriteSamplerFeedbackLevel(in Texture2D t, in sampler s, in float<2> x, in float lod);
@@ -328,6 +336,24 @@ def test_hlsl_methods_take_the_element_type_of_their_object():
     assert load.signature == Signature(Type("float", (4,)), (Param(Type("int", (3,))),))
     assert (load.group, load.spelling, load.crossgl) == ("Texture2D", "Load", "Load")
     assert features["ByteAddressBuffer.Load"].signature.result == Type("uint")
+
+
+def test_hlsl_matched_types_keep_a_size_the_table_spells_out():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    # Array layers take no gradient: Texture2DArray.SampleGrad has float3 coordinates and float2 gradients.
+    grad = features["Texture2DArray.SampleGrad"].signature
+    assert [p.type for p in grad.params[1:]] == [
+        Type("float", (3,)),
+        Type("float", (2,)),
+        Type("float", (2,)),
+    ]
+    compare = features["TextureCUBEArray.SampleCmpGrad"].signature
+    assert [p.type for p in compare.params[1:]] == [
+        Type("float", (4,)),
+        Type("float"),
+        Type("float", (3,)),
+        Type("float", (3,)),
+    ]
 
 
 def test_hlsl_gather_raw_returns_the_raw_bits_of_a_uint_texture():

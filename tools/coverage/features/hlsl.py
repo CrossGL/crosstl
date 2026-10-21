@@ -184,7 +184,12 @@ def _own(spelling: str) -> tuple[dict | None, Type | None]:
         return None, Type.other(spelling.strip() or "unknown")
     base, layout = match.group("base"), match.group("layout")
     reference = (
-        {"x": int(match.group("x")), "y": int(match.group("y"))}
+        {
+            "x": int(match.group("x")),
+            "y": int(match.group("y")),
+            # ``float<2>`` fixes the size; ``$match`` then only matches scalar, vector or matrix and the component.
+            "sized": bool(layout and all(p.strip().isdigit() for p in layout.split(","))),
+        }
         if match.group("x") is not None
         else None
     )
@@ -199,7 +204,11 @@ def _own(spelling: str) -> tuple[dict | None, Type | None]:
 
 
 def _resolve(spellings: list[str]) -> list[Type]:
-    """Apply ``$match<X, Y>``: the layout comes from type X and the component type from type Y."""
+    """Apply ``$match<X, Y>``: the layout comes from type X and the component type from type Y.
+
+    A spelling with its own size, such as the ``$match<2, 2> float<2>`` gradients of ``Texture2DArray.SampleGrad``,
+    keeps that size.
+    """
     parsed = [_own(s) for s in spellings]
     own = [kind for _, kind in parsed]
     final: list[Type | None] = list(own)
@@ -222,7 +231,8 @@ def _resolve(spellings: list[str]) -> list[Type]:
         if layout is None or component is None or layout.opaque or component.opaque:
             final[position] = kind
             continue
-        final[position] = Type(component.scalar, layout.shape if layout else ())
+        shape = kind.shape if reference.get("sized") else layout.shape
+        final[position] = Type(component.scalar, shape)
     return [kind or Type.other("unknown") for kind in final]
 
 
