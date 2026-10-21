@@ -761,6 +761,7 @@ __DEVICE__ double frexp(double __a, int *__b) { return __nv_frexp(__a, __b); }
 __DEVICE__ float frexpf(float __a, int *__b) { return __nv_frexpf(__a, __b); }
 __DEVICE__ long labs(long __a) { return llabs(__a); }
 __DEVICE__ double powi(double __a, int __b) { return __nv_powi(__a, __b); }
+__DEVICE__ double norm(int __dim, const double *__t) { return __nv_norm(__dim, __t); }
 __DEVICE__ void *memcpy(void *__a, const void *__b, size_t __c) {
   return __builtin_memcpy(__a, __b, __c);
 }
@@ -801,6 +802,7 @@ def test_cuda_reads_device_functions_and_leaves_out_the_rest():
         "frexp",
         "frexpf",
         "labs",
+        "norm",
     ]
     # ``long`` is 64 bits wide on Linux, where nvcc validates the probes.
     assert features["labs"].signature.params[0].type == Type("int64")
@@ -808,6 +810,11 @@ def test_cuda_reads_device_functions_and_leaves_out_the_rest():
     assert features["fabsf"].group == "math"
     # The comment before clock's result type is not part of it.
     assert features["clock"].signature == Signature(Type("int"), ())
+    # A pointer to constant values takes the address of a local.
+    assert features["norm"].signature.params == (
+        Param(Type("int")),
+        Param(Type("double"), "address"),
+    )
 
 
 def test_cuda_atomics_take_the_int_helper_and_bind_the_pointer_inout():

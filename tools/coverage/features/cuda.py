@@ -65,8 +65,12 @@ def parameter(text: str, atomic: bool, first: bool) -> Param:
     if not text.endswith("*"):
         return Param(cuda_type(text))
     pointee = text.rstrip("*").strip()
-    if pointee.startswith("const ") or text.count("*") > 1:
+    if text.count("*") > 1:
         return Param(Type.other(text))
+    if pointee.startswith("const "):
+        # A pointer to constant values, such as the vector norm reads, takes the address of a local.
+        kind = cuda_type(pointee)
+        return Param(kind, "address") if not kind.opaque else Param(Type.other(text))
     if atomic and first:
         return Param(cuda_type(pointee), "inout")
     return Param(cuda_type(pointee), "out")

@@ -1008,6 +1008,22 @@ def test_metal_probes_are_valid_metal(probe_feature):
     assert verdict.accepted, verdict.log
 
 
+def test_cuda_and_hip_pass_the_address_of_a_local_for_a_pointer_to_values():
+    norm = Feature(
+        "cuda",
+        "function",
+        "normf",
+        Signature(Type("float"), (Param(Type("int")), Param(Type("float"), "address"))),
+        crossgl="norm",
+    )
+    for language in ("cuda", "hip"):
+        source = probes.build(replace(norm, language=language), language).source
+        assert "    float a1 = fin[i + 0u];" in source
+        assert "    float r = normf(a0, &a1);" in source
+    with pytest.raises(probes.ProbeError, match="no probe passes crossgl a pointer"):
+        probes.build(norm, "crossgl")
+
+
 def test_metal_compare_exchange_takes_the_address_of_the_expected_value():
     exchange = next(
         f for f in METAL_SIGNATURES if f.name == "atomic_compare_exchange_weak"
