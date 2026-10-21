@@ -220,3 +220,8 @@ class Dialect:
         ``body`` hands to the mesh workgroups it launches; the buffers and ``parts`` are :meth:`kernel`'s.
         """
         raise ProbeError(f"no task-stage probe for {self.language} yet")
+
+    def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A work-graph node shader of one thread, launched once, that runs ``body`` with ``i`` set to 0; the
+        buffers and ``parts`` are :meth:`kernel`'s."""
+        raise ProbeError(f"no node-stage probe for {self.language} yet")

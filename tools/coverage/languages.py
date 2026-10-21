@@ -272,6 +272,20 @@ class HLSL(Dialect):
         ]
         return "\n".join(lines) + "\n"
 
+    def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        lines = [
+            *self._globals(buffers, parts),
+            '[Shader("node")]',
+            '[NodeLaunch("broadcasting")]',
+            "[NodeDispatchGrid(1, 1, 1)]",
+            "[NumThreads(1, 1, 1)]",
+            "void main() {",
+            "    uint i = 0u;",
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+        return "\n".join(lines) + "\n"
+
 
 class Metal(Dialect):
     language = "metal"

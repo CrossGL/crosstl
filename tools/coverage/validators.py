@@ -68,7 +68,8 @@ GLSL_STAGES = {
 }
 # The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one.
 HLSL_SHADER_MODEL = (6, 9)
-# Ray-tracing shaders compile as a library, whose ``[shader(...)]`` attributes name the entry points.
+# Ray-tracing and work-graph node shaders compile as a library, whose ``[shader(...)]`` attributes name the entry
+# points.
 HLSL_PROFILES = {
     stage: f"{prefix}_{HLSL_SHADER_MODEL[0]}_{HLSL_SHADER_MODEL[1]}"
     for stage, prefix in {
@@ -81,8 +82,11 @@ HLSL_PROFILES = {
         "task": "as",
         "mesh": "ms",
         **dict.fromkeys(RAYTRACING_STAGES, "lib"),
+        "node": "lib",
     }.items()
 }
+# The ``[shader(...)]`` kind of each stage a library holds.
+HLSL_LIBRARY_KINDS = {**RAYTRACING_STAGES, "node": "node"}
 # slangc's names for the stages it does not spell as the report does.
 SLANG_STAGES = {
     **RAYTRACING_STAGES,
@@ -302,10 +306,15 @@ _UNSUPPORTED_IN_HLSL = re.compile(r"/\*[^*]*not currently supported for HLSL\s*\
 
 
 def _dxc(name: str, source: str, stage: str, entry: str, scratch: str) -> Verdict:
+    """Compile an HLSL probe. A library must also declare an entry point of ``stage``: DXC accepts a library of plain
+    functions, which no pipeline can run."""
     profile = HLSL_PROFILES[stage]
-    entry_point = (
-        [] if profile.startswith("lib_") else ["-E", entry or hlsl_entry(source, stage)]
-    )
+    library = profile.startswith("lib_")
+    entry_point = [] if library else ["-E", entry or hlsl_entry(source, stage)]
+    kind = HLSL_LIBRARY_KINDS.get(stage, "")
+    attribute = rf'\[\s*shader\s*\(\s*"{kind}"\s*\)\s*\]'
+    if library and not re.search(attribute, source, re.IGNORECASE):
+        return Verdict(False, f"error: the library has no {stage} entry point")
     return _run(
         [
             *command("dxc"),

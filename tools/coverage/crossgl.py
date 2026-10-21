@@ -8,7 +8,14 @@ anywhere else.
 
 from __future__ import annotations
 
-from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
+from .dialect import (
+    UNIFORM_ARRAY_LENGTH,
+    Buffer,
+    Dialect,
+    NoSpelling,
+    ProbeError,
+    uniform_read,
+)
 from .model import WIDE_INTEGERS
 from .objects import VERTEX
 from .templates import C_FAMILY, Template
@@ -257,6 +264,9 @@ class CrossGL(Dialect):
             f"groupshared Payload {self.payload} @ taskPayloadSharedEXT;",
         )
         return self._program("task", shared, buffers, functions, parts)
+
+    def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        raise NoSpelling("CrossGL has no work-graph node stage")
 
 
 # A geometry stage's input and output primitives, as the CrossGL importers write them.
