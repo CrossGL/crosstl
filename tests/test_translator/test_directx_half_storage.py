@@ -15,6 +15,9 @@ from crosstl.translator.resource_storage import (
     BINARY16_STORAGE,
     parse_resource_storage_header,
 )
+from crosstl.translator.semantics.structured_layouts import (
+    StructuredLayoutUnsupportedError,
+)
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values, _request
 from tests.test_translator.test_codegen.test_directx_codegen import (
     assert_directx_native_16_bit_compute_validates_if_available,
@@ -95,7 +98,6 @@ STRUCTURES = {
     ),
     "array": "struct Cell { half values[2]; uint marker; };",
     "vector": "struct Cell { half2 value; uint marker; };",
-    "mixed": "struct Cell { half value; bool enabled; uint marker; };",
     "collision": (
         "struct __crossgl_half_storage_Cell { uint value; }; struct Cell { half first; half second; };"
     ),
@@ -119,6 +121,17 @@ def test_storage_structures_do_not_change_local_member_types(tmp_path, case):
     if case == "collision":
         assert "struct __crossgl_half_storage_Cell_1" in generated
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+def test_storage_structure_with_a_one_byte_bool_keeps_the_metal_layout(tmp_path):
+    # MSL stores bool in one byte, so Cell is 8 bytes on Metal (half at 0, bool at 2, uint at 4); an HLSL
+    # structured buffer stores bool in four, which would make it 12 bytes and move marker to byte 8.
+    source = _source("structure").replace(
+        "struct Cell { half first; half second; };",
+        "struct Cell { half value; bool enabled; uint marker; };",
+    )
+    with pytest.raises(StructuredLayoutUnsupportedError, match="no word layout"):
+        _translate(tmp_path, source)
 
 
 @pytest.mark.parametrize("scalar", ["float", "ushort", "uint", "int"])

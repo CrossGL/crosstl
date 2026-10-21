@@ -1,34 +1,43 @@
-"""HLSL structured-buffer layouts on std430 targets: buffers of 32-bit words with explicit element offsets.
+"""Declared buffer layouts on targets with other buffer rules: buffers of 32-bit words with explicit offsets.
 
-An HLSL structured buffer packs its elements tightly: every 32-bit scalar sits at a multiple of four bytes, a
-``float3`` takes 12 bytes, ``struct { float a; float3 b; }`` puts ``b`` at byte 4 and takes 16 bytes, and an array
-member's elements follow each other without padding (D3D11.3 functional specification, section 5.3.7, structured
-buffers; DXC's ``-fvk-use-dx-layout``). GLSL's std430 rules, which OpenGL storage blocks and the SPIR-V emitter use,
-align a three- or four-component vector to 16 bytes and a two-component one to 8, and align a struct to its widest
-member (GLSL 4.60 section 7.6.2.2), so ``vec3 v[]`` has a 16-byte stride and ``b`` moves to byte 16. The generators
-declared the HLSL element type unchanged, so a translated program read and wrote other bytes than the host's.
+A structured buffer's element layout belongs to the language that declared it, and the generators declared the
+element type unchanged, so a translated program read and wrote other bytes than the host's:
 
-:func:`legalize_structured_layouts` rewrites, for OpenGL and SPIR-V, every buffer marked
-``@buffer_layout(hlsl_structured)`` whose element type is laid out differently by the two rule sets into a buffer of
-``uint`` words, and every access to it into word accesses at the HLSL offsets:
+* an HLSL structured buffer packs its elements tightly: every 32-bit scalar sits at a multiple of four bytes, a
+  ``float3`` takes 12 bytes, ``struct { float a; float3 b; }`` puts ``b`` at byte 4 and takes 16 bytes, and an
+  array member's elements follow each other without padding (D3D11.3 functional specification, section 5.3.7;
+  DXC's ``-fvk-use-dx-layout``). CrossGL marks such buffers ``@buffer_layout(hlsl_structured)``;
+* an MSL ``device`` buffer uses the natural layout of its element type: ``float2`` is 8-byte and ``float3`` and
+  ``float4`` 16-byte sized and aligned, so ``device float3*`` has a 16-byte stride and ``struct { float3 a;
+  float b; }`` puts ``b`` at byte 16 and takes 32 bytes (MSL 3.2 section 2.2 and table 2.4). CrossGL marks such
+  buffers ``@buffer_layout(metal)`` where that differs from the HLSL or std430 layout;
+* GLSL's std430 rules, which OpenGL storage blocks and the SPIR-V emitter use, align a three- or four-component
+  vector to 16 bytes and a two-component one to 8, size a ``vec3`` 12 bytes and align a struct to its widest member
+  (GLSL 4.60 section 7.6.2.2), so ``vec3 v[]`` has a 16-byte stride and the two structs above take 16 bytes.
+
+:func:`legalize_structured_layouts` rewrites, for OpenGL and SPIR-V (std430) and for HLSL (structured-buffer
+rules), every marked buffer whose element type the target lays out differently into a buffer of ``uint`` words,
+and every access to it into word accesses at the declared offsets:
 
 * a scalar read becomes ``asfloat(b[k])`` (``asint`` for ``int``, the word itself for ``uint``), a scalar write
   ``b[k] = asuint(value)``; a compound assignment, ``++`` or ``--`` statement reads and writes the word;
 * a vector, struct or multi-component swizzle is read and written through generated helper functions that take the
   element's first word, so the index is evaluated once;
 * an atomic on an ``int`` or ``uint`` scalar operates on its word;
-* ``buffer_dimensions`` reports elements and the HLSL stride.
+* ``buffer_dimensions`` reports elements and the declared stride.
 
 The element type may be built from 32-bit ``float``, ``int`` and ``uint`` scalars, vectors, structs and arrays of
-those. Any other element type with a different std430 layout (matrices, booleans, 16- or 64-bit values), and any
-access the rewrite cannot carry (the buffer passed to a function, a compound assignment whose index has effects, a
-``min``/``max`` atomic on an ``int``, a float atomic), raises :class:`StructuredLayoutUnsupportedError` instead of
-reading the wrong bytes.
+those. Any other element type the target lays out differently (matrices, MSL's one-byte booleans, 16- or 64-bit
+values), and any access the rewrite cannot carry (the buffer passed to a function, a compound assignment whose index
+has effects, a ``min``/``max`` atomic on an ``int``, a float atomic), raises
+:class:`StructuredLayoutUnsupportedError` instead of reading the wrong bytes. Padding words of an MSL layout are
+never written.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
@@ -41,7 +50,15 @@ __all__ = [
     "legalize_structured_layouts",
 ]
 
-TARGETS = frozenset({"opengl", "glsl", "vulkan", "spirv"})
+HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
+TARGETS = frozenset({"opengl", "glsl", "vulkan", "spirv"}) | HLSL_TARGETS
+# ``@buffer_layout`` values this pass reproduces, and the rules they name.
+_SOURCE_RULES = {"hlsl_structured": "hlsl", "metal": "metal"}
+_RULE_NAMES = {
+    "hlsl": "HLSL structured buffers",
+    "std430": "std430",
+    "metal": "MSL",
+}
 # The OpenGL generator stores the struct elements of global buffers as scalarized struct copies itself
 # (glsl_hlsl_structured); buffer parameters are lowered here.
 _GENERATOR_LOWERS_STRUCTS = frozenset({"opengl", "glsl"})
@@ -79,7 +96,7 @@ _STATEMENT_SLOTS = frozenset(
 
 
 class StructuredLayoutUnsupportedError(TranslationDiagnostic):
-    """An HLSL structured buffer whose layout or access the std430 target cannot reproduce."""
+    """A buffer with a declared layout whose layout or access the target cannot reproduce."""
 
     code = f"{CODE_PREFIX}structured-layout-unsupported"
 
@@ -89,7 +106,11 @@ class StructuredLayoutUnsupportedError(TranslationDiagnostic):
 
 @dataclass(frozen=True)
 class _Shape:
-    """A value in words: ``scalar`` (kind), ``vector`` (kind, lanes), ``struct`` (name, members) or ``array``."""
+    """A value in words: ``scalar`` (kind), ``vector`` (kind, lanes), ``matrix`` (float columns: ``count`` columns
+    of ``lanes`` rows), ``struct`` (name, members) or ``array``.
+
+    ``source`` names the rules (``hlsl`` or ``metal``) the member word offsets and :attr:`words` follow.
+    """
 
     form: str
     kind: str = ""
@@ -98,8 +119,9 @@ class _Shape:
     members: tuple = ()  # (member name, shape, word offset)
     element: _Shape | None = None
     count: int = 0
-    # An ``opaque`` value has no word lowering; ``rules`` maps "hlsl" and "std430" to its (size, alignment).
-    rules: tuple = ()
+    # An ``opaque`` value has no word lowering: (kind, bits, rows, columns), columns 0 for a scalar or vector.
+    opaque: tuple = ()
+    source: str = "hlsl"
 
     @property
     def lowerable(self) -> bool:
@@ -111,13 +133,9 @@ class _Shape:
 
     @property
     def words(self) -> int:
-        if self.form == "scalar":
-            return 1
-        if self.form == "vector":
-            return self.lanes
-        if self.form == "array":
-            return self.count * self.element.words
-        return sum(member.words for _name, member, _offset in self.members)
+        """The element stride of an array of this value under its source rules, in 32-bit words."""
+        size, alignment, _leaves = _layout(self, self.source)
+        return _round(size, alignment) // 4
 
     def type_text(self) -> str:
         if self.form == "scalar":
@@ -126,12 +144,18 @@ class _Shape:
             return f"{_VECTOR_PREFIX[self.kind]}{self.lanes}"
         if self.form == "struct":
             return self.name
+        if self.form == "matrix":
+            return (
+                f"mat{self.count}"
+                if self.count == self.lanes
+                else f"mat{self.count}x{self.lanes}"
+            )
         raise StructuredLayoutUnsupportedError(
             "an array value of a structured-buffer element cannot be read or written whole"
         )
 
     def key(self) -> str:
-        if self.form in ("scalar", "vector"):
+        if self.form in ("scalar", "vector", "matrix"):
             return self.type_text()
         if self.form == "struct":
             return self.name
@@ -142,20 +166,53 @@ def _round(value, alignment):
     return -(-value // alignment) * alignment
 
 
+def _vector_layout(scalar, lanes, rules):
+    """``(size, alignment, leaves)`` of a vector of ``lanes`` scalars of ``scalar`` bytes under ``rules``.
+
+    HLSL structured buffers align a vector to its scalar (D3D11.3 section 5.3.7); std430 aligns a two-component
+    vector to twice and a three- or four-component one to four times its scalar (GLSL 4.60 section 7.6.2.2); MSL
+    sizes and aligns ``T3`` like ``T4`` (MSL 3.2 table 2.4).
+    """
+    leaves = tuple((scalar * lane, scalar) for lane in range(lanes))
+    if rules == "hlsl" or lanes == 1:
+        return scalar * lanes, scalar, leaves
+    if rules == "metal":
+        size = scalar * (4 if lanes == 3 else lanes)
+        return size, size, leaves
+    return scalar * lanes, scalar * (2 if lanes == 2 else 4), leaves
+
+
+def _opaque_layout(opaque, rules):
+    kind, bits, rows, columns = opaque
+    # MSL bool is one byte; HLSL and GLSL store it in 32 bits.
+    scalar = (1 if rules == "metal" else 4) if kind == "b" else bits // 8
+    if not columns:
+        return _vector_layout(scalar, rows, rules)
+    size, alignment, leaves = _vector_layout(scalar, rows, rules)
+    stride = _round(size, alignment)
+    return (
+        stride * columns,
+        alignment,
+        tuple(
+            (column * stride + offset, width)
+            for column in range(columns)
+            for offset, width in leaves
+        ),
+    )
+
+
+@lru_cache(maxsize=None)
 def _layout(shape: _Shape, rules: str) -> tuple[int, int, tuple]:
-    """``(size, alignment, leaves)`` of ``shape`` under ``rules`` ("hlsl" or "std430"); leaves are (offset, size)."""
+    """``(size, alignment, leaves)`` of ``shape`` under ``rules`` (``hlsl``, ``std430`` or ``metal``); leaves are
+    ``(offset, size)`` pairs of its scalars."""
     if shape.form == "scalar":
-        return 4, 4, ((0, 4),)
+        return _vector_layout(4, 1, rules)
     if shape.form == "vector":
-        alignment = 4 if rules == "hlsl" else (8 if shape.lanes == 2 else 16)
-        return (
-            4 * shape.lanes,
-            alignment,
-            tuple((4 * lane, 4) for lane in range(shape.lanes)),
-        )
+        return _vector_layout(4, shape.lanes, rules)
     if shape.form == "opaque":
-        size, alignment = dict(shape.rules)[rules]
-        return size, alignment, ((0, size),)
+        return _opaque_layout(shape.opaque, rules)
+    if shape.form == "matrix":
+        return _opaque_layout(("f", 32, shape.lanes, shape.count), rules)
     if shape.form == "array":
         size, alignment, leaves = _layout(shape.element, rules)
         stride = _round(size, alignment)
@@ -178,51 +235,44 @@ def _layout(shape: _Shape, rules: str) -> tuple[int, int, tuple]:
     return _round(offset, alignment), alignment, tuple(leaves)
 
 
-def _same_layout(shape: _Shape) -> bool:
-    """Whether a runtime array of ``shape`` has the same element stride and leaf offsets under both rules."""
-    hlsl_size, hlsl_alignment, hlsl_leaves = _layout(shape, "hlsl")
-    glsl_size, glsl_alignment, glsl_leaves = _layout(shape, "std430")
+def _same_layout(shape: _Shape, target_rules: str) -> bool:
+    """Whether a runtime array of ``shape`` has the same element stride and leaf offsets under its source rules
+    and ``target_rules``."""
+    source_size, source_alignment, source_leaves = _layout(shape, shape.source)
+    target_size, target_alignment, target_leaves = _layout(shape, target_rules)
     return (
-        _round(hlsl_size, hlsl_alignment) == _round(glsl_size, glsl_alignment)
-        and hlsl_leaves == glsl_leaves
-    )
-
-
-def _opaque(type_node, value=None, matrix=None) -> _Shape:
-    """A value the rewrite cannot split into words, with its HLSL structured and std430 sizes."""
-    if matrix is not None:
-        columns, rows, bits = matrix
-        scalar = bits // 8
-        column_alignment = scalar * (2 if rows == 2 else 4)
-        column_stride = _round(scalar * rows, column_alignment)
-        return _Shape(
-            "opaque",
-            name=str(type_node),
-            rules=(
-                ("hlsl", (scalar * rows * columns, scalar)),
-                ("std430", (column_stride * columns, column_alignment)),
-            ),
-        )
-    scalar = max(value.bits, 32) // 8 if value.kind == "b" else value.bits // 8
-    lanes = value.lanes
-    glsl_alignment = scalar * (1 if lanes == 1 else 2 if lanes == 2 else 4)
-    return _Shape(
-        "opaque",
-        name=str(type_node),
-        rules=(
-            ("hlsl", (scalar * lanes, scalar)),
-            ("std430", (scalar * lanes, glsl_alignment)),
-        ),
+        _round(source_size, source_alignment) == _round(target_size, target_alignment)
+        and source_leaves == target_leaves
     )
 
 
 class _Shapes:
-    def __init__(self, program):
+    """The shapes of element types under one source layout (``hlsl`` or ``metal``)."""
+
+    def __init__(self, program, source):
+        self.source = source
         self.structs = {}
         for struct in iter_structs(program):
             if isinstance(struct, A.StructNode) and getattr(struct, "members", None):
                 self.structs.setdefault(struct.name, struct)
         self.cache = {}
+
+    def opaque(self, type_node, kind, bits, rows, columns=0):
+        return _Shape(
+            "opaque",
+            name=str(type_node),
+            opaque=(kind, bits, rows, columns),
+            source=self.source,
+        )
+
+    def matrix(self, type_node, bits, rows, columns):
+        # An MSL matrix is an array of column vectors, the columns CrossGL indexes, so its words can be addressed;
+        # the orientation of an HLSL structured-buffer matrix depends on its packing and is not split.
+        if self.source == "metal" and bits == 32:
+            return _Shape(
+                "matrix", kind="f", lanes=rows, count=columns, source=self.source
+            )
+        return self.opaque(type_node, "f", bits, rows, columns)
 
     def of(self, type_node, context) -> _Shape:
         if isinstance(type_node, A.ArrayType):
@@ -233,15 +283,24 @@ class _Shapes:
                     f"{context}: an array without a constant element count has no structured-buffer layout"
                 )
             return _Shape(
-                "array", element=self.of(type_node.element_type, context), count=count
+                "array",
+                element=self.of(type_node.element_type, context),
+                count=count,
+                source=self.source,
             )
         value = type_from_node(type_node)
         if value is not None:
-            if value.kind not in _KINDS or (value.bits != 32 and value.kind != "b"):
-                return _opaque(type_node, value=value)
+            if (
+                value.kind not in _KINDS
+                or (value.bits != 32 and value.kind != "b")
+                or (value.kind == "b" and self.source == "metal")
+            ):
+                return self.opaque(type_node, value.kind, value.bits, value.lanes)
             if value.lanes == 1:
-                return _Shape("scalar", kind=value.kind)
-            return _Shape("vector", kind=value.kind, lanes=value.lanes)
+                return _Shape("scalar", kind=value.kind, source=self.source)
+            return _Shape(
+                "vector", kind=value.kind, lanes=value.lanes, source=self.source
+            )
         if isinstance(type_node, A.MatrixType):
             element = type_from_node(type_node.element_type)
             if (
@@ -249,9 +308,8 @@ class _Shapes:
                 and element.kind == "f"
                 and str(type_node.rows).isdigit()
             ):
-                return _opaque(
-                    type_node,
-                    matrix=(int(type_node.cols), int(type_node.rows), element.bits),
+                return self.matrix(
+                    type_node, element.bits, int(type_node.rows), int(type_node.cols)
                 )
         name = (
             getattr(type_node, "name", None)
@@ -260,7 +318,8 @@ class _Shapes:
         )
         matrix = _matrix_spelling(name)
         if matrix is not None:
-            return _opaque(type_node, matrix=matrix)
+            columns, rows, bits = matrix
+            return self.matrix(type_node, bits, rows, columns)
         struct = self.structs.get(name)
         if struct is None:
             raise StructuredLayoutUnsupportedError(
@@ -270,9 +329,13 @@ class _Shapes:
             members, offset = [], 0
             for member in struct.members:
                 shape = self.of(member.member_type, f"{context}, member {member.name}")
-                members.append((member.name, shape, offset))
-                offset += shape.words
-            self.cache[name] = _Shape("struct", name=name, members=tuple(members))
+                size, alignment, _leaves = _layout(shape, self.source)
+                offset = _round(offset, alignment)
+                members.append((member.name, shape, offset // 4))
+                offset += size
+            self.cache[name] = _Shape(
+                "struct", name=name, members=tuple(members), source=self.source
+            )
         return self.cache[name]
 
 
@@ -398,17 +461,22 @@ class _Rewriter:
                 self.refuse(f"{value!r} is not a swizzle of a {shape.type_text()}")
             if len(words) == 1:
                 place.offset += words[0]
-                place.shape = _Shape("scalar", kind=shape.kind)
+                place.shape = _Shape("scalar", kind=shape.kind, source=shape.source)
             else:
                 place.swizzle = tuple(words)
-                place.shape = _Shape("vector", kind=shape.kind, lanes=len(words))
+                place.shape = _Shape(
+                    "vector", kind=shape.kind, lanes=len(words), source=shape.source
+                )
             return
-        if step == "index" and shape.form in ("array", "vector"):
-            element = (
-                shape.element
-                if shape.form == "array"
-                else _Shape("scalar", kind=shape.kind)
-            )
+        if step == "index" and shape.form in ("array", "vector", "matrix"):
+            if shape.form == "array":
+                element = shape.element
+            elif shape.form == "matrix":
+                element = _Shape(
+                    "vector", kind=shape.kind, lanes=shape.lanes, source=shape.source
+                )
+            else:
+                element = _Shape("scalar", kind=shape.kind, source=shape.source)
             if (
                 isinstance(value, A.LiteralNode)
                 and str(value.value).rstrip("uU").isdigit()
@@ -782,6 +850,15 @@ def _value_text(buffer, shape, offset, base="base"):
             for _name, member, start in shape.members
         ]
         return f"{shape.name}({', '.join(members)})"
+    if shape.form == "matrix":
+        column = _Shape(
+            "vector", kind=shape.kind, lanes=shape.lanes, source=shape.source
+        )
+        columns = [
+            _value_text(buffer, column, offset + index * column.words, base)
+            for index in range(shape.count)
+        ]
+        return f"{shape.type_text()}({', '.join(columns)})"
     element = shape.element
     if element.form == "array":
         raise StructuredLayoutUnsupportedError(
@@ -809,13 +886,18 @@ def _store_lines(buffer, shape, offset, value, base="base"):
                 _store_lines(buffer, member, offset + start, f"{value}.{name}", base)
             )
         return lines
+    element = shape.element
+    if shape.form == "matrix":
+        element = _Shape(
+            "vector", kind=shape.kind, lanes=shape.lanes, source=shape.source
+        )
     lines = []
     for index in range(shape.count):
         lines.extend(
             _store_lines(
                 buffer,
-                shape.element,
-                offset + index * shape.element.words,
+                element,
+                offset + index * element.words,
                 f"{value}[{index}]",
                 base,
             )
@@ -837,37 +919,49 @@ def _declared_layout(declaration):
 
 
 def _buffer_type(declaration):
-    """The ``(attribute holder, type slot, type)`` of a structured-buffer declaration or parameter."""
+    """The ``(type slot, type, source rules)`` of a structured-buffer declaration or parameter with a layout."""
     slot = "param_type" if isinstance(declaration, A.ParameterNode) else "var_type"
     var_type = getattr(declaration, slot, None)
+    source = _SOURCE_RULES.get(_declared_layout(declaration))
     if (
-        _declared_layout(declaration) != "hlsl_structured"
+        source is None
         or not isinstance(var_type, A.NamedType)
         or var_type.name not in _WRAPPERS
         or len(var_type.generic_args) != 1
     ):
         return None
-    return slot, var_type
+    return slot, var_type, source
 
 
 def _plan_buffer(declaration, shapes, target, inline):
     """A :class:`_Buffer` for a declaration whose layout must change, ``False`` when the generator keeps it, or
-    ``None`` when std430 already has the HLSL layout."""
+    ``None`` when the target's buffer rules already have the declared layout."""
     found = _buffer_type(declaration)
     if found is None:
         return None
-    slot, var_type = found
+    slot, var_type, source = found
+    target_rules = "hlsl" if target in HLSL_TARGETS else "std430"
+    if source == target_rules:
+        return None
     kind = "buffer parameter" if inline else "structured buffer"
     context = f"{kind} {declaration.name}"
-    shape = shapes.of(var_type.generic_args[0], context)
-    if _same_layout(shape) and not _holds_bool(shape):
+    shape = shapes[source].of(var_type.generic_args[0], context)
+    if _same_layout(shape, target_rules) and not (
+        target_rules == "std430" and _holds_bool(shape)
+    ):
         return None
-    if shape.form == "struct" and target in _GENERATOR_LOWERS_STRUCTS and not inline:
+    if (
+        source == "hlsl"
+        and shape.form == "struct"
+        and target in _GENERATOR_LOWERS_STRUCTS
+        and not inline
+    ):
         return False
     if not shape.lowerable:
         raise StructuredLayoutUnsupportedError(
-            f"{context}: its element type is laid out differently by HLSL structured buffers and std430, and "
-            "holds a matrix, boolean, 16-bit or 64-bit value that cannot be split into 32-bit words",
+            f"{context}: its element type is laid out differently by {_RULE_NAMES[source]} and "
+            f"{_RULE_NAMES[target_rules]}, and holds a matrix, boolean, 16-bit or 64-bit value that cannot be "
+            "split into 32-bit words",
             target=target,
         )
     buffer = _Buffer(
@@ -965,11 +1059,11 @@ def _parse_helpers(texts):
 
 
 def legalize_structured_layouts(program, target) -> int:
-    """Rewrite HLSL structured buffers whose layout std430 changes into word buffers; returns how many."""
+    """Rewrite marked buffers whose layout ``target`` changes into word buffers; returns how many."""
     target = str(target or "")
     if target not in TARGETS or not isinstance(program, A.ShaderNode):
         return 0
-    shapes = _Shapes(program)
+    shapes = {source: _Shapes(program, source) for source in ("hlsl", "metal")}
     buffers, scopes, canonical = _lowered_buffers(program, shapes, target)
     if not canonical and not any(parameters for parameters, _names in scopes.values()):
         return 0
