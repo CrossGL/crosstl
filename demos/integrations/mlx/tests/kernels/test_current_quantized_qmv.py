@@ -107,21 +107,27 @@ KERNELS = {
 # The 108 quantize and dequantize entries have their own gate,
 # test_current_quantized.py, the 162 affine_qmv and affine_gather_qmv entries
 # theirs, test_current_quantized_qmv_unaligned.py, the 432 affine_qmv_wide
-# entries theirs, test_current_quantized_qmv_wide.py, and the 162 affine_qvm
-# and affine_gather_qvm entries theirs, test_current_quantized_qvm.py.
+# entries theirs, test_current_quantized_qmv_wide.py, the 162 affine_qvm
+# and affine_gather_qvm entries theirs, test_current_quantized_qvm.py, the 108
+# affine_qvm_split_k entries theirs, test_current_quantized_qvm_split_k.py,
+# the 216 affine_qmm_t and 108 affine_qmm_n entries theirs,
+# test_current_quantized_qmm_t.py and test_current_quantized_qmm_n.py, the 108
+# affine_qmm_t_splitk entries theirs, test_current_quantized_qmm_t_splitk.py,
+# the 162 affine_gather_qmm_t and affine_gather_qmm_n entries theirs,
+# test_current_quantized_gather_qmm.py, and the 216 affine_qmv_quad entries
+# theirs, test_current_quantized_qmv_quad.py.
 QUANTIZE_ENTRY_COUNT = 108
 QMV_UNALIGNED_ENTRY_COUNT = 162
 QMV_WIDE_ENTRY_COUNT = 432
 QVM_ENTRY_COUNT = 162
 QVM_SPLIT_K_ENTRY_COUNT = 108
+QMM_T_ENTRY_COUNT = 216
+QMM_N_ENTRY_COUNT = 108
+QMM_T_SPLITK_ENTRY_COUNT = 108
+GATHER_QMM_ENTRY_COUNT = 162
+QMV_QUAD_ENTRY_COUNT = 216
 # Kernels of quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
-    "affine_gather_qmm_n",
-    "affine_qmm_n",
-    "affine_gather_qmm_t",
-    "affine_qmm_t",
-    "affine_qmv_quad",
-    "affine_qmm_t_splitk",
     "affine_gather_qmm_rhs_nt",
     "affine_gather_qmm_rhs_nn",
 )
@@ -264,11 +270,12 @@ INFO = dict(_instantiations())
 ENTRIES = tuple(INFO)
 
 
-def _config(directory, target, entry, variant=None):
+def _config(directory, target, entry, variant=None, workgroup=WORKGROUP):
     """The translation of one entry, as the gate and contract run it.
 
     ``variant`` defaults to the entry's own; the qmv gate passes its
-    entries' variants.
+    entries' variants, and ``workgroup`` is the threadgroup size the host
+    dispatches.
     """
     variant = variant or INFO[entry]["variant"]
     # simd_sum: software subgroups give DirectX and OpenGL MLX's 32 lanes.
@@ -288,7 +295,7 @@ def _config(directory, target, entry, variant=None):
         targets=(target,),
         output_dir=Path(directory).name + "/out",
         entry_points={SOURCE: (entry,)},
-        entry_workgroup_size_rules={SOURCE: {entry: WORKGROUP}},
+        entry_workgroup_size_rules={SOURCE: {entry: workgroup}},
         index_range_assertions=[
             dict(source=SOURCE, expression=expression, minimum=0, maximum=INDEX_BOUND)
             for expression in assertions
@@ -1039,6 +1046,11 @@ def _expected_scope():
         + QMV_WIDE_ENTRY_COUNT
         + QVM_ENTRY_COUNT
         + QVM_SPLIT_K_ENTRY_COUNT
+        + QMM_T_ENTRY_COUNT
+        + QMM_N_ENTRY_COUNT
+        + QMM_T_SPLITK_ENTRY_COUNT
+        + GATHER_QMM_ENTRY_COUNT
+        + QMV_QUAD_ENTRY_COUNT
     )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
@@ -1048,12 +1060,15 @@ def _expected_scope():
         "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
         "qvmGateEntryCount": QVM_ENTRY_COUNT,
         "qvmSplitKGateEntryCount": QVM_SPLIT_K_ENTRY_COUNT,
+        "qmmTGateEntryCount": QMM_T_ENTRY_COUNT,
+        "qmmNGateEntryCount": QMM_N_ENTRY_COUNT,
+        "qmmTSplitKGateEntryCount": QMM_T_SPLITK_ENTRY_COUNT,
+        "gatherQmmGateEntryCount": GATHER_QMM_ENTRY_COUNT,
+        "qmvQuadGateEntryCount": QMV_QUAD_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
             "count": UNIT_ENTRY_COUNT - covered,
-            "reason": (
-                "the other matrix-vector and matrix-matrix kernels are not gated yet"
-            ),
+            "reason": "the gather_qmm_rhs matrix-matrix kernels are not gated yet",
         },
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
@@ -1129,7 +1144,12 @@ def test_quantized_qmv_entries_follow_mlx_instantiation():
         + QMV_WIDE_ENTRY_COUNT
         + QVM_ENTRY_COUNT
         + QVM_SPLIT_K_ENTRY_COUNT
-        + 918
+        + QMM_T_ENTRY_COUNT
+        + QMM_N_ENTRY_COUNT
+        + QMM_T_SPLITK_ENTRY_COUNT
+        + GATHER_QMM_ENTRY_COUNT
+        + QMV_QUAD_ENTRY_COUNT
+        + 108
         == UNIT_ENTRY_COUNT
     )
 
@@ -1426,7 +1446,7 @@ def metal_reference(current_mlx, tmp_path_factory):
     )
 
 
-def _translate(root, work, target, config, record):
+def _translate(root, work, target, config, record, workgroup=WORKGROUP):
     """Translate one entry's ``config`` and check it against its pinned artifact."""
     translation = translate_project(
         config,
@@ -1447,7 +1467,7 @@ def _translate(root, work, target, config, record):
         artifact, sha256=record["sha256"], size_bytes=record["sizeBytes"]
     )
     (execution,) = artifact["execution"]["entryPoints"]
-    assert execution["workgroupSize"] == list(WORKGROUP)
+    assert execution["workgroupSize"] == list(workgroup)
     generated = root / artifact["path"]
     text = generated.read_text(encoding="utf-8")
     assert "unsupported" not in text
@@ -1458,10 +1478,13 @@ def _translate(root, work, target, config, record):
     return _prepare_native_package(translation, work)
 
 
-def _request(descriptor, package, target, variant, data, parameters=None):
+def _request(
+    descriptor, package, target, variant, data, parameters=None, workgroup=WORKGROUP
+):
     """Bind every reflected binding by source parameter and build one dispatch.
 
-    ``parameters`` overrides the variant's ``[[buffer(i)]]`` parameters.
+    ``parameters`` overrides the variant's ``[[buffer(i)]]`` parameters and
+    ``workgroup`` the threadgroup size.
     """
     from crosstl.project.runtime_value_encoding import FLOAT16_BITS
 
@@ -1507,7 +1530,7 @@ def _request(descriptor, package, target, variant, data, parameters=None):
         package,
         inputs,
         {output: expected},
-        {"workgroupCount": list(data["grid"]), "workgroupSize": list(WORKGROUP)},
+        {"workgroupCount": list(data["grid"]), "workgroupSize": list(workgroup)},
         expected_target=target,
         observe_inputs=observed,
     )
@@ -1516,16 +1539,29 @@ def _request(descriptor, package, target, variant, data, parameters=None):
     return request, output, len(observed)
 
 
-def _upstream(work, reference, entry, variant, label, data, parameters=None):
+def _upstream(
+    work,
+    reference,
+    entry,
+    variant,
+    label,
+    data,
+    parameters=None,
+    workgroup=WORKGROUP,
+    bound=UNBATCHED_BOUND,
+):
     """Run the unchanged upstream kernel on raw ``[[buffer(i)]]`` storage.
 
-    ``parameters`` overrides the variant's ``[[buffer(i)]]`` parameters.
+    ``parameters`` overrides the variant's ``[[buffer(i)]]`` parameters,
+    ``workgroup`` the threadgroup size and ``bound`` the buffers the host
+    binds when ``B <= 1``.
     """
     runner, library = reference
     parameters = parameters or _parameters(variant)
     if variant == "batch_0":
-        # qmv binds only buffers 0-6 when B <= 1.
-        parameters = parameters[:UNBATCHED_BOUND]
+        # The host skips add_strides_and_shapes when B <= 1: qmv binds only
+        # buffers 0-6.
+        parameters = parameters[:bound]
     files, payloads = [], {}
     for name, index in parameters:
         payload = _metal_bytes(*data["values"][name])
@@ -1539,7 +1575,7 @@ def _upstream(work, reference, entry, variant, label, data, parameters=None):
             {
                 "buffers": files,
                 "workgroupCount": list(data["grid"]),
-                "workgroupSize": list(WORKGROUP),
+                "workgroupSize": list(workgroup),
                 "simdWidth": SIMD_SIZE,
             }
         ),

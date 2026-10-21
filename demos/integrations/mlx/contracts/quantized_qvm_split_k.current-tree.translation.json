@@ -397,19 +397,18 @@
     "qmvUnalignedGateEntryCount": 162,
     "qmvWideGateEntryCount": 432,
     "qvmGateEntryCount": 162,
+    "qmmTGateEntryCount": 216,
+    "qmmNGateEntryCount": 108,
+    "qmmTSplitKGateEntryCount": 108,
+    "gatherQmmGateEntryCount": 162,
+    "qmvQuadGateEntryCount": 216,
     "excludedEntries": {
       "kernels": [
-        "affine_gather_qmm_n",
-        "affine_qmm_n",
-        "affine_gather_qmm_t",
-        "affine_qmm_t",
-        "affine_qmv_quad",
-        "affine_qmm_t_splitk",
         "affine_gather_qmm_rhs_nt",
         "affine_gather_qmm_rhs_nn"
       ],
-      "count": 918,
-      "reason": "the other matrix-vector and matrix-matrix kernels are not gated yet"
+      "count": 108,
+      "reason": "the gather_qmm_rhs matrix-matrix kernels are not gated yet"
     },
     "runtimeCoveredEntryCount": 108,
     "artifactCountByTarget": 108,

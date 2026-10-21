@@ -73,6 +73,7 @@ from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
     EXCLUDED_KERNELS,
     GATHER_PARAMETERS,
+    GATHER_QMM_ENTRY_COUNT,
     GROUP_SIZES,
     GUARD_COUNT,
     INDEX_BOUND,
@@ -83,8 +84,12 @@ from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
     NUM_SIMDGROUPS,
     OPENGL_INDEX_RANGE_ASSERTIONS,
+    QMM_N_ENTRY_COUNT,
+    QMM_T_ENTRY_COUNT,
+    QMM_T_SPLITK_ENTRY_COUNT,
     QMV_HEADERS,
     QMV_PARAMETERS,
+    QMV_QUAD_ENTRY_COUNT,
     QMV_UNALIGNED_ENTRY_COUNT,
     QMV_WIDE_ENTRY_COUNT,
     QUANTIZE_ENTRY_COUNT,
@@ -525,6 +530,11 @@ def _expected_scope():
         + QMV_WIDE_ENTRY_COUNT
         + QVM_ENTRY_COUNT
         + QVM_SPLIT_K_ENTRY_COUNT
+        + QMM_T_ENTRY_COUNT
+        + QMM_N_ENTRY_COUNT
+        + QMM_T_SPLITK_ENTRY_COUNT
+        + GATHER_QMM_ENTRY_COUNT
+        + QMV_QUAD_ENTRY_COUNT
     )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
@@ -534,12 +544,15 @@ def _expected_scope():
         "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
         "qvmGateEntryCount": QVM_ENTRY_COUNT,
         "qvmSplitKGateEntryCount": QVM_SPLIT_K_ENTRY_COUNT,
+        "qmmTGateEntryCount": QMM_T_ENTRY_COUNT,
+        "qmmNGateEntryCount": QMM_N_ENTRY_COUNT,
+        "qmmTSplitKGateEntryCount": QMM_T_SPLITK_ENTRY_COUNT,
+        "gatherQmmGateEntryCount": GATHER_QMM_ENTRY_COUNT,
+        "qmvQuadGateEntryCount": QMV_QUAD_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
             "count": UNIT_ENTRY_COUNT - covered,
-            "reason": (
-                "the other matrix-vector and matrix-matrix kernels are not gated yet"
-            ),
+            "reason": "the gather_qmm_rhs matrix-matrix kernels are not gated yet",
         },
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
@@ -615,7 +628,12 @@ def test_quantized_qmv_unaligned_entries_follow_mlx_instantiation():
         + QMV_WIDE_ENTRY_COUNT
         + QVM_ENTRY_COUNT
         + QVM_SPLIT_K_ENTRY_COUNT
-        + 918
+        + QMM_T_ENTRY_COUNT
+        + QMM_N_ENTRY_COUNT
+        + QMM_T_SPLITK_ENTRY_COUNT
+        + GATHER_QMM_ENTRY_COUNT
+        + QMV_QUAD_ENTRY_COUNT
+        + 108
         == UNIT_ENTRY_COUNT
     )
 

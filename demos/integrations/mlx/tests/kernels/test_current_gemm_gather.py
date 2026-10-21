@@ -9,8 +9,9 @@ with the buffers ``matmul.cpp`` binds: operand batches selected through
 and broadcast indices over multi-dimensional operand batches. Every output
 word, guards included, must equal an exact reference; on Metal it must also
 equal the original source. ``gather_mm_rhs`` derives its row tile from
-``offsets`` with subgroup scans, which DirectX and OpenGL can only lower
-once read-only storage is proved immutable (#2263), so it is not covered.
+``offsets`` with subgroup scans and returns early on their reduction, which
+DirectX and OpenGL can lower only once reductions of values equal in every
+subgroup count as workgroup-uniform (#2546), so it is not covered.
 """
 
 import hashlib
