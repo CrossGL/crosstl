@@ -456,6 +456,7 @@ from .stage_utils import (
     compute_local_size,
     declaration_signature,
     deduplicate_named_declarations,
+    function_entry_execution_config,
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
@@ -5044,6 +5045,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 functions_code += self.generate_function(
                     func,
                     shader_type="compute",
+                    execution_config=function_entry_execution_config(func),
                     entry_name=stage_entry_names.get(id(func)),
                 )
             else:

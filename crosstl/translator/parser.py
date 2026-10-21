@@ -438,7 +438,9 @@ class Parser:
 
     def finalize_shader(self, shader):
         bind_anonymous_buffer_block_members(shader, self.anonymous_buffer_blocks)
-        return resolve_host_workgroup_sizes(validate_shader_cbuffers(shader))
+        return resolve_host_workgroup_sizes(
+            validate_shader_cbuffers(shader), self.layout_argument_to_string
+        )
 
     def append_parsed_nodes(self, collection, parsed):
         """Append one parsed node or extend a list of parsed nodes."""

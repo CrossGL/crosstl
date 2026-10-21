@@ -64,7 +64,7 @@ def isolated(job, path, timeout):
 
 
 # Source languages whose host, not the kernel, chooses the threadgroup size at dispatch time.
-HOST_SIZED_LANGUAGES = frozenset({"metal"})
+HOST_SIZED_LANGUAGES = frozenset({"metal", "cuda", "hip", "opencl"})
 
 
 @dataclass

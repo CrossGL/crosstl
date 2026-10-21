@@ -2,6 +2,11 @@
 
 import re
 
+from ..thread_hierarchy import (
+    global_invocation_axis,
+    kernel_workgroup_size_attribute,
+    normalize_threadgroup_size_option,
+)
 from .buffer_layout_import import EmittedBufferLayouts
 from .CudaAst import (
     ArrayAccessNode,
@@ -230,7 +235,9 @@ class CudaToCrossGLConverter:
     CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
     CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "kernel", "precision", "var"}
 
-    def __init__(self):
+    def __init__(self, threadgroup_size=None):
+        # The host picks a CUDA kernel's block size at launch time; this option names it.
+        self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         self.indent_level = 0
         self.output = []
         self.identifier_name_scopes = [{}]
@@ -4199,7 +4206,7 @@ class CudaToCrossGLConverter:
                 self.emit(f"// CUDA grid constant parameter: {param.name}")
 
         self.emit("@compute")
-        self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
+        self.emit(kernel_workgroup_size_attribute(self.threadgroup_size))
 
         params = []
         buffer_params = (
@@ -4250,11 +4257,6 @@ class CudaToCrossGLConverter:
             self.emit(") {")
 
             self.indent_level += 1
-            self.emit("let thread_id = gl_GlobalInvocationID;")
-            self.emit("let block_id = gl_WorkGroupID;")
-            self.emit("let thread_local_id = gl_LocalInvocationID;")
-            self.emit("let block_dim = gl_WorkGroupSize;")
-            self.emit("")
 
             self.push_packed_argument_scope()
             self.push_type_alias_scope()
@@ -4694,6 +4696,9 @@ class CudaToCrossGLConverter:
         self.register_warp_mask_value(raw_name, output_left, assigned_value)
 
     def visit_BinaryOpNode(self, node):
+        axis = global_invocation_axis(node)
+        if axis is not None:
+            return f"gl_GlobalInvocationID.{axis}"
         left = self.visit(node.left)
         right = self.visit(node.right)
         return f"({left} {node.op} {right})"

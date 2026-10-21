@@ -18,6 +18,7 @@ from crosstl.backend.HIP.HipAst import (
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
+from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .conversions import format_conversion, is_conversion_name
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 
@@ -273,8 +274,8 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         r"[hH]$"
     )
 
-    def __init__(self, normalize_target_safe_cgl=False):
-        super().__init__()
+    def __init__(self, normalize_target_safe_cgl=False, threadgroup_size=None):
+        super().__init__(threadgroup_size=threadgroup_size)
         self.normalize_target_safe_cgl = normalize_target_safe_cgl
 
     def generate(self, ast_node):
@@ -525,9 +526,8 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         return self.sanitize_identifier_name(sanitized)
 
     def visit_kernel_as_compute_shader(self, kernel):
-        workgroup_size = self.opencl_workgroup_size(kernel)
         self.emit("@compute")
-        self.emit(f"@workgroup_size({workgroup_size})")
+        self.emit(self.opencl_workgroup_size_attribute(kernel))
 
         params = []
         self.push_resource_object_hint_scope(
@@ -577,11 +577,6 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             self.emit(") {")
 
             self.indent_level += 1
-            self.emit("let thread_id = gl_GlobalInvocationID;")
-            self.emit("let block_id = gl_WorkGroupID;")
-            self.emit("let thread_local_id = gl_LocalInvocationID;")
-            self.emit("let block_dim = gl_WorkGroupSize;")
-            self.emit("")
 
             self.push_packed_argument_scope()
             self.push_type_alias_scope()
@@ -606,12 +601,14 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             self.pop_variable_type_scope()
             self.pop_resource_object_hint_scope()
 
-    def opencl_workgroup_size(self, kernel):
+    def opencl_workgroup_size_attribute(self, kernel):
+        """``reqd_work_group_size`` fixes the size; otherwise the host passes it to ``clEnqueueNDRangeKernel``."""
         for attribute in getattr(kernel, "attributes", []) or []:
             match = re.search(r"reqd_work_group_size\((.*?)\)", str(attribute))
             if match:
-                return re.sub(r"\s*,\s*", ", ", match.group(1).strip())
-        return "1, 1, 1"
+                size = re.sub(r"\s*,\s*", ", ", match.group(1).strip())
+                return f"@workgroup_size({size})"
+        return kernel_workgroup_size_attribute(self.threadgroup_size)
 
     def format_opencl_kernel_pointer_parameter(
         self, raw_type, output_name, element_type, binding

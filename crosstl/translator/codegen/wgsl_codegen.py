@@ -46,7 +46,10 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
-from ..host_workgroup_size import require_static_workgroup_size
+from ..host_workgroup_size import (
+    function_entry_execution_config,
+    require_static_workgroup_size,
+)
 from .array_utils import prepend_array_dimension
 from .call_graph import validate_recursion_free
 from .enum_utils import (
@@ -6559,7 +6562,7 @@ class WGSLCodeGen:
         return None
 
     def _function_execution_config(self, func):
-        config = {}
+        config = function_entry_execution_config(func)
         for attr in getattr(func, "attributes", []) or []:
             key = str(getattr(attr, "name", "")).lower()
             if key not in {"numthreads", "workgroup_size"}:
