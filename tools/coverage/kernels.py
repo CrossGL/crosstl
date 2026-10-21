@@ -11,6 +11,7 @@ class CUDA(Dialect):
     suffix = ".cu"
     entry = "probe"
     wide_integers = True
+    string = "const char*"
     _SCALARS = {
         "uint": "unsigned int",
         "int64": "long long",

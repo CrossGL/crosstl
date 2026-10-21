@@ -35,6 +35,7 @@ class CrossGL(Dialect):
     wide_integers = True
     narrow_scalars = True
     packed_bytes = True
+    string = "string"
     # The spellings CrossGL's own importers write for these scalars; the HLSL importer reads a packed 8-bit word as
     # ``uint``, which HLSL converts to and from implicitly.
     _SCALARS = {

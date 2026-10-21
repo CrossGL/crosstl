@@ -110,6 +110,8 @@ class Type:
 
 
 VOID = Type.other("void")
+# A constant string argument, such as the tag a C library ``nan`` takes; probes pass the empty string.
+STRING = Type.other("string")
 
 
 @dataclass(frozen=True)

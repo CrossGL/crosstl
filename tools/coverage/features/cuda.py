@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 from .. import spellings
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import STRING, VOID, Feature, Param, Signature, Type
 
 # Definitions in the headers that are not CUDA device functions a kernel calls: the pre-Volta warp votes CUDA 9
 # removed, a helper of those votes, the debugger trap and profiler counters, and C library functions. The last four
@@ -67,6 +67,9 @@ def parameter(text: str, atomic: bool, first: bool) -> Param:
     pointee = text.rstrip("*").strip()
     if text.count("*") > 1:
         return Param(Type.other(text))
+    if " ".join(pointee.split()) == "const char":
+        # A C string, such as the tag of nan and nanf, takes a string constant.
+        return Param(STRING, "const")
     if pointee.startswith("const "):
         # A pointer to constant values, such as the vector norm reads, takes the address of a local.
         kind = cuda_type(pointee)

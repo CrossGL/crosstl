@@ -10,7 +10,7 @@ from tools.coverage.features import (
     spirv,
     wgsl,
 )
-from tools.coverage.model import VOID, Param, Signature, Type
+from tools.coverage.model import STRING, VOID, Param, Signature, Type
 
 GLSL_EXCERPT = """
 == Common Functions
@@ -899,6 +899,8 @@ float erff(float __x) { return __ocml_erf_f32(__x); }
 __DEVICE__
 float frexpf(float __x, int *__nptr) { return __builtin_frexpf(__x, __nptr); }
 __DEVICE__
+float nanf(const char *__tagp) { return __builtin_nanf(""); }
+__DEVICE__
 __RETURN_TYPE __isnanf(float __x) { return __builtin_isnan(__x); }
 #if defined OCML_BASIC_ROUNDED_OPERATIONS
 __DEVICE__
@@ -951,6 +953,7 @@ def test_hip_reads_the_math_atomic_and_device_headers():
         "erff",
         "frexpf",
         "min",
+        "nanf",
     ]
     assert {f.group for f in features.values()} == {"math", "atomic", "device"}
     # Only the #else branch of OCML_BASIC_ROUNDED_OPERATIONS is compiled by default, so __fadd_rd is left out.
@@ -960,6 +963,8 @@ def test_hip_reads_the_math_atomic_and_device_headers():
     assert add.params == (Param(Type("int"), "inout"), Param(Type("int")))
     assert features["min"].signature.result == Type("int")
     assert features["frexpf"].signature.params[1] == Param(Type("int"), "out")
+    # A C string takes a string constant.
+    assert features["nanf"].signature.params == (Param(STRING, "const"),)
     assert features["__isnanf"].signature.result == Type("bool")
     assert features["__fns32"].signature.params[0].type == Type("uint64")
     assert features["__fns32"].signature.params[1].type == Type("uint")

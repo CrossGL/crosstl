@@ -6,7 +6,7 @@ builder in :mod:`.probes` talks to a dialect and never to a language directly.
 
 from __future__ import annotations
 
-from .model import NARROW_SCALARS, PACKED_BYTES, WIDE_INTEGERS, Type
+from .model import NARROW_SCALARS, PACKED_BYTES, STRING, WIDE_INTEGERS, Type
 
 # A storage buffer as ``(element type spelling, name)``; buffer ``k`` is bound at binding ``k``.
 Buffer = tuple[str, str]
@@ -53,10 +53,14 @@ class Dialect:
     wide_integers = False
     narrow_scalars = False
     packed_bytes = False
+    # The spelling of a constant string argument (model.STRING), empty where the language has no strings.
+    string = ""
 
     def type(self, kind: Type) -> str:
         if kind.count:
             raise ProbeError(f"no probe for {self.language} array parameters yet")
+        if kind == STRING and self.string:
+            return self.string
         if kind.opaque:
             if kind.opaque == "void":
                 return "void"
@@ -99,6 +103,8 @@ class Dialect:
 
     def literal(self, kind: Type) -> str:
         """A constant of ``kind``, for an argument the language requires to be a constant expression."""
+        if kind == STRING:
+            return '""'
         if len(kind.shape) > 1:
             raise ProbeError("no constant probe argument of a matrix type")
         constants = {

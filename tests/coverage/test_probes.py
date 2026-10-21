@@ -4,7 +4,7 @@ import pytest
 
 from tools.coverage import probes, validators
 from tools.coverage.features.common import prototype
-from tools.coverage.model import VOID, Feature, Param, Signature, Type
+from tools.coverage.model import STRING, VOID, Feature, Param, Signature, Type
 
 VEC3 = Type("float", (3,))
 
@@ -1164,6 +1164,21 @@ def test_cuda_and_hip_pass_the_address_of_a_local_for_a_pointer_to_values():
         assert "    float r = normf(a0, &a1);" in source
     with pytest.raises(probes.ProbeError, match="no probe passes crossgl a pointer"):
         probes.build(norm, "crossgl")
+
+
+def test_hip_and_crossgl_pass_the_empty_string_for_a_c_string():
+    nan = Feature(
+        "hip",
+        "function",
+        "nanf",
+        Signature(Type("float"), (Param(STRING, "const"),)),
+        crossgl="nan",
+    )
+    assert '    float r = nanf("");' in probes.build(nan, "hip").source
+    assert '            float r = nan("");' in probes.build(nan, "crossgl").source
+    # Languages without strings say so rather than spelling one.
+    with pytest.raises(probes.ProbeError, match="parameters of type string"):
+        probes.build(replace(nan, language="glsl"), "glsl")
 
 
 def test_metal_compare_exchange_takes_the_address_of_the_expected_value():
