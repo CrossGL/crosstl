@@ -870,6 +870,20 @@ def test_function_probe_declares_the_samplers_and_images_it_passes():
     assert "uint r = imageAtomicAdd(u0, a1, a2);" in crossgl
 
 
+def test_a_subpass_input_names_its_input_attachment():
+    subpass = feature("subpassLoad", VEC4, Type.other("subpassInput"), stage="fragment")
+    source = probes.build(subpass, "glsl").source
+    assert (
+        "layout(input_attachment_index = 0, binding = 8) uniform subpassInput u0;"
+        in source
+    )
+    assert "vec4 r = subpassLoad(u0);" in source
+    crossgl = probes.build(subpass, "crossgl").source
+    assert (
+        "        layout(input_attachment_index = 0) uniform subpassInput u0;" in crossgl
+    )
+
+
 def test_atomic_counters_use_the_first_atomic_counter_binding():
     source = probes.build(ATOMIC_COUNTER, "glsl").source
     assert "layout(binding = 0) uniform atomic_uint u0;" in source

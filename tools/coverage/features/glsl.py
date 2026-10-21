@@ -21,7 +21,11 @@ LEFT_OUT = {
 STAGES = {
     "geometry-shader-functions": "geometry",
     "fragment-processing-functions": "fragment",
+    "subpass-input-functions": "fragment",
 }
+# "Subpass-input functions are only available when targeting a Vulkan fragment stage" (the specification's
+# Subpass-Input Functions section), so their probes are fragment shaders checked for Vulkan.
+TARGETS = {"subpass-input-functions": "vulkan"}
 # Texture functions that compute an implicit level of detail, from derivatives only a fragment shader has.
 IMPLICIT_LOD = frozenset(
     {"texture", "textureOffset", "textureProj", "textureProjOffset", "textureQueryLod"}
@@ -173,6 +177,7 @@ def parse(text: str) -> list[Feature]:
             group=group,
             crossgl=name,
             stage=_stage(name, group),
+            target=TARGETS.get(group, ""),
         )
         for name, (group, signatures) in sorted(overloads(text).items())
     ]

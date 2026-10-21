@@ -125,12 +125,13 @@ _REGISTERS = {"t": "t0", "u": "u8"}
 
 @dataclass(frozen=True)
 class Uniform:
-    """A sampler, texture, image or atomic counter a function probe declares at module scope; ``image_format`` is
-    GLSL's format qualifier for an image, and ``binding`` a binding the uniform must use.
+    """A sampler, texture, image, subpass input or atomic counter a function probe declares at module scope;
+    ``qualifier`` is the GLSL layout qualifier it needs besides its binding (an image's format, a subpass input's
+    attachment index), and ``binding`` a binding the uniform must use.
     """
 
     spelling: str
-    image_format: str = ""
+    qualifier: str = ""
     binding: int | None = None
 
 
@@ -144,6 +145,7 @@ _GLSL_UNIFORMS = {
     "image2DMS": Uniform("image2DMS", "rgba32f"),
     "iimage2D": Uniform("iimage2D", "r32i"),
     "uimage2D": Uniform("uimage2D", "r32ui"),
+    "subpassInput": Uniform("subpassInput", "input_attachment_index = 0"),
     # Atomic counters bind in a namespace of their own, and glslang's default limits allow only binding 0
     # (gl_MaxAtomicCounterBindings).
     "atomic_uint": Uniform("atomic_uint", binding=0),
@@ -209,7 +211,7 @@ class Uniforms:
             else uniform.binding
         )
         self.declarations.append(
-            self.dialect.uniform(uniform.spelling, name, binding, uniform.image_format)
+            self.dialect.uniform(uniform.spelling, name, binding, uniform.qualifier)
         )
         return name
 

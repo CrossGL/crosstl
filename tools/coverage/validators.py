@@ -349,12 +349,13 @@ def validate(
             return _essl(name, source, scratch)
         if language == "glsl":
             # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V 1.4 and later, so those shaders are
-            # checked for Vulkan.
-            environment = (
-                ["--target-env", SPIRV_1_4_ENVIRONMENT]
-                if stage in SPIRV_1_4_STAGES
-                else []
-            )
+            # checked for Vulkan, as are probes whose feature only GLSL for Vulkan has.
+            if stage in SPIRV_1_4_STAGES:
+                environment = ["--target-env", SPIRV_1_4_ENVIRONMENT]
+            elif target == "vulkan":
+                environment = ["--target-env", SPIRV_ENVIRONMENT]
+            else:
+                environment = []
             return _run([*command("glslangValidator"), *environment, name], scratch)
         if language == "hlsl":
             return _dxc(name, source, stage, entry, scratch)

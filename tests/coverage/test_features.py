@@ -145,6 +145,15 @@ vec2 interpolateAtOffset(float interpolant, vec2 offset)
 void EmitStreamVertex(int stream)
 void EmitVertex()
 ----
+
+== Subpass-Input Functions
+
+=== SubpassLoad
+[source,glsl]
+----
+gvec4 subpassLoad(gsubpassInput subpass)
+gvec4 subpassLoad(gsubpassInputMS subpass, int sample)
+----
 """
 
 
@@ -178,6 +187,14 @@ def test_glsl_marks_constant_offsets_arrays_and_implicit_lod():
     stream = features["EmitStreamVertex"]
     assert stream.stage == "geometry"
     assert stream.signature.params == (Param(Type("int"), "const"),)
+
+
+def test_glsl_probes_subpass_loads_in_a_vulkan_fragment_shader():
+    features = by_name(glsl.parse(TEXTURE_EXCERPT))
+    subpass = features["subpassLoad"]
+    assert subpass.signature.params == (Param(Type.other("subpassInput")),)
+    assert (subpass.stage, subpass.target) == ("fragment", "vulkan")
+    assert features["texture"].target == ""
 
 
 GRAMMAR = """{"instructions": [

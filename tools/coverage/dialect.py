@@ -160,8 +160,9 @@ class Dialect:
         """The declaration of a resource object, such as a texture or a sampler, of type ``spelling``."""
         raise ProbeError(f"no probe for {self.language} {spelling} objects yet")
 
-    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
-        """The declaration of a GLSL sampler or image uniform; ``image_format`` is the image's format qualifier."""
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        """The declaration of a GLSL sampler, image or subpass input uniform; ``qualifier`` is the layout qualifier
+        it needs besides its binding."""
         raise ProbeError(f"no probe for {self.language} {spelling} uniforms yet")
 
     def call(self, name: str, arguments: list[str]) -> str:

@@ -147,7 +147,7 @@ class Feature:
     CrossGL probe calls when CrossGL's operation takes other arguments than the feature, as a WGSL texture function
     does: it takes a texture and a sampler where CrossGL takes one GLSL sampler. ``target`` is the compiler target
     probes are checked for when it is not the language's usual one, as ``hlsl`` for a Slang function that SPIR-V
-    lacks.
+    lacks or ``vulkan`` for a GLSL function that only GLSL for Vulkan has.
     """
 
     language: str

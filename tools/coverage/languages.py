@@ -24,11 +24,9 @@ class GLSL(Dialect):
         ]
         return lines + list(parts.get("declarations", ()))
 
-    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
         layout = (
-            f"{image_format}, binding = {binding}"
-            if image_format
-            else f"binding = {binding}"
+            f"{qualifier}, binding = {binding}" if qualifier else f"binding = {binding}"
         )
         return f"layout({layout}) uniform {spelling} {name};"
 
@@ -110,7 +108,7 @@ class HLSL(Dialect):
     def resource(self, spelling: str, name: str, register: str) -> str:
         return f"{spelling} {name} : register({register});"
 
-    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
         return self.resource(spelling, name, f"t{binding}")
 
     def flat(self, kind: str) -> str:
@@ -451,7 +449,7 @@ class WGSL(Dialect):
     def to_int(self, condition: str) -> str:
         return f"select(0, 1, {condition})"
 
-    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
         return f"@group(0) @binding({binding}) var {name}: {spelling};"
 
     def buffer_element(self, kind: Type, atomic: bool) -> str:
@@ -512,9 +510,9 @@ class WebGL(Dialect):
         return uniform_read(buffer, offset)
 
     # GLSL ES 3.00 has no binding layouts, and no default precision for most sampler types.
-    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
-        if image_format:
-            raise ProbeError("GLSL ES 3.00 has no images")
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        if qualifier:
+            raise ProbeError("GLSL ES 3.00 has no images or subpass inputs")
         return f"uniform highp {spelling} {name};"
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:

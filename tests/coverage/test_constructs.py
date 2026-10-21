@@ -206,10 +206,12 @@ def test_ray_tracing_and_mesh_stages_are_checked_for_vulkan(monkeypatch):
     validators.validate("glsl", "", "miss")
     validators.validate("glsl", "", "mesh")
     validators.validate("glsl", "", "fragment")
+    validators.validate("glsl", "", "fragment", target="vulkan")
     assert commands == [
         ["glslangValidator", "--target-env", "vulkan1.2", "probe.rmiss"],
         ["glslangValidator", "--target-env", "vulkan1.2", "probe.mesh"],
         ["glslangValidator", "probe.frag"],
+        ["glslangValidator", "--target-env", "vulkan1.1", "probe.frag"],
     ]
 
 
