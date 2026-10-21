@@ -117,6 +117,11 @@ class Dialect:
         """The element type of the output buffer; ``atomic`` when the probe passes it to an atomic operation."""
         return self.type(kind)
 
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        """How a probe reads a result of the opaque type ``opaque`` as a value: the value's type and an expression
+        with ``{}`` for the call, or ``None`` when the probe only makes the call."""
+        return None
+
     def stored(self, kind: Type, value: str) -> str:
         """``value``, of type ``kind``, as the output buffer's element type holds it."""
         return value

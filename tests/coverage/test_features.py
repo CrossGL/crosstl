@@ -534,6 +534,23 @@ def test_metal_reads_the_generated_list():
     )
 
 
+def test_metal_lists_ballots_whose_mask_a_probe_reads(tmp_path):
+    for header in metal.HEADERS:
+        (tmp_path / header).write_text("")
+    (tmp_path / "metal_simdgroup").write_text(
+        "METAL_FUNC simd_vote simd_ballot(bool expr)\n{\n  return simd_vote(0);\n}\n"
+        "METAL_FUNC bool simd_none(simd_vote vote)\n{\n  return false;\n}\n"
+    )
+    lines = metal.generate(tmp_path, "test", "9.9").splitlines()
+    assert "metal_simdgroup simd_ballot simd_vote(bool)" in lines
+    # A probe reads a mask a function returns, but has none to pass.
+    assert "metal_simdgroup simd_none -" in lines
+    ballot = by_name(metal.parse("metal_simdgroup simd_ballot simd_vote(bool)\n"))
+    assert ballot["simd_ballot"].signature == Signature(
+        Type.other("simd_vote"), (Param(Type("bool")),)
+    )
+
+
 METAL_SIMDGROUP_HEADER = """
 template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
 METAL_FUNC T simd_shuffle(T data METAL_MAYBE_UNDEF, ushort simd_lane_id)
