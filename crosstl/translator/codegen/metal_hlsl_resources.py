@@ -22,6 +22,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .buffer_member_layout import member_explicit_offset, member_is_row_major
 from .hlsl_buffer_layout import (
     HLSL_CBUFFER_LAYOUT,
     HLSL_STRUCTURED_LAYOUT,
@@ -132,7 +133,11 @@ class MetalHlslResourceMixin:
         if struct is not None:
             static_members = self.metal_static_struct_members.get(name, set())
             members = [
-                (member.name, self.struct_member_raw_type(member))
+                (
+                    member.name,
+                    self.struct_member_raw_type(member),
+                    member_is_row_major(member),
+                )
                 for member in getattr(struct, "members", []) or []
                 if getattr(member, "name", None)
                 and not isinstance(member, FunctionNode)
@@ -159,12 +164,17 @@ class MetalHlslResourceMixin:
             layout = buffer_layout_from_attributes(getattr(cbuffer, "attributes", None))
             if layout != HLSL_CBUFFER_LAYOUT:
                 continue
-            members = [
-                (member.name, self.struct_member_raw_type(member))
-                for member in getattr(cbuffer, "members", []) or []
-                if getattr(member, "name", None)
-            ]
             try:
+                members = [
+                    (
+                        member.name,
+                        self.struct_member_raw_type(member),
+                        member_is_row_major(member),
+                        member_explicit_offset(member),
+                    )
+                    for member in getattr(cbuffer, "members", []) or []
+                    if getattr(member, "name", None)
+                ]
                 plan = planner.plan_cbuffer(cbuffer.name, members)
             except HlslLayoutError as exc:
                 raise ValueError(
