@@ -56,7 +56,9 @@ def _hlsl(**outcomes):
 def _bug(language, name, direction="output"):
     """The bug key of feature ``name`` in the rows built here, whose detail is :func:`_detail`."""
     row = {"language": language, "direction": direction}
-    return issues.bug_key(row, _feature(name, "wrong", detail=_detail(name)))
+    return issues.bug_key(
+        row, issues.cause(_feature(name, "wrong", detail=_detail(name)))
+    )
 
 
 def _applied(actions, existing=()):
@@ -309,6 +311,73 @@ def test_features_whose_diagnostics_name_them_share_a_cause():
     assert issues.cause(
         {"name": "Vec3::round", "crossgl": "round", "detail": detail}
     ) == ('after the round trip: probe.cu(N): error: identifier "f64" is undefined')
+
+
+def test_a_shared_diagnostic_that_names_a_feature_stays_one_cause():
+    detail = "ValueError: Rust geometry stage requires maxvertexcount attribute"
+    features = [
+        _feature(name, "wrong", category, detail)
+        for name, category in (
+            ("emit_vertex", "function"),
+            ("end_primitive", "function"),
+            ("geometry", "stage"),
+        )
+    ]
+    row = _row("rust", "output", features)
+    assert set(issues.causes_of(row).values()) == {detail}
+    # A diagnostic that names every feature failing with it still leaves the name out.
+    overload = (
+        'error: no instance of overloaded function "{}" matches the argument list'
+    )
+    spelled = [
+        _feature("modf", "wrong", detail=overload.format("modf")),
+        _feature("modff", "wrong", detail=overload.format("modf")) | {
+            "crossgl": "modf"
+        },
+        _feature("frexp", "wrong", detail=overload.format("frexp")),
+    ]
+    assert set(issues.causes_of(_row("cuda", "output", spelled)).values()) == {
+        overload.format(issues.FEATURE)
+    }
+    # The issue filed before the stage failed the same way takes it in rather than a second issue opening.
+    row["features"] = features[:2]
+    state = _applied(issues.plan(_report(row), []))
+    (bug,) = (i for i in state if i.key.startswith("wrong/"))
+    row["features"] = features
+    actions = [
+        a for a in issues.plan(_report(row), state) if a.key.startswith("wrong/")
+    ]
+    assert [(a.kind, a.number) for a in actions] == [("edit", bug.number)]
+    assert "Affected features: `emit_vertex`, `end_primitive`, `geometry`." in (
+        actions[0].body
+    )
+
+
+def test_a_method_shares_a_cause_under_the_name_crossgl_gives_it():
+    detail = "after the round trip: probe.hlsl:{}:5: error: use of undeclared identifier '{}'"
+    row = _row(
+        "hlsl",
+        "input",
+        [
+            _feature(
+                f"RWByteAddressBuffer.{name}",
+                "wrong",
+                "method",
+                detail.format(line, spelled),
+            )
+            | {"crossgl": name}
+            for name, spelled, line in (
+                ("InterlockedAnd", "atomicAnd", 11),
+                ("InterlockedMax", "atomicMax", 12),
+            )
+        ],
+    )
+    bugs = [a for a in issues.plan(_report(row), []) if a.key.startswith("wrong/")]
+    assert [a.title for a in bugs] == [
+        "HLSL input: use of undeclared identifier '<feature>'"
+    ]
+    # Without the language the spelling is not known, so each diagnostic keeps it.
+    assert issues.cause(row["features"][0]).endswith("'atomicAnd'")
 
 
 def _wrong(row_features):

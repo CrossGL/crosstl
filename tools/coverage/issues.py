@@ -1,7 +1,7 @@
 """Reconcile the coverage tracking and bug issues with a coverage report.
 
 There is one tracking issue per language and direction, plus one for CrossGL IR expressiveness, and one bug issue per
-cause of ``wrong`` results in a language and direction (:func:`cause`), so one translator bug that breaks many probes
+cause of ``wrong`` results in a language and direction (:func:`causes_of`), so one translator bug that breaks many probes
 is one issue. Every managed issue carries a hidden marker, ``<!-- crosstl-coverage key=... -->``, and nothing here
 edits or closes an issue without one.
 
@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 
-from . import chart, ir, publish
+from . import chart, crossgl, ir, publish
 
 LABEL = "coverage"
 NEW_BUGS = 10
@@ -184,18 +184,37 @@ def _diagnostic(feature: dict) -> str:
     return _DIGITS.sub("N", detail).strip()
 
 
-def cause(feature: dict) -> str:
+def cause(feature: dict, language: str = "") -> str:
     """The diagnostic of a wrong result with what is particular to its probe removed: line and column numbers, the
-    names every probe uses, and the feature's own name or CrossGL spelling. Wrong results with one cause are one bug,
-    so a generator that emits twenty builtins unchanged has one issue rather than twenty.
+    names every probe uses, and the feature's own name or CrossGL spelling, including the name CrossGL gives a
+    ``language`` built-in (:data:`.crossgl.RENAMES`). Wrong results with one cause are one bug, so a generator that
+    emits twenty builtins unchanged has one issue rather than twenty.
     """
     detail = _diagnostic(feature)
     prefix = _ROUND_TRIP if detail.startswith(_ROUND_TRIP) else ""
     rest = detail[len(prefix) :]
     names = {feature.get("name"), feature.get("crossgl")} - {None, ""}
+    renames = crossgl.RENAMES.get(language, {})
+    names |= {renames[name] for name in names if name in renames}
     for name in sorted(names, key=lambda n: (-len(n), n)):
         rest = re.sub(rf"(?<![\w.:]){re.escape(name)}(?!\w|::)", FEATURE, rest)
     return prefix + rest
+
+
+def causes_of(row: dict) -> dict[str, str]:
+    """The cause of each wrong result of ``row`` by feature name.
+
+    A diagnostic that names one feature but is shared by another that it does not name is the cause of both as it
+    stands, so the ``geometry`` stage that fails with "Rust geometry stage requires ..." stays with the functions that
+    fail that way. Any other wrong result has its :func:`cause`.
+    """
+    wrong = [f for f in row["features"] if f["outcome"] == "wrong"]
+    named = {f["name"]: cause(f, row["language"]) for f in wrong}
+    literal = {_diagnostic(f) for f in wrong if named[f["name"]] == _diagnostic(f)}
+    return {
+        f["name"]: _diagnostic(f) if _diagnostic(f) in literal else named[f["name"]]
+        for f in wrong
+    }
 
 
 def _covered(body: str | None) -> list[str]:
@@ -203,8 +222,9 @@ def _covered(body: str | None) -> list[str]:
     return found.group(1).split(",") if found and found.group(1) else []
 
 
-def bug_key(row: dict, feature: dict) -> str:
-    digest = hashlib.sha256(cause(feature).encode()).hexdigest()[:12]
+def bug_key(row: dict, text: str) -> str:
+    """The key of the bug issue for the wrong results of ``row`` whose cause is ``text`` (:func:`causes_of`)."""
+    digest = hashlib.sha256(text.encode()).hexdigest()[:12]
     return key("wrong", row["language"], row["direction"], digest)
 
 
@@ -272,6 +292,7 @@ def tracking_body(row: dict, repository: str, bugs: dict[str, int]) -> str:
         "so edits to this description are overwritten. Each wrong result of a backend also has its own `bug` issue.",
     ]
     gaps = sorted(_gaps(row), key=lambda f: (f["category"], f["name"]))
+    causes = causes_of(row)
     used = sum(len(line) + 1 for line in lines)
     category = ""
     for index, feature in enumerate(gaps):
@@ -280,7 +301,8 @@ def tracking_body(row: dict, repository: str, bugs: dict[str, int]) -> str:
             if feature["category"] != category
             else []
         )
-        number = bugs.get(bug_key(row, feature))
+        text = causes.get(feature["name"])
+        number = bugs.get(bug_key(row, text)) if text is not None else None
         link = f" (#{number})" if number else ""
         detail = f": {publish.cell(feature['detail'])}" if feature.get("detail") else ""
         item.append(f"- [ ] `{feature['name']}` {feature['outcome']}{link}{detail}")
@@ -303,18 +325,18 @@ def _fence(text: str) -> str:
     return text.replace("```", "'''")
 
 
-def bug_title(row: dict, features: list[dict]) -> str:
-    """The title of the bug for ``features``, which share a cause; one feature's title keeps its name."""
+def bug_title(row: dict, text: str, features: list[dict]) -> str:
+    """The title of the bug for ``features``, whose cause is ``text``; one feature's title keeps its name."""
     first = features[0]
-    summary = _diagnostic(first) if len(features) == 1 else cause(first)
+    summary = _diagnostic(first) if len(features) == 1 else text
     summary = _LOCATION.sub("", summary, count=1).strip()
     if len(summary) > TITLE_LIMIT:
         summary = summary[: TITLE_LIMIT - 1].rstrip() + "…"
     return f"{_name(row)}: {summary}"
 
 
-def bug_body(row: dict, features: list[dict], repository: str) -> str:
-    """The bug issue body for the ``features`` of ``row`` that fail with one :func:`cause`."""
+def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str:
+    """The bug issue body for the ``features`` of ``row`` whose cause is ``text``."""
     language, direction = row["language"], row["direction"]
     tool = TOOLS.get(language, language)
     if direction == "input":
@@ -342,7 +364,7 @@ def bug_body(row: dict, features: list[dict], repository: str) -> str:
         else f"The coverage probes for {count} {_name(row)} features give a wrong result with the same diagnostic."
     )
     lines = [
-        MARKER.format(bug_key(row, first)),
+        MARKER.format(bug_key(row, text)),
         FEATURES.format(",".join(f["name"] for f in features)),
         f"{subject} {what}",
         "",
@@ -401,11 +423,12 @@ Causes = list[tuple[str, list[dict]]]
 
 
 def _causes(row: dict) -> Causes:
-    """The row's wrong results grouped by :func:`cause`, the cause shared by most features first."""
+    """The row's wrong results grouped by :func:`causes_of`, the cause shared by most features first."""
+    causes = causes_of(row)
     groups: dict[str, list[dict]] = {}
     for feature in sorted(row["features"], key=lambda f: f["name"]):
         if feature["outcome"] == "wrong":
-            groups.setdefault(cause(feature), []).append(feature)
+            groups.setdefault(causes[feature["name"]], []).append(feature)
     return sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
 
 
@@ -417,9 +440,7 @@ def _stale(
     Each comes with its features that the row still lists and the keys of the causes those features fail with now.
     An issue with an untested feature is left out: a result that could not be measured says nothing about the bug.
     """
-    successor = {
-        f["name"]: bug_key(row, group[0]) for _, group in causes for f in group
-    }
+    successor = {f["name"]: bug_key(row, text) for text, group in causes for f in group}
     present = set(successor.values())
     prefix = key("wrong", row["language"], row["direction"]) + "/"
     outcomes = {f["name"]: f["outcome"] for f in row["features"]}
@@ -470,21 +491,23 @@ def _retire(plan: _Plan, row: dict, causes: Causes) -> None:
 
 def _bugs(plan: _Plan, rows: list[tuple[dict, Causes]], new_bugs: int) -> None:
     # New bugs are taken one row at a time, so a capped run files issues for every language rather than the first.
-    wanted: list[tuple[int, int, dict, list[dict]]] = []
+    wanted: list[tuple[int, int, dict, str, list[dict]]] = []
     for order, (row, causes) in enumerate(rows):
-        wanted += [(rank, order, row, group) for rank, (_, group) in enumerate(causes)]
+        wanted += [
+            (rank, order, row, text, group) for rank, (text, group) in enumerate(causes)
+        ]
         _retire(plan, row, causes)
     created = 0
-    for _, _, row, group in sorted(wanted, key=lambda w: (w[0], w[1])):
-        issue_key = bug_key(row, group[0])
+    for _, _, row, text, group in sorted(wanted, key=lambda w: (w[0], w[1])):
+        issue_key = bug_key(row, text)
         if issue_key not in plan.managed:
             if created >= new_bugs:
                 continue
             created += 1
         plan.ensure(
             issue_key,
-            bug_title(row, group),
-            bug_body(row, group, plan.repository),
+            bug_title(row, text, group),
+            bug_body(row, text, group, plan.repository),
             bug_labels(row),
             "A probe fails this way again, so this issue is reopened.",
         )
