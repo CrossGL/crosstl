@@ -55,6 +55,10 @@ from .storage_blocks import (
     normalize_spirv_storage_blocks,
 )
 from .struct_scalar_splats import expand_struct_scalar_splats
+from .structured_layouts import (
+    StructuredLayoutUnsupportedError,
+    legalize_structured_layouts,
+)
 from .tessellation_patches import (
     TessellationPatchUnsupportedError,
     lower_tessellation_patches,
@@ -176,6 +180,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_dxr_ray_interfaces(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
+    legalize_structured_layouts(program, report.target)
     hoist_array_constructors(program, report.target)
     copy_written_array_parameters(program, report.target)
     refuse_per_vertex_inputs(program, report.target)

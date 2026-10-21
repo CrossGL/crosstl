@@ -60,7 +60,10 @@ def _run(command):
 def test_opengl_receives_value_returning_atomics_and_compiles(tmp_path):
     code = re.sub(r"\s+", " ", _translate(tmp_path, "opengl"))
     assert "o9 = atomicAdd(g, 1u);" in code
-    assert re.search(r"o10 = atomicAdd\(v\[[^]]+\]\.z, 1u\);", code)
+    # v is a uint3 structured buffer, stored as words on OpenGL: the atomic operates on the z word.
+    assert re.search(
+        r"o10 = atomicAdd\(v\[\(\(uint\(\w+\.x\) \* 3u\) \+ 2u\)\], 1u\);", code
+    )
     assert "atomicCompSwap(c[8], 0u, 12u);" in code
     assert "o8 = atomicCompSwap(c[7], 0u, 11u);" in code
     assert "Interlocked" not in code

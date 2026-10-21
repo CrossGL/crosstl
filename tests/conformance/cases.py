@@ -119,6 +119,23 @@ def _i32_edge(n=64):
     return _tile(base, n).astype(np.int32)
 
 
+def o_struct_stride(inp):
+    r = inp.reshape(64, 7).astype(np.float32)
+    out = np.stack(
+        [
+            r[:, 6],
+            r[:, 3],
+            r[:, 2] + np.float32(0.5),
+            r[:, 1],
+            r[:, 0] + r[:, 4],
+            r[:, 1],
+            r[:, 4],
+        ],
+        axis=1,
+    )
+    return out.reshape(-1).astype(np.float32)
+
+
 def o_matrix_orientation(inp):
     """GLSL 4.60 sections 5.4.2, 5.6, 5.10 and 8.6 on mat2x3 values built from six inputs per thread."""
     out = []
@@ -1220,6 +1237,17 @@ CASES = [
         np.arange(64 * 3, dtype=np.float32),
         np.float32,
         lambda inp: inp[1::3].astype(np.float32),
+        compare="ulp:0",
+        readings=BOTH,
+    ),
+    Case(
+        "h_struct_stride",
+        "H16",
+        "StructuredBuffer<P>: float3 and float2 members at 4-byte offsets, 28-byte elements",
+        "HLSL structured buffer layout",
+        np.arange(64 * 7, dtype=np.float32),
+        np.float32,
+        o_struct_stride,
         compare="ulp:0",
         readings=BOTH,
     ),
