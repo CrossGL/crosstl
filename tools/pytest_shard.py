@@ -1,9 +1,13 @@
 """Run one shard of a test session.
 
-``python -m pytest -p tools.pytest_shard --shard 2/3 tests`` runs the test files
-that fall into shard 2 of 3. A file's shard is a CRC-32 of its path relative to
-the rootdir, so a module's tests and fixtures stay on one runner, every run picks
-the same files, and the shards together run each file exactly once.
+``python -m pytest -p tools.pytest_shard --shard 2/3 tests`` runs the tests that
+fall into shard 2 of 3. A test's shard is a CRC-32 of its node id, so every run
+picks the same tests and the shards together run each test exactly once.
+
+Hashing node ids rather than files keeps the shards even: a few files hold most
+of the slow parametrized cases, and splitting by file left one shard with twice
+the work of another. pytest-xdist already spreads a file's tests over workers,
+so no test may rely on running in the same process as the rest of its file.
 """
 
 import argparse
@@ -23,8 +27,8 @@ def parse_shard(value: str) -> tuple[int, int]:
     return shard, count
 
 
-def shard_of(path: str, count: int) -> int:
-    return zlib.crc32(path.encode("utf-8")) % count + 1
+def shard_of(nodeid: str, count: int) -> int:
+    return zlib.crc32(nodeid.encode("utf-8")) % count + 1
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -33,7 +37,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type=parse_shard,
         default=None,
         metavar="K/N",
-        help="run only the test files in shard K of N",
+        help="run only the tests in shard K of N",
     )
 
 
@@ -47,8 +51,7 @@ def pytest_collection_modifyitems(
     shard, count = selected
     keep, drop = [], []
     for item in items:
-        path = item.nodeid.split("::", 1)[0]
-        (keep if shard_of(path, count) == shard else drop).append(item)
+        (keep if shard_of(item.nodeid, count) == shard else drop).append(item)
     if drop:
         config.hook.pytest_deselected(items=drop)
         items[:] = keep

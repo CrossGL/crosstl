@@ -64,15 +64,26 @@ jobs:
             "hip",
             "webgl",
             "wgsl",
-            "general",
+            "general-1-of-3",
+            "general-2-of-3",
+            "general-3-of-3",
           ]
         python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
         OS: [ubuntu-latest, windows-latest, macOS-latest]
         exclude:
           - OS: windows-latest
           - OS: macOS-latest
+        # A K-of-N leg runs shard K of N (tools/pytest_shard.py). The general
+        # tests took 13 to 24 minutes on one runner and every translator test
+        # 28 minutes on Windows; macOS needs 13 and stays whole.
         include:
-          - component: all
+          - component: all-1-of-3
+            python-version: "3.13"
+            OS: windows-latest
+          - component: all-2-of-3
+            python-version: "3.13"
+            OS: windows-latest
+          - component: all-3-of-3
             python-version: "3.13"
             OS: windows-latest
           - component: all
@@ -148,11 +159,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/reports
-          if [ "${{ matrix.component }}" == "all" ]; then
-            python -m pytest tests/test_translator -n auto \
+          component="${{ matrix.component }}"
+          shard=()
+          if [[ "$component" == *-of-* ]]; then
+            part="${component#*-}"
+            shard=(-p tools.pytest_shard --shard "${part%-of-*}/${part#*-of-}")
+          fi
+          if [[ "$component" == all* ]]; then
+            python -m pytest tests/test_translator "${shard[@]}" -n auto \
               --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-          elif [ "${{ matrix.component }}" == "general" ]; then
-            python -m pytest tests/test_translator --ignore=tests/test_translator/test_codegen -n auto \
+          elif [[ "$component" == general* ]]; then
+            python -m pytest tests/test_translator --ignore=tests/test_translator/test_codegen "${shard[@]}" -n auto \
               --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           elif [ "${{ matrix.component }}" == "GLSL" ]; then
             python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py -n auto \

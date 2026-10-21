@@ -25,7 +25,7 @@ jobs:
     name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
     runs-on: ubuntu-latest
     # One runner took 33 to 66 minutes for the whole suite. tools/pytest_shard.py
-    # splits it by test file, so each shard runs about a third of it.
+    # splits it by test id, so each shard runs about a third of it.
     timeout-minutes: 60
     strategy:
       fail-fast: false
