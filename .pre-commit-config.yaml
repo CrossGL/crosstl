@@ -4,6 +4,8 @@ default_stages: [pre-commit]
 fail_fast: false
 
 ci:
+  # Each autoupdate pull request runs the full test and merge-queue tiers, so hook bumps come once a quarter.
+  autoupdate_schedule: quarterly
   skip:
     - black
     - crosstl-ci-workflow-tests
