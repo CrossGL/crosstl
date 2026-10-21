@@ -18,8 +18,9 @@ import json
 import re
 import shlex
 import subprocess
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+import time
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass, field, replace
 
 from . import chart, ir, publish
 
@@ -43,6 +44,10 @@ _DIGITS = re.compile(r"(?<!\w)\d+(?!\w)")
 _PLUMBING = re.compile(
     r"""(['"`])(?:fin|iin|uin|rin|outp|i|r|a\d+|tile|probe|main|compute_main)\1"""
 )
+# A cause writes the feature's own name as FEATURE. An input row's diagnostics start with _ROUND_TRIP, whose words
+# are never the name of a feature such as ``round``.
+FEATURE = "<feature>"
+_ROUND_TRIP = "after the round trip: "
 # The file and position a diagnostic starts with: ``probe.cu(N): error:``, ``probe.hlsl:N:N: error:``, ``ERROR: N:N:``.
 _LOCATION = re.compile(
     r"^(?:after the round trip: )?(?:\S*probe\.\w+[(:][N:)]*:?\s*|ERROR: N:N:\s*)?(?:error:\s*)?"
@@ -170,12 +175,26 @@ def tracking_key(row: dict) -> str:
     return key("tracking", row["language"], row["direction"])
 
 
-def cause(feature: dict) -> str:
-    """The diagnostic of a wrong result with what is particular to its probe removed: line and column numbers and
-    the names every probe uses. Wrong results with one cause are one bug."""
+def _diagnostic(feature: dict) -> str:
+    """The first line of a wrong result's diagnostic without its line and column numbers and the names every probe
+    uses."""
     detail = (feature.get("detail") or "no diagnostic was recorded").splitlines()[0]
     detail = _PLUMBING.sub(lambda m: m.group(1) + "<probe>" + m.group(1), detail)
     return _DIGITS.sub("N", detail).strip()
+
+
+def cause(feature: dict) -> str:
+    """The diagnostic of a wrong result with what is particular to its probe removed: line and column numbers, the
+    names every probe uses, and the feature's own name or CrossGL spelling. Wrong results with one cause are one bug,
+    so a generator that emits twenty builtins unchanged has one issue rather than twenty.
+    """
+    detail = _diagnostic(feature)
+    prefix = _ROUND_TRIP if detail.startswith(_ROUND_TRIP) else ""
+    rest = detail[len(prefix) :]
+    names = {feature.get("name"), feature.get("crossgl")} - {None, ""}
+    for name in sorted(names, key=lambda n: (-len(n), n)):
+        rest = re.sub(rf"(?<![\w.:]){re.escape(name)}(?!\w|::)", FEATURE, rest)
+    return prefix + rest
 
 
 def _covered(body: str | None) -> list[str]:
@@ -283,8 +302,11 @@ def _fence(text: str) -> str:
     return text.replace("```", "'''")
 
 
-def bug_title(row: dict, cause: str) -> str:
-    summary = _LOCATION.sub("", cause, count=1).strip()
+def bug_title(row: dict, features: list[dict]) -> str:
+    """The title of the bug for ``features``, which share a cause; one feature's title keeps its name."""
+    first = features[0]
+    summary = _diagnostic(first) if len(features) == 1 else cause(first)
+    summary = _LOCATION.sub("", summary, count=1).strip()
     if len(summary) > TITLE_LIMIT:
         summary = summary[: TITLE_LIMIT - 1].rstrip() + "…"
     return f"{_name(row)}: {summary}"
@@ -368,7 +390,11 @@ def _tracking(plan: _Plan, row: dict, bugs: dict[str, int]) -> None:
             )
 
 
-def _causes(row: dict) -> list[tuple[str, list[dict]]]:
+# A row's wrong results grouped by cause, as (cause, features) pairs.
+Causes = list[tuple[str, list[dict]]]
+
+
+def _causes(row: dict) -> Causes:
     """The row's wrong results grouped by :func:`cause`, the cause shared by most features first."""
     groups: dict[str, list[dict]] = {}
     for feature in sorted(row["features"], key=lambda f: f["name"]):
@@ -377,29 +403,71 @@ def _causes(row: dict) -> list[tuple[str, list[dict]]]:
     return sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
 
 
-def _bugs(plan: _Plan, rows: list[dict], new_bugs: int) -> None:
+def _stale(
+    plan: _Plan, row: dict, causes: Causes
+) -> Iterator[tuple[Issue, list[str], set[str]]]:
+    """The row's bug issues whose cause no probe has any more, oldest first.
+
+    Each comes with its features that the row still lists and the keys of the causes those features fail with now.
+    An issue with an untested feature is left out: a result that could not be measured says nothing about the bug.
+    """
+    successor = {
+        f["name"]: bug_key(row, group[0]) for _, group in causes for f in group
+    }
+    present = set(successor.values())
+    prefix = key("wrong", row["language"], row["direction"]) + "/"
+    outcomes = {f["name"]: f["outcome"] for f in row["features"]}
+    for issue in sorted(plan.managed.values(), key=lambda i: i.number):
+        if not issue.key.startswith(prefix) or issue.key in present:
+            continue
+        covered = [n for n in _covered(issue.body) if n in outcomes]
+        if "untested" not in (outcomes[n] for n in covered):
+            yield issue, covered, {successor[n] for n in covered if n in successor}
+
+
+def _adopt(plan: _Plan, row: dict, causes: Causes) -> None:
+    """Give an open bug issue whose features all fail with one other cause, which has no issue yet, that cause's key.
+
+    Its next edit rewrites the marker, so a cause that changes or merges with others keeps its oldest issue.
+    """
+    for issue, _, failing in list(_stale(plan, row, causes)):
+        if issue.state == "open" and len(failing) == 1:
+            (new,) = failing
+            if new not in plan.managed:
+                del plan.managed[issue.key]
+                plan.managed[new] = replace(issue, key=new)
+
+
+def _retire(plan: _Plan, row: dict, causes: Causes) -> None:
+    """Close the row's stale bug issues (:func:`_stale`).
+
+    One whose features still fail with other causes is closed in favour of the issues for those causes once they all
+    have one.
+    """
+    tracking = plan.managed.get(tracking_key(row))
+    see = f" The remaining gaps are on #{tracking.number}." if tracking else ""
+    for issue, covered, failing in list(_stale(plan, row, causes)):
+        if failing:
+            if not failing <= plan.managed.keys():
+                continue
+            numbers = sorted(plan.managed[k].number for k in failing)
+            links = ", ".join(f"#{number}" for number in numbers)
+            comment = f"Its probes still fail, now tracked in {links}, so this issue is closed."
+            plan.close(issue, issue.title, issue.body, comment, "not_planned")
+        elif covered:
+            comment = f"No {_name(row)} probe fails this way any more, so this issue is closed."
+            plan.close(issue, issue.title, issue.body, comment + see, "completed")
+        else:
+            comment = "Its features are no longer in the pinned feature list, so this issue is closed."
+            plan.close(issue, issue.title, issue.body, comment, "not_planned")
+
+
+def _bugs(plan: _Plan, rows: list[tuple[dict, Causes]], new_bugs: int) -> None:
     # New bugs are taken one row at a time, so a capped run files issues for every language rather than the first.
     wanted: list[tuple[int, int, dict, list[dict]]] = []
-    for order, row in enumerate(rows):
-        causes = _causes(row)
+    for order, (row, causes) in enumerate(rows):
         wanted += [(rank, order, row, group) for rank, (_, group) in enumerate(causes)]
-        present = {bug_key(row, group[0]) for _, group in causes}
-        prefix = key("wrong", row["language"], row["direction"]) + "/"
-        tracking = plan.managed.get(tracking_key(row))
-        see = f" The remaining gaps are on #{tracking.number}." if tracking else ""
-        outcomes = {f["name"]: f["outcome"] for f in row["features"]}
-        for issue_key, issue in sorted(plan.managed.items()):
-            if not issue_key.startswith(prefix) or issue_key in present:
-                continue
-            members = [outcomes[n] for n in _covered(issue.body) if n in outcomes]
-            if "untested" in members:
-                continue  # a result that could not be measured says nothing about the bug
-            if members:
-                comment = f"No {_name(row)} probe fails this way any more, so this issue is closed."
-                plan.close(issue, issue.title, issue.body, comment + see, "completed")
-            else:
-                comment = "Its features are no longer in the pinned feature list, so this issue is closed."
-                plan.close(issue, issue.title, issue.body, comment, "not_planned")
+        _retire(plan, row, causes)
     created = 0
     for _, _, row, group in sorted(wanted, key=lambda w: (w[0], w[1])):
         issue_key = bug_key(row, group[0])
@@ -409,7 +477,7 @@ def _bugs(plan: _Plan, rows: list[dict], new_bugs: int) -> None:
             created += 1
         plan.ensure(
             issue_key,
-            bug_title(row, cause(group[0])),
+            bug_title(row, group),
             bug_body(row, group, plan.repository),
             bug_labels(row),
             "A probe fails this way again, so this issue is reopened.",
@@ -432,10 +500,13 @@ def plan(
             managed.setdefault(issue.key, issue)
     state = _Plan(managed, repository)
     rows = _rows(report)
-    bugs = {k: i.number for k, i in managed.items() if k.startswith("wrong/")}
+    measured = [(row, _causes(row)) for row in rows if row["language"] != ir.LANGUAGE]
+    for row, causes in measured:
+        _adopt(state, row, causes)
+    bugs = {k: i.number for k, i in state.managed.items() if k.startswith("wrong/")}
     for row in rows:
         _tracking(state, row, bugs)
-    _bugs(state, [row for row in rows if row["language"] != ir.LANGUAGE], new_bugs)
+    _bugs(state, measured, new_bugs)
     return state.actions
 
 
@@ -470,10 +541,18 @@ class GitHubError(RuntimeError):
 class GitHub:
     """The few REST calls reconciliation needs, through the ``gh`` command line, which reads ``GH_TOKEN``."""
 
+    # GitHub asks clients to wait at least a second between requests that change something; its secondary rate
+    # limit stops a run that closes or comments on many issues at once.
+    PAUSE = 1.0
+
     def __init__(self, repository: str):
         self.repository = repository
+        self._changed = -self.PAUSE
 
     def _api(self, method: str, path: str, payload: dict | None = None):
+        if method != "GET":
+            time.sleep(max(0.0, self._changed + self.PAUSE - time.monotonic()))
+            self._changed = time.monotonic()
         command = ["gh", "api", "--method", method, f"repos/{self.repository}/{path}"]
         if payload is not None:
             command += ["--input", "-"]

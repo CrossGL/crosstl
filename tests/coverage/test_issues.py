@@ -35,6 +35,11 @@ def _report(*rows):
     }
 
 
+def _detail(name):
+    """A diagnostic that does not name its feature, so that every feature in these rows has a cause of its own."""
+    return f"{name.upper()} failed"
+
+
 def _hlsl(**outcomes):
     """An HLSL output row; ``outcomes`` overrides the outcome of the named features."""
     base = {"a": "supported", "b": "wrong", "c": "refused", "d": "untested"}
@@ -42,36 +47,41 @@ def _hlsl(**outcomes):
         "hlsl",
         "output",
         [
-            _feature(name, outcome, detail=f"{name} failed")
+            _feature(name, outcome, detail=_detail(name))
             for name, outcome in (base | outcomes).items()
         ],
     )
 
 
 def _bug(language, name, direction="output"):
-    """The bug key of feature ``name`` in the rows built here, whose detail is ``"<name> failed"``."""
+    """The bug key of feature ``name`` in the rows built here, whose detail is :func:`_detail`."""
     row = {"language": language, "direction": direction}
-    return issues.bug_key(row, _feature(name, "wrong", detail=f"{name} failed"))
+    return issues.bug_key(row, _feature(name, "wrong", detail=_detail(name)))
 
 
 def _applied(actions, existing=()):
     """The managed issues after ``actions`` run, numbering new issues after the existing ones."""
-    state = {issue.key: issue for issue in existing}
+    state = {issue.number: issue for issue in existing}
     number = max((issue.number for issue in existing), default=0)
     for action in actions:
         if action.kind == "create":
             number += 1
-            state[action.key] = issues.Issue(
+            state[number] = issues.Issue(
                 number, action.key, "open", action.title, action.body, action.labels
             )
             continue
-        old = state[action.key]
+        old = state[action.number]
         status = {"close": "closed", "reopen": "open"}.get(action.kind, old.state)
         labels = old.labels + tuple(
             label for label in action.labels if label not in old.labels
         )
-        state[action.key] = replace(
-            old, state=status, title=action.title, body=action.body, labels=labels
+        state[action.number] = replace(
+            old,
+            key=action.key,
+            state=status,
+            title=action.title,
+            body=action.body,
+            labels=labels,
         )
     return list(state.values())
 
@@ -104,11 +114,11 @@ def test_first_run_files_tracking_and_bug_issues():
         "area:codegen",
     )
     assert tracking.body.startswith(issues.MARKER.format("tracking/hlsl/output") + "\n")
-    assert "- [ ] `b` wrong: b failed" in tracking.body
-    assert "- [ ] `c` refused: c failed" in tracking.body
+    assert "- [ ] `b` wrong: B failed" in tracking.body
+    assert "- [ ] `c` refused: C failed" in tracking.body
     assert "`d`" not in tracking.body
     bug = actions[1]
-    assert bug.title == "HLSL output: b failed"
+    assert bug.title == "HLSL output: B failed"
     assert (
         "The coverage probe for `b` (HLSL output, g) gives a wrong result." in bug.body
     )
@@ -147,7 +157,7 @@ def test_a_run_links_the_bugs_it_files_and_the_next_run_changes_nothing():
     assert len(logged) == 3
     bug = next(i for i in repository.issues if i.key == _bug("hlsl", "b"))
     tracking = next(i for i in repository.issues if i.key == "tracking/hlsl/output")
-    assert f"- [ ] `b` wrong (#{bug.number}): b failed" in tracking.body
+    assert f"- [ ] `b` wrong (#{bug.number}): B failed" in tracking.body
     assert issues.reconcile(report, repository, log=logged.append) == []
     assert len(logged) == 3
 
@@ -156,7 +166,7 @@ def test_the_follow_up_pass_files_no_further_bugs():
     row = _row(
         "wgsl",
         "output",
-        [_feature(f"w{i}", "wrong", detail=f"w{i} failed") for i in range(3)],
+        [_feature(f"w{i}", "wrong", detail=_detail(f"w{i}")) for i in range(3)],
     )
     repository = _Repository()
     issues.reconcile(_report(row), repository, new_bugs=1, log=lambda line: None)
@@ -250,6 +260,133 @@ def test_causes_keep_the_digits_of_names():
     assert first != second
 
 
+def test_features_whose_diagnostics_name_them_share_a_cause():
+    row = _row(
+        "wgsl",
+        "output",
+        [
+            _feature(
+                "firstLeadingBit",
+                "wrong",
+                detail="error: no definition in scope for identifier: `findMSB`",
+            )
+            | {"crossgl": "findMSB"},
+            _feature(
+                "countOneBits",
+                "wrong",
+                detail="error: no definition in scope for identifier: `bitCount`",
+            )
+            | {"crossgl": "bitCount"},
+            _feature(
+                "RayQuery.Abort",
+                "wrong",
+                detail="ValueError: RayQuery.Abort receiver must be RayQuery",
+            ),
+            _feature(
+                "RayQuery.Proceed",
+                "wrong",
+                detail="ValueError: RayQuery.Proceed receiver must be RayQuery",
+            ),
+            _feature(
+                "max",
+                "wrong",
+                detail="error: no definition in scope for identifier: `max_value`",
+            ),
+        ],
+    )
+    bugs = [a for a in issues.plan(_report(row), []) if a.key.startswith("wrong/")]
+    assert [a.title for a in bugs] == [
+        "WGSL output: ValueError: <feature> receiver must be RayQuery",
+        "WGSL output: no definition in scope for identifier: `<feature>`",
+        "WGSL output: no definition in scope for identifier: `max_value`",
+    ]
+    assert "Affected features: `countOneBits`, `firstLeadingBit`." in bugs[1].body
+    # The prefix of an input row's diagnostic is not the name of a feature called ``round``.
+    detail = 'after the round trip: probe.cu(3): error: identifier "f64" is undefined'
+    assert issues.cause({"name": "round", "detail": detail}) == (
+        'after the round trip: probe.cu(N): error: identifier "f64" is undefined'
+    )
+    assert issues.cause(
+        {"name": "Vec3::round", "crossgl": "round", "detail": detail}
+    ) == ('after the round trip: probe.cu(N): error: identifier "f64" is undefined')
+
+
+def _wrong(row_features):
+    """An HLSL output row of wrong results, from ``(name, detail)`` pairs."""
+    return _report(
+        _row(
+            "hlsl", "output", [_feature(n, "wrong", detail=d) for n, d in row_features]
+        )
+    )
+
+
+def _open_bugs(state):
+    return sorted(
+        (i.number, i.title)
+        for i in state
+        if i.key.startswith("wrong/") and i.state == "open"
+    )
+
+
+def test_a_bug_whose_features_fail_another_way_keeps_its_issue():
+    state = _applied(issues.plan(_wrong([("p", "first failure")]), []))
+    (old,) = (i for i in state if i.key.startswith("wrong/"))
+    actions = issues.plan(_wrong([("p", "second failure")]), state, new_bugs=0)
+    assert [(a.kind, a.number) for a in actions if a.key.startswith("wrong/")] == [
+        ("edit", old.number)
+    ]
+    state = _applied(actions, state)
+    assert _open_bugs(state) == [(old.number, "HLSL output: second failure")]
+    assert issues.plan(_wrong([("p", "second failure")]), state) == []
+
+
+def test_bugs_whose_causes_merge_close_in_favour_of_the_oldest():
+    first = _wrong([("p", "'p' is undefined failure"), ("q", "first failure")])
+    state = _applied(issues.plan(first, []))
+    oldest, newer = sorted(i.number for i in state if i.key.startswith("wrong/"))
+    merged = _wrong([("p", "'p' is undefined"), ("q", "'q' is undefined")])
+    actions = issues.plan(merged, state, new_bugs=0)
+    close = [a for a in actions if a.kind == "close"]
+    assert [(a.number, a.reason) for a in close] == [(newer, "not_planned")]
+    assert close[0].comment == (
+        f"Its probes still fail, now tracked in #{oldest}, so this issue is closed."
+    )
+    state = _applied(actions, state)
+    assert _open_bugs(state) == [(oldest, "HLSL output: '<feature>' is undefined")]
+
+
+def test_a_split_bug_closes_once_each_new_cause_has_an_issue():
+    state = _applied(issues.plan(_wrong([("p", "same"), ("q", "same")]), []))
+    (old,) = (i for i in state if i.key.startswith("wrong/"))
+    split = _wrong([("p", "one way"), ("q", "another way")])
+    capped = issues.plan(split, state, new_bugs=1)
+    assert [a.kind for a in capped if a.key.startswith("wrong/")] == ["create"]
+    state = _applied(capped, state)
+    filed = issues.plan(split, state)
+    assert [a.kind for a in filed if a.key.startswith("wrong/")] == ["create"]
+    state = _applied(filed, state)
+    close = [a for a in issues.plan(split, state) if a.kind == "close"]
+    assert [a.number for a in close] == [old.number]
+    assert close[0].comment == (
+        f"Its probes still fail, now tracked in #{old.number + 1}, #{old.number + 2}, so this issue is closed."
+    )
+
+
+def test_a_run_closes_a_split_bug_in_favour_of_the_issues_it_files():
+    repository = _Repository()
+    issues.reconcile(
+        _wrong([("p", "same"), ("q", "same")]), repository, log=lambda line: None
+    )
+    split = _wrong([("p", "one way"), ("q", "another way")])
+    actions = issues.reconcile(split, repository, log=lambda line: None)
+    assert [a.kind for a in actions if a.key.startswith("wrong/")] == [
+        "create",
+        "create",
+        "close",
+    ]
+    assert issues.reconcile(split, repository, log=lambda line: None) == []
+
+
 def test_bug_issues_reopen_when_the_result_is_wrong_again():
     state = _applied(issues.plan(_report(_hlsl()), []))
     state = _applied(issues.plan(_report(_hlsl(b="supported")), state), state)
@@ -288,12 +425,12 @@ def test_new_bug_issues_are_capped_and_spread_over_rows():
     many = _row(
         "wgsl",
         "output",
-        [_feature(f"w{i:02}", "wrong", detail=f"w{i:02} failed") for i in range(20)],
+        [_feature(f"w{i:02}", "wrong", detail=_detail(f"w{i:02}")) for i in range(20)],
     )
     few = _row(
         "glsl",
         "output",
-        [_feature(f"g{i}", "wrong", detail=f"g{i} failed") for i in range(2)],
+        [_feature(f"g{i}", "wrong", detail=_detail(f"g{i}")) for i in range(2)],
     )
     actions = issues.plan(_report(many, few), [], new_bugs=4)
     bugs = [a.key for a in actions if a.key.startswith("wrong/")]
@@ -434,6 +571,25 @@ def test_github_comments_before_closing_and_adds_labels_last():
         "issues",
         {"title": "t", "body": "b", "labels": ["bug"]},
     )
+
+
+def test_github_waits_a_second_between_changes(monkeypatch):
+    clock = iter([100.0, 100.0, 100.25, 100.25, 107.0, 107.0])
+    slept = []
+    monkeypatch.setattr(issues.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(issues.time, "sleep", slept.append)
+    monkeypatch.setattr(
+        issues.subprocess,
+        "run",
+        lambda *args, **kwargs: issues.subprocess.CompletedProcess(args, 0, "[]", ""),
+    )
+    github = issues.GitHub("o/r")
+    github._api("GET", "issues")
+    github._api("PATCH", "issues/1", {})
+    github._api("GET", "issues")
+    github._api("POST", "issues/1/comments", {})
+    github._api("PATCH", "issues/1", {})
+    assert slept == [0.0, 0.75, 0.0]
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
