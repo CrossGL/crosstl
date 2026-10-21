@@ -145,13 +145,16 @@ def _check(structs, declaration, type_nodes, layout, target):
 
 
 def _is_storage_parameter(parameter, stage_entry):
-    """Whether a parameter binds storage: a buffer, or a ``constant``/``device`` reference of a stage entry (a
-    helper's reference names a value its caller already holds)."""
+    """Whether a parameter binds storage: a buffer, a runtime-sized array (which only a bound buffer parameter
+    keeps, :mod:`.unsized_arrays`), or a ``constant``/``device`` reference of a stage entry (a helper's reference
+    names a value its caller already holds)."""
     param_type = getattr(parameter, "param_type", None)
     if isinstance(param_type, A.ReferenceType):
         return stage_entry and str(
             getattr(param_type, "address_space", "") or ""
         ).lower() in ("constant", "device")
+    if isinstance(param_type, A.ArrayType):
+        return param_type.size is None
     return isinstance(param_type, A.NamedType) and bool(param_type.generic_args)
 
 

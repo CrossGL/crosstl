@@ -373,6 +373,15 @@ def _binding_attribute(binding):
     )
 
 
+def _layout_attributes(parameter):
+    """The ``@buffer_layout`` of a storage parameter, which its structured buffer keeps."""
+    return [
+        attribute
+        for attribute in getattr(parameter, "attributes", []) or []
+        if str(getattr(attribute, "name", "")).lower() == "buffer_layout"
+    ]
+
+
 def _mark_directx_relocatable_binding(node, provenance):
     node.add_annotation(DIRECTX_RELOCATABLE_BINDING_ANNOTATION, True)
     node.add_annotation(DIRECTX_BINDING_PROVENANCE_ANNOTATION, provenance)
@@ -883,7 +892,10 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
                                 parameter,
                                 writable=_is_writable_storage_parameter(parameter),
                             ),
-                            attributes=[_binding_attribute(binding)],
+                            attributes=[
+                                _binding_attribute(binding),
+                                *_layout_attributes(parameter),
+                            ],
                         ),
                         (
                             "OpenCL target-lowered storage parameter "

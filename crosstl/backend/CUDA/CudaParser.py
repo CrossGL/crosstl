@@ -1425,7 +1425,9 @@ class CudaParser:
         self.eat("SEMICOLON")
         self.type_aliases.add(alias_name)
         self.struct_names.add(alias_name)
-        return StructNode(alias_name, members, attributes=attributes)
+        return self.mark_union(
+            StructNode(alias_name, members, attributes=attributes), aggregate_type
+        )
 
     def parse_typedef_enum_alias(self):
         self.eat("ENUM")
@@ -1894,7 +1896,7 @@ class CudaParser:
         self.parse_alignment_attributes()
         self.skip_gnu_attributes()
 
-        self.eat(self.current_token[0])
+        aggregate_type = self.eat(self.current_token[0])[1]
         attributes = self.parse_cuda_struct_attribute_prefix()
 
         tag_name = None
@@ -1931,7 +1933,11 @@ class CudaParser:
             tag_name = f"{prefix}_{first_name}_layout"
 
         self.struct_names.add(tag_name)
-        nodes = [StructNode(tag_name, members, attributes=attributes)]
+        nodes = [
+            self.mark_union(
+                StructNode(tag_name, members, attributes=attributes), aggregate_type
+            )
+        ]
         for name, array_suffix in declarators:
             vtype = f"{tag_name}{array_suffix}"
             if "__shared__" in qualifiers:
@@ -1952,8 +1958,14 @@ class CudaParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
+    @staticmethod
+    def mark_union(node, aggregate_type):
+        """``node`` with ``is_union`` set when it was declared with ``union``, whose members share storage."""
+        node.is_union = str(aggregate_type) == "union"
+        return node
+
     def parse_struct(self):
-        self.eat(self.current_token[0])
+        aggregate_type = self.eat(self.current_token[0])[1]
         attributes = self.parse_cuda_struct_attribute_prefix()
         name = self.parse_name_component()
         if self.current_token[0] == "LESS_THAN":
@@ -1961,7 +1973,9 @@ class CudaParser:
         self.struct_names.add(name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            return StructNode(name, [], attributes=attributes)
+            return self.mark_union(
+                StructNode(name, [], attributes=attributes), aggregate_type
+            )
         if self.current_token[0] == "COLON":
             self.skip_struct_inheritance_clause()
         self.eat("LBRACE")
@@ -1969,7 +1983,9 @@ class CudaParser:
         self.eat("RBRACE")
         self.eat("SEMICOLON")
 
-        return StructNode(name, members, attributes=attributes)
+        return self.mark_union(
+            StructNode(name, members, attributes=attributes), aggregate_type
+        )
 
     def skip_struct_inheritance_clause(self):
         self.eat("COLON")

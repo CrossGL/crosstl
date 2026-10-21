@@ -155,6 +155,37 @@ def check_metal_struct(inputs, out):
     return len(bad) == 0, detail
 
 
+# The words of a CUDA ``struct { float3 a; float2 b; }`` that hold values: a (0-2) and b (4-5).
+_CUDA_STRUCT_WORDS = np.array([0, 1, 2, 4, 5])
+
+
+def check_cuda_struct(inputs, out):
+    """u_struct_layout: the value words of each 6-word CUDA struct, bit for bit; the padding word is unspecified."""
+    r = inputs.reshape(64, 6).astype(np.float32)
+    want = np.stack(
+        [
+            r[:, 2] + r[:, 4],
+            r[:, 1],
+            r[:, 0] - r[:, 5],
+            r[:, 0] * np.float32(2.0) + np.float32(1.0),
+            r[:, 5] + np.float32(0.5),
+        ],
+        axis=1,
+    ).astype(np.float32)
+    got = out.astype(np.float32).reshape(64, 6)[:, _CUDA_STRUCT_WORDS]
+    bad = np.argwhere(got.view(np.uint32) != want.view(np.uint32))
+    detail = {"mismatches": int(len(bad)), "n": int(want.size)}
+    if len(bad):
+        element, word = (int(value) for value in bad[0])
+        detail.update(
+            element=element,
+            word=int(_CUDA_STRUCT_WORDS[word]),
+            got=repr(float(got[element, word])),
+            want=repr(float(want[element, word])),
+        )
+    return len(bad) == 0, detail
+
+
 # The words of an MSL ``struct { float3 a; float b; }`` that hold values: a (0-2) and b (4).
 _METAL_FLOAT3_FLOAT_WORDS = np.array([0, 1, 2, 4])
 
@@ -1425,6 +1456,17 @@ CASES = [
         np.float32,
         lambda inp: inp[1::3].astype(np.float32),
         compare="ulp:0",
+    ),
+    Case(
+        "u_struct_layout",
+        "H16",
+        "struct {float3 a; float2 b;}: b at offset 16, 24-byte elements",
+        "CUDA built-in vector alignment",
+        np.arange(64 * 6, dtype=np.float32),
+        np.float32,
+        None,
+        out_count=64 * 6,
+        check=check_cuda_struct,
     ),
     Case(
         "g_std430_vec3_float",
