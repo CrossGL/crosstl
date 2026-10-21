@@ -18435,6 +18435,19 @@ class GLSLCodeGen(
             block_name = "Entry_Value_Args"
         return block_name
 
+    @staticmethod
+    def glsl_uniform_member_orientation(member):
+        """``layout(row_major) `` for a block member whose matrices are stored row by row (GLSL 4.60 section
+        4.4.5), which sets the bytes the host writes."""
+        names = {str(q).lower() for q in getattr(member, "qualifiers", None) or []}
+        names.update(
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(member, "attributes", None) or []
+        )
+        if "row_major" in names and "column_major" not in names:
+            return "layout(row_major) "
+        return ""
+
     def generate_cbuffers(self, ast, target_stage=None):
         code = ""
         cbuffers = self.glsl_cbuffer_nodes(ast, target_stage)
@@ -18568,13 +18581,12 @@ class GLSLCodeGen(
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
                         )
+                        orientation = self.glsl_uniform_member_orientation(member)
                         if member.size:
-                            code += f"    {self.map_type(element_type)} {member_name}[{member.size}];\n"
+                            code += f"    {orientation}{self.map_type(element_type)} {member_name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
-                            code += (
-                                f"    {self.map_type(element_type)} {member_name}[];\n"
-                            )
+                            code += f"    {orientation}{self.map_type(element_type)} {member_name}[];\n"
                     else:
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(member.member_type)
@@ -18585,7 +18597,8 @@ class GLSLCodeGen(
                         declaration = format_c_style_array_declaration(
                             member_type, member_name
                         )
-                        code += f"    {declaration};\n"
+                        orientation = self.glsl_uniform_member_orientation(member)
+                        code += f"    {orientation}{declaration};\n"
                 code += "};\n"
             elif hasattr(node, "name") and hasattr(
                 node, "members"
@@ -18597,13 +18610,12 @@ class GLSLCodeGen(
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
                         )
+                        orientation = self.glsl_uniform_member_orientation(member)
                         if member.size:
-                            code += f"    {self.map_type(element_type)} {member_name}[{member.size}];\n"
+                            code += f"    {orientation}{self.map_type(element_type)} {member_name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
-                            code += (
-                                f"    {self.map_type(element_type)} {member_name}[];\n"
-                            )
+                            code += f"    {orientation}{self.map_type(element_type)} {member_name}[];\n"
                     else:
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(member.member_type)
@@ -18614,7 +18626,8 @@ class GLSLCodeGen(
                         declaration = format_c_style_array_declaration(
                             member_type, member_name
                         )
-                        code += f"    {declaration};\n"
+                        orientation = self.glsl_uniform_member_orientation(member)
+                        code += f"    {orientation}{declaration};\n"
                 code += "};\n"
         return code
 

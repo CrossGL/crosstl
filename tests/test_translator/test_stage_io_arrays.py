@@ -177,7 +177,12 @@ def test_clip_distance_takes_the_largest_constant_index(tmp_path):
     glsl = translate(tmp_path, CLIP_DISTANCE, ".vert", "glsl")
     spirv = translate(tmp_path, CLIP_DISTANCE, ".vert", "spirv")
     assert "gl_ClipDistance[]" not in glsl
-    assert re.search(r"OpTypeArray %\w+ %\w*2\b|OpTypeArray %float %uint_2", spirv)
+    constants = dict(re.findall(r"^(%\w+) = OpConstant %\w+ (\d+)$", spirv, re.M))
+    lengths = [
+        constants.get(length)
+        for length in re.findall(r"= OpTypeArray %\w+ (%\w+)$", spirv, re.M)
+    ]
+    assert "2" in lengths
 
 
 def test_per_vertex_inputs_take_three_elements(tmp_path):
