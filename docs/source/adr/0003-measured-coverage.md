@@ -114,7 +114,7 @@ closed, never deleted.
 | `support/backends.json` | `tests/test_backend/test_package_contracts.py`, `tests/test_translator/test_project_translation.py` (Core) | Core is asked to read the backend list from `crosstl.translator.source_registry` and the codegen registry instead |
 | `support/features.json` | `tests/test_translator/test_project_translation.py` (Core), MLX `test_ci.py` path list | Removed after Core and MLX drop the references |
 | `support/external-corpus.json` | project pipeline tests (Core) and `docs/source/project-porting.rst` | Moved next to the project tests it configures, with Core's agreement |
-| `support/demo-ci-metadata.json`, `tools/demo_ci_metadata.py` | `demo.yml`, `tests/test_demo_open_source_porting.py` | Moved under `demos/open-source-porting/` |
+| `support/demo-ci-metadata.json`, `tools/demo_ci_metadata.py` | `demo.yml`, `tests/test_demo_open_source_porting.py` | Removed; `demo.yml` names the three tests it selected |
 | `support/generated/` | used as a scratch directory for JUnit XML by the test workflows and `demo-project-testing.yml` (MLX) | Scratch output moves to an ignored directory; the three committed JSON files are deleted |
 | `further-work-backlog.json` | nothing | Deleted |
 | `deploy.sh` | nothing; `release.yml` builds and publishes | Deleted; `.github/RELEASING.md` keeps the commands |

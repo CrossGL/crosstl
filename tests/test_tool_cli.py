@@ -349,14 +349,13 @@ def test_pre_commit_config_keeps_repo_wide_formatters():
 
 
 def test_local_temporary_worktrees_are_ignored_by_developer_tooling():
+    # pre-commit only reads tracked files, so .gitignore covers it too.
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    pre_commit = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     pytest_options = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )["tool"]["pytest"]["ini_options"]
 
     assert "worktrees/" in gitignore
-    assert "worktrees/" in pre_commit
     assert "worktrees" in pytest_options["norecursedirs"]
 
 

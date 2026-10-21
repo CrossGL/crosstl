@@ -3,7 +3,21 @@ Backend Support
 
 CrossGL Translator keeps source imports and target code generators in separate
 registries. A language can be available as an input source, an output target,
-or both.
+or both. The tables below list what is registered; they do not say how much of
+each language translates correctly.
+
+Measured coverage
+-----------------
+
+CI measures that on every push to ``main`` and nightly. Each feature in a
+pinned upstream feature list gets a generated probe, CrossTL translates it, and
+the language's reference compiler or validator checks the result.
+`COVERAGE.md <https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md>`_
+lists the score and every gap for each language and direction, and each row
+with gaps has an open issue labelled ``coverage``.
+
+.. image:: https://raw.githubusercontent.com/CrossGL/crosstl/coverage/coverage.svg
+   :alt: CrossTL coverage per language and direction
 
 Built-in targets
 ----------------
