@@ -145,8 +145,8 @@ metal_graphics get_num_samples uint()
 metal_graphics get_sample_position float2(uint)
 metal_compute simdgroup_barrier void(mem_flags)
 metal_compute threadgroup_barrier void(mem_flags)
-metal_atomic atomic_compare_exchange_weak -
-metal_atomic atomic_compare_exchange_weak_explicit -
+metal_atomic atomic_compare_exchange_weak bool(inout int, address int, int)
+metal_atomic atomic_compare_exchange_weak_explicit bool(inout int, address int, int, memory_order, memory_order)
 metal_atomic atomic_exchange int(inout int, int)
 metal_atomic atomic_exchange_explicit int(inout int, int, memory_order)
 metal_atomic atomic_fetch_add int(inout int, int)

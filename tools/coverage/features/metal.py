@@ -108,7 +108,7 @@ def _result(spelling: str) -> bool:
 def _value(spelling: str) -> bool:
     """Whether a probe can pass or receive ``spelling``: a value, an atomic operand in the output buffer, or an
     enumeration it passes as a constant."""
-    spelling = re.sub(r"^(?:out|inout) ", "", spelling)
+    spelling = re.sub(r"^(?:out|inout|address) ", "", spelling)
     return spelling in ENUMS or bool(
         re.fullmatch(
             r"(float|int|uint|bool|long|ulong|half)([2-4])?|(?:float|half)[2-4]x[2-4]|void",
@@ -138,7 +138,11 @@ def _declared(part: str, template: str, bound: str) -> str | None:
         pointee = _QUALIFIERS.sub("", part.rsplit("*", 1)[0]).strip()
         if bound and _ATOMIC.fullmatch(pointee):
             return f"inout {bound}"
-        return f"{_concrete(pointee, template, bound)}*"
+        kind = _concrete(pointee, template, bound)
+        # A pointer to a thread-local value, such as compare-exchange's expected value, takes a local's address.
+        if part.startswith("thread ") and _value(kind):
+            return f"address {kind}"
+        return f"{kind}*"
     reference = "&" in part
     words = part.replace("&", " ").rsplit(None, 1)
     kind = _concrete(words[0] if len(words) == 2 else part, template, bound)

@@ -302,6 +302,9 @@ class Metal(Dialect):
     def inout_argument(self) -> str:
         return "&outp[i]"
 
+    def address(self, name: str) -> str:
+        return f"&{name}"
+
     def keep(self, atomic: bool) -> str:
         # An atomic buffer element can only be used through atomic functions.
         return "" if atomic else self.store("outp[i]")

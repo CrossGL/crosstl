@@ -148,6 +148,10 @@ class Dialect:
     def out_argument(self, name: str) -> str:
         return name
 
+    def address(self, name: str) -> str:
+        """A pointer to the local ``name``, for a parameter that takes one."""
+        raise ProbeError(f"no probe passes {self.language} a pointer yet")
+
     def inout_argument(self) -> str:
         return "outp[i]"
 

@@ -106,8 +106,9 @@ VOID = Type.other("void")
 
 @dataclass(frozen=True)
 class Param:
-    """A parameter; ``direction`` is ``in``, ``out``, ``inout`` (an atomic or read-modify-write operand) or
-    ``const``, an argument the language requires to be a constant expression."""
+    """A parameter; ``direction`` is ``in``, ``out``, ``inout`` (an atomic or read-modify-write operand),
+    ``const``, an argument the language requires to be a constant expression, or ``address``, a pointer to a local
+    value that the function reads and may write."""
 
     type: Type
     direction: str = "in"
