@@ -2,18 +2,12 @@
 #extension GL_EXT_fragment_invocation_density : require
 
 shader main {
-    struct g_Constants {
-    mat4x4 WorldViewProj;
-    int PrimitiveShadingRate;
-    int DrawMode;
-};
-
     struct FragmentInput {
     vec2 in_UV @location(0);
     };
 
     sampler2D g_Texture;
-    cbuffer Uniforms {
+    cbuffer g_Constants @buffer_layout(std140) {
     mat4x4 WorldViewProj;
     int PrimitiveShadingRate;
     int DrawMode;

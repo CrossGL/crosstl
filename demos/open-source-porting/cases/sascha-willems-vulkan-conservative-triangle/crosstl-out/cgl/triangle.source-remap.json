@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 36,
-        "endOffset": 639,
+        "endLine": 32,
+        "endOffset": 627,
         "file": "crosstl-out/cgl/triangle.cgl",
-        "length": 639,
+        "length": 627,
         "line": 1,
         "offset": 0
       },

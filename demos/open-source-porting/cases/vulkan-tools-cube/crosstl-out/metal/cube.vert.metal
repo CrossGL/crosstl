@@ -2,25 +2,22 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct buf {
-    float4x4 MVP;
-    float4 position[12 * 3];
-    float4 attr[12 * 3];
-};
 struct VertexOutput {
     float4 texcoord [[user(locn0)]];
     float3 frag_pos [[user(locn1)]];
     float4 gl_Position [[position]];
 };
 // Constant Buffers
-struct Uniforms {
-    buf ubuf;
+struct buf {
+    float4x4 MVP;
+    float4 position[36];
+    float4 attr[36];
 };
 // Vertex Shader
-vertex VertexOutput vertex_main(uint _crossglVertexID [[vertex_id]], constant Uniforms& uniforms [[buffer(0)]]) {
+vertex VertexOutput vertex_main(uint _crossglVertexID [[vertex_id]], constant buf& buf [[buffer(0)]]) {
     VertexOutput output;
-    output.texcoord = uniforms.ubuf.attr[_crossglVertexID];
-    output.gl_Position = uniforms.ubuf.MVP * uniforms.ubuf.position[_crossglVertexID];
+    output.texcoord = buf.attr[_crossglVertexID];
+    output.gl_Position = buf.MVP * buf.position[_crossglVertexID];
     output.frag_pos = output.gl_Position.xyz;
     return output;
 }
