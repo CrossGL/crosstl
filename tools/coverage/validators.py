@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import rustgpu
+from .model import RAYTRACING_STAGES
 
 TIMEOUT = 60
 # Terminal colour codes some validators (naga) write even when their output is not a terminal.
@@ -46,14 +47,52 @@ SUFFIX = {
     "spirv": ".spvasm",
     "wgsl": ".wgsl",
 }
-GLSL_STAGES = {"compute": "comp", "fragment": "frag", "vertex": "vert"}
+GLSL_STAGES = {
+    "compute": "comp",
+    "fragment": "frag",
+    "vertex": "vert",
+    "geometry": "geom",
+    "tessellation-control": "tesc",
+    "tessellation-evaluation": "tese",
+    "task": "task",
+    "mesh": "mesh",
+    # glslang's stage suffixes for GL_EXT_ray_tracing shaders.
+    "ray-generation": "rgen",
+    "intersection": "rint",
+    "any-hit": "rahit",
+    "closest-hit": "rchit",
+    "miss": "rmiss",
+    "callable": "rcall",
+}
 # The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one.
 HLSL_SHADER_MODEL = (6, 9)
+# Ray-tracing shaders compile as a library, whose ``[shader(...)]`` attributes name the entry points.
 HLSL_PROFILES = {
     stage: f"{prefix}_{HLSL_SHADER_MODEL[0]}_{HLSL_SHADER_MODEL[1]}"
-    for stage, prefix in {"compute": "cs", "fragment": "ps", "vertex": "vs"}.items()
+    for stage, prefix in {
+        "compute": "cs",
+        "fragment": "ps",
+        "vertex": "vs",
+        "geometry": "gs",
+        "tessellation-control": "hs",
+        "tessellation-evaluation": "ds",
+        "task": "as",
+        "mesh": "ms",
+        **dict.fromkeys(RAYTRACING_STAGES, "lib"),
+    }.items()
+}
+# slangc's names for the stages it does not spell as the report does.
+SLANG_STAGES = {
+    **RAYTRACING_STAGES,
+    "tessellation-control": "hull",
+    "tessellation-evaluation": "domain",
+    "task": "amplification",
 }
 SPIRV_ENVIRONMENT = "vulkan1.1"
+# Ray tracing and mesh shading need SPIR-V 1.4, which Vulkan 1.1 allows only as an extension; DXC lowers them for
+# Vulkan 1.2.
+SPIRV_1_4_ENVIRONMENT = "vulkan1.2"
+SPIRV_1_4_STAGES = frozenset({*RAYTRACING_STAGES, "task", "mesh"})
 # The language version of the Metal feature list (features/metal.txt); probes compile against the same version.
 METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
@@ -165,7 +204,15 @@ def _run(arguments: list[str], cwd: str) -> Verdict:
 
 
 # Entry-point names HLSL writers conventionally give each stage, tried when a shader has no ``main``.
-HLSL_STAGE_ENTRIES = {"vertex": "VSMain", "fragment": "PSMain"}
+HLSL_STAGE_ENTRIES = {
+    "vertex": "VSMain",
+    "fragment": "PSMain",
+    "geometry": "GSMain",
+    "tessellation-control": "HSMain",
+    "tessellation-evaluation": "DSMain",
+    "task": "ASMain",
+    "mesh": "MSMain",
+}
 
 
 def hlsl_entry(source: str, stage: str) -> str:
@@ -185,6 +232,42 @@ def hlsl_entry(source: str, stage: str) -> str:
     return "main"
 
 
+# The AIR metadata that marks a Metal entry point of each stage; a post-tessellation vertex function also describes
+# its patch.
+METAL_ENTRIES = {
+    "compute": (r"^!air\.kernel = ",),
+    "vertex": (r"^!air\.vertex = ",),
+    "fragment": (r"^!air\.fragment = ",),
+    "tessellation-evaluation": (r"^!air\.vertex = ", r'!"air\.patch"'),
+    "task": (r"^!air\.object = ",),
+    "mesh": (r"^!air\.mesh = ",),
+}
+
+
+def _metal(name: str, stage: str, scratch: str) -> Verdict:
+    """Compile a Metal probe to textual AIR and require an entry point of ``stage``: the compiler accepts a library
+    of plain functions, which no pipeline can run."""
+    compiled = _run(
+        [
+            *command("metal"),
+            f"-std={METAL_STANDARD}",
+            "-S",
+            "-emit-llvm",
+            name,
+            "-o",
+            "probe.ll",
+        ],
+        scratch,
+    )
+    if not compiled.accepted:
+        return compiled
+    air = Path(scratch, "probe.ll").read_text()
+    for pattern in METAL_ENTRIES.get(stage, ()):
+        if not re.search(pattern, air, re.MULTILINE):
+            return Verdict(False, f"error: the library has no {stage} entry point")
+    return compiled
+
+
 def validate(
     language: str, source: str, stage: str = "compute", entry: str = ""
 ) -> Verdict:
@@ -195,17 +278,27 @@ def validate(
         )
         Path(scratch, name).write_text(source)
         if language == "glsl":
-            return _run([*command("glslangValidator"), name], scratch)
+            # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V 1.4 and later, so those shaders are
+            # checked for Vulkan.
+            environment = (
+                ["--target-env", SPIRV_1_4_ENVIRONMENT]
+                if stage in SPIRV_1_4_STAGES
+                else []
+            )
+            return _run([*command("glslangValidator"), *environment, name], scratch)
         if language == "hlsl":
-            entry = entry or hlsl_entry(source, stage)
             profile = HLSL_PROFILES[stage]
+            entry_point = (
+                []
+                if profile.startswith("lib_")
+                else ["-E", entry or hlsl_entry(source, stage)]
+            )
             return _run(
                 [
                     *command("dxc"),
                     "-T",
                     profile,
-                    "-E",
-                    entry,
+                    *entry_point,
                     "-HV",
                     "2021",
                     "-enable-16bit-types",
@@ -216,17 +309,7 @@ def validate(
                 scratch,
             )
         if language == "metal":
-            return _run(
-                [
-                    *command("metal"),
-                    f"-std={METAL_STANDARD}",
-                    "-c",
-                    name,
-                    "-o",
-                    "probe.air",
-                ],
-                scratch,
-            )
+            return _metal(name, stage, scratch)
         if language == "wgsl":
             return _run([*command("naga"), name], scratch)
         if language == "cuda":
@@ -277,7 +360,12 @@ def validate(
             entry_point = (
                 []
                 if "[shader(" in source
-                else ["-entry", entry or "main", "-stage", stage]
+                else [
+                    "-entry",
+                    entry or "main",
+                    "-stage",
+                    SLANG_STAGES.get(stage, stage),
+                ]
             )
             return _run(
                 [
@@ -291,7 +379,10 @@ def validate(
                 ],
                 scratch,
             )
-        environment = ["--target-env", SPIRV_ENVIRONMENT]
+        environment = [
+            "--target-env",
+            (SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT),
+        ]
         assembled = _run(
             [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch
         )
@@ -300,12 +391,12 @@ def validate(
         return _run([*command("spirv-val"), *environment, "probe.spv"], scratch)
 
 
-# How each language's reference compiler lowers a probe to SPIR-V; ``{source}``, ``{entry}``, ``{stage}`` and the HLSL
-# ``{profile}`` are filled in.
+# How each language's reference compiler lowers a probe to SPIR-V; ``{source}``, ``{entry}``, ``{stage}``, the HLSL
+# ``{profile}`` and the Vulkan ``{environment}`` are filled in.
 SPIRV_COMPILERS = {
     "glsl": (
         "glslangValidator",
-        ("-V", "--target-env", SPIRV_ENVIRONMENT, "{source}", "-o", "probe.spv"),
+        ("-V", "--target-env", "{environment}", "{source}", "-o", "probe.spv"),
     ),
     "hlsl": (
         "dxc",
@@ -319,7 +410,7 @@ SPIRV_COMPILERS = {
             "2021",
             "-enable-16bit-types",
             "-O0",
-            "-fspv-target-env=" + SPIRV_ENVIRONMENT,
+            "-fspv-target-env={environment}",
             "{source}",
             "-Fo",
             "probe.spv",
@@ -368,8 +459,11 @@ def lower(
     fields = {
         "source": name,
         "entry": entry,
-        "stage": stage,
+        "stage": SLANG_STAGES.get(stage, stage),
         "profile": HLSL_PROFILES.get(stage, ""),
+        "environment": (
+            SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT
+        ),
     }
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
         Path(scratch, name).write_text(source)

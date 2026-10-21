@@ -1,7 +1,10 @@
+from dataclasses import replace
+
 import pytest
 
 from tools.coverage import probes, validators
-from tools.coverage.model import Feature, Param, Signature, Type
+from tools.coverage.features.common import prototype
+from tools.coverage.model import VOID, Feature, Param, Signature, Type
 
 VEC3 = Type("float", (3,))
 
@@ -116,6 +119,258 @@ def test_fragment_probes_are_valid(language):
         assert verdict.accepted, verdict.log
 
 
+WORLD_RAY_ORIGIN = feature("WorldRayOrigin", VEC3, stage="closest-hit")
+HIT_PARAMETERS = "void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attributes) {"
+
+
+@pytest.mark.parametrize(
+    ("language", "entry"),
+    [
+        (
+            "crossgl",
+            "    ray_closest_hit {\n        buffer vec3* outp;\n        void main(Payload payload @ payload, "
+            "BuiltInTriangleIntersectionAttributes attributes @ hit_attribute) {",
+        ),
+        (
+            "hlsl",
+            f'RWStructuredBuffer<float3> outp : register(u0);\n[shader("closesthit")]\n{HIT_PARAMETERS}',
+        ),
+        (
+            "slang",
+            f'RWStructuredBuffer<float3> outp;\n[shader("closesthit")]\n{HIT_PARAMETERS}',
+        ),
+    ],
+)
+def test_raytracing_features_get_a_shader_of_their_stage(language, entry):
+    probe = probes.build(WORLD_RAY_ORIGIN, language)
+    assert entry in probe.source
+    assert "numthreads" not in probe.source
+    # Payload access qualifiers are required from HLSL shader model 6.7; Slang takes a plain struct.
+    payload = {"hlsl": "struct [raypayload] Payload", "slang": "struct Payload\n{"}
+    if language in payload:
+        assert payload[language] in probe.source
+
+
+def test_a_raytracing_shader_without_a_hit_takes_no_payload():
+    reorder = feature("ReorderThread", VOID, Type("uint"), stage="ray-generation")
+    source = probes.build(reorder, "hlsl").source
+    assert '[shader("raygeneration")]\nvoid main() {' in source
+    assert "Payload" not in source
+    assert "    ray_generation {" in probes.build(reorder, "crossgl").source
+    with pytest.raises(probes.ProbeError, match="no closest-hit-stage probe for glsl"):
+        probes.build(WORLD_RAY_ORIGIN, "glsl")
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang"])
+def test_raytracing_probes_are_valid(language):
+    if not validators.available(language):
+        pytest.skip(f"no {language} validator")
+    for stage, name in (("closest-hit", "WorldRayOrigin"), ("any-hit", "HitKind")):
+        result = Type("uint") if name == "HitKind" else VEC3
+        spelled = Feature(
+            language, "function", name, Signature(result, ()), crossgl=name, stage=stage
+        )
+        for baseline in (False, True):
+            probe = probes.build(spelled, language, baseline=baseline)
+            verdict = validators.validate(language, probe.source, stage, probe.entry)
+            assert verdict.accepted, verdict.log
+
+
+EMIT_STREAM_VERTEX = feature(
+    "EmitStreamVertex", VOID, Param(Type("int"), "const"), stage="geometry"
+)
+
+
+def test_geometry_features_get_a_point_geometry_shader():
+    glsl = probes.build(EMIT_STREAM_VERTEX, "glsl")
+    assert glsl.suffix == ".geom"
+    assert "layout(points) in;\nlayout(points, max_vertices = 1) out;" in glsl.source
+    assert "    EmitStreamVertex(0);" in glsl.source
+    assert "local_size_x" not in glsl.source
+    crossgl = probes.build(EMIT_STREAM_VERTEX, "crossgl").source
+    assert "    geometry {\n        layout(points) in;" in crossgl
+    assert "            EmitStreamVertex(0);" in crossgl
+    with pytest.raises(probes.ProbeError, match="no geometry-stage probe for hlsl"):
+        probes.build(EMIT_STREAM_VERTEX, "hlsl")
+
+
+def test_geometry_probes_are_valid():
+    if not validators.available("glsl"):
+        pytest.skip("no glsl validator")
+    for name, params in (
+        ("EmitVertex", ()),
+        ("EmitStreamVertex", EMIT_STREAM_VERTEX.signature.params),
+    ):
+        spelled = feature(name, VOID, *params, stage="geometry")
+        for baseline in (False, True):
+            probe = probes.build(spelled, "glsl", baseline=baseline)
+            verdict = validators.validate("glsl", probe.source, "geometry", probe.entry)
+            assert verdict.accepted, verdict.log
+
+
+UINT = Type("uint")
+VEC4 = Type("float", (4,))
+VEC2 = Type("float", (2,))
+STAGE_FUNCTIONS = {
+    "tessellation-control": (
+        "Process2DQuadTessFactorsAvg",
+        VOID,
+        VEC4,
+        VEC2,
+        Param(VEC4, "out"),
+        Param(VEC2, "out"),
+        Param(VEC2, "out"),
+    ),
+    "mesh": ("SetMeshOutputCounts", VOID, UINT, UINT),
+    "task": ("DispatchMesh", VOID, UINT, UINT, UINT, Type("", (), "udt")),
+}
+
+
+def stage_function(language, stage):
+    name, result, *params = STAGE_FUNCTIONS[stage]
+    signature = Signature(
+        result, tuple(p if isinstance(p, Param) else Param(p) for p in params)
+    )
+    return Feature(language, "function", name, signature, crossgl=name, stage=stage)
+
+
+def test_tessellation_factor_functions_run_in_the_patch_constant_function():
+    feature = stage_function("hlsl", "tessellation-control")
+    hlsl = probes.build(feature, "hlsl").source
+    constants, entry = hlsl.split("[domain(")
+    assert "PatchConstants constants(InputPatch<ControlPoint, 3> patch) {" in constants
+    assert "    Process2DQuadTessFactorsAvg(a0, a1, a2, a3, a4);" in constants
+    assert '[patchconstantfunc("constants")]' in entry
+    assert "numthreads" not in hlsl
+    slang = probes.build(replace(feature, language="slang"), "slang").source
+    assert '[shader("hull")]\n[domain("tri")]' in slang
+    crossgl = probes.build(feature, "crossgl").source
+    assert "    tessellation_control {\n        buffer float* fin;" in crossgl
+    assert "            Process2DQuadTessFactorsAvg(a0, a1, a2, a3, a4);" in crossgl
+    assert "            @patchconstantfunc(constants) {" in crossgl
+
+
+def test_mesh_functions_run_before_the_mesh_shader_writes_its_triangle():
+    hlsl = probes.build(stage_function("hlsl", "mesh"), "hlsl").source
+    call = hlsl.index("    SetMeshOutputCounts(a0, a1);")
+    assert hlsl.index("    tris[0] = uint3(0, 1, 2);") > call
+    assert '[numthreads(1, 1, 1)]\n[outputtopology("triangle")]' in hlsl
+    crossgl = probes.build(stage_function("hlsl", "mesh"), "crossgl").source
+    assert "    mesh {\n        buffer uint* uin;" in crossgl
+    assert "            SetMeshOutputCounts(a0, a1);" in crossgl
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang", "crossgl"])
+def test_a_task_shader_hands_its_payload_to_dispatch_mesh(language):
+    source = probes.build(stage_function("hlsl", "task"), language).source
+    assert "DispatchMesh(a0, a1, a2, payload);" in source
+    declaration = {
+        "crossgl": "groupshared Payload payload @ taskPayloadSharedEXT;",
+        "hlsl": "groupshared Payload payload;",
+        "slang": "groupshared Payload payload;",
+    }
+    assert declaration[language] in source
+    # Slang's DispatchMesh takes the payload by reference.
+    by_reference = stage_function("slang", "task")
+    *values, _ = by_reference.signature.params
+    by_reference = replace(
+        by_reference,
+        signature=Signature(VOID, (*values, Param(Type("int"), "inout"))),
+    )
+    assert (
+        "DispatchMesh(a0, a1, a2, payload);" in probes.build(
+            by_reference, language
+        ).source
+    )
+
+
+def trace_ray(language):
+    """TraceRay as the HLSL list declares it, or as the Slang list does with its generic payload read as ``int``."""
+    hlsl = language == "hlsl"
+    acceleration = Type(
+        "", (), "acceleration_struct" if hlsl else "RaytracingAccelerationStructure"
+    )
+    ray = Type("", (), "ray_desc" if hlsl else "RayDesc")
+    payload = Type("", (), "udt") if hlsl else Type("int")
+    params = (acceleration, *[UINT] * 5, ray, Param(payload, "inout"))
+    signature = Signature(
+        VOID, tuple(p if isinstance(p, Param) else Param(p) for p in params)
+    )
+    return Feature(
+        language,
+        "function",
+        "TraceRay",
+        signature,
+        crossgl="TraceRay",
+        stage="closest-hit",
+    )
+
+
+@pytest.mark.parametrize(
+    ("language", "acceleration", "origin"),
+    [
+        (
+            "hlsl",
+            "RaytracingAccelerationStructure u0 : register(t8);",
+            "float3(fin[i + 0u], fin[i + 1u], fin[i + 2u])",
+        ),
+        (
+            "slang",
+            "RaytracingAccelerationStructure u0 : register(t8);",
+            "float3(fin[i + 0u], fin[i + 1u], fin[i + 2u])",
+        ),
+        (
+            "crossgl",
+            "uniform accelerationStructureEXT u0;",
+            "vec3(fin[i + 0u], fin[i + 1u], fin[i + 2u])",
+        ),
+    ],
+)
+def test_a_hit_shader_traces_a_ray_with_its_payload(language, acceleration, origin):
+    native = "slang" if language == "slang" else "hlsl"
+    source = probes.build(trace_ray(native), language).source
+    assert acceleration in source
+    assert "RayDesc a6;" in source
+    assert f"a6.Origin = {origin};" in source
+    assert "a6.TMax = 1.0;" in source
+    assert "TraceRay(u0, a1, a2, a3, a4, a5, a6, payload);" in source
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang"])
+def test_trace_ray_probes_are_valid(language):
+    if not validators.available(language):
+        pytest.skip(f"no {language} validator")
+    for baseline in (False, True):
+        probe = probes.build(trace_ray(language), language, baseline=baseline)
+        verdict = validators.validate(
+            language, probe.source, "closest-hit", probe.entry
+        )
+        assert verdict.accepted, verdict.log
+
+
+def test_stages_without_a_function_probe_say_so():
+    for stage in STAGE_FUNCTIONS:
+        with pytest.raises(probes.ProbeError, match=f"no {stage}-stage probe for glsl"):
+            probes.build(stage_function("glsl", stage), "glsl")
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang"])
+@pytest.mark.parametrize("stage", list(STAGE_FUNCTIONS))
+def test_stage_function_probes_are_valid(language, stage):
+    if not validators.available(language):
+        pytest.skip(f"no {language} validator")
+    feature = stage_function(language, stage)
+    if (language, stage) == ("slang", "tessellation-control"):
+        # Slang has the tessellation-factor functions only for HLSL targets; any function checks the hull shader.
+        scalar = Type("float")
+        feature = replace(
+            feature, name="abs", signature=Signature(scalar, (Param(scalar),))
+        )
+    probe = probes.build(feature, language)
+    verdict = validators.validate(language, probe.source, stage, probe.entry)
+    assert verdict.accepted, verdict.log
+
+
 def test_an_interpolant_is_read_straight_from_a_shader_input():
     vec2 = Type("float", (2,))
     centroid = feature("interpolateAtCentroid", vec2, vec2, stage="fragment")
@@ -184,7 +439,63 @@ HLSL_SIGNATURES = [
         "InterlockedAdd", Type.other("void"), Param(Type("uint"), "inout"), Type("uint")
     ),
     feature("asdouble", Type("double", (2,)), Type("uint", (2,)), Type("uint", (2,))),
+    feature("asint16", Type("int16", (2,)), Type("half", (2,))),
+    feature("asuint16", Type("uint16"), Type("int16")),
+    feature("unpack_s8s32", Type("int", (4,)), Type("int8x4_packed")),
+    feature("pack_u8", Type("uint8x4_packed"), Type("int", (4,))),
 ]
+HLSL_BY_NAME = {f.name: f for f in HLSL_SIGNATURES}
+
+
+def test_16_bit_scalars_are_read_and_stored_through_32_bit_buffers():
+    asint16, asuint16 = HLSL_BY_NAME["asint16"], HLSL_BY_NAME["asuint16"]
+    source = probes.build(asint16, "hlsl").source
+    assert "RWStructuredBuffer<int2> outp : register(u1);" in source
+    assert "half2 a0 = half2((half)fin[i + 0u], (half)fin[i + 1u]);" in source
+    assert "int16_t2 r = asint16(a0);" in source
+    assert "outp[i] = (int2)r;" in source
+    assert "int16_t a0 = (int16_t)iin[i + 0u];" in probes.build(asuint16, "hlsl").source
+    assert "half2 a0" in probes.build(asint16, "slang").source
+    crossgl = probes.build(asint16, "crossgl").source
+    assert (
+        "f16vec2 a0 = f16vec2(float16(fin[i + 0u]), float16(fin[i + 1u]));" in crossgl
+    )
+    assert "i16vec2 r = asint16(a0);" in crossgl
+    assert "outp[i] = ivec2(r);" in crossgl
+    # A language whose 16-bit spelling has not been checked leaves the feature untested.
+    with pytest.raises(probes.ProbeError, match="16-bit"):
+        probes.build(asint16, "glsl")
+
+
+def test_packed_8_bit_integers_are_read_and_stored_as_32_bit_words():
+    unpack, pack = HLSL_BY_NAME["unpack_s8s32"], HLSL_BY_NAME["pack_u8"]
+    source = probes.build(unpack, "hlsl").source
+    assert "int8_t4_packed a0 = (int8_t4_packed)uin[i + 0u];" in source
+    assert "int4 r = unpack_s8s32(a0);" in source
+    source = probes.build(pack, "hlsl").source
+    assert "RWStructuredBuffer<uint> outp : register(u1);" in source
+    assert "uint8_t4_packed r = pack_u8(a0);" in source
+    assert "outp[i] = (uint)r;" in source
+    # CrossGL's HLSL importer reads a packed word as uint.
+    assert "uint r = pack_u8(a0);" in probes.build(pack, "crossgl").source
+    with pytest.raises(probes.ProbeError, match="packed 8-bit"):
+        probes.build(pack, "metal")
+
+
+def test_64_bit_integers_are_read_through_32_bit_buffers_in_hlsl():
+    exchange = method(
+        "RWByteAddressBuffer",
+        "InterlockedExchange64",
+        Type.other("void"),
+        Type("uint"),
+        Type("int64"),
+    )
+    source = probes.build(exchange, "hlsl").source
+    assert "int64_t a1 = (int64_t)iin[i + 0u];" in source
+    assert "obj.InterlockedExchange64(a0, a1);" in source
+    assert (
+        "int64_t a1 = int64_t(iin[i + 0u]);" in probes.build(exchange, "crossgl").source
+    )
 
 
 @pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
@@ -248,6 +559,9 @@ TEXEL_OFFSET = feature(
     Type("float"),
     Param(Type("int", (2,)), "const"),
 )
+ATOMIC_COUNTER = feature(
+    "atomicCounterAdd", Type("uint"), Type.other("atomic_uint"), Type("uint")
+)
 
 
 def test_function_probe_declares_the_samplers_and_images_it_passes():
@@ -261,6 +575,17 @@ def test_function_probe_declares_the_samplers_and_images_it_passes():
     assert "uint r = imageAtomicAdd(u0, a1, a2);" in crossgl
 
 
+def test_atomic_counters_use_the_first_atomic_counter_binding():
+    source = probes.build(ATOMIC_COUNTER, "glsl").source
+    assert "layout(binding = 0) uniform atomic_uint u0;" in source
+    assert "uint r = atomicCounterAdd(u0, a1);" in source
+    assert (
+        "        uniform atomic_uint u0;" in probes.build(
+            ATOMIC_COUNTER, "crossgl"
+        ).source
+    )
+
+
 def test_constant_vector_arguments_are_zero_vectors():
     source = probes.build(TEXEL_OFFSET, "glsl").source
     assert "textureLodOffset(u0, a1, a2, ivec2(0, 0))" in source
@@ -270,7 +595,9 @@ def test_constant_vector_arguments_are_zero_vectors():
     not validators.available("glsl"), reason="glslangValidator is not installed"
 )
 @pytest.mark.parametrize(
-    "probe_feature", [TEXTURE_LOD, IMAGE_ATOMIC, TEXEL_OFFSET], ids=lambda f: f.name
+    "probe_feature",
+    [TEXTURE_LOD, IMAGE_ATOMIC, TEXEL_OFFSET, ATOMIC_COUNTER],
+    ids=lambda f: f.name,
 )
 def test_glsl_texture_and_image_probes_are_valid_glsl(probe_feature):
     probe = probes.build(probe_feature, "glsl")
@@ -293,8 +620,50 @@ def test_method_probe_needs_an_object_it_can_declare():
         probes.build(SAMPLE_LEVEL, "metal")
 
 
+GATHER_RAW = method(
+    "Texture2D",
+    "GatherRaw",
+    Type("uint", (4,)),
+    Type.other("sampler"),
+    Type("float", (2,)),
+)
+FEEDBACK_LEVEL = method(
+    "FeedbackTexture2DArray",
+    "WriteSamplerFeedbackLevel",
+    Type.other("void"),
+    Type.other("Texture2DArray"),
+    Type.other("sampler"),
+    Type("float", (3,)),
+    Type("float"),
+)
+
+
+def test_gather_raw_reads_a_uint_texture():
+    source = probes.build(GATHER_RAW, "hlsl").source
+    assert "Texture2D<uint> obj : register(t0);" in source
+    assert "Texture2D<uint> obj;" in probes.build(GATHER_RAW, "crossgl").source
+
+
+def test_feedback_probe_declares_the_texture_it_records():
+    source = probes.build(FEEDBACK_LEVEL, "hlsl").source
+    assert (
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP> obj : register(u8);" in source
+    )
+    assert "Texture2DArray<float4> tex : register(t0);" in source
+    assert "obj.WriteSamplerFeedbackLevel(tex, smp, a2, a3);" in source
+
+
+# DXC cannot lower a feedback texture to SPIR-V, so this probe is only checked as DXIL.
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+def test_feedback_probe_is_valid_hlsl():
+    probe = probes.build(FEEDBACK_LEVEL, "hlsl")
+    verdict = validators.validate("hlsl", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
 HLSL_METHODS = [
     SAMPLE_LEVEL,
+    GATHER_RAW,
     method(
         "TextureCUBE",
         "GatherCmp",
@@ -316,6 +685,13 @@ HLSL_METHODS = [
         "Texture2DArrayMS", "Load", Type("float", (4,)), Type("int", (3,)), Type("int")
     ),
     method("RayQuery", "CommittedRayT", Type("float")),
+    method(
+        "RWByteAddressBuffer",
+        "InterlockedAdd64",
+        Type.other("void"),
+        Type("uint"),
+        Type("uint64"),
+    ),
 ]
 
 
@@ -324,6 +700,32 @@ HLSL_METHODS = [
 def test_hlsl_method_probes_are_valid_hlsl(probe_feature):
     probe = probes.build(probe_feature, "hlsl")
     verdict = validators.validate("hlsl", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
+HIT_OBJECT = Feature(
+    "hlsl",
+    "method",
+    "DxHitObject.GetRayTMin",
+    Signature(Type("float"), ()),
+    group="DxHitObject",
+    crossgl="GetRayTMin",
+    spelling="GetRayTMin",
+    stage="ray-generation",
+)
+
+
+def test_hit_object_methods_query_a_default_hit_object():
+    source = probes.build(HIT_OBJECT, "hlsl").source
+    assert '[shader("raygeneration")]' in source
+    assert "    dx::HitObject obj;" in source
+    assert "float r = obj.GetRayTMin();" in source
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+def test_hit_object_probe_is_valid_hlsl():
+    probe = probes.build(HIT_OBJECT, "hlsl")
+    verdict = validators.validate("hlsl", probe.source, HIT_OBJECT.stage, probe.entry)
     assert verdict.accepted, verdict.log
 
 
@@ -386,6 +788,23 @@ METAL_SIGNATURES = [
     feature("select", VEC3, VEC3, VEC3, Type("bool", (3,))),
     feature("frexp", VEC3, VEC3, Param(Type("int", (3,)), "out")),
     feature("simd_sum", Type("float"), Type("float")),
+    feature(
+        "atomic_fetch_add_explicit",
+        Type("int"),
+        Param(Type("int"), "inout"),
+        Type("int"),
+        Param(Type.other("memory_order"), "const"),
+    ),
+    feature(
+        "atomic_max", Type.other("void"), Param(Type("uint64"), "inout"), Type("uint64")
+    ),
+    feature(
+        "threadgroup_barrier",
+        Type.other("void"),
+        Param(Type.other("mem_flags"), "const"),
+    ),
+    feature("pack_half_to_unorm4x8", Type("uint"), Type("half", (4,))),
+    feature("unpack_unorm565_to_half", Type("half", (3,)), Type("uint")),
 ]
 
 
@@ -397,6 +816,29 @@ def test_metal_probes_are_valid_metal(probe_feature):
     probe = probes.build(probe_feature, "metal")
     verdict = validators.validate("metal", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_metal_half_arguments_are_read_from_float_buffers():
+    pack, unpack = METAL_SIGNATURES[-2:]
+    source = probes.build(pack, "metal").source
+    assert "half4 a0 = half4(half(fin[i + 0u]), half(fin[i + 1u])" in source
+    assert "uint r = pack_half_to_unorm4x8(a0);" in source
+    source = probes.build(unpack, "metal").source
+    assert "device float3* outp [[buffer(1)]]" in source
+    assert "outp[i] = float3(r);" in source
+
+
+def test_metal_atomic_probe_passes_the_output_element_and_a_relaxed_order():
+    add = feature(
+        "atomic_fetch_add_explicit",
+        Type("int"),
+        Param(Type("int"), "inout"),
+        Type("int"),
+        Param(Type.other("memory_order"), "const"),
+    )
+    source = probes.build(add, "metal").source
+    assert "device atomic_int* outp [[buffer(1)]]" in source
+    assert "atomic_fetch_add_explicit(&outp[i], a1, memory_order_relaxed);" in source
 
 
 CUDA_SIGNATURES = [
@@ -576,3 +1018,15 @@ def test_wgsl_texture_probe_is_valid_wgsl():
     probe = probes.build(WGSL_SAMPLE_LEVEL, "wgsl")
     verdict = validators.validate("wgsl", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_a_counterpart_stands_in_for_a_signature_only_in_the_crossgl_probe():
+    name, counterpart = prototype("vec3 frexp(vec3, out ivec3)")
+    feature = Feature(
+        "wgsl", "function", "frexp", None, crossgl=name, counterpart=counterpart
+    )
+    source = probes.build(feature, "crossgl").source
+    assert "ivec3 a1;" in source
+    assert "vec3 r = frexp(a0, a1);" in source
+    with pytest.raises(probes.ProbeError, match="no signature"):
+        probes.build(feature, "wgsl")

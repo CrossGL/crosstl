@@ -20,13 +20,15 @@ from .model import Feature
 CURATED: dict[str, str] = {}
 # Languages whose functions, or some of them, have no id of their own. They take the id of the function of the named
 # language that CrossGL spells the same way: Metal ``fabs`` and CUDA ``fabsf`` are CrossGL ``abs``, so they share
-# GLSL ``abs``'s id.
+# GLSL ``abs``'s id. WGSL ``frexp`` returns a result structure that its probe cannot spell, so it has no id either and
+# shares GLSL ``frexp``'s.
 BORROWED = {
     "cuda": "glsl",
     "hip": "glsl",
     "metal": "glsl",
     "mojo": "glsl",
     "rust": "glsl",
+    "wgsl": "glsl",
 }
 # Feature groups whose SPIR-V does not identify them: glam writes Vec3's methods in plain Rust arithmetic, so
 # ``Vec3::dot`` lowers to multiplies and adds rather than to OpDot.
@@ -61,12 +63,18 @@ _GROUP_OPERATIONS = frozenset(
 _INSTRUCTION = re.compile(r"^\s*(?:%\w+\s*=\s*)?(Op\w+)(.*)$")
 _IMPORT = re.compile(r'^\s*(%\w+)\s*=\s*OpExtInstImport\s+"([^"]+)"')
 _CONSTANT = re.compile(r"^\s*(%\w+)\s*=\s*OpConstant\s+%\w+\s+(\S+)")
+_BUILTIN = re.compile(r"^\s*OpDecorate\s+(%\w+)\s+BuiltIn\s+(\w+)")
+# Instructions that read a variable through the pointer that is their second operand.
+_READS = frozenset({"OpLoad", "OpAccessChain", "OpInBoundsAccessChain"})
 
 
 def instructions(assembly: str) -> Counter:
-    """The instructions inside function bodies, with extended instructions named ``set:instruction``."""
+    """The instructions inside function bodies, with extended instructions named ``set:instruction``. A read of a
+    built-in variable also counts as ``BuiltIn:<name>``, since a function such as HLSL ``WorldRayOrigin`` lowers to
+    that read alone."""
     sets: dict[str, str] = {}
     constants: dict[str, str] = {}
+    builtins: dict[str, str] = {}
     found: Counter = Counter()
     inside = False
     for line in assembly.splitlines():
@@ -77,6 +85,9 @@ def instructions(assembly: str) -> Counter:
         constant = _CONSTANT.match(line)
         if constant:
             constants[constant.group(1)] = constant.group(2)
+        builtin = _BUILTIN.match(line)
+        if builtin:
+            builtins[builtin.group(1)] = builtin.group(2)
         match = _INSTRUCTION.match(line)
         if not match:
             continue
@@ -87,9 +98,12 @@ def instructions(assembly: str) -> Counter:
             continue
         if opcode == "OpFunctionEnd":
             inside = False
-        token = _token(opcode, operands.split(), sets, constants)
+        words = operands.split()
+        token = _token(opcode, words, sets, constants)
         if token:
             found[token] += 1
+        if opcode in _READS and len(words) > 1 and words[1] in builtins:
+            found[f"BuiltIn:{builtins[words[1]]}"] += 1
     return found
 
 

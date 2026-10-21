@@ -6,14 +6,10 @@ builder in :mod:`.probes` talks to a dialect and never to a language directly.
 
 from __future__ import annotations
 
-from .model import Type
+from .model import NARROW_SCALARS, PACKED_BYTES, WIDE_INTEGERS, Type
 
 # A storage buffer as ``(element type spelling, name)``; buffer ``k`` is bound at binding ``k``.
 Buffer = tuple[str, str]
-
-
-# Scalars a probe reads from and stores as 32-bit integers.
-WIDE_INTEGERS = frozenset({"int64", "uint64"})
 
 
 class ProbeError(ValueError):
@@ -28,13 +24,18 @@ class Dialect:
     language = ""
     suffix = ""
     entry = "main"
-    # The file suffix of a fragment probe, where the language's tools tell the stage from it.
+    # The file suffix of a fragment or geometry probe, where the language's tools tell the stage from it.
     fragment_suffix = ""
+    geometry_suffix = ""
+    # The task payload a task-stage probe declares and hands to the mesh workgroups it launches.
+    payload = "payload"
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
-    # Whether the dialect spells the scalars in WIDE_INTEGERS.
+    # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS and PACKED_BYTES.
     wide_integers = False
+    narrow_scalars = False
+    packed_bytes = False
 
     def type(self, kind: Type) -> str:
         if kind.opaque:
@@ -43,6 +44,10 @@ class Dialect:
             raise ProbeError(f"no probe for parameters of type {kind.opaque}")
         if kind.scalar in WIDE_INTEGERS and not self.wide_integers:
             raise ProbeError(f"no 64-bit integer probe for {self.language} yet")
+        if kind.scalar in NARROW_SCALARS and not self.narrow_scalars:
+            raise ProbeError(f"no 16-bit probe for {self.language} yet")
+        if kind.scalar in PACKED_BYTES and not self.packed_bytes:
+            raise ProbeError(f"{self.language} has no packed 8-bit integer types")
         if not kind.shape:
             return self.scalar(kind.scalar)
         if len(kind.shape) == 1:
@@ -80,9 +85,13 @@ class Dialect:
         constants = {
             "bool": "false",
             "int": "0",
+            "int16": "0",
             "int64": "0",
             "uint": "0u",
+            "uint16": "0u",
             "uint64": "0u",
+            "int8x4_packed": "0u",
+            "uint8x4_packed": "0u",
         }
         zero = constants.get(kind.scalar, "0.0")
         if kind.shape:
@@ -162,3 +171,33 @@ class Dialect:
         ``parts`` may add ``inputs``, the shader inputs as ``(type spelling, name)``, for a function that takes one.
         """
         raise ProbeError(f"{self.language} has no fragment stage")
+
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A geometry shader that takes and emits points and runs ``body`` with ``i`` set to 0, for a feature only
+        that stage has; the buffers and ``parts`` are :meth:`kernel`'s."""
+        raise ProbeError(f"no geometry-stage probe for {self.language} yet")
+
+    def raytracing(
+        self, stage: str, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        """A shader of the ray-tracing ``stage`` that runs ``body`` with ``i`` set to 0, for a feature only that stage
+        has; the buffers and ``parts`` are :meth:`kernel`'s."""
+        raise ProbeError(f"no {stage}-stage probe for {self.language} yet")
+
+    def tessellation_control(
+        self, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        """A tessellation-control shader for a triangle patch whose patch-constant code runs ``body`` with ``i`` set
+        to 0; the buffers and ``parts`` are :meth:`kernel`'s."""
+        raise ProbeError(f"no tessellation-control-stage probe for {self.language} yet")
+
+    def mesh(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A mesh shader that runs ``body`` with ``i`` set to 0 and then writes one triangle; the buffers and ``parts``
+        are :meth:`kernel`'s."""
+        raise ProbeError(f"no mesh-stage probe for {self.language} yet")
+
+    def task(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A task shader that runs ``body`` with ``i`` set to 0. It declares the task payload :attr:`payload`, which
+        ``body`` hands to the mesh workgroups it launches; the buffers and ``parts`` are :meth:`kernel`'s.
+        """
+        raise ProbeError(f"no task-stage probe for {self.language} yet")

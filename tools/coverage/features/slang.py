@@ -18,7 +18,15 @@ import re
 from dataclasses import dataclass
 
 from .. import crossgl
-from ..model import VOID, Feature, Param, Signature, Type
+from ..model import (
+    OTHER_WIDTHS,
+    VOID,
+    Feature,
+    Param,
+    Signature,
+    Type,
+    raytracing_stage,
+)
 from .common import pick, split
 
 # The scalar each generic constraint is probed with.
@@ -57,12 +65,23 @@ _SCALARS = {
     "float32_t": "float",
     "double": "double",
     "float64_t": "double",
+    "half": "half",
+    "float16_t": "half",
+    "int16_t": "int16",
+    "uint16_t": "uint16",
+    "int64_t": "int64",
+    "uint64_t": "uint64",
+    "int8_t4_packed": "int8x4_packed",
+    "uint8_t4_packed": "uint8x4_packed",
 }
 _SHORTHAND = re.compile(
-    r"(bool|int|uint|float|double|int32_t|uint32_t|float32_t|float64_t)([1-4])(?:x([1-4]))?"
+    r"(bool|int|uint|float|double|half|int32_t|uint32_t|float32_t|float64_t|float16_t|int16_t|uint16_t|int64_t"
+    r"|uint64_t)([1-4])(?:x([1-4]))?"
 )
 # The targets a ``require`` capability atom such as ``cuda_glsl_hlsl_spirv`` is made of.
 TARGETS = frozenset("cpp cuda glsl hlsl metal spirv wgsl llvm".split())
+# Capability atoms that imply one target without naming it (source/slang/slang-capabilities.capdef).
+_ATOM_TARGETS = {"optix_coopvec": "cuda", "optix_multilevel_traversal": "cuda"}
 _GENERIC_TYPE = re.compile(r"(vector|matrix)\s*<(.*)>")
 _QUALIFIERS = {
     "in": "in",
@@ -397,9 +416,18 @@ def stage(declaration: Declaration) -> str:
     return stages[0] if stages else "compute"
 
 
+def _stage(name: str, declaration: Declaration) -> str:
+    """:func:`stage`, with a ray-tracing function probed in the ray-tracing stage that has it, and DispatchMesh, which
+    launches mesh workgroups, in the task stage."""
+    found = stage(declaration)
+    if found == "mesh" and name == "DispatchMesh":
+        return "task"
+    return raytracing_stage(name) if found == "raytracing" else found
+
+
 def _preference(signature: Signature) -> tuple[bool, bool, int]:
-    """Sort key among overloads: value-returning before ``void``, 32-bit before ``double``, and vectors before
-    scalars before matrices, so a generic function is probed with two-component vectors as in the HLSL list.
+    """Sort key among overloads: value-returning before ``void``, 32-bit before 64-bit or 16-bit, and vectors
+    before scalars before matrices, so a generic function is probed with two-component vectors as in the HLSL list.
     """
     kinds = [signature.result, *(p.type for p in signature.params)]
     shapes = {len(k.shape) for k in kinds if not k.opaque}
@@ -407,7 +435,7 @@ def _preference(signature: Signature) -> tuple[bool, bool, int]:
     return (
         signature.result == VOID
         and any(p.direction == "out" for p in signature.params),
-        any(k.scalar == "double" for k in kinds),
+        any(k.scalar in OTHER_WIDTHS for k in kinds),
         rank,
     )
 
@@ -416,9 +444,10 @@ def spirv_target(declaration: Declaration) -> bool:
     """Whether some ``require`` alternative allows SPIR-V; one that names no target allows every target."""
     clauses = re.findall(r"require\s*\(([^)]*)\)", declaration.requires)
     for clause in clauses or [""]:
+        atoms = [_ATOM_TARGETS.get(atom, atom) for atom in re.findall(r"\w+", clause)]
         targets = {
             part
-            for atom in re.findall(r"\w+", clause)
+            for atom in atoms
             if set(atom.split("_")) <= TARGETS
             for part in atom.split("_")
         }
@@ -479,7 +508,7 @@ def parse(
                 chosen,
                 group=declared[0][0],
                 crossgl=crossgl.spelling("slang", name, glsl_names),
-                stage=stage(declared[0][1]),
+                stage=_stage(name, declared[0][1]),
                 note=note,
                 spelling=explicit(source, chosen) if chosen else "",
             )

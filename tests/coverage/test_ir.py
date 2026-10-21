@@ -73,3 +73,21 @@ def test_report_adds_the_ir_row_after_the_backends():
     assert [b["language"] for b in data["backends"]] == ["glsl", "crossgl"]
     assert data["backends"][0]["features"][0]["semantic"] == "GLSL.std.450:FAbs"
     assert "CrossGL IR" in report.summary(data)
+
+
+def test_a_feature_with_no_id_borrows_the_glsl_id_of_its_crossgl_spelling():
+    entry = ir.build(
+        [
+            row(
+                "glsl",
+                ("frexp", "supported", {"semantic": "GLSL.std.450:Frexp"}),
+            ),
+            row(
+                "wgsl",
+                ("frexp", "wrong", {"crossgl": "frexp", "detail": "bad"}),
+            ),
+        ]
+    )
+    features = by_name(entry)
+    assert list(features) == ["GLSL.std.450:Frexp"]
+    assert features["GLSL.std.450:Frexp"]["members"] == ["glsl/frexp", "wgsl/frexp"]

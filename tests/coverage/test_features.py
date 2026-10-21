@@ -137,6 +137,14 @@ int imageAtomicAdd(IMAGE_PARAMS, int data)
 ----
 vec2 interpolateAtOffset(float interpolant, vec2 offset)
 ----
+
+== Geometry Shader Functions
+
+[source,glsl]
+----
+void EmitStreamVertex(int stream)
+void EmitVertex()
+----
 """
 
 
@@ -167,6 +175,9 @@ def test_glsl_marks_constant_offsets_arrays_and_implicit_lod():
     assert gather.params[2].type == Type.other("ivec2[4]")
     assert len(gather.params) == 3
     assert features["texture"].stage == "fragment"
+    stream = features["EmitStreamVertex"]
+    assert stream.stage == "geometry"
+    assert stream.signature.params == (Param(Type("int"), "const"),)
 
 
 GRAMMAR = """{"instructions": [
@@ -200,14 +211,23 @@ def test_spirv_explains_unreachable_and_unspelled_instructions():
 HLSL_TABLE = """
 namespace Intrinsics {
 double<> [[rn]] asdouble(in $match<0, 1> uint<> x, in $match<0, 2> uint<> y) : reinterpret_fuse_double;
+int16_t<> [[rn]] asint16(in $match<0,1> numeric16_only<> x) : reinterpret_int16;
+float [[rn]] dot2add(in float16_t<2> a, in $type1 b, in float c);
 $type1 [[rn]] lerp(in float_like<> a, in $type1 b, in $type1 s);
 $type1 [[rn,unsigned_op=umad]] mad(in numeric<> a, in $type1 b, in $type1 c);
 void [[]] InterlockedAdd(ref int32_only result, in uint value);
+void [[]] InterlockedAdd(ref int64_only result, in u64 value);
+int<4> [[rn]] unpack_s8s32(in p32i8 pk);
+p32u8 [[rn]] pack_u8(in any_int16or32<4> v);
 $type1 [[rn]] ddx(in float_like<> x);
 $type1 [[rn]] GetAttributeAtVertex(in numeric<> value, in uint VertexID);
+float<3> [[rn]] WorldRayOrigin();
+void [[]] IgnoreHit();
 void [[]] Barrier(in uint MemoryTypeFlags, in uint SemanticFlags);
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
 uint   [[rn,min_sm=6.10]] GetGroupWaveIndex();
+float_like<4> [[ro]] tex2D(in sampler2d s, in float_like<2> x) : tex2d;
+float_like<4> [[ro]] texCUBElod(in sampler_cube s, in float_like<4> x) : texcube_lod;
 } namespace
 
 namespace VkIntrinsics {
@@ -219,14 +239,25 @@ float [[ro]] CalculateLevelOfDetail(in any_sampler s, in float<2> x) : tex2d_t_c
 $match<0, -1> void<4> [[ro]] GatherCmp(in sampler_cmp s, in float<2> x, in float compareValue) : tex2d_t_gather_comp;
 $classT [[]] Load(in int<3> x, in int<2> o, out uint_only status) : tex2d_t_load_o_s;
 $classT [[ro]] Load(in int<3> x) : tex2d_t_load;
+$match<0, -1> void<4> [[ro]] GatherRaw(in sampler s, in float<2> x);
+} namespace
+
+namespace FeedbackTexture2DMethods {
+void [[]] WriteSamplerFeedback(in Texture2D t, in sampler s, in float<2> x);
+void [[]] WriteSamplerFeedbackLevel(in Texture2D t, in sampler s, in float<2> x, in float lod);
 } namespace
 
 namespace ByteAddressBufferMethods {
 $funcT [[ro]] Load(in uint byteOffset) : byteaddress_load;
 } namespace
 
+namespace RWByteAddressBufferMethods {
+void [[]] InterlockedExchange64(in uint byteOffset, in any_int64 value, out any_int64 original);
+} namespace
+
 namespace DxHitObjectMethods {
     DxHitObject [[static,class_prefix,min_sm=6.9]] MakeNop();
+    bool [[rn,class_prefix,min_sm=6.9]] IsMiss();
 } namespace
 
 namespace NodeOutputMethods {
@@ -247,15 +278,20 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     features = by_name(hlsl.parse(HLSL_TABLE, {"mix", "fma"}))
     assert "ReadClock" not in features
     assert "VkSubpassInput.SubpassLoad" not in features
+    # DXC rejects every call to the shader model 2 and 3 sampling functions.
+    assert "tex2D" not in features and "texCUBElod" not in features
     assert features["Texture2D.CalculateLevelOfDetail"].category == "method"
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
     assert features["GetGroupWaveIndex"].note == "needs shader model 6.10"
+    # Ray-tracing intrinsics run in a closest-hit shader unless another stage alone has them.
+    assert features["WorldRayOrigin"].stage == "closest-hit"
+    assert features["IgnoreHit"].stage == "any-hit"
     # The probes compile for shader model 6.9, so its intrinsics are probed in the stage they belong to.
     reorder = features["dx::MaybeReorderThread"]
     assert (reorder.category, reorder.stage, reorder.note) == (
         "function",
-        "raytracing",
+        "ray-generation",
         "",
     )
     assert [p.type for p in reorder.signature.params] == [Type("uint")] * 2
@@ -277,13 +313,32 @@ def test_hlsl_methods_take_the_element_type_of_their_object():
     assert features["ByteAddressBuffer.Load"].signature.result == Type("uint")
 
 
+def test_hlsl_gather_raw_returns_the_raw_bits_of_a_uint_texture():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    assert features["Texture2D.GatherRaw"].signature.result == Type("uint", (4,))
+    assert features["Texture2D.GatherCmp"].signature.result == Type("float", (4,))
+
+
+def test_hlsl_feedback_methods_take_the_texture_they_record():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    implicit = features["FeedbackTexture2D.WriteSamplerFeedback"]
+    level = features["FeedbackTexture2D.WriteSamplerFeedbackLevel"]
+    assert implicit.signature.params[0].type == Type.other("Texture2D")
+    # Only the implicit level of detail needs derivatives, so a fragment shader.
+    assert (implicit.stage, level.stage) == ("fragment", "compute")
+
+
 def test_hlsl_methods_of_types_no_probe_declares_are_untested():
     features = by_name(hlsl.parse(HLSL_TABLE))
-    assert (
-        features["DxHitObject.MakeNop"].note == "no probe for DxHitObject objects yet"
-    )
     assert features["NodeOutput.IsValid"].signature is None
     assert features["NodeOutput.IsValid"].note == "no probe for NodeOutput objects yet"
+
+
+def test_hlsl_hit_object_methods_are_probed_in_a_ray_generation_shader():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    is_miss = features["DxHitObject.IsMiss"]
+    assert (is_miss.stage, is_miss.signature.result) == ("ray-generation", Type("bool"))
+    assert features["DxHitObject.MakeNop"].stage == "ray-generation"
 
 
 def test_hlsl_resolves_generic_layouts_and_matched_types():
@@ -304,11 +359,49 @@ def test_hlsl_resolves_generic_layouts_and_matched_types():
     assert [p.direction for p in barrier.params] == ["const", "const"]
 
 
+def test_hlsl_reads_16_bit_scalars():
+    features = by_name(hlsl.parse(HLSL_TABLE, {"mix", "fma"}))
+    asint16 = features["asint16"].signature
+    assert asint16.result == Type("int16", (2,))
+    assert asint16.params[0].type == Type("half", (2,))
+    dot2add = features["dot2add"].signature
+    assert [p.type for p in dot2add.params] == [Type("half", (2,))] * 2 + [
+        Type("float")
+    ]
+
+
+def test_hlsl_reads_64_bit_and_packed_8_bit_integers():
+    features = by_name(hlsl.parse(HLSL_TABLE, {"mix", "fma"}))
+    exchange = features["RWByteAddressBuffer.InterlockedExchange64"].signature
+    assert [p.type for p in exchange.params] == [Type("uint")] + [Type("int64")] * 2
+    unpack = features["unpack_s8s32"].signature
+    assert unpack.result == Type("int", (4,))
+    assert unpack.params[0].type == Type("int8x4_packed")
+    assert features["pack_u8"].signature.result == Type("uint8x4_packed")
+    # The 32-bit overload of a function is probed rather than its 64-bit one.
+    assert features["InterlockedAdd"].signature.params[0].type == Type("int")
+
+
 def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
     major, minor = hlsl.SHADER_MODEL
     assert validators.HLSL_PROFILES == {
         stage: f"{prefix}_{major}_{minor}"
-        for stage, prefix in (("compute", "cs"), ("fragment", "ps"), ("vertex", "vs"))
+        for stage, prefix in (
+            ("compute", "cs"),
+            ("fragment", "ps"),
+            ("vertex", "vs"),
+            ("geometry", "gs"),
+            ("tessellation-control", "hs"),
+            ("tessellation-evaluation", "ds"),
+            ("task", "as"),
+            ("mesh", "ms"),
+            ("ray-generation", "lib"),
+            ("intersection", "lib"),
+            ("any-hit", "lib"),
+            ("closest-hit", "lib"),
+            ("miss", "lib"),
+            ("callable", "lib"),
+        )
     }
 
 
@@ -422,12 +515,15 @@ metal_math frexp float3(float3, out int3)
 metal_matrix determinant float(float3x3)
 metal_graphics dfdx float3(float3)
 metal_atomic atomic_fetch_add_explicit -
+metal_pack pack_half_to_unorm4x8 uint(half4)
 """
 
 
 def test_metal_reads_the_generated_list():
     features = by_name(metal.parse(METAL_LIST, {"fma", "dFdx", "frexp", "determinant"}))
     assert features["frexp"].signature.params[1] == Param(Type("int", (3,)), "out")
+    pack = features["pack_half_to_unorm4x8"].signature
+    assert pack == Signature(Type("uint"), (Param(Type("half", (4,))),))
     assert features["determinant"].signature.params[0].type == Type("float", (3, 3))
     assert features["dfdx"].stage == "fragment"
     assert features["dfdx"].crossgl == "dFdx"
@@ -452,6 +548,83 @@ def test_metal_header_parse_drops_attribute_macros():
     assert list(metal.declarations("metal_simdgroup", METAL_SIMDGROUP_HEADER)) == [
         ("simd_shuffle", "float", ["float", "uint"])
     ]
+
+
+METAL_ATOMIC_HEADER = """
+template <typename T, typename U, thread_scope S>
+METAL_FUNC enable_if_t<_valid_fetch_add_sub_type<device T *>::value &&
+                       is_convertible<T, U>::value, T>
+atomic_fetch_add_explicit(volatile device _atomic<T, S> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return T(__metal_atomic_fetch_add_explicit(&object->__s, operand, int(order), int(S)));
+}
+template <typename T, typename U, thread_scope S>
+METAL_FUNC enable_if_t<_valid_non_fetch_type<device T *>::value &&
+                       is_convertible<T, U>::value>
+atomic_store_explicit(volatile device _atomic<T, S> *object, U desired, memory_order order, mem_flags flags)
+{
+}
+template <typename T, typename U>
+METAL_FUNC enable_if_t<_valid_max_type<device T *>::value &&
+                       is_convertible<T, U>::value>
+atomic_max_explicit(volatile coherent(device) device _atomic<T> *object, U operand, memory_order order)
+{
+}
+template <typename T, typename U, thread_scope S>
+METAL_FUNC enable_if_t<_valid_non_fetch_type<device T *>::value, bool>
+atomic_compare_exchange_weak_explicit(volatile device _atomic<T, S> *object, thread T *expected, U desired)
+{
+}
+METAL_FUNC void atomic_thread_fence(mem_flags flags, memory_order order, thread_scope scope = thread_scope_device) METAL_CONST_ARG(flags)
+"""
+
+
+def test_metal_header_parse_reads_atomic_functions():
+    # The atomic object is the probe's output buffer element; trailing attribute macros and defaulted parameters are
+    # not parameters, and enable_if_t without a type is void.
+    assert list(metal.declarations("metal_atomic", METAL_ATOMIC_HEADER)) == [
+        ("atomic_fetch_add_explicit", "int", ["inout int", "int", "memory_order"]),
+        (
+            "atomic_store_explicit",
+            "void",
+            ["inout int", "int", "memory_order", "mem_flags"],
+        ),
+        # Metal declares the atomic max and min without a fetch for 64-bit unsigned integers only.
+        ("atomic_max_explicit", "void", ["inout ulong", "ulong", "memory_order"]),
+        # A pointer to anything but an atomic object is not probed.
+        ("atomic_compare_exchange_weak_explicit", "bool", ["inout int", "int*", "int"]),
+        ("atomic_thread_fence", "void", ["mem_flags", "memory_order"]),
+    ]
+
+
+METAL_ATOMIC_LIST = """metal_atomic atomic_fetch_add_explicit int(inout int, int, memory_order)
+metal_atomic atomic_fetch_add int(inout int, int)
+metal_atomic atomic_load_explicit int(inout int, memory_order)
+metal_atomic atomic_max void(inout ulong, ulong)
+metal_compute threadgroup_barrier void(mem_flags)
+"""
+
+
+def test_metal_atomic_functions_call_glsl_atomics_from_crossgl():
+    features = by_name(metal.parse(METAL_ATOMIC_LIST, {"atomicAdd", "barrier"}))
+    add = features["atomic_fetch_add_explicit"]
+    assert add.signature.params == (
+        Param(Type("int"), "inout"),
+        Param(Type("int")),
+        Param(Type.other("memory_order"), "const"),
+    )
+    # CrossGL's atomics take no memory order.
+    assert add.crossgl == "atomicAdd"
+    assert add.counterpart.params == (Param(Type("int"), "inout"), Param(Type("int")))
+    assert features["atomic_fetch_add"].crossgl == "atomicAdd"
+    assert features["atomic_fetch_add"].counterpart is None
+    assert features["atomic_max"].signature.params[0] == Param(Type("uint64"), "inout")
+    assert features["threadgroup_barrier"].crossgl == "barrier"
+    assert features["threadgroup_barrier"].counterpart.params == ()
+    # An operation CrossGL has only without a memory order is a gap, not an untested probe.
+    load = features["atomic_load_explicit"]
+    assert load.crossgl == ""
+    assert "memory order" in load.note
 
 
 def test_metal_list_records_its_toolchain():
@@ -556,6 +729,15 @@ __DEVICE__
 float frexpf(float __x, int *__nptr) { return __builtin_frexpf(__x, __nptr); }
 __DEVICE__
 __RETURN_TYPE __isnanf(float __x) { return __builtin_isnan(__x); }
+#if defined OCML_BASIC_ROUNDED_OPERATIONS
+__DEVICE__
+float __fadd_rd(float __x, float __y) { return __ocml_add_rtn_f32(__x, __y); }
+__DEVICE__
+float __fadd_rn(float __x, float __y) { return __ocml_add_rte_f32(__x, __y); }
+#else
+__DEVICE__
+float __fadd_rn(float __x, float __y) { return __x + __y; }
+#endif
 template <class T> __DEVICE__ T min(T __arg1, T __arg2) { return __arg1 < __arg2 ? __arg1 : __arg2; }
 __DEVICE__ int min(int __arg1, int __arg2) { return __arg1 < __arg2 ? __arg1 : __arg2; }
 """
@@ -588,6 +770,7 @@ def test_hip_reads_the_math_atomic_and_device_headers():
     glsl_names = {"erf", "frexp", "isnan", "bitCount", "barrier", "min"}
     features = by_name(hip.parse(HIP_MATH, HIP_ATOMIC, HIP_DEVICE, glsl_names))
     assert sorted(features) == [
+        "__fadd_rn",
         "__fns32",
         "__isnanf",
         "__popc",
@@ -599,6 +782,8 @@ def test_hip_reads_the_math_atomic_and_device_headers():
         "min",
     ]
     assert {f.group for f in features.values()} == {"math", "atomic", "device"}
+    # Only the #else branch of OCML_BASIC_ROUNDED_OPERATIONS is compiled by default, so __fadd_rd is left out.
+    assert "__fadd_rd" not in features
     # The first definition is the one probed: the int overloads of atomicAdd and min.
     add = features["atomicAdd"].signature
     assert add.params == (Param(Type("int"), "inout"), Param(Type("int")))
@@ -610,6 +795,30 @@ def test_hip_reads_the_math_atomic_and_device_headers():
     assert features["erff"].crossgl == features["erf"].crossgl == "erf"
     assert features["__popc"].crossgl == "bitCount"
     assert features["__syncthreads"].crossgl == "barrier"
+
+
+def test_hip_default_compile_drops_opt_in_branches_with_their_nested_blocks():
+    header = "\n".join(
+        [
+            "int a();",
+            "#if defined(OCML_BASIC_ROUNDED_OPERATIONS)",
+            "#ifdef X",
+            "int b();",
+            "#endif",
+            "int c();",
+            "#endif",
+            "#if defined OCML_BASIC_ROUNDED_OPERATIONS",
+            "int d();",
+            "#else",
+            "int e();",
+            "#endif",
+            "#ifdef Y",
+            "int f();",
+            "#endif",
+        ]
+    )
+    kept = [line for line in hip.default_compile(header).splitlines() if "(" in line]
+    assert kept == ["int a();", "int e();", "int f();"]
 
 
 SLANG_HLSL = """
@@ -668,12 +877,22 @@ void clip(float x);
 [require(hlsl, sm_5_0)]
 void ProcessTriTessFactorsAvg(in float3 RawEdgeFactors, in float InsideScale, out float3 Rounded);
 
+[require(cuda_glsl_hlsl_spirv, raytracing_anyhit_closesthit_intersection_miss)]
+float3 WorldRayOrigin();
+
+__generic<A>
+[require(glsl_hlsl_spirv, raytracing_intersection)]
+bool ReportHit(float tHit, uint hitKind, A attributes);
+
 [require(glsl_spirv, GLSL_430_SPIRV_1_0_compute)]
 [require(glsl_spirv, meshshading)]
 uint3 WorkgroupCount()
 {
     return uint3(0);
 }
+
+[require(optix_multilevel_traversal, raytracing_stages)]
+uint64_t GetTraversableChild(uint64_t handle);
 
 __generic<T : __BuiltinFloatingPointType>
 T lerp(T x, T y, T s);
@@ -696,10 +915,13 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
     glsl_names = {"sin", "mix"}
     features = by_name(slang.parse(SLANG_CORE, SLANG_HLSL, glsl_names))
     assert sorted(features) == [
+        "GetTraversableChild",
         "InterlockedAdd",
         "InterlockedExchange",
         "ProcessTriTessFactorsAvg",
+        "ReportHit",
         "WorkgroupCount",
+        "WorldRayOrigin",
         "bit_cast",
         "clip",
         "lerp",
@@ -720,11 +942,16 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
 def test_slang_stages_targets_and_explicit_generic_arguments():
     features = by_name(slang.parse(SLANG_CORE, SLANG_HLSL))
     assert features["clip"].stage == "fragment"
+    assert features["WorldRayOrigin"].stage == "closest-hit"
+    assert features["ReportHit"].stage == "intersection"
     # One require alternative works in compute, so no other stage is needed.
     assert features["WorkgroupCount"].stage == "compute"
     tess = features["ProcessTriTessFactorsAvg"]
     assert tess.signature is None
     assert tess.note == "needs a target other than SPIR-V"
+    # An OptiX capability implies the CUDA target.
+    traversable = features["GetTraversableChild"]
+    assert (traversable.signature, traversable.note) == (None, tess.note)
     # No argument fixes bit_cast's result type, so the probe names it.
     assert features["bit_cast"].spelling == "bit_cast<int>"
     assert features["sin"].spelling == ""
@@ -736,7 +963,13 @@ def test_slang_types():
     assert slang.slang_type("matrix<T, 3, 4>", generics) == Type("float", (4, 3))
     assert slang.slang_type("float3x4", {}) == Type("float", (4, 3))
     assert slang.slang_type("uint32_t4", {}) == Type("uint", (4,))
-    assert slang.slang_type("half", {}) == Type.other("half")
+    assert slang.slang_type("half", {}) == Type("half")
+    assert slang.slang_type("int16_t4", {}) == Type("int16", (4,))
+    assert slang.slang_type("vector<uint16_t, 3>", {}) == Type("uint16", (3,))
+    assert slang.slang_type("half*", {}) == Type.other("half*")
+    assert slang.slang_type("uint64_t", {}) == Type("uint64")
+    assert slang.slang_type("int64_t2", {}) == Type("int64", (2,))
+    assert slang.slang_type("int8_t4_packed", {}) == Type("int8x4_packed")
 
 
 MOJO_MATH_INIT = """

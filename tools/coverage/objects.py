@@ -18,11 +18,13 @@ from .model import Type
 @dataclass(frozen=True)
 class Object:
     """``spelling`` names the type, with ``{element}`` for its element type; ``register`` is the register class it
-    binds to, empty for an object that is a local variable."""
+    binds to, empty for an object that is a local variable; ``stage`` is the stage its methods are probed in.
+    """
 
     spelling: str
     element: Type | None = None
     register: str = ""
+    stage: str = "compute"
 
 
 _FLOAT4 = Type("float", (4,))
@@ -74,11 +76,24 @@ OBJECTS: dict[str, Object] = {
     "ByteAddressBuffer": Object("ByteAddressBuffer", None, "t"),
     "RWByteAddressBuffer": Object("RWByteAddressBuffer", None, "u"),
     "RayQuery": Object("RayQuery<RAY_FLAG_NONE>"),
+    # A default-constructed hit object is a NOP hit object (HLSL shader execution reordering), which a ray-generation
+    # shader can query.
+    "DxHitObject": Object("dx::HitObject", stage="ray-generation"),
+    # A feedback texture records which mips of its paired texture a sample would touch; it binds as a UAV.
+    "FeedbackTexture2D": Object(
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP>", None, "u"
+    ),
+    "FeedbackTexture2DArray": Object(
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP>", None, "u"
+    ),
 }
-# Sampler parameters, by the opaque type a feature list gives them: the sampler type, its name and its register.
+# The samplers a method takes, and the texture a feedback texture's methods sample, by the opaque type a feature
+# list gives them: the declared type, its name and its register.
 SAMPLERS = {
     "sampler": ("SamplerState", "smp", "s0"),
     "sampler_cmp": ("SamplerComparisonState", "cmp", "s1"),
+    "Texture2D": ("Texture2D<float4>", "tex", "t0"),
+    "Texture2DArray": ("Texture2DArray<float4>", "tex", "t0"),
 }
 # The probe's buffers take the first registers of their class; resources bind after them.
 _REGISTERS = {"t": "t0", "u": "u8"}
@@ -86,11 +101,13 @@ _REGISTERS = {"t": "t0", "u": "u8"}
 
 @dataclass(frozen=True)
 class Uniform:
-    """A sampler, texture or image a function probe declares at module scope; ``image_format`` is GLSL's format
-    qualifier for an image."""
+    """A sampler, texture, image or atomic counter a function probe declares at module scope; ``image_format`` is
+    GLSL's format qualifier for an image, and ``binding`` a binding the uniform must use.
+    """
 
     spelling: str
     image_format: str = ""
+    binding: int | None = None
 
 
 def _same(*names: str) -> dict[str, Uniform]:
@@ -103,6 +120,9 @@ _GLSL_UNIFORMS = {
     "image2DMS": Uniform("image2DMS", "rgba32f"),
     "iimage2D": Uniform("iimage2D", "r32i"),
     "uimage2D": Uniform("uimage2D", "r32ui"),
+    # Atomic counters bind in a namespace of their own, and glslang's default limits allow only binding 0
+    # (gl_MaxAtomicCounterBindings).
+    "atomic_uint": Uniform("atomic_uint", binding=0),
 }
 # Tint's table writes a texture's texel type as ``T`` where any sampled type will do; a probe samples ``f32``.
 _WGSL_UNIFORMS = {
@@ -113,12 +133,29 @@ _WGSL_UNIFORMS = {
     "texture_multisampled_2d<T>": Uniform("texture_multisampled_2d<f32>"),
     "texture_storage_2d<F, W>": Uniform("texture_storage_2d<rgba32float, write>"),
 }
+
+
+def _acceleration_structure(spelling: str) -> dict[str, Uniform]:
+    """A ray-tracing acceleration structure of type ``spelling``, under the names the HLSL and Slang lists give it."""
+    return {
+        name: Uniform(spelling)
+        for name in ("acceleration_struct", "RaytracingAccelerationStructure")
+    }
+
+
 # The opaque parameter types a function probe can pass, by language and as each feature list spells them. Probes use
 # the 2D forms; functions that only take the others stay untested. CrossGL calls texture functions as GLSL does.
 UNIFORMS: dict[str, dict[str, Uniform]] = {
     "glsl": _GLSL_UNIFORMS,
     # The CrossGL counterparts of WGSL's depth and array textures (:data:`.crossgl.COUNTERPARTS`) take two more.
-    "crossgl": {**_GLSL_UNIFORMS, **_same("sampler2DShadow", "sampler2DArray")},
+    # CrossGL spells an acceleration structure as every generator reads it.
+    "crossgl": {
+        **_GLSL_UNIFORMS,
+        **_same("sampler2DShadow", "sampler2DArray"),
+        **_acceleration_structure("accelerationStructureEXT"),
+    },
+    "hlsl": _acceleration_structure("RaytracingAccelerationStructure"),
+    "slang": _acceleration_structure("RaytracingAccelerationStructure"),
     "wgsl": _WGSL_UNIFORMS,
 }
 # Uniforms bind past the probe's buffers.
@@ -140,11 +177,27 @@ class Uniforms:
     def argument(self, kind: Type) -> str:
         uniform = self.table[kind.opaque]
         name = f"u{len(self.declarations)}"
-        binding = _FIRST_UNIFORM + len(self.declarations)
+        binding = (
+            _FIRST_UNIFORM + len(self.declarations)
+            if uniform.binding is None
+            else uniform.binding
+        )
         self.declarations.append(
             self.dialect.uniform(uniform.spelling, name, binding, uniform.image_format)
         )
         return name
+
+
+# Methods whose object must hold another element type: GatherRaw returns raw texel bits, so its texture holds uint.
+_ELEMENTS = {"GatherRaw": Type("uint")}
+
+
+def element(owner: str, method: str) -> Type | None:
+    """The element type of the object ``method`` is probed on."""
+    kind = OBJECTS.get(owner)
+    if kind is None or kind.element is None:
+        return None
+    return _ELEMENTS.get(method, kind.element)
 
 
 class Receiver:
@@ -152,13 +205,13 @@ class Receiver:
 
     name = "obj"
 
-    def __init__(self, owner: str, dialect: Dialect):
+    def __init__(self, owner: str, dialect: Dialect, method: str = ""):
         kind = OBJECTS.get(owner)
         if kind is None:
             raise ProbeError(f"no probe for {owner} objects yet")
         self.dialect = dialect
-        element = dialect.type(kind.element) if kind.element else ""
-        spelling = kind.spelling.format(element=element)
+        held = element(owner, method)
+        spelling = kind.spelling.format(element=dialect.type(held) if held else "")
         self.declarations: list[str] = []
         self.locals: list[str] = []
         if kind.register:
@@ -169,16 +222,11 @@ class Receiver:
             self.locals.append(f"{spelling} {self.name};")
         self._samplers: set[str] = set()
 
-    @staticmethod
-    def element(owner: str) -> Type | None:
-        kind = OBJECTS.get(owner)
-        return kind.element if kind else None
-
     def takes(self, kind: Type) -> bool:
         return kind.opaque in SAMPLERS
 
     def argument(self, kind: Type) -> str:
-        """The sampler to pass for a parameter of ``kind``, declared the first time it is used."""
+        """The sampler or texture to pass for a parameter of ``kind``, declared the first time it is used."""
         spelling, name, register = SAMPLERS[kind.opaque]
         if name not in self._samplers:
             self._samplers.add(name)
