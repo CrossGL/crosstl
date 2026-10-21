@@ -16,6 +16,7 @@ from typing import Callable
 import numpy as np
 
 from . import (
+    constants_cases,
     control_flow_cases,
     conversion_cases,
     half_cases,
@@ -57,6 +58,9 @@ class Case:
         None  # custom (inputs, out) -> (ok, detail) for parametric oracles
     )
     readings: dict = field(default_factory=lambda: {"spec": True})
+    constants: bytes | None = (
+        None  # constants block the host uploads, in the source's layout
+    )
     v1: str | None = None
     note: str = ""
     lang: str = ""
@@ -1754,6 +1758,61 @@ CASES = [
         threads=256,
         out_count=1,
         out_init=np.zeros(1, np.int32),
+    ),
+    Case(
+        "g_std140_uniform",
+        "S20",
+        "std140 uniform block: vec3+float slot, 16-byte array strides, mat3 columns, slot-aligned tail",
+        "GLSL 4.60 section 7.6.2.2 (std140)",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.glsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.STD140),
+    ),
+    Case(
+        "s_std140_uniform",
+        "S20",
+        "std140 Uniform Block: Offset, ArrayStride and MatrixStride decorations from glslang",
+        "GLSL 4.60 section 7.6.2.2 (std140) as decorated by glslang",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.glsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.STD140),
+    ),
+    Case(
+        "s_push_constant_std430",
+        "S20",
+        "std430 push constants: 8-byte vec2 and 4-byte float strides, mat3 columns, member after an array",
+        "GLSL 4.60 section 7.6.2.3 (std430) as decorated by glslang",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.glsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.STD430),
+    ),
+    Case(
+        "h_cbuffer_packing",
+        "S20",
+        "cbuffer packing: unpadded last array element, scalar after float3x3, register-aligned arrays",
+        "HLSL packing rules for constant variables",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.hlsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.HLSL),
+    ),
+    Case(
+        "m_constant_struct",
+        "S20",
+        "constant struct: 16-byte float3, packed_float3, 8-byte float2 stride, float3x3 columns",
+        "MSL 4.1 chapter 2 size and alignment of vector, packed vector and matrix types",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.msl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.MSL),
     ),
 ]
 

@@ -2,8 +2,10 @@
 
 Each adapter binds ``input.bin`` at the input slot and ``output.bin`` at the output slot of the job directory,
 dispatches ``ceil(threads / group)`` one-dimensional workgroups, and writes both buffers back so the runner can
-check the output and confirm that the input buffer and the output guard words were not overwritten. Every adapter
-reports the identity of the device that ran the job; the runner rejects a result from an unexpected driver.
+check the output and confirm that the input buffer and the output guard words were not overwritten. When the job
+has a constants block, ``constants.bin`` is bound read-only as that API's uniform or constant buffer at the slot
+discovered in the artifact, or pushed as push constants. Every adapter reports the identity of the device that ran
+the job; the runner rejects a result from an unexpected driver.
 """
 
 import os
@@ -13,6 +15,7 @@ from pathlib import Path
 from .process import run
 
 FILES = ("input.bin", "output.bin")
+CONSTANTS = "constants.bin"
 VULKAN_TIMEOUT = 15
 
 
@@ -32,6 +35,18 @@ def _expect(job, identity):
     if job.get("expect") and job["expect"] not in identity:
         raise RuntimeError(f"Expected a {job['expect']} device, ran on {identity}")
     return identity
+
+
+def _constants(job, *kinds):
+    """The job's constants block and its bytes, or ``(None, None)``; a block kind the API lacks is a harness error."""
+    block = job.get("constants")
+    if block is None:
+        return None, None
+    if block["kind"] not in kinds:
+        raise RuntimeError(
+            f"{job['runtime']} cannot bind a {block['kind']} constants block"
+        )
+    return block, (Path(job["directory"]) / CONSTANTS).read_bytes()
 
 
 def execute_metal(job):
@@ -73,11 +88,21 @@ def execute_metal(job):
         if buffer is None:
             raise RuntimeError("Metal buffer allocation failed")
         buffers.append((binding, buffer, filename))
+    block, data = _constants(job, "uniform")
+    constants = None
+    if block is not None:
+        constants = device.newBufferWithBytes_length_options_(
+            data, len(data), Metal.MTLResourceStorageModeShared
+        )
+        if constants is None:
+            raise RuntimeError("Metal constants allocation failed")
     command = device.newCommandQueue().commandBuffer()
     encoder = command.computeCommandEncoder()
     encoder.setComputePipelineState_(pipeline)
     for binding, buffer, _ in buffers:
         encoder.setBuffer_offset_atIndex_(buffer, 0, binding)
+    if constants is not None:
+        encoder.setBuffer_offset_atIndex_(constants, 0, block["slot"])
     # Metal hosts dispatch exactly `threads` threads (non-uniform threadgroups); the other APIs can only launch
     # whole workgroups, which is the hazard the partial-threadgroup cases measure.
     encoder.dispatchThreads_threadsPerThreadgroup_(
@@ -113,10 +138,16 @@ def execute_opengl(job):
             buffer = context.buffer((Path(job["directory"]) / filename).read_bytes())
             buffers.append((buffer, filename))
             buffer.bind_to_storage_buffer(binding)
+        block, data = _constants(job, "uniform")
+        if block is not None:
+            constants = context.buffer(data)
+            buffers.append((constants, None))
+            constants.bind_to_uniform_block(block["slot"])
         shader.run(group_x=_groups(job))
         context.finish()
         for buffer, filename in buffers:
-            (Path(job["directory"]) / filename).write_bytes(buffer.read())
+            if filename is not None:
+                (Path(job["directory"]) / filename).write_bytes(buffer.read())
         return {"device": identity, "runtime": job["runtime"]}
     finally:
         for buffer, _ in buffers:
@@ -132,6 +163,11 @@ def execute_vulkan(job):
     args = [executable, job["binary"], job["entry"], _groups(job), 1, 1]
     for binding, filename in zip(job["bindings"], FILES):
         args.append(f"{binding}:inout:{directory / filename}")
+    block, _ = _constants(job, "uniform", "push")
+    if block is not None and block["kind"] == "push":
+        args.append(f"push:{directory / CONSTANTS}")
+    elif block is not None:
+        args.append(f"{block['slot']}:uniform:{directory / CONSTANTS}")
     result = run(args, timeout=job.get("timeout", VULKAN_TIMEOUT))
     if result.status == "timeout":
         raise ExecutionTimeout(f"vkrun exceeded {job.get('timeout', VULKAN_TIMEOUT)} s")
@@ -277,6 +313,16 @@ def execute_d3d12(job):
         buffer = compushady.Buffer(len(data), stride=stride, device=device)
         upload.copy_to(buffer)
         views.append((resource["register"], buffer, filename))
+    cbv = []
+    block, data = _constants(job, "uniform")
+    if block is not None:
+        upload = compushady.Buffer(len(data), compushady.HEAP_UPLOAD, device=device)
+        upload.upload(data)
+        constants = compushady.Buffer(len(data), device=device)
+        upload.copy_to(constants)
+        # Constant-buffer views are positional too; lower b registers get placeholders.
+        cbv = [compushady.Buffer(256, device=device) for _ in range(block["slot"])]
+        cbv.append(constants)
     srv = [buffer for register, buffer, _ in views if register.startswith("t")]
     uav = {
         int(register[1:]): buffer
@@ -287,6 +333,7 @@ def execute_d3d12(job):
     placeholder = compushady.Buffer(16, stride=4, device=device)
     shader = compushady.Compute(
         Path(job["binary"]).read_bytes(),
+        cbv=cbv,
         srv=srv,
         uav=[uav.get(slot, placeholder) for slot in range(max(uav) + 1)],
         device=device,

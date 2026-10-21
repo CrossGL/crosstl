@@ -23,8 +23,9 @@ def test_hazard_inventory_and_oracles():
     # integer instructions whose opcode signedness differs from their operand types, SPIR-V structured control
     # flow with function variables and with phis, an HLSL structured buffer of structs with vector members, a
     # Metal buffer of structs with packed vector members, Metal buffers of float3, float3x3 and structs in the
-    # natural MSL layout, and Metal helper functions that take packed and natural buffer pointers.
-    assert len(CASES) == len(BY_ID) == 101
+    # natural MSL layout, Metal helper functions that take packed and natural buffer pointers, and constants
+    # blocks in GLSL std140, SPIR-V std140 and std430 push constants, HLSL cbuffer packing and MSL layout.
+    assert len(CASES) == len(BY_ID) == 106
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",
@@ -97,9 +98,210 @@ def write(tmp_path, name, text):
 def test_every_source_fixture_exposes_the_two_slot_interface():
     for case in CASES:
         if case.lang in validators.TARGETS:
-            found = interface(case.src, case.lang, case.group)
+            found = interface(
+                case.src, case.lang, case.group, case.constants is not None
+            )
             assert found["bindings"] == (0, 1), case.id
             assert found["group"][1:] == (1, 1), case.id
+            assert (found["constants"] is None) == (case.constants is None), case.id
+
+
+def test_constants_cases_cover_each_source_language_and_document_their_offsets():
+    from . import constants_cases
+
+    with_constants = {case.lang: case for case in CASES if case.constants is not None}
+    assert set(with_constants) == set(validators.TARGETS)
+    words = {
+        layout: np.frombuffer(constants_cases.block(fields), dtype=np.float32)
+        for layout, fields in {
+            "std140": constants_cases.STD140,
+            "std430": constants_cases.STD430,
+            "hlsl": constants_cases.HLSL,
+            "msl": constants_cases.MSL,
+        }.items()
+    }
+    canary = np.uint32(constants_cases.CANARY).view(np.float32)
+    # bias follows the vec3 in its 16-byte slot except in MSL, where float3 takes all 16 bytes.
+    assert [words[name][3] for name in ("std140", "std430", "hlsl")] == [11.0] * 3
+    assert words["msl"][3] == canary and words["msl"][4] == 11.0
+    # tail: after a slot-aligned array (std140), after the 4-byte-stride array (std430), in the last array
+    # element's register (HLSL) and at its own 8-byte alignment (MSL).
+    assert [
+        words[name][index]
+        for name, index in (("std140", 41), ("std430", 29), ("hlsl", 15), ("msl", 33))
+    ] == [53.0] * 4
+    assert all(len(constants_cases.block(f)) == 256 for f in (constants_cases.HLSL,))
+    with pytest.raises(ValueError, match="overlaps"):
+        constants_cases.block(((0, (1.0, 2.0), np.float32), (4, (3.0,), np.float32)))
+
+
+def test_constants_blocks_are_discovered_in_every_language(tmp_path):
+    metal = (
+        "kernel void k(device const float* x [[buffer(0)]], device float* o [[buffer(1)]],\n"
+        "              constant P& p [[buffer(3)]], uint i [[thread_position_in_grid]]) {}"
+    )
+    found = interface(write(tmp_path, "a.metal", metal), "metal", 8, True)
+    assert found["bindings"] == (0, 1)
+    assert found["constants"] == {"slot": 3, "kind": "uniform"}
+    with pytest.raises(InterfaceChanged, match="host does not provide"):
+        interface(write(tmp_path, "a.metal", metal), "metal", 8)
+    with pytest.raises(InterfaceChanged, match="shares a storage-buffer index"):
+        shared = metal.replace(
+            "constant P& p [[buffer(3)]]", "constant P& p [[buffer(1)]]"
+        )
+        interface(write(tmp_path, "b.metal", shared), "metal", 8, True)
+    pointer = metal.replace("device const float* x", "constant float* x")
+    assert interface(write(tmp_path, "c.metal", pointer), "metal", 8, True)[
+        "bindings"
+    ] == (0, 1)
+    with pytest.raises(InterfaceChanged, match="Expected one constants block"):
+        interface(
+            write(
+                tmp_path,
+                "d.metal",
+                metal.replace(
+                    "constant P& p [[buffer(3)]]", "device P& p [[buffer(3)]]"
+                ),
+            ),
+            "metal",
+            8,
+            True,
+        )
+
+    hlsl = """StructuredBuffer<float> x : register(t0);
+RWStructuredBuffer<float> o : register(u1);
+cbuffer P : register(b2) { float a; };
+[numthreads(64, 1, 1)] void CSMain(uint3 id : SV_DispatchThreadID) {}
+"""
+    found = interface(write(tmp_path, "a.hlsl", hlsl), "hlsl", 1, True)
+    assert found["constants"] == {"slot": 2, "kind": "uniform", "register": "b2"}
+    typed = hlsl.replace(
+        "cbuffer P : register(b2) { float a; };",
+        "struct Q { float a; };\n" "ConstantBuffer<Q> p : register(b0);",
+    )
+    assert (
+        interface(write(tmp_path, "b.hlsl", typed), "hlsl", 1, True)["constants"][
+            "slot"
+        ]
+        == 0
+    )
+    for text, message in (
+        (hlsl.replace(" : register(b2)", ""), "no explicit register"),
+        (hlsl.replace("register(b2)", "register(b2, space1)"), "space1"),
+        (
+            hlsl + "cbuffer R : register(b3) { float b; };\n",
+            "Expected one constants block",
+        ),
+    ):
+        with pytest.raises(InterfaceChanged, match=message):
+            interface(write(tmp_path, "c.hlsl", text), "hlsl", 1, True)
+
+    glsl = """#version 450
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer In { float a[]; };
+layout(std430, binding = 1) buffer Out { float o[]; };
+layout(std140, binding = 3) uniform P { float k; } p;
+void main() {}
+"""
+    assert interface(write(tmp_path, "a.comp", glsl), "glsl", 1, True)["constants"] == {
+        "slot": 3,
+        "kind": "uniform",
+    }
+    push = glsl.replace("std140, binding = 3", "push_constant")
+    assert interface(write(tmp_path, "b.comp", push), "glsl", 1, True)["constants"] == {
+        "slot": None,
+        "kind": "push",
+    }
+    for text, message in (
+        (
+            glsl.replace("std140, binding = 3", "std140"),
+            "uniform block has no explicit binding",
+        ),
+        (glsl + "uniform float loose;\n", "uniforms the host does not provide"),
+        (glsl, "host does not provide"),
+    ):
+        with pytest.raises(InterfaceChanged, match=message):
+            interface(write(tmp_path, "c.comp", text), "glsl", 1, text != glsl)
+
+    spirv = """OpEntryPoint GLCompute %main "main" %id
+OpExecutionMode %main LocalSize 8 1 1
+OpDecorate %In Block
+OpDecorate %P Block
+OpDecorate %a DescriptorSet 0
+OpDecorate %a Binding 0
+OpDecorate %b DescriptorSet 0
+OpDecorate %b Binding 1
+OpDecorate %p DescriptorSet 0
+OpDecorate %p Binding 2
+%ptr_ssbo = OpTypePointer StorageBuffer %In
+%ptr_ubo = OpTypePointer Uniform %P
+%a = OpVariable %ptr_ssbo StorageBuffer
+%b = OpVariable %ptr_ssbo StorageBuffer
+%p = OpVariable %ptr_ubo Uniform
+"""
+    found = interface(write(tmp_path, "a.spvasm", spirv), "spirv", 1, True)
+    assert found["bindings"] == (0, 1)
+    assert found["constants"] == {"slot": 2, "kind": "uniform"}
+    # A BufferBlock struct in Uniform storage is a storage buffer, so it takes a storage slot.
+    legacy = spirv.replace("OpDecorate %P Block", "OpDecorate %P BufferBlock")
+    with pytest.raises(InterfaceChanged, match=r"slots \[0, 1\], found \[0, 1, 2\]"):
+        interface(write(tmp_path, "b.spvasm", legacy), "spirv", 1, True)
+    pushed = (
+        spirv.replace("OpDecorate %p DescriptorSet 0\nOpDecorate %p Binding 2\n", "")
+        .replace(
+            "%ptr_ubo = OpTypePointer Uniform %P",
+            "%ptr_pc = OpTypePointer PushConstant %P",
+        )
+        .replace(
+            "%p = OpVariable %ptr_ubo Uniform", "%p = OpVariable %ptr_pc PushConstant"
+        )
+    )
+    assert interface(write(tmp_path, "c.spvasm", pushed), "spirv", 1, True)[
+        "constants"
+    ] == {
+        "slot": None,
+        "kind": "push",
+    }
+    with pytest.raises(InterfaceChanged, match="host does not provide"):
+        interface(write(tmp_path, "c.spvasm", pushed), "spirv", 1)
+
+
+def test_staged_jobs_carry_the_constants_block(tmp_path, monkeypatch):
+    from . import native
+
+    case = BY_ID["g_std140_uniform"]
+    cell = runner.Cell(case, "spirv", "strict", tmp_path, {})
+    cell.artifact, cell.binary = tmp_path / "shader.spvasm", tmp_path / "shader.spv"
+    cell.abi = {
+        "entry": "main",
+        "group": (64, 1, 1),
+        "bindings": (0, 1),
+        "constants": {"slot": 2, "kind": "uniform"},
+    }
+    path, size = runner.stage(cell, runtimes.RUNTIMES["vulkan-lavapipe"])
+    job = json.loads(path.read_text())
+    assert (path.parent / "constants.bin").read_bytes() == case.constants
+    assert job["constants"] == {"slot": 2, "kind": "uniform"} and size == 512 * 4
+    seen = []
+
+    def vkrun(args, **_):
+        seen.append(args)
+        return CommandResult(
+            tuple(args),
+            "accepted",
+            0,
+            "ok gpu_ns=1\ndriver=llvmpipe\ndevice=llvmpipe\n",
+        )
+
+    monkeypatch.setattr(native, "run", vkrun)
+    native.execute_vulkan(job)
+    assert seen[-1][-1] == f"2:uniform:{path.parent / 'constants.bin'}"
+    native.execute_vulkan(dict(job, constants={"slot": None, "kind": "push"}))
+    assert seen[-1][-1] == f"push:{path.parent / 'constants.bin'}"
+    with pytest.raises(RuntimeError, match="cannot bind a push constants block"):
+        native._constants(
+            dict(job, constants={"slot": None, "kind": "push"}), "uniform"
+        )
 
 
 def test_metal_slots_come_from_buffer_indices_not_names(tmp_path):
@@ -108,6 +310,7 @@ def test_metal_slots_come_from_buffer_indices_not_names(tmp_path):
         "entry": "k",
         "group": (32, 1, 1),
         "bindings": (0, 1),
+        "constants": None,
     }
     with pytest.raises(InterfaceChanged, match="slots"):
         interface(
@@ -134,7 +337,9 @@ RWByteAddressBuffer dst : register(u1, space0);
         {"register": "t0", "name": "src", "kind": "structured", "stride": 16},
         {"register": "u1", "name": "dst", "kind": "raw", "stride": 0},
     ]
-    with pytest.raises(InterfaceChanged, match="registers"):
+    with pytest.raises(
+        InterfaceChanged, match="constants block the host does not provide"
+    ):
         interface(
             write(
                 tmp_path,
