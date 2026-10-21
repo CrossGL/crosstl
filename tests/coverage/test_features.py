@@ -620,6 +620,9 @@ atomic_compare_exchange_weak_explicit(volatile device _atomic<T, S> *object, thr
 {
 }
 METAL_FUNC void atomic_thread_fence(mem_flags flags, memory_order order, thread_scope scope = thread_scope_device) METAL_CONST_ARG(flags)
+METAL_FUNC void prefetch(const device float *p)
+{
+}
 """
 
 
@@ -635,9 +638,15 @@ def test_metal_header_parse_reads_atomic_functions():
         ),
         # Metal declares the atomic max and min without a fetch for 64-bit unsigned integers only.
         ("atomic_max_explicit", "void", ["inout ulong", "ulong", "memory_order"]),
-        # A pointer to anything but an atomic object is not probed.
-        ("atomic_compare_exchange_weak_explicit", "bool", ["inout int", "int*", "int"]),
+        # A pointer to a thread-local value takes the address of a local.
+        (
+            "atomic_compare_exchange_weak_explicit",
+            "bool",
+            ["inout int", "address int", "int"],
+        ),
         ("atomic_thread_fence", "void", ["mem_flags", "memory_order"]),
+        # A pointer to anything else is not probed.
+        ("prefetch", "void", ["float*"]),
     ]
 
 

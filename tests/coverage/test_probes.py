@@ -877,6 +877,13 @@ METAL_SIGNATURES = [
         Type.other("void"),
         Param(Type.other("mem_flags"), "const"),
     ),
+    feature(
+        "atomic_compare_exchange_weak",
+        Type("bool"),
+        Param(Type("int"), "inout"),
+        Param(Type("int"), "address"),
+        Type("int"),
+    ),
     feature("simd_ballot", Type.other("simd_vote"), Type("bool")),
     feature("quad_active_threads_mask", Type.other("quad_vote")),
     feature("pack_half_to_unorm4x8", Type("uint"), Type("half", (4,))),
@@ -892,6 +899,17 @@ def test_metal_probes_are_valid_metal(probe_feature):
     probe = probes.build(probe_feature, "metal")
     verdict = validators.validate("metal", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
+
+
+def test_metal_compare_exchange_takes_the_address_of_the_expected_value():
+    exchange = next(
+        f for f in METAL_SIGNATURES if f.name == "atomic_compare_exchange_weak"
+    )
+    source = probes.build(exchange, "metal").source
+    assert "    int a1 = iin[i + 0u];" in source
+    assert "atomic_compare_exchange_weak(&outp[i], &a1, a2);" in source
+    with pytest.raises(probes.ProbeError, match="no probe passes hlsl a pointer"):
+        probes.build(exchange, "hlsl")
 
 
 def test_metal_ballots_are_read_as_their_vote_integer():
