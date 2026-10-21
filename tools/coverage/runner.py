@@ -89,11 +89,13 @@ def _remember(directory: str | None) -> None:
     _verdicts = directory
 
 
-def _verdict(language: str, source: str, stage: str, entry: str) -> validators.Verdict:
+def _verdict(
+    language: str, source: str, stage: str, entry: str, target: str
+) -> validators.Verdict:
     if not _verdicts:
-        return validators.validate(language, source, stage, entry)
+        return validators.validate(language, source, stage, entry, target)
     digest = hashlib.sha256(
-        "\0".join((language, stage, entry, source)).encode()
+        "\0".join((language, target, stage, entry, source)).encode()
     ).hexdigest()
     path = Path(_verdicts, digest)
     try:
@@ -101,7 +103,7 @@ def _verdict(language: str, source: str, stage: str, entry: str) -> validators.V
         return validators.Verdict(accepted == "1", log)
     except FileNotFoundError:
         pass
-    verdict = validators.validate(language, source, stage, entry)
+    verdict = validators.validate(language, source, stage, entry, target)
     # Written aside and renamed, so a worker validating the same source at the same time never reads half a file.
     partial = path.with_suffix(f".{os.getpid()}")
     partial.write_text(("1" if verdict.accepted else "0") + "\n" + verdict.log)
@@ -110,9 +112,9 @@ def _verdict(language: str, source: str, stage: str, entry: str) -> validators.V
 
 
 def _validated(
-    language: str, source: str, stage: str, entry: str = ""
+    language: str, source: str, stage: str, entry: str = "", target: str = ""
 ) -> validators.Verdict:
-    verdict = _verdict(language, source, stage, entry)
+    verdict = _verdict(language, source, stage, entry, target)
     if verdict.accepted:
         return verdict
     errors = [line for line in verdict.log.splitlines() if "error" in line.lower()]
@@ -141,13 +143,17 @@ def parse_crossgl(source: str) -> None:
 
 def _native_rejection(feature: Feature, language: str) -> str:
     """Why the target rejects the feature's own probe, or an empty string when it accepts it or cannot tell."""
-    if language not in probes.DIALECTS or not validators.available(language):
+    if language not in probes.DIALECTS or not validators.available(
+        language, feature.target
+    ):
         return ""
     try:
         native = probes.build(feature, language)
     except probes.ProbeError:
         return ""
-    verdict = _validated(language, native.source, feature.stage, native.entry)
+    verdict = _validated(
+        language, native.source, feature.stage, native.entry, feature.target
+    )
     return "" if verdict.accepted else verdict.log
 
 
@@ -176,9 +182,12 @@ def run_output(feature: Feature, language: str) -> Result:
         return result("refused", str(error))
     except Broken as error:
         return result("wrong", str(error))
-    if not validators.available(language):
-        return result("untested", f"{validators.TOOLS[language]} is not installed")
-    verdict = _validated(language, translated, feature.stage)
+    if not validators.available(language, feature.target):
+        tool = (
+            validators.missing(language, feature.target) or validators.TOOLS[language]
+        )
+        return result("untested", f"{tool} is not installed")
+    verdict = _validated(language, translated, feature.stage, "", feature.target)
     return result("supported") if verdict.accepted else result("wrong", verdict.log)
 
 
@@ -194,9 +203,14 @@ def run_input(feature: Feature, language: str) -> Result:
             probe = probes.build(feature, language)
     except probes.ProbeError as error:
         return result("untested", str(error))
-    if not validators.available(language):
-        return result("untested", f"{validators.TOOLS[language]} is not installed")
-    native = _validated(language, probe.source, feature.stage, probe.entry)
+    if not validators.available(language, feature.target):
+        tool = (
+            validators.missing(language, feature.target) or validators.TOOLS[language]
+        )
+        return result("untested", f"{tool} is not installed")
+    native = _validated(
+        language, probe.source, feature.stage, probe.entry, feature.target
+    )
     if not native.accepted:
         return result("untested", f"the probe itself is rejected: {native.log}")
     backend = INPUT_BACKENDS[language]
@@ -207,7 +221,7 @@ def run_input(feature: Feature, language: str) -> Result:
         return result("refused", str(error))
     except Broken as error:
         return result("wrong", str(error))
-    verdict = _validated(language, translated, feature.stage)
+    verdict = _validated(language, translated, feature.stage, "", feature.target)
     if not verdict.accepted:
         return result("wrong", f"after the round trip: {verdict.log}")
     lost = spirv_input.dropped(feature, translated) if language == "spirv" else ""

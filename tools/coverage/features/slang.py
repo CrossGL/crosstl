@@ -8,8 +8,9 @@ functions of resource and object types are left out.
 
 Generic parameters are made concrete as in the HLSL list: a floating-point or arithmetic ``T`` is ``float``, an
 integer, atomic or unconstrained one ``int``, a logical one ``uint``, and a ``let`` size is 2. A function whose every
-``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V, so a function
-whose ``require`` names no SPIR-V target is rejected in its own probe and stays untested.
+``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V. A function whose
+``require`` names no SPIR-V target but allows HLSL compiles for HLSL instead, which DXC then checks, in the stage
+Direct3D allows it in; any other function stays untested.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from ..model import (
     raytracing_stage,
 )
 from .common import pick, split
+from .hlsl import stage_of as direct3d_stage
 
 # The scalar each generic constraint is probed with.
 CONSTRAINTS = {
@@ -440,8 +442,8 @@ def _preference(signature: Signature) -> tuple[bool, bool, int]:
     )
 
 
-def spirv_target(declaration: Declaration) -> bool:
-    """Whether some ``require`` alternative allows SPIR-V; one that names no target allows every target."""
+def allows(declaration: Declaration, target: str) -> bool:
+    """Whether some ``require`` alternative allows ``target``; one that names no target allows every target."""
     clauses = re.findall(r"require\s*\(([^)]*)\)", declaration.requires)
     for clause in clauses or [""]:
         atoms = [_ATOM_TARGETS.get(atom, atom) for atom in re.findall(r"\w+", clause)]
@@ -451,7 +453,7 @@ def spirv_target(declaration: Declaration) -> bool:
             if set(atom.split("_")) <= TARGETS
             for part in atom.split("_")
         }
-        if not targets or "spirv" in targets:
+        if not targets or target in targets:
             return True
     return False
 
@@ -494,8 +496,12 @@ def parse(
     for name, declared in sorted(overloads.items()):
         candidates = [(s, d) for s, d in ((signature(d), d) for _, d in declared) if s]
         note = "" if candidates else "variadic"
-        if not any(spirv_target(d) for _, d in declared):
-            candidates, note = [], "needs a target other than SPIR-V"
+        target, stage = "", _stage(name, declared[0][1])
+        if not any(allows(d, "spirv") for _, d in declared):
+            candidates = [(s, d) for s, d in candidates if allows(d, "hlsl")]
+            target, stage = "hlsl", direct3d_stage(name) or stage
+            if not any(allows(d, "hlsl") for _, d in declared):
+                note = "needs a target other than SPIR-V and HLSL"
         chosen = None
         if candidates:
             chosen = pick(sorted((s for s, _ in candidates), key=_preference))
@@ -508,9 +514,10 @@ def parse(
                 chosen,
                 group=declared[0][0],
                 crossgl=crossgl.spelling("slang", name, glsl_names),
-                stage=_stage(name, declared[0][1]),
+                stage=stage,
                 note=note,
                 spelling=explicit(source, chosen) if chosen else "",
+                target=target if chosen else "",
             )
         )
     return features

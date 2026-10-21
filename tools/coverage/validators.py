@@ -178,10 +178,17 @@ def version(name: str) -> str:
     return _first_line([*base, flag])
 
 
-def available(language: str) -> bool:
-    if language == "spirv":
-        return bool(command("spirv-as") and command("spirv-val"))
-    return bool(command(TOOLS[language]))
+def missing(language: str, target: str = "") -> str:
+    """The first tool that checking ``language`` probes for ``target`` needs and this machine lacks, or ``""``."""
+    needed = {
+        "spirv": ("spirv-as", "spirv-val"),
+        "slang": ("slangc", "dxc") if target == "hlsl" else ("slangc",),
+    }.get(language, (TOOLS[language],))
+    return next((tool for tool in needed if not command(tool)), "")
+
+
+def available(language: str, target: str = "") -> bool:
+    return not missing(language, target)
 
 
 def _run(arguments: list[str], cwd: str) -> Verdict:
@@ -268,10 +275,41 @@ def _metal(name: str, stage: str, scratch: str) -> Verdict:
     return compiled
 
 
+# What Slang's library emits for an operation that its HLSL target cannot express, as for ``debugBreak``.
+_UNSUPPORTED_IN_HLSL = re.compile(r"/\*[^*]*not currently supported for HLSL\s*\*/")
+
+
+def _dxc(name: str, source: str, stage: str, entry: str, scratch: str) -> Verdict:
+    profile = HLSL_PROFILES[stage]
+    entry_point = (
+        [] if profile.startswith("lib_") else ["-E", entry or hlsl_entry(source, stage)]
+    )
+    return _run(
+        [
+            *command("dxc"),
+            "-T",
+            profile,
+            *entry_point,
+            "-HV",
+            "2021",
+            "-enable-16bit-types",
+            name,
+            "-Fo",
+            "probe.bin",
+        ],
+        scratch,
+    )
+
+
 def validate(
-    language: str, source: str, stage: str = "compute", entry: str = ""
+    language: str,
+    source: str,
+    stage: str = "compute",
+    entry: str = "",
+    target: str = "",
 ) -> Verdict:
-    """Check ``source`` with the language's reference validator. Call only when :func:`available` is true."""
+    """Check ``source`` with the language's reference validator, compiling for ``target`` when the language has
+    more than one (Slang). Call only when :func:`available` is true."""
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
         name = "probe" + (
             f".{GLSL_STAGES[stage]}" if language == "glsl" else SUFFIX[language]
@@ -287,27 +325,7 @@ def validate(
             )
             return _run([*command("glslangValidator"), *environment, name], scratch)
         if language == "hlsl":
-            profile = HLSL_PROFILES[stage]
-            entry_point = (
-                []
-                if profile.startswith("lib_")
-                else ["-E", entry or hlsl_entry(source, stage)]
-            )
-            return _run(
-                [
-                    *command("dxc"),
-                    "-T",
-                    profile,
-                    *entry_point,
-                    "-HV",
-                    "2021",
-                    "-enable-16bit-types",
-                    name,
-                    "-Fo",
-                    "probe.bin",
-                ],
-                scratch,
-            )
+            return _dxc(name, source, stage, entry, scratch)
         if language == "metal":
             return _metal(name, stage, scratch)
         if language == "wgsl":
@@ -357,28 +375,41 @@ def validate(
             return _run([*command("rust-gpu"), name, "--out-dir", "."], scratch)
         if language == "slang":
             # A ``[shader(...)]`` attribute names the entry point and its stage; without one, slangc is told both.
-            entry_point = (
-                []
-                if "[shader(" in source
-                else [
-                    "-entry",
-                    entry or "main",
-                    "-stage",
-                    SLANG_STAGES.get(stage, stage),
-                ]
-            )
-            return _run(
+            # For a source target the output must follow the entry point it holds.
+            entry_point = [
+                *(
+                    ["-entry", entry or "main"]
+                    if target or "[shader(" not in source
+                    else []
+                ),
+                *(
+                    []
+                    if "[shader(" in source
+                    else ["-stage", SLANG_STAGES.get(stage, stage)]
+                ),
+            ]
+            output = "probe.hlsl" if target == "hlsl" else "probe.spv"
+            compiled = _run(
                 [
                     *command("slangc"),
                     name,
                     *entry_point,
                     "-target",
-                    SLANG_TARGET,
+                    target or SLANG_TARGET,
                     "-o",
-                    "probe.spv",
+                    output,
                 ],
                 scratch,
             )
+            if target != "hlsl" or not compiled.accepted:
+                return compiled
+            # slangc writes HLSL without compiling it, so DXC checks the result as it checks an HLSL probe. Where
+            # HLSL lacks an operation, Slang's library emits a comment in place of the call.
+            generated = Path(scratch, output).read_text()
+            dropped = _UNSUPPORTED_IN_HLSL.search(generated)
+            if dropped:
+                return Verdict(False, f"error: slangc emits {dropped.group(0)}")
+            return _dxc(output, generated, stage, "", scratch)
         environment = [
             "--target-env",
             (SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT),

@@ -103,6 +103,13 @@ _STAGE_OF = {
     for stage, names in STAGES.items()
     for name in names.split()
 }
+
+
+def stage_of(name: str) -> str:
+    """The stage Direct3D allows the intrinsic ``name`` in, or an empty string when every stage has it."""
+    return _STAGE_OF.get(name, "")
+
+
 # Parameters that must be immediate values although the table declares them ``in``: GetAttributeAtVertex
 # reads one of the primitive's three vertices, so its index is a literal 0, 1 or 2 (HLSL SM 6.1 barycentrics),
 # and Barrier's memory-type and semantic flags must be constants (HLSL SM 6.8 barriers).

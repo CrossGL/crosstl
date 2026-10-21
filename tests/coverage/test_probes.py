@@ -936,6 +936,31 @@ def test_slang_validation_needs_an_entry_point():
     assert not validators.validate("slang", source, entry="main").accepted
 
 
+@pytest.mark.skipif(
+    not validators.available("slang", "hlsl"), reason="slangc or dxc is not installed"
+)
+def test_slang_functions_spirv_lacks_compile_for_hlsl():
+    tess = feature(
+        "ProcessIsolineTessFactors",
+        VOID,
+        Type("float"),
+        Type("float"),
+        Param(Type("float"), "out"),
+        Param(Type("float"), "out"),
+        stage="tessellation-control",
+    )
+    tess = replace(tess, target="hlsl")
+    probe = probes.build(tess, "slang")
+    verdict = validators.validate(
+        "slang", probe.source, tess.stage, probe.entry, "hlsl"
+    )
+    assert verdict.accepted, verdict.log
+    # Without the HLSL target the probe compiles for SPIR-V, which has no such function.
+    assert not validators.validate(
+        "slang", probe.source, tess.stage, probe.entry
+    ).accepted
+
+
 MOJO_SIGNATURES = [
     feature("fma", Type("float"), Type("float"), Type("float"), Type("float")),
     feature("isnan", Type("bool"), Type("float")),

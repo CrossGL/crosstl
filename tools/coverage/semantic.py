@@ -139,6 +139,8 @@ def lower(feature: Feature) -> tuple[str, str]:
         return f"GLSL.std.450:{feature.name}", ""
     if (feature.language, feature.group) in UNIDENTIFIED:
         return "", UNIDENTIFIED[feature.language, feature.group]
+    if feature.target:
+        return "", f"probed for {feature.target}, not SPIR-V"
     if feature.language not in validators.SPIRV_COMPILERS:
         return "", f"no SPIR-V compiler for {feature.language}"
     if not validators.can_lower(feature.language):

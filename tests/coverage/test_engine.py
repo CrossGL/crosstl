@@ -88,7 +88,7 @@ def test_output_probe_end_to_end():
 def test_a_run_validates_each_distinct_source_once(monkeypatch):
     calls = []
 
-    def validate(language, source, stage="compute", entry=""):
+    def validate(language, source, stage="compute", entry="", target=""):
         calls.append(source)
         return validators.Verdict("bad" not in source, "error: bad probe")
 
@@ -189,8 +189,8 @@ def test_run_measures_only_the_requested_features(monkeypatch, tmp_path, capsys)
 
     other = Feature("glsl", "function", "sin", ABS.signature, crossgl="sin")
     monkeypatch.setattr(features, "load", lambda language, offline=False: [ABS, other])
-    monkeypatch.setattr(validators, "available", lambda language: True)
-    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(validators, "can_lower", lambda language, target="": True)
     measured = []
 
     def run(jobs, workers=None):
@@ -217,7 +217,9 @@ def test_tools_lists_every_language_and_how_to_provide_a_missing_tool(
 ):
     from tools.coverage import __main__ as cli
 
-    monkeypatch.setattr(validators, "available", lambda language: language == "glsl")
+    monkeypatch.setattr(
+        validators, "available", lambda language, target="": language == "glsl"
+    )
     monkeypatch.setattr(validators, "can_lower", lambda language: language == "glsl")
     monkeypatch.setattr(validators, "version", lambda tool: "Glslang Version: 11")
     assert cli.main(["tools"]) == 0
@@ -235,7 +237,7 @@ def test_tools_lists_every_language_and_how_to_provide_a_missing_tool(
 def test_strict_run_names_exactly_the_missing_lowering_tool(monkeypatch, capsys):
     from tools.coverage import __main__ as cli
 
-    monkeypatch.setattr(validators, "available", lambda language: True)
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
     monkeypatch.setattr(validators, "can_lower", lambda language: False)
     monkeypatch.setattr(
         validators, "command", lambda tool: () if tool == "spirv-dis" else (tool,)

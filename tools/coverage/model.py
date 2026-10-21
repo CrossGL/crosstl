@@ -135,7 +135,9 @@ class Feature:
     then says why. ``stage`` is the shader stage the probe must run in. ``spelling`` is how the native probe calls
     the feature when that differs from ``name``, as for WGSL's ``bitcast<u32>``. ``counterpart`` is the overload the
     CrossGL probe calls when CrossGL's operation takes other arguments than the feature, as a WGSL texture function
-    does: it takes a texture and a sampler where CrossGL takes one GLSL sampler.
+    does: it takes a texture and a sampler where CrossGL takes one GLSL sampler. ``target`` is the compiler target
+    probes are checked for when it is not the language's usual one, as ``hlsl`` for a Slang function that SPIR-V
+    lacks.
     """
 
     language: str
@@ -148,6 +150,7 @@ class Feature:
     note: str = ""
     spelling: str = ""
     counterpart: Signature | None = None
+    target: str = ""
 
     @property
     def key(self) -> str:

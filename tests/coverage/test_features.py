@@ -946,12 +946,15 @@ def test_slang_stages_targets_and_explicit_generic_arguments():
     assert features["ReportHit"].stage == "intersection"
     # One require alternative works in compute, so no other stage is needed.
     assert features["WorkgroupCount"].stage == "compute"
+    # SPIR-V lacks it, so it compiles for HLSL, in the hull stage Direct3D allows it in.
     tess = features["ProcessTriTessFactorsAvg"]
-    assert tess.signature is None
-    assert tess.note == "needs a target other than SPIR-V"
-    # An OptiX capability implies the CUDA target.
+    assert (tess.target, tess.stage, tess.note) == ("hlsl", "tessellation-control", "")
+    assert tess.signature.params[2] == Param(Type("float", (3,)), "out")
+    assert features["clip"].target == ""
+    # An OptiX capability implies the CUDA target, which is not probed.
     traversable = features["GetTraversableChild"]
-    assert (traversable.signature, traversable.note) == (None, tess.note)
+    assert (traversable.signature, traversable.target) == (None, "")
+    assert traversable.note == "needs a target other than SPIR-V and HLSL"
     # No argument fixes bit_cast's result type, so the probe names it.
     assert features["bit_cast"].spelling == "bit_cast<int>"
     assert features["sin"].spelling == ""

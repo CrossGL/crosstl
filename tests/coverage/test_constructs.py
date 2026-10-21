@@ -212,6 +212,50 @@ def test_entry_parameters_join_the_kernel_signature():
     assert "texture2d<float> tex [[texture(0)]], sampler smp [[sampler(0)]]" in metal
 
 
+@pytest.mark.parametrize(
+    "generated, accepted",
+    [
+        ("void main() { x = ProcessTriTessFactorsAvg(); }", True),
+        ("void main() { /* debugBreak() not currently supported for HLSL */; }", False),
+    ],
+)
+def test_a_slang_probe_for_hlsl_is_written_as_hlsl_and_compiled_by_dxc(
+    monkeypatch, generated, accepted
+):
+    commands = []
+
+    def run(arguments, cwd):
+        commands.append(arguments)
+        if arguments[0] == "slangc":
+            Path(cwd, arguments[arguments.index("-o") + 1]).write_text(generated)
+        return validators.Verdict(True)
+
+    monkeypatch.setattr(validators, "command", lambda name: (name,))
+    monkeypatch.setattr(validators, "_run", run)
+    verdict = validators.validate(
+        "slang", '[shader("hull")]', "tessellation-control", "main", "hlsl"
+    )
+    assert verdict.accepted is accepted
+    slangc = ["slangc", "probe.slang", "-entry", "main", "-target", "hlsl"]
+    assert commands[0] == [*slangc, "-o", "probe.hlsl"]
+    if accepted:
+        profile = validators.HLSL_PROFILES["tessellation-control"]
+        assert commands[1][:5] == ["dxc", "-T", profile, "-E", "main"]
+        assert commands[1][-3:] == ["probe.hlsl", "-Fo", "probe.bin"]
+    else:
+        assert len(commands) == 1
+        assert "debugBreak() not currently supported" in verdict.log
+
+
+def test_a_slang_probe_for_hlsl_needs_dxc(monkeypatch):
+    monkeypatch.setattr(
+        validators, "command", lambda name: (name,) if name == "slangc" else ()
+    )
+    assert validators.missing("slang") == ""
+    assert validators.missing("slang", "hlsl") == "dxc"
+    assert not validators.available("slang", "hlsl")
+
+
 def test_hlsl_entry_falls_back_to_the_stage_convention():
     assert (
         validators.hlsl_entry("float4 PSMain() : SV_Target {}", "fragment") == "PSMain"
