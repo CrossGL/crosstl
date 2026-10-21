@@ -22,6 +22,7 @@ from . import crossgl, templates
 from .dialect import ProbeError
 from .model import Feature, Type
 from .templates import ABSENT, Template
+from .validators import GLSL_STAGES
 
 CATEGORIES = ("control-flow", "type", "compute", "resource", "stage")
 # The capabilities that make an execution model a shader stage; Kernel and the NV-only mesh models are left out.
@@ -192,11 +193,16 @@ def _lines(text: str, spelled: dict[str, str]) -> list[str]:
     return _Text(text).substitute(spelled).splitlines() if text else []
 
 
-_PROGRAM_SUFFIX = {"glsl": {"vertex": ".vert", "fragment": ".frag"}}
+# GLSL tools tell a program's stage from its file suffix.
+_PROGRAM_SUFFIX = {
+    language: {stage: f".{suffix}" for stage, suffix in GLSL_STAGES.items()}
+    for language in ("glsl", "webgl")
+}
 
 
-def build(feature: Feature, language: str, dialect):
-    """The probe of a language-level feature in ``language``, as ``(source, entry, suffix)``."""
+def build(feature: Feature, dialect):
+    """The probe of a language-level feature in ``dialect``'s language, as ``(source, entry, suffix)``."""
+    language = dialect.language
     template = _template(feature.name, language)
     if template is ABSENT:
         raise ProbeError(f"{language} has no spelling for {feature.name}")

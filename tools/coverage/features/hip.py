@@ -3,8 +3,8 @@
 clang's ``__clang_hip_math.h`` defines the HIP math functions (``sinf``, ``erf``) and their intrinsics (``__fadd_rn``,
 ``__expf``). ROCm's ``amd_hip_atomic.h`` defines the atomic functions, and ``amd_device_functions.h`` the integer
 intrinsics, conversions, warp votes and barriers. All three are pinned in :mod:`..upstream` at the versions the
-validating compiler ships, so the list names exactly what it defines. A name defined more than once, for several
-types or architectures, is probed with its first definition.
+validating compiler ships, so the list names exactly what a default compile defines. A name defined more than once,
+for several types or architectures, is probed with its first definition.
 """
 
 from __future__ import annotations
@@ -24,6 +24,10 @@ LEFT_OUT = frozenset("""
     __local_to_generic __get_dynamicgroupbaseptr __amdgcn_get_dynamicgroupbaseptr __work_group_barrier __barrier
     __named_sync
     """.split())
+# Macros a kernel must define on the compiler's command line to get the definitions they guard. clang's HIP
+# headers are included before the kernel's first line, so a default compile never defines them, and the functions
+# behind them (the directed-rounding ``__fadd_rd`` family) are not part of the default HIP API.
+_OPT_IN = re.compile(r"#\s*if\s+defined\s*\(?\s*OCML_BASIC_ROUNDED_OPERATIONS\b")
 _DEFINITION = re.compile(
     r"^(?:(?:__device__|__DEVICE__|__host__|static|inline)\s+)+([^;{}()#<>]*?)\b(\w+)\s*\(([^)]*)\)\s*\{",
     re.M,
@@ -55,9 +59,38 @@ def _plain(text: str) -> str:
     return text
 
 
+def default_compile(text: str) -> str:
+    """The header as a default compile sees it, without the branches of an ``OPT_IN`` macro.
+
+    The ``#else`` branch of such a block stays, since it is what a compile without the macro defines.
+    """
+    kept: list[str] = []
+    skipping = 0  # nesting depth inside a dropped branch, 0 when lines are kept
+    depth = 0
+    for line in text.splitlines():
+        directive = line.strip()
+        if skipping:
+            if directive.startswith("#if"):
+                depth += 1
+            elif directive.startswith("#endif"):
+                if depth == 0:
+                    skipping = 0
+                    continue
+                depth -= 1
+            elif directive.startswith("#el") and depth == 0:
+                skipping = 0
+            continue
+        if _OPT_IN.match(directive):
+            skipping, depth = 1, 0
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def definitions(text: str, group: str) -> list[tuple[str, str, Signature]]:
     """``(name, group, signature)`` for every function the header defines, first definition of a name only."""
     found: dict[str, tuple[str, str, Signature]] = {}
+    text = default_compile(text)
     for result, name, params in _DEFINITION.findall(_ATTRIBUTE.sub("", text)):
         if name in LEFT_OUT or name in found:
             continue
