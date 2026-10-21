@@ -17,6 +17,7 @@ DTYPES = {
 
 
 MAX_DESTINATION_ELEMENTS = 2**31 - 1
+MAX_GROUPS = 65535
 INOUT = 2
 
 
@@ -26,6 +27,43 @@ def destination_indices(metadata):
             coordinate * stride
             for coordinate, stride in zip(coordinates, metadata["destinationStrides"])
         )
+
+
+def launch_regions(shape, source_strides, destination_strides, destination_offset):
+    """Mirror the host's split of one copy into portable exact launches.
+
+    The copy kernel guards only its X axis, so the host runs a copy whose
+    launch would exceed 65535 groups on an axis as sub-copies along the array
+    axes, in ascending order: the last axis in chunks of 65535 element pairs,
+    then rows, then the leading axes that fold into Z. Each region is
+    ``(shape, source_origin, destination_offset)``, where ``source_origin`` is
+    the element offset of the region origin from the source view.
+    """
+    regions = []
+
+    def append(region_shape, origin, offset):
+        rank = len(region_shape)
+        axis, chunk = rank - 1, 2 * MAX_GROUPS
+        if (region_shape[-1] + 1) // 2 <= MAX_GROUPS:
+            axis, chunk = rank - 2, MAX_GROUPS
+            if region_shape[-2] <= MAX_GROUPS:
+                if math.prod(region_shape[:-2]) <= MAX_GROUPS:
+                    regions.append((list(region_shape), origin, offset))
+                    return
+                axis = next(i for i, size in enumerate(region_shape) if size > 1)
+                inner = math.prod(region_shape[axis + 1 : -2])
+                chunk = MAX_GROUPS // inner if inner <= MAX_GROUPS else 1
+        for first in range(0, region_shape[axis], chunk):
+            part = list(region_shape)
+            part[axis] = min(chunk, region_shape[axis] - first)
+            append(
+                part,
+                origin + first * source_strides[axis],
+                offset + first * destination_strides[axis],
+            )
+
+    append(list(shape), 0, destination_offset)
+    return regions
 
 
 def validate(buffers, logical_size, *, dtype="uint32"):

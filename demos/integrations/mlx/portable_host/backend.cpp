@@ -177,6 +177,113 @@ void dispatch_unary(
   }
 }
 
+// One exact MLX copy launch: a sub-shape of the copy, the element offset of
+// its origin from the source view, and its destination offset.
+struct CopyRegion {
+  std::vector<int32_t> shape;
+  int64_t source_origin;
+  int64_t destination_offset;
+};
+
+// The copy kernel guards only its X axis, so a copy whose launch would exceed
+// the portable 65535 groups on an axis runs as exact sub-copies along the
+// array axes, in ascending order: the last axis in chunks of 65535 element
+// pairs, then rows, then the leading axes that fold into Z.
+void append_copy_regions(
+    CopyRegion region,
+    const std::vector<int64_t>& src_strides,
+    const std::vector<int64_t>& dst_strides,
+    std::vector<CopyRegion>& regions) {
+  const size_t ndim = region.shape.size();
+  size_t axis = ndim - 1;
+  int64_t chunk = 2 * 65535;
+  if ((uint64_t(region.shape[ndim - 1]) + 1) / 2 <= 65535) {
+    axis = ndim - 2;
+    chunk = 65535;
+    if (uint64_t(region.shape[ndim - 2]) <= 65535) {
+      uint64_t slices = 1;
+      for (size_t leading = 0; leading + 2 < ndim; ++leading) {
+        slices *= uint64_t(region.shape[leading]);
+      }
+      if (slices <= 65535) {
+        regions.push_back(std::move(region));
+        return;
+      }
+      axis = 0;
+      while (region.shape[axis] == 1) {
+        ++axis;
+      }
+      uint64_t inner = 1;
+      for (size_t next = axis + 1; next + 2 < ndim; ++next) {
+        inner *= uint64_t(region.shape[next]);
+      }
+      chunk = inner <= 65535 ? int64_t(65535 / inner) : 1;
+    }
+  }
+  const int64_t extent = region.shape[axis];
+  for (int64_t first = 0; first < extent; first += chunk) {
+    CopyRegion part = region;
+    part.shape[axis] = static_cast<int32_t>(std::min(chunk, extent - first));
+    part.source_origin += first * src_strides[axis];
+    part.destination_offset += first * dst_strides[axis];
+    append_copy_regions(std::move(part), src_strides, dst_strides, regions);
+  }
+}
+
+void launch_copy_region(
+    const mlx::core::array& in,
+    mlx::core::array& out,
+    const CopyRegion& region,
+    std::vector<int64_t> src_strides,
+    std::vector<int64_t> dst_strides,
+    const char* dtype,
+    uint32_t destination_mode) {
+  std::vector<int32_t> shape = region.shape;
+  int64_t low = region.source_origin, high = region.source_origin;
+  uint64_t count = 1;
+  for (size_t axis = 0; axis < shape.size(); ++axis) {
+    const int64_t extent = (int64_t(shape[axis]) - 1) * src_strides[axis];
+    low += std::min<int64_t>(extent, 0);
+    high += std::max<int64_t>(extent, 0);
+    count *= uint64_t(shape[axis]);
+  }
+  int32_t ndim = static_cast<int32_t>(shape.size());
+  int64_t src_offset = region.source_origin - low;
+  int64_t dst_offset = region.destination_offset;
+  CrosstlMlxBuffer buffers[] = {
+      {"src", dtype, const_cast<uint8_t*>(in.data<uint8_t>() + low * in.itemsize()),
+       uint64_t(high - low + 1), 0},
+      {"dst", dtype, out.data<void>(), out.size(), destination_mode},
+      {"src_shape", "int32", shape.data(), uint64_t(ndim), 0},
+      {"src_strides", "int64", src_strides.data(), uint64_t(ndim), 0},
+      {"dst_strides", "int64", dst_strides.data(), uint64_t(ndim), 0},
+      {"ndim", "int32", &ndim, 1, 0},
+      {"src_offset", "int64", &src_offset, 1, 0},
+      {"dst_offset", "int64", &dst_offset, 1, 0},
+  };
+  uint64_t slices = 1;
+  for (size_t axis = 0; axis + 2 < shape.size(); ++axis) {
+    slices *= uint64_t(shape[axis]);
+  }
+  const uint64_t columns = (uint64_t(shape.back()) + 1) / 2;
+  const uint64_t rows = shape[shape.size() - 2];
+  if (columns > 65535 || rows > 65535 || slices > 65535) {
+    throw std::logic_error("CrossTL copy region exceeds 65535 groups per axis.");
+  }
+  const CrosstlMlxLaunch launch{
+      {static_cast<uint32_t>(columns), static_cast<uint32_t>(rows),
+       static_cast<uint32_t>(slices)},
+      {1, 1, 1}};
+  const std::string entry = std::string("ggn2_dynamic_copy") + dtype + dtype;
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 8, count, &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native copy failed: ") + error);
+  }
+}
+
 void dispatch_copy_into(
     const mlx::core::array& in,
     mlx::core::array& out,
@@ -226,7 +333,6 @@ void dispatch_copy_into(
     low += std::min<int64_t>(extent, 0);
     high += std::max<int64_t>(extent, 0);
   }
-  const int64_t span = high - low + 1;
   const int64_t item_size = in.itemsize();
   if (in.offset() < 0 || in.offset() % item_size != 0) {
     throw std::invalid_argument("CrossTL copy source span exceeds its bounds.");
@@ -260,46 +366,19 @@ void dispatch_copy_into(
       out.nbytes() > out.buffer_size() - uint64_t(out.offset())) {
     throw std::invalid_argument("CrossTL copy destination exceeds its allocation.");
   }
-  int32_t ndim = static_cast<int32_t>(shape.size());
-  int64_t src_offset = -low;
   // Copy storage words to preserve NaN payloads, subnormals and signed zero.
   const bool boolean = in.dtype() == mlx::core::bool_;
   const bool wide = in.dtype() == mlx::core::int64 || in.dtype() == mlx::core::uint64;
   const char* dtype = in.dtype() == mlx::core::float16 ? "float16" :
       in.dtype() == mlx::core::bfloat16 ? "bfloat16" :
       wide ? storage_type(in.dtype()) : boolean ? "bool_" : "uint32";
-  CrosstlMlxBuffer buffers[] = {
-      {"src", dtype, const_cast<uint8_t*>(in.data<uint8_t>() + low * item_size), uint64_t(span), 0},
-      {"dst", dtype, out.data<void>(), out.size(),
-       preserve ? CROSTL_MLX_BUFFER_INOUT : uint32_t(1)},
-      {"src_shape", "int32", shape.data(), uint64_t(ndim), 0},
-      {"src_strides", "int64", src_strides.data(), uint64_t(ndim), 0},
-      {"dst_strides", "int64", dst_strides.data(), uint64_t(ndim), 0},
-      {"ndim", "int32", &ndim, 1, 0},
-      {"src_offset", "int64", &src_offset, 1, 0},
-      {"dst_offset", "int64", &dst_offset, 1, 0},
-  };
-  char error[2048] = {};
-  uint64_t slices = 1;
-  for (size_t axis = 0; axis + 2 < shape.size(); ++axis) {
-    slices *= static_cast<uint32_t>(shape[axis]);
-  }
-  const uint64_t columns = (uint64_t(shape.back()) + 1) / 2;
-  const uint64_t rows = shape[shape.size() - 2];
-  if (columns > 65535 || rows > 65535 || slices > 65535) {
-    throw std::invalid_argument("CrossTL copy launch exceeds 65535 groups per axis.");
-  }
-  const CrosstlMlxLaunch launch{
-      {static_cast<uint32_t>(columns), static_cast<uint32_t>(rows),
-       static_cast<uint32_t>(slices)},
-      {1, 1, 1}};
-  const std::string entry = std::string("ggn2_dynamic_copy") + dtype + dtype;
-  int status = dispatch_callback.load()(
-      entry.c_str(),
-      buffers, 8, in.size(), &launch, error, sizeof(error));
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(std::string("CrossTL native copy failed: ") + error);
+  std::vector<CopyRegion> regions;
+  append_copy_regions({shape, 0, dst_offset}, src_strides, dst_strides, regions);
+  for (size_t index = 0; index < regions.size(); ++index) {
+    // Later regions keep the elements that earlier regions already wrote.
+    launch_copy_region(
+        in, out, regions[index], src_strides, dst_strides, dtype,
+        preserve || index > 0 ? CROSTL_MLX_BUFFER_INOUT : uint32_t(1));
   }
 }
 
