@@ -274,6 +274,7 @@ METAL_ENTRIES = {
     "tessellation-evaluation": (r"^!air\.vertex = ", r'!"air\.patch"'),
     "task": (r"^!air\.object = ",),
     "mesh": (r"^!air\.mesh = ",),
+    "intersection": (r"^!air\.intersection = ",),
 }
 
 
