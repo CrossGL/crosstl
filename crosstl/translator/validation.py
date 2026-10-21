@@ -1,5 +1,6 @@
 """Shared AST validation helpers for the CrossGL translator."""
 
+from .matrix_shape import matrix_type_spelling
 from .stage_utils import (
     SHADER_STAGE_NAMES,
     STAGE_NAME_ALIASES,
@@ -54,6 +55,14 @@ TEXTURE_INTRINSIC_MIN_ARGUMENTS = {
     "imageAtomicXor": 3,
     "imageAtomicExchange": 3,
     "imageAtomicCompSwap": 4,
+    "textureClamp": 3,
+    "textureOffsetClamp": 4,
+    "textureGradClamp": 5,
+    "textureGradOffsetClamp": 6,
+    "textureCompareClamp": 4,
+    "textureCompareOffsetClamp": 5,
+    "textureCompareGradClamp": 6,
+    "textureCompareGradOffsetClamp": 7,
 }
 
 TEXTURE_INTRINSICS_WITH_EXPLICIT_SAMPLERS = {
@@ -87,6 +96,14 @@ TEXTURE_INTRINSICS_WITH_EXPLICIT_SAMPLERS = {
     "textureGatherCompare",
     "textureGatherCompareOffset",
     "textureQueryLod",
+    "textureClamp",
+    "textureOffsetClamp",
+    "textureGradClamp",
+    "textureGradOffsetClamp",
+    "textureCompareClamp",
+    "textureCompareOffsetClamp",
+    "textureCompareGradClamp",
+    "textureCompareGradOffsetClamp",
 }
 
 TEXTURE_INTRINSIC_MAX_ARGUMENTS = {
@@ -137,6 +154,14 @@ TEXTURE_INTRINSIC_MAX_ARGUMENTS = {
     "imageAtomicXor": 4,
     "imageAtomicExchange": 4,
     "imageAtomicCompSwap": 5,
+    "textureClamp": 4,
+    "textureOffsetClamp": 5,
+    "textureGradClamp": 5,
+    "textureGradOffsetClamp": 6,
+    "textureCompareClamp": 4,
+    "textureCompareOffsetClamp": 5,
+    "textureCompareGradClamp": 6,
+    "textureCompareGradOffsetClamp": 7,
 }
 
 TEXTURE_INTRINSIC_ALLOWED_ARGUMENT_COUNTS = {
@@ -1702,10 +1727,7 @@ def _stage_interface_type_name(type_node):
         and hasattr(type_node, "cols")
     ):
         element_type = _stage_interface_type_name(type_node.element_type)
-        prefix = "dmat" if element_type == "double" else "mat"
-        if type_node.rows == type_node.cols:
-            return f"{prefix}{type_node.rows}"
-        return f"{prefix}{type_node.rows}x{type_node.cols}"
+        return matrix_type_spelling(type_node, element_type)
     if type_node.__class__.__name__ == "VectorType":
         element_type = _stage_interface_type_name(type_node.element_type)
         vector_prefixes = {

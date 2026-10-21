@@ -26,6 +26,7 @@ from typing import (
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
+from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
 from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
@@ -903,7 +904,7 @@ class _PromotedFunctionDefinition:
     promoted_parameters: Tuple[_PromotedFunctionParameter, ...]
 
 
-class MetalPreprocessor(HLSLPreprocessor):
+class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     """Small Metal preprocessor used before lexing imported source files."""
 
     def __init__(
@@ -1070,7 +1071,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._containing_span_cache.clear()
         self._lexical_scope_lookup_cache.clear()
         code = self._strip_leading_compiler_diagnostics(code)
-        return super().preprocess(code, file_path=file_path)
+        self._discovering_entry_points = True
+        try:
+            return super().preprocess(code, file_path=file_path)
+        finally:
+            self._discovering_entry_points = False
 
     def _source_analysis(self, code: str) -> _MetalSourceAnalysis:
         cache = self._source_analysis_cache

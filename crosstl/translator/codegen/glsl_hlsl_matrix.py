@@ -2,7 +2,7 @@
 
 GLSL only provides floating-point matrices; HLSL also has ``int``, ``uint`` and
 ``bool`` matrices, which CrossGL keeps under their HLSL names (``int3x2`` has
-three rows and two columns, like every CrossGL ``matRxC``). Each one becomes a
+three rows and two columns, the integer counterpart of CrossGL ``mat2x3``). Each one becomes a
 struct of column vectors named like the GLSL matrix it stands in for: CrossGL
 ``int3x2`` is ``crossgl_imat2x3 { ivec3 c[2]; }`` just as ``mat3x2`` is GLSL
 ``mat2x3``. Indexing selects a column (``m[i]`` is ``m.c[i]``), constructors
@@ -270,8 +270,7 @@ class GLSLEmulatedMatrices:
     def glsl_native_matrix_dimensions(self, expr, type_name):
         """``(scalar, rows, columns)`` of a native floating-point matrix value.
 
-        Declared matrices carry GLSL ``matCxR`` names, constructor calls the
-        CrossGL ``matRxC`` spelling.
+        CrossGL and GLSL both spell a matrix of C columns and R rows ``matCxR``.
         """
         if not isinstance(type_name, str):
             return None
@@ -279,14 +278,9 @@ class GLSLEmulatedMatrices:
         if match is None:
             return None
         scalar = "double" if match.group("prefix") else "float"
-        first = int(match.group("a"))
-        second = int(match.group("b") or first)
-        if (
-            isinstance(expr, FunctionCallNode)
-            and self.function_call_name(expr) == type_name
-        ):
-            return (scalar, first, second)
-        return (scalar, second, first)
+        columns = int(match.group("a"))
+        rows = int(match.group("b") or columns)
+        return (scalar, rows, columns)
 
     def glsl_emulated_common_scalar(self, operands, operation, *, comparison=False):
         scalars = []
@@ -734,8 +728,8 @@ class GLSLEmulatedMatrices:
     def generate_glsl_emulated_to_native(self, func_name, operand):
         match = NATIVE_MATRIX_PATTERN.fullmatch(func_name)
         scalar = "double" if match.group("prefix") else "float"
-        rows = int(match.group("a"))
-        columns = int(match.group("b") or rows)
+        columns = int(match.group("a"))
+        rows = int(match.group("b") or columns)
         if operand["kind"] != "matrix" or operand["shape"][1:] != (rows, columns):
             self.glsl_emulated_matrix_error(func_name, (operand,), "dimension-mismatch")
         native = self.glsl_native_matrix_name((scalar, rows, columns))

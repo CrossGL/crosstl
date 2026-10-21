@@ -458,8 +458,10 @@ class HLSLValueShapeMixin:
     def generate_matrix_swizzle(self, expr, is_main=False):
         """Render ``m._m01`` / ``m._12_21`` as indexed matrix elements.
 
-        HLSL ``_mRC`` is zero-based and ``_RC`` one-based; CrossGL holds
-        HLSL row ``R`` at index ``R``, so elements are ``m[R][C]``.
+        HLSL ``_mRC`` is zero-based and ``_RC`` one-based. CrossGL indexes
+        columns first, so element (R, C) is ``m[C][R]``; with row-major
+        packing CrossGL holds HLSL row ``R`` as column ``R`` and the element
+        is ``m[R][C]``.
         """
         member = expr.member
         if not isinstance(member, str) or not member.startswith("_"):
@@ -488,7 +490,10 @@ class HLSLValueShapeMixin:
         obj = self.maybe_parenthesize(expr.object, obj)
         if isinstance(expr.object, (UnaryOpNode, CastNode)):
             obj = f"({obj})"
-        accesses = [f"{obj}[{row}][{col}]" for row, col in elements]
+        if self.hlsl_matrix_rows_are_columns():
+            accesses = [f"{obj}[{row}][{col}]" for row, col in elements]
+        else:
+            accesses = [f"{obj}[{col}][{row}]" for row, col in elements]
         if len(accesses) == 1:
             return accesses[0]
         matrix_type = self.canonical_composite_type(

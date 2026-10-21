@@ -4200,6 +4200,42 @@ def test_hlsl_parameter_qualifiers_parse():
     assert patch_param.param_type.generic_args[1].value == 3
 
 
+def test_struct_named_like_a_primitive_qualifier_is_a_type():
+    """Primitive qualifiers are lower-case keywords; ``Triangle`` and ``Point`` stay user type names."""
+    code = """
+    shader UserPrimitiveTypes {
+        struct Triangle {
+            vec3 normal;
+        };
+
+        struct Point {
+            vec3 position;
+        };
+
+        Triangle unpack(uint index, int vertexSize) {
+            Triangle tri;
+            tri.normal = vec3(float(index + uint(vertexSize)));
+            return tri;
+        }
+
+        Point lift(Point point, triangle Triangle prims[3]) {
+            return point;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    unpack, lift = ast.functions
+    assert unpack.name == "unpack"
+    assert unpack.return_type.name == "Triangle"
+    assert [param.name for param in unpack.parameters] == ["index", "vertexSize"]
+    point_param, prims_param = lift.parameters
+    assert point_param.qualifiers == []
+    assert point_param.param_type.name == "Point"
+    assert prims_param.qualifiers == ["triangle"]
+    assert prims_param.param_type.element_type.name == "Triangle"
+
+
 def test_backend_parameter_address_and_access_qualifiers_parse():
     code = """
     shader BackendParameterQualifiers {
@@ -4837,11 +4873,12 @@ def test_matrix_type_keywords_parse():
     ast = parse_code(tokens)
     statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
 
+    # CrossGL follows GLSL: matCxR has C columns and R rows.
     affine = statements[0]
     assert isinstance(affine.var_type, MatrixType)
     assert affine.var_type.element_type.name == "float"
-    assert affine.var_type.rows == 3
-    assert affine.var_type.cols == 4
+    assert affine.var_type.cols == 3
+    assert affine.var_type.rows == 4
 
     precise = statements[1]
     assert isinstance(precise.var_type, MatrixType)
@@ -4854,8 +4891,8 @@ def test_matrix_type_keywords_parse():
     jacobian = statements[2]
     assert isinstance(jacobian.var_type, MatrixType)
     assert jacobian.var_type.element_type.name == "double"
-    assert jacobian.var_type.rows == 4
-    assert jacobian.var_type.cols == 3
+    assert jacobian.var_type.cols == 4
+    assert jacobian.var_type.rows == 3
 
 
 def test_sampler_type_keywords_parse():

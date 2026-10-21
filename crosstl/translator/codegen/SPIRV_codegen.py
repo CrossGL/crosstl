@@ -51,6 +51,15 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..diagnostics import TranslationDiagnostic
+from ..matrix_shape import (
+    crossgl_matrix_shape,
+    length_method_object,
+    matrix_type_spelling,
+)
+from ..semantics.shader_records import (
+    is_shader_record_buffer,
+    shader_record_memory_layout,
+)
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .array_utils import (
     collect_literal_int_constants,
@@ -93,14 +102,27 @@ from .pointer_reinterpret import (
 )
 from .relational_builtins import lower_relational_builtins
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
+from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
+from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
 from .spirv_refusals import SpirvRefusals
+from .spirv_stage_distances import (
+    entry_point_distance_layout,
+    entry_point_distance_variable,
+    load_entry_point_distance,
+    store_entry_point_distance,
+)
+from .texture_lod_clamp import (
+    TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
+    is_texture_lod_clamp_operation,
+    spirv_texture_lod_clamp_call,
+)
 
 
 class SpirvType:
@@ -379,6 +401,8 @@ class VulkanSPIRVCodeGen(
         self.std430_runtime_array_struct_types = set()
         self.resource_types = {}
         self.resource_image_types = {}
+        # OpTypeSampledImage id per image type id: combined samplers and texture+sampler pairs share one type.
+        self.sampled_image_type_ids = {}
         self.ray_query_types = {}
         self.ray_tracing_storage_variables = {}
         self.enum_type_names = set()
@@ -794,8 +818,7 @@ class VulkanSPIRVCodeGen(
             )
 
             if info["kind"] == "sampled_image":
-                id_value = self.get_id()
-                self.emit(f"%{id_value} = OpTypeSampledImage %{image_type.id}")
+                id_value = self.sampled_image_type_id(image_type)
                 spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
             else:
                 spirv_id = image_type
@@ -4726,7 +4749,7 @@ class VulkanSPIRVCodeGen(
             "imageSamples",
             "textureQueryLevels",
             "textureQueryLod",
-        }
+        } | TEXTURE_LOD_CLAMP_INTRINSIC_NAMES
 
     def image_atomic_function_names(self):
         return {
@@ -5029,10 +5052,12 @@ class VulkanSPIRVCodeGen(
         self, function_name: str, args: List[SpirvId], extra_arg_count: int
     ):
         coord_index = 1
+        sampler_id = None
         if len(args) > 1:
             sampler_metadata = self.resource_metadata_for_value(args[1])
             if sampler_metadata and sampler_metadata.get("kind") == "sampler":
                 coord_index = 2
+                sampler_id = args[1]
 
         required_arg_count = coord_index + 2 + extra_arg_count
         if len(args) < required_arg_count:
@@ -5047,6 +5072,13 @@ class VulkanSPIRVCodeGen(
         depth_id = args[coord_index + 1]
         extra_args = args[coord_index + 2 : required_arg_count]
         metadata = self.resource_metadata_for_value(sampled_image_id)
+        if sampler_id is not None:
+            sampled_image_id = self.pair_resource_with_explicit_sampler(
+                function_name, sampled_image_id, sampler_id, metadata
+            )
+            if sampled_image_id is None:
+                return None
+            metadata = self.resource_metadata_for_value(sampled_image_id)
         if not metadata or metadata.get("kind") != "sampled_image":
             self.refuse_lowering(
                 f"{function_name} requires a shadow sampled image operand"
@@ -5054,7 +5086,9 @@ class VulkanSPIRVCodeGen(
             return None
         if not self.validate_non_multisample_sampled_image(function_name, metadata):
             return None
-        if int(metadata.get("depth", 0)) != 1:
+        # An explicit sampler carries the comparison (HLSL SampleCmp with a SamplerComparisonState), so the image
+        # need not be declared as a depth image: the Vulkan environment ignores the Depth operand of OpTypeImage.
+        if sampler_id is None and int(metadata.get("depth", 0)) != 1:
             self.refuse_lowering(
                 f"{function_name} requires a shadow sampled image operand"
             )
@@ -5096,7 +5130,12 @@ class VulkanSPIRVCodeGen(
         )
 
     def sampled_texture_operands(
-        self, function_name: str, args: List[SpirvId], extra_arg_count: int = 0
+        self,
+        function_name: str,
+        args: List[SpirvId],
+        extra_arg_count: int = 0,
+        *,
+        pair_explicit_sampler: bool = True,
     ):
         coord_index = 1
         sampler_id = None
@@ -5118,14 +5157,15 @@ class VulkanSPIRVCodeGen(
         coord_id = args[coord_index]
         extra_args = args[coord_index + 1 :]
         metadata = self.resource_metadata_for_value(sampled_image_id)
-        if metadata and metadata.get("kind") == "texture":
-            if sampler_id is None:
-                self.refuse_lowering(
-                    f"{function_name} requires a sampler for separate "
-                    "texture operands"
-                )
-                return None
-            sampled_image_id = self.combine_texture_and_sampler(
+        if metadata and metadata.get("kind") == "texture" and sampler_id is None:
+            self.refuse_lowering(
+                f"{function_name} requires a sampler for separate texture operands"
+            )
+            return None
+        if sampler_id is not None and (
+            pair_explicit_sampler or metadata and metadata.get("kind") == "texture"
+        ):
+            sampled_image_id = self.pair_resource_with_explicit_sampler(
                 function_name, sampled_image_id, sampler_id, metadata
             )
             if sampled_image_id is None:
@@ -5137,6 +5177,32 @@ class VulkanSPIRVCodeGen(
             return None
 
         return sampled_image_id, coord_id, extra_args, metadata
+
+    def pair_resource_with_explicit_sampler(
+        self, function_name: str, resource_id: SpirvId, sampler_id: SpirvId, metadata
+    ) -> Optional[SpirvId]:
+        """Return the sampled image an operation with an explicit sampler reads.
+
+        A separate texture is combined with the sampler. A combined resource is sampled through the explicit
+        sampler too: its image is extracted and re-paired, because the sampler it was declared with is not the
+        one the operation names (two samplers on one HLSL Texture2D must not collapse into one sample).
+        """
+        if metadata and metadata.get("kind") == "texture":
+            return self.combine_texture_and_sampler(
+                function_name, resource_id, sampler_id, metadata
+            )
+        if not metadata or metadata.get("kind") != "sampled_image":
+            return resource_id
+        image_id = self.extract_image_from_sampled_image(resource_id, metadata)
+        if image_id is None:
+            return None
+        if self.is_non_uniform_value(resource_id):
+            self.mark_non_uniform_result(image_id)
+        texture_metadata = dict(metadata)
+        texture_metadata["kind"] = "texture"
+        return self.combine_texture_and_sampler(
+            function_name, image_id, sampler_id, texture_metadata
+        )
 
     def call_resource_constructor(
         self, type_name: str, args: List[SpirvId]
@@ -5228,16 +5294,25 @@ class VulkanSPIRVCodeGen(
         if cache_key in self.resource_types:
             return self.resource_types[cache_key]
 
-        id_value = self.get_id()
-        self.emit(f"%{id_value} = OpTypeSampledImage %{image_type.id}")
+        id_value = self.sampled_image_type_id(image_type)
         sampled_image_type = SpirvId(id_value, SpirvType(type_name), type_name)
         self.resource_types[cache_key] = sampled_image_type
-        self.resource_type_metadata[id_value] = (
+        self.resource_type_metadata.setdefault(
+            id_value,
             self.sampled_image_metadata_from_texture(
                 sampled_image_type, texture_metadata
-            )
+            ),
         )
         return sampled_image_type
+
+    def sampled_image_type_id(self, image_type: SpirvId) -> int:
+        """The OpTypeSampledImage of ``image_type``, declared once: SPIR-V forbids duplicate non-aggregate types."""
+        id_value = self.sampled_image_type_ids.get(image_type.id)
+        if id_value is None:
+            id_value = self.get_id()
+            self.emit(f"%{id_value} = OpTypeSampledImage %{image_type.id}")
+            self.sampled_image_type_ids[image_type.id] = id_value
+        return id_value
 
     def sampled_image_metadata_from_texture(self, sampled_image_type, texture_metadata):
         metadata = dict(texture_metadata)
@@ -5962,6 +6037,25 @@ class VulkanSPIRVCodeGen(
             self.image_offset_operand(extra_args[2]),
         )
 
+    def projected_shadow_reference(
+        self, coord_id: SpirvId, depth_id: SpirvId, float_type: SpirvId
+    ) -> SpirvId:
+        """The Dref of a projected compare, divided by the coordinate's last component ``q``.
+
+        CrossGL divides the reference by ``q`` as ``OpImageSampleProjDref*`` does (Vulkan, "Projection
+        Operation"); the coordinate is projected by hand, so the reference is too.
+        """
+        component_type_name, source_count = self.vector_component_type_and_count(
+            coord_id.type.base_type
+        )
+        component_type = self.register_primitive_type(component_type_name)
+        projection = self.convert_scalar_to_type(
+            self.composite_extract(coord_id, component_type, source_count - 1),
+            float_type,
+        )
+        depth = self.convert_scalar_to_type(depth_id, float_type)
+        return self.binary_operation("/", float_type, depth, projection)
+
     def call_projected_shadow_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
@@ -6010,6 +6104,7 @@ class VulkanSPIRVCodeGen(
         )
         if projected_coord is None:
             return self.default_value_for_type(result_type)
+        depth_id = self.projected_shadow_reference(coord_id, depth_id, result_type)
 
         image_operands = self.projected_shadow_image_operands(function_name, extra_args)
         id_value = self.get_id()
@@ -6029,6 +6124,16 @@ class VulkanSPIRVCodeGen(
     def call_resource_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
+        if is_texture_lod_clamp_operation(function_name):
+            sampler = (
+                self.resource_metadata_for_value(args[1]) if len(args) > 1 else None
+            )
+            return spirv_texture_lod_clamp_call(
+                self,
+                function_name,
+                args,
+                bool(sampler) and sampler.get("kind") == "sampler",
+            )
         if function_name in self.image_atomic_function_names():
             return self.call_image_atomic_function(function_name, args)
         if function_name in self.buffer_atomic_function_names():
@@ -6676,8 +6781,9 @@ class VulkanSPIRVCodeGen(
 
         if function_name in {"texelFetch", "texelFetchOffset"}:
             required_extra_count = 1 if function_name == "texelFetch" else 2
+            # A texel fetch reads the image without filtering, so the sampler it names is irrelevant.
             sample_args = self.sampled_texture_operands(
-                function_name, args, required_extra_count
+                function_name, args, required_extra_count, pair_explicit_sampler=False
             )
             if sample_args is None:
                 return self.register_constant(
@@ -6917,14 +7023,14 @@ class VulkanSPIRVCodeGen(
                 return self.resource_query_lod_default_value()
 
             metadata = self.resource_metadata_for_value(sampled_image_id)
-            if metadata and metadata.get("kind") == "texture":
-                if sampler_id is None:
-                    self.refuse_lowering(
-                        "textureQueryLod requires a sampler for separate "
-                        "texture operands"
-                    )
-                    return self.resource_query_lod_default_value()
-                sampled_image_id = self.combine_texture_and_sampler(
+            if metadata and metadata.get("kind") == "texture" and sampler_id is None:
+                self.refuse_lowering(
+                    "textureQueryLod requires a sampler for separate texture operands"
+                )
+                return self.resource_query_lod_default_value()
+            if sampler_id is not None:
+                # The computed level depends on the sampler's filters and LOD clamps.
+                sampled_image_id = self.pair_resource_with_explicit_sampler(
                     function_name, sampled_image_id, sampler_id, metadata
                 )
                 if sampled_image_id is None:
@@ -7067,6 +7173,10 @@ class VulkanSPIRVCodeGen(
             "textureCompareLodOffset": {4, 5},
             "textureCompareGradOffset": {5, 6},
             "textureGatherCompareOffset": {3, 4},
+            "textureOffsetClamp": {2, 3},
+            "textureGradOffsetClamp": {4, 5},
+            "textureCompareOffsetClamp": {3, 4},
+            "textureCompareGradOffsetClamp": {5, 6},
         }.get(function_name, set())
 
     def literal_integer_vector_constant(self, expr) -> Optional[SpirvId]:
@@ -14033,6 +14143,10 @@ class VulkanSPIRVCodeGen(
                 variable = self.process_entry_point_storage_buffer_parameter(param)
                 self.local_variables[param_name] = variable
                 continue
+            if self.is_entry_point_descriptor_parameter(param):
+                variable = self.process_entry_point_descriptor_parameter(param)
+                self.local_variables[param_name] = variable
+                continue
 
             if self.is_bound_uniform_value_parameter(param, execution_model):
                 initial_value = self.entry_point_uniform_parameter_value(
@@ -14098,6 +14212,46 @@ class VulkanSPIRVCodeGen(
         param_type_id = self.map_crossgl_type(param_type)
         return self.array_type_info_from_type(param_type_id) is not None
 
+    def is_entry_point_descriptor_parameter(self, param) -> bool:
+        """Whether an entry parameter is an opaque descriptor (MSL ``texture2d t [[texture(0)]]``, ``sampler s``)."""
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        type_name = self.normalize_reference_type_name(
+            self.type_name_from_value(param_type)
+        )
+        if not type_name:
+            return False
+        base_type = self.array_base_type_name(type_name)
+        return self.is_resource_type_name(
+            base_type
+        ) or self.is_acceleration_structure_type_name(base_type)
+
+    def process_entry_point_descriptor_parameter(self, param) -> SpirvId:
+        """Declare an opaque entry parameter as the ``UniformConstant`` descriptor it is bound to.
+
+        The host binds such a parameter like a module-scope resource; a stage ``Input`` variable cannot hold an
+        image, sampler or acceleration structure (``VUID-StandaloneSpirv-OpTypeImage-06924`` forbids storing one into
+        the Function-scope copy). MSL keeps textures, samplers and buffers in separate binding namespaces, so a slot
+        an earlier resource already holds moves to the next free binding of the set.
+        """
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        node = VariableNode(
+            getattr(param, "name", "param"),
+            param_type,
+            attributes=list(getattr(param, "attributes", []) or []),
+            qualifiers=list(getattr(param, "qualifiers", []) or []),
+        )
+        var_type = self.map_resource_type_with_format(param_type, node)
+        var_id = self.create_variable(var_type, "UniformConstant", node.name)
+        descriptor_set, binding = self.resource_descriptor_slot(
+            node, allow_binding_reassignment=True
+        )
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+        self.register_declared_resource_metadata(node, var_id, var_type)
+        return var_id
+
     def process_entry_point_storage_buffer_parameter(self, param) -> SpirvId:
         variable = VariableNode(
             getattr(param, "name", "param"),
@@ -14151,9 +14305,28 @@ class VulkanSPIRVCodeGen(
             metadata = self.struct_member_metadata.get(
                 param_value_type.type.base_type, {}
             )
-            for member_index, (member_type, member_name) in enumerate(members):
+            distances = entry_point_distance_layout(self, members, metadata)
+            # A member that occupies several locations (an array or matrix) moves the later members along.
+            member_location = 0
+            for member_type, member_name in members:
                 member_info = metadata.get(member_name, {})
                 member_node = member_info.get("node")
+                location_index = member_location
+                member_location += self.struct_member_interface_location_span(
+                    member_node
+                )
+                distance = distances.slot(member_name)
+                if distance is not None:
+                    array = entry_point_distance_variable(
+                        self,
+                        distance.builtin,
+                        distances.size(distance.builtin),
+                        "Input",
+                    )
+                    components.append(
+                        load_entry_point_distance(self, array, distance, member_type)
+                    )
+                    continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Input",
@@ -14166,7 +14339,7 @@ class VulkanSPIRVCodeGen(
                     member_type,
                     member_node,
                     member_name=member_name,
-                    member_index=member_index,
+                    member_index=location_index,
                 )
                 components.append(
                     self.load_entry_point_interface_value(variable, member_type)
@@ -14193,10 +14366,29 @@ class VulkanSPIRVCodeGen(
         members = self.current_struct_members.get(return_type.type.base_type)
         if members:
             outputs = []
+            distance_outputs = []
             metadata = self.struct_member_metadata.get(return_type.type.base_type, {})
+            distances = entry_point_distance_layout(self, members, metadata)
+            member_location = 0
             for member_index, (member_type, member_name) in enumerate(members):
                 member_info = metadata.get(member_name, {})
                 member_node = member_info.get("node")
+                location_index = member_location
+                member_location += self.struct_member_interface_location_span(
+                    member_node
+                )
+                distance = distances.slot(member_name)
+                if distance is not None:
+                    array = entry_point_distance_variable(
+                        self,
+                        distance.builtin,
+                        distances.size(distance.builtin),
+                        "Output",
+                    )
+                    distance_outputs.append(
+                        (member_index, array, member_type, distance)
+                    )
+                    continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Output",
@@ -14209,10 +14401,15 @@ class VulkanSPIRVCodeGen(
                     member_type,
                     member_node,
                     member_name=member_name,
-                    member_index=member_index,
+                    member_index=location_index,
                 )
                 outputs.append((member_index, variable, member_type))
-            return {"kind": "struct", "type": return_type, "outputs": outputs}
+            return {
+                "kind": "struct",
+                "type": return_type,
+                "outputs": outputs,
+                "distances": distance_outputs,
+            }
 
         variable = self.register_entry_point_interface_variable(
             execution_model,
@@ -14276,6 +14473,7 @@ class VulkanSPIRVCodeGen(
             storage_class == "Input"
             and execution_model == "Fragment"
             and self.interface_type_requires_flat(interface_type)
+            and not self.is_per_vertex_interface(interface_node)
         ):
             self.decorations.append(f"OpDecorate %{variable.id} Flat")
         self.decorate_global_interface_variable(interface_node, variable)
@@ -14487,6 +14685,9 @@ class VulkanSPIRVCodeGen(
         for member_index, target, member_type in outputs["outputs"]:
             member_value = self.composite_extract(value, member_type, member_index)
             self.store_to_variable(target, member_value)
+        for member_index, target, member_type, slot in outputs.get("distances", ()):
+            member_value = self.composite_extract(value, member_type, member_index)
+            store_entry_point_distance(self, target, slot, member_value, member_type)
         self.create_return()
         return True
 
@@ -16339,10 +16540,7 @@ class VulkanSPIRVCodeGen(
             return type_node.name
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
-            prefix = "dmat" if element_type in {"double", "f64"} else "mat"
-            if type_node.rows == type_node.cols:
-                return f"{prefix}{type_node.rows}"
-            return f"{prefix}{type_node.rows}x{type_node.cols}"
+            return matrix_type_spelling(type_node, element_type)
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = type_node.size
@@ -17064,7 +17262,10 @@ class VulkanSPIRVCodeGen(
         )
         self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
 
-        self.global_variables[cbuffer_node.name] = var_id
+        # HLSL and CrossGL constant-buffer names are not in expression scope: in ``cbuffer ubo { UBO ubo; }`` the
+        # identifier ``ubo`` names the member, so the block keeps its name only for reflection.
+        if all(member_name != cbuffer_node.name for _, member_name in members):
+            self.global_variables[cbuffer_node.name] = var_id
         self.cbuffer_variables[cbuffer_node.name] = var_id
         self.uniform_buffers.append(var_id)
         for member_index, (member_type, member_name) in enumerate(members):
@@ -17245,7 +17446,12 @@ class VulkanSPIRVCodeGen(
         allow_binding_reassignment: bool = False,
     ) -> SpirvId:
         """Emit a GLSL-style buffer block or buffer-qualified array variable."""
-        layout = self.glsl_buffer_block_layout(node)
+        shader_record = is_shader_record_buffer(node)
+        layout = (
+            shader_record_memory_layout(node)
+            if shader_record
+            else self.glsl_buffer_block_layout(node)
+        )
         base_type_name = self.array_base_type_name(type_name)
         outer_array = self.split_outer_array_type(type_name)
         pointer_element_type_name = self.pointer_pointee_type_name_from_string(
@@ -17315,20 +17521,29 @@ class VulkanSPIRVCodeGen(
                 block_type, pointer_descriptor_array_size
             )
 
-        self.decorate_storage_buffer_block_type(block_type, layout)
+        self.decorate_storage_buffer_block_type(
+            block_type, layout, block_decoration="Block" if shader_record else None
+        )
         memory_flags = self.storage_buffer_memory_flags(node)
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
-        var_id = self.create_variable(
-            value_type, self.storage_buffer_storage_class(), node.name
-        )
-        descriptor_set, binding = self.resource_descriptor_slot(
-            node, allow_binding_reassignment=allow_binding_reassignment
-        )
-        self.decorations.append(
-            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
-        )
-        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+        if shader_record:
+            # SPV_KHR_ray_tracing: the shader binding table record, read through no descriptor.
+            self.validate_shader_record_buffer(node, value_type, block_type)
+            var_id = self.create_variable(
+                value_type, "ShaderRecordBufferKHR", node.name
+            )
+        else:
+            var_id = self.create_variable(
+                value_type, self.storage_buffer_storage_class(), node.name
+            )
+            descriptor_set, binding = self.resource_descriptor_slot(
+                node, allow_binding_reassignment=allow_binding_reassignment
+            )
+            self.decorations.append(
+                f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+            )
+            self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
 
         self.global_variables[node.name] = var_id
         self.register_glsl_buffer_access_metadata(node, var_id, value_type, block_type)
@@ -17847,12 +18062,16 @@ class VulkanSPIRVCodeGen(
         return type_id
 
     def decorate_storage_buffer_block_type(
-        self, block_type: SpirvId, layout: str = "std430"
+        self,
+        block_type: SpirvId,
+        layout: str = "std430",
+        block_decoration: Optional[str] = None,
     ):
         if self.type_contains_bfloat16(block_type):
             self.require_bfloat16_storage()
         self.decorations.append(
-            f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
+            f"OpDecorate %{block_type.id} "
+            f"{block_decoration or self.storage_buffer_block_decoration()}"
         )
         members = self.current_struct_members.get(block_type.type.base_type, [])
         self.validate_specialization_sized_member_layout(
@@ -17873,6 +18092,19 @@ class VulkanSPIRVCodeGen(
                     f"MatrixStride {matrix_stride}"
                 )
             self.decorate_storage_buffer_nested_type(member_type, layout)
+
+    def validate_shader_record_buffer(self, node, value_type, block_type):
+        """A shader record buffer is one ``Block`` struct with no descriptor slot, read by a ray tracing stage."""
+        if value_type is not block_type:
+            raise ValueError(
+                f"SPIR-V shader record buffer '{node.name}' must be a single block, not an array of blocks "
+                "(GL_EXT_ray_tracing allows one shaderRecordEXT block per stage)"
+            )
+        if self.explicit_descriptor_binding(node) is not None:
+            raise ValueError(
+                f"SPIR-V shader record buffer '{node.name}' cannot declare a binding: the record is read "
+                "through no descriptor (GL_EXT_ray_tracing)"
+            )
 
     def storage_buffer_storage_class(self) -> str:
         return "StorageBuffer" if self.cooperative_matrix_khr_enabled else "Uniform"
@@ -19537,9 +19769,57 @@ class VulkanSPIRVCodeGen(
             or self.is_glsl_buffer_block_node(node)
         )
 
+    # Clip and cull distances are float arrays whose size the shader declares (GLSL 4.60 section 7.1).
+    DISTANCE_BUILTINS = {
+        "gl_ClipDistance": ("ClipDistance", "ClipDistance"),
+        "gl_CullDistance": ("CullDistance", "CullDistance"),
+    }
+    DISTANCE_BUILTIN_STAGES = {
+        "Output": {"Vertex", "TessellationEvaluation", "Geometry"},
+        "Input": {"Fragment"},
+    }
+
+    def global_interface_distance_builtin(
+        self, node: VariableNode, storage_class: str, type_id: SpirvId
+    ) -> Optional[SpirvId]:
+        """The ``ClipDistance`` or ``CullDistance`` built-in a stage-level variable declares, or ``None``."""
+        semantic = self.semantic_from_node(node)
+        name = str(semantic) if semantic is not None else getattr(node, "name", "")
+        if name not in self.DISTANCE_BUILTINS:
+            return None
+        builtin_name, capability = self.DISTANCE_BUILTINS[name]
+        execution_model = self.current_execution_model
+        if execution_model not in self.DISTANCE_BUILTIN_STAGES.get(storage_class, ()):
+            raise ValueError(
+                f"SPIR-V {name} is not a {storage_class.lower()} of the "
+                f"{execution_model or 'current'} stage"
+            )
+        array_info = self.array_type_info_from_type(type_id)
+        element_type = array_info[0] if array_info is not None else None
+        if (
+            element_type is None
+            or self.normalize_primitive_name(element_type.type.base_type) != "float"
+        ):
+            raise ValueError(f"SPIR-V {name} must be declared as a sized float array")
+        cache_key = f"__distance_builtin::{name}::{storage_class}"
+        if cache_key in self.global_variables:
+            builtin = self.global_variables[cache_key]
+            self.mark_builtin_interface_variable(builtin)
+            return builtin
+        self.require_capability(capability)
+        builtin = self.register_builtin_variable(
+            name, type_id, builtin_name, storage_class
+        )
+        self.global_variables[cache_key] = builtin
+        self.mark_builtin_interface_variable(builtin)
+        return builtin
+
     def global_interface_builtin_variable(
         self, node: VariableNode, storage_class: str, type_id: SpirvId
     ) -> Optional[SpirvId]:
+        distance = self.global_interface_distance_builtin(node, storage_class, type_id)
+        if distance is not None:
+            return distance
         semantic = self.semantic_from_node(node)
         if semantic is None and self.stage_builtin_info(getattr(node, "name", "")):
             semantic = node.name
@@ -19960,6 +20240,12 @@ class VulkanSPIRVCodeGen(
     def interface_location_span(self, node: VariableNode) -> int:
         return max(len(self.interface_location_component_widths(node)), 1)
 
+    def struct_member_interface_location_span(self, member_node) -> int:
+        """Locations a stage-interface structure member occupies; built-ins and unknown members count one."""
+        if member_node is None:
+            return 1
+        return self.interface_location_span(member_node)
+
     def explicit_interface_integer_attribute(
         self, node: VariableNode, attribute_name: str
     ) -> Optional[int]:
@@ -20032,6 +20318,15 @@ class VulkanSPIRVCodeGen(
                 if attribute_name == "sample":
                     self.require_capability("SampleRateShading")
                 self.decorations.append(f"OpDecorate %{var_id.id} {decoration_name}")
+        if self.declaration_metadata_names(node) & {
+            "pervertex",
+            "pervertexext",
+            "pervertexnv",
+        }:
+            # SPV_KHR_fragment_shader_barycentric: each element is one vertex's value, not an interpolant.
+            self.require_capability("FragmentBarycentricKHR")
+            self.require_extension("SPV_KHR_fragment_shader_barycentric")
+            self.decorations.append(f"OpDecorate %{var_id.id} PerVertexKHR")
 
     def has_attribute(self, node, attribute_name: str) -> bool:
         return any(
@@ -20702,7 +20997,48 @@ class VulkanSPIRVCodeGen(
         type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         type_source = getattr(node, "member_type", type_source)
         type_name = self.type_name_from_value(type_source)
+        if type_name is not None and self.is_per_vertex_interface(node):
+            outer = self.split_outer_array_type(
+                self.normalize_hlsl_matrix_type(
+                    self.normalize_generic_vector_type(type_name)
+                )
+            )
+            if outer is not None:
+                type_name = outer[0]
         return self.interface_type_location_component_widths(type_name)
+
+    # Arrayed interfaces whose outer dimension indexes vertices and takes no locations (Vulkan 1.3 section
+    # 15.1.4): geometry inputs, tessellation inputs and non-patch control outputs, mesh outputs, pervertex inputs.
+    PER_VERTEX_INTERFACES = {
+        ("Geometry", "in"),
+        ("TessellationControl", "in"),
+        ("TessellationControl", "out"),
+        ("TessellationEvaluation", "in"),
+        ("MeshEXT", "out"),
+        ("MeshNV", "out"),
+    }
+
+    def is_per_vertex_interface(self, node) -> bool:
+        names = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", None) or []
+        }
+        names.update(str(q).lower() for q in getattr(node, "qualifiers", None) or [])
+        if "patch" in names:
+            return False
+        if names & {"pervertex", "pervertexext", "pervertexnv"}:
+            return True
+        direction = (
+            "in"
+            if names & {"in", "input"}
+            else "out" if names & {"out", "output"} else None
+        )
+        models = (
+            {self.current_execution_model}
+            if self.current_execution_model
+            else getattr(self, "program_execution_models", set())
+        )
+        return len(models) == 1 and (*models, direction) in self.PER_VERTEX_INTERFACES
 
     def interface_type_location_component_widths(self, type_name: str) -> List[int]:
         if type_name is None:
@@ -20753,6 +21089,16 @@ class VulkanSPIRVCodeGen(
 
         if self.is_task_payload_shared_node(node):
             return "TaskPayloadWorkgroupEXT"
+        ray_storage = ray_storage_class(attribute_names | qualifiers)
+        if ray_storage is not None:
+            if getattr(node, "initial_value", None) is not None:
+                raise UnsupportedSPIRVFeatureError(
+                    "ray tracing variable initializer",
+                    f"SPIR-V {ray_storage} variable '{node.name}' cannot take an initializer",
+                    missing_capabilities=("spirv.ray_tracing_storage.initializer",),
+                    source_location=getattr(node, "source_location", None),
+                )
+            return ray_storage
         # Module- and stage-scope GLSL `shared`, HLSL `groupshared` and MSL `threadgroup` variables are one copy
         # per workgroup; Private storage would give every invocation its own copy.
         workgroup_names = {"shared", "groupshared", "threadgroup", "workgroup"}
@@ -25986,6 +26332,12 @@ class VulkanSPIRVCodeGen(
                 if struct_constant is not None:
                     return struct_constant
 
+            matrix_constant = constant_matrix_constructor(
+                self, expr, callee_name, target_type
+            )
+            if matrix_constant is not None:
+                return matrix_constant
+
             vector_type = target_type
             if vector_type is None and isinstance(callee_name, str):
                 if self.vector_component_type_and_count(callee_name) is not None:
@@ -26372,6 +26724,14 @@ class VulkanSPIRVCodeGen(
 
             array_type = self.variable_value_types.get(array_variable.id)
             element_type = self.array_element_type_from_type(array_type)
+            vector_info = (
+                self.vector_component_type_and_count(array_type.type.base_type)
+                if element_type is None and array_type is not None
+                else None
+            )
+            if vector_info is not None:
+                # A subscript of a vector, such as a matrix column, selects one component.
+                element_type = self.register_primitive_type(vector_info[0])
             if (
                 element_type is None
                 and array_type is not None
@@ -28540,6 +28900,19 @@ class VulkanSPIRVCodeGen(
             )
             if handled_length_call:
                 return length_result
+            length_object = length_method_object(
+                getattr(expr, "function", None), getattr(expr, "args", None) or []
+            )
+            matrix_shape = (
+                crossgl_matrix_shape(self.expression_result_type(length_object))
+                if length_object is not None
+                else None
+            )
+            if matrix_shape is not None:
+                # A matrix's length() is its column count (GLSL 4.60 section 5.10).
+                return self.register_constant(
+                    matrix_shape[1], self.register_primitive_type("int")
+                )
 
             handled_structured_buffer_call, structured_buffer_result = (
                 self.process_structured_buffer_method_call(expr)
@@ -28893,6 +29266,7 @@ class VulkanSPIRVCodeGen(
             "GL_VERTEXINDEX": "gl_VertexID",
             "SV_INSTANCEID": "gl_InstanceID",
             "SV_PRIMITIVEID": "gl_PrimitiveID",
+            "SV_VIEWID": "gl_ViewIndex",
             "SV_ISFRONTFACE": "gl_FrontFacing",
             "SV_BARYCENTRICS": "gl_BaryCoordEXT",
             "SV_STENCILREF": "gl_FragStencilRefEXT",
@@ -29026,6 +29400,12 @@ class VulkanSPIRVCodeGen(
                 "Output",
                 {"Vertex", "TessellationEvaluation"},
             ),
+            "gl_PointSize": (
+                "float",
+                "PointSize",
+                "Output",
+                {"Vertex", "TessellationEvaluation"},
+            ),
             "gl_FragDepth": (
                 "float",
                 "FragDepth",
@@ -29049,6 +29429,18 @@ class VulkanSPIRVCodeGen(
                 "PrimitiveId",
                 "Input",
                 {
+                    "Fragment",
+                    "Geometry",
+                    "TessellationControl",
+                    "TessellationEvaluation",
+                },
+            ),
+            "gl_ViewIndex": (
+                "int",
+                "ViewIndex",
+                "Input",
+                {
+                    "Vertex",
                     "Fragment",
                     "Geometry",
                     "TessellationControl",
@@ -29257,7 +29649,10 @@ class VulkanSPIRVCodeGen(
             }
             and any(
                 global_variable.id == variable.id
-                for global_variable in self.global_variables.values()
+                for global_variable in (
+                    *self.global_variables.values(),
+                    *self.cbuffer_variables.values(),
+                )
             )
         ):
             self.mark_function_interface_variable(variable)
@@ -29320,6 +29715,10 @@ class VulkanSPIRVCodeGen(
         elif builtin_name == "FragStencilRefEXT":
             self.require_capability("StencilExportEXT")
             self.require_extension("SPV_EXT_shader_stencil_export")
+        elif builtin_name == "ViewIndex":
+            # SPV_KHR_multiview: core in SPIR-V 1.3, an extension before it.
+            self.require_capability("MultiView")
+            self.require_extension("SPV_KHR_multiview")
 
     def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:
         builtin = self.ensure_compute_builtin(name)
@@ -29657,6 +30056,15 @@ class VulkanSPIRVCodeGen(
                     for type_id in type_dict.values():
                         if type_id.type.base_type == element_type_name:
                             return type_id
+
+        # A matrix value's subscript is a column; a vector value's is a component.
+        matrix_shape = crossgl_matrix_shape(array_type)
+        if matrix_shape is not None:
+            scalar, _columns, rows = matrix_shape
+            return self.register_vector_type(self.register_primitive_type(scalar), rows)
+        vector_info = self.vector_component_type_and_count(array_type)
+        if vector_info is not None:
+            return self.register_primitive_type(vector_info[0])
 
         # Last resort: Try to parse from type name
         for type_dict in [
@@ -30309,10 +30717,14 @@ class VulkanSPIRVCodeGen(
                 body.append(line)
 
         if self.spirv_module_version() == "1.4":
-            entry_points = [
-                self.append_spirv_1_4_workgroup_interfaces(line)
-                for line in entry_points
-            ]
+            entry_points = complete_entry_point_interfaces(
+                [
+                    self.append_spirv_1_4_workgroup_interfaces(line)
+                    for line in entry_points
+                ],
+                global_variables,
+                body,
+            )
 
         annotations.extend(self.decorations)
 
@@ -30461,6 +30873,10 @@ class VulkanSPIRVCodeGen(
         validate_recursion_free(ast, "vulkan")
         lower_relational_builtins(ast)
         self.reset_generation_state()
+        self.program_execution_models = {
+            self.spirv_execution_model(self.stage_key(stage_type))
+            for stage_type in getattr(ast, "stages", None) or {}
+        }
         try:
             module = self._generate_module(ast)
         except (TranslationDiagnostic, UnsupportedSPIRVFeatureError):

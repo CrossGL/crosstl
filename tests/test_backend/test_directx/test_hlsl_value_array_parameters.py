@@ -160,19 +160,25 @@ def test_metal_copies_written_input_arrays(tmp_path):
     }
     for function, (element, name, dimensions) in copies.items():
         suffix = "".join(f"[{dimension}]" for dimension in dimensions)
+        # The semantic pass (crosstl/translator/semantics/array_parameters.py)
+        # renames the parameter and copies it into a local of its name.
         signature = re.search(
-            rf"float {function}\({element} {name}_crosstl_input{re.escape(suffix)}\)"
-            r" \{(?P<body>.*?)\n\}",
+            rf"float {function}\({element} (?P<input>cgl_array_argument_{name}_\d+)"
+            rf"{re.escape(suffix)}\) \{{(?P<body>.*?)\n\}}",
             metal,
             re.S,
         )
         assert signature is not None, function
         body = signature.group("body")
-        assert f"{element} {name}{suffix};" in body
-        indices = "".join(
-            f"[crosstl_{name}_i{level}]" for level in range(len(dimensions))
+        source = signature.group("input")
+        copy = re.search(
+            rf"{element} {name}{re.escape(suffix)} = \{{(?P<elements>.*?)\}};", body
         )
-        assert f"{name}{indices} = {name}_crosstl_input{indices};" in body
+        assert copy is not None, function
+        first = "".join("[0]" for _ in dimensions)
+        last = "".join(f"[{int(dimension) - 1}]" for dimension in dimensions)
+        assert f"{source}{first}" in copy.group("elements"), function
+        assert f"{source}{last}" in copy.group("elements"), function
 
     # Read-only inputs keep the pointer parameter; out/inout keep aliasing.
     assert "float total(float values[4])" in metal

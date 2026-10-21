@@ -272,6 +272,36 @@ def test_parse_main_struct_inout_parameters_infer_stage_qualifiers():
     assert fragment_main.qualifiers == ["fragment"]
 
 
+def test_parse_main_returning_stage_struct_infers_stage_from_member_semantics():
+    vertex_ast = parse_code(textwrap.dedent("""
+            struct VSInput { float3 Pos : POSITION0; };
+            struct VSOutput { float4 Pos : SV_POSITION; float2 UV : TEXCOORD0; };
+            VSOutput main(VSInput input) {
+                VSOutput output = (VSOutput)0;
+                output.Pos = float4(input.Pos, 1.0);
+                return output;
+            }
+            """))
+    fragment_ast = parse_code(textwrap.dedent("""
+            struct VSOutput { float4 Pos : SV_POSITION; float2 UV : TEXCOORD0; };
+            struct FSOutput { float4 Color : SV_TARGET0; };
+            FSOutput main(VSOutput input) {
+                FSOutput output = (FSOutput)0;
+                output.Color = float4(input.UV, 0.0, 1.0);
+                return output;
+            }
+            """))
+    helper_ast = parse_code(textwrap.dedent("""
+            struct Light { float3 Dir : TEXCOORD0; };
+            Light main(float3 d) { Light l; l.Dir = d; return l; }
+            """))
+
+    assert vertex_ast.functions[0].qualifier == "vertex"
+    assert fragment_ast.functions[0].qualifier == "fragment"
+    # A returned structure without stage-output semantics names no stage.
+    assert helper_ast.functions[0].qualifier is None
+
+
 def test_parse_main_scalar_input_output_struct_keeps_helper_signature():
     ast = parse_code(textwrap.dedent("""
             struct VertexOut {

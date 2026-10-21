@@ -560,10 +560,18 @@ def test_comparison_sampler_array_is_an_explicit_sampler_resource():
         "float2(0.25, 0.75), 0.33, 1.0)" in hlsl
     )
 
+    # The two elements are two sampler states, so OpenGL samples shadowMap through two combined uniforms.
+    glsl_body = "\n".join(
+        line for line in glsl.splitlines() if not line.startswith("// crosstl-")
+    )
     assert "comparison_sampler" not in glsl
-    assert "shadowCompareSamplers" not in glsl
+    assert not re.search(r"\bshadowCompareSamplers\b", glsl_body)
+    assert "uniform sampler2DShadow shadowMap_shadowCompareSamplers_1;" in glsl
     assert "texture(shadowMap, vec3(vec2(0.5, 0.5), 0.25))" in glsl
-    assert "textureLod(shadowMap, vec3(vec2(0.25, 0.75), 0.33), 1.0)" in glsl
+    assert (
+        "textureLod(shadowMap_shadowCompareSamplers_1, vec3(vec2(0.25, 0.75), 0.33), 1.0)"
+        in glsl
+    )
 
     assert "array<sampler, 2> shadowCompareSamplers [[sampler(4)]]" in metal
     assert (

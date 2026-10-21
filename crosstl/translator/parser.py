@@ -1904,7 +1904,7 @@ class Parser:
 
             if (
                 token_type == "IDENTIFIER"
-                and normalized in PARAMETER_PRIMITIVE_QUALIFIER_NAMES
+                and str(token_value) in PARAMETER_PRIMITIVE_QUALIFIER_NAMES
                 and self.current_token_starts_qualified_parameter_type()
             ):
                 qualifiers.append(normalized)
@@ -2547,7 +2547,8 @@ class Parser:
             is_double_matrix = mat_type.startswith("dmat")
             dimensions = mat_type[4:] if is_double_matrix else mat_type[3:]
             if "x" in dimensions:
-                rows, cols = map(int, dimensions.split("x"))
+                # CrossGL follows GLSL: matCxR has C columns of R-component vectors.
+                cols, rows = map(int, dimensions.split("x"))
             else:
                 size = int(dimensions)
                 rows = cols = size

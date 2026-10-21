@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 32,
-        "endOffset": 659,
+        "endLine": 36,
+        "endOffset": 746,
         "file": "crosstl-out/opengl/headless.glsl",
-        "length": 659,
+        "length": 746,
         "line": 1,
         "offset": 0
       },

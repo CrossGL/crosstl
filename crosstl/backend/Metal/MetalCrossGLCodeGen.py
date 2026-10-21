@@ -24,6 +24,11 @@ from ...translator.precise_power import binary32_power_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
 from ...translator.resource_identity import source_resource_attribute
+from ...translator.semantics.array_layers import metal_sampled_layer_source_argument
+from ...translator.semantics.sampler_states import (
+    SAMPLER_STATE_CALL_ARGUMENTS,
+    canonical_sampler_argument,
+)
 from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .MetalAst import *
@@ -2595,8 +2600,34 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
 
     def generate_sampler_constructor_arg(self, arg, is_main=False):
         if isinstance(arg, VariableNode) and self.is_scoped_identifier(arg.name):
-            return arg.name
+            return canonical_sampler_argument(arg.name)
+        if isinstance(arg, FunctionCallNode) and isinstance(arg.name, str):
+            name = canonical_sampler_argument(arg.name)
+            if name in SAMPLER_STATE_CALL_ARGUMENTS:
+                arguments = ", ".join(
+                    self.generate_expression(item, is_main) for item in arg.args
+                )
+                return f"{name}({arguments})"
         return self.generate_expression(arg, is_main)
+
+    def program_scope_sampler_constant(self, variable, initializer):
+        """``const sampler NAME = sampler(...);`` for a program-scope constexpr sampler."""
+        name = self.sanitize_identifier(variable.name)
+        extents = [
+            self.generate_expression(size, False)
+            for size in getattr(variable, "array_sizes", None) or []
+        ]
+        array_type = self.metal_array_type_parts(
+            self.normalized_metal_type(getattr(variable, "vtype", None))
+        )
+        if array_type is not None:
+            extents.insert(0, array_type[1])
+        if initializer is None:
+            value = "sampler()"
+        else:
+            value = self.generate_expression(initializer, False)
+        suffix = "".join(f"[{extent}]" for extent in extents)
+        return f"    const sampler {name}{suffix} = {value};\n"
 
     def is_scoped_identifier(self, name):
         return (
@@ -2624,6 +2655,11 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
     def texture_sample_options_call(self, options, sample_args, is_main=False):
         if not options:
             return f"texture({', '.join(sample_args)})"
+        clamp_split = self.texture_min_lod_clamp_options(options, is_main)
+        if clamp_split is not None:
+            return self.texture_min_lod_clamp_sample_call(
+                clamp_split, sample_args, is_main
+            )
         if len(options) > 2:
             return None
 
@@ -2654,17 +2690,6 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 )
             return f"textureGrad({', '.join(sample_args + [ddx, ddy])})"
 
-        min_lod_clamp_arg = self.unwrap_texture_option_argument(option, "min_lod_clamp")
-        if min_lod_clamp_arg is not option:
-            min_lod = self.generate_expression(min_lod_clamp_arg, is_main)
-            if offset is not None:
-                rendered_offset = self.generate_expression(offset, is_main)
-                return (
-                    "textureMinLodClampOffset("
-                    f"{', '.join(sample_args + [min_lod, rendered_offset])})"
-                )
-            return f"textureMinLodClamp({', '.join(sample_args + [min_lod])})"
-
         level_arg = self.unwrap_texture_option_argument(option, "level")
         if level_arg is not option or not self.texture_sample_option_is_offset(option):
             lod = self.generate_expression(level_arg, is_main)
@@ -2678,6 +2703,89 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
 
         rendered_offset = self.generate_expression(option, is_main)
         return f"textureOffset({', '.join(sample_args + [rendered_offset])})"
+
+    METAL_SAMPLE_OPTION_NAMES = frozenset(
+        {
+            "bias",
+            "level",
+            "min_lod_clamp",
+            "gradient2d",
+            "gradient3d",
+            "gradientcube",
+        }
+    )
+
+    def texture_min_lod_clamp_options(self, options, is_main=False):
+        """``(leading option, clamp, offset)`` for MSL options that hold ``min_lod_clamp``, otherwise ``None``.
+
+        MSL accepts ``min_lod_clamp`` alone or after ``bias`` or a ``gradient*`` option, and before the offset
+        (MSL specification, section 6.12). CrossGL's ``texture*Clamp`` operations carry the same clamp.
+        """
+        positions = [
+            index
+            for index, option in enumerate(options)
+            if self.unwrap_texture_option_argument(option, "min_lod_clamp")
+            is not option
+        ]
+        if not positions:
+            return None
+        index = positions[0]
+        leading, trailing = options[:index], options[index + 1 :]
+        if (
+            len(positions) > 1
+            or len(leading) > 1
+            or len(trailing) > 1
+            or any(
+                isinstance(option, FunctionCallNode)
+                and self.unscoped_function_name(option.name)
+                in self.METAL_SAMPLE_OPTION_NAMES
+                for option in trailing
+            )
+        ):
+            return False
+        clamp = self.generate_expression(
+            self.unwrap_texture_option_argument(options[index], "min_lod_clamp"),
+            is_main,
+        )
+        offset = self.generate_expression(trailing[0], is_main) if trailing else None
+        return (leading[0] if leading else None), clamp, offset
+
+    def texture_min_lod_clamp_sample_call(self, clamp_split, sample_args, is_main):
+        if clamp_split is False:
+            return self.refuse_import(
+                "Metal sample options around min_lod_clamp: MSL takes at most one bias or gradient option before "
+                "min_lod_clamp and an offset after it",
+                "vec4(0.0)",
+            )
+        option, clamp, offset = clamp_split
+        if option is None:
+            if offset is not None:
+                return f"textureOffsetClamp({', '.join(sample_args + [offset, clamp])})"
+            return f"textureClamp({', '.join(sample_args + [clamp])})"
+        bias_arg = self.unwrap_texture_option_argument(option, "bias")
+        if bias_arg is not option:
+            bias = self.generate_expression(bias_arg, is_main)
+            if offset is not None:
+                return (
+                    "textureOffsetClamp("
+                    f"{', '.join(sample_args + [offset, clamp, bias])})"
+                )
+            return f"textureClamp({', '.join(sample_args + [clamp, bias])})"
+        gradient_args = self.texture_gradient_option_arguments(option)
+        if gradient_args is not None:
+            ddx = self.generate_expression(gradient_args[0], is_main)
+            ddy = self.generate_expression(gradient_args[1], is_main)
+            if offset is not None:
+                return (
+                    "textureGradOffsetClamp("
+                    f"{', '.join(sample_args + [ddx, ddy, offset, clamp])})"
+                )
+            return f"textureGradClamp({', '.join(sample_args + [ddx, ddy, clamp])})"
+        return self.refuse_import(
+            "Metal sample option combined with min_lod_clamp: MSL clamps only a computed level of detail, so "
+            "min_lod_clamp combines with bias or gradient options, not with an explicit level",
+            "vec4(0.0)",
+        )
 
     def texture_sample_option_is_offset(self, option):
         mapped_type = self.expression_mapped_type(option)
@@ -2756,9 +2864,15 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         remaining_options = list(options)
         constructor = self.sampled_array_coordinate_constructor(texture_expr)
         if constructor and remaining_options:
-            layer = self.generate_expression(remaining_options.pop(0), is_main)
+            layer = self.sampled_array_layer_argument(remaining_options.pop(0), is_main)
             coords = f"{constructor}({coords}, {layer})"
         return coords, remaining_options
+
+    def sampled_array_layer_argument(self, layer_expr, is_main=False):
+        """Render a Metal sampled-array layer argument as a CrossGL coordinate."""
+        layer = self.generate_expression(layer_expr, is_main)
+        metal_type = self.resolve_type_alias(self.expression_metal_type(layer_expr))
+        return metal_sampled_layer_source_argument(layer, metal_type)
 
     def texture_compare_method_base_arguments(
         self, obj_expr, method_args, is_main=False
@@ -2769,13 +2883,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         if mapped_type == "sampler2DArrayShadow" and len(method_args) >= 4:
             sampler = self.generate_expression(method_args[0], is_main)
             coord = self.generate_expression(method_args[1], is_main)
-            layer = self.generate_expression(method_args[2], is_main)
+            layer = self.sampled_array_layer_argument(method_args[2], is_main)
             compare = self.generate_expression(method_args[3], is_main)
             return [sampler, f"vec3({coord}, {layer})", compare], 4
         if mapped_type == "samplerCubeArrayShadow" and len(method_args) >= 4:
             sampler = self.generate_expression(method_args[0], is_main)
             coord = self.generate_expression(method_args[1], is_main)
-            layer = self.generate_expression(method_args[2], is_main)
+            layer = self.sampled_array_layer_argument(method_args[2], is_main)
             compare = self.generate_expression(method_args[3], is_main)
             return [sampler, f"vec4({coord}, {layer})", compare], 4
         return [self.generate_expression(arg, is_main) for arg in method_args[:3]], 3
@@ -2788,6 +2902,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         )
         if len(method_args) == compare_arg_count and compare_arg_count == 4:
             return f"textureCompare({obj}, {', '.join(compare_args)})"
+        clamp_split = self.texture_min_lod_clamp_options(
+            method_args[compare_arg_count:], is_main
+        )
+        if clamp_split is not None:
+            return self.texture_compare_min_lod_clamp_call(
+                obj, compare_args, clamp_split, is_main
+            )
         if len(method_args) not in {compare_arg_count + 1, compare_arg_count + 2}:
             return None
 
@@ -2833,15 +2954,51 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
 
         return None
 
+    def texture_compare_min_lod_clamp_call(
+        self, obj, compare_args, clamp_split, is_main
+    ):
+        if clamp_split is False:
+            return self.refuse_import(
+                f"Metal depth compare options around min_lod_clamp on {obj}: MSL takes at most one gradient "
+                "option before min_lod_clamp and an offset after it",
+                "0.0",
+            )
+        option, clamp, offset = clamp_split
+        gradient_args = (
+            self.texture_gradient_option_arguments(option)
+            if option is not None
+            else None
+        )
+        if option is not None and gradient_args is None:
+            return self.unsupported_texture_compare_lod_option(obj, option) or (
+                self.refuse_import(
+                    f"Metal depth compare option combined with min_lod_clamp on {obj}: MSL clamps only a "
+                    "computed level of detail",
+                    "0.0",
+                )
+            )
+        args = [obj, *compare_args]
+        if gradient_args is not None:
+            args += [
+                self.generate_expression(gradient_args[0], is_main),
+                self.generate_expression(gradient_args[1], is_main),
+            ]
+        function = (
+            "textureCompareGrad" if gradient_args is not None else "textureCompare"
+        )
+        if offset is not None:
+            return f"{function}OffsetClamp({', '.join(args + [offset, clamp])})"
+        return f"{function}Clamp({', '.join(args + [clamp])})"
+
     def unsupported_texture_compare_lod_option(self, obj, option):
         if not isinstance(option, FunctionCallNode):
             return None
         option_name = self.unscoped_function_name(option.name)
-        if option_name not in {"bias", "min_lod_clamp"}:
+        if option_name != "bias":
             return None
         return self.refuse_import(
             f"Metal depth compare LOD option {option_name} on {obj}: CrossGL depth "
-            "compares have no bias or minimum-LOD clamp operand",
+            "compares have no bias operand",
             "0.0",
         )
 
@@ -2861,7 +3018,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         tail = list(method_args[2:])
         constructor = self.sampled_array_coordinate_constructor(texture_expr)
         if constructor and tail:
-            layer = self.generate_expression(tail.pop(0), is_main)
+            layer = self.sampled_array_layer_argument(tail.pop(0), is_main)
             coords = f"{constructor}({coords}, {layer})"
 
         args = [sampler, coords]
@@ -2911,7 +3068,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             )
             sampler = self.generate_expression(method_args[0], is_main)
             coord = self.generate_expression(method_args[1], is_main)
-            layer = self.generate_expression(method_args[2], is_main)
+            layer = self.sampled_array_layer_argument(method_args[2], is_main)
             compare = self.generate_expression(method_args[3], is_main)
             return [sampler, f"{constructor}({coord}, {layer})", compare], 4
 
@@ -3503,7 +3660,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 if isinstance(glob, AssignmentNode):
                     if isinstance(glob.left, VariableNode):
                         if self.is_sampler_variable(glob.left):
-                            self.global_sampler_names.add(glob.left.name)
+                            # A program-scope constexpr sampler is fixed sampler
+                            # state; it stays a CrossGL constant so every target
+                            # either carries that state or refuses it.
+                            code += self.program_scope_sampler_constant(
+                                glob.left, glob.right
+                            )
                             self.current_type_resolution_context = (
                                 previous_type_resolution_context
                             )
@@ -3544,7 +3706,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                     code += f"    {left} {glob.operator} {right};\n"
                 elif isinstance(glob, VariableNode):
                     if self.is_sampler_variable(glob):
-                        self.global_sampler_names.add(glob.name)
+                        code += self.program_scope_sampler_constant(glob, None)
                         self.current_type_resolution_context = (
                             previous_type_resolution_context
                         )
@@ -12418,12 +12580,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             ):
                 coords_expr = sampler_expr
                 sampler_expr = None
-            sampler_name = self.expression_base_name(sampler_expr)
-            sampler = (
-                ""
-                if sampler_name in self.global_sampler_names
-                else self.generate_expression(sampler_expr, is_main)
-            )
+            sampler = self.generate_expression(sampler_expr, is_main)
             sample_args = [texture]
             if sampler:
                 sample_args.append(sampler)
