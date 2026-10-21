@@ -1804,6 +1804,17 @@ CASES = [
         constants=constants_cases.block(constants_cases.HLSL),
     ),
     Case(
+        "h_cbuffer_row_major",
+        "S20",
+        "cbuffer packing: row_major float3x3 rows, scalar packed after the last row, unpadded array tail",
+        "HLSL packing rules for constant variables; row_major matrix packing",
+        constants_cases.inputs(),
+        np.float32,
+        constants_cases.hlsl_reference,
+        compare="ulp:0",
+        constants=constants_cases.block(constants_cases.HLSL_ROW_MAJOR),
+    ),
+    Case(
         "m_constant_struct",
         "S20",
         "constant struct: 16-byte float3, packed_float3, 8-byte float2 stride, float3x3 columns",

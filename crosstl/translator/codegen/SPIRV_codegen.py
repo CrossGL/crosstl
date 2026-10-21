@@ -135,6 +135,11 @@ from .spirv_push_constants import (
     is_push_constant_block,
     uniform_block_storage_layout,
 )
+from .spirv_placed_blocks import (
+    SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION,
+    decorate_placed_uniform_block,
+    placed_uniform_block,
+)
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -412,6 +417,9 @@ class VulkanSPIRVCodeGen(
         self.refusals = SpirvRefusals()
         self.decorations = []
         self.required_extensions = set()
+        self.source_extensions = set()
+        self.placed_uniform_decorations = {}
+        self.placed_uniform_structs = set()
 
         self.primitive_types = {}
         self.vector_types = {}
@@ -626,6 +634,10 @@ class VulkanSPIRVCodeGen(
     def require_extension(self, extension: str):
         """Request a SPIR-V extension for instructions emitted later."""
         self.required_extensions.add(extension)
+
+    def require_source_extension(self, extension: str):
+        """Record a source-language extension the module's layout relies on (``OpSourceExtension``)."""
+        self.source_extensions.add(extension)
 
     def require_non_uniform_descriptor_indexing(self):
         self.require_capability("ShaderNonUniform")
@@ -17342,7 +17354,12 @@ class VulkanSPIRVCodeGen(
                 )
             var_id, members = declare_push_constant_block(self, cbuffer_node, members)
         else:
-            layout = uniform_block_storage_layout(self, cbuffer_node, row_major_members)
+            placed = placed_uniform_block(self, cbuffer_node)
+            layout = (
+                placed.clone_key
+                if placed is not None
+                else uniform_block_storage_layout(self, cbuffer_node, row_major_members)
+            )
             # Block members use layout clones so that ArrayStride/Offset
             # decorations never reach the logical types used by Function,
             # Private or Workgroup variables (VUID-StandaloneSpirv-None-10684).
@@ -17351,12 +17368,15 @@ class VulkanSPIRVCodeGen(
                 for member_type, member_name in members
             ]
             cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
-            if layout == "std140":
+            if placed is not None:
+                decorate_placed_uniform_block(self, cbuffer_type, placed)
+            elif layout == "std140":
                 self.decorate_cbuffer_type(cbuffer_type, members, row_major_members)
             else:
                 self.decorate_storage_buffer_block_type(
                     cbuffer_type, layout, block_decoration="Block"
                 )
+                self.require_source_extension(SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION)
 
             var_id = self.create_variable(cbuffer_type, "Uniform", cbuffer_node.name)
             descriptor_set, binding = self.resource_descriptor_slot(cbuffer_node)
@@ -30973,7 +30993,10 @@ class VulkanSPIRVCodeGen(
         memory_model = []
         entry_points = []
         execution_modes = []
-        debug_names = []
+        debug_names = [
+            f'OpSourceExtension "{extension}"'
+            for extension in sorted(getattr(self, "source_extensions", ()))
+        ]
         annotations = []
         declarations = []
         global_variables = []

@@ -61,6 +61,13 @@ HLSL = (
     (112, (MODE,), np.int32),
     *((128 + 16 * index, (value,), np.float32) for index, value in enumerate(WEIGHTS)),
 )
+# A row_major float3x3 stores the rows of the same matrix: row r holds component r of every column.
+ROWS = tuple(tuple(column[row] for column in ROT) for row in range(3))
+HLSL_ROW_MAJOR = (
+    *HLSL[:6],
+    *((64 + 16 * index, row, np.float32) for index, row in enumerate(ROWS)),
+    *HLSL[9:],
+)
 MSL = (
     (0, SCALE, np.float32),
     (16, (BIAS,), np.float32),
