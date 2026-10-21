@@ -137,6 +137,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .ast_walk import walk_ast_values
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .builtin_result_types import (
@@ -201,6 +202,7 @@ from .generic_struct_utils import (
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_generic_vectors import glsl_generic_vector_constructor_name
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
 from .glsl_hlsl_precise import GLSLHlslPreciseMixin
@@ -226,6 +228,7 @@ from .glsl_stage_distances import (
     distance_private_output_declaration,
 )
 from .glsl_stage_output_values import (
+    builtin_output_value,
     flattened_stage_output_assignment,
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
@@ -23594,9 +23597,9 @@ class GLSLCodeGen(
             output_name = self.current_stage_output_member_map.get(member.name)
             if output_name is None:
                 continue
-            value = self.generate_expression_with_expected(
-                value_expr, self.member_type_name(member)
-            )
+            member_type = self.member_type_name(member)
+            value = self.generate_expression_with_expected(value_expr, member_type)
+            value = builtin_output_value(self, output_name, value, member_type)
             code += f"{indent_str}{output_name} = {value};\n"
         code += distance_output_epilogue(self, indent_str)
         code += f"{indent_str}return;\n"
@@ -38184,6 +38187,9 @@ complex64_t crossgl_complex64_mod_assign(
                 else self.glsl_source_expression_type(right_node)
             ),
         )
+        right = builtin_output_value(
+            self, left, right, self.glsl_source_expression_type(right_node)
+        )
         return f"{left} {op} {right}"
 
     def generate_if(self, node, indent, is_main=False):
@@ -39574,6 +39580,9 @@ complex64_t crossgl_complex64_mod_assign(
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
             original_func_name = self.glsl_builtin_option_constructor_name(
+                original_func_name
+            )
+            original_func_name = glsl_generic_vector_constructor_name(
                 original_func_name
             )
             if original_func_name != func_name:
@@ -54676,31 +54685,7 @@ complex64_t crossgl_complex64_mod_assign(
         return names
 
     def walk_ast(self, root):
-        visited = set()
-
-        def walk(value):
-            if value is None or isinstance(value, (str, int, float, bool)):
-                return
-            if isinstance(value, dict):
-                for item in value.values():
-                    yield from walk(item)
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    yield from walk(item)
-                return
-
-            value_id = id(value)
-            if value_id in visited:
-                return
-            visited.add(value_id)
-            yield value
-
-            if hasattr(value, "__dict__"):
-                for child in vars(value).values():
-                    yield from walk(child)
-
-        yield from walk(root)
+        return walk_ast_values(root)
 
     def is_sampler_type(self, vtype):
         return self.resource_base_type(vtype) in {"sampler", "comparison_sampler"}
@@ -55650,21 +55635,20 @@ complex64_t crossgl_complex64_mod_assign(
     def next_available_resource_binding_from(
         self, used_bindings, namespace, binding, count
     ):
+        # The first window of ``count`` slots at or after ``binding`` that no used
+        # range overlaps. One sweep in start order finds it: a range that
+        # overlaps the current window forces the window past its end, and once a
+        # range starts after the window every later one does too.
         count = max(count or 1, 1)
-        ranges = used_bindings.get(namespace, [])
-        while True:
-            end = binding + count - 1
-            conflict_end = None
-            for used_start, used_end, _ in ranges:
-                if binding <= used_end and used_start <= end:
-                    conflict_end = (
-                        used_end
-                        if conflict_end is None
-                        else max(conflict_end, used_end)
-                    )
-            if conflict_end is None:
-                return binding
-            binding = conflict_end + 1
+        for used_start, used_end, _ in sorted(
+            used_bindings.get(namespace, []), key=lambda used: used[0]
+        ):
+            if used_end < binding:
+                continue
+            if used_start > binding + count - 1:
+                break
+            binding = used_end + 1
+        return binding
 
     def resource_binding_range_conflict_names(
         self, used_bindings, namespace, start, count, name=None

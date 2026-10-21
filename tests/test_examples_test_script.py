@@ -1,8 +1,11 @@
 import importlib.util
-import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
+
+import crosstl.translator.codegen as codegen
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "examples" / "test.py"
@@ -17,92 +20,51 @@ def load_examples_test_module():
     return module
 
 
-def test_build_summary_records_regression_budget_and_failures():
+def test_example_catalog_covers_all_committed_source_examples():
     module = load_examples_test_module()
-    failures = [
-        ("ComplexShader", "mojo", "unsupported sample"),
-        ("GenericPatternMatching", "cuda", "unsupported match arm"),
-    ]
-
-    summary = module.build_summary(
-        total_tests=10,
-        successful_tests=8,
-        failed_tests=failures,
-        consistency_summary={"successful": 4, "total": 4},
-    )
-
-    assert summary["schema_version"] == 1
-    assert summary["failed"] == 2
-    assert summary["skipped"] == 0
-    assert summary["success_rate"] == 80.0
-    assert summary["known_failure_budget"] == module.KNOWN_FAILURE_BUDGET
-    assert summary["minimum_success_rate"] == module.MIN_SUCCESS_RATE
-    assert summary["within_regression_budget"] is False
-    assert summary["failures"][0] == {
-        "example": "ComplexShader",
-        "backend": "mojo",
-        "error": "unsupported sample",
+    catalog_paths = {
+        module.EXAMPLES_ROOT / category / example
+        for category, examples in module.EXAMPLES_BY_CATEGORY.items()
+        for example in examples
     }
-    assert summary["consistency"] == {"successful": 4, "total": 4}
+    source_paths = {
+        path
+        for path in module.EXAMPLES_ROOT.glob("*/*.cgl")
+        if path.parent.name != "output"
+    }
+
+    assert catalog_paths == source_paths
 
 
-def test_build_summary_records_documented_skips():
+def test_backend_compatibility_and_rejections_reference_scheduled_examples():
     module = load_examples_test_module()
-    skips = [("GenericPatternMatching", "mojo", "generic functions unsupported")]
 
-    summary = module.build_summary(
-        total_tests=59,
-        successful_tests=59,
-        failed_tests=[],
-        skipped_tests=skips,
+    assert set(module.BACKEND_COMPATIBILITY) == set(module.EXAMPLES_BY_CATEGORY)
+    for category, backends in module.BACKEND_COMPATIBILITY.items():
+        assert set(backends) <= set(module.BACKENDS), category
+    assert set(module.EXPECTED_REJECTIONS) <= set(module.scheduled_cases())
+
+
+def test_examples_runner_schedules_all_registered_backend_targets():
+    module = load_examples_test_module()
+
+    assert set(module.BACKENDS) == set(codegen.backend_names())
+
+
+def test_validate_generated_output_rejects_internal_ast_repr(tmp_path):
+    module = load_examples_test_module()
+    output = tmp_path / "shader.mojo"
+    output.write_text(
+        "// generated\n"
+        + ("x" * 120)
+        + "\nvar tile: float[IdentifierNode(name=TILE_SIZE)]\n",
+        encoding="utf-8",
     )
 
-    assert summary["failed"] == 0
-    assert summary["skipped"] == 1
-    assert summary["success_rate"] == 100.0
-    assert summary["within_regression_budget"] is True
-    assert summary["skips"] == [
-        {
-            "example": "GenericPatternMatching",
-            "backend": "mojo",
-            "reason": "generic functions unsupported",
-        }
-    ]
-
-
-def test_build_summary_accepts_current_known_failure_budget():
-    module = load_examples_test_module()
-    failures = [
-        (f"KnownFailure{index}", "backend", "expected")
-        for index in range(module.KNOWN_FAILURE_BUDGET)
-    ]
-
-    summary = module.build_summary(
-        total_tests=60,
-        successful_tests=54,
-        failed_tests=failures,
+    assert (
+        module.validate_generated_output(output)
+        == "Output contains internal AST representation: IdentifierNode("
     )
-
-    assert summary["failed"] == module.KNOWN_FAILURE_BUDGET
-    assert summary["success_rate"] == 90.0
-    assert summary["within_regression_budget"] is True
-
-
-def test_write_summary_json_writes_stable_machine_readable_report(tmp_path):
-    module = load_examples_test_module()
-    output = tmp_path / "nested" / "examples-summary.json"
-    summary = module.build_summary(
-        total_tests=1,
-        successful_tests=1,
-        failed_tests=[],
-    )
-
-    module.write_summary_json(summary, output)
-
-    text = output.read_text(encoding="utf-8")
-    assert text.endswith("\n")
-    assert '"schema_version": 1' in text
-    assert '"within_regression_budget": true' in text
 
 
 def test_generic_pattern_matching_cli_reports_documented_generic_gaps():
@@ -160,13 +122,14 @@ def test_generic_pattern_matching_cli_reports_documented_generic_gaps():
         assert result.returncode == 0, (result.stdout + result.stderr)[-4000:]
 
 
-def test_main_is_independent_of_current_working_directory(monkeypatch, tmp_path):
+@pytest.fixture
+def one_example(monkeypatch, tmp_path):
+    """Point the runner at a single graphics example and the Metal backend."""
     module = load_examples_test_module()
     examples_root = tmp_path / "examples"
     source = examples_root / "graphics" / "SimpleShader.cgl"
     source.parent.mkdir(parents=True)
     source.write_text("shader SimpleShader {}", encoding="utf-8")
-    summary_path = tmp_path / "summary.json"
 
     monkeypatch.setattr(module, "EXAMPLES_ROOT", examples_root)
     monkeypatch.setattr(
@@ -174,53 +137,90 @@ def test_main_is_independent_of_current_working_directory(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(module, "BACKENDS", {"metal": ".metal"})
     monkeypatch.setattr(module, "BACKEND_COMPATIBILITY", {"graphics": ["metal"]})
-    monkeypatch.setattr(module, "EXAMPLE_BACKEND_SKIPS", {})
+    monkeypatch.setattr(module, "EXPECTED_REJECTIONS", {})
+    return module
+
+
+def write_valid_output(input_path, backend, save_shader=None):
+    assert Path(input_path).is_absolute()
+    assert backend == "metal"
+    Path(save_shader).write_text("//" + ("x" * 120), encoding="utf-8")
+    return "x" * 120
+
+
+def refuse(*args, **kwargs):
+    raise ValueError("forced rejection")
+
+
+def test_main_is_independent_of_current_working_directory(
+    one_example, monkeypatch, tmp_path
+):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(one_example.crosstl, "translate", write_valid_output)
 
-    def translate(input_path, backend, save_shader=None):
-        assert Path(input_path).is_absolute()
-        if save_shader:
-            Path(save_shader).write_text("//" + ("x" * 120), encoding="utf-8")
-        return "x" * 120
-
-    monkeypatch.setattr(module.crosstl, "translate", translate)
-
-    assert module.main(["--summary-json", str(summary_path)]) == 0
-
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert summary["within_regression_budget"] is True
+    assert one_example.main([]) == 0
     assert (
-        examples_root / "output" / "metal" / "graphics" / "SimpleShader.metal"
+        one_example.EXAMPLES_ROOT
+        / "output"
+        / "metal"
+        / "graphics"
+        / "SimpleShader.metal"
     ).exists()
 
 
-def test_main_returns_failure_when_regression_budget_is_exceeded(
-    monkeypatch, tmp_path, capsys
+def test_main_can_write_outputs_outside_committed_examples_tree(
+    one_example, monkeypatch, tmp_path
 ):
-    module = load_examples_test_module()
-    examples_root = tmp_path / "examples"
-    source = examples_root / "graphics" / "SimpleShader.cgl"
-    source.parent.mkdir(parents=True)
-    source.write_text("shader SimpleShader {}", encoding="utf-8")
+    output_root = tmp_path / "generated"
+    monkeypatch.setattr(one_example.crosstl, "translate", write_valid_output)
 
-    monkeypatch.setattr(module, "EXAMPLES_ROOT", examples_root)
-    monkeypatch.setattr(
-        module, "EXAMPLES_BY_CATEGORY", {"graphics": ["SimpleShader.cgl"]}
-    )
-    monkeypatch.setattr(module, "BACKENDS", {"metal": ".metal"})
-    monkeypatch.setattr(module, "BACKEND_COMPATIBILITY", {"graphics": ["metal"]})
-    monkeypatch.setattr(module, "EXAMPLE_BACKEND_SKIPS", {})
-    monkeypatch.setattr(
-        module,
-        "test_cross_backend_consistency",
-        lambda: {"successful": 0, "total": 0},
-    )
+    assert one_example.main(["--output-root", str(output_root)]) == 0
+    assert (output_root / "metal" / "graphics" / "SimpleShader.metal").exists()
+    assert not (one_example.EXAMPLES_ROOT / "output").exists()
 
-    def translate(*args, **kwargs):
-        raise RuntimeError("forced failure")
 
-    monkeypatch.setattr(module.crosstl, "translate", translate)
+def test_main_fails_on_any_unexpected_rejection(one_example, monkeypatch, capsys):
+    monkeypatch.setattr(one_example.crosstl, "translate", refuse)
 
-    assert module.main([]) == 1
+    assert one_example.main([]) == 1
     captured = capsys.readouterr()
-    assert "Example regression budget exceeded" in captured.err
+    assert "0 passed, 0 rejected as expected, 1 failed" in captured.out
+    assert (
+        "graphics/SimpleShader -> metal: ValueError: forced rejection" in captured.err
+    )
+
+
+def test_main_fails_on_output_that_does_not_validate(one_example, monkeypatch, capsys):
+    def write_small_output(input_path, backend, save_shader=None):
+        Path(save_shader).write_text("//", encoding="utf-8")
+
+    monkeypatch.setattr(one_example.crosstl, "translate", write_small_output)
+
+    assert one_example.main([]) == 1
+    assert "Output file too small" in capsys.readouterr().err
+
+
+def test_main_accepts_a_listed_rejection(one_example, monkeypatch, capsys):
+    monkeypatch.setattr(
+        one_example,
+        "EXPECTED_REJECTIONS",
+        {("graphics", "SimpleShader", "metal"): "the target cannot express it"},
+    )
+    monkeypatch.setattr(one_example.crosstl, "translate", refuse)
+
+    assert one_example.main([]) == 0
+    assert "0 passed, 1 rejected as expected, 0 failed" in capsys.readouterr().out
+
+
+def test_main_fails_when_a_listed_rejection_translates(
+    one_example, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        one_example,
+        "EXPECTED_REJECTIONS",
+        {("graphics", "SimpleShader", "metal"): "the target cannot express it"},
+    )
+    monkeypatch.setattr(one_example.crosstl, "translate", write_valid_output)
+
+    assert one_example.main([]) == 1
+    assert "delete its EXPECTED_REJECTIONS entry" in capsys.readouterr().err

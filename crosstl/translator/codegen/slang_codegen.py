@@ -60,6 +60,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .ast_walk import walk_ast_values
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -2909,6 +2910,12 @@ class SlangCodeGen(LoweringRefusalMixin):
                 continue
             if str(getattr(attr, "name", "")).lower() == "precise":
                 # A modifier of the declaration, rendered before its type.
+                continue
+            if str(getattr(attr, "name", "")).lower() in (
+                "ray_payload_read",
+                "ray_payload_write",
+            ):
+                # HLSL shader model 6.7 payload access qualifiers; Slang declares a ray payload as a plain struct.
                 continue
             if (
                 self.is_resource_format_attribute(attr)
@@ -7785,31 +7792,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         return {}
 
     def walk_ast(self, root):
-        visited = set()
-
-        def walk(value):
-            if value is None or isinstance(value, (str, int, float, bool)):
-                return
-            if isinstance(value, dict):
-                for item in value.values():
-                    yield from walk(item)
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    yield from walk(item)
-                return
-
-            value_id = id(value)
-            if value_id in visited:
-                return
-            visited.add(value_id)
-            yield value
-
-            if hasattr(value, "__dict__"):
-                for child in vars(value).values():
-                    yield from walk(child)
-
-        yield from walk(root)
+        return walk_ast_values(root)
 
     def slang_stage_builtin_return_rewrite(
         self, body_statements, shader_type, ret_type_name, semantic

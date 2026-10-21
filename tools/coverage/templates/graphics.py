@@ -380,6 +380,17 @@ METAL = {
         "[[object]] void probe(object_data Payload& payload [[payload]], mesh_grid_properties grid) {\n"
         "    payload.value = 1;\n    grid.set_threadgroups_per_grid(uint3(1, 1, 1));\n}\n"
     ),
+    # A bounding-box intersection function, which tests a ray against a custom primitive as an intersection shader
+    # does in Direct3D and Vulkan, and accepts the hit at the ray's minimum distance.
+    "intersection": Template(
+        program=_METAL_HEADER + "using namespace raytracing;\n\n"
+        "struct BoxResult {\n    bool accept [[accept_intersection]];\n"
+        "    float distance [[distance]];\n};\n\n"
+        "[[intersection(bounding_box)]]\n"
+        "BoxResult probe(float min_distance [[min_distance]]) {\n"
+        "    BoxResult result;\n    result.accept = true;\n"
+        "    result.distance = min_distance;\n    return result;\n}\n"
+    ),
     # Metal has no geometry stage, runs tessellation factors in a compute kernel, and traces rays from kernels
     # with intersection functions rather than dedicated ray stages.
     **dict.fromkeys(

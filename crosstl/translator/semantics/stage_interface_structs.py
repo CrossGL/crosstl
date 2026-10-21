@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .builtin_values import glsl_builtin_name
 from .hub_types import call_name
 from .rewrite import child_slots, get_child, set_child
 
@@ -332,9 +333,10 @@ def _direction(variable):
 
 
 def _builtin_name(variable):
+    """The GLSL name of the built-in ``variable`` carries, whichever spelling (``@gl_*``, ``@SV_*``, ``@builtin``)."""
     for attribute in getattr(variable, "attributes", None) or []:
-        name = str(getattr(attribute, "name", ""))
-        if name.startswith("gl_"):
+        name = glsl_builtin_name(attribute)
+        if name is not None:
             return name
     return None
 
