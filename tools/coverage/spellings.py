@@ -218,6 +218,11 @@ COUNTERPARTS = {
     },
     # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
     "metal": {"threadgroup_barrier": "void barrier()"},
+    # Mojo returns both parts of frexp and modf as a tuple.
+    "mojo": {
+        "frexp": "float frexp(float, out int)",
+        "modf": "float modf(float, out float)",
+    },
 }
 # Metal functions whose CrossGL operation takes other arguments. Compare-exchange takes the expected value through a
 # pointer and returns whether it swapped, where CrossGL's atomicCompSwap, like GLSL's, takes it by value and returns

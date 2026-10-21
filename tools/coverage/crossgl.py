@@ -8,8 +8,15 @@ anywhere else.
 
 from __future__ import annotations
 
-from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
-from .model import WIDE_INTEGERS
+from .dialect import (
+    UNIFORM_ARRAY_LENGTH,
+    Buffer,
+    Dialect,
+    NoSpelling,
+    ProbeError,
+    uniform_read,
+)
+from .model import WIDE_INTEGERS, Type
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .templates import C_FAMILY, Template
 
@@ -28,6 +35,7 @@ class CrossGL(Dialect):
     wide_integers = True
     narrow_scalars = True
     packed_bytes = True
+    string = "string"
     # The spellings CrossGL's own importers write for these scalars; the HLSL importer reads a packed 8-bit word as
     # ``uint``, which HLSL converts to and from implicitly.
     _SCALARS = {
@@ -61,8 +69,8 @@ class CrossGL(Dialect):
         return f"{spelling} {name};"
 
     # GLSL's samplers and images keep their GLSL spelling; the backend assigns the bindings.
-    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
-        layout = f"layout({image_format}) " if image_format else ""
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        layout = f"layout({qualifier}) " if qualifier else ""
         return f"{layout}uniform {spelling} {name};"
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
@@ -126,9 +134,11 @@ class CrossGL(Dialect):
         self, stage: str, buffers: list[Buffer], body: list[str], **parts
     ) -> str:
         hit = stage in ("any-hit", "closest-hit")
+        # A ray-generation probe that traces declares its payload as a local.
+        traced = parts.get("traced", False)
         lines = ["shader Probe {"]
         lines += [f"    {line}" for line in parts.get("prelude", ())]
-        if hit:
+        if hit or traced:
             lines += ["    struct Payload {", "        vec4 color;", "    }"]
         lines += [f"    {_RAYTRACING_BLOCKS[stage]} {{"]
         lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
@@ -136,6 +146,7 @@ class CrossGL(Dialect):
         lines += [
             f"        void main({self._HIT_PARAMETERS if hit else ''}) {{",
             "            uint i = 0u;",
+            *([f"            Payload {self.payload};"] if traced else ()),
         ]
         lines += [f"            {line}" for line in body]
         lines += ["        }", "    }", "}"]
@@ -260,6 +271,12 @@ class CrossGL(Dialect):
 
     def absent(self, stage: str) -> str:
         return "CrossGL has no work-graph node stage" if stage == "node" else ""
+
+    def type(self, kind: Type) -> str:
+        # A Metal ballot returns a simd_vote or quad_vote mask (features.metal.VOTES), which no CrossGL type holds.
+        if kind.opaque in ("simd_vote", "quad_vote"):
+            raise NoSpelling(f"CrossGL has no type for Metal's {kind.opaque} mask")
+        return super().type(kind)
 
     # CrossGL spells Direct3D's hit object as HLSL does.
     def holding(self, opaque: str) -> str:

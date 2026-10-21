@@ -55,8 +55,9 @@ _QUALIFIERS = re.compile(
     r"|\bcoherent\s*\(\s*\w+\s*\)"
 )
 _MACRO = re.compile(r"\bMETAL_\w+\b")
+_COHERENT = re.compile(r"\bcoherent\s*\(\s*\w+\s*\)")
 _DECLARATION = re.compile(
-    r"METAL_FUNC\s+(?P<result>.*?)\b(?P<name>[A-Za-z]\w*)\s*\(", re.S
+    r"METAL_FUNC\s+(?P<result>.*?)\b(?P<name>[A-Za-z_]\w*)\s*\(", re.S
 )
 # Enumerations a probe passes as a constant; :class:`~tools.coverage.languages.Metal` names the enumerator.
 ENUMS = ("memory_order", "mem_flags")
@@ -172,8 +173,16 @@ def declarations(header: str, text: str):
                 break
             declaration += " " + lines[index].strip()
             index += 1
+        # coherent(device) qualifies a type: its parenthesis is not the parameter list's.
+        declaration = _COHERENT.sub("", declaration)
         match = _DECLARATION.match(declaration)
-        if not match or match.group("name").startswith(("_", "operator")):
+        # An operator's symbol stops the name match, which would then take a later word before a parenthesis for the
+        # function's name. Helpers start with an underscore.
+        if (
+            not match
+            or match.group("name").startswith(("_", "operator"))
+            or re.search(r"\boperator\b", match.group("result"))
+        ):
             template = ""
             continue
         # Metal's atomic functions fix the types their template parameters may take; see _atomic_type.
