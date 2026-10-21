@@ -494,6 +494,8 @@ class _Lowering:
         # origin analysis infers every reachable expression, and so registers
         # every view, before any helper is built.
         self.storage_views = {}
+        # (element, space) -> elements some view of its handles yields.
+        self.view_targets = {}
         self.viewed_loads = set()
         self.generated = []
         self.entry_handles = {
@@ -1094,7 +1096,8 @@ class _Lowering:
         both pointers grant, so an access the source lacks fails where it is
         made. A view of the same element changes no byte and is the source
         pointer itself. A view of another element is a narrowing integer view
-        of device or constant storage (see ``resource_storage_views``); it is
+        of device or constant storage (see ``resource_storage_views``), or a
+        widening view that restores storage a narrowing view reads; both are
         read-only. Any other reinterpretation stays unknown.
         """
         source = self.infer(node.expression, env)
@@ -1111,21 +1114,79 @@ class _Lowering:
             return replace(
                 source, writable=source.writable and target.writable, readable=readable
             )
-        if source.space == "threadgroup" or (
-            storage_view(source.element, target.element) is None
-        ):
+        if source.space == "threadgroup":
             return None
-        key = target.element, source.space
+        space = source.space
+        storages = self.storage_views.get((source.element, space), set())
+        if storage_view(source.element, target.element) is None:
+            if not self.widening_view(source, target, storages):
+                return None
+        else:
+            # A narrowing view reads the source's own bindings too.
+            storages = {source.element, *storages}
+        self.view_targets.setdefault((source.element, space), set()).add(target.element)
+        for storage in sorted(storages):
+            self.register_view(storage, target.element, space, node)
+        return _Pointer(target.element, space, False, readable)
+
+    def register_view(self, storage, element, space, node):
+        """Record that ``element`` handles in ``space`` may name ``storage``.
+
+        Handles viewed from ``element`` handles carry the same identities, so
+        the storage reaches every element viewed from it as well.
+        """
+        if storage == element:
+            # The handle's own element: load helpers read it directly.
+            return
+        if storage_view(storage, element) is None:
+            # A view restores more than some storage it names holds.
+            raise ResourceAggregateError("widened-narrow-storage", node)
+        key = element, space
         viewed = self.storage_views.setdefault(key, set())
-        if source.element not in viewed and key in self.viewed_loads:
+        if storage in viewed:
+            return
+        if key in self.viewed_loads:
             # A load helper of this element no longer covers every view.
             raise ResourceAggregateError("late-storage-view", node)
-        viewed.add(source.element)
-        return _Pointer(target.element, source.space, False, readable)
+        viewed.add(storage)
+        for target in sorted(self.view_targets.get(key, ())):
+            self.register_view(storage, target, space, node)
+
+    def widening_view(self, source, target, storages):
+        """Whether ``target`` handles can restore what ``source`` handles view.
+
+        A ``source`` handle names a binding of its own element or a storage a
+        narrowing view of it reads (``storages``). Widening is exact only when
+        every such storage holds whole ``target`` elements: the handle's
+        offset then divides into the wider elements. An offset that does not
+        divide is a misaligned ``target`` pointer, whose use C++, and so MSL,
+        leaves undefined. Bindings of the narrow element itself would need
+        loads that combine elements, and fail closed.
+        """
+        if storage_view(target.element, source.element) is None:
+            return False
+        if any(
+            resource.element == source.element and resource.space == source.space
+            for _param, resource, _name in self.resources
+        ):
+            return False
+        return bool(storages) and all(
+            storage == target.element or storage_view(storage, target.element)
+            for storage in storages
+        )
 
     def view_helper(self, source, target):
-        """A helper turning a ``source`` handle into a ``target`` view handle."""
+        """A helper turning a ``source`` handle into a ``target`` view handle.
+
+        A narrowing view counts ``ratio`` view elements per source element; a
+        widening view divides the offset back into its wider elements.
+        """
         view = storage_view(source.element, target.element)
+        if view is None:
+            view = storage_view(target.element, source.element)
+            operator = "/"
+        else:
+            operator = "*"
         key = (source.element, target.element), "view", None
         if key in self.helpers:
             return self.helpers[key]
@@ -1139,7 +1200,9 @@ class _Lowering:
             AssignmentNode(_member(_id("view"), "identity"), reference),
             AssignmentNode(
                 _member(_id("view"), "offset"),
-                BinaryOpNode(offset, "*", _call("int64_t", [_integer(view.ratio)])),
+                BinaryOpNode(
+                    offset, operator, _call("int64_t", [_integer(view.ratio)])
+                ),
             ),
             ReturnNode(_id("view")),
         ]

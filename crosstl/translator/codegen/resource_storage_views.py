@@ -12,6 +12,12 @@ of word ``i / ratio``.
 Only reads through unsigned views of integer storage are representable this
 way. A narrower store would need a read-modify-write of the shared word, which
 races with the neighbours' stores, so views never grant write access.
+
+Sources also cast such a view back (``(const device uint32_t*)(bytes + n)``).
+That widening view divides the offset back into storage elements, which is
+exact for every pointer the source may use: a widened pointer whose offset does
+not divide is misaligned for its type, and using it is undefined. Its handles
+keep naming the word buffer, so loads through them read words directly.
 """
 
 from copy import deepcopy
@@ -42,8 +48,9 @@ def storage_view(source_element, target_element):
     """The narrowing view of ``source_element`` storage, or None.
 
     The source must be integer storage, the target an unsigned integer whose
-    width divides the source's. Wider, signed and floating views are left to
-    the caller, which refuses them.
+    width divides the source's. Signed and floating views are left to the
+    caller, which refuses them; it widens only views of storage that holds
+    whole elements of the wider type.
     """
     source = scalar_storage_layout(source_element)
     target = scalar_storage_layout(target_element)
