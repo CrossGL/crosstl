@@ -30,7 +30,13 @@ _DEFINITION = re.compile(
 )
 _ATTRIBUTE = re.compile(r"__attribute__\s*\(\([^)]*\)\)")
 # ``__RETURN_TYPE`` is the math header's macro for the predicates' result, ``bool`` in C++.
-_SPELLINGS = {"int32_t": "int", "uint32_t": "unsigned int", "__RETURN_TYPE": "bool"}
+_SPELLINGS = {
+    "int32_t": "int",
+    "uint32_t": "unsigned int",
+    "int64_t": "long long",
+    "uint64_t": "unsigned long long",
+    "__RETURN_TYPE": "bool",
+}
 _TYPE_WORDS = frozenset(
     "const unsigned signed long short int char float double bool void".split()
 )
@@ -39,7 +45,9 @@ _TYPE_WORDS = frozenset(
 def _plain(text: str) -> str:
     """A declaration's type without its parameter name, with fixed-width and macro spellings resolved."""
     text = re.sub(
-        r"\b(?:u?int32_t|__RETURN_TYPE)\b", lambda m: _SPELLINGS[m.group(0)], text
+        r"\b(?:u?int(?:32|64)_t|__RETURN_TYPE)\b",
+        lambda m: _SPELLINGS[m.group(0)],
+        text,
     ).strip()
     words = re.match(r"(.*?[\w*&])\s*\b(\w+)$", text)
     if words and words.group(2) not in _TYPE_WORDS:

@@ -12,6 +12,10 @@ from .model import Type
 Buffer = tuple[str, str]
 
 
+# Scalars a probe reads from and stores as 32-bit integers.
+WIDE_INTEGERS = frozenset({"int64", "uint64"})
+
+
 class ProbeError(ValueError):
     """The feature's signature cannot be expressed as a probe yet."""
 
@@ -24,15 +28,21 @@ class Dialect:
     language = ""
     suffix = ""
     entry = "main"
+    # The file suffix of a fragment probe, where the language's tools tell the stage from it.
+    fragment_suffix = ""
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
+    # Whether the dialect spells the scalars in WIDE_INTEGERS.
+    wide_integers = False
 
     def type(self, kind: Type) -> str:
         if kind.opaque:
             if kind.opaque == "void":
                 return "void"
             raise ProbeError(f"no probe for parameters of type {kind.opaque}")
+        if kind.scalar in WIDE_INTEGERS and not self.wide_integers:
+            raise ProbeError(f"no 64-bit integer probe for {self.language} yet")
         if not kind.shape:
             return self.scalar(kind.scalar)
         if len(kind.shape) == 1:
@@ -65,9 +75,19 @@ class Dialect:
 
     def literal(self, kind: Type) -> str:
         """A constant of ``kind``, for an argument the language requires to be a constant expression."""
+        if len(kind.shape) > 1:
+            raise ProbeError("no constant probe argument of a matrix type")
+        constants = {
+            "bool": "false",
+            "int": "0",
+            "int64": "0",
+            "uint": "0u",
+            "uint64": "0u",
+        }
+        zero = constants.get(kind.scalar, "0.0")
         if kind.shape:
-            raise ProbeError("no constant probe argument of a vector or matrix type")
-        return {"bool": "false", "int": "0", "uint": "0u"}.get(kind.scalar, "0.0")
+            return self.construct(kind, [zero] * kind.shape[0])
+        return zero
 
     def buffer_element(self, kind: Type, atomic: bool) -> str:
         """The element type of the output buffer; ``atomic`` when the probe passes it to an atomic operation."""
@@ -88,6 +108,10 @@ class Dialect:
     def resource(self, spelling: str, name: str, register: str) -> str:
         """The declaration of a resource object, such as a texture or a sampler, of type ``spelling``."""
         raise ProbeError(f"no probe for {self.language} {spelling} objects yet")
+
+    def uniform(self, spelling: str, name: str, binding: int, image_format: str) -> str:
+        """The declaration of a GLSL sampler or image uniform; ``image_format`` is the image's format qualifier."""
+        raise ProbeError(f"no probe for {self.language} {spelling} uniforms yet")
 
     def call(self, name: str, arguments: list[str]) -> str:
         return f"{name}({', '.join(arguments)})"
@@ -114,6 +138,14 @@ class Dialect:
     def statement(self, expression: str) -> str:
         return f"{expression};"
 
+    def flat(self, kind: str) -> str:
+        """A shader input of type ``kind`` that is not interpolated."""
+        return f"flat {kind}"
+
+    def stage_input(self, name: str) -> str:
+        """How a fragment shader reads its input ``name``, which :meth:`fragment` declares from ``inputs``."""
+        return name
+
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         """A compute kernel that runs ``body`` once per invocation, with ``i`` the invocation's index.
 
@@ -122,3 +154,11 @@ class Dialect:
         ``params``.
         """
         raise NotImplementedError
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A fragment shader that runs ``body`` with ``i`` set to 0 and writes a constant colour.
+
+        Fragment-only features, such as derivatives, are probed here; the buffers are the same as :meth:`kernel`'s.
+        ``parts`` may add ``inputs``, the shader inputs as ``(type spelling, name)``, for a function that takes one.
+        """
+        raise ProbeError(f"{self.language} has no fragment stage")

@@ -10,7 +10,6 @@ you can tell before a local run which rows it will report as untested.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -142,7 +141,7 @@ def _run(args: argparse.Namespace) -> int:
 
 def _merge(args: argparse.Namespace) -> int:
     try:
-        data = report.merge([json.loads(path.read_text()) for path in args.reports])
+        data = report.merge([report.load(path) for path in args.reports])
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -156,14 +155,14 @@ def _publish(args: argparse.Namespace) -> int:
     previous = ""
     if args.history and args.history.is_file():
         previous = args.history.read_text(encoding="utf-8")
-    data = json.loads(args.report.read_text(encoding="utf-8"))
+    data = report.load(args.report)
     for path in publish.write_site(data, args.output_dir, previous, args.repository):
         print(f"wrote {path}")
     return 0
 
 
 def _issues(args: argparse.Namespace) -> int:
-    data = json.loads(args.report.read_text(encoding="utf-8"))
+    data = report.load(args.report)
     try:
         actions = issues.reconcile(
             data,
@@ -230,8 +229,7 @@ def main(argv: list[str] | None = None) -> int:
             return _tools()
         if args.command == "compare":
             published, current = (
-                json.loads(path.read_text(encoding="utf-8"))
-                for path in (args.published, args.report)
+                report.load(path) for path in (args.published, args.report)
             )
             print(compare.compare(published, current), end="")
             return 0

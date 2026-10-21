@@ -105,8 +105,68 @@ def test_glsl_records_section_stage_and_opaque_types():
     features = by_name(glsl.parse(GLSL_EXCERPT))
     assert features["dFdx"].stage == "fragment"
     assert features["abs"].group == "common-functions"
-    assert features["texture"].signature.unsupported == "gvec4"
+    assert features["texture"].signature.unsupported == "sampler2D"
     assert len(features["texture"].signature.params) == 2
+
+
+TEXTURE_EXCERPT = """
+== Texture Functions
+
+[source,glsl]
+----
+int textureSize(gsampler1D sampler, int lod)
+ivec2 textureSize(gsampler2D sampler, int lod)
+gvec4 texture(gsampler2D sampler, vec2 P [, float bias] )
+gvec4 textureLod(gsampler2D sampler, vec2 P, float lod)
+gvec4 textureLodOffset(gsampler2D sampler, vec2 P, float lod, ivec2 offset)
+gvec4 textureGatherOffsets(gsampler2D sampler, vec2 P, ivec2 offsets[4] [, int comp])
+----
+
+== Image Functions
+
+[source,glsl]
+----
+gvec4 imageLoad(readonly IMAGE_PARAMS)
+uint imageAtomicAdd(IMAGE_PARAMS, uint data)
+int imageAtomicAdd(IMAGE_PARAMS, int data)
+----
+
+== Fragment Processing Functions
+
+[source,glsl]
+----
+vec2 interpolateAtOffset(float interpolant, vec2 offset)
+----
+"""
+
+
+def test_glsl_probes_textures_and_images_through_their_2d_forms():
+    features = by_name(glsl.parse(TEXTURE_EXCERPT))
+    size = features["textureSize"].signature
+    assert size.result == Type("int", (2,))
+    assert size.params[0].type == Type.other("sampler2D")
+    assert features["textureLod"].signature.result == Type("float", (4,))
+    assert features["textureLod"].stage == "compute"
+    load = features["imageLoad"].signature
+    assert [p.type for p in load.params] == [
+        Type.other("image2D"),
+        Type("int", (2,)),
+    ]
+    atomic = features["imageAtomicAdd"].signature
+    assert atomic.params[0].type == Type.other("uimage2D")
+    assert atomic.params[2].type == Type("uint")
+
+
+def test_glsl_marks_constant_offsets_arrays_and_implicit_lod():
+    features = by_name(glsl.parse(TEXTURE_EXCERPT))
+    offset = features["textureLodOffset"].signature.params[3]
+    assert offset == Param(Type("int", (2,)), "const")
+    # An interpolation offset is a float and need not be constant.
+    assert features["interpolateAtOffset"].signature.params[1].direction == "in"
+    gather = features["textureGatherOffsets"].signature
+    assert gather.params[2].type == Type.other("ivec2[4]")
+    assert len(gather.params) == 3
+    assert features["texture"].stage == "fragment"
 
 
 GRAMMAR = """{"instructions": [
@@ -144,6 +204,8 @@ $type1 [[rn]] lerp(in float_like<> a, in $type1 b, in $type1 s);
 $type1 [[rn,unsigned_op=umad]] mad(in numeric<> a, in $type1 b, in $type1 c);
 void [[]] InterlockedAdd(ref int32_only result, in uint value);
 $type1 [[rn]] ddx(in float_like<> x);
+$type1 [[rn]] GetAttributeAtVertex(in numeric<> value, in uint VertexID);
+void [[]] Barrier(in uint MemoryTypeFlags, in uint SemanticFlags);
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
 uint   [[rn,min_sm=6.10]] GetGroupWaveIndex();
 } namespace
@@ -189,8 +251,14 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
     assert features["GetGroupWaveIndex"].note == "needs shader model 6.10"
-    assert features["dx::MaybeReorderThread"].category == "function"
-    assert features["dx::MaybeReorderThread"].note == "needs shader model 6.9"
+    # The probes compile for shader model 6.9, so its intrinsics are probed in the stage they belong to.
+    reorder = features["dx::MaybeReorderThread"]
+    assert (reorder.category, reorder.stage, reorder.note) == (
+        "function",
+        "raytracing",
+        "",
+    )
+    assert [p.type for p in reorder.signature.params] == [Type("uint")] * 2
 
 
 def test_hlsl_methods_take_the_element_type_of_their_object():
@@ -211,7 +279,9 @@ def test_hlsl_methods_take_the_element_type_of_their_object():
 
 def test_hlsl_methods_of_types_no_probe_declares_are_untested():
     features = by_name(hlsl.parse(HLSL_TABLE))
-    assert features["DxHitObject.MakeNop"].note == "needs shader model 6.9"
+    assert (
+        features["DxHitObject.MakeNop"].note == "no probe for DxHitObject objects yet"
+    )
     assert features["NodeOutput.IsValid"].signature is None
     assert features["NodeOutput.IsValid"].note == "no probe for NodeOutput objects yet"
 
@@ -226,6 +296,20 @@ def test_hlsl_resolves_generic_layouts_and_matched_types():
     assert asdouble.params[1].type == Type("uint", (2,))
     assert features["InterlockedAdd"].signature.params[0].direction == "inout"
     assert features["transpose"].signature.params[0].type == Type("float", (2, 2))
+    # The table declares the vertex index ``in``, but DXC requires a literal.
+    vertex = features["GetAttributeAtVertex"]
+    assert [p.direction for p in vertex.signature.params] == ["in", "const"]
+    assert vertex.stage == "fragment"
+    barrier = features["Barrier"].signature
+    assert [p.direction for p in barrier.params] == ["const", "const"]
+
+
+def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
+    major, minor = hlsl.SHADER_MODEL
+    assert validators.HLSL_PROFILES == {
+        stage: f"{prefix}_{major}_{minor}"
+        for stage, prefix in (("compute", "cs"), ("fragment", "ps"), ("vertex", "vs"))
+    }
 
 
 def test_hlsl_takes_crossgl_spellings_from_the_template_layer():
@@ -292,6 +376,42 @@ def test_wgsl_takes_crossgl_spellings_from_the_template_layer():
     features = by_name(wgsl.parse(WGSL_DEF, {"atan", "dFdx", "atomicAdd"}))
     assert features["atan2"].crossgl == "atan"
     assert features["dpdx"].crossgl == "dFdx"
+
+
+WGSL_TEXTURES = """
+match fiu32: f32 | i32 | u32
+match iu32: i32 | u32
+
+////////////////////////////////////////////////////////////////////////////////
+// Builtin Functions                                                          //
+////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////
+// Textures
+/////////////////////////////////////////
+@must_use implicit(T: fiu32, C: iu32, L: iu32) fn textureLoad(texture: texture_1d<T>, coords: C, level: L) -> vec4<T>
+@must_use implicit(T: fiu32, C: iu32, L: iu32) fn textureLoad(texture: texture_2d<T>, coords: vec2<C>, level: L) -> vec4<T>
+@must_use fn textureSampleCompareLevel(texture: texture_depth_2d, sampler: sampler_comparison, coords: vec2<f32>,
+                                       depth_ref: f32) -> f32
+@must_use @stage("fragment") fn textureSampleBaseClampToEdge(texture: texture_2d<f32>, sampler: sampler,
+                                                             coords: vec2<f32>) -> vec4<f32>
+"""
+
+
+def test_wgsl_texture_functions_take_a_2d_texture_and_call_glsl_from_crossgl():
+    features = by_name(wgsl.parse(WGSL_TEXTURES))
+    load = features["textureLoad"]
+    assert load.signature.params[0].type == Type.other("texture_2d<T>")
+    assert load.signature.result == Type("float", (4,))
+    assert load.crossgl == "texelFetch"
+    assert [p.type for p in load.counterpart.params] == [
+        Type.other("sampler2D"),
+        Type("int", (2,)),
+        Type("int"),
+    ]
+    compare = features["textureSampleCompareLevel"].counterpart
+    # WGSL always samples level 0, so the CrossGL probe passes the level as a constant.
+    assert compare.params[-1] == Param(Type("float"), "const")
+    assert features["textureSampleBaseClampToEdge"].counterpart is None
 
 
 METAL_LIST = """# Generated by python -m tools.coverage.features.metal; do not edit.
@@ -392,7 +512,8 @@ def test_cuda_reads_device_functions_and_leaves_out_the_rest():
         "frexpf",
         "labs",
     ]
-    assert features["labs"].signature.params[0].type == Type.other("long")
+    # ``long`` is 64 bits wide on Linux, where nvcc validates the probes.
+    assert features["labs"].signature.params[0].type == Type("int64")
     assert features["__threadfence"].group == "intrinsics"
     assert features["fabsf"].group == "math"
 
@@ -484,7 +605,7 @@ def test_hip_reads_the_math_atomic_and_device_headers():
     assert features["min"].signature.result == Type("int")
     assert features["frexpf"].signature.params[1] == Param(Type("int"), "out")
     assert features["__isnanf"].signature.result == Type("bool")
-    assert features["__fns32"].signature.params[0].type == Type.other("uint64_t")
+    assert features["__fns32"].signature.params[0].type == Type("uint64")
     assert features["__fns32"].signature.params[1].type == Type("uint")
     assert features["erff"].crossgl == features["erf"].crossgl == "erf"
     assert features["__popc"].crossgl == "bitCount"

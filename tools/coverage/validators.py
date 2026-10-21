@@ -47,7 +47,12 @@ SUFFIX = {
     "wgsl": ".wgsl",
 }
 GLSL_STAGES = {"compute": "comp", "fragment": "frag", "vertex": "vert"}
-HLSL_PROFILES = {"compute": "cs_6_6", "fragment": "ps_6_6", "vertex": "vs_6_6"}
+# The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one.
+HLSL_SHADER_MODEL = (6, 9)
+HLSL_PROFILES = {
+    stage: f"{prefix}_{HLSL_SHADER_MODEL[0]}_{HLSL_SHADER_MODEL[1]}"
+    for stage, prefix in {"compute": "cs", "fragment": "ps", "vertex": "vs"}.items()
+}
 SPIRV_ENVIRONMENT = "vulkan1.1"
 # The language version of the Metal feature list (features/metal.txt); probes compile against the same version.
 METAL_STANDARD = "metal4.1"
@@ -295,7 +300,8 @@ def validate(
         return _run([*command("spirv-val"), *environment, "probe.spv"], scratch)
 
 
-# How each language's reference compiler lowers a compute probe to SPIR-V; ``{source}`` and ``{entry}`` are filled in.
+# How each language's reference compiler lowers a probe to SPIR-V; ``{source}``, ``{entry}``, ``{stage}`` and the HLSL
+# ``{profile}`` are filled in.
 SPIRV_COMPILERS = {
     "glsl": (
         "glslangValidator",
@@ -306,7 +312,7 @@ SPIRV_COMPILERS = {
         (
             "-spirv",
             "-T",
-            HLSL_PROFILES["compute"],
+            "{profile}",
             "-E",
             "{entry}",
             "-HV",
@@ -328,7 +334,7 @@ SPIRV_COMPILERS = {
             "-entry",
             "{entry}",
             "-stage",
-            "compute",
+            "{stage}",
             "-O0",
             # slangc removes unused locals even at -O0; with debug information it keeps them, so the baseline
             # probe keeps the argument reads the call's probe has. Debug instructions never join an id.
@@ -348,16 +354,26 @@ def can_lower(language: str) -> bool:
     return bool(compiler and command(compiler[0]) and command("spirv-dis"))
 
 
-def lower(language: str, source: str, entry: str = "main") -> tuple[str, str]:
-    """Compile a compute probe to SPIR-V and disassemble it: ``(assembly, "")`` on success, ``("", log)`` if not.
+def lower(
+    language: str, source: str, entry: str = "main", stage: str = "compute"
+) -> tuple[str, str]:
+    """Compile a probe to SPIR-V and disassemble it: ``(assembly, "")`` on success, ``("", log)`` if not.
 
     Call only when :func:`can_lower` is true.
     """
     tool, arguments = SPIRV_COMPILERS[language]
-    name = "probe" + (".comp" if language == "glsl" else SUFFIX[language])
+    name = "probe" + (
+        f".{GLSL_STAGES[stage]}" if language == "glsl" else SUFFIX[language]
+    )
+    fields = {
+        "source": name,
+        "entry": entry,
+        "stage": stage,
+        "profile": HLSL_PROFILES.get(stage, ""),
+    }
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
         Path(scratch, name).write_text(source)
-        filled = [a.format(source=name, entry=entry) for a in arguments]
+        filled = [a.format(**fields) for a in arguments]
         compiled = _run([*command(tool), *filled], scratch)
         if not compiled.accepted:
             return "", compiled.log

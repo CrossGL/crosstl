@@ -19,6 +19,7 @@ from ..model import VOID, Feature, Param, Signature, Type
 LEFT_OUT = frozenset(
     "__all __any __ballot __bool2mask __brkpt __trap __pm0 __pm1 __pm2 __pm3 memcpy memset".split()
 )
+# ``long`` is 64 bits wide in device code on Linux, where the headers are read and nvcc validates the probes.
 _SCALARS = {
     "bool": "bool",
     "int": "int",
@@ -26,6 +27,14 @@ _SCALARS = {
     "unsigned": "uint",
     "float": "float",
     "double": "double",
+    "long": "int64",
+    "long int": "int64",
+    "long long": "int64",
+    "long long int": "int64",
+    "unsigned long": "uint64",
+    "unsigned long int": "uint64",
+    "unsigned long long": "uint64",
+    "unsigned long long int": "uint64",
 }
 _DEFINITION = re.compile(
     r"^__DEVICE(?:_VOID)?__\s+([^;{(]*?)\b(\w+)\s*\(([^)]*)\)", re.M
@@ -37,7 +46,7 @@ _ATTRIBUTE = re.compile(r"__attribute__\s*\(\([^)]*\)\)")
 
 
 def cuda_type(spelling: str) -> Type:
-    """A CUDA value type; ``long``, ``long long``, ``long double`` and the like stay opaque."""
+    """A CUDA value type; ``long double``, ``short``, ``char`` and the like stay opaque."""
     text = " ".join(spelling.replace("const ", "").split())
     if text == "void":
         return VOID
