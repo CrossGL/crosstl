@@ -2551,6 +2551,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-small-rows/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-small-rows/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -2801,6 +2804,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-half/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-half/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3065,6 +3071,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-integer64/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-integer64/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3250,6 +3259,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-slice-update/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-slice-update/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3453,6 +3465,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-scatter/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-scatter/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3698,6 +3713,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-reductions/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-reductions/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail

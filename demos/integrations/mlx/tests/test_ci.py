@@ -29,6 +29,31 @@ ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW_DIR = ROOT / ".github/workflows"
 
 
+def test_host_package_downloads_unpack_outside_the_artifact_stream():
+    """Windows extraction stalls the 30 s blob stream, so unpack in a later step."""
+    jobs = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])["jobs"]
+    consumers = {}
+    for name, job in jobs.items():
+        steps = job.get("steps", [])
+        for index, step in enumerate(steps):
+            with_ = step.get("with") or {}
+            if with_.get("artifact-ids") != "${{ steps.host-artifact.outputs.id }}":
+                continue
+            assert step["uses"].startswith("actions/download-artifact@")
+            assert with_["merge-multiple"] is True
+            assert with_["skip-decompress"] is True
+            unpack = steps[index + 1]
+            assert unpack["name"] == "Unpack same-run host package"
+            assert unpack["run"] == (
+                "python -m demos.integrations.mlx.portable_host.unpack_artifact "
+                + with_["path"]
+            )
+            assert "if" not in unpack and "continue-on-error" not in unpack
+            consumers[name] = with_["path"]
+    assert len(consumers) == 6
+    assert len(set(consumers.values())) == 6
+
+
 @pytest.mark.parametrize("family", ["column", "row"])
 def test_checked_reductions_require_native_execution_on_existing_platform_jobs(family):
     workflow = _workflow_texts()["demo-project-testing.yml"]
