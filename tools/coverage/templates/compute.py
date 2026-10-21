@@ -244,6 +244,45 @@ _RUST_STAGE = (
     "{body}}}\n"
 )
 _RUST_COLOR = "    *color = Vec4::new(uv.x, uv.y, 0.0, 1.0);\n"
+# Ray-tracing stage programs, as GLSL's: each writes a buffer or the ray data it is handed, and the hit stages also
+# read the triangle's barycentrics.
+_RUST_WRITE = dict(
+    params="#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] outp: &mut [f32]",
+    body="    outp[0] = 1.0;\n",
+)
+_RUST_PAYLOAD = "pub struct Payload {\n    pub color: Vec4,\n}\n\n"
+_RUST_HIT = dict(
+    params="#[spirv(incoming_ray_payload)] payload: &mut Payload, "
+    "#[spirv(hit_attribute)] attributes: &mut Vec2",
+    body="    payload.color = Vec4::new(attributes.x, attributes.y, 0.0, 1.0);\n",
+)
+
+
+def _rust_stage(stage: str, declarations: str = "", **parts: str) -> Template:
+    program = _RUST_STAGE.format(stage=stage, **parts)
+    if declarations:
+        program = program.replace("#[spirv(", declarations + "#[spirv(", 1)
+    return Template(program=program, entry="main")
+
+
+_RUST_RAYTRACING_STAGES = {
+    "ray-generation": _rust_stage("ray_generation", **_RUST_WRITE),
+    "intersection": _rust_stage("intersection", **_RUST_WRITE),
+    "any-hit": _rust_stage("any_hit", _RUST_PAYLOAD, **_RUST_HIT),
+    "closest-hit": _rust_stage("closest_hit", _RUST_PAYLOAD, **_RUST_HIT),
+    "miss": _rust_stage(
+        "miss",
+        _RUST_PAYLOAD,
+        params="#[spirv(incoming_ray_payload)] payload: &mut Payload",
+        body="    payload.color = Vec4::new(0.0, 0.0, 0.0, 1.0);\n",
+    ),
+    "callable": _rust_stage(
+        "callable",
+        "pub struct CallData {\n    pub color: Vec4,\n}\n\n",
+        params="#[spirv(incoming_callable_data)] data: &mut CallData",
+        body="    data.color = Vec4::new(1.0, 0.0, 0.0, 1.0);\n",
+    ),
+}
 
 # rust-gpu kernels take their resources and built-in inputs as entry-point parameters. Rust has no do-while
 # statement; a loop that tests at its end is written with ``loop`` and ``break``.
@@ -379,4 +418,24 @@ RUST = {
         ),
         entry="main",
     ),
+    "geometry": _rust_stage(
+        "geometry(input_points = 1, output_points = 1, output_vertices = 1)",
+        params="position: [Vec4; 1], #[spirv(position)] out_position: &mut Vec4",
+        body="    *out_position = position[0] * 2.0;\n    unsafe {\n        spirv_std::arch::emit_vertex();\n"
+        "        spirv_std::arch::end_primitive();\n    }\n",
+    ),
+    # A triangle patch of three control points, tessellated once.
+    "tessellation-control": _rust_stage(
+        "tessellation_control(output_vertices = 3)",
+        params="#[spirv(invocation_id)] id: u32, position: [Vec4; 3], out_position: &mut [Vec4; 3], "
+        "#[spirv(tess_level_outer)] outer: &mut [f32; 4], #[spirv(tess_level_inner)] inner: &mut [f32; 2]",
+        body="    out_position[id as usize] = position[id as usize] * 2.0;\n"
+        "    outer[0] = 1.0;\n    outer[1] = 1.0;\n    outer[2] = 1.0;\n    inner[0] = 1.0;\n",
+    ),
+    "tessellation-evaluation": _rust_stage(
+        "tessellation_evaluation(triangles, spacing_equal, vertex_order_ccw)",
+        params="#[spirv(tess_coord)] coord: Vec3, position: [Vec4; 3], #[spirv(position)] out_position: &mut Vec4",
+        body="    *out_position = position[0] * coord.x + position[1] * coord.y + position[2] * coord.z;\n",
+    ),
+    **_RUST_RAYTRACING_STAGES,
 }

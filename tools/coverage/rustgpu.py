@@ -58,9 +58,13 @@ CAPABILITIES = (
     "AtomicFloat32MinMaxEXT",
     "ShaderClockKHR",
     "VulkanMemoryModelDeviceScope",
+    "Geometry",
+    "Tessellation",
+    "RayTracingKHR",
 )
 EXTENSIONS = (
     "SPV_EXT_demote_to_helper_invocation",
+    "SPV_KHR_ray_tracing",
     "SPV_EXT_shader_atomic_float_add",
     "SPV_EXT_shader_atomic_float_min_max",
     "SPV_KHR_shader_clock",

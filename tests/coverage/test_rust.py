@@ -281,6 +281,92 @@ def test_rust_probe_wraps_unsafe_calls_and_passes_inout_by_reference():
     assert "outp[i] = outp[i];" in baseline
 
 
+RAY_TRACING = """
+pub unsafe fn report_intersection(hit: f32, hit_kind: u32) -> bool {
+    false
+}
+
+pub unsafe fn terminate_ray() -> ! {
+    loop {}
+}
+
+pub unsafe fn execute_callable<T, const ID: usize>(data: &T) {}
+"""
+PRIMITIVE = "pub unsafe fn emit_vertex() {}\n"
+
+
+def test_rust_ray_tracing_functions_are_probed_in_a_stage_that_has_them():
+    found = rust.parse(
+        {"ray_tracing": RAY_TRACING, "primitive": PRIMITIVE, "arch": ARCH}, FLOAT, VEC3
+    )
+    features = {f.name: f for f in found}
+    assert features["report_intersection"].stage == "intersection"
+    assert features["terminate_ray"].stage == "any-hit"
+    assert features["execute_callable"].stage == "closest-hit"
+    assert features["emit_vertex"].stage == "geometry"
+    # A function that never returns is called as a statement.
+    assert features["terminate_ray"].signature == Signature(VOID, ())
+    assert features["kill"].signature == Signature(VOID, ())
+
+
+STAGE_SAMPLES = [
+    Feature(
+        "rust",
+        "function",
+        "report_intersection",
+        Signature(Type("bool"), (Param(Type("float")), Param(Type("uint")))),
+        spelling="unsafe report_intersection",
+        stage="intersection",
+    ),
+    Feature(
+        "rust",
+        "function",
+        "terminate_ray",
+        Signature(VOID, ()),
+        spelling="unsafe terminate_ray",
+        stage="any-hit",
+    ),
+    Feature(
+        "rust",
+        "function",
+        "emit_vertex",
+        Signature(VOID, ()),
+        spelling="unsafe emit_vertex",
+        stage="geometry",
+    ),
+    Feature("rust", "function", "kill", Signature(VOID, ()), stage="fragment"),
+]
+
+
+def test_rust_stage_probes_name_their_execution_model():
+    intersection, hit, geometry, _ = (
+        probes.build(f, "rust").source for f in STAGE_SAMPLES
+    )
+    assert (
+        "#[spirv(intersection)]\npub fn probe(\n    #[spirv(storage_buffer"
+        in intersection
+    )
+    assert "Payload" not in intersection
+    assert "let r: bool = unsafe { report_intersection(a0, a1) };" in intersection
+    assert "pub struct Payload {\n    pub color: Vec4,\n}\n\n#[spirv(any_hit)]" in hit
+    assert "    #[spirv(incoming_ray_payload)] payload: &mut Payload,\n" in hit
+    assert "    #[spirv(hit_attribute)] attributes: &mut Vec2,\n" in hit
+    assert "unsafe { terminate_ray() };" in hit
+    assert (
+        "#[spirv(geometry(input_points = 1, output_points = 1, output_vertices = 1))]"
+        in geometry
+    )
+
+
+def test_rust_has_no_mesh_or_task_probe_for_vulkan_1_1():
+    for stage in ("mesh", "task"):
+        probe_feature = Feature(
+            "rust", "function", "f", Signature(VOID, ()), stage=stage
+        )
+        with pytest.raises(probes.ProbeError, match="need SPIR-V 1.4"):
+            probes.build(probe_feature, "rust")
+
+
 def test_rust_gpu_is_unavailable_without_a_build(monkeypatch, tmp_path):
     monkeypatch.setenv("CROSSTL_COVERAGE_RUST_GPU", str(tmp_path))
     rustgpu.command.cache_clear()
@@ -336,6 +422,14 @@ def test_rust_probes_compile_with_rust_gpu(probe_feature, baseline):
 @needs_rust_gpu
 @pytest.mark.parametrize("probe_feature", FRAGMENT_SAMPLES, ids=lambda f: f.name)
 def test_rust_fragment_probes_compile_with_rust_gpu(probe_feature):
+    probe = probes.build(probe_feature, "rust")
+    verdict = validators.validate("rust", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
+@needs_rust_gpu
+@pytest.mark.parametrize("probe_feature", STAGE_SAMPLES, ids=lambda f: f.name)
+def test_rust_stage_probes_compile_with_rust_gpu(probe_feature):
     probe = probes.build(probe_feature, "rust")
     verdict = validators.validate("rust", probe.source, entry=probe.entry)
     assert verdict.accepted, verdict.log
