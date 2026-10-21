@@ -31,7 +31,13 @@ def metal_vector_component_address(codegen, target, address_space, scalar_type):
     match = _INTEGER_VECTOR.fullmatch(mapped)
     if match is None or index >= int(match.group(1)):
         return None
-    vector_expr = codegen.generate_expression(vector)
+    # A packed vector in buffer storage reads as a converted rvalue (``uint3(v[i])``); address the storage itself.
+    layout_store = getattr(codegen, "metal_hlsl_layout_store_target", None)
+    store = layout_store(vector) if layout_store is not None else None
+    if store is not None and not store[1]:
+        vector_expr = store[0]
+    else:
+        vector_expr = codegen.generate_expression(vector)
     if not codegen.is_metal_address_expression(vector, vector_expr):
         vector_expr = f"&{vector_expr}"
     return (

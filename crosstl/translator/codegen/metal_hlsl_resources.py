@@ -7,6 +7,8 @@ assignment, fences for image stores the same thread reads back, explicit 1D
 texture levels of detail and strong atomic compare-exchange on pointers.
 """
 
+import re
+
 from ..ast import (
     ArrayAccessNode,
     BinaryOpNode,
@@ -23,6 +25,11 @@ from ..ast import (
     VariableNode,
 )
 from .buffer_member_layout import member_explicit_offset, member_is_row_major
+from .glsl_block_layout import (
+    GLSL_BLOCK_LAYOUTS,
+    declared_buffer_layout,
+    member_explicit_alignment,
+)
 from .hlsl_buffer_layout import (
     HLSL_CBUFFER_LAYOUT,
     HLSL_STRUCTURED_LAYOUT,
@@ -30,13 +37,6 @@ from .hlsl_buffer_layout import (
     buffer_layout_from_attributes,
 )
 from .metal_hlsl_buffer_layout import LAYOUT_LABELS, MetalHlslBufferLayouts
-from .std140_buffer_layout import (
-    SCALAR_BLOCK_LAYOUT,
-    STD140_LAYOUT,
-    STD430_LAYOUT,
-    declared_buffer_layout,
-    member_explicit_alignment,
-)
 
 
 class MetalHlslResourceMixin:
@@ -157,7 +157,8 @@ class MetalHlslResourceMixin:
         """Plan Metal storage that reproduces the HLSL buffer layouts of a program.
 
         Constant buffers marked ``@ buffer_layout(hlsl_cbuffer)`` or, for GLSL
-        uniform blocks, ``@ buffer_layout(std140)``, and the element types of
+        uniform and push-constant blocks, ``@ buffer_layout(std140)``,
+        ``std430`` or ``scalar``, and the element types of
         structured buffers marked ``@ buffer_layout(hlsl_structured)`` get Metal
         declarations with the exact member offsets of those layouts.
         """
@@ -170,12 +171,7 @@ class MetalHlslResourceMixin:
         self.metal_hlsl_layout_planner = planner
         for cbuffer in self.cbuffer_variables or []:
             layout = declared_buffer_layout(getattr(cbuffer, "attributes", None))
-            if layout not in (HLSL_CBUFFER_LAYOUT, STD140_LAYOUT):
-                if layout in (STD430_LAYOUT, SCALAR_BLOCK_LAYOUT):
-                    raise ValueError(
-                        f"Cannot reproduce the {layout} layout of uniform block "
-                        f"'{cbuffer.name}' in Metal"
-                    )
+            if layout != HLSL_CBUFFER_LAYOUT and layout not in GLSL_BLOCK_LAYOUTS:
                 continue
             try:
                 members = [
@@ -383,6 +379,18 @@ class MetalHlslResourceMixin:
             ):
                 obj = self.metal_hlsl_layout_member_object_code(object_expr)
                 return f"{obj}.{object_expr.member}.{target.member}", None
+            if isinstance(object_expr, (MemberAccessNode, ArrayAccessNode)):
+                # A component of a vector whose reads convert (``uint3(v[i])``) is
+                # stored through the storage vector: ``v[i].y``.
+                outer = self.metal_hlsl_layout_store_target(object_expr)
+                if outer is not None:
+                    lhs, conversion = outer
+                    if conversion:
+                        width = len(str(target.member))
+                        conversion = re.sub(
+                            r"[234]$", str(width) if width > 1 else "", conversion
+                        )
+                    return f"{lhs}.{target.member}", conversion
             return None
         if isinstance(target, ArrayAccessNode):
             array_expr = getattr(target, "array", getattr(target, "array_expr", None))

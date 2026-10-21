@@ -2693,7 +2693,7 @@ def test_codegen_push_constant_interface_block_preserves_attribute():
 
     crossgl = generate_crossgl(code, "vertex")
 
-    assert "cbuffer MVPUniform @push_constant {" in crossgl
+    assert "cbuffer MVPUniform @push_constant @buffer_layout(std430) {" in crossgl
     assert "mat4 model;" in crossgl
     assert "mat4 view_proj;" in crossgl
     assert "cbuffer Uniforms" not in crossgl
@@ -2718,7 +2718,7 @@ def test_codegen_push_constant_scalar_array_to_wgsl_uses_padded_elements(tmp_pat
     crossgl = generate_crossgl(code, "vertex")
     wgsl = WGSLCodeGen().generate(parse_crossgl(crossgl))
 
-    assert "cbuffer Material @push_constant {" in crossgl
+    assert "cbuffer Material @push_constant @buffer_layout(std430) {" in crossgl
     assert "float fa[3];" in crossgl
     assert (
         "struct UniformArrayElementF32 {\n" "    @size(16) value: f32,\n" "};"

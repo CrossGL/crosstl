@@ -2182,7 +2182,19 @@ class GLSLToCrossGLConverter:
             block_name, uniforms, fields
         )
 
-        result = f"cbuffer {block_name} @push_constant {{\n"
+        layout = self.uniform_block_layout(block_name, uniforms)
+        # Push constants use std430 unless the block names std140 or scalar (GL_KHR_vulkan_glsl).
+        buffer_layout = next(
+            (
+                name
+                for name in ("std140", "scalar")
+                if self.layout_has_key(layout, name)
+            ),
+            "std430",
+        )
+        result = (
+            f"cbuffer {block_name} @push_constant @buffer_layout({buffer_layout}) {{\n"
+        )
         self.increase_indent()
         result += self.uniform_block_member_lines(fields, field_output_names, uniforms)
         self.decrease_indent()
@@ -3913,8 +3925,14 @@ class GLSLToCrossGLConverter:
         return self.generate_function_call(node.object)
 
     def flattened_uniform_block_member(self, node):
-        instance_name = self.expression_base_name(getattr(node, "object", None))
-        if instance_name is None:
+        # Only ``instance.member`` names a block member: in ``instance.m[1].z`` the
+        # ``.z`` is a swizzle of ``m[1]``, even when the block also has a member ``z``.
+        instance = getattr(node, "object", None)
+        if isinstance(instance, VariableNode):
+            instance_name = instance.name
+        elif isinstance(instance, str):
+            instance_name = instance
+        else:
             return None
         fields = self.flattened_uniform_block_instances.get(instance_name)
         if fields is None or node.member not in fields:
@@ -3952,7 +3970,7 @@ class GLSLToCrossGLConverter:
             return array_expr.name, index
 
         if isinstance(array_expr, MemberAccessNode):
-            base_name = self.expression_base_name(array_expr.object)
+            base_name = self.block_instance_name(array_expr.object)
             if (
                 base_name
                 and (base_name, array_expr.member)
@@ -3978,7 +3996,7 @@ class GLSLToCrossGLConverter:
         ):
             return target.name
         if isinstance(target, MemberAccessNode):
-            base_name = self.expression_base_name(target.object)
+            base_name = self.block_instance_name(target.object)
             if (
                 base_name
                 and (base_name, target.member)
@@ -3993,6 +4011,20 @@ class GLSLToCrossGLConverter:
             index = self.generate_expression(node.index)
             return f"{array}[{index}]"
         return self.generate_expression(node)
+
+    def block_instance_name(self, node):
+        """The name of a block instance (``buf`` or an element ``bufs[i]``), else ``None``.
+
+        In ``buf.items[3].data`` the ``data`` is a member of a struct element,
+        not of the block, even when the block also has a member ``data``.
+        """
+        while isinstance(node, ArrayAccessNode):
+            node = node.array
+        if isinstance(node, VariableNode):
+            return node.name
+        if isinstance(node, str):
+            return node
+        return None
 
     def expression_base_name(self, node):
         if isinstance(node, str):

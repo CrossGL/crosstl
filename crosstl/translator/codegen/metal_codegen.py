@@ -11394,6 +11394,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
                 if byte_update is not None:
                     return byte_update
+                # Buffer storage whose reads convert (a packed vector's
+                # components) is updated in place through the storage itself.
+                layout_store = self.metal_hlsl_layout_store_target(expr.operand)
+                if layout_store is not None and not layout_store[1]:
+                    operand = layout_store[0]
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{operator}"
             if operator == "!":

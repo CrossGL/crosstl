@@ -3136,7 +3136,7 @@ def test_codegen_vulkan_samples_buffer_device_address_fixture_snippets():
     assert "vec2 positions[];" in crossgl
     assert "struct PositionReferences {" in crossgl
     assert "Position buffers[];" in crossgl
-    assert "cbuffer Registers @push_constant {" in crossgl
+    assert "cbuffer Registers @push_constant @buffer_layout(std430) {" in crossgl
     assert "PositionReferences references;" in crossgl
     assert "restrict Position positions = references.buffers[slice];" in crossgl
     assert "\n     Position;\n" not in crossgl

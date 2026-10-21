@@ -201,6 +201,13 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .glsl_block_layout import (
+    GLSL_BLOCK_LAYOUTS,
+    crossgl_struct_layout_type,
+    declared_buffer_layout,
+    hlsl_packoffsets_for_block,
+    member_explicit_alignment,
+)
 from .glsl_buffer_layout import (
     byte_offset_add,
     byte_offset_expression,
@@ -212,6 +219,7 @@ from .glsl_buffer_layout import (
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_buffer_layout import HlslLayoutError
+from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
@@ -445,15 +453,6 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_layout_entry_value,
     stage_matches,
-)
-from .std140_buffer_layout import (
-    SCALAR_BLOCK_LAYOUT,
-    STD140_LAYOUT,
-    STD430_LAYOUT,
-    crossgl_struct_layout_type,
-    declared_buffer_layout,
-    hlsl_packoffsets_for_std140,
-    member_explicit_alignment,
 )
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
@@ -1576,7 +1575,7 @@ class _DirectXResourceRegisterAllocator(dict):
         )
 
 
-class HLSLCodeGen(LoweringRefusalMixin):
+class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
     """Emit HLSL source from the shared CrossGL translator AST."""
 
     LOWERING_REFUSAL_TYPE = DirectXLoweringRefused
@@ -12532,6 +12531,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         texture_registers = texture_registers if texture_registers is not None else {}
         cbuffer_registers = cbuffer_registers if cbuffer_registers is not None else {}
         self.reserve_explicit_cbuffer_registers(cbuffers, used_resource_registers)
+        self.reset_hlsl_glsl_block_registers()
         for node in cbuffers:
             is_tbuffer = self.is_hlsl_tbuffer_node(node)
             buffer_keyword = "tbuffer" if is_tbuffer else "cbuffer"
@@ -12564,7 +12564,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if isinstance(node, StructNode) or (
                 hasattr(node, "name") and hasattr(node, "members")
             ):
-                packoffsets = self.hlsl_std140_packoffsets(ast, node)
+                packoffsets = self.hlsl_block_packoffsets(ast, node)
+                if isinstance(packoffsets, HlslRegisterBlockPlan):
+                    code += self.hlsl_glsl_block_register_buffer(
+                        ast,
+                        node,
+                        packoffsets.layout,
+                        packoffsets.layout_type,
+                        buffer_keyword,
+                        register,
+                    )
+                    continue
                 code += f"{buffer_keyword} {node.name}{register} {{\n"
                 for member in getattr(node, "members", []) or []:
                     declaration = self.generate_hlsl_cbuffer_member_declaration(
@@ -12574,21 +12584,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += "};\n"
         return code
 
-    def hlsl_std140_packoffsets(self, ast, node):
-        """``packoffset`` arguments that keep the members of a std140 uniform block at their std140 offsets.
+    def hlsl_block_packoffsets(self, ast, node):
+        """``packoffset`` arguments that keep the members of a GLSL block at the offsets of its layout.
 
-        A GLSL uniform block keeps the std140 layout the host writes (``@ buffer_layout(std140)``). HLSL packing
-        places a ``vec3`` after a ``float``, and any member after an array, a matrix or a struct, at other bytes, so
-        every member gets the ``packoffset`` of its std140 offset unless HLSL packing already agrees. A struct or
-        array whose inner layout differs between the two rule sets, and the std430 and scalar layouts, are refused.
+        A GLSL uniform or push-constant block keeps the std140, std430 or scalar layout the host writes
+        (``@ buffer_layout(...)``). HLSL packing places a ``vec3`` after a ``float``, and any member after an array, a
+        matrix or a struct, at other bytes, so every member gets the ``packoffset`` of its offset unless HLSL packing
+        already agrees. A struct, array or matrix whose inner layout differs between the two rule sets (a std430
+        ``float[]`` has a 4-byte stride, a constant-buffer array a 16-byte one) returns an
+        :class:`HlslRegisterBlockPlan`: the block is then read through its registers (``hlsl_glsl_block_registers``).
         """
         layout = declared_buffer_layout(getattr(node, "attributes", None))
-        if layout in (STD430_LAYOUT, SCALAR_BLOCK_LAYOUT):
-            raise ValueError(
-                f"Cannot reproduce the {layout} layout of uniform block '{node.name}' "
-                "in HLSL"
-            )
-        if layout != STD140_LAYOUT:
+        if layout not in GLSL_BLOCK_LAYOUTS:
             return {}
         structs = {
             struct.name: struct
@@ -12601,7 +12608,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if struct is None:
                 return None
             return [
-                self.hlsl_std140_member(member)
+                self.hlsl_block_member(member)
                 for member in getattr(struct, "members", []) or []
                 if getattr(member, "name", None)
                 and not isinstance(member, FunctionNode)
@@ -12611,7 +12618,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             layout_type = crossgl_struct_layout_type(
                 node.name,
                 [
-                    self.hlsl_std140_member(member)
+                    self.hlsl_block_member(member)
                     for member in getattr(node, "members", []) or []
                     if getattr(member, "name", None)
                 ],
@@ -12619,12 +12626,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 (node.name,),
                 self.hlsl_constant_int_value,
             )
-            offsets = hlsl_packoffsets_for_std140(layout_type)
         except HlslLayoutError as exc:
             raise ValueError(
-                f"Cannot reproduce the std140 layout of uniform block '{node.name}' "
+                f"Cannot reproduce the {layout} layout of block '{node.name}' "
                 f"in HLSL: {exc}"
             ) from exc
+        try:
+            offsets = hlsl_packoffsets_for_block(layout_type, layout)
+        except HlslLayoutError:
+            # packoffset cannot move an array element, a matrix vector or a
+            # nested struct member: read the block through its registers.
+            return HlslRegisterBlockPlan(layout, layout_type)
         if offsets is None:
             return {}
         return {
@@ -12632,7 +12644,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             for (name, _member_type), offset in zip(layout_type.members, offsets)
         }
 
-    def hlsl_std140_member(self, member):
+    def hlsl_block_member(self, member):
         """``(name, type, row_major, offset, alignment)`` of a uniform-block or struct member."""
         if isinstance(member, ArrayNode):
             element_type = getattr(
@@ -13908,6 +13920,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.local_variable_types[output_name] = output_type
             for statement in parameter_prologue_statements:
                 code += f"{'    ' * (indent + 1)}{statement}\n"
+            code += self.generate_hlsl_glsl_block_loads(
+                function_name,
+                shader_type is not None or entry_name is not None,
+                indent + 1,
+            )
             if (
                 effective_shader_type == "compute"
                 and self.hlsl_software_subgroup_invocation_variable is not None

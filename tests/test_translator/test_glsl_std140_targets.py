@@ -16,12 +16,12 @@ import pytest
 
 import crosstl
 from crosstl.translator.codegen.buffer_member_layout import packoffset_bytes
-from crosstl.translator.codegen.hlsl_buffer_layout import HlslLayoutError
-from crosstl.translator.codegen.std140_buffer_layout import (
+from crosstl.translator.codegen.glsl_block_layout import (
+    block_struct_placements,
     crossgl_layout_type,
-    hlsl_packoffsets_for_std140,
-    std140_struct_placements,
+    hlsl_packoffsets_for_block,
 )
+from crosstl.translator.codegen.hlsl_buffer_layout import HlslLayoutError
 
 BASIC = """#version 450
 layout(std140, binding = 2) uniform Params {
@@ -213,7 +213,7 @@ def test_std140_rules_match_glslang(tmp_path):
             else None
         ),
     )
-    placements, size = std140_struct_placements(block, root=True)
+    placements, size = block_struct_placements(block, "std140", root=True)
     assert {p.name: p.offset for p in placements} == BASIC_OFFSETS
     assert size == 180
     reflected = _glslang_offsets(tmp_path, BASIC, "Params")
@@ -246,7 +246,7 @@ def test_std140_nested_struct_and_qualifiers_match_glslang(tmp_path):
         ("Qualified", QUALIFIED_OFFSETS, QUALIFIED),
     ):
         layout_type = crossgl_layout_type(block, structs.get)
-        placements, _size = std140_struct_placements(layout_type, root=True)
+        placements, _size = block_struct_placements(layout_type, "std140", root=True)
         assert {p.name: p.offset for p in placements} == expected
         reflected = _glslang_offsets(tmp_path, source, block)
         if reflected is not None:
@@ -265,7 +265,7 @@ def test_std140_offset_qualifier_must_respect_alignment():
     with pytest.raises(
         HlslLayoutError, match="not a multiple of its std140 alignment 16"
     ):
-        std140_struct_placements(block, root=True)
+        block_struct_placements(block, "std140", root=True)
 
 
 def test_hlsl_packoffsets_are_skipped_when_packing_agrees():
@@ -281,7 +281,7 @@ def test_hlsl_packoffsets_are_skipped_when_packing_agrees():
             else None
         ),
     )
-    assert hlsl_packoffsets_for_std140(block) is None
+    assert hlsl_packoffsets_for_block(block, "std140") is None
 
 
 def test_glsl_import_marks_uniform_blocks_std140(tmp_path):
@@ -358,9 +358,18 @@ def test_hlsl_keeps_row_major_on_std140_matrices(tmp_path):
     assert re.search(r"row_major float3x3 rotation : packoffset\(c0\)", code)
 
 
-def test_hlsl_refuses_structs_that_std140_lays_out_differently(tmp_path):
-    with pytest.raises(Exception, match=r"Pair.*second|second.*Pair"):
-        _translate(tmp_path, MISMATCHED, "directx")
+def test_hlsl_loads_structs_that_std140_lays_out_differently(tmp_path):
+    """HLSL packs ``Pair.second`` at byte 4; std140 aligns it to 16, so the block is read from registers."""
+    code = _flat(_translate(tmp_path, MISMATCHED, "directx"))
+    assert re.search(
+        r"cbuffer Mismatched : register\(b0\) \{ uint4 __crossgl_Mismatched_registers\[2\]; \};",
+        code,
+    ), code
+    assert "pair.first = asfloat(__crossgl_Mismatched_registers[0].x);" in code
+    assert "pair.second = asfloat(__crossgl_Mismatched_registers[1].xyz);" in code
+    assert re.search(
+        r"PSMain\(\) : SV_Target0 \{ __crossgl_load_Mismatched\(\);", code
+    ), code
 
 
 @pytest.mark.parametrize(

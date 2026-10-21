@@ -356,3 +356,52 @@ def test_crossgl_buffers_without_a_layout_keep_the_metal_layout():
         """)
 
     assert "    bool enabled;\n    int3 offset;\n    float scale;\n" in metal
+
+
+def test_metal_reads_packed_cbuffer_vectors_as_natural_vectors(tmp_path):
+    # ``dir`` sits at byte 4, so Metal stores it as packed_float3, which matrix
+    # products and the vector built-ins do not accept.
+    metal = generate_metal("""
+        cbuffer Params : register(b0) {
+            float scale;
+            float3 dir;
+            float3x3 rot;
+        };
+        float4 PSMain() : SV_Target {
+            return float4(normalize(mul(rot, dir)) * scale, 1.0);
+        }
+        """)
+    assert "packed_float3 dir;" in metal
+    assert "float3(params.dir)" in metal
+    compile_metal_with_layout(metal, tmp_path, offsets=[("Params", "dir", 4)])
+
+
+def test_metal_stores_components_of_packed_structured_elements(tmp_path):
+    # A uint3, float3 or bool3 element of a structured buffer is a packed (or
+    # uint-held) vector in Metal. Its reads convert, but component stores and
+    # atomics go through the storage vector, which is assignable.
+    metal = generate_metal("""
+        RWStructuredBuffer<uint3> v : register(u0);
+        RWStructuredBuffer<float3> f : register(u1);
+        RWStructuredBuffer<bool3> b : register(u2);
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 id : SV_DispatchThreadID) {
+            v[id.x].y = 3;
+            v[id.x].xz += uint2(1, 2);
+            f[id.x].z = length(f[0]);
+            b[id.x].y = true;
+            b[id.x].xz = bool2(false, true);
+            v[id.x].y++;
+            --v[id.x].z;
+            InterlockedAdd(v[id.x].x, 1u);
+        }
+        """)
+    assert "v[id.x].y = 3;" in metal
+    assert "v[id.x].xz += uint2(1, 2);" in metal
+    assert "f[id.x].z = length(float3(f[0]));" in metal
+    assert "b[id.x].y = uint(true);" in metal
+    assert "b[id.x].xz = uint2(bool2(false, true));" in metal
+    assert "v[id.x].y++;" in metal
+    assert "--v[id.x].z;" in metal
+    assert "(reinterpret_cast<device uint*>(&v[id.x]) + 0)" in metal
+    compile_metal_with_layout(metal, tmp_path)

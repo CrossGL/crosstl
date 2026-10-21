@@ -1,26 +1,34 @@
-"""GLSL std140 uniform-block layouts for backends that must reproduce them.
+"""GLSL std140, std430 and scalar block layouts for backends that must reproduce them.
 
 A GLSL uniform block is laid out with the std140 rules (GLSL 4.60 section
-7.6.2.2), which neither HLSL constant-buffer packing nor the natural layout of
-Metal follow:
+7.6.2.2), a Vulkan push-constant block with the std430 rules unless it names
+another layout (GL_KHR_vulkan_glsl), and a block that names ``scalar`` with
+the rules of GL_EXT_scalar_block_layout. None of them is HLSL constant-buffer
+packing or the natural layout of Metal:
 
-* a scalar is aligned to its size, a two-component vector to twice that and a
-  three- or four-component vector to four times that; a ``vec3`` takes 12
-  bytes, so a following ``float`` packs into its last word (rules 1-3);
+* std140 and std430 align a scalar to its size, a two-component vector to
+  twice that and a three- or four-component vector to four times that; a
+  ``vec3`` takes 12 bytes, so a following ``float`` packs into its last word
+  (rules 1-3);
 * an array element, and every column (or row, for ``row_major``) of a matrix,
-  is aligned to its vector's alignment rounded up to 16 bytes, and an array or
-  matrix takes ``count * stride`` bytes: the member after ``float a[2]`` starts
-  at byte 32, the one after a ``mat2`` at byte 32 (rules 4-8);
-* a struct is aligned to its widest member rounded up to 16 bytes and its size
-  is rounded up to that alignment (rules 9-10);
+  is aligned like its element (std430) or like its element rounded up to 16
+  bytes (std140), and an array or matrix takes ``count * stride`` bytes
+  (rules 4-8): ``float a[2]`` takes 8 bytes under std430 and 32 under std140;
+* a struct is aligned to its widest member, rounded up to 16 bytes under
+  std140, and its size is rounded up to that alignment (rules 9-10);
+* the scalar layout aligns every value to the size of its scalar components;
+  an array's stride is its element size rounded up to that alignment, and the
+  padding after the last element of an array, or after the last member of a
+  struct, is not reserved: the next member may start in it (the offsets
+  glslang assigns);
 * ``layout(offset = N)`` places a member at byte ``N``, which must be a
   multiple of its alignment and must not reach back into the previous member;
   ``layout(align = N)`` raises a member's alignment to ``N`` (section 4.4.5).
 
-CrossGL keeps a uniform block imported from GLSL as a ``cbuffer`` marked
-``@ buffer_layout(std140)``; the shapes are the :class:`HlslLayoutType` values
-of :mod:`hlsl_buffer_layout`, so a backend may place a buffer with either
-rules and compare them.
+CrossGL keeps such a block as a ``cbuffer`` marked ``@ buffer_layout(std140)``
+(or ``std430``, ``scalar``); the shapes are the :class:`HlslLayoutType` values
+of :mod:`hlsl_buffer_layout`, so a backend may place a buffer with either rule
+set and compare them.
 """
 
 import re
@@ -34,6 +42,7 @@ from .hlsl_buffer_layout import (
     align_to,
     array_type,
     cbuffer_array_stride,
+    cbuffer_matrix_vector_stride,
     cbuffer_struct_placements,
     oriented_matrix_type,
     scalar_type,
@@ -122,63 +131,95 @@ def member_explicit_alignment(member):
     return None
 
 
-# std140 rules ----------------------------------------------------------------
-def std140_vector_alignment(scalar_size, components):
-    if components == 1:
+# Block layout rules ---------------------------------------------------------
+GLSL_BLOCK_LAYOUTS = (STD140_LAYOUT, STD430_LAYOUT, SCALAR_BLOCK_LAYOUT)
+
+
+def require_block_layout(layout):
+    if layout not in GLSL_BLOCK_LAYOUTS:
+        raise HlslLayoutError(f"'{layout}' is not a GLSL block layout")
+
+
+def block_vector_alignment(scalar_size, components, layout):
+    if layout == SCALAR_BLOCK_LAYOUT or components == 1:
         return scalar_size
     if components == 2:
         return 2 * scalar_size
     return 4 * scalar_size
 
 
-def std140_matrix_vector_stride(layout_type):
+def block_matrix_vector_stride(layout_type, layout):
     """Distance between the stored columns (rows, for ``row_major``) of a matrix (rules 5 and 7)."""
-    return align_to(
-        std140_vector_alignment(layout_type.scalar_size, layout_type.components),
-        VEC4_ALIGNMENT,
+    if layout == SCALAR_BLOCK_LAYOUT:
+        return layout_type.scalar_size * layout_type.components
+    stride = block_vector_alignment(
+        layout_type.scalar_size, layout_type.components, layout
     )
+    if layout == STD140_LAYOUT:
+        return align_to(stride, VEC4_ALIGNMENT)
+    return stride
 
 
-def std140_alignment(layout_type):
-    """The std140 base alignment of a value."""
+def block_alignment(layout_type, layout):
+    """The base alignment of a value under ``layout``."""
     kind = layout_type.kind
     if kind == "scalar":
         return layout_type.scalar_size
     if kind == "vector":
-        return std140_vector_alignment(layout_type.scalar_size, layout_type.components)
+        return block_vector_alignment(
+            layout_type.scalar_size, layout_type.components, layout
+        )
     if kind == "matrix":
-        return std140_matrix_vector_stride(layout_type)
+        if layout == SCALAR_BLOCK_LAYOUT:
+            return layout_type.scalar_size
+        return block_matrix_vector_stride(layout_type, layout)
     if kind == "array":
-        return align_to(std140_alignment(layout_type.element), VEC4_ALIGNMENT)
+        alignment = block_alignment(layout_type.element, layout)
+        if layout == STD140_LAYOUT:
+            return align_to(alignment, VEC4_ALIGNMENT)
+        return alignment
     if kind == "struct":
-        alignment = VEC4_ALIGNMENT
+        alignment = VEC4_ALIGNMENT if layout == STD140_LAYOUT else 1
         for (_name, member), explicit in zip(
             layout_type.members, member_alignments(layout_type)
         ):
-            alignment = max(alignment, std140_alignment(member), explicit or 0)
-        return align_to(alignment, VEC4_ALIGNMENT)
-    raise HlslLayoutError(f"unsupported std140 value kind '{kind}'")
+            alignment = max(alignment, block_alignment(member, layout), explicit or 0)
+        if layout == STD140_LAYOUT:
+            return align_to(alignment, VEC4_ALIGNMENT)
+        return alignment
+    raise HlslLayoutError(f"unsupported {layout} value kind '{kind}'")
 
 
-def std140_array_stride(layout_type):
-    """The element stride of a std140 array (rules 4, 6, 8 and 10)."""
-    element = layout_type.element
-    return align_to(std140_size(element), std140_alignment(layout_type))
+def block_array_stride(layout_type, layout):
+    """The element stride of an array (rules 4, 6, 8 and 10)."""
+    return align_to(
+        block_size(layout_type.element, layout), block_alignment(layout_type, layout)
+    )
 
 
-def std140_size(layout_type):
-    """The bytes a std140 value takes, including the padding no other member may use."""
+def block_size(layout_type, layout):
+    """The bytes a value takes: no other member may start before its offset plus this size."""
     kind = layout_type.kind
     if kind in ("scalar", "vector"):
         return layout_type.scalar_size * layout_type.components
     if kind == "matrix":
-        return std140_matrix_vector_stride(layout_type) * layout_type.registers
+        if layout == SCALAR_BLOCK_LAYOUT:
+            return (
+                layout_type.scalar_size * layout_type.components * layout_type.registers
+            )
+        return block_matrix_vector_stride(layout_type, layout) * layout_type.registers
     if kind == "array":
-        return std140_array_stride(layout_type) * layout_type.count
+        stride = block_array_stride(layout_type, layout)
+        if layout == SCALAR_BLOCK_LAYOUT:
+            # The padding after the last element is not reserved.
+            return stride * (layout_type.count - 1) + block_size(
+                layout_type.element, layout
+            )
+        return stride * layout_type.count
     if kind == "struct":
-        _placements, size = std140_struct_placements(layout_type)
+        _placements, size = block_struct_placements(layout_type, layout)
         return size
-    raise HlslLayoutError(f"unsupported std140 value kind '{kind}'")
+    raise HlslLayoutError(f"unsupported {layout} value kind '{kind}'")
 
 
 def member_alignments(layout_type):
@@ -186,12 +227,13 @@ def member_alignments(layout_type):
     return layout_type.alignments or (None,) * len(layout_type.members)
 
 
-def std140_struct_placements(layout_type, root=False):
-    """Member placements and size of a struct, or of a uniform block when ``root``.
+def block_struct_placements(layout_type, layout, root=False):
+    """Member placements and size of a struct, or of a block when ``root``.
 
-    The size of a nested struct is rounded up to its alignment; a block's size
-    ends after its last member.
+    The size of a nested struct is rounded up to its alignment, except under
+    the scalar layout; a block's size ends after its last member.
     """
+    require_block_layout(layout)
     offsets = layout_type.offsets or (None,) * len(layout_type.members)
     alignments = member_alignments(layout_type)
     placements = []
@@ -199,11 +241,11 @@ def std140_struct_placements(layout_type, root=False):
     for (name, member_type), offset, explicit_alignment in zip(
         layout_type.members, offsets, alignments
     ):
-        alignment = std140_alignment(member_type)
+        alignment = block_alignment(member_type, layout)
         if offset is not None:
             if offset % alignment:
                 raise HlslLayoutError(
-                    f"offset {offset} of '{name}' is not a multiple of its std140 "
+                    f"offset {offset} of '{name}' is not a multiple of its {layout} "
                     f"alignment {alignment}"
                 )
             if offset < cursor:
@@ -215,24 +257,24 @@ def std140_struct_placements(layout_type, root=False):
         if explicit_alignment:
             alignment = max(alignment, explicit_alignment)
         start = align_to(cursor, alignment)
-        size = std140_size(member_type)
+        size = block_size(member_type, layout)
         placements.append(HlslMemberPlacement(name, member_type, start, size))
         cursor = start + size
-    if root:
+    if root or layout == SCALAR_BLOCK_LAYOUT:
         return placements, cursor
-    return placements, align_to(cursor, std140_alignment(layout_type))
+    return placements, align_to(cursor, block_alignment(layout_type, layout))
 
 
 def layout_struct_placements(layout_type, layout, root=False):
-    """Member placements and size of a struct under ``layout`` (an HLSL layout or std140)."""
-    if layout == STD140_LAYOUT:
-        return std140_struct_placements(layout_type, root)
+    """Member placements and size of a struct under ``layout`` (an HLSL or a GLSL block layout)."""
+    if layout in GLSL_BLOCK_LAYOUTS:
+        return block_struct_placements(layout_type, layout, root)
     return struct_placements(layout_type, layout)
 
 
 def layout_array_stride(layout_type, layout):
-    if layout == STD140_LAYOUT:
-        return std140_array_stride(layout_type)
+    if layout in GLSL_BLOCK_LAYOUTS:
+        return block_array_stride(layout_type, layout)
     return cbuffer_array_stride(layout_type)
 
 
@@ -286,6 +328,22 @@ def crossgl_layout_type(
         return oriented_matrix_type(
             CROSSGL_MATRIX_PREFIXES[matrix_match.group(1)], columns, rows, row_major
         )
+    # The HLSL-style spellings some importers emit: unambiguous for vectors and square matrices only.
+    alias_match = re.fullmatch(
+        r"(float|double|int|uint|bool)([234])(?:x([234]))?", type_name
+    )
+    if alias_match is not None:
+        scalar, size, second = alias_match.groups()
+        if second is None:
+            return vector_type(CROSSGL_SCALARS[scalar], int(size))
+        if second != size:
+            raise HlslLayoutError(
+                f"the matrix spelling '{type_name}' does not say which size is the column count; "
+                f"write it as mat{size}x{second} or mat{second}x{size}"
+            )
+        if scalar not in ("float", "double"):
+            raise HlslLayoutError(f"{scalar} matrices have no uniform-block layout")
+        return oriented_matrix_type(scalar, int(size), int(size), row_major)
     members = struct_members(type_name)
     if members is None:
         raise HlslLayoutError(f"type '{type_name}' has no uniform-block layout")
@@ -368,72 +426,74 @@ def crossgl_struct_layout_type(
 
 
 # HLSL constant buffers -------------------------------------------------------
-def hlsl_packoffsets_for_std140(layout_type):
-    """``packoffset`` byte offsets that put the members of a constant buffer at their std140 offsets.
+def hlsl_packoffsets_for_block(layout_type, layout):
+    """``packoffset`` byte offsets that put the members of a constant buffer at their ``layout`` offsets.
 
     Returns ``None`` when HLSL packing already places every member there, and
     raises :class:`HlslLayoutError` when HLSL cannot reproduce the block: a
-    member's std140 offset breaks HLSL packing for its type, or a struct or
-    array inside a member is laid out differently by the two rule sets
+    member's offset breaks HLSL packing for its type, or a struct, array or
+    matrix inside a member is laid out differently by the two rule sets
     (``packoffset`` places only the members of the buffer itself).
     """
-    std140, _size = std140_struct_placements(layout_type, root=True)
+    placements, _size = block_struct_placements(layout_type, layout, root=True)
     hlsl, _hlsl_size = cbuffer_struct_placements(
         struct_type(layout_type.struct_name, layout_type.members)
     )
-    for placement in std140:
-        check_std140_interior_matches_hlsl(placement.name, placement.layout_type)
-    if [placement.offset for placement in std140] == [
+    for placement in placements:
+        check_block_interior_matches_hlsl(placement.name, placement.layout_type, layout)
+    if [placement.offset for placement in placements] == [
         placement.offset for placement in hlsl
     ]:
         return None
     explicit = struct_type(
         layout_type.struct_name,
         layout_type.members,
-        [placement.offset for placement in std140],
+        [placement.offset for placement in placements],
     )
-    # Raises when a std140 offset is not a legal HLSL placement of its type.
+    # Raises when an offset is not a legal HLSL placement of its type.
     cbuffer_struct_placements(explicit)
-    return [placement.offset for placement in std140]
+    return [placement.offset for placement in placements]
 
 
-def check_std140_interior_matches_hlsl(name, layout_type):
-    """Refuse a value whose inner layout (array stride, struct members) differs between std140 and HLSL."""
+def check_block_interior_matches_hlsl(name, layout_type, layout):
+    """Refuse a value whose inner layout (array stride, matrix stride, struct members) differs from HLSL's."""
     kind = layout_type.kind
     if kind == "array":
-        std140_stride = std140_array_stride(layout_type)
+        stride = block_array_stride(layout_type, layout)
         hlsl_stride = cbuffer_array_stride(layout_type)
-        if std140_stride != hlsl_stride:
+        if stride != hlsl_stride:
             raise HlslLayoutError(
-                f"array '{name}' has a std140 stride of {std140_stride} bytes but an "
+                f"array '{name}' has a {layout} stride of {stride} bytes but an "
                 f"HLSL constant-buffer stride of {hlsl_stride}"
             )
-        check_std140_interior_matches_hlsl(name, layout_type.element)
+        check_block_interior_matches_hlsl(name, layout_type.element, layout)
         return
     if kind == "matrix":
-        if std140_matrix_vector_stride(layout_type) != 16 * (
-            1 + (layout_type.scalar_size * layout_type.components - 1) // 16
-        ):
+        stride = block_matrix_vector_stride(layout_type, layout)
+        if stride != cbuffer_matrix_vector_stride(layout_type):
             raise HlslLayoutError(
-                f"matrix '{name}' has a std140 vector stride that HLSL does not use"
+                f"matrix '{name}' has a {layout} vector stride of {stride} bytes, "
+                "which HLSL constant buffers do not use"
             )
         return
     if kind != "struct":
         return
-    std140, _size = std140_struct_placements(layout_type)
-    hlsl, _hlsl_size = cbuffer_struct_placements(
+    placements, size = block_struct_placements(layout_type, layout)
+    hlsl, hlsl_size = cbuffer_struct_placements(
         struct_type(layout_type.struct_name, layout_type.members)
     )
-    std140_offsets = [placement.offset for placement in std140]
+    offsets = [placement.offset for placement in placements]
     hlsl_offsets = [placement.offset for placement in hlsl]
-    if std140_offsets != hlsl_offsets:
-        differing = next(s.name for s, h in zip(std140, hlsl) if s.offset != h.offset)
+    if offsets != hlsl_offsets:
+        differing = next(
+            s.name for s, h in zip(placements, hlsl) if s.offset != h.offset
+        )
         raise HlslLayoutError(
             f"member '{name}' is a struct '{layout_type.struct_name}' whose member "
-            f"'{differing}' sits at a different byte under std140 than under HLSL "
+            f"'{differing}' sits at a different byte under {layout} than under HLSL "
             "constant-buffer packing"
         )
-    for placement in std140:
-        check_std140_interior_matches_hlsl(
-            f"{name}.{placement.name}", placement.layout_type
+    for placement in placements:
+        check_block_interior_matches_hlsl(
+            f"{name}.{placement.name}", placement.layout_type, layout
         )

@@ -133,6 +133,7 @@ from .spirv_push_constants import (
     declare_push_constant_block,
     declare_push_constant_variable,
     is_push_constant_block,
+    uniform_block_storage_layout,
 )
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (
@@ -17341,15 +17342,21 @@ class VulkanSPIRVCodeGen(
                 )
             var_id, members = declare_push_constant_block(self, cbuffer_node, members)
         else:
-            # Block members use std140 layout clones so that ArrayStride/Offset
+            layout = uniform_block_storage_layout(self, cbuffer_node, row_major_members)
+            # Block members use layout clones so that ArrayStride/Offset
             # decorations never reach the logical types used by Function,
             # Private or Workgroup variables (VUID-StandaloneSpirv-None-10684).
             members = [
-                (self.storage_layout_type(member_type, "std140"), member_name)
+                (self.storage_layout_type(member_type, layout), member_name)
                 for member_type, member_name in members
             ]
             cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
-            self.decorate_cbuffer_type(cbuffer_type, members, row_major_members)
+            if layout == "std140":
+                self.decorate_cbuffer_type(cbuffer_type, members, row_major_members)
+            else:
+                self.decorate_storage_buffer_block_type(
+                    cbuffer_type, layout, block_decoration="Block"
+                )
 
             var_id = self.create_variable(cbuffer_type, "Uniform", cbuffer_node.name)
             descriptor_set, binding = self.resource_descriptor_slot(cbuffer_node)
@@ -18456,6 +18463,12 @@ class VulkanSPIRVCodeGen(
         return self.uniform_scalar_size(type_id)
 
     def scalar_layout_size(self, type_id: SpirvId) -> int:
+        """The bytes a scalar-layout value takes before the next member may start.
+
+        GL_EXT_scalar_block_layout reserves no padding after the last element of an array or the last member of a
+        struct: glslang puts the member after ``struct { double d; float f; } s`` at 12 bytes past ``s``, although
+        an array of that struct has a 16-byte stride.
+        """
         matrix_info = self.matrix_type_info_from_type(type_id)
         if matrix_info is not None:
             column_type, column_count = matrix_info
@@ -18464,20 +18477,22 @@ class VulkanSPIRVCodeGen(
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, size = array_info
-            return self.scalar_array_stride(
-                element_type
-            ) * self.array_length_default_value(size)
+            count = self.array_length_default_value(size)
+            if count <= 0:
+                return 0
+            return self.scalar_array_stride(element_type) * (
+                count - 1
+            ) + self.scalar_layout_size(element_type)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
             offset = 0
-            max_alignment = 1
             for member_type, _ in struct_members:
-                alignment = self.scalar_layout_alignment(member_type)
-                max_alignment = max(max_alignment, alignment)
-                offset = self.align_to(offset, alignment)
+                offset = self.align_to(
+                    offset, self.scalar_layout_alignment(member_type)
+                )
                 offset += self.scalar_layout_size(member_type)
-            return self.align_to(offset, max_alignment)
+            return offset
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:

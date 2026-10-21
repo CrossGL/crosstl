@@ -1,4 +1,4 @@
-"""OpenGL uniform blocks that reproduce HLSL constant-buffer layouts.
+"""OpenGL uniform blocks that reproduce HLSL constant-buffer and GLSL std430 or scalar layouts.
 
 HLSL packs a constant buffer into 16-byte registers (see
 ``hlsl_buffer_layout``): a scalar or vector only moves to the next register
@@ -18,6 +18,13 @@ from the bits at their HLSL offsets (``uintBitsToFloat``, ``packDouble2x32``
 and so on). Member reads are unchanged, and every value is read from the bytes
 the host wrote for it. A member type without an HLSL constant-buffer layout
 raises :class:`OpenGLHlslConstantBufferError`.
+
+A GLSL block marked ``@ buffer_layout(std430)`` or ``scalar`` (a Vulkan push
+constant, or a block written for GL_EXT_scalar_block_layout) is declared the
+same way: OpenGL uniform blocks have only the std140 layout, which moves every
+``float[]`` element to its own 16 bytes. So is a std140 block whose ``offset``
+or ``align`` qualifiers move its members. Arrays whose stride is not a whole
+number of registers are read word by word.
 """
 
 import re
@@ -27,13 +34,20 @@ from typing import List, Tuple
 from ..ast import ArrayNode, FunctionNode
 from .array_utils import format_c_style_array_declaration
 from .buffer_member_layout import member_explicit_offset, member_is_row_major
+from .glsl_block_layout import (
+    GLSL_BLOCK_LAYOUTS,
+    block_array_stride,
+    block_matrix_vector_stride,
+    block_struct_placements,
+    declared_buffer_layout,
+    member_explicit_alignment,
+)
 from .hlsl_buffer_layout import (
     CBUFFER_REGISTER_SIZE,
     HLSL_CBUFFER_LAYOUT,
     HlslLayoutError,
     align_to,
     array_type,
-    buffer_layout_from_attributes,
     cbuffer_array_stride,
     cbuffer_matrix_vector_stride,
     cbuffer_struct_placements,
@@ -167,8 +181,28 @@ def std140_scalar_offsets(layout_type, offset=0):
     ]
 
 
-def hlsl_scalar_offsets(layout_type, offset=0):
-    """Byte offsets of every scalar of a value under HLSL constant packing."""
+def layout_matrix_vector_stride(layout_type, layout):
+    if layout in GLSL_BLOCK_LAYOUTS:
+        return block_matrix_vector_stride(layout_type, layout)
+    return cbuffer_matrix_vector_stride(layout_type)
+
+
+def layout_array_stride(layout_type, layout):
+    if layout in GLSL_BLOCK_LAYOUTS:
+        return block_array_stride(layout_type, layout)
+    return cbuffer_array_stride(layout_type)
+
+
+def layout_member_placements(layout_type, layout):
+    if layout in GLSL_BLOCK_LAYOUTS:
+        placements, _size = block_struct_placements(layout_type, layout)
+    else:
+        placements, _size = cbuffer_struct_placements(layout_type)
+    return placements
+
+
+def layout_scalar_offsets(layout_type, layout, offset=0):
+    """Byte offsets of every scalar of a value under HLSL constant packing or a GLSL block layout."""
     kind = layout_type.kind
     if kind == "scalar":
         return [offset]
@@ -176,48 +210,59 @@ def hlsl_scalar_offsets(layout_type, offset=0):
         size = layout_type.scalar_size
         return [offset + k * size for k in range(layout_type.components)]
     if kind == "matrix":
-        stride = cbuffer_matrix_vector_stride(layout_type)
+        stride = layout_matrix_vector_stride(layout_type, layout)
         column = vector_type(layout_type.scalar, layout_type.components)
         return [
             item
             for index in range(layout_type.registers)
-            for item in hlsl_scalar_offsets(column, offset + index * stride)
+            for item in layout_scalar_offsets(column, layout, offset + index * stride)
         ]
     if kind == "array":
-        stride = cbuffer_array_stride(layout_type)
+        stride = layout_array_stride(layout_type, layout)
         return [
             item
             for index in range(layout_type.count)
-            for item in hlsl_scalar_offsets(
-                layout_type.element, offset + index * stride
+            for item in layout_scalar_offsets(
+                layout_type.element, layout, offset + index * stride
             )
         ]
-    placements, _size = cbuffer_struct_placements(layout_type)
     return [
         item
-        for placement in placements
-        for item in hlsl_scalar_offsets(
-            placement.layout_type, offset + placement.offset
+        for placement in layout_member_placements(layout_type, layout)
+        for item in layout_scalar_offsets(
+            placement.layout_type, layout, offset + placement.offset
         )
     ]
 
 
 @dataclass(frozen=True)
 class RegisterLocation:
-    """A byte address in the register array: ``16 * sum(terms) + byte``.
+    """A byte address in the register array: ``16 * sum(terms) + 4 * sum(word_terms) + byte``.
 
-    ``terms`` are loop-dependent register counts; every array element and
-    struct starts a register, so they never change the byte within one.
+    ``terms`` are loop-dependent register counts, for arrays whose stride is a
+    whole number of registers, so they never change the byte within one.
+    ``word_terms`` are loop-dependent word counts, for the other arrays.
     """
 
     terms: Tuple[str, ...] = ()
     byte: int = 0
+    word_terms: Tuple[str, ...] = ()
 
     def shifted(self, delta):
-        return RegisterLocation(self.terms, self.byte + delta)
+        return RegisterLocation(self.terms, self.byte + delta, self.word_terms)
 
     def indexed(self, term):
-        return RegisterLocation((*self.terms, term), self.byte)
+        return RegisterLocation((*self.terms, term), self.byte, self.word_terms)
+
+    def word_indexed(self, term):
+        return RegisterLocation(self.terms, self.byte, (*self.word_terms, term))
+
+    def word_index(self):
+        """The index of the location's word, counted from the first register."""
+        parts = [f"({term}) * 4" for term in self.terms]
+        parts.extend(f"({term})" for term in self.word_terms)
+        parts.append(str(self.byte // WORD_SIZE))
+        return " + ".join(parts)
 
     def register_and_component(self, registers):
         index_terms = list(self.terms)
@@ -235,6 +280,11 @@ class RegisterLoader:
     registers: str
     index_names: List[str]
     lines: List[str] = field(default_factory=list)
+    # The layout the host wrote: HLSL constant packing or a GLSL block layout.
+    layout: str = HLSL_CBUFFER_LAYOUT
+    # ``uint name(int word)`` reads one word at a computed index; set when used.
+    word_reader: str = ""
+    uses_word_reader: bool = False
 
 
 class GLSLHlslConstantBuffers:
@@ -326,22 +376,27 @@ class GLSLHlslConstantBuffers:
     # Declarations -----------------------------------------------------------
 
     def glsl_hlsl_cbuffer_block(self, node, layout, block_name):
-        """Register storage for ``node`` when std140 differs from HLSL, else ``None``.
+        """Register storage for ``node`` when std140 differs from its layout, else ``None``.
 
-        Returns the uniform block, the private member variables and their
-        loader; stage entries call the loader through
-        :meth:`generate_glsl_hlsl_cbuffer_loads`.
+        ``node`` is an HLSL constant buffer (``@ buffer_layout(hlsl_cbuffer)``)
+        or a GLSL block (``std140``, ``std430`` or ``scalar``). Returns the
+        uniform block, the private member variables and their loader; stage
+        entries call the loader through :meth:`generate_glsl_hlsl_cbuffer_loads`.
         """
         if not hasattr(self, "glsl_hlsl_cbuffer_loaders"):
             self.reset_glsl_hlsl_cbuffers()
-        attributes = getattr(node, "attributes", None)
-        if buffer_layout_from_attributes(attributes) != HLSL_CBUFFER_LAYOUT:
+        source_layout = declared_buffer_layout(getattr(node, "attributes", None))
+        if (
+            source_layout != HLSL_CBUFFER_LAYOUT
+            and source_layout not in GLSL_BLOCK_LAYOUTS
+        ):
             return None
         members = [
             member
             for member in getattr(node, "members", []) or []
             if getattr(member, "name", None) and not isinstance(member, FunctionNode)
         ]
+        label = "HLSL" if source_layout == HLSL_CBUFFER_LAYOUT else source_layout
         try:
             layout_type = struct_type(
                 node.name,
@@ -357,8 +412,15 @@ class GLSLHlslConstantBuffers:
                     for member in members
                 ],
                 [member_explicit_offset(member) for member in members],
+                [member_explicit_alignment(member) for member in members],
             )
-            placements, size = cbuffer_struct_placements(layout_type)
+            if source_layout == HLSL_CBUFFER_LAYOUT:
+                placements, size = cbuffer_struct_placements(layout_type)
+            else:
+                placements, size = block_struct_placements(
+                    layout_type, source_layout, root=True
+                )
+            # The declaration this generator writes has no offset or align qualifiers.
             std140_offsets, _std140_size, _alignment = std140_struct_offsets(
                 layout_type
             )
@@ -368,24 +430,37 @@ class GLSLHlslConstantBuffers:
                 for _name, member_type in layout_type.members
             )
             if not nested_orientation and all(
-                hlsl_scalar_offsets(placement.layout_type, placement.offset)
+                layout_scalar_offsets(
+                    placement.layout_type, source_layout, placement.offset
+                )
                 == std140_scalar_offsets(placement.layout_type, std140_offset)
                 for placement, std140_offset in zip(placements, std140_offsets)
             ):
                 return None
             return self.glsl_hlsl_cbuffer_register_block(
-                node, layout, block_name, members, placements, size
+                node, layout, block_name, members, placements, size, source_layout
             )
         except HlslLayoutError as exc:
             raise OpenGLHlslConstantBufferError(
-                f"Cannot reproduce the HLSL layout of cbuffer '{node.name}' in "
+                f"Cannot reproduce the {label} layout of cbuffer '{node.name}' in "
                 f"OpenGL: {exc}",
                 cbuffer=node.name,
-                reason="hlsl-cbuffer-layout",
+                reason=(
+                    "hlsl-cbuffer-layout"
+                    if source_layout == HLSL_CBUFFER_LAYOUT
+                    else "glsl-block-layout"
+                ),
             ) from exc
 
     def glsl_hlsl_cbuffer_register_block(
-        self, node, layout, block_name, members, placements, size
+        self,
+        node,
+        layout,
+        block_name,
+        members,
+        placements,
+        size,
+        source_layout=HLSL_CBUFFER_LAYOUT,
     ):
         identity = ("hlsl-cbuffer", id(node))
         registers = self.glsl_generated_module_identifier(
@@ -395,7 +470,10 @@ class GLSLHlslConstantBuffers:
             (*identity, "loader"), f"crossgl_load_{block_name}"
         )
         register_count = max(1, align_to(size, CBUFFER_REGISTER_SIZE) // 16)
-        loader = RegisterLoader(registers, [])
+        loader = RegisterLoader(registers, [], layout=source_layout)
+        loader.word_reader = self.glsl_generated_module_identifier(
+            (*identity, "word"), f"crossgl_{block_name}_word"
+        )
         declarations = ""
         for member, placement in zip(members, placements):
             name = self.glsl_global_identifier_name(member.name)
@@ -412,11 +490,19 @@ class GLSLHlslConstantBuffers:
             )
         self.glsl_hlsl_cbuffer_loaders.append(loader_name)
         body = "".join(f"{line}\n" for line in loader.lines)
+        word_reader = ""
+        if loader.uses_word_reader:
+            word_reader = (
+                f"uint {loader.word_reader}(int word) {{\n"
+                f"    return {registers}[word >> 2][word & 3];\n"
+                "}\n"
+            )
         return (
             f"{layout} uniform {block_name} {{\n"
             f"    uvec4 {registers}[{register_count}];\n"
             "};\n"
             f"{declarations}"
+            f"{word_reader}"
             f"void {loader_name}() {{\n{body}}}\n"
         )
 
@@ -440,7 +526,7 @@ class GLSLHlslConstantBuffers:
             loader.lines.append(f"{indent}{target} = {value};")
             return
         if kind == "matrix":
-            stride = cbuffer_matrix_vector_stride(layout_type)
+            stride = layout_matrix_vector_stride(layout_type, loader.layout)
             column_type = vector_type(layout_type.scalar, layout_type.components)
             emulated = layout_type.scalar in ("int", "uint", "bool")
             columns = f"{target}.c" if emulated else target
@@ -467,8 +553,7 @@ class GLSLHlslConstantBuffers:
                 loader.lines.append(f"{indent}{columns}[{index}] = {value};")
             return
         if kind == "struct":
-            placements, _size = cbuffer_struct_placements(layout_type)
-            for placement in placements:
+            for placement in layout_member_placements(layout_type, loader.layout):
                 member = self.glsl_struct_member_name(
                     layout_type.struct_name, placement.name
                 )
@@ -480,7 +565,6 @@ class GLSLHlslConstantBuffers:
                     depth,
                 )
             return
-        # Arrays start a register and have a stride of whole registers.
         level = depth - 1
         while len(loader.index_names) <= level:
             loader.index_names.append(
@@ -489,8 +573,16 @@ class GLSLHlslConstantBuffers:
                 )
             )
         index = loader.index_names[level]
-        registers = cbuffer_array_stride(layout_type) // CBUFFER_REGISTER_SIZE
-        term = index if registers == 1 else f"{index} * {registers}"
+        stride = layout_array_stride(layout_type, loader.layout)
+        if stride % CBUFFER_REGISTER_SIZE == 0:
+            # The elements start registers: the index counts whole registers.
+            registers = stride // CBUFFER_REGISTER_SIZE
+            term = index if registers == 1 else f"{index} * {registers}"
+            element_location = location.indexed(term)
+        else:
+            words = stride // WORD_SIZE
+            term = index if words == 1 else f"{index} * {words}"
+            element_location = location.word_indexed(term)
         loader.lines.append(
             f"{indent}for (int {index} = 0; {index} < {layout_type.count}; ++{index}) {{"
         )
@@ -498,15 +590,32 @@ class GLSLHlslConstantBuffers:
             loader,
             layout_type.element,
             f"{target}[{index}]",
-            location.indexed(term),
+            element_location,
             depth + 1,
         )
         loader.lines.append(f"{indent}}}")
+
+    @staticmethod
+    def glsl_hlsl_cbuffer_word(loader, location):
+        """The ``uint`` holding the word at ``location``."""
+        if location.word_terms:
+            loader.uses_word_reader = True
+            return f"{loader.word_reader}({location.word_index()})"
+        register, component = location.register_and_component(loader.registers)
+        return f"{register}.{COMPONENTS[component]}"
 
     def glsl_hlsl_cbuffer_vector_value(self, loader, layout_type, location):
         """The value of a scalar or vector whose first byte is at ``location``."""
         scalar = layout_type.scalar
         width = layout_type.components if layout_type.kind == "vector" else 1
+        component = (location.byte % CBUFFER_REGISTER_SIZE) // WORD_SIZE
+        if (
+            location.word_terms
+            or (layout_type.scalar_size == 4 and component + width > len(COMPONENTS))
+            or location.byte % layout_type.scalar_size
+        ):
+            # The value is not within one register at a known component: read it word by word.
+            return self.glsl_hlsl_cbuffer_word_value(loader, layout_type, location)
         if layout_type.scalar_size == 8:
             parts = []
             for index in range(width):
@@ -526,19 +635,52 @@ class GLSLHlslConstantBuffers:
             prefix = {"double": "d", "long": "i64", "ulong": "u64"}[scalar]
             return f"{prefix}vec{width}({', '.join(parts)})"
         register, component = location.register_and_component(loader.registers)
-        if component + width > len(COMPONENTS):
-            raise HlslLayoutError("a value straddles two constant-buffer registers")
         words = f"{register}.{COMPONENTS[component:component + width]}"
-        if width == 1:
-            return {
-                "uint": words,
-                "int": f"int({words})",
-                "float": f"uintBitsToFloat({words})",
-                "bool": f"({words} != 0u)",
-            }[scalar]
+        return glsl_value_from_words(scalar, width, words)
+
+    def glsl_hlsl_cbuffer_word_value(self, loader, layout_type, location):
+        """A scalar or vector assembled from its words, wherever they lie."""
+        scalar = layout_type.scalar
+        width = layout_type.components if layout_type.kind == "vector" else 1
+        if layout_type.scalar_size == 8:
+            parts = []
+            for index in range(width):
+                low = self.glsl_hlsl_cbuffer_word(loader, location.shifted(8 * index))
+                high = self.glsl_hlsl_cbuffer_word(
+                    loader, location.shifted(8 * index + WORD_SIZE)
+                )
+                words = f"uvec2({low}, {high})"
+                parts.append(
+                    {
+                        "double": f"packDouble2x32({words})",
+                        "long": f"packInt2x32(ivec2({words}))",
+                        "ulong": f"packUint2x32({words})",
+                    }[scalar]
+                )
+            if width == 1:
+                return parts[0]
+            prefix = {"double": "d", "long": "i64", "ulong": "u64"}[scalar]
+            return f"{prefix}vec{width}({', '.join(parts)})"
+        words = [
+            self.glsl_hlsl_cbuffer_word(loader, location.shifted(WORD_SIZE * index))
+            for index in range(width)
+        ]
+        packed = words[0] if width == 1 else f"uvec{width}({', '.join(words)})"
+        return glsl_value_from_words(scalar, width, packed)
+
+
+def glsl_value_from_words(scalar, width, words):
+    """Convert ``words``, a ``uint`` or ``uvecN`` expression, to a value of ``scalar`` components."""
+    if width == 1:
         return {
             "uint": words,
-            "int": f"ivec{width}({words})",
+            "int": f"int({words})",
             "float": f"uintBitsToFloat({words})",
-            "bool": f"notEqual({words}, uvec{width}(0u))",
+            "bool": f"({words} != 0u)",
         }[scalar]
+    return {
+        "uint": words,
+        "int": f"ivec{width}({words})",
+        "float": f"uintBitsToFloat({words})",
+        "bool": f"notEqual({words}, uvec{width}(0u))",
+    }[scalar]

@@ -38,6 +38,16 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from .glsl_block_layout import (
+    GLSL_BLOCK_LAYOUTS,
+    SCALAR_BLOCK_LAYOUT,
+    STD140_LAYOUT,
+    STD430_LAYOUT,
+    block_matrix_vector_stride,
+    block_size,
+    layout_array_stride,
+    layout_struct_placements,
+)
 from .hlsl_buffer_layout import (
     HLSL_CBUFFER_LAYOUT,
     HLSL_STRUCTURED_LAYOUT,
@@ -49,12 +59,6 @@ from .hlsl_buffer_layout import (
     struct_type,
     vector_type,
 )
-from .std140_buffer_layout import (
-    STD140_LAYOUT,
-    layout_array_stride,
-    layout_struct_placements,
-    std140_size,
-)
 
 # Layouts whose arrays put every element in its own 16-byte register and whose
 # matrices put every column (or row) in one.
@@ -63,6 +67,8 @@ LAYOUT_LABELS = {
     HLSL_CBUFFER_LAYOUT: "HLSL",
     HLSL_STRUCTURED_LAYOUT: "HLSL",
     STD140_LAYOUT: "std140",
+    STD430_LAYOUT: "std430",
+    SCALAR_BLOCK_LAYOUT: "scalar",
 }
 
 METAL_SCALAR_STORAGE = {
@@ -276,20 +282,25 @@ class MetalHlslBufferLayouts:
             plan.members.append(member)
             cursor = member.offset + member.size
             max_alignment = max(max_alignment, member.alignment)
-        if layout == STD140_LAYOUT and not root:
-            # The struct's std140 size is its array stride and where the next
-            # member may start; it is a multiple of 16, so of any Metal alignment.
-            source_size = std140_size(layout_type)
+        if layout in GLSL_BLOCK_LAYOUTS and not root:
+            # The struct's size is where the next member may start (and, but for
+            # the scalar layout, its array stride); it is a multiple of the
+            # struct's alignment, which no Metal member alignment exceeds.
+            source_size = block_size(layout_type, layout)
             if source_size < cursor:
                 raise HlslLayoutError(
                     f"struct '{name}' needs {cursor} bytes of Metal storage but has a "
-                    f"std140 size of {source_size}"
+                    f"{label} size of {source_size}"
                 )
             plan.tail_padding = source_size - cursor
             cursor = source_size
         plan.alignment = max_alignment
         plan.size = align_to(cursor, max_alignment)
-        self.use_natural_vector_storage(plan, cursor, root or layout == STD140_LAYOUT)
+        # std140 and std430 align every vector at least as Metal does, so a
+        # natural vector type never moves a member or changes a struct's size.
+        self.use_natural_vector_storage(
+            plan, cursor, root or layout in (STD140_LAYOUT, STD430_LAYOUT)
+        )
         return plan
 
     @staticmethod
@@ -316,6 +327,8 @@ class MetalHlslBufferLayouts:
             ):
                 continue
             member.storage_type = f"{scalar}{width}"
+            if member.read_conversion == member.storage_type:
+                member.read_conversion = None
             member.alignment = alignment
             plan.alignment = max(plan.alignment, alignment)
 
@@ -348,12 +361,17 @@ class MetalHlslBufferLayouts:
         if kind == "vector":
             storage, size = METAL_SCALAR_STORAGE[layout_type.scalar]
             width = layout_type.components
-            read = write = None
+            # A packed vector converts to its natural type when read: matrix
+            # products and the vector built-ins take no packed operands.
+            read = f"{storage}{width}"
+            write = None
             if layout_type.scalar == "bool":
                 read = f"bool{width}"
                 write = f"uint{width}"
             return f"packed_{storage}{width}", size * width, size, read, write, None
         if kind == "matrix":
+            if layout in (STD430_LAYOUT, SCALAR_BLOCK_LAYOUT):
+                return self.block_matrix_storage(layout_type, layout)
             if layout not in REGISTER_LAYOUTS:
                 raise HlslLayoutError(
                     "matrices in HLSL structured buffers have no Metal layout"
@@ -395,10 +413,15 @@ class MetalHlslBufferLayouts:
             )
         if layout in REGISTER_LAYOUTS and element.kind == "matrix":
             storage = self.matrix_storage(element, padded=True, layout=layout)
+        elif layout in (STD430_LAYOUT, SCALAR_BLOCK_LAYOUT) and element.kind in (
+            "scalar",
+            "vector",
+        ):
+            storage = self.block_array_element_storage(layout_type, layout)
         else:
             storage = self.value_storage(element, layout)
         storage_type, size, alignment, read, write, nested = storage
-        if layout in REGISTER_LAYOUTS:
+        if layout in REGISTER_LAYOUTS or layout in GLSL_BLOCK_LAYOUTS:
             stride = layout_array_stride(layout_type, layout)
             if size != stride:
                 raise HlslLayoutError(
@@ -452,8 +475,66 @@ class MetalHlslBufferLayouts:
             )
         return name, 4 * words, 4, f"{name}_load", f"{name}_store", None
 
+    def block_array_element_storage(self, layout_type, layout):
+        """Storage of one element of a std430 or scalar array of scalars or vectors.
+
+        The elements are packed, so the stride is the element size, except for
+        the three-component vectors of std430, whose 16-byte stride is that of
+        Metal's natural ``float3``.
+        """
+        element = layout_type.element
+        storage = self.value_storage(element, layout)
+        stride = layout_array_stride(layout_type, layout)
+        if storage[1] == stride:
+            return storage
+        if element.kind == "vector" and element.components == 3:
+            scalar, size = METAL_SCALAR_STORAGE[element.scalar]
+            if 4 * size == stride and size == 4:
+                read = "bool3" if element.scalar == "bool" else None
+                write = "uint3" if element.scalar == "bool" else None
+                return f"{scalar}3", stride, stride, read, write, None
+        raise HlslLayoutError(
+            f"{LAYOUT_LABELS[layout]} arrays of {element.scalar} values with a "
+            f"{stride}-byte stride have no Metal layout"
+        )
+
+    def block_matrix_storage(self, layout_type, layout):
+        """Storage of a std430 or scalar matrix, as returned by :meth:`value_storage`.
+
+        A std430 float matrix stores its columns (rows, for ``row_major``) at
+        the stride of Metal's native matrix of that column type; the scalar
+        layout packs them, so its words are loaded and stored by helpers.
+        """
+        scalar = layout_type.scalar
+        if scalar != "float":
+            raise HlslLayoutError(f"Metal has no {scalar} matrices")
+        registers, components = layout_type.registers, layout_type.components
+        row_major = layout_type.row_major
+        stride = block_matrix_vector_stride(layout_type, layout)
+        if layout == STD430_LAYOUT:
+            native = f"float{registers}x{components}"
+            alignment = 8 if components == 2 else 16
+            if stride != alignment:
+                raise HlslLayoutError(
+                    f"a {stride}-byte std430 matrix stride has no Metal layout"
+                )
+            conversion = "transpose" if row_major else None
+            return native, stride * registers, alignment, conversion, conversion, None
+        columns, rows = (
+            (components, registers) if row_major else (registers, components)
+        )
+        name = f"crosstl_scalar_{scalar}{columns}x{rows}"
+        if row_major:
+            name += "_row_major"
+        words = components * registers
+        if name not in self.matrix_storages:
+            self.matrix_storages[name] = metal_matrix_storage_definition(
+                name, scalar, columns, rows, words, row_major, vector_words=components
+            )
+        return name, 4 * words, 4, f"{name}_load", f"{name}_store", None
+
     def plan_cbuffer(self, name, members, layout=HLSL_CBUFFER_LAYOUT):
-        """Plan a constant buffer declared with HLSL packing or as a std140 uniform block.
+        """Plan a constant buffer declared with HLSL packing or as a GLSL std140, std430 or scalar block.
 
         ``members`` are ``(name, raw_type, row_major, offset[, alignment])``,
         where ``offset`` is the byte offset of a ``packoffset`` or ``offset``
@@ -485,15 +566,18 @@ class MetalHlslBufferLayouts:
             # The element stride equals the vector size either way, and buffer
             # bases are aligned, so the natural vector type has the same layout.
             storage_type = storage_type[len("packed_") :]
+            if read == storage_type:
+                read = None
         return storage_type, read, write
 
 
 def metal_matrix_storage_definition(
-    name, scalar, columns, rows, words, row_major=False
+    name, scalar, columns, rows, words, row_major=False, vector_words=4
 ):
     """A register-word struct for one matrix shape with its load and store helpers.
 
-    The registers hold the columns of the matrix, or its rows when ``row_major``.
+    The registers hold the columns of the matrix, or its rows when ``row_major``;
+    consecutive registers start ``vector_words`` words apart.
     """
     logical = (
         f"float{columns}x{rows}"
@@ -506,9 +590,9 @@ def metal_matrix_storage_definition(
     stores = []
     for column in range(columns):
         if row_major:
-            indices = [4 * row + column for row in range(rows)]
+            indices = [vector_words * row + column for row in range(rows)]
         else:
-            indices = [4 * column + row for row in range(rows)]
+            indices = [vector_words * column + row for row in range(rows)]
         values = ", ".join(f"m.v[{index}]" for index in indices)
         if scalar == "bool":
             vector = f"bool{rows}(uint{rows}({values}))"
